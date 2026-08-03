@@ -14,9 +14,14 @@ class DepthEstimatorTest {
     @Test
     fun testDepthEstimatorInitializationAndInference() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        
-        // This test requires the midas_v2_w8a8.tflite model to be present in the assets folder.
-        // If it's not present, the initialization should fail gracefully (catch block in init).
+
+        // The production model is optional and downloaded into app-private storage.
+        // Instrumentation environments without a downloaded model have nothing to infer with.
+        if (!DepthModelManager.isInstalled(context)) {
+            assertFalse(DepthModelManager.isInstalled(context))
+            return
+        }
+
         val estimator = DepthEstimator(context)
         
         // Generate a dummy 640x480 bitmap
@@ -25,16 +30,9 @@ class DepthEstimatorTest {
 
         val depthMap = estimator.estimateDepth(testBitmap)
         
-        // Since we don't have the model file in the automated environment, 
-        // depthMap will likely be null. If the user places the model in assets/,
-        // this test should pass and return a 256x256 bitmap.
-        if (depthMap != null) {
-            assertEquals(256, depthMap.width)
-            assertEquals(256, depthMap.height)
-            assertNotNull(depthMap)
-        } else {
-            println("Model file not found. Please place midas_v2_w8a8.tflite in src/main/assets/ to fully run this test.")
-        }
+        assertNotNull(depthMap)
+        assertEquals(518, depthMap?.width)
+        assertEquals(518, depthMap?.height)
         
         estimator.close()
     }

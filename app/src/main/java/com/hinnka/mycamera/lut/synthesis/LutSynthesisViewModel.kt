@@ -43,7 +43,7 @@ class LutSynthesisViewModel(application: Application) : AndroidViewModel(applica
 
     private val importManager = CustomImportManager(application)
     private val lutManager = LutManager(application)
-    private val imageProcessor = LutImageProcessor()
+    private val imageProcessor = LutImageProcessor(application)
 
     // 状态流
     private val _layers = MutableStateFlow<List<LutSynthesisLayer>>(emptyList())
@@ -204,6 +204,7 @@ class LutSynthesisViewModel(application: Application) : AndroidViewModel(applica
                 val bakeableRecipe = recipe.copy(
                     filmGrain = 0f,
                     vignette = 0f,
+                    flash = 0f,
                     bloom = 0f,
                     halation = 0f,
                     redHalation = 0f,
@@ -277,6 +278,7 @@ class LutSynthesisViewModel(application: Application) : AndroidViewModel(applica
                 val bakeableRecipe = recipe.copy(
                     filmGrain = 0f,
                     vignette = 0f,
+                    flash = 0f,
                     bloom = 0f,
                     halation = 0f,
                     redHalation = 0f,

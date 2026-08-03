@@ -63,16 +63,19 @@ class CameraDiscovery(private val context: Context) {
     fun discoverAllCameras(): List<CameraInfo> {
         val cameras = mutableListOf<CameraInfo>()
         val preferredMainCameraId = loadPreferredMainCameraId()
+        val preferredMacroCameraId = loadPreferredMacroCameraId()
 
         val discoveredCameras = discoverCameraCandidates(
             includeDuplicateMainCameraIds = false,
-            preferredMainCameraId = preferredMainCameraId
+            preferredMainCameraId = preferredMainCameraId,
+            preferredMacroCameraId = preferredMacroCameraId
         )
 
         val iszVirtualCameras = createIszVirtualCameraCandidates(discoveredCameras.backCameras)
         val classifiedBackCameras = classifyBackCameras(
             cameras = discoveredCameras.backCameras + iszVirtualCameras,
-            preferredMainCameraId = preferredMainCameraId
+            preferredMainCameraId = preferredMainCameraId,
+            preferredMacroCameraId = preferredMacroCameraId
         )
         cameras.addAll(classifiedBackCameras)
 
@@ -94,8 +97,15 @@ class CameraDiscovery(private val context: Context) {
     }
 
     fun discoverMainCameraIdOptions(): List<String> {
-        val discoveredCameras = discoverCameraCandidates(includeDuplicateMainCameraIds = true)
-        val adjustedCameras = adjustMacroCandidatesByFocalLength(discoveredCameras.backCameras)
+        val preferredMacroCameraId = loadPreferredMacroCameraId()
+        val discoveredCameras = discoverCameraCandidates(
+            includeDuplicateMainCameraIds = true,
+            preferredMacroCameraId = preferredMacroCameraId
+        )
+        val adjustedCameras = adjustMacroCandidatesByFocalLength(
+            cameras = discoveredCameras.backCameras,
+            preferredMacroCameraId = preferredMacroCameraId
+        )
         val options = adjustedCameras
             .filter { !it.isMacro && isSameFocalLength(it.intrinsicZoomRatio, 1f) }
             .sortedWith(
@@ -111,9 +121,25 @@ class CameraDiscovery(private val context: Context) {
         return options
     }
 
+    fun discoverMacroCameraIdOptions(): List<String> {
+        val preferredMacroCameraId = loadPreferredMacroCameraId()
+        val discoveredCameras = discoverCameraCandidates(
+            includeDuplicateMainCameraIds = true,
+            preferredMacroCameraId = preferredMacroCameraId
+        )
+        val options = discoveredCameras.backCameras
+            .map { it.info.cameraId }
+            .distinct()
+            .sortedWith(compareCameraIdsForSettings())
+
+        PLog.d(TAG, "Macro camera ID options: $options")
+        return options
+    }
+
     private fun discoverCameraCandidates(
         includeDuplicateMainCameraIds: Boolean,
-        preferredMainCameraId: String? = null
+        preferredMainCameraId: String? = null,
+        preferredMacroCameraId: String? = null
     ): DiscoveredCameraCandidates {
         val customLensIdSet = loadCustomLensIds().toSet()
         val baseCameraIds = getAllCameraIds(includeDuplicateMainCameraIds)
@@ -127,8 +153,13 @@ class CameraDiscovery(private val context: Context) {
             preferredMainCameraId = preferredMainCameraId,
             logicalCameraBindings = logicalCameraBindings
         )
+        val preferredDirectCameraIds = appendPreferredMacroCameraId(
+            baseIds = directCameraIds,
+            preferredMacroCameraId = preferredMacroCameraId,
+            logicalCameraBindings = logicalCameraBindings
+        )
         // 获取完整的 Camera ID 列表（包括探测的隐藏摄像头和逻辑多摄暴露的物理摄像头）
-        val allCameraIds = (directCameraIds + logicalCameraBindings.keys).distinct()
+        val allCameraIds = (preferredDirectCameraIds + logicalCameraBindings.keys).distinct()
         PLog.d(TAG, "Camera2 discovered IDs: $allCameraIds")
 
         val backCameras = mutableListOf<CameraInfoWithZoom>()
@@ -143,7 +174,8 @@ class CameraDiscovery(private val context: Context) {
                 val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
 
                 // 检测是否为微距镜头
-                val isMacro = isMacroLens(characteristics)
+                val isMacro = isMacroLens(characteristics) ||
+                        isPreferredCameraId(cameraId, preferredMacroCameraId)
 
                 val info = createCameraInfo(
                     cameraId = cameraId,
@@ -279,6 +311,37 @@ class CameraDiscovery(private val context: Context) {
 
         PLog.d(TAG, "Preferred main camera ID $cameraId added to discovery IDs")
         return (baseIds + cameraId).distinct()
+    }
+
+    private fun appendPreferredMacroCameraId(
+        baseIds: List<String>,
+        preferredMacroCameraId: String?,
+        logicalCameraBindings: Map<String, LogicalCameraBinding>
+    ): List<String> {
+        val cameraId = preferredMacroCameraId?.trim()?.takeIf { it.isNotEmpty() } ?: return baseIds
+        if (baseIds.contains(cameraId)) return baseIds
+        logicalCameraBindings[cameraId]?.let { binding ->
+            PLog.d(
+                TAG,
+                "Preferred macro camera ID $cameraId uses logical camera ${binding.logicalCameraId}"
+            )
+            return baseIds
+        }
+        if (!isCustomCameraIdAvailable(cameraId)) return baseIds
+
+        PLog.d(TAG, "Preferred macro camera ID $cameraId added to discovery IDs")
+        return (baseIds + cameraId).distinct()
+    }
+
+    private fun isPreferredCameraId(cameraId: String, preferredCameraId: String?): Boolean {
+        return preferredCameraId?.trim()?.takeIf { it.isNotEmpty() } == cameraId
+    }
+
+    private fun compareCameraIdsForSettings(): Comparator<String> {
+        return compareBy<String>(
+            { it.toIntOrNull() ?: Int.MAX_VALUE },
+            { it }
+        )
     }
 
     private fun findLogicalCameraBindings(
@@ -637,6 +700,17 @@ class CameraDiscovery(private val context: Context) {
         }
     }
 
+    private fun loadPreferredMacroCameraId(): String? {
+        return try {
+            runBlocking {
+                userPreferencesRepository.userPreferences.firstOrNull()?.preferredMacroCameraId
+            }
+        } catch (e: Exception) {
+            PLog.w(TAG, "Failed to load preferred macro camera ID", e)
+            null
+        }
+    }
+
     private fun loadLogicalCameraDiscoveryConfig(): LogicalCameraDiscoveryConfig {
         return try {
             runBlocking {
@@ -878,14 +952,21 @@ class CameraDiscovery(private val context: Context) {
      */
     private fun classifyBackCameras(
         cameras: List<CameraInfoWithZoom>,
-        preferredMainCameraId: String?
+        preferredMainCameraId: String?,
+        preferredMacroCameraId: String?
     ): List<CameraInfo> {
         if (cameras.isEmpty()) return emptyList()
 
-        val adjustedCameras = adjustMacroCandidatesByFocalLength(cameras)
+        val adjustedCameras = adjustMacroCandidatesByFocalLength(
+            cameras = cameras,
+            preferredMacroCameraId = preferredMacroCameraId
+        )
 
         // 分离微距镜头和普通镜头
-        val macroCameras = preferCustomCameraForSameFocalLength(adjustedCameras.filter { it.isMacro })
+        val macroCameras = preferCustomCameraForSameFocalLength(
+            cameras = adjustedCameras.filter { it.isMacro },
+            preferredMacroCameraId = preferredMacroCameraId
+        )
         val normalCameras = preferCustomCameraForSameFocalLength(
             cameras = adjustedCameras.filter { !it.isMacro },
             preferredMainCameraId = preferredMainCameraId
@@ -950,7 +1031,10 @@ class CameraDiscovery(private val context: Context) {
         return sortedCameras.indices.minByOrNull { abs(sortedCameras[it].intrinsicZoomRatio - 1f) } ?: 0
     }
 
-    private fun adjustMacroCandidatesByFocalLength(cameras: List<CameraInfoWithZoom>): List<CameraInfoWithZoom> {
+    private fun adjustMacroCandidatesByFocalLength(
+        cameras: List<CameraInfoWithZoom>,
+        preferredMacroCameraId: String? = null
+    ): List<CameraInfoWithZoom> {
         if (cameras.size <= 1) return cameras
 
         val shortestFocalLength = cameras
@@ -961,6 +1045,9 @@ class CameraDiscovery(private val context: Context) {
 
         return cameras.map { camera ->
             if (camera.isMacro && camera.info.isVirtualIszMacroLens) {
+                return@map camera
+            }
+            if (camera.isMacro && isPreferredCameraId(camera.info.cameraId, preferredMacroCameraId)) {
                 return@map camera
             }
             if (!camera.isMacro || !isSameFocalLength(getComparableFocalLength(camera), shortestFocalLength)) {
@@ -985,7 +1072,8 @@ class CameraDiscovery(private val context: Context) {
 
     private fun preferCustomCameraForSameFocalLength(
         cameras: List<CameraInfoWithZoom>,
-        preferredMainCameraId: String? = null
+        preferredMainCameraId: String? = null,
+        preferredMacroCameraId: String? = null
     ): List<CameraInfoWithZoom> {
         val selectedCameras = mutableListOf<CameraInfoWithZoom>()
 
@@ -1000,7 +1088,12 @@ class CameraDiscovery(private val context: Context) {
             }
 
             val existing = selectedCameras[sameFocalIndex]
-            if (shouldReplaceSameFocalCamera(existing, camera, preferredMainCameraId)) {
+            if (shouldKeepSameFocalVirtualIszVariant(existing.info, camera.info)) {
+                selectedCameras.add(camera)
+                continue
+            }
+
+            if (shouldReplaceSameFocalCamera(existing, camera, preferredMainCameraId, preferredMacroCameraId)) {
                 PLog.d(
                     TAG,
                     "Camera ID ${camera.info.cameraId} overrides same focal ID ${existing.info.cameraId} " +
@@ -1020,11 +1113,22 @@ class CameraDiscovery(private val context: Context) {
         return selectedCameras
     }
 
+    private fun shouldKeepSameFocalVirtualIszVariant(existing: CameraInfo, candidate: CameraInfo): Boolean {
+        return existing.isVirtualIszLens &&
+                candidate.isVirtualIszLens &&
+                existing.cameraId != candidate.cameraId
+    }
+
     private fun shouldReplaceSameFocalCamera(
         existing: CameraInfoWithZoom,
         candidate: CameraInfoWithZoom,
-        preferredMainCameraId: String?
+        preferredMainCameraId: String?,
+        preferredMacroCameraId: String?
     ): Boolean {
+        val existingIsPreferredMacro = isPreferredCameraId(existing.info.cameraId, preferredMacroCameraId)
+        val candidateIsPreferredMacro = isPreferredCameraId(candidate.info.cameraId, preferredMacroCameraId)
+        if (existingIsPreferredMacro != candidateIsPreferredMacro) return candidateIsPreferredMacro
+
         if (isSameFocalLength(candidate.intrinsicZoomRatio, 1f)) {
             val existingIsPreferred = existing.info.cameraId == preferredMainCameraId
             val candidateIsPreferred = candidate.info.cameraId == preferredMainCameraId

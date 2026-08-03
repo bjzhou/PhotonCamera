@@ -23,13 +23,13 @@ import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoLogProfile
-import com.hinnka.mycamera.video.VideoRecorder
 
 /**
  * 相机预览组件 - OpenGL ES 版本（Camera2 适配）
@@ -65,7 +65,6 @@ fun CameraPreviewGL(
     onDepthInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     onAiFocusInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
-    videoRecorder: VideoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     isHlgInput: Boolean = false,
     naturalLightEnabled: Boolean = false,
@@ -73,6 +72,7 @@ fun CameraPreviewGL(
     rawBlackPointCorrection: Float = 0f,
     rawWhitePointCorrection: Float = 0f,
     rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+    rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     isAiFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
@@ -275,7 +275,6 @@ fun CameraPreviewGL(
                         })
                         glSurfaceView.setMeteringMode(meteringMode)
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
-                        glSurfaceView.setVideoRecorder(videoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setIsHlgInput(isHlgInput)
                         glSurfaceView.setRawPreviewSettings(
@@ -284,6 +283,7 @@ fun CameraPreviewGL(
                             blackPointCorrection = rawBlackPointCorrection,
                             whitePointCorrection = rawWhitePointCorrection,
                             renderingEngine = rawRenderingEngine,
+                            hncsFilmCurveMode = rawHncsFilmCurveMode,
                             toneMappingParameters = rawToneMappingParameters
                         )
                         glSurfaceView.setAutoFocus(isAutoFocus)

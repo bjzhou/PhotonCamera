@@ -178,22 +178,16 @@
     <string name="settings_ai_focus_sensitivity_description">ความมั่นใจในการตรวจจับขั้นต่ำที่จำเป็นเพื่อกระตุ้นการโฟกัสของ AI</string>
     <string name="settings_grid_lines">เส้นตาราง</string>
     <string name="settings_grid_description">แสดงเส้นตารางสำหรับการจัดองค์ประกอบ</string>
-    <string name="settings_use_multi_frame">การรวมหลายเฟรม</string>
     <string name="settings_use_multiple_exposure">การสัมผัสหลายครั้ง</string>
     <string name="multiple_exposure_finish">เสร็จ</string>
     <string name="multiple_exposure_undo">ยกเลิก</string>
     <string name="multiple_exposure_cancel">ยกเลิกการถ่ายภาพ</string>
     <string name="settings_multiple_exposure_count">จำนวนการสัมผัสหลายครั้ง</string>
     <string name="settings_multiple_exposure_count_description">จำนวนภาพที่ใช้ในการจัดองค์ประกอบภาพขั้นสุดท้าย ค่าเริ่มต้นคือ 2 รูปภาพ ซึ่งใกล้เคียงกับขั้นตอนการทำงานแบบ Double Exposure แบบคลาสสิกมากกว่า</string>
-    <string name="settings_multi_frame_count">จำนวนเฟรมที่รวม</string>
-    <string name="settings_multi_frame_count_description">จำนวนเฟรมสำหรับการรวมหลายเฟรม (เฟรมมาก = คุณภาพดีขึ้นแต่ช้าลง)</string>
-    <string name="settings_use_super_resolution">ความละเอียดสูงพิเศษ (Super Resolution)</string>
     <string name="settings_use_live_photo">ภาพเคลื่อนไหว (Live Photo)</string>
     <string name="settings_use_live_photo_description">บันทึกวิดีโอคลิปสั้นๆ พร้อมกับรูปภาพของคุณเพื่อให้ได้เอฟเฟกต์ภาพเคลื่อนไหวที่สมจริง</string>
     <string name="settings_develop_animation">พัฒนาแอนิเมชั่น</string>
     <string name="settings_develop_animation_description">หลังจากถ่ายภาพ เอฟเฟกต์แอนิเมชั่นการพัฒนาภาพยนตร์จะปรากฏขึ้น</string>
-    <string name="settings_use_gpu_acceleration">การเร่งความเร็วด้วย GPU</string>
-    <string name="settings_use_gpu_acceleration_description">ใช้ GPU (Vulkan) เพื่อเร่งความเร็วในการรวมหลายเฟรม เปิดอยู่เป็นค่าเริ่มต้น</string>
     <string name="settings_section_frame">ลายน้ำกรอบ</string>
     <string name="settings_frame_style">สไตล์กรอบ</string>
     <string name="settings_frame_description">เพิ่มกรอบตกแต่งและลายน้ำให้กับรูปภาพ</string>
@@ -294,11 +288,6 @@
     <!-- Color Recipe -->
     <string name="color_recipe">สูตรสี (Color Recipe)</string>
     <string name="effects_title">ผล</string>
-    <string name="recipe_scope_lut">ค่าเริ่มต้นของ LUT</string>
-    <string name="recipe_scope_photo">เฉพาะรูปนี้เท่านั้น</string>
-    <string name="recipe_scope_photo_reset">คืนค่าเริ่มต้น LUT</string>
-    <string name="color_recipe_reset_all">รีเซ็ตพารามิเตอร์ทั้งหมด</string>
-    <string name="recipe_scope_photo_hint">การปรับเปลี่ยนมีผลกับรูปภาพนี้เท่านั้น</string>
 
     <!-- Color Recipe Parameters -->
     <string name="recipe_param_exposure">การรับแสง</string>
@@ -312,6 +301,7 @@
     <string name="recipe_param_shadows">ส่วนมืด</string>
     <string name="recipe_param_film_grain">นอยซ์แบบฟิล์ม</string>
     <string name="recipe_param_vignette">ขอบมืด</string>
+    <string name="recipe_param_flash">แฟลช</string>
     <string name="recipe_param_bleach_bypass">การข้ามกระบวนการล้าง (Bleach Bypass)</string>
     <string name="recipe_param_bloom">แสงฟุ้ง</string>
     <string name="recipe_param_soft_light">แสงนุ่ม</string>
@@ -359,7 +349,16 @@
     <string name="recipe_param_primary_blue_lightness">ความสว่างของสีหลักสีน้ำเงิน</string>
 
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">อัปเดต LUT ปัจจุบันด้วย</string>
+    <string name="edit_sync_lut_recipe_description">สี เอฟเฟกต์ และความเข้ม LUT จะบันทึกไปยัง LUT ที่เลือกด้วย</string>
+    <string name="edit_select_lut_hint">เลือก LUT ก่อนปรับสีและเอฟเฟกต์</string>
+    <string name="edit_color_and_effects">ปรับสีและเอฟเฟกต์</string>
     <string name="recipe_tab_color">สี</string>
+    <string name="recipe_color_basic">พื้นฐาน</string>
+    <string name="recipe_color_grading">เกรดสี</string>
+    <string name="recipe_grading_midtones">โทนกลาง</string>
+    <string name="recipe_grading_balance">สมดุล</string>
+    <string name="recipe_grading_blending">การผสม</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">แสง</string>
     <string name="recipe_tab_curve">เส้นโค้ง</string>
@@ -455,6 +454,8 @@
     <string name="favorite">เก็บรวบรวม</string>
     <string name="add_to_favorites">เพิ่มในรายการโปรด</string>
     <string name="remove_from_favorites">ยกเลิกรายการโปรด</string>
+    <string name="favorite_empty_title">ยังไม่มีรายการโปรด</string>
+    <string name="favorite_empty_message">แตะดาวบนฟิลเตอร์เพื่อเพิ่มไว้ที่นี่</string>
     <string name="built_in">ที่มากับแอป</string>
     <string name="custom">กำหนดเอง</string>
     <string name="uncategorized">ไม่มีหมวดหมู่</string>
@@ -631,8 +632,8 @@
     <string name="settings_hlg_hardware_compatibility_description">ภาพอาจมืดหรือผิดปกติหลังจากเปิด HLG บนอุปกรณ์บางตัว หากคุณพบภาพที่ผิดปกติ โปรดเปิดตัวเลือกนี้สำหรับการถอดรหัสด้วยตนเอง หากภาพเป็นปกติโปรดปิดไว้</string>
     <string name="settings_use_p3_color_space">ช่วงสี P3</string>
     <string name="settings_use_p3_color_space_description">เปิดใช้งานเอาต์พุต Display P3 บนอุปกรณ์ที่รองรับ ปิดโดยค่าเริ่มต้น</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture">HDR ถูกเปิดใช้งานตามค่าเริ่มต้น</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture_description">จอแสดงผล HDR ถูกเปิดใช้งานตามค่าเริ่มต้น</string>
+    <string name="settings_ultra_hdr_gain_map">แผนที่เกน Ultra HDR</string>
+    <string name="settings_ultra_hdr_gain_map_description">สร้างแผนที่เกน Ultra HDR สำหรับภาพถ่าย</string>
     <string name="settings_screen_hdr">จอแสดงผล HDR</string>
     <string name="settings_screen_hdr_description">เปิดใช้งานการแสดงผลช่วงไดนามิกสูง (HDR) บนหน้าต่างหน้าจอ หากการเปิดโหมดนี้ในอุปกรณ์บางอย่างทำให้หน้าจอเปลี่ยนเป็นสีเหลืองหรือมืดลง คุณสามารถปิดได้</string>
     <string name="hdr_label">HDR</string>
@@ -682,6 +683,7 @@
     <string name="settings_white_level_raw12">RAW12</string>
     <string name="settings_white_level_raw14">RAW14</string>
     <string name="settings_white_level_raw_sensor">RAW Sensor(65535)</string>
+    <string name="settings_white_level_custom">ปรับแต่ง</string>
     <string name="settings_raw_cfa_correction">การแก้ไขช่อง CFA</string>
     <string name="settings_raw_cfa_correction_with_lens">การแก้ไขช่อง CFA (เลนส์ %1$s · %2$d มม.)</string>
     <string name="settings_raw_cfa_correction_description">แทนที่รูปแบบช่อง RAW CFA ที่เขียนลง DNG การตั้งค่าส่วนบุคคลสำหรับเลนส์</string>
@@ -726,6 +728,8 @@
     <string name="settings_phantom_pip_crop_reset">รีเซ็ตการครอบตัด</string>
     <string name="settings_phantom_pip_crop_choose_background">เลือกภาพพื้นหลัง</string>
     <string name="settings_phantom_pip_crop_default_background">พื้นหลังเริ่มต้น</string>
+    <string name="settings_phantom_frame_title">กรอบโหมด Phantom</string>
+    <string name="settings_phantom_frame_description">เลือกกรอบที่ใช้เฉพาะกับการส่งออกในโหมด Phantom โดยจะไม่ใช้กรอบเริ่มต้นของแอป</string>
     <string name="settings_phantom_save_as_new">บันทึกภาพใหม่เป็น</string>
     <string name="settings_phantom_save_as_new_description">เมื่อเปิด ไฟล์ใหม่จะถูกสร้างขึ้นเมื่อมีการบันทึกรูปภาพที่แก้ไขแล้ว แทนที่จะเขียนทับรูปภาพต้นฉบับ</string>
     <string name="color_space">พื้นที่สี</string>
@@ -771,27 +775,31 @@
     <string name="lut_creator_finish">เสร็จ</string>
     <string name="lut_creator_error">ข้อผิดพลาด: %s</string>
     <string name="lut_creator_try_again">ลองอีกครั้ง</string>
-    <string name="gallery_ai_analysis">การวิเคราะห์เอไอ</string>
-    <string name="gallery_ai_quality_title">การวิเคราะห์การถ่ายภาพด้วย AI</string>
-    <string name="gallery_ai_premium_required">การวิเคราะห์ภาพถ่าย AI เป็นฟีเจอร์ระดับ Pro และสามารถปลดล็อกการให้คะแนนและบทวิจารณ์ AI ได้หลังจากอัปเกรดแล้ว</string>
-    <string name="gallery_ai_analyzing">กำลังวิเคราะห์รูปภาพ...</string>
-    <string name="gallery_ai_rank_excellent_plus">ยอดเยี่ยมมาก</string>
-    <string name="gallery_ai_rank_excellent">ยอดเยี่ยม</string>
-    <string name="gallery_ai_rank_good">ดี</string>
-    <string name="gallery_ai_rank_pass">ผ่าน</string>
-    <string name="gallery_ai_rank_needs_work">ที่จะปรับปรุงให้ดีขึ้น</string>
-    <string name="gallery_ai_element_impact">ผลกระทบต่อภาพ</string>
-    <string name="gallery_ai_element_technical_excellence">ความเป็นเลิศทางเทคนิค</string>
-    <string name="gallery_ai_element_creativity">ความคิดสร้างสรรค์</string>
-    <string name="gallery_ai_element_style">สไตล์</string>
-    <string name="gallery_ai_element_composition">องค์ประกอบ</string>
-    <string name="gallery_ai_element_presentation">การนำเสนอ</string>
-    <string name="gallery_ai_element_color_balance">ความสมดุลของสี</string>
-    <string name="gallery_ai_element_center_of_interest">ศูนย์ภาพ</string>
-    <string name="gallery_ai_element_lighting">แสงและเงา</string>
-    <string name="gallery_ai_element_subject_matter">ธีม</string>
-    <string name="gallery_ai_element_technique">เทคนิค</string>
-    <string name="gallery_ai_element_storytelling">การเล่าเรื่อง</string>
+    <string name="gallery_ai_analysis">บทวิจารณ์ AI</string>
+    <string name="gallery_ai_quality_title">บทวิจารณ์ภาพถ่ายโดย AI</string>
+    <string name="gallery_ai_premium_required">บทวิจารณ์ภาพถ่ายโดย AI เป็นฟีเจอร์ Pro อัปเกรดเพื่อปลดล็อกคะแนนและคำวิจารณ์ในมุมมองกรรมการ</string>
+    <string name="gallery_ai_analyzing">กำลังวิจารณ์ภาพถ่าย…</string>
+    <string name="gallery_ai_analyzing_description">กำลังประเมินเกณฑ์บรรณาธิการ 5 ด้านจากหลักฐานที่มองเห็นในภาพ</string>
+    <string name="gallery_ai_analysis_failed">ไม่สามารถดำเนินการวิจารณ์ให้เสร็จสิ้น</string>
+    <string name="gallery_ai_analysis_failed_description">ตรวจสอบการตั้งค่าบริการ AI และการเชื่อมต่อ แล้วลองอีกครั้ง</string>
+    <string name="gallery_ai_rank_excellent_plus">พร้อมสำหรับรางวัล</string>
+    <string name="gallery_ai_rank_excellent">โดดเด่น</string>
+    <string name="gallery_ai_rank_good">แข็งแรง</string>
+    <string name="gallery_ai_rank_pass">มีศักยภาพ</string>
+    <string name="gallery_ai_rank_needs_work">กำลังพัฒนา</string>
+    <string name="gallery_ai_editorial_framework">คณะกรรมการบรรณาธิการ · 5 เกณฑ์</string>
+    <string name="gallery_ai_score_label">คะแนนกรรมการ</string>
+    <string name="gallery_ai_score_out_of">/ 100</string>
+    <string name="gallery_ai_strength">จุดที่ทำได้ดี</string>
+    <string name="gallery_ai_next_step">ขั้นตอนถัดไป</string>
+    <string name="gallery_ai_criteria_title">การประเมินรายเกณฑ์</string>
+    <string name="gallery_ai_criteria_description">แต่ละเกณฑ์ให้คะแนนแยกกันจากหลักฐานที่มองเห็นในเฟรม</string>
+    <string name="gallery_ai_criterion_visual_impact">พลังทางสายตา</string>
+    <string name="gallery_ai_criterion_originality_voice">ความเป็นต้นฉบับและเสียงของผู้สร้าง</string>
+    <string name="gallery_ai_criterion_narrative_meaning">เรื่องเล่าและความหมาย</string>
+    <string name="gallery_ai_criterion_intent_coherence">เจตนาและความสอดคล้อง</string>
+    <string name="gallery_ai_criterion_aesthetic_technical">สุนทรียะและเทคนิค</string>
+    <string name="gallery_ai_scale_note">อ้างอิงหลักการที่ปรากฏซ้ำในแนวทางของกรรมการ LensCulture นี่คือคำวิจารณ์ AI อิสระ ไม่ใช่คะแนนอย่างเป็นทางการของ LensCulture</string>
 
     <string name="settings_ai_model">แบบจำลองการสกัดด้วย AI</string>
     <string name="settings_ai_model_desc">เลือกแบบจำลอง AI</string>
@@ -887,4 +895,7 @@
     <string name="preset_restore_defaults_confirm">การเรียกคืนค่าที่ตั้งล่วงหน้าเริ่มต้นจะล้างการแทนที่ที่กำหนดเองทั้งหมด คุณต้องการดำเนินการต่อหรือไม่?</string>
     <string name="preset_custom_badge">ปรับแต่ง</string>
     <string name="preset_builtin_badge">ในตัว</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: ระบบจัดการสีที่ Hasselblad พัฒนาขึ้นอย่างอิสระ</string>
+    <string name="settings_raw_max_hdr_composition">การรวม HDR ของ RAWmax</string>
+    <string name="settings_raw_max_hdr_composition_description">ใช้การถ่ายคร่อมแสงสำหรับการรวม HDR ใน RAWmax ปิดเพื่อเพิ่มความเร็วในการประมวลผล</string>
 </resources>

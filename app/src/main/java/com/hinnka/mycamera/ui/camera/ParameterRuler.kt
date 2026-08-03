@@ -43,6 +43,8 @@ enum class CameraParameter {
     WHITE_BALANCE          // AWB
 }
 
+internal val CameraParameterRulerHeight = 40.dp
+
 /**
  * Parameter ruler component for adjusting camera parameters
  */
@@ -54,6 +56,7 @@ fun ParameterRuler(
     maxValue: Float,
     isAdjustable: Boolean,
     showAutoButton: Boolean,
+    isAutoModeToggleEnabled: Boolean = true,
     resetValue: Float? = null,
     showHyperfocalButton: Boolean = false,
     hyperfocalEnabled: Boolean = false,
@@ -80,7 +83,7 @@ fun ParameterRuler(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(CameraParameterRulerHeight)
             .padding(horizontal = 8.dp)
     ) {
         Row(
@@ -91,12 +94,15 @@ fun ParameterRuler(
             if (showAutoButton) {
                 Button(
                     onClick = onAutoModeToggle,
+                    enabled = isAutoModeToggleEnabled,
                     modifier = Modifier
                         .padding(start = 8.dp)
                         .size(25.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (!isAdjustable) yellow else Color.Gray.copy(alpha = 0.5f),
-                        contentColor = if (!isAdjustable) Color.Black else Color.White
+                        contentColor = if (!isAdjustable) Color.Black else Color.White,
+                        disabledContainerColor = Color.Gray.copy(alpha = 0.25f),
+                        disabledContentColor = Color.White.copy(alpha = 0.35f)
                     ),
                     shape = CircleShape,
                     contentPadding = PaddingValues(0.dp)
@@ -137,8 +143,8 @@ fun ParameterRuler(
                             onTap = {
                                 if (isAdjustableState) {
                                     val width = size.width
-                                    val stepWidth = width / scaleValues.size
-                                    val index = (it.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
+                                    val stepWidth = width / (scaleValues.size - 1).coerceAtLeast(1)
+                                    val index = (it.x / stepWidth).roundToInt().coerceIn(0, scaleValues.lastIndex)
                                     selectedValue = scaleValues[index]
                                     if (selectedValue != currentValueState) {
                                         onValueChange(selectedValue)
@@ -152,8 +158,9 @@ fun ParameterRuler(
                             if (isAdjustableState) {
                                 change.consume()
                                 val width = size.width
-                                val stepWidth = width / scaleValues.size
-                                val index = (change.position.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
+                                val stepWidth = width / (scaleValues.size - 1).coerceAtLeast(1)
+                                val index =
+                                    (change.position.x / stepWidth).roundToInt().coerceIn(0, scaleValues.lastIndex)
                                 selectedValue = scaleValues[index]
                                 if (selectedValue != currentValueState) {
                                     onValueChange(selectedValue)
@@ -244,7 +251,7 @@ private fun RulerScale(
     val yellow = Color(0xFFFFD700)
     val textMeasurer = rememberTextMeasurer()
 
-    Canvas(modifier = Modifier.fillMaxSize().padding(vertical = 8.dp)) {
+    Canvas(modifier = Modifier.fillMaxSize().padding(vertical = 4.dp)) {
         val width = size.width
         val height = size.height
         val stepCount = scaleValues.size
@@ -256,17 +263,12 @@ private fun RulerScale(
         
         // Find current value position
         val currentPosition = findValuePosition(currentValue, scaleValues, stepWidth)
-        val currentIndex = findClosestIndex(currentValue, scaleValues, parameter)
         
         // Draw each scale value
         scaleValues.forEachIndexed { index, value ->
             val x = index * stepWidth
             
-            val isCurrent = if (parameter == CameraParameter.SHUTTER_SPEED) {
-                abs(value - currentValue) < 1000
-            } else {
-                abs(value - currentValue) < 1e-3f
-            }
+            val isCurrent = isSameParameterValue(value, currentValue, parameter)
             
             // Determine if we should show label
             val shouldShowLabel = isCurrent || index == 0 || index == scaleValues.lastIndex || value == 0f
@@ -333,8 +335,21 @@ private fun isValueOnScale(
     scaleValues: List<Float>,
     parameter: CameraParameter
 ): Boolean {
-    val tolerance = if (parameter == CameraParameter.SHUTTER_SPEED) 1000f else 1e-3f
-    return scaleValues.any { abs(it - currentValue) < tolerance }
+    return scaleValues.any { isSameParameterValue(it, currentValue, parameter) }
+}
+
+private fun isSameParameterValue(
+    value: Float,
+    currentValue: Float,
+    parameter: CameraParameter
+): Boolean {
+    val tolerance = when (parameter) {
+        CameraParameter.SHUTTER_SPEED -> 1000f
+        CameraParameter.ISO -> 1f
+        CameraParameter.WHITE_BALANCE -> 25f
+        else -> 1e-3f
+    }
+    return abs(value - currentValue) < tolerance
 }
 
 /**
@@ -370,21 +385,6 @@ private fun findValuePosition(
         currentValue > scaleValues.last() -> (scaleValues.size - 1) * stepWidth
         else -> 0f
     }
-}
-
-/**
- * Find closest scale index to current value
- */
-private fun findClosestIndex(
-    currentValue: Float,
-    scaleValues: List<Float>,
-    parameter: CameraParameter
-): Int {
-    if (scaleValues.isEmpty()) return 0
-    
-    return scaleValues.indices.minByOrNull { index ->
-        abs(scaleValues[index] - currentValue)
-    } ?: 0
 }
 
 /**
@@ -518,7 +518,7 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
 
         CameraParameter.WHITE_BALANCE -> {
             // Color temperature presets
-            generateSequence(minValue) { it + 500f }
+            generateSequence(minValue) { it + 100f }
                 .takeWhile { it <= maxValue }
                 .filter { it in minValue..maxValue }
                 .toList()

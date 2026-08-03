@@ -15,6 +15,7 @@ object GlesGpuScheduler {
     private const val EGL_IMG_CONTEXT_PRIORITY = "EGL_IMG_context_priority"
     private const val GPU_CHECKPOINT_WAIT_NS = 1_000_000L
     private const val GPU_CHECKPOINT_SLEEP_MS = 1L
+    private const val GPU_UI_BREATHING_ROOM_MS = 2L
 
     fun createBackgroundContext(display: EGLDisplay, config: EGLConfig, tag: String): EGLContext {
         if (supportsLowPriorityContext(display)) {
@@ -123,7 +124,11 @@ object GlesGpuScheduler {
             PLog.w(tag, "Failed to wait for GLES background checkpoint $label", e)
         } finally {
             GLES30.glDeleteSync(sync)
-            Thread.yield()
+            try {
+                Thread.sleep(GPU_UI_BREATHING_ROOM_MS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
         }
     }
 

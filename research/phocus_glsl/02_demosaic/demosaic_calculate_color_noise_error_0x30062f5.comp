@@ -1,0 +1,77 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 6da3783cd147005c2750b1fe352a0110d3ca2c22e32c35691f4087f45ac1b17b
+ * ELF offsets: 0x30062f5
+ * Symbols: demosaic_calculate_color_noise_error_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
+layout(rgba16ui, binding = 1) readonly  uniform uimage2D ycceSmoothTex;
+layout(rgba16ui, binding = 2) writeonly uniform uimage2D dstTex;
+
+int chromaSigned(uint c) {
+    int ic = int(c);
+    return (ic > 32767) ? (ic - 65536) : ic;
+}
+
+uint chromaUnsigned(int v) {
+    return uint(v & 0xFFFF);
+}
+
+int DirMask2Count(int a) {
+    return (a >> 8) & 0x0F;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    uvec4 pix1 = imageLoad(yccdTex, gid);
+    uvec4 pix2 = imageLoad(ycceSmoothTex, gid);
+
+    int dir = int(pix1.a);
+    uint ySmooth  = pix2.r;
+    int  crSmooth = chromaSigned(pix2.g);
+    int  cbSmooth = chromaSigned(pix2.b);
+    uint error    = pix2.a;
+
+    ivec2 dirStep[8] = ivec2[8](
+        ivec2( 0, -1),
+        ivec2(+1,  0),
+        ivec2( 0, +1),
+        ivec2(-1,  0),
+        ivec2(+1, -1),
+        ivec2(+1, +1),
+        ivec2(-1, +1),
+        ivec2(-1, -1)
+    );
+
+    int ySum = 0, rSum = 0, bSum = 0;
+    for (int i = 0; i < 8; i++) {
+        int mask = (1 << i);
+        if ((dir & mask) != 0) {
+            uvec4 pix = imageLoad(yccdTex, gid + dirStep[i]);
+            ySum += int(pix1.r) - int(pix.r);
+            rSum += chromaSigned(pix1.g) - chromaSigned(pix.g);
+            bSum += chromaSigned(pix1.b) - chromaSigned(pix.b);
+        }
+    }
+    int count = DirMask2Count(dir);
+    int dirBits = dir & 0xFF;
+    bool diagPenalty = (dirBits == 0x50 || dirBits == 0xA0);
+    int newError = diagPenalty ? abs(rSum + bSum) : 0;
+    if (count > 0) {
+        newError += abs(ySum);
+        newError /= count;
+    }
+
+    float minLevel = 0.05 * float(ySmooth);
+    float scaledError = float(error) * max(0.0, min(float(newError) - minLevel, 1.0));
+
+    imageStore(dstTex, gid, uvec4(ySmooth, chromaUnsigned(crSmooth), chromaUnsigned(cbSmooth), uint(scaledError)));
+}

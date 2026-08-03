@@ -1,0 +1,91 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 8d16470f554de7df8693c89071c77ac19f5ef17534834471d501cee1ded83566
+ * ELF offsets: 0x30a1fbe
+ * Symbols: claritySubtractColTileU16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D uTemp;        // collapsed pyramid col (full image)
+layout(rgba16ui, binding = 1) readonly  uniform uimage2D uGlobalGauss; // top gaussian (full image)
+layout(rgba16ui, binding = 2) readonly  uniform uimage2D uLocalGauss;  // local gaussian (tile)
+layout(rgba16ui, binding = 3) writeonly uniform uimage2D uOut;
+
+layout(std140, binding = 4) uniform ClaritySubtractColParams_UBO {
+    int offsetX;
+    int offsetY;
+    int maxX;
+    int maxY;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// iOS: ushort4 shiftBytes(ushort4 left, ushort4 right, int amount)
+ivec4 shiftBytes(ivec4 left, ivec4 right, int amount) {
+    if (amount == 0) return left;
+    if (amount == 1 || amount == -3) return ivec4(left.yzw, right.x);
+    if (amount == 2 || amount == -2) return ivec4(left.zw, right.xy);
+    if (amount == 3 || amount == -1) return ivec4(left.w, right.xyz);
+    return left;
+}
+
+// iOS: auto readClamped4(texture2d<ushort, access::read> tex, int2 pos, int2 maxPos)
+// texId: 0 = uTemp, 1 = uGlobalGauss
+ivec4 readClamped4(int texId, ivec2 pos, ivec2 maxPos) {
+    ivec2 clampedPos = clamp(pos, ivec2(0), ivec2(maxPos.x / 4, maxPos.y));
+    ivec4 res;
+    if (texId == 0)
+        res = ivec4(imageLoad(uTemp, clampedPos));
+    else
+        res = ivec4(imageLoad(uGlobalGauss, clampedPos));
+    // iOS: res = (pos.x < 0) ? res.xxxx : res
+    if (pos.x < 0)
+        res = res.xxxx;
+    // iOS: int lastX = pos.x*4 + 3; if (lastX > maxPos.x) { switch ... }
+    int lastX = pos.x * 4 + 3;
+    if (lastX > maxPos.x) {
+        int diff = lastX - maxPos.x;
+        if (diff == 1) res = ivec4(res.xyz, res.z);       // xyzz
+        else if (diff == 2) res = ivec4(res.xy, res.y, res.y); // xyyy
+        else if (diff == 3) res = res.xxxx;                // xxxx
+        else res = res.wwww;                               // default
+    }
+    return res;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uOut);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    // iOS: short misalignment = (opts.offsetX) % 4
+    int misalignment = offsetX % 4;
+
+    // iOS: int2 rawPos = int2((int)gid.x + opts.offsetX / 4, gid.y + opts.offsetY)
+    ivec2 rawPos = ivec2(gid.x + offsetX / 4, gid.y + offsetY);
+    // iOS: if (misalignment < 0) rawPos.x -= 1
+    if (misalignment < 0)
+        rawPos.x -= 1;
+
+    ivec2 maxPos = ivec2(maxX, maxY);
+
+    // iOS: ushort4 temp = readClamped4(texTemp, rawPos, maxPos)
+    ivec4 temp = readClamped4(0, rawPos, maxPos);
+    // iOS: ushort4 guassGlobal = readClamped4(texGlobalGauss, rawPos, maxPos)
+    ivec4 gaussGlobal = readClamped4(1, rawPos, maxPos);
+    // iOS: ushort4 guassLocal = texLocalGauss.read(gid)
+    ivec4 gaussLocal = ivec4(imageLoad(uLocalGauss, gid));
+
+    // iOS: if (misalignment != 0) { ... shift ... }
+    if (misalignment != 0) {
+        temp = shiftBytes(temp, readClamped4(0, ivec2(rawPos.x + 1, rawPos.y), maxPos), misalignment);
+        gaussGlobal = shiftBytes(gaussGlobal, readClamped4(1, ivec2(rawPos.x + 1, rawPos.y), maxPos), misalignment);
+    }
+
+    // iOS: texOut.write(ushort4(clamp(int4(guassLocal) + int4(temp) - int4(guassGlobal), 0, 65535)), gid)
+    imageStore(uOut, gid, uvec4(clamp(gaussLocal + temp - gaussGlobal, 0, 65535)));
+}

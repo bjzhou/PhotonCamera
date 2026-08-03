@@ -1,0 +1,159 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: b3af96dca2b14851ada4f1cd7cad4b9e9bfa6c4f499fe6edf9e4367e6fe2246d
+ * ELF offsets: 0x303704a
+ * Symbols: demosaic_color_noise_pass_3_yccd_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
+layout(rgba16ui, binding = 1) readonly  uniform uimage2D smoothTex;
+layout(rgba16ui, binding = 2) writeonly uniform uimage2D outYccd;
+layout(rgba16ui, binding = 3) writeonly uniform uimage2D outSmooth;
+
+layout(std140, binding = 4) uniform DemosaicColorNoisePass3YccdParams_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+};
+
+float hadd(float a, float b) {
+    return (a + b) * 0.5;
+}
+
+int chromaSigned(uint c) {
+    int ic = int(c);
+    return (ic > 32767) ? (ic - 65536) : ic;
+}
+
+uint chromaUnsigned(int v) {
+    return uint(v & 0xFFFF);
+}
+
+void loadSmoothYCbCr(ivec2 p, out int yv, out int cr, out int cb) {
+    uvec4 u = imageLoad(smoothTex, p);
+    yv = int(u.r);
+    cr = chromaSigned(u.g);
+    cb = chromaSigned(u.b);
+}
+
+vec4 colorFilter3(vec4 pix, ivec2 imgPos) {
+    ivec4 yA, yB, crA, cbA, crB, cbB;
+
+    int yv, cr, cb;
+    loadSmoothYCbCr(imgPos + ivec2(-1, 0), yv, cr, cb);
+    yA[0] = yv; crA[0] = cr; cbA[0] = cb;
+    loadSmoothYCbCr(imgPos + ivec2(1, 0), yv, cr, cb);
+    yB[0] = yv; crB[0] = cr; cbB[0] = cb;
+    loadSmoothYCbCr(imgPos + ivec2(0, -1), yv, cr, cb);
+    yA[1] = yv; crA[1] = cr; cbA[1] = cb;
+    loadSmoothYCbCr(imgPos + ivec2(0, 1), yv, cr, cb);
+    yB[1] = yv; crB[1] = cr; cbB[1] = cb;
+    loadSmoothYCbCr(imgPos + ivec2(1, -1), yv, cr, cb);
+    yA[2] = yv; crA[2] = cr; cbA[2] = cb;
+    loadSmoothYCbCr(imgPos + ivec2(-1, 1), yv, cr, cb);
+    yB[2] = yv; crB[2] = cr; cbB[2] = cb;
+    loadSmoothYCbCr(imgPos + ivec2(-1, -1), yv, cr, cb);
+    yA[3] = yv; crA[3] = cr; cbA[3] = cb;
+    loadSmoothYCbCr(imgPos + ivec2(1, 1), yv, cr, cb);
+    yB[3] = yv; crB[3] = cr; cbB[3] = cb;
+
+    vec4 yP = vec4(pix.x);
+    vec4 crP = vec4(pix.y > 32767.0 ? (pix.y - 65536.0) : pix.y);
+    vec4 cbP = vec4(pix.z > 32767.0 ? (pix.z - 65536.0) : pix.z);
+
+    vec4 difA = (abs(yP - vec4(float(yA[0]), float(yA[1]), float(yA[2]), float(yA[3]))) +
+                 abs(crP - vec4(float(crA[0]), float(crA[1]), float(crA[2]), float(crA[3]))) +
+                 abs(cbP - vec4(float(cbA[0]), float(cbA[1]), float(cbA[2]), float(cbA[3])))) * (1.0 / 6.0);
+    vec4 difB = (abs(yP - vec4(float(yB[0]), float(yB[1]), float(yB[2]), float(yB[3]))) +
+                 abs(crP - vec4(float(crB[0]), float(crB[1]), float(crB[2]), float(crB[3]))) +
+                 abs(cbP - vec4(float(cbB[0]), float(cbB[1]), float(cbB[2]), float(cbB[3])))) * (1.0 / 6.0);
+
+    vec4 ly, lcr, lcb;
+    vec4 nom = difA + difB;
+    for (int i = 0; i < 4; i++) {
+        if (nom[i] != 0.0) {
+            ly[i]  = (float(yA[i])  * difB[i] + float(yB[i])  * difA[i]) / nom[i];
+            lcr[i] = (float(crA[i]) * difB[i] + float(crB[i]) * difA[i]) / nom[i];
+            lcb[i] = (float(cbA[i]) * difB[i] + float(cbB[i]) * difA[i]) / nom[i];
+        } else {
+            ly[i]  = hadd(float(yA[i]),  float(yB[i]));
+            lcr[i] = hadd(float(crA[i]), float(crB[i]));
+            lcb[i] = hadd(float(cbA[i]), float(cbB[i]));
+        }
+    }
+
+    vec4 scaleArr = min(abs(yP - ly) / (yP + ly) * 2.0, 1.0);
+    vec4 crArr = mix(crP, lcr, scaleArr);
+    vec4 cbArr = mix(cbP, lcb, scaleArr);
+
+    vec4 dir0 = vec4(0.0, crArr[0], cbArr[0], scaleArr[0]);
+    vec4 dir1 = vec4(0.0, crArr[1], cbArr[1], scaleArr[1]);
+    vec4 dir2 = vec4(0.0, crArr[2], cbArr[2], scaleArr[2]);
+    vec4 dir3 = vec4(0.0, crArr[3], cbArr[3], scaleArr[3]);
+
+    vec4 crcbe = vec4(0.0);
+    int pixw = int(pix.w);
+    int count = 0;
+    if ((pixw & (1 << 0)) != 0) { crcbe += dir0; count++; }
+    if ((pixw & (1 << 1)) != 0) { crcbe += dir0; count++; }
+    if ((pixw & (1 << 2)) != 0) { crcbe += dir1; count++; }
+    if ((pixw & (1 << 3)) != 0) { crcbe += dir1; count++; }
+    if ((pixw & (1 << 4)) != 0) { crcbe += dir2; count++; }
+    if ((pixw & (1 << 5)) != 0) { crcbe += dir2; count++; }
+    if ((pixw & (1 << 6)) != 0) { crcbe += dir3; count++; }
+    if ((pixw & (1 << 7)) != 0) { crcbe += dir3; count++; }
+
+    if (count > 0) {
+        crcbe /= float(count);
+    }
+
+    pix.w = crcbe.w * 65535.0;
+
+    float scale = min(min(scaleArr.x, scaleArr.y), min(scaleArr.z, scaleArr.w));
+    float yScale = clamp(1.0 - (yP.x / 16384.0 * scale), 0.0, 1.0);
+    pix.y = yScale * crcbe.y;
+    pix.z = yScale * crcbe.z;
+
+    return pix;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    if (gid.x < uParams_l || gid.x >= uParams_r ||
+        gid.y < uParams_t || gid.y >= uParams_b) return;
+
+    uvec4 uYccd = imageLoad(yccdTex, gid);
+    vec4 yccdPix = vec4(float(uYccd.r), float(uYccd.g), float(uYccd.b), float(uYccd.a));
+    yccdPix.yz = vec2(yccdPix.y > 32767.0 ? (yccdPix.y - 65536.0) : yccdPix.y,
+                      yccdPix.z > 32767.0 ? (yccdPix.z - 65536.0) : yccdPix.z);
+    uint dir = uYccd.a;
+    if (yccdPix.x != 0.0 && yccdPix.w != 0.0) {
+        yccdPix = colorFilter3(yccdPix, gid);
+    } else {
+        yccdPix.w = 0.0;
+    }
+    uint error = uint(yccdPix.w);
+
+    uvec4 uSmooth = imageLoad(smoothTex, gid);
+    float smoothY = float(uSmooth.g) > 32767.0 ? (float(uSmooth.g) - 65536.0) : float(uSmooth.g);
+    float smoothZ = float(uSmooth.b) > 32767.0 ? (float(uSmooth.b) - 65536.0) : float(uSmooth.b);
+    float yccdY = yccdPix.y > 32767.0 ? (yccdPix.y - 65536.0) : yccdPix.y;
+    float yccdZ = yccdPix.z > 32767.0 ? (yccdPix.z - 65536.0) : yccdPix.z;
+
+    if (abs(smoothY) + abs(smoothZ) < abs(yccdY) + abs(yccdZ)) {
+        yccdPix.y = float(uSmooth.g);
+        yccdPix.z = float(uSmooth.b);
+    }
+
+    // Output YCCD: (Y, Cr, Cb, dir)
+    imageStore(outYccd, gid, uvec4(uint(yccdPix.x), chromaUnsigned(int(yccdPix.y)), chromaUnsigned(int(yccdPix.z)), dir));
+    // Output Smooth: (Y, Cr, Cb, error)
+    imageStore(outSmooth, gid, uvec4(uint(yccdPix.x), chromaUnsigned(int(yccdPix.y)), chromaUnsigned(int(yccdPix.z)), error));
+}

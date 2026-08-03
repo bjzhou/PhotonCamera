@@ -107,6 +107,9 @@ fun getCropAspectOptions(allRatios: List<AspectRatio>): List<CropAspectOption> {
 fun CropEditPanel(
     selectedOption: CropAspectOption,
     onOptionSelected: (CropAspectOption) -> Unit,
+    isHorizontallyMirrored: Boolean,
+    onRotate: () -> Unit,
+    onMirrorHorizontal: () -> Unit,
     availableRatios: List<AspectRatio>,
     imageWidth: Int,
     imageHeight: Int,
@@ -121,6 +124,52 @@ fun CropEditPanel(
             .fillMaxWidth()
             .padding(vertical = 12.dp)
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilledTonalButton(
+                onClick = onRotate,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = Color.White.copy(alpha = 0.05f),
+                    contentColor = Color.White.copy(alpha = 0.6f)
+                )
+            ) {
+                Icon(
+                    imageVector = AppIcons.ScreenRotation,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.rotate), maxLines = 1)
+            }
+            FilledTonalButton(
+                onClick = onMirrorHorizontal,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = if (isHorizontallyMirrored) {
+                        AccentOrange.copy(alpha = 0.18f)
+                    } else {
+                        Color.White.copy(alpha = 0.05f)
+                    },
+                    contentColor = if (isHorizontallyMirrored) AccentOrange else Color.White.copy(0.6f)
+                )
+            ) {
+                Icon(
+                    imageVector = AppIcons.SwapHoriz,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.flip_horizontal), maxLines = 1)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
         // 比例选择标题
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),

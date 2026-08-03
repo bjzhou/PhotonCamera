@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.gallery.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
@@ -47,6 +48,7 @@ data class GalleryMediaEntity(
     val rawDenoiseValue: Float?,
     val rawExposureCompensation: Float?,
     val rawAutoExposure: Boolean?,
+    val rawAutoExposureMode: String?,
     val rawHighlightsAdjustment: Float?,
     val rawShadowsAdjustment: Float?,
     val rawBlackPointCorrection: Float?,
@@ -54,6 +56,9 @@ data class GalleryMediaEntity(
     val rawAutoWhiteBalanceEstimate: Boolean?,
     val rawLensShadingCorrectionEnabled: Boolean?,
     val rawDcpId: String?,
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: String = "standard",
+    val rawHncsFilmCurveMode: String = "standard",
     val rawColorEngine: String,
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,
@@ -61,8 +66,11 @@ data class GalleryMediaEntity(
     val rawAgxShoulder: Float,
     val rawFilmicBlackRelativeExposure: Float,
     val rawFilmicWhiteRelativeExposure: Float,
-    val rawGooglePixelToneMap: Boolean,
+    @ColumnInfo(name = "rawGooglePixelToneMap")
+    val legacyPhotonToneMap: Boolean,
     val rawOppoMasterToneMap: Boolean,
+    val rawPhotonPgtmToneMap: Boolean,
+    val rawAppleProRawToneMap: Boolean,
     val frameId: String?,
     val width: Int,
     val height: Int,
@@ -104,6 +112,8 @@ data class GalleryMediaEntity(
     val postCropTop: Int?,
     val postCropRight: Int?,
     val postCropBottom: Int?,
+    val postRotationDegrees: Int,
+    val postMirrorHorizontal: Boolean,
     val presentationTimestampUs: Long?,
     val droMode: String?,
     val software: String?,
@@ -120,6 +130,7 @@ data class GalleryMediaEntity(
     val rawBlackLevelMode: String?,
     val rawCustomBlackLevel: Float?,
     val rawWhiteLevelMode: String?,
+    val rawCustomWhiteLevel: Float?,
     val rawCfaCorrectionMode: String?,
     val rawBlackBorderCropLeftPx: Int,
     val rawBlackBorderCropTopPx: Int,

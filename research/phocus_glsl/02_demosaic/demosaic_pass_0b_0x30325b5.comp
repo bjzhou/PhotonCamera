@@ -1,0 +1,80 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 6ebfd8f9386e94f8fc0090d4b6379e8ac599ae6581c15edb35a0c1ed5981e6c5
+ * ELF offsets: 0x30325b5
+ * Symbols: demosaic_pass_0b_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16f, binding = 0) readonly  uniform image2D inTex;   // textureScale (width, height/2)
+layout(rgba16f, binding = 1) writeonly uniform image2D outTex;  // textureMedian (width/4, height/2)
+
+layout(std140, binding = 2) uniform DemosaicPass0bParams_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+};
+
+vec2 medianFilter(ivec2 imgPos) {
+    ivec2 pos1 = ivec2(imgPos.x, (imgPos.y - 1) / 2);
+    ivec2 pos2 = ivec2(imgPos.x + 2, (imgPos.y - 1) / 2);
+
+    float scale0 = imageLoad(inTex, pos1).g;
+    float scale1 = imageLoad(inTex, pos2).g;
+    vec2 v = vec2(scale0, scale1);
+    vec2 sum = v;
+
+    pos1 = ivec2(imgPos.x, (imgPos.y - 1) / 2 + 1);
+    pos2 = ivec2(imgPos.x + 2, (imgPos.y - 1) / 2 + 1);
+    scale0 = imageLoad(inTex, pos1).g;
+    scale1 = imageLoad(inTex, pos2).g;
+    v = vec2(scale0, scale1);
+    vec2 minv = min(sum, v);
+    vec2 maxv = max(sum, v);
+    sum += v;
+
+    pos1 = ivec2(imgPos.x - 1, imgPos.y / 2);
+    pos2 = ivec2(imgPos.x + 1, imgPos.y / 2);
+    scale0 = imageLoad(inTex, pos1).r;
+    scale1 = imageLoad(inTex, pos2).r;
+    v = vec2(scale0, scale1);
+    minv = min(minv, v);
+    maxv = max(maxv, v);
+    sum += v;
+
+    pos2 = ivec2(imgPos.x + 3, imgPos.y / 2);
+    scale0 = imageLoad(inTex, pos2).r;
+    v = vec2(scale1, scale0);
+    minv = min(minv, v);
+    maxv = max(maxv, v);
+    sum += v;
+    return (sum - minv - maxv) / 2.0;
+}
+
+void main() {
+    ivec2 outputPos = ivec2(gl_GlobalInvocationID.xy);
+
+    if (outputPos.x < uParams_l || outputPos.x >= uParams_r ||
+        outputPos.y * 2 < uParams_t || outputPos.y * 2 >= uParams_b) {
+        return;
+    }
+
+    int inputX = outputPos.x * 4;
+    int inputY = outputPos.y;
+
+    ivec2 pos1 = ivec2(inputX + 0, inputY * 2 + 0);
+    ivec2 pos2 = ivec2(inputX + 1, inputY * 2 + 1);
+
+    vec2 med1 = medianFilter(pos1);
+    vec2 med2 = medianFilter(pos2);
+
+    imageStore(outTex, outputPos, vec4(med1.x, med2.x, med1.y, med2.y));
+}

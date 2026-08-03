@@ -22,6 +22,7 @@ import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
+import com.hinnka.mycamera.gallery.PostEditGeometry
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
@@ -33,8 +34,9 @@ import com.hinnka.mycamera.lut.exportVideoWithEffects
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -61,6 +63,22 @@ import kotlin.math.roundToInt
 enum class GalleryTab {
     PHOTON, SYSTEM
 }
+
+enum class GalleryBatchOperation {
+    PASTE_SETTINGS,
+    EXPORT
+}
+
+data class GalleryBatchOperationProgress(
+    val operation: GalleryBatchOperation,
+    val completed: Int,
+    val total: Int
+)
+
+private data class CopiedEditSettings(
+    val metadata: MediaMetadata,
+    val normalizedCropRect: RectF?
+)
 
 /**
  * 相册 ViewModel
@@ -95,6 +113,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.chromaNoiseReduction }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+
+    val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.rawLensShadingCorrectionEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val categoryOrder: StateFlow<List<String>> = userPreferencesRepository.userPreferences
         .map { it.categoryOrder }
@@ -197,6 +219,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var exportProgress by mutableStateOf(0 to 0)
         private set
 
+    private val _isPastingSettings = MutableStateFlow(false)
+    val isPastingSettings: StateFlow<Boolean> = _isPastingSettings.asStateFlow()
+    var pasteSettingsProgress by mutableStateOf(0 to 0)
+        private set
+
+    private val _batchOperationProgress =
+        MutableStateFlow<GalleryBatchOperationProgress?>(null)
+    val batchOperationProgress: StateFlow<GalleryBatchOperationProgress?> =
+        _batchOperationProgress.asStateFlow()
+
+    private var copiedEditSettings: CopiedEditSettings? = null
+    private val _hasCopiedEditSettings = MutableStateFlow(false)
+    val hasCopiedEditSettings: StateFlow<Boolean> = _hasCopiedEditSettings.asStateFlow()
+
     // 视频导出状态
     var isVideoExporting by mutableStateOf(false)
         private set
@@ -247,6 +283,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /** 仅此照片的色彩配方覆盖，null 表示跟随 LUT 默认配方 */
     var editPhotoRecipeParams = MutableStateFlow<ColorRecipeParams?>(null)
         private set
+
+    private var editLutRecipeSyncJob: Job? = null
+    private var pendingEditLutRecipeSync: Pair<String, ColorRecipeParams>? = null
 
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
@@ -336,6 +375,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawWhitePointCorrection = MutableStateFlow(0f)
         private set
+    var editRawLensShadingCorrectionEnabled = MutableStateFlow(true)
+        private set
     var editRawDROMode = MutableStateFlow("OFF")
         private set
     var editRawBlackLevelMode = MutableStateFlow(RawCfaCorrection.MODE_DEFAULT)
@@ -344,9 +385,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawWhiteLevelMode = MutableStateFlow(RawWhiteLevelCorrection.MODE_DEFAULT)
         private set
+    var editRawCustomWhiteLevel = MutableStateFlow(0f)
+        private set
     var editRawCfaCorrectionMode = MutableStateFlow(RawCfaCorrection.MODE_DEFAULT)
         private set
     var editRawDcpId = MutableStateFlow<String?>(null)
+        private set
+    var editRawHncsProfileId = MutableStateFlow<String?>(null)
+        private set
+    var editRawHncsRenderIntent = MutableStateFlow(HncsRenderIntent.Standard)
+        private set
+    var editRawHncsFilmCurveMode = MutableStateFlow(HncsFilmCurveMode.Standard)
         private set
     var editRawBaselineLutId = MutableStateFlow<String?>(null)
         private set
@@ -394,6 +443,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editCropAspectOption = MutableStateFlow<CropAspectOption>(CropAspectOption.Free)
         private set
+    var editRotationDegrees = MutableStateFlow(0)
+        private set
+    var editMirrorHorizontal = MutableStateFlow(false)
+        private set
 
     private val _editAiDenoiseStrength = MutableStateFlow(1.0f)
     val editAiDenoiseStrength = _editAiDenoiseStrength.asStateFlow()
@@ -412,8 +465,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setFocusPoint(x: Float, y: Float) {
-        editFocusPointX.value = x
-        editFocusPointY.value = y
+        val (sourceX, sourceY) = PostEditGeometry.mapEditedPointToSource(
+            x = x,
+            y = y,
+            rotationDegrees = editRotationDegrees.value,
+            mirrorHorizontal = editMirrorHorizontal.value
+        )
+        editFocusPointX.value = sourceX
+        editFocusPointY.value = sourceY
         updateBokehPhoto()
     }
 
@@ -1007,7 +1066,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawAutoExposure.value == (metadata.rawAutoExposure ?: true) &&
             editRawHighlightsAdjustment.value == (metadata.rawHighlightsAdjustment ?: 0f) &&
             editRawShadowsAdjustment.value == (metadata.rawShadowsAdjustment ?: 0f) &&
+            editRawLensShadingCorrectionEnabled.value == resolveRawLensShadingCorrectionForEdit(metadata) &&
             editRawToneMappingParameters.value == metadata.rawToneMappingParameters
+    }
+
+    private fun resolveRawLensShadingCorrectionForEdit(metadata: MediaMetadata?): Boolean {
+        return metadata?.rawLensShadingCorrectionEnabled
+            ?: if (metadata?.isImported == true) true else rawLensShadingCorrectionEnabled.value
     }
 
     /**
@@ -1169,12 +1234,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
 
         if (selectedTab == GalleryTab.SYSTEM) {
-            photo.metadata?.let { m ->
+            photo.relatedPhoto?.metadata?.let { m ->
                 currentPhotoMetadataId = photo.id
                 applyMetadataToEditState(m)
                 return
             }
-            photo.relatedPhoto?.metadata?.let { m ->
+            photo.metadata?.let { m ->
                 currentPhotoMetadataId = photo.id
                 applyMetadataToEditState(m)
                 return
@@ -1230,6 +1295,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             lowerName.endsWith(".dng") ||
             lowerName.endsWith(".rw2") ||
             lowerName.endsWith(".arw") ||
+            lowerName.endsWith(".3fr") ||
             lowerName.endsWith(".cr3")
     }
 
@@ -1240,8 +1306,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        val cw = metadata.width.takeIf { it > 0 } ?: photo?.width ?: 0
-        val ch = metadata.height.takeIf { it > 0 } ?: photo?.height ?: 0
+        val baseWidth = metadata.width.takeIf { it > 0 } ?: photo?.width ?: 0
+        val baseHeight = metadata.height.takeIf { it > 0 } ?: photo?.height ?: 0
+        val (cw, ch) = PostEditGeometry.rotatedDimensions(
+            baseWidth,
+            baseHeight,
+            metadata.postRotationDegrees
+        )
         if (metadata.postCropRegion != null && cw > 0 && ch > 0) {
             val cropRect = RectF(
                 metadata.postCropRegion.left.toFloat() / cw,
@@ -1281,11 +1352,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawShadowsAdjustment.value = m.rawShadowsAdjustment ?: 0f
             editRawBlackPointCorrection.value = m.rawBlackPointCorrection ?: 0f
             editRawWhitePointCorrection.value = m.rawWhitePointCorrection ?: 0f
+            editRawLensShadingCorrectionEnabled.value = resolveRawLensShadingCorrectionForEdit(m)
             editRawBlackLevelMode.value = m.rawBlackLevelMode ?: RawCfaCorrection.MODE_DEFAULT
             editRawCustomBlackLevel.value = m.rawCustomBlackLevel ?: 0f
             editRawWhiteLevelMode.value = m.rawWhiteLevelMode ?: RawWhiteLevelCorrection.MODE_DEFAULT
+            editRawCustomWhiteLevel.value = m.rawCustomWhiteLevel ?: 0f
             editRawCfaCorrectionMode.value = m.rawCfaCorrectionMode ?: RawCfaCorrection.MODE_DEFAULT
             editRawDcpId.value = m.rawDcpId
+            editRawHncsProfileId.value = m.rawHncsProfileId
+            editRawHncsRenderIntent.value = m.rawHncsRenderIntent
+            editRawHncsFilmCurveMode.value = m.rawHncsFilmCurveMode
             editRawRenderingEngine.value = m.rawRenderingEngine
             editRawToneMappingParameters.value = m.rawToneMappingParameters
             editRawSpectralFilmStock.value = m.spectralFilmStock ?: "kodak_portra_400"
@@ -1293,6 +1369,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawSpectralFilmCDensityGain.value = m.spectralFilmCDensityGain
             editRawSpectralFilmMDensityGain.value = m.spectralFilmMDensityGain
             editRawSpectralFilmYDensityGain.value = m.spectralFilmYDensityGain
+            editRotationDegrees.value = PostEditGeometry.normalizeRotation(m.postRotationDegrees)
+            editMirrorHorizontal.value = m.postMirrorHorizontal
             _editAiDenoiseStrength.value = if (m.hasAiDenoisedBase) m.aiDenoiseStrength ?: 1.0f else 0.0f
             restoreCropEditState(photo, m)
 
@@ -1305,6 +1383,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         } ?: run {
+            editRotationDegrees.value = 0
+            editMirrorHorizontal.value = false
             _editAiDenoiseStrength.value = 0.0f
             restoreCropEditState(photo, null)
         }
@@ -1849,6 +1929,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawAutoExposure.value = metadata.rawAutoExposure ?: true
         editRawHighlightsAdjustment.value = metadata.rawHighlightsAdjustment ?: 0f
         editRawShadowsAdjustment.value = metadata.rawShadowsAdjustment ?: 0f
+        editRawLensShadingCorrectionEnabled.value = resolveRawLensShadingCorrectionForEdit(metadata)
         editRawToneMappingParameters.value = metadata.rawToneMappingParameters
     }
 
@@ -1882,6 +1963,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             
             if (!targetPhoto.isVideo) {
                 editRawDcpId.value = metadata.rawDcpId
+                editRawHncsProfileId.value = metadata.rawHncsProfileId
+                editRawHncsRenderIntent.value = metadata.rawHncsRenderIntent
+                editRawHncsFilmCurveMode.value = metadata.rawHncsFilmCurveMode
                 editRawBaselineLutId.value = metadata.baselineLutId
                 editRawRenderingEngine.value = metadata.rawRenderingEngine
                 editRawToneMappingParameters.value = metadata.rawToneMappingParameters
@@ -1890,6 +1974,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawSpectralFilmCDensityGain.value = metadata.spectralFilmCDensityGain
                 editRawSpectralFilmMDensityGain.value = metadata.spectralFilmMDensityGain
                 editRawSpectralFilmYDensityGain.value = metadata.spectralFilmYDensityGain
+                editRotationDegrees.value =
+                    PostEditGeometry.normalizeRotation(metadata.postRotationDegrees)
+                editMirrorHorizontal.value = metadata.postMirrorHorizontal
                 restoreCropEditState(targetPhoto, metadata)
                 // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
                 editSharpening.value =
@@ -1905,9 +1992,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawShadowsAdjustment.value = metadata.rawShadowsAdjustment ?: 0f
                 editRawBlackPointCorrection.value = metadata.rawBlackPointCorrection ?: 0f
                 editRawWhitePointCorrection.value = metadata.rawWhitePointCorrection ?: 0f
+                editRawLensShadingCorrectionEnabled.value = resolveRawLensShadingCorrectionForEdit(metadata)
                 editRawBlackLevelMode.value = metadata.rawBlackLevelMode ?: RawCfaCorrection.MODE_DEFAULT
                 editRawCustomBlackLevel.value = metadata.rawCustomBlackLevel ?: 0f
                 editRawWhiteLevelMode.value = metadata.rawWhiteLevelMode ?: RawWhiteLevelCorrection.MODE_DEFAULT
+                editRawCustomWhiteLevel.value = metadata.rawCustomWhiteLevel ?: 0f
                 editRawCfaCorrectionMode.value = metadata.rawCfaCorrectionMode ?: RawCfaCorrection.MODE_DEFAULT
                 editRawDROMode.value = RawProcessingPreferences.DROMode.fromPersistedName(metadata.droMode).name
                 editComputationalAperture.value = metadata.computationalAperture
@@ -1930,12 +2019,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawShadowsAdjustment.value = 0f
                 editRawBlackPointCorrection.value = 0f
                 editRawWhitePointCorrection.value = 0f
+                editRawLensShadingCorrectionEnabled.value = rawLensShadingCorrectionEnabled.value
                 editRawBlackLevelMode.value = RawCfaCorrection.MODE_DEFAULT
                 editRawCustomBlackLevel.value = 0f
                 editRawWhiteLevelMode.value = RawWhiteLevelCorrection.MODE_DEFAULT
+                editRawCustomWhiteLevel.value = 0f
                 editRawCfaCorrectionMode.value = RawCfaCorrection.MODE_DEFAULT
                 editRawDROMode.value = "OFF"
                 editRawDcpId.value = null
+                editRawHncsProfileId.value = null
+                editRawHncsRenderIntent.value = HncsRenderIntent.Standard
+                editRawHncsFilmCurveMode.value = HncsFilmCurveMode.Standard
                 editRawBaselineLutId.value = null
                 editRawRenderingEngine.value = RawRenderingEngine.AdobeCurve
                 editRawToneMappingParameters.value = RawToneMappingParameters.DEFAULT
@@ -1944,6 +2038,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawSpectralFilmCDensityGain.value = 1f
                 editRawSpectralFilmMDensityGain.value = 1f
                 editRawSpectralFilmYDensityGain.value = 1f
+                editRotationDegrees.value = 0
+                editMirrorHorizontal.value = false
                 editComputationalAperture.value = null
                 editFocusPointX.value = null
                 editFocusPointY.value = null
@@ -2022,6 +2118,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 退出编辑模式
      */
     fun exitEditMode() {
+        viewModelScope.launch {
+            flushPendingEditLutRecipeSync()
+        }
         isEditing = false
         editLutId.value = null
         editLutConfig = null
@@ -2030,18 +2129,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editApplyEffectsToVideo.value = false
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
+        editRotationDegrees.value = 0
+        editMirrorHorizontal.value = false
         editRawExposureCompensation.value = 0f
         editRawAutoExposure.value = true
         editRawHighlightsAdjustment.value = 0f
         editRawShadowsAdjustment.value = 0f
         editRawBlackPointCorrection.value = 0f
         editRawWhitePointCorrection.value = 0f
+        editRawLensShadingCorrectionEnabled.value = true
         editRawBlackLevelMode.value = RawCfaCorrection.MODE_DEFAULT
         editRawCustomBlackLevel.value = 0f
         editRawWhiteLevelMode.value = RawWhiteLevelCorrection.MODE_DEFAULT
+        editRawCustomWhiteLevel.value = 0f
         editRawCfaCorrectionMode.value = RawCfaCorrection.MODE_DEFAULT
         editRawDROMode.value = "OFF"
         editRawDcpId.value = null
+        editRawHncsProfileId.value = null
+        editRawHncsRenderIntent.value = HncsRenderIntent.Standard
+        editRawHncsFilmCurveMode.value = HncsFilmCurveMode.Standard
         editRawBaselineLutId.value = null
         editRawRenderingEngine.value = RawRenderingEngine.AdobeCurve
         editRawToneMappingParameters.value = RawToneMappingParameters.DEFAULT
@@ -2055,13 +2161,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 设置照片级别的色彩配方覆盖（null = 清除覆盖，跟随 LUT 默认）
      */
-    fun setPhotoRecipeParams(params: ColorRecipeParams?) {
+    fun setPhotoRecipeParams(
+        params: ColorRecipeParams?,
+        syncToCurrentLut: Boolean = false
+    ) {
         editPhotoRecipeParams.value = params
+        if (syncToCurrentLut && params != null) {
+            val lutId = editLutId.value ?: return
+            pendingEditLutRecipeSync = lutId to params
+            editLutRecipeSyncJob?.cancel()
+            editLutRecipeSyncJob = viewModelScope.launch {
+                delay(250)
+                editLutRecipeSyncJob = null
+                flushPendingEditLutRecipeSync()
+            }
+        }
     }
 
-    fun setPhotoEffectParams(params: EffectParams, baseRecipeOverride: ColorRecipeParams? = null) {
-        val baseRecipe = baseRecipeOverride ?: editPhotoRecipeParams.value ?: editLutRecipeParams.value
-        editPhotoRecipeParams.value = params.applyTo(baseRecipe)
+    private suspend fun flushPendingEditLutRecipeSync() {
+        editLutRecipeSyncJob?.cancel()
+        editLutRecipeSyncJob = null
+        val (lutId, params) = pendingEditLutRecipeSync ?: return
+        pendingEditLutRecipeSync = null
+        contentRepository.lutManager.saveColorRecipeParams(lutId, params)
     }
 
     /**
@@ -2084,20 +2206,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun switchToNextLut() {
-        if (availableLuts.isEmpty()) return
+    fun switchToNextLut(): LutInfo? {
+        if (availableLuts.isEmpty()) return null
         val currentLut = editLutId.value
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
         val nextIndex = (currentIndex + 1) % availableLuts.size
-        setEditLut(availableLuts[nextIndex].id)
+        val nextLut = availableLuts[nextIndex]
+        setEditLut(nextLut.id)
+        return nextLut
     }
 
-    fun switchToPreviousLut() {
-        if (availableLuts.isEmpty()) return
+    fun switchToPreviousLut(): LutInfo? {
+        if (availableLuts.isEmpty()) return null
         val currentLut = editLutId.value
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
         val prevIndex = if (currentIndex <= 0) availableLuts.size - 1 else currentIndex - 1
-        setEditLut(availableLuts[prevIndex].id)
+        val previousLut = availableLuts[prevIndex]
+        setEditLut(previousLut.id)
+        return previousLut
     }
 
 
@@ -2127,6 +2253,177 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 )
             }
         }
+    }
+
+    /**
+     * 复制当前编辑页中实际生效的后期设置。RAW 开发参数刻意不进入剪贴板，
+     * 避免粘贴后改变目标照片的 RAW 开发结果并触发重新刷新。
+     *
+     * 色彩配方保存为当前有效值，而不是继续引用 LUT 的默认值，确保复制后即使 LUT
+     * 的全局配方发生变化，粘贴结果仍与复制时看到的画面一致。
+     */
+    fun copyCurrentEditSettings(customProperties: Map<String, String>) {
+        val normalizedCrop = editCropRect.value?.let(::RectF)
+        val sourceIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
+        copiedEditSettings = CopiedEditSettings(
+            metadata = MediaMetadata(
+                lutId = editLutId.value,
+                colorRecipeParams = (editPhotoRecipeParams.value ?: editLutRecipeParams.value)
+                    .deepCopy(),
+                sharpening = editSharpening.value.takeUnless { sourceIsRaw },
+                noiseReduction = editNoiseReduction.value.takeUnless { sourceIsRaw },
+                chromaNoiseReduction =
+                    editChromaNoiseReduction.value.takeUnless { sourceIsRaw },
+                frameId = editFrameId.value,
+                customProperties = customProperties.toMap(),
+                computationalAperture = editComputationalAperture.value,
+                focusPointX = editFocusPointX.value,
+                focusPointY = editFocusPointY.value,
+                postRotationDegrees = editRotationDegrees.value,
+                postMirrorHorizontal = editMirrorHorizontal.value,
+                applyEffectsToVideo = editApplyEffectsToVideo.value
+            ),
+            normalizedCropRect = normalizedCrop
+        )
+        _hasCopiedEditSettings.value = true
+    }
+
+    /**
+     * 从详情页复制照片已经保存的后期设置。
+     */
+    fun copyPhotoSettings(
+        photo: MediaData,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val sourcePhoto = photo.relatedPhoto ?: photo
+                val sourceIsRaw = isRawMedia(photo)
+                val metadata = withContext(Dispatchers.IO) {
+                    GalleryManager.loadMetadata(context, sourcePhoto.id)
+                        ?: sourcePhoto.metadata
+                        ?: photo.metadata
+                        ?: if (selectedTab == GalleryTab.SYSTEM) {
+                            MediaMetadata.fromUri(context, photo.uri)
+                        } else {
+                            null
+                        }
+                } ?: run {
+                    onComplete(false)
+                    return@launch
+                }
+                val effectiveRecipe = metadata.colorRecipeParams
+                    ?: metadata.lutId?.let { lutId ->
+                        withContext(Dispatchers.IO) {
+                            contentRepository.lutManager.loadColorRecipeParams(lutId)
+                        }
+                    }
+                val baseWidth = metadata.width.takeIf { it > 0 } ?: sourcePhoto.width
+                val baseHeight = metadata.height.takeIf { it > 0 } ?: sourcePhoto.height
+                val (cropWidth, cropHeight) = PostEditGeometry.rotatedDimensions(
+                    baseWidth,
+                    baseHeight,
+                    metadata.postRotationDegrees
+                )
+                val normalizedCrop = metadata.postCropRegion
+                    ?.takeIf { cropWidth > 0 && cropHeight > 0 }
+                    ?.let { crop ->
+                        RectF(
+                            crop.left.toFloat() / cropWidth,
+                            crop.top.toFloat() / cropHeight,
+                            crop.right.toFloat() / cropWidth,
+                            crop.bottom.toFloat() / cropHeight
+                        )
+                    }
+
+                copiedEditSettings = CopiedEditSettings(
+                    metadata = MediaMetadata(
+                        lutId = metadata.lutId,
+                        colorRecipeParams = effectiveRecipe?.deepCopy(),
+                        sharpening = metadata.sharpening.takeUnless { sourceIsRaw },
+                        noiseReduction = metadata.noiseReduction.takeUnless { sourceIsRaw },
+                        chromaNoiseReduction =
+                            metadata.chromaNoiseReduction.takeUnless { sourceIsRaw },
+                        frameId = metadata.frameId,
+                        customProperties = metadata.customProperties.toMap(),
+                        computationalAperture = metadata.computationalAperture,
+                        focusPointX = metadata.focusPointX,
+                        focusPointY = metadata.focusPointY,
+                        postRotationDegrees = metadata.postRotationDegrees,
+                        postMirrorHorizontal = metadata.postMirrorHorizontal,
+                        applyEffectsToVideo = metadata.applyEffectsToVideo
+                    ),
+                    normalizedCropRect = normalizedCrop
+                )
+                _hasCopiedEditSettings.value = true
+                onComplete(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to copy settings from photo ${photo.id}", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    /**
+     * 将已复制设置放入当前编辑态；返回边框自定义属性供编辑页同步本地预览状态。
+     */
+    fun pasteCopiedEditSettingsToCurrentEdit(): Map<String, String>? {
+        val copied = copiedEditSettings ?: return null
+        val settings = copied.metadata
+
+        pendingEditLutRecipeSync = null
+        editLutRecipeSyncJob?.cancel()
+        editLutRecipeSyncJob = null
+
+        editLutId.value = settings.lutId
+        editPhotoRecipeParams.value = settings.colorRecipeParams?.deepCopy()
+        editFrameId.value = settings.frameId
+        val targetIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
+        if (!targetIsRaw) {
+            settings.sharpening?.let { editSharpening.value = it }
+            settings.noiseReduction?.let { editNoiseReduction.value = it }
+            settings.chromaNoiseReduction?.let {
+                editChromaNoiseReduction.value = it
+            }
+        }
+        editComputationalAperture.value = settings.computationalAperture
+        editFocusPointX.value = settings.focusPointX
+        editFocusPointY.value = settings.focusPointY
+        editRotationDegrees.value =
+            PostEditGeometry.normalizeRotation(settings.postRotationDegrees)
+        editMirrorHorizontal.value = settings.postMirrorHorizontal
+        editCropRect.value = copied.normalizedCropRect?.let(::RectF)
+        editCropAspectOption.value = copied.normalizedCropRect?.let {
+            CropAspectOption.Custom(it.width(), it.height())
+        } ?: CropAspectOption.Free
+        editApplyEffectsToVideo.value = settings.applyEffectsToVideo
+        currentMediaMetadata = (currentMediaMetadata ?: MediaMetadata()).copy(
+            customProperties = settings.customProperties.toMap()
+        )
+
+        settings.lutId?.let { lutId ->
+            viewModelScope.launch {
+                editLutConfig = withContext(Dispatchers.IO) {
+                    contentRepository.lutManager.loadLut(lutId)
+                }
+            }
+        } ?: run {
+            editLutConfig = null
+        }
+        updateBokehPhoto()
+        return settings.customProperties.toMap()
+    }
+
+    private fun ColorRecipeParams.deepCopy(): ColorRecipeParams {
+        return copy(
+            masterCurvePoints = masterCurvePoints?.copyOf(),
+            redCurvePoints = redCurvePoints?.copyOf(),
+            greenCurvePoints = greenCurvePoints?.copyOf(),
+            blueCurvePoints = blueCurvePoints?.copyOf()
+        )
     }
 
     /**
@@ -2173,12 +2470,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val shadows = editRawShadowsAdjustment.value
         val blackPoint = editRawBlackPointCorrection.value
         val whitePoint = editRawWhitePointCorrection.value
+        val lensShadingCorrectionEnabled = editRawLensShadingCorrectionEnabled.value
         val droMode = editRawDROMode.value
         val blackLevelMode = editRawBlackLevelMode.value
         val customBlackLevel = editRawCustomBlackLevel.value
         val whiteLevelMode = editRawWhiteLevelMode.value
+        val customWhiteLevel = editRawCustomWhiteLevel.value
         val cfaCorrectionMode = editRawCfaCorrectionMode.value
         val dcpId = editRawDcpId.value
+        val hncsProfileId = editRawHncsProfileId.value
+        val hncsRenderIntent = editRawHncsRenderIntent.value
+        val hncsFilmCurveMode = editRawHncsFilmCurveMode.value
         val baselineLutId = editRawBaselineLutId.value
         val rawColorEngine = editRawRenderingEngine.value
         val rawToneMappingParameters = editRawToneMappingParameters.value.normalized()
@@ -2194,7 +2496,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             PLog.d(
                 TAG,
                 "persist RAW edit metadata: ${mediaData.id}, dro=$droMode, noise=$noiseReduction, " +
-                    "chromaNoise=$chromaNoiseReduction, googlePixelToneMap=${rawToneMappingParameters.useGooglePixelToneMap}"
+                    "chromaNoise=$chromaNoiseReduction, profileToneMap=${rawToneMappingParameters.profileToneMapMode}"
             )
             val updated = GalleryManager.updateMetadata(context, mediaData.id) { current ->
                 current.copy(
@@ -2207,12 +2509,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     rawShadowsAdjustment = shadows,
                     rawBlackPointCorrection = blackPoint,
                     rawWhitePointCorrection = whitePoint,
+                    rawLensShadingCorrectionEnabled = lensShadingCorrectionEnabled,
                     rawBlackLevelMode = blackLevelMode,
                     rawCustomBlackLevel = customBlackLevel,
                     rawWhiteLevelMode = whiteLevelMode,
+                    rawCustomWhiteLevel = customWhiteLevel,
                     rawCfaCorrectionMode = cfaCorrectionMode,
                     droMode = droMode,
                     rawDcpId = dcpId,
+                    rawHncsProfileId = hncsProfileId,
+                    rawHncsRenderIntent = hncsRenderIntent,
+                    rawHncsFilmCurveMode = hncsFilmCurveMode,
                     baselineTarget = baselineLutId?.let { BaselineColorCorrectionTarget.RAW },
                     baselineLutId = baselineLutId,
                     baselineColorRecipeParams = baselineRecipeParams,
@@ -2244,7 +2551,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     if (_latestPhoto.value?.id == mediaData.id) {
                         _latestPhoto.value = _latestPhoto.value?.copy(metadata = updated)
                     }
-                    photoRefreshKeys[mediaData.id] = System.currentTimeMillis()
                 }
                 onComplete?.invoke(updated != null)
             }
@@ -2262,7 +2568,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     ) {
         val previous = editRawToneMappingParameters.value.normalized()
         val updated = value.normalized()
-        val shouldEnableHdrGainmap = !previous.useGooglePixelToneMap && updated.useGooglePixelToneMap
+        val shouldEnableHdrGainmap =
+            previous.profileToneMapMode != updated.profileToneMapMode &&
+                updated.usePhotonPgtmToneMap
         editRawToneMappingParameters.value = updated
         persistRawEditMetadata(
             mediaData = mediaData,
@@ -2322,6 +2630,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         persistRawEditMetadata(mediaData, onComplete)
     }
 
+    fun saveRawLensShadingCorrectionEnabled(
+        mediaData: MediaData,
+        enabled: Boolean,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        editRawLensShadingCorrectionEnabled.value = enabled
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
     fun saveRawBlackLevelMode(mediaData: MediaData, mode: String, onComplete: ((Boolean) -> Unit)? = null) {
         editRawBlackLevelMode.value = mode
         persistRawEditMetadata(mediaData, onComplete)
@@ -2337,6 +2654,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         persistRawEditMetadata(mediaData, onComplete)
     }
 
+    fun saveRawCustomWhiteLevel(mediaData: MediaData, value: Float, onComplete: ((Boolean) -> Unit)? = null) {
+        editRawCustomWhiteLevel.value = value
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
     fun saveRawCfaCorrectionMode(mediaData: MediaData, mode: String, onComplete: ((Boolean) -> Unit)? = null) {
         editRawCfaCorrectionMode.value = mode
         persistRawEditMetadata(mediaData, onComplete)
@@ -2344,6 +2666,33 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun saveRawDcpSelection(mediaData: MediaData, dcpId: String?, onComplete: ((Boolean) -> Unit)? = null) {
         editRawDcpId.value = dcpId
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
+    fun saveRawHncsProfileSelection(
+        mediaData: MediaData,
+        profileId: String?,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        editRawHncsProfileId.value = profileId
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
+    fun saveRawHncsRenderIntent(
+        mediaData: MediaData,
+        renderIntent: HncsRenderIntent,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        editRawHncsRenderIntent.value = renderIntent
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
+    fun saveRawHncsFilmCurveMode(
+        mediaData: MediaData,
+        mode: HncsFilmCurveMode,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        editRawHncsFilmCurveMode.value = mode
         persistRawEditMetadata(mediaData, onComplete)
     }
 
@@ -2433,16 +2782,56 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 设置裁剪比例选项
+     * 设置裁剪比例选项。
+     *
+     * 系统相册中的 RAW 会先导入为 Photon 副本再进入编辑，外层系统条目的尺寸/方向
+     * 可能与实际编辑预览不同，因此裁剪框必须使用实际编辑源的元数据坐标系。
      */
     fun setCropAspectOption(option: CropAspectOption) {
         editCropAspectOption.value = option
-        val photo = getCurrentPhoto() ?: return
-        val w = photo.metadata?.width ?: photo.width
-        val h = photo.metadata?.height ?: photo.height
+        val photo = getCurrentPhoto()?.let { it.relatedPhoto ?: it } ?: return
+        val baseWidth = photo.metadata?.width?.takeIf { it > 0 }
+            ?: currentMediaMetadata?.width?.takeIf { it > 0 }
+            ?: photo.width
+        val baseHeight = photo.metadata?.height?.takeIf { it > 0 }
+            ?: currentMediaMetadata?.height?.takeIf { it > 0 }
+            ?: photo.height
+        val (w, h) = PostEditGeometry.rotatedDimensions(
+            baseWidth,
+            baseHeight,
+            editRotationDegrees.value
+        )
         if (w > 0 && h > 0) {
             editCropRect.value = calculateInitialCropRect(w, h, option)
         }
+    }
+
+    fun rotateEditClockwise() {
+        editCropRect.value = editCropRect.value?.let {
+            PostEditGeometry.rotateNormalizedRect(it, 90)
+        }
+        editCropAspectOption.value = when (val option = editCropAspectOption.value) {
+            is CropAspectOption.FromAspectRatio -> CropAspectOption.Custom(
+                option.heightRatio,
+                option.widthRatio
+            )
+            is CropAspectOption.Custom -> CropAspectOption.Custom(
+                option.heightRatio,
+                option.widthRatio
+            )
+            else -> option
+        }
+        editRotationDegrees.value = PostEditGeometry.rotationAfterClockwiseTurn(
+            rotationDegrees = editRotationDegrees.value,
+            mirrorHorizontal = editMirrorHorizontal.value
+        )
+    }
+
+    fun toggleEditHorizontalMirror() {
+        editCropRect.value = editCropRect.value?.let {
+            PostEditGeometry.mirrorNormalizedRectHorizontally(it)
+        }
+        editMirrorHorizontal.value = !editMirrorHorizontal.value
     }
 
     /**
@@ -2617,11 +3006,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawShadowsAdjustment = editRawShadowsAdjustment.value,
                         rawBlackPointCorrection = editRawBlackPointCorrection.value,
                         rawWhitePointCorrection = editRawWhitePointCorrection.value,
+                        rawLensShadingCorrectionEnabled = editRawLensShadingCorrectionEnabled.value,
                         rawBlackLevelMode = editRawBlackLevelMode.value,
                         rawCustomBlackLevel = editRawCustomBlackLevel.value,
                         rawWhiteLevelMode = editRawWhiteLevelMode.value,
+                        rawCustomWhiteLevel = editRawCustomWhiteLevel.value,
                         rawCfaCorrectionMode = editRawCfaCorrectionMode.value,
                         rawDcpId = editRawDcpId.value,
+                        rawHncsProfileId = editRawHncsProfileId.value,
+                        rawHncsRenderIntent = editRawHncsRenderIntent.value,
+                        rawHncsFilmCurveMode = editRawHncsFilmCurveMode.value,
                         baselineTarget = editRawBaselineLutId.value?.let { BaselineColorCorrectionTarget.RAW },
                         baselineLutId = editRawBaselineLutId.value,
                         baselineColorRecipeParams = editRawBaselineLutId.value?.let {
@@ -2638,15 +3032,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
                         postCropRegion = editCropRect.value?.let { rectF ->
-                            val cw = photo.metadata?.width ?: photo.width
-                            val ch = photo.metadata?.height ?: photo.height
+                            val baseWidth = photo.metadata?.width ?: photo.width
+                            val baseHeight = photo.metadata?.height ?: photo.height
+                            val (cw, ch) = PostEditGeometry.rotatedDimensions(
+                                baseWidth,
+                                baseHeight,
+                                editRotationDegrees.value
+                            )
                             android.graphics.Rect(
                                 (rectF.left * cw).roundToInt(),
                                 (rectF.top * ch).roundToInt(),
                                 (rectF.right * cw).roundToInt(),
                                 (rectF.bottom * ch).roundToInt()
                             )
-                        }
+                        },
+                        postRotationDegrees = editRotationDegrees.value,
+                        postMirrorHorizontal = editMirrorHorizontal.value
                     )
                     
                     if (ignoreCrop) {
@@ -2895,6 +3296,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             try {
+                flushPendingEditLutRecipeSync()
                 val context = getApplication<Application>()
                 val wasSystemPhoto = selectedTab == GalleryTab.SYSTEM
 
@@ -2920,10 +3322,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
+                val targetMetadata = GalleryManager.loadMetadata(context, targetPhotoId)
+                    ?: photo.relatedPhoto?.metadata
+                    ?: currentMediaMetadata
+                    ?: photo.metadata
                 val rawBaselineLutId = editRawBaselineLutId.value
                 val rawBaselineRecipeParams = loadRawBaselineRecipeParams(rawBaselineLutId)
-                val w = photo.metadata?.width ?: photo.width
-                val h = photo.metadata?.height ?: photo.height
+                val baseWidth = targetMetadata?.width?.takeIf { it > 0 }
+                    ?: photo.relatedPhoto?.width?.takeIf { it > 0 }
+                    ?: photo.width
+                val baseHeight = targetMetadata?.height?.takeIf { it > 0 }
+                    ?: photo.relatedPhoto?.height?.takeIf { it > 0 }
+                    ?: photo.height
+                val (w, h) = PostEditGeometry.rotatedDimensions(
+                    baseWidth,
+                    baseHeight,
+                    editRotationDegrees.value
+                )
                 val finalCropRegion = editCropRect.value?.let { rectF ->
                     android.graphics.Rect(
                         (rectF.left * w).roundToInt(),
@@ -2937,6 +3352,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     current.copy(
                         lutId = editLutId.value,
                         frameId = editFrameId.value,
+                        customProperties = currentMediaMetadata?.customProperties
+                            ?: targetMetadata?.customProperties.orEmpty(),
                         colorRecipeParams = editPhotoRecipeParams.value,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
@@ -2947,11 +3364,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawShadowsAdjustment = editRawShadowsAdjustment.value,
                         rawBlackPointCorrection = editRawBlackPointCorrection.value,
                         rawWhitePointCorrection = editRawWhitePointCorrection.value,
+                        rawLensShadingCorrectionEnabled = editRawLensShadingCorrectionEnabled.value,
                         rawBlackLevelMode = editRawBlackLevelMode.value,
                         rawCustomBlackLevel = editRawCustomBlackLevel.value,
                         rawWhiteLevelMode = editRawWhiteLevelMode.value,
+                        rawCustomWhiteLevel = editRawCustomWhiteLevel.value,
                         rawCfaCorrectionMode = editRawCfaCorrectionMode.value,
                         rawDcpId = editRawDcpId.value,
+                        rawHncsProfileId = editRawHncsProfileId.value,
+                        rawHncsRenderIntent = editRawHncsRenderIntent.value,
+                        rawHncsFilmCurveMode = editRawHncsFilmCurveMode.value,
                         baselineTarget = rawBaselineLutId?.let { BaselineColorCorrectionTarget.RAW },
                         baselineLutId = rawBaselineLutId,
                         baselineColorRecipeParams = rawBaselineRecipeParams,
@@ -2966,6 +3388,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
                         postCropRegion = finalCropRegion,
+                        postRotationDegrees = editRotationDegrees.value,
+                        postMirrorHorizontal = editMirrorHorizontal.value,
                         applyEffectsToVideo = editApplyEffectsToVideo.value
                     )
                 }
@@ -2976,6 +3400,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                     currentMediaMetadata = success
                     photo.metadata = success
+                    photo.relatedPhoto?.metadata = success
 
                     // 系统相册项保存后保留 SYSTEM tab，通过 relatedPhoto 展示导入副本的编辑结果。
                     if (wasSystemPhoto) {
@@ -3208,18 +3633,320 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun applyCopiedEditSettings(
+        current: MediaMetadata,
+        copied: CopiedEditSettings,
+        copyDetailProcessing: Boolean
+    ): MediaMetadata {
+        val settings = copied.metadata
+        val (cropWidth, cropHeight) = PostEditGeometry.rotatedDimensions(
+            current.width,
+            current.height,
+            settings.postRotationDegrees
+        )
+        val cropRegion = copied.normalizedCropRect
+            ?.takeIf { cropWidth > 0 && cropHeight > 0 }
+            ?.let { rect ->
+                android.graphics.Rect(
+                    (rect.left * cropWidth).roundToInt(),
+                    (rect.top * cropHeight).roundToInt(),
+                    (rect.right * cropWidth).roundToInt(),
+                    (rect.bottom * cropHeight).roundToInt()
+                )
+            }
+
+        return current.copy(
+            lutId = settings.lutId,
+            frameId = settings.frameId,
+            customProperties = settings.customProperties.toMap(),
+            colorRecipeParams = settings.colorRecipeParams?.deepCopy(),
+            sharpening = if (copyDetailProcessing && settings.sharpening != null) {
+                settings.sharpening
+            } else {
+                current.sharpening
+            },
+            noiseReduction =
+                if (copyDetailProcessing && settings.noiseReduction != null) {
+                    settings.noiseReduction
+                } else {
+                    current.noiseReduction
+                },
+            chromaNoiseReduction =
+                if (copyDetailProcessing && settings.chromaNoiseReduction != null) {
+                    settings.chromaNoiseReduction
+                } else {
+                    current.chromaNoiseReduction
+                },
+            computationalAperture = settings.computationalAperture,
+            focusPointX = settings.focusPointX,
+            focusPointY = settings.focusPointY,
+            postCropRegion = cropRegion,
+            postRotationDegrees =
+                PostEditGeometry.normalizeRotation(settings.postRotationDegrees),
+            postMirrorHorizontal = settings.postMirrorHorizontal,
+            applyEffectsToVideo = settings.applyEffectsToVideo
+        )
+    }
+
+    /**
+     * 从详情页将剪贴板设置直接保存到当前照片，不进入编辑模式。
+     */
+    fun pasteCopiedSettingsToPhoto(
+        photo: MediaData,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        val copied = copiedEditSettings ?: run {
+            onComplete(false)
+            return
+        }
+        val selectedTabSnapshot = selectedTab
+
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val result = withContext(Dispatchers.IO) {
+                    val targetPhotoId = if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                        photo.relatedPhoto?.id
+                            ?: findPhotonPhotoBySourceUri(photo.uri)?.id
+                            ?: GalleryManager.importPhoto(context, photo.uri, null)
+                    } else {
+                        photo.id
+                    } ?: return@withContext null
+
+                    val targetIsRaw =
+                        GalleryManager.getDngFile(context, targetPhotoId).exists()
+                    val fallbackMetadata = photo.relatedPhoto?.metadata
+                        ?: photo.metadata
+                        ?: MediaMetadata(
+                            mediaType = photo.mediaType,
+                            width = photo.width,
+                            height = photo.height
+                        )
+                    val updated = GalleryManager.updateMetadata(
+                        context,
+                        targetPhotoId
+                    ) { latest ->
+                        val metadataWithResolvedSize =
+                            if (latest.width > 0 && latest.height > 0) {
+                                latest
+                            } else {
+                                latest.copy(
+                                    width = fallbackMetadata.width,
+                                    height = fallbackMetadata.height
+                                )
+                            }
+                        applyCopiedEditSettings(
+                            current = metadataWithResolvedSize,
+                            copied = copied,
+                            copyDetailProcessing = !targetIsRaw
+                        )
+                    } ?: return@withContext null
+
+                    invalidatePreviewCache(targetPhotoId)
+                    GalleryManager.deleteDetailHdrFile(context, targetPhotoId)
+                    GalleryManager.queueDetailHdrCacheBuild(
+                        context = context,
+                        photoId = targetPhotoId,
+                        metadata = updated,
+                        sharpening = updated.sharpening ?: 0f,
+                        noiseReduction = updated.noiseReduction ?: 0f,
+                        chromaNoiseReduction = updated.chromaNoiseReduction ?: 0f
+                    )
+                    GalleryManager.updateThumbnail(
+                        context = context,
+                        photoId = targetPhotoId,
+                        photoProcessor = contentRepository.photoProcessor,
+                        metadata = updated
+                    )
+                    targetPhotoId to updated
+                }
+
+                if (result == null) {
+                    onComplete(false)
+                    return@launch
+                }
+                val (targetPhotoId, updated) = result
+                currentMediaMetadata = updated
+                currentPhotoMetadataId = photo.id
+                photo.relatedPhoto?.metadata = updated
+                if (selectedTabSnapshot == GalleryTab.PHOTON) {
+                    photo.metadata = updated
+                }
+                applyPhotoMetadataUpdateToMemory(targetPhotoId, updated)
+                if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                    loadPhotos(reset = true)
+                    _photos.value.firstOrNull { it.id == targetPhotoId }?.let {
+                        linkSystemPhotoToPhoton(photo.id, it)
+                    }
+                }
+                photoRefreshKeys[targetPhotoId] = System.currentTimeMillis()
+                onComplete(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to paste settings to photo ${photo.id}", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    /**
+     * 将剪贴板中的设置批量应用到选中的照片。系统相册照片会先建立 Photon 副本，
+     * 使粘贴保持非破坏性，并与单张编辑保存使用同一份元数据链路。
+     */
+    fun pasteCopiedSettingsToSelectedPhotos(
+        onComplete: (successCount: Int, total: Int) -> Unit = { _, _ -> }
+    ) {
+        if (_isExporting.value || _isPastingSettings.value) return
+        val copied = copiedEditSettings ?: run {
+            onComplete(0, 0)
+            return
+        }
+        val selectedSnapshot = selectedPhotos.filter { it.isImage }
+        if (selectedSnapshot.isEmpty()) {
+            onComplete(0, 0)
+            return
+        }
+        val selectedTabSnapshot = selectedTab
+
+        viewModelScope.launch {
+            _isPastingSettings.value = true
+            val total = selectedSnapshot.size
+            pasteSettingsProgress = 0 to total
+            _batchOperationProgress.value = GalleryBatchOperationProgress(
+                operation = GalleryBatchOperation.PASTE_SETTINGS,
+                completed = 0,
+                total = total
+            )
+            var successCount = 0
+
+            try {
+                val context = getApplication<Application>()
+                withContext(Dispatchers.IO) {
+                    selectedSnapshot.forEachIndexed { index, photo ->
+                        var refreshedPhotoId: String? = null
+                        try {
+                            val targetPhotoId = if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                                photo.relatedPhoto?.id
+                                    ?: findPhotonPhotoBySourceUri(photo.uri)?.id
+                                    ?: GalleryManager.importPhoto(context, photo.uri, null)
+                            } else {
+                                photo.id
+                            }
+                            if (targetPhotoId != null) {
+                                val targetIsRaw =
+                                    GalleryManager.getDngFile(context, targetPhotoId).exists()
+                                val current = GalleryManager.loadMetadata(context, targetPhotoId)
+                                    ?: photo.relatedPhoto?.metadata
+                                    ?: photo.metadata
+                                    ?: MediaMetadata(
+                                        width = photo.width,
+                                        height = photo.height,
+                                        mediaType = photo.mediaType
+                                    )
+                                val updated = GalleryManager.updateMetadata(
+                                    context,
+                                    targetPhotoId
+                                ) { latest ->
+                                    val metadataWithResolvedSize =
+                                        if (latest.width > 0 && latest.height > 0) {
+                                            latest
+                                        } else {
+                                            latest.copy(
+                                                width = current.width,
+                                                height = current.height
+                                            )
+                                        }
+                                    applyCopiedEditSettings(
+                                        metadataWithResolvedSize,
+                                        copied,
+                                        copyDetailProcessing = !targetIsRaw
+                                    )
+                                }
+                                if (updated != null) {
+                                    invalidatePreviewCache(targetPhotoId)
+                                    GalleryManager.deleteDetailHdrFile(context, targetPhotoId)
+                                    GalleryManager.queueDetailHdrCacheBuild(
+                                        context = context,
+                                        photoId = targetPhotoId,
+                                        metadata = updated,
+                                        sharpening = updated.sharpening ?: 0f,
+                                        noiseReduction = updated.noiseReduction ?: 0f,
+                                        chromaNoiseReduction =
+                                            updated.chromaNoiseReduction ?: 0f
+                                    )
+                                    GalleryManager.updateThumbnail(
+                                        context = context,
+                                        photoId = targetPhotoId,
+                                        photoProcessor = contentRepository.photoProcessor,
+                                        metadata = updated
+                                    )
+                                    refreshedPhotoId = targetPhotoId
+                                    successCount += 1
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            PLog.e(
+                                TAG,
+                                "Failed to paste settings to selected photo ${photo.id}",
+                                e
+                            )
+                        } finally {
+                            withContext(Dispatchers.Main) {
+                                val completed = index + 1
+                                pasteSettingsProgress = completed to total
+                                _batchOperationProgress.value =
+                                    GalleryBatchOperationProgress(
+                                        operation =
+                                            GalleryBatchOperation.PASTE_SETTINGS,
+                                        completed = completed,
+                                        total = total
+                                    )
+                                refreshedPhotoId?.let { photoId ->
+                                    photoRefreshKeys[photoId] = System.currentTimeMillis()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                exitSelectionMode()
+                loadPhotos(reset = true)
+                onComplete(successCount, total)
+            } finally {
+                _isPastingSettings.value = false
+                pasteSettingsProgress = 0 to 0
+                _batchOperationProgress.value = null
+            }
+        }
+    }
+
     /**
      * 批量导出选中的照片
      */
     fun exportSelectedPhotos(onComplete: (Int) -> Unit = {}) {
+        if (_isExporting.value || _isPastingSettings.value) return
         val selectedSnapshot = selectedPhotos.toList()
         if (selectedSnapshot.isEmpty()) return
+        val toExport = selectedSnapshot.filter { it.isImage }
+        if (toExport.isEmpty()) {
+            onComplete(0)
+            return
+        }
+        val selectedTabSnapshot = selectedTab
 
         viewModelScope.launch {
             _isExporting.value = true
-            val toExport = selectedSnapshot.filter { it.isImage }
             val total = toExport.size
             exportProgress = 0 to total
+            _batchOperationProgress.value = GalleryBatchOperationProgress(
+                operation = GalleryBatchOperation.EXPORT,
+                completed = 0,
+                total = total
+            )
+            var successCount = 0
             
             try {
                 val context = getApplication<Application>()
@@ -3227,33 +3954,67 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 withContext(Dispatchers.IO) {
                     toExport.forEachIndexed { index, photo ->
-                        var photoId = photo.id
-                        // 如果在系统相册 Tab，导出其关联的照片
-                        if (selectedTab == GalleryTab.SYSTEM) {
-                            photoId = photo.relatedPhoto?.id ?: return@forEachIndexed
-                        }
-                        val metadata = GalleryManager.loadMetadata(context, photoId) ?: photo.metadata ?: MediaMetadata()
-                        GalleryManager.exportPhoto(
-                            context, photoId, null, contentRepository.photoProcessor, metadata,
-                            sharpening.value, noiseReduction.value,
-                            chromaNoiseReduction.value, quality
-                        )
-                        
-                        withContext(Dispatchers.Main) {
-                            exportProgress = (index + 1) to total
+                        try {
+                            val photoId = if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                                photo.relatedPhoto?.id
+                            } else {
+                                photo.id
+                            }
+                            if (photoId != null) {
+                                val metadata = GalleryManager.loadMetadata(context, photoId)
+                                    ?: photo.relatedPhoto?.metadata
+                                    ?: photo.metadata
+                                    ?: MediaMetadata()
+                                val exported = GalleryManager.exportPhoto(
+                                    context,
+                                    photoId,
+                                    null,
+                                    contentRepository.photoProcessor,
+                                    metadata,
+                                    sharpening.value,
+                                    noiseReduction.value,
+                                    chromaNoiseReduction.value,
+                                    quality
+                                )
+                                if (exported) {
+                                    successCount += 1
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            PLog.e(
+                                TAG,
+                                "Failed to export selected photo ${photo.id}",
+                                e
+                            )
+                        } finally {
+                            withContext(Dispatchers.Main) {
+                                val completed = index + 1
+                                exportProgress = completed to total
+                                _batchOperationProgress.value =
+                                    GalleryBatchOperationProgress(
+                                        operation = GalleryBatchOperation.EXPORT,
+                                        completed = completed,
+                                        total = total
+                                    )
+                            }
                         }
                     }
                 }
                 
                 exitSelectionMode()
                 loadPhotos()
-                onComplete(total)
+                onComplete(successCount)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to batch export photos", e)
                 onComplete(0)
             } finally {
                 _isExporting.value = false
                 exportProgress = 0 to 0
+                _batchOperationProgress.value = null
             }
         }
     }

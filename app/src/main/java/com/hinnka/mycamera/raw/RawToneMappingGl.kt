@@ -28,10 +28,9 @@ object RawToneMappingGl {
 
     fun adobeCurveSamplesFor(params: RawToneMappingParameters): FloatArray {
         val normalized = params.normalized()
-        return if (normalized.useOppoMasterToneMap) {
-            OPPO_MASTER_ADOBE_CURVE
-        } else {
-            ACR3Curve.samples()
+        return when (normalized.profileToneMapMode) {
+            RawProfileToneMapMode.OppoMaster -> OPPO_MASTER_ADOBE_CURVE
+            else -> ACR3Curve.samples()
         }
     }
 
@@ -251,6 +250,9 @@ object RawToneMappingGl {
     }
 
     private fun computeXyzD50ToGamut(colorSpace: ColorSpace): FloatArray? {
+        if (colorSpace == ColorSpace.HNCS) {
+            return invertMatrix3x3(HncsProfileManager.HNCS_RGB_TO_XYZ_D50)
+        }
         val primaries = colorSpace.primaries
         val whitePoint = colorSpace.whitePoint
         if (primaries.size != 6 || whitePoint.size != 2) return null

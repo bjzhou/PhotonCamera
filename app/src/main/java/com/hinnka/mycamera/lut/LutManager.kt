@@ -48,7 +48,7 @@ class LutManager(private val context: Context) {
             "exposure", "contrast", "saturation", "temperature", "tint", "fade", "color",
             "highlights", "shadows", "toneToe", "toneShoulder", "tonePivot",
             "paletteX", "paletteY", "paletteDensity",
-            "filmGrain", "vignette", "bleachBypass", "bloom", "softLight", "halation", "redHalation", "chromaticAberration",
+            "filmGrain", "vignette", "flash", "bleachBypass", "bloom", "softLight", "halation", "redHalation", "chromaticAberration",
             "noise", "lowRes",
             "skinHue", "skinChroma", "skinLightness",
             "redHue", "redChroma", "redLightness",
@@ -59,6 +59,10 @@ class LutManager(private val context: Context) {
             "blueHue", "blueChroma", "blueLightness",
             "purpleHue", "purpleChroma", "purpleLightness",
             "magentaHue", "magentaChroma", "magentaLightness",
+            "gradingShadowHue", "gradingShadowAmount",
+            "gradingMidtoneHue", "gradingMidtoneAmount",
+            "gradingHighlightHue", "gradingHighlightAmount",
+            "gradingBalance", "gradingBlending",
             "lutIntensity"
         )
 
@@ -85,6 +89,7 @@ class LutManager(private val context: Context) {
                 paletteDensity = f("paletteDensity", 1f),
                 filmGrain = f("filmGrain"),
                 vignette = f("vignette"),
+                flash = f("flash"),
                 bleachBypass = f("bleachBypass"),
                 bloom = f("bloom"),
                 softLight = f("softLight"),
@@ -120,6 +125,14 @@ class LutManager(private val context: Context) {
                 magentaHue = f("magentaHue"),
                 magentaChroma = f("magentaChroma"),
                 magentaLightness = f("magentaLightness"),
+                gradingShadowHue = f("gradingShadowHue"),
+                gradingShadowAmount = f("gradingShadowAmount"),
+                gradingMidtoneHue = f("gradingMidtoneHue"),
+                gradingMidtoneAmount = f("gradingMidtoneAmount"),
+                gradingHighlightHue = f("gradingHighlightHue"),
+                gradingHighlightAmount = f("gradingHighlightAmount"),
+                gradingBalance = f("gradingBalance"),
+                gradingBlending = f("gradingBlending", 0.5f),
                 lutIntensity = f("lutIntensity", 1f),
                 remarks = s("remarks"),
             )

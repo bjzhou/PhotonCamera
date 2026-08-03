@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <android/bitmap.h>
 #include <array>
+#include <arm_neon.h>
+#include <cctype>
 #include <cmath>
 #include <chrono>
 #include <cstring>
@@ -26,7 +28,6 @@
 #include "dng_memory_stream.h"
 #include "libraw/libraw.h"
 #include "math_utils.h"
-#include "stacking_utils.h"
 
 #ifndef LOG_TAG
 #define LOG_TAG "native-lib"
@@ -174,17 +175,44 @@ static jobject decodeJpegPreviewToBitmap(JNIEnv *env, const unsigned char *jpegD
     return nullptr;
   }
 
-  std::vector<unsigned char> rgba(static_cast<size_t>(width) * height * 4);
-  if (tjDecompress2(handle, mutableJpegData, jpegSize, rgba.data(), width, width * 4,
-                    height, TJPF_RGBA, TJFLAG_FASTUPSAMPLE |
-                                            TJFLAG_FASTDCT) != 0) {
+  constexpr int kPreviewMaxEdge = 512;
+  int scaledWidth = width;
+  int scaledHeight = height;
+  const tjscalingfactor *scalingFactors = nullptr;
+  int scalingFactorCount = 0;
+  if (std::max(width, height) > kPreviewMaxEdge) {
+    scalingFactors = tjGetScalingFactors(&scalingFactorCount);
+    if (scalingFactors && scalingFactorCount > 0) {
+      bool foundWithinLimit = false;
+      for (int i = 0; i < scalingFactorCount; ++i) {
+        const int candidateWidth = TJSCALED(width, scalingFactors[i]);
+        const int candidateHeight = TJSCALED(height, scalingFactors[i]);
+        const bool fitsLimit = std::max(candidateWidth, candidateHeight) <= kPreviewMaxEdge;
+        if (fitsLimit && (!foundWithinLimit ||
+            candidateWidth * candidateHeight > scaledWidth * scaledHeight)) {
+          scaledWidth = candidateWidth;
+          scaledHeight = candidateHeight;
+          foundWithinLimit = true;
+        } else if (!foundWithinLimit &&
+                   candidateWidth * candidateHeight < scaledWidth * scaledHeight) {
+          scaledWidth = candidateWidth;
+          scaledHeight = candidateHeight;
+        }
+      }
+    }
+  }
+
+  std::vector<unsigned char> rgba(static_cast<size_t>(scaledWidth) * scaledHeight * 4);
+  if (tjDecompress2(handle, mutableJpegData, jpegSize, rgba.data(), scaledWidth,
+                    scaledWidth * 4, scaledHeight, TJPF_RGBA,
+                    TJFLAG_FASTUPSAMPLE | TJFLAG_FASTDCT) != 0) {
     LOGE("decodeJpegPreviewToBitmap: jpeg decode failed: %s", tjGetErrorStr());
     tjDestroy(handle);
     return nullptr;
   }
 
   tjDestroy(handle);
-  return createBitmapFromRgba(env, width, height, rgba.data(), width * 4);
+  return createBitmapFromRgba(env, scaledWidth, scaledHeight, rgba.data(), scaledWidth * 4);
 }
 
 static jobject convertBitmapThumbnailToBitmap(JNIEnv *env,
@@ -555,6 +583,9 @@ struct DngRawTagInfo {
   std::vector<double> blackLevel;
   std::vector<double> blackDeltaH;
   std::vector<double> blackDeltaV;
+  bool hasFixBadPixelsList = false;
+  std::vector<float> warpRectilinear;
+  std::vector<int> warpRectilinearFlags;
 };
 
 static int bayerBlackLevelIndexForPattern(int cfaPattern, int col, int row) {
@@ -1049,9 +1080,34 @@ static float illuminantToTemp(int illuminant) {
 static bool hasMatrixSignal(const Matrix3x3 &matrix) {
   float sum = 0.0f;
   for (float value : matrix.m) {
+    if (!std::isfinite(value)) {
+      return false;
+    }
     sum += std::abs(value);
   }
   return sum > 0.01f;
+}
+
+static bool isOppoCameraMake(const char *make) {
+  if (!make) {
+    return false;
+  }
+  std::string normalized(make);
+  const auto first = std::find_if_not(
+      normalized.begin(), normalized.end(),
+      [](unsigned char value) { return std::isspace(value) != 0; });
+  const auto last = std::find_if_not(
+      normalized.rbegin(), normalized.rend(),
+      [](unsigned char value) { return std::isspace(value) != 0; }).base();
+  if (first >= last) {
+    return false;
+  }
+  normalized = std::string(first, last);
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  return normalized == "oppo" || normalized.rfind("oppo ", 0) == 0;
 }
 
 static std::array<float, 3> multiplyMatrixVector(const Matrix3x3 &matrix,
@@ -1544,26 +1600,20 @@ static bool dngSdkNeutralToXy(const DngSdkPreparedColor &prepared,
   return true;
 }
 
+static bool dngSdkCameraWhiteForWhite(
+    const DngSdkPreparedColor &prepared,
+    const std::array<float, 2> &whiteXy,
+    std::array<float, 3> &cameraWhite);
+
 static bool dngSdkCameraToPcsForWhite(const DngSdkPreparedColor &prepared,
                                       const std::array<float, 2> &whiteXy,
+                                      bool preferColorMatrix,
                                       Matrix3x3 &cameraToPcs) {
   static constexpr std::array<float, 2> d50Xy = {0.3457f, 0.3585f};
   static constexpr std::array<float, 3> pcsToXyz = {0.9642957f, 1.0f,
                                                     0.8251046f};
   const DngSdkMatrixForWhite matrices =
       dngSdkFindXyzToCamera(prepared, whiteXy);
-
-  std::array<float, 3> whiteXyz;
-  if (!xyToXyz(whiteXy, whiteXyz)) {
-    return false;
-  }
-  std::array<float, 3> cameraWhite =
-      multiplyMatrixVector(matrices.colorMatrix, whiteXyz);
-  const float whiteScale =
-      1.0f / std::max(maxVectorEntry(cameraWhite), 1e-6f);
-  for (float &value : cameraWhite) {
-    value = std::clamp(value * whiteScale, 0.001f, 1.0f);
-  }
 
   Matrix3x3 pcsToCamera =
       matrices.colorMatrix.multiply(dngMapWhiteMatrix(d50Xy, whiteXy));
@@ -1574,29 +1624,66 @@ static bool dngSdkCameraToPcsForWhite(const DngSdkPreparedColor &prepared,
     value *= pcsScale;
   }
 
-  if (matrices.hasForwardMatrix) {
+  if (!preferColorMatrix && matrices.hasForwardMatrix) {
+    std::array<float, 3> cameraWhite;
+    if (!dngSdkCameraWhiteForWhite(prepared, whiteXy, cameraWhite)) {
+      return false;
+    }
     const Matrix3x3 individualToReference =
         diagonalMatrix3x3(prepared.analogBalance)
             .multiply(matrices.cameraCalibration)
             .invert();
     const std::array<float, 3> referenceCameraWhite =
         multiplyMatrixVector(individualToReference, cameraWhite);
-    if (referenceCameraWhite[0] <= 1e-6f ||
-        referenceCameraWhite[1] <= 1e-6f ||
-        referenceCameraWhite[2] <= 1e-6f) {
-      return false;
+    const bool hasValidReferenceWhite =
+        std::all_of(referenceCameraWhite.begin(), referenceCameraWhite.end(),
+                    [](float value) {
+                      return std::isfinite(value) && value > 1e-6f;
+                    });
+    if (hasValidReferenceWhite) {
+      const Matrix3x3 inverseWhite = diagonalMatrix3x3({
+          1.0f / referenceCameraWhite[0],
+          1.0f / referenceCameraWhite[1],
+          1.0f / referenceCameraWhite[2],
+      });
+      const Matrix3x3 forwardCameraToPcs =
+          matrices.forwardMatrix.multiply(inverseWhite).multiply(
+              individualToReference);
+      if (hasMatrixSignal(forwardCameraToPcs)) {
+        cameraToPcs = forwardCameraToPcs;
+        LOGI("DNG matrix policy selected ForwardMatrix");
+        return true;
+      }
     }
-    const Matrix3x3 inverseWhite = diagonalMatrix3x3({
-        1.0f / referenceCameraWhite[0],
-        1.0f / referenceCameraWhite[1],
-        1.0f / referenceCameraWhite[2],
-    });
-    cameraToPcs =
-        matrices.forwardMatrix.multiply(inverseWhite).multiply(individualToReference);
-    return true;
+    LOGI("DNG ForwardMatrix unusable after calibration, falling back to "
+         "ColorMatrix");
   }
 
   cameraToPcs = pcsToCamera.invert();
+  LOGI("DNG matrix policy selected ColorMatrix: preferColor=%d hasForward=%d",
+       preferColorMatrix ? 1 : 0, matrices.hasForwardMatrix ? 1 : 0);
+  return true;
+}
+
+static bool dngSdkCameraWhiteForWhite(
+    const DngSdkPreparedColor &prepared,
+    const std::array<float, 2> &whiteXy,
+    std::array<float, 3> &cameraWhite) {
+  std::array<float, 3> whiteXyz;
+  if (!xyToXyz(whiteXy, whiteXyz)) {
+    return false;
+  }
+
+  const DngSdkMatrixForWhite matrices =
+      dngSdkFindXyzToCamera(prepared, whiteXy);
+  cameraWhite = multiplyMatrixVector(matrices.colorMatrix, whiteXyz);
+  const float scale = 1.0f / std::max(maxVectorEntry(cameraWhite), 1e-6f);
+  for (float &value : cameraWhite) {
+    value = std::clamp(value * scale, 0.001f, 1.0f);
+    if (!std::isfinite(value)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -1607,8 +1694,10 @@ static bool computeDngSdkCameraToPcsD50(
     const Matrix3x3 &forwardMatrix2, bool hasForward2, int illuminant1,
     int illuminant2, const float wb[4], const Matrix3x3 &cameraCalibration1,
     const Matrix3x3 &cameraCalibration2,
-    const std::array<float, 3> &analogBalance, Matrix3x3 &cameraToPcs,
-    std::array<float, 2> *outWhiteXy = nullptr) {
+    const std::array<float, 3> &analogBalance, bool preferColorMatrix,
+    Matrix3x3 &cameraToPcs,
+    std::array<float, 2> *outWhiteXy = nullptr,
+    std::array<float, 3> *outCameraWhite = nullptr) {
   DngSdkPreparedColor prepared;
   if (!prepareDngSdkColor(colorMatrix1, hasColor1, colorMatrix2, hasColor2,
                           forwardMatrix1, hasForward1, forwardMatrix2,
@@ -1632,7 +1721,12 @@ static bool computeDngSdkCameraToPcsD50(
   if (outWhiteXy) {
     *outWhiteXy = whiteXy;
   }
-  return dngSdkCameraToPcsForWhite(prepared, whiteXy, cameraToPcs);
+  if (outCameraWhite &&
+      !dngSdkCameraWhiteForWhite(prepared, whiteXy, *outCameraWhite)) {
+    return false;
+  }
+  return dngSdkCameraToPcsForWhite(prepared, whiteXy, preferColorMatrix,
+                                   cameraToPcs);
 }
 
 static bool computeWbFromDngAsShotWhiteXY(const LibRaw &rawProcessor,
@@ -1737,6 +1831,76 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
   return gamutToXYZD50.invert();
 }
 
+// LibRaw's rgb_cam maps white-balanced native camera RGB into linear sRGB
+// (D65). It is not a DNG ColorMatrix: passing it through the DNG color-spec
+// path applies the wrong PCS/white-point assumptions to proprietary RAWs.
+static bool computeLibRawCameraToXyzD50(const LibRaw &rawProcessor,
+                                        const float wb[4],
+                                        Matrix3x3 &cameraToXyzD50,
+                                        std::array<float, 2> *outWhiteXy = nullptr) {
+  Matrix3x3 cameraToSrgb;
+  Matrix3x3 xyzToCamera;
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      cameraToSrgb.m[row * 3 + col] =
+          rawProcessor.imgdata.color.rgb_cam[row][col];
+      xyzToCamera.m[row * 3 + col] =
+          rawProcessor.imgdata.color.cam_xyz[row][col];
+    }
+  }
+  if (!hasMatrixSignal(cameraToSrgb) || !hasMatrixSignal(xyzToCamera)) {
+    return false;
+  }
+
+  const float red = wb[0] > 0.0f && std::isfinite(wb[0]) ? wb[0] : 1.0f;
+  const float greenEven =
+      wb[1] > 0.0f && std::isfinite(wb[1]) ? wb[1] : 1.0f;
+  const float greenOdd =
+      wb[3] > 0.0f && std::isfinite(wb[3]) ? wb[3] : greenEven;
+  const float blue = wb[2] > 0.0f && std::isfinite(wb[2]) ? wb[2] : 1.0f;
+  const Matrix3x3 wbMatrix =
+      diagonalMatrix3x3({red, (greenEven + greenOdd) * 0.5f, blue});
+  if (outWhiteXy) {
+    const float green = std::max((greenEven + greenOdd) * 0.5f, 1e-6f);
+    const std::array<float, 3> cameraNeutral = {
+        green / std::max(red, 1e-6f),
+        1.0f,
+        green / std::max(blue, 1e-6f),
+    };
+    const std::array<float, 3> whiteXyz =
+        multiplyMatrixVector(xyzToCamera.invert(), cameraNeutral);
+    if (!xyzToXy(whiteXyz, *outWhiteXy)) {
+      return false;
+    }
+  }
+
+  Matrix3x3 srgbToXyzD65;
+  const float srgbToXyzD65Values[9] = {
+      0.4124564f, 0.3575761f, 0.1804375f,
+      0.2126729f, 0.7151522f, 0.0721750f,
+      0.0193339f, 0.1191920f, 0.9503041f,
+  };
+  memcpy(srgbToXyzD65.m, srgbToXyzD65Values, sizeof(srgbToXyzD65Values));
+
+  Matrix3x3 d65ToD50;
+  const float d65ToD50Values[9] = {
+      1.0478112f,  0.0228866f, -0.0501270f,
+      0.0295424f,  0.9904844f, -0.0170491f,
+      -0.0092345f, 0.0150436f, 0.7521316f,
+  };
+  memcpy(d65ToD50.m, d65ToD50Values, sizeof(d65ToD50Values));
+
+  cameraToXyzD50 = d65ToD50.multiply(srgbToXyzD65)
+                       .multiply(cameraToSrgb)
+                       .multiply(wbMatrix);
+  for (float value : cameraToXyzD50.m) {
+    if (!std::isfinite(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
   switch (cfaPattern) {
   case 0:
@@ -1761,200 +1925,6 @@ static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
 }
 
 extern "C" {
-
-/**
- * Multi-Frame Stacking JNI Interface
- */
-JNIEXPORT jlong JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_createStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean enableSuperRes) {
-  auto *stacker = new ImageStacker(width, height, enableSuperRes);
-  return reinterpret_cast<jlong>(stacker);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToStackNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject yBuffer,
-    jobject uBuffer, jobject vBuffer, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint format) {
-
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (!stacker)
-    return;
-
-  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
-  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
-  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
-
-  if (yData && uData && vData) {
-    jlong yCap = env->GetDirectBufferCapacity(yBuffer);
-    jlong uCap = env->GetDirectBufferCapacity(uBuffer);
-    jlong vCap = env->GetDirectBufferCapacity(vBuffer);
-
-    // Basic sanity check for capacity. Actual check depends on strides,
-    // but at least check it's not empty.
-    if (yCap <= 0 || uCap <= 0 || vCap <= 0) {
-      LOGE("addToStackNative: Buffer capacity is zero");
-      return;
-    }
-
-    stacker->addFrame(yData, uData, vData, yRowStride, uvRowStride,
-                      uvPixelStride, format);
-  } else {
-    LOGE("addToStackNative: Failed to get buffer addresses");
-  }
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_stageFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject yBuffer,
-    jobject uBuffer, jobject vBuffer, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint format) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (!stacker)
-    return;
-  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
-  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
-  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
-  if (yData && uData && vData) {
-    stacker->stageFrame(yData, uData, vData, yRowStride, uvRowStride,
-                        uvPixelStride, format);
-  }
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jint index) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (stacker)
-    stacker->processFrame(index);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_clearStagedFramesNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (stacker)
-    stacker->clearStagedFrames();
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processStackNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
-    jint rotation, jint targetWR, jint targetHR) {
-
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (!stacker || !outBitmap)
-    return;
-
-  AndroidBitmapInfo info;
-  void *bitmapPixels = nullptr;
-  if (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
-      AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0) {
-    return;
-  }
-
-  stacker->writeResult(static_cast<uint32_t *>(bitmapPixels), info.width,
-                       info.height, rotation, targetWR, targetHR);
-
-  AndroidBitmap_unlockPixels(env, outBitmap);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  delete stacker;
-}
-
-/**
- * Raw Stacking JNI Interface
- */
-JNIEXPORT jlong JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_createRawStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean enableSuperRes) {
-  auto *stacker = new RawStacker(width, height, enableSuperRes);
-  return reinterpret_cast<jlong>(stacker);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToRawStackNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject rawData,
-    jint rowStride, jint cfaPattern) {
-
-  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
-  if (!stacker)
-    return;
-
-  auto *data = static_cast<uint16_t *>(env->GetDirectBufferAddress(rawData));
-  if (data) {
-    stacker->addFrame(data, rowStride, cfaPattern);
-  } else {
-    LOGE("addToRawStackNative: Failed to get buffer address");
-  }
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_stageRawFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject rawData,
-    jint rowStride, jint cfaPattern) {
-  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
-  if (!stacker)
-    return;
-  auto *data = static_cast<uint16_t *>(env->GetDirectBufferAddress(rawData));
-  if (data) {
-    stacker->stageFrame(data, rowStride, cfaPattern);
-  }
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jint index) {
-  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
-  if (stacker)
-    stacker->processFrame(index);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_clearStagedRawFramesNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
-  if (stacker)
-    stacker->clearStagedFrames();
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outputBuffer) {
-
-  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
-  if (!stacker)
-    return;
-
-  auto *outData =
-      static_cast<uint16_t *>(env->GetDirectBufferAddress(outputBuffer));
-  if (!outData)
-    return;
-
-  std::vector<uint16_t> result = stacker->process();
-
-  jlong capacity = env->GetDirectBufferCapacity(outputBuffer);
-  if (capacity >= result.size() * sizeof(uint16_t)) {
-    memcpy(outData, result.data(), result.size() * sizeof(uint16_t));
-  } else {
-    LOGE("Output buffer too small: capacity=%ld, required=%ld", (long)capacity,
-         (long)(result.size() * sizeof(uint16_t)));
-  }
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseRawStackerNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
-  delete stacker;
-}
 
 /**
  * 带有保存到本地文件的 JPG 压缩版本的 processToBitmap
@@ -2513,6 +2483,79 @@ static bool parseDngCfaInfo(const char *path, DngCfaInfo &info) {
   return info.repeatRows > 0 && info.repeatCols > 0 && info.patternLen > 0;
 }
 
+static uint32_t dngOpcodeReadU32(const unsigned char *p) {
+  return (static_cast<uint32_t>(p[0]) << 24) |
+         (static_cast<uint32_t>(p[1]) << 16) |
+         (static_cast<uint32_t>(p[2]) << 8) |
+         static_cast<uint32_t>(p[3]);
+}
+
+static double dngOpcodeReadDouble(const unsigned char *p) {
+  const uint64_t bits = (static_cast<uint64_t>(p[0]) << 56) |
+                        (static_cast<uint64_t>(p[1]) << 48) |
+                        (static_cast<uint64_t>(p[2]) << 40) |
+                        (static_cast<uint64_t>(p[3]) << 32) |
+                        (static_cast<uint64_t>(p[4]) << 24) |
+                        (static_cast<uint64_t>(p[5]) << 16) |
+                        (static_cast<uint64_t>(p[6]) << 8) |
+                        static_cast<uint64_t>(p[7]);
+  double value;
+  memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
+static void parseDngOpcodeList(const std::vector<unsigned char> &data,
+                               DngRawTagInfo &info, int opcodeStage) {
+  if (data.size() < 4)
+    return;
+  const uint32_t count = std::min<uint32_t>(dngOpcodeReadU32(data.data()), 1024);
+  size_t offset = 4;
+  for (uint32_t index = 0; index < count; ++index) {
+    if (offset + 16 > data.size())
+      return;
+    const uint32_t id = dngOpcodeReadU32(data.data() + offset);
+    const uint32_t flags = dngOpcodeReadU32(data.data() + offset + 8);
+    const uint32_t payloadSize = dngOpcodeReadU32(data.data() + offset + 12);
+    offset += 16;
+    if (payloadSize > data.size() - offset)
+      return;
+    if (opcodeStage == 2 && id == 5 && payloadSize >= 12) {
+      const unsigned char *payload = data.data() + offset;
+      const uint32_t bayerPhase = dngOpcodeReadU32(payload);
+      const uint32_t pointCount = dngOpcodeReadU32(payload + 4);
+      const uint32_t rectCount = dngOpcodeReadU32(payload + 8);
+      const uint64_t expectedSize = 12ull + 8ull * pointCount + 16ull * rectCount;
+      if (bayerPhase <= 3 && expectedSize == payloadSize &&
+          (pointCount > 0 || rectCount > 0)) {
+        info.hasFixBadPixelsList = true;
+        LOGI("DNG FixBadPixelsList: phase=%u points=%u rects=%u",
+             bayerPhase, pointCount, rectCount);
+      } else {
+        LOGW("Ignoring malformed DNG FixBadPixelsList: phase=%u points=%u rects=%u payload=%u expected=%llu",
+             bayerPhase, pointCount, rectCount, payloadSize,
+             static_cast<unsigned long long>(expectedSize));
+      }
+    } else if (opcodeStage == 3 && id == 1 && payloadSize >= 68) {
+      const unsigned char *payload = data.data() + offset;
+      const uint32_t planes = dngOpcodeReadU32(payload);
+      if (planes == 1 && payloadSize == 68) {
+        std::vector<float> warp(8);
+        bool valid = true;
+        for (int i = 0; i < 8; ++i) {
+          const double value = dngOpcodeReadDouble(payload + 4 + i * 8);
+          valid = valid && std::isfinite(value);
+          warp[i] = static_cast<float>(value);
+        }
+        if (valid) {
+          info.warpRectilinear.insert(info.warpRectilinear.end(), warp.begin(), warp.end());
+          info.warpRectilinearFlags.push_back(static_cast<int>(flags));
+        }
+      }
+    }
+    offset += payloadSize;
+  }
+}
+
 static void parseDngRawTagIfd(std::ifstream &file, bool littleEndian,
                               uint32_t ifdOffset, DngRawTagInfo &info, int depth) {
   if (ifdOffset == 0 || depth > 8)
@@ -2538,7 +2581,10 @@ static void parseDngRawTagIfd(std::ifstream &file, bool littleEndian,
     const uint32_t count = tiffReadU32(entry + 4, littleEndian);
     std::vector<unsigned char> data;
 
-    if (tag == 0xc68d && count >= 4 &&
+    if ((tag == 0xc741 || tag == 0xc74e) && count > 0 &&
+        tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      parseDngOpcodeList(data, info, tag == 0xc741 ? 2 : 3);
+    } else if (tag == 0xc68d && count >= 4 &&
         tiffEntryData(file, entry, littleEndian, type, count, data)) {
       info.hasActiveArea = true;
       for (int i = 0; i < 4; ++i) {
@@ -2884,7 +2930,15 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   LibRaw RawProcessor;
   ExifData ed;
-  RawProcessor.imgdata.rawparams.use_dngsdk = 0;
+  DngRawTagInfo dngRawTagInfo;
+  parseDngRawTagInfo(path, dngRawTagInfo);
+  if (dngRawTagInfo.hasFixBadPixelsList) {
+    RawProcessor.imgdata.rawparams.use_dngsdk = LIBRAW_DNG_ALL;
+    RawProcessor.imgdata.rawparams.options |= LIBRAW_RAWOPTIONS_DNG_STAGE2_IFPRESENT;
+    LOGI("processDngNative: enabling DNG SDK Stage2 for FixBadPixelsList");
+  } else {
+    RawProcessor.imgdata.rawparams.use_dngsdk = 0;
+  }
   RawProcessor.set_exifparser_handler(exif_callback, &ed);
 
   int ret = RawProcessor.open_file(path);
@@ -2900,9 +2954,11 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     env->ReleaseStringUTFChars(filePath, path);
     return nullptr;
   }
+  const bool dngStage2Applied =
+      (RawProcessor.imgdata.process_warnings & LIBRAW_WARN_DNG_STAGE2_APPLIED) != 0;
 
   jobject embeddedPreviewBitmap = nullptr;
-  /*ret = RawProcessor.unpack_thumb();
+  ret = RawProcessor.unpack_thumb();
   if (ret == LIBRAW_SUCCESS) {
     libraw_processed_image_t *thumb = RawProcessor.dcraw_make_mem_thumb(&ret);
     if (thumb && ret == LIBRAW_SUCCESS) {
@@ -2912,17 +2968,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
             decodeJpegPreviewToBitmap(env, thumb->data, thumb->data_size);
         LOGI("processDngNative: extracted embedded JPEG preview (%d bytes)",
              (int)thumb->data_size);
-      } else if (thumb->type == LIBRAW_IMAGE_BITMAP) {
-        embeddedPreviewBitmap = convertBitmapThumbnailToBitmap(env, thumb);
-        if (embeddedPreviewBitmap) {
-          LOGI("processDngNative: converted embedded bitmap preview %dx%d c=%d b=%d",
-               thumb->width, thumb->height, thumb->colors, thumb->bits);
-        } else {
-          LOGI("processDngNative: failed to convert embedded bitmap preview %dx%d c=%d b=%d",
-               thumb->width, thumb->height, thumb->colors, thumb->bits);
-        }
       } else {
-        LOGI("processDngNative: embedded preview present but unsupported type=%d",
+        LOGI("processDngNative: embedded preview ignored because it is not JPEG type=%d",
              thumb->type);
       }
       LibRaw::dcraw_clear_mem(thumb);
@@ -2932,7 +2979,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   } else {
     LOGI("processDngNative: unpack_thumb failed ret=%d err=%s", ret,
          libraw_strerror(ret));
-  }*/
+  }
 
   const bool hasBayerRaw = RawProcessor.imgdata.rawdata.raw_image != nullptr;
   const bool hasLinearRawColor3 = RawProcessor.imgdata.rawdata.color3_image != nullptr;
@@ -2959,9 +3006,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   const bool useLinearRawRgb =
       !hasBayerRaw && (hasLinearRawColor3 || hasLinearRawColor4 || hasLinearRawImage);
   const jint samplesPerPixel = useLinearRawRgb ? 3 : 1;
+  const bool isDngInput = RawProcessor.imgdata.idata.dng_version != 0;
 
-  DngRawTagInfo dngRawTagInfo;
-  parseDngRawTagInfo(path, dngRawTagInfo);
   jint cfaPattern = 0;
 
   // 判定 CFA 模式。LibRaw COLOR()/FC() folds DNG CFAPattern into the dcraw
@@ -3051,14 +3097,15 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
        static_cast<int>(levels.dng_cblack[5]));
 
   const bool blackDeltaApplied =
-      useLinearRawRgb ? false : applyDngBlackLevelDeltas(RawProcessor, dngRawTagInfo);
+      useLinearRawRgb || dngStage2Applied ? false
+                                         : applyDngBlackLevelDeltas(RawProcessor, dngRawTagInfo);
 
   // Read the TOTAL effective black level per LibRaw channel.
   // LibRaw stores it as: color.black + cblack[channel] + repeat_pattern[position].
   float librawBlackLevels[4] = {};
   float activeBlackLevels[4] = {};
   float exportedBlackLevels[4] = {};
-  if (!useLinearRawRgb) {
+  if (!useLinearRawRgb && !dngStage2Applied) {
     computeEffectiveBlackLevels(RawProcessor, cfaPattern, left, top, librawBlackLevels);
     mapLibRawBlackLevelsForGpu(RawProcessor, cfaPattern, left, top,
                                librawBlackLevels, activeBlackLevels,
@@ -3109,7 +3156,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
       0.0f, 0.0f, 1.0f, 1.0f,
       0.0f, 0.0f, static_cast<float>(std::max(1, width)), static_cast<float>(std::max(1, height))};
   jfloatArray exportedLscArray = nullptr;
-  if (!useLinearRawRgb) {
+  if (!useLinearRawRgb && !dngStage2Applied) {
     exportedLscArray = buildDngLensShadingArray(
         env, RawProcessor, cfaPattern, left, top, exportedLscWidth,
         exportedLscHeight, exportedLscGrid);
@@ -3119,8 +3166,9 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     exportedLscGridArray = env->NewFloatArray(8);
     env->SetFloatArrayRegion(exportedLscGridArray, 0, 8, exportedLscGrid);
   }
-  LOGI("dng gain map: opcode2_len=%u native_apply=0 exported=%d",
+  LOGI("dng gain map: opcode2_len=%u stage2Applied=%d exported=%d",
        RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
+       dngStage2Applied ? 1 : 0,
        exportedLscArray ? 1 : 0);
 
   RawProcessor.imgdata.params.output_bps = 16;
@@ -3145,7 +3193,10 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     }
     selectedWb[i] = val > 0.0f && std::isfinite(val) ? val : 1.0f;
   }
-  if (selectedWb[3] <= 0.0f || !std::isfinite(selectedWb[3])) {
+  // LibRaw leaves cam_mul[3] at zero for ordinary three-color Bayer RAW.
+  // Preserve the second green as Gr; checking selectedWb here is too late
+  // because its invalid source value was already replaced with 1.0 above.
+  if (!(cameraWb[3] > 0.0f && std::isfinite(cameraWb[3]))) {
     selectedWb[3] = selectedWb[1];
   }
   const char *selectedWbSource = hasCameraWb ? "cam_mul" : "unity";
@@ -3266,7 +3317,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[FIIFF[FII[FFIJF[I[I[FLandroid/graphics/Bitmap;)V");
+                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[F[ILandroid/graphics/Bitmap;)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
@@ -3370,17 +3421,42 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
        analogBalance[1], analogBalance[2]);
 
   Matrix3x3 camToXYZ = Matrix3x3::identity();
-  std::array<float, 2> sdkWhiteXy = {0.3457f, 0.3585f};
+  std::array<float, 2> sdkWhiteXy = {
+      std::numeric_limits<float>::quiet_NaN(),
+      std::numeric_limits<float>::quiet_NaN(),
+  };
+  const float cameraGreen =
+      std::max((wb[1] + (wb[3] > 0.0f ? wb[3] : wb[1])) * 0.5f, 1e-6f);
+  std::array<float, 3> sdkCameraWhite = {
+      cameraGreen / std::max(wb[0], 1e-6f),
+      1.0f,
+      cameraGreen / std::max(wb[2], 1e-6f),
+  };
+  const float cameraWhiteScale =
+      1.0f / std::max(maxVectorEntry(sdkCameraWhite), 1e-6f);
+  for (float &value : sdkCameraWhite) {
+    value = std::clamp(value * cameraWhiteScale, 0.001f, 1.0f);
+  }
+  const bool preferColorMatrix =
+      isOppoCameraMake(RawProcessor.imgdata.idata.make);
   bool hasSdkMatrix = computeDngSdkCameraToPcsD50(
       colorMatrix1, hasColor1, colorMatrix2, hasColor2, forwardMatrix1,
       hasForward1, forwardMatrix2, hasForward2,
       RawProcessor.imgdata.color.dng_color[0].illuminant,
       RawProcessor.imgdata.color.dng_color[1].illuminant, wb,
-      cameraCalibration1, cameraCalibration2, analogBalance, camToXYZ,
-      &sdkWhiteXy);
+      cameraCalibration1, cameraCalibration2, analogBalance,
+      preferColorMatrix, camToXYZ,
+      &sdkWhiteXy, &sdkCameraWhite);
   if (hasSdkMatrix) {
-    LOGI("Using DNG color spec path: whiteXY=%f,%f", sdkWhiteXy[0],
-         sdkWhiteXy[1]);
+    LOGI("Using DNG color spec path: whiteXY=%f,%f cameraWhite=%f,%f,%f",
+         sdkWhiteXy[0], sdkWhiteXy[1], sdkCameraWhite[0],
+         sdkCameraWhite[1], sdkCameraWhite[2]);
+  } else if (!isDngInput &&
+             computeLibRawCameraToXyzD50(RawProcessor, wb, camToXYZ,
+                                         &sdkWhiteXy)) {
+    hasSdkMatrix = true;
+    LOGI("Using LibRaw rgb_cam path for non-DNG RAW: dngVersion=%u",
+         RawProcessor.imgdata.idata.dng_version);
   } else {
     Matrix3x3 identity = Matrix3x3::identity();
     std::array<float, 3> unityAnalog = {1.0f, 1.0f, 1.0f};
@@ -3389,8 +3465,10 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
       std::array<float, 2> fallbackWhiteXy = {0.3457f, 0.3585f};
       if (computeDngSdkCameraToPcsD50(
               xyzToCam, true, identity, false, identity, false, identity,
-              false, 21, 0, wb, identity, identity, unityAnalog, camToXYZ,
-              &fallbackWhiteXy)) {
+              false, 21, 0, wb, identity, identity, unityAnalog,
+              preferColorMatrix, camToXYZ,
+              &fallbackWhiteXy, &sdkCameraWhite)) {
+        sdkWhiteXy = fallbackWhiteXy;
         LOGI("Using %s fallback via DNG ColorMatrix path: whiteXY=%f,%f",
              sourceName, fallbackWhiteXy[0], fallbackWhiteXy[1]);
         return true;
@@ -3460,14 +3538,21 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   Matrix3x3 finalCCM = targetTransform.multiply(camToXYZ);
   jfloatArray colorMatrixArray = env->NewFloatArray(9);
   env->SetFloatArrayRegion(colorMatrixArray, 0, 9, finalCCM.m);
+  jfloatArray cameraWhiteArray = env->NewFloatArray(3);
+  env->SetFloatArrayRegion(cameraWhiteArray, 0, 3, sdkCameraWhite.data());
+  jfloatArray whitePointXyArray = env->NewFloatArray(2);
+  env->SetFloatArrayRegion(whitePointXyArray, 0, 2, sdkWhiteXy.data());
+  jstring cameraMake = env->NewStringUTF(RawProcessor.imgdata.idata.make);
+  jstring cameraModel = env->NewStringUTF(RawProcessor.imgdata.idata.model);
 
   LOGI("finalCCM: %f, %f, %f, %f, %f, %f, %f, %f, %f", finalCCM.m[0],
        finalCCM.m[1], finalCCM.m[2], finalCCM.m[3], finalCCM.m[4],
        finalCCM.m[5], finalCCM.m[6], finalCCM.m[7], finalCCM.m[8]);
 
   // 其它
-  jfloat whiteLevel =
-      (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
+  jfloat whiteLevel = dngStage2Applied
+                          ? 65535.0f
+                          : (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
   if (whiteLevel <= 0 && useLinearRawRgb)
     whiteLevel = 65535.0f;
   else if (whiteLevel <= 0)
@@ -3508,8 +3593,12 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   int defaultCrop[4] = {0, 0, 0, 0};
   const bool hasDefaultCrop = computeValidDngDefaultCrop(
       dngRawTagInfo, left, top, width, height, defaultCrop);
-  LOGI("dng default crop tags: origin=%d(%f,%f) size=%d(%f,%f) "
-       "valid=%d crop=%d,%d,%d,%d buffer=%d,%d,%d,%d",
+  LOGI("RAW_CROP_TRACE stage=NATIVE_DNG_READ activeTag=%d active=%d,%d,%d,%d "
+       "originTag=%d origin=%f,%f sizeTag=%d size=%f,%f "
+       "valid=%d localCrop=%d,%d,%d,%d buffer=%d,%d,%d,%d",
+       dngRawTagInfo.hasActiveArea ? 1 : 0,
+       dngRawTagInfo.activeArea[0], dngRawTagInfo.activeArea[1],
+       dngRawTagInfo.activeArea[2], dngRawTagInfo.activeArea[3],
        dngRawTagInfo.hasDefaultCropOrigin ? 1 : 0,
        dngRawTagInfo.defaultCropOrigin[0], dngRawTagInfo.defaultCropOrigin[1],
        dngRawTagInfo.hasDefaultCropSize ? 1 : 0,
@@ -3530,13 +3619,33 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     noiseProfileArray = env->NewFloatArray(8);
     env->SetFloatArrayRegion(noiseProfileArray, 0, 8, ed.noiseProfile);
   }
+  jfloatArray warpRectilinearArray = nullptr;
+  jintArray warpRectilinearFlagsArray = nullptr;
+  if (!dngRawTagInfo.warpRectilinear.empty() &&
+      dngRawTagInfo.warpRectilinear.size() % 8 == 0 &&
+      dngRawTagInfo.warpRectilinearFlags.size() ==
+          dngRawTagInfo.warpRectilinear.size() / 8) {
+    warpRectilinearArray = env->NewFloatArray(dngRawTagInfo.warpRectilinear.size());
+    env->SetFloatArrayRegion(warpRectilinearArray, 0,
+                             dngRawTagInfo.warpRectilinear.size(),
+                             dngRawTagInfo.warpRectilinear.data());
+    warpRectilinearFlagsArray =
+        env->NewIntArray(dngRawTagInfo.warpRectilinearFlags.size());
+    env->SetIntArrayRegion(warpRectilinearFlagsArray, 0,
+                           dngRawTagInfo.warpRectilinearFlags.size(),
+                           dngRawTagInfo.warpRectilinearFlags.data());
+  }
 
   jobject dngData = env->NewObject(
       dngDataClass, constructor, rawDataBuffer, width, height, rowStride,
-      samplesPerPixel, whiteLevel, blackLevelArray, preMulArray, wbArray, colorMatrixArray,
-      cfaPattern, ed.rotation, baselineExposure, shadowScale, exportedLscArray, exportedLscWidth, exportedLscHeight,
+      samplesPerPixel, whiteLevel, blackLevelArray, preMulArray, wbArray,
+      colorMatrixArray, cameraWhiteArray, whitePointXyArray, cameraMake,
+      cameraModel, cfaPattern, ed.rotation,
+      baselineExposure, shadowScale, exportedLscArray, exportedLscWidth,
+      exportedLscHeight,
       exportedLscGridArray, exposureBias, iso,
       shutterSpeedLong, aperture, activeArray, defaultCropArray, noiseProfileArray,
+      warpRectilinearArray, warpRectilinearFlagsArray,
       embeddedPreviewBitmap);
 
   // 释放资源
@@ -3738,6 +3847,70 @@ Java_com_hinnka_mycamera_utils_DirectBufferAllocator_allocateNative(
     return nullptr;
   }
   return env->NewDirectByteBuffer(ptr, capacity);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_utils_DirectBufferPixelPacker_unpackRgba16TileToRgb16(
+    JNIEnv *env, jobject, jobject sourceBuffer, jint sourceWidth,
+    jint sourceHeight, jobject destinationBuffer, jint destinationWidth,
+    jint destinationHeight, jint destinationLeft, jint destinationTop) {
+  if (!sourceBuffer || !destinationBuffer || sourceWidth <= 0 ||
+      sourceHeight <= 0 || destinationWidth <= 0 || destinationHeight <= 0 ||
+      destinationLeft < 0 || destinationTop < 0 ||
+      static_cast<int64_t>(destinationLeft) + sourceWidth > destinationWidth ||
+      static_cast<int64_t>(destinationTop) + sourceHeight > destinationHeight) {
+    LOGE("unpackRgba16TileToRgb16: invalid geometry src=%dx%d dst=%dx%d at %d,%d",
+         sourceWidth, sourceHeight, destinationWidth, destinationHeight,
+         destinationLeft, destinationTop);
+    return JNI_FALSE;
+  }
+
+  auto *source = static_cast<const uint16_t *>(
+      env->GetDirectBufferAddress(sourceBuffer));
+  auto *destination = static_cast<uint16_t *>(
+      env->GetDirectBufferAddress(destinationBuffer));
+  const int64_t sourceRequiredBytes =
+      static_cast<int64_t>(sourceWidth) * sourceHeight * 4 * sizeof(uint16_t);
+  const int64_t destinationRequiredBytes =
+      static_cast<int64_t>(destinationWidth) * destinationHeight * 3 *
+      sizeof(uint16_t);
+  const jlong sourceCapacity = env->GetDirectBufferCapacity(sourceBuffer);
+  const jlong destinationCapacity =
+      env->GetDirectBufferCapacity(destinationBuffer);
+  if (!source || !destination || sourceCapacity < sourceRequiredBytes ||
+      destinationCapacity < destinationRequiredBytes) {
+    LOGE("unpackRgba16TileToRgb16: invalid buffers src=%p %lld/%lld dst=%p %lld/%lld",
+         source, static_cast<long long>(sourceCapacity),
+         static_cast<long long>(sourceRequiredBytes), destination,
+         static_cast<long long>(destinationCapacity),
+         static_cast<long long>(destinationRequiredBytes));
+    return JNI_FALSE;
+  }
+
+  for (int y = 0; y < sourceHeight; ++y) {
+    const uint16_t *sourceRow =
+        source + static_cast<size_t>(y) * sourceWidth * 4;
+    uint16_t *destinationRow =
+        destination +
+        (static_cast<size_t>(destinationTop + y) * destinationWidth +
+         destinationLeft) *
+            3;
+    int x = 0;
+    for (; x + 8 <= sourceWidth; x += 8) {
+      const uint16x8x4_t rgba = vld4q_u16(sourceRow + x * 4);
+      uint16x8x3_t rgb;
+      rgb.val[0] = rgba.val[0];
+      rgb.val[1] = rgba.val[1];
+      rgb.val[2] = rgba.val[2];
+      vst3q_u16(destinationRow + x * 3, rgb);
+    }
+    for (; x < sourceWidth; ++x) {
+      destinationRow[x * 3] = sourceRow[x * 4];
+      destinationRow[x * 3 + 1] = sourceRow[x * 4 + 1];
+      destinationRow[x * 3 + 2] = sourceRow[x * 4 + 2];
+    }
+  }
+  return JNI_TRUE;
 }
 
 JNIEXPORT jbyteArray JNICALL

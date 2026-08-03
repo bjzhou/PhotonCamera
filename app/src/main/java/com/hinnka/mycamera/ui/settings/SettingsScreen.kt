@@ -6,11 +6,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,6 +44,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.ripple.RippleAlpha
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -60,10 +63,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RippleConfiguration
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -72,7 +71,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -81,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -92,6 +91,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import coil.compose.AsyncImage
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import com.hinnka.mycamera.BuildConfig
@@ -99,7 +99,12 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.CustomFocalLengthValue
+import com.hinnka.mycamera.camera.CustomVendorKey
+import com.hinnka.mycamera.camera.CustomVendorKeySettings
+import com.hinnka.mycamera.camera.CustomVendorKeyTarget
+import com.hinnka.mycamera.camera.CustomVendorKeyValueType
 import com.hinnka.mycamera.camera.IszLensConfig
+import com.hinnka.mycamera.camera.IszRawDngMetadataCorrections
 import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
@@ -108,25 +113,32 @@ import com.hinnka.mycamera.camera.VendorCaptureSettings
 import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.camera.VendorCaptureValueType
 import com.hinnka.mycamera.data.AiFocusTargetMode
+import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.gallery.HeicExportEncoder
+import com.hinnka.mycamera.gallery.Jpeg444ExportEncoder
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
+import com.hinnka.mycamera.ml.DepthModelDownloadState
+import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
+import com.hinnka.mycamera.ui.components.DepthModelDownloadDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
+import com.hinnka.mycamera.ui.components.RawDngMetadataCorrectionSettings
 import com.hinnka.mycamera.ui.components.rawDcpLensOptions
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.update.AppUpdateManager
@@ -134,11 +146,27 @@ import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.video.VideoRecordingPath
 import java.io.File
+import java.util.UUID
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
 
-enum class SettingsTab {
-    CAMERA, IMAGING, RAW, PHANTOM, SYSTEM
+private enum class SettingsPage {
+    ASSIST,
+    FOCUS_LENS,
+    CAPTURE_STORAGE,
+    CALIBRATION,
+    QUALITY_PERFORMANCE,
+    COLOR_HDR,
+    MULTIFRAME_EXPOSURE,
+    SOFTWARE_PROCESSING,
+    RAW,
+    PHANTOM,
+    INTERFACE,
+    CONTENT_MANAGEMENT,
+    AI_SERVICE,
+    SYSTEM_CONTROL,
+    DATA_MAINTENANCE,
+    HELP_ABOUT
 }
 
 private enum class BackupOperation {
@@ -255,9 +283,9 @@ fun SettingsScreen(
     val nrLevel by viewModel.nrLevel.collectAsState(initial = 5)
     val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
     val vendorCaptureSettingsByLens by viewModel.vendorCaptureSettingsByLens.collectAsState()
+    val customVendorKeySettings by viewModel.customVendorKeySettings.collectAsState()
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
     val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = true)
-    val useSuperResolution by viewModel.useMFSR.collectAsState(initial = false)
     // 软件处理参数
     val sharpening by viewModel.sharpening.collectAsState(initial = 0f)
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
@@ -267,25 +295,28 @@ fun SettingsScreen(
     val lensIdBlacklist by viewModel.lensIdBlacklist.collectAsState(initial = emptyList())
     val iszLensConfigs by viewModel.iszLensConfigs.collectAsState(initial = emptyList())
     val preferredMainCameraId by viewModel.preferredMainCameraId.collectAsState(initial = null)
+    val preferredMacroCameraId by viewModel.preferredMacroCameraId.collectAsState(initial = null)
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
+    val useJpgMaxHdrComposition by viewModel.useJpgMaxHdrComposition.collectAsState()
+    val useRawMaxHdrComposition by viewModel.useRawMaxHdrComposition.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useHeicExport by viewModel.useHeicExport.collectAsState(initial = false)
+    val useJpeg444Export by viewModel.useJpeg444Export.collectAsState(initial = false)
     val tonemapMode by viewModel.tonemapMode.collectAsState()
     val settingsTonemapMode = remember(tonemapMode) { sanitizeSettingsTonemapMode(tonemapMode) }
     val fixTonemapPreview by viewModel.fixTonemapPreview.collectAsState()
     val fixTonemapCapture by viewModel.fixTonemapCapture.collectAsState()
-    val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
     val useHlg10 by viewModel.useHlg10.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
-    val autoEnableHdr by viewModel.autoEnableHdr.collectAsState()
+    val ultraHdrGainMapEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
     val useHdrScreenMode by viewModel.useHdrScreenMode.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
@@ -305,12 +336,15 @@ fun SettingsScreen(
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
+    val phantomFrameId by viewModel.phantomFrameId.collectAsState()
     val defaultVirtualAperture by viewModel.defaultVirtualAperture.collectAsState(initial = 0f)
     val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
+    val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
+    val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
     val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
@@ -324,20 +358,24 @@ fun SettingsScreen(
     val rawBlackLevelMode by viewModel.rawBlackLevelMode.collectAsState()
     val rawCustomBlackLevel by viewModel.rawCustomBlackLevel.collectAsState()
     val rawWhiteLevelMode by viewModel.rawWhiteLevelMode.collectAsState()
+    val rawCustomWhiteLevel by viewModel.rawCustomWhiteLevel.collectAsState()
     val rawCfaCorrectionMode by viewModel.rawCfaCorrectionMode.collectAsState()
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
+    val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val availableDcps = viewModel.availableDcps
     val availableLuts = viewModel.availableLutList
+    val availableFrames = viewModel.availableFrameList
     val previewThumbnail = viewModel.previewThumbnail
 
-    var selectedTab by remember { mutableStateOf(SettingsTab.CAMERA) }
+    var selectedPage by remember { mutableStateOf<SettingsPage?>(null) }
     var isRawSliderAdjusting by remember { mutableStateOf(false) }
     var isSoftwareProcessingSliderAdjusting by remember { mutableStateOf(false) }
     var mainCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var macroCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
     var rawExposureCompensationUi by remember { mutableStateOf(rawExposureCompensation) }
     var rawHighlightsAdjustmentUi by remember { mutableStateOf(rawHighlightsAdjustment) }
     var rawShadowsAdjustmentUi by remember { mutableStateOf(rawShadowsAdjustment) }
@@ -352,6 +390,7 @@ fun SettingsScreen(
     var windowScreenBrightnessEnabled by remember { mutableStateOf(windowScreenBrightness != null) }
     var showAspectRatioDialog by remember { mutableStateOf(false) }
     var showAddIszLensDialog by remember { mutableStateOf(false) }
+    var showCustomVendorKeysDialog by remember { mutableStateOf(false) }
     var backupOperation by remember { mutableStateOf<BackupOperation?>(null) }
 
     LaunchedEffect(
@@ -383,11 +422,17 @@ fun SettingsScreen(
     LaunchedEffect(
         customLensIds,
         lensIdBlacklist,
+        preferredMacroCameraId,
         enableLogicalMultiCameraDiscovery,
         logicalCameraBindingWhitelist
     ) {
         mainCameraIdOptions = runCatching {
             viewModel.discoverMainCameraIdOptions()
+        }.getOrElse {
+            emptyList()
+        }
+        macroCameraIdOptions = runCatching {
+            viewModel.discoverMacroCameraIdOptions()
         }.getOrElse {
             emptyList()
         }
@@ -428,9 +473,34 @@ fun SettingsScreen(
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
+    val depthModelState by remember(context.applicationContext) {
+        DepthModelManager.observe(context)
+    }.collectAsState()
+    val isDepthModelInstalled = depthModelState is DepthModelDownloadState.Ready
+    var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
+    var pendingDefaultVirtualAperture by remember { mutableStateOf<Float?>(null) }
+    val depthModelImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { DepthModelManager.importModel(context, it) }
+    }
+
+    LaunchedEffect(depthModelState, pendingDefaultVirtualAperture) {
+        val pendingAperture = pendingDefaultVirtualAperture
+        if (depthModelState is DepthModelDownloadState.Ready && pendingAperture != null) {
+            viewModel.setDefaultVirtualAperture(pendingAperture)
+            pendingDefaultVirtualAperture = null
+            showDepthModelDownloadDialog = false
+        }
+    }
+
+    val availableHncsProfiles = remember(context) {
+        HncsProfileManager(context.applicationContext).getAvailableProfiles()
+    }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
     val isHeicExportSupported = remember { HeicExportEncoder.isSupported }
+    val isJpeg444ExportSupported = remember { Jpeg444ExportEncoder.isSupported }
     val photoSavePathOptions = PhotoSavePath.entries.toList()
     val photoSavePathLabels = photoSavePathOptions.map { it.displayName() }
     val photoSaveTreeLabel = remember(photoSaveTreeUri) {
@@ -651,6 +721,18 @@ fun SettingsScreen(
         )
     }
 
+    if (showDepthModelDownloadDialog) {
+        DepthModelDownloadDialog(
+            state = depthModelState,
+            onDownload = { DepthModelManager.download(context) },
+            onImport = { depthModelImportLauncher.launch(arrayOf("*/*")) },
+            onDismiss = {
+                showDepthModelDownloadDialog = false
+                pendingDefaultVirtualAperture = null
+            }
+        )
+    }
+
     if (showGhostPermissionDialog) {
         AlertDialog(
             onDismissRequest = { showGhostPermissionDialog = false },
@@ -770,6 +852,37 @@ fun SettingsScreen(
             rippleAlpha = SettingsRippleAlpha
         )
     }
+    val screenTitle = when (selectedPage) {
+        null -> stringResource(R.string.settings_title)
+        SettingsPage.ASSIST -> stringResource(R.string.settings_section_assist)
+        SettingsPage.FOCUS_LENS -> stringResource(R.string.settings_section_focus_lens)
+        SettingsPage.CAPTURE_STORAGE -> stringResource(R.string.settings_section_capture_storage)
+        SettingsPage.CALIBRATION -> stringResource(R.string.settings_section_calibration)
+        SettingsPage.QUALITY_PERFORMANCE -> stringResource(R.string.settings_section_quality_perf)
+        SettingsPage.COLOR_HDR -> stringResource(R.string.settings_section_color_hdr)
+        SettingsPage.MULTIFRAME_EXPOSURE -> stringResource(R.string.settings_section_multiframe_exposure)
+        SettingsPage.SOFTWARE_PROCESSING -> stringResource(R.string.settings_section_software_processing)
+        SettingsPage.RAW -> stringResource(R.string.baseline_target_raw)
+        SettingsPage.PHANTOM -> stringResource(R.string.phantom)
+        SettingsPage.INTERFACE -> stringResource(R.string.settings_section_interface)
+        SettingsPage.CONTENT_MANAGEMENT -> stringResource(R.string.settings_section_management)
+        SettingsPage.AI_SERVICE -> stringResource(R.string.ai_service)
+        SettingsPage.SYSTEM_CONTROL -> stringResource(R.string.settings_section_system_control)
+        SettingsPage.DATA_MAINTENANCE -> stringResource(R.string.settings_section_data_maintenance)
+        SettingsPage.HELP_ABOUT -> stringResource(R.string.settings_section_help_about)
+    }
+
+    BackHandler(enabled = selectedPage != null) {
+        selectedPage = null
+    }
+    val overviewScrollState = rememberScrollState()
+    val detailScrollState = rememberScrollState()
+    LaunchedEffect(selectedPage) {
+        if (selectedPage != null) {
+            detailScrollState.scrollTo(0)
+        }
+    }
+    val settingsScrollState = if (selectedPage == null) overviewScrollState else detailScrollState
 
     CompositionLocalProvider(LocalRippleConfiguration provides settingsRippleConfiguration) {
         Column(
@@ -780,97 +893,65 @@ fun SettingsScreen(
                 .background(SettingsBackgroundScrim)
                 .navigationBarsPadding()
         ) {
-        // 顶部标题栏
-        TopAppBar(
-            title = {
-                Text(
-                    text = stringResource(R.string.settings_title),
-                    color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            },
-            navigationIcon = {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.autoRotate()
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.back),
-                        tint = Color.White
+            // 顶部标题栏
+            TopAppBar(
+                title = {
+                    Text(
+                        text = screenTitle,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Medium
                     )
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent
-            )
-        )
-
-        val camera = stringResource(R.string.settings_tab_camera)
-        val imaging = stringResource(R.string.imaging)
-        val phantom = stringResource(R.string.phantom)
-        val system = stringResource(R.string.settings_tab_system)
-
-        // Tab 选择器
-        val tabs = remember {
-            mutableStateListOf<Pair<SettingsTab, String>>().apply {
-                add(SettingsTab.CAMERA to camera)
-                add(SettingsTab.IMAGING to imaging)
-                add(SettingsTab.RAW to "RAW")
-                if (DeviceUtil.canShowPhantom) {
-                    add(SettingsTab.PHANTOM to phantom)
-                }
-                add(SettingsTab.SYSTEM to system)
-            }
-        }
-        val selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0)
-
-        TabRow(
-            selectedTabIndex = selectedTabIndex,
-            containerColor = Color.Transparent,
-            contentColor = Color.White,
-            divider = {},
-            indicator = { tabPositions ->
-                if (selectedTabIndex < tabPositions.size) {
-                    TabRowDefaults.SecondaryIndicator(
-                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                        color = Color(0xFFFF6B35)
-                    )
-                }
-            }
-        ) {
-            tabs.forEach { (tab, label) ->
-                Tab(
-                    selected = selectedTab == tab,
-                    onClick = { selectedTab = tab },
-                    text = {
-                        Text(
-                            text = label,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.basicMarquee()
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            if (selectedPage == null) {
+                                onBack()
+                            } else {
+                                selectedPage = null
+                            }
+                        },
+                        modifier = Modifier.autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                            tint = Color.White
                         )
                     }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent
                 )
-            }
-        }
+            )
 
-        // 设置项列表
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-        ) {
-            Spacer(modifier = Modifier.height(16.dp))
+            // 设置项列表
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(settingsScrollState)
+                    .padding(horizontal = 16.dp)
+            ) {
+                Spacer(modifier = Modifier.height(16.dp))
 
-            when (selectedTab) {
-                SettingsTab.CAMERA -> {
+            when (selectedPage) {
+                null -> {
+                    SettingsCategoryOverview(
+                        showPremium = !isPurchased,
+                        onPremiumClick = {
+                            context.findActivity()?.let { viewModel.purchase(it) }
+                        },
+                        onPageSelected = { selectedPage = it }
+                    )
+                }
+
+                SettingsPage.ASSIST -> {
                     // 辅助工具
-                    SettingsSection(title = stringResource(R.string.settings_section_assist)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_assist),
+                        showTitle = false
+                    ) {
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_grid_lines),
                             description = stringResource(R.string.settings_grid_description),
@@ -902,11 +983,14 @@ fun SettingsScreen(
                             onCheckedChange = { viewModel.setFocusPeakingEnabled(it) }
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.FOCUS_LENS -> {
                     // 对焦与镜头
-                    SettingsSection(title = stringResource(R.string.settings_section_focus_lens)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_focus_lens),
+                        showTitle = false
+                    ) {
                         val aiFocusModeOptions = AiFocusTargetMode.entries.map { it to it.displayName() }
                         val aiFocusModeLabels = aiFocusModeOptions.map { it.second }
                         DropdownSettingItem(
@@ -966,6 +1050,20 @@ fun SettingsScreen(
                             onClick = { showAddIszLensDialog = true }
                         )
 
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        NavigationSettingItem(
+                            title = stringResource(R.string.settings_custom_vendor_keys),
+                            description = stringResource(
+                                R.string.settings_custom_vendor_keys_description,
+                                customVendorKeySettings.keys.size
+                            ),
+                            onClick = { showCustomVendorKeysDialog = true }
+                        )
+
                         if (mainCameraIdOptions.size > 1) {
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
@@ -1002,6 +1100,39 @@ fun SettingsScreen(
                             )
                         }
 
+                        if (macroCameraIdOptions.size > 1) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            val macroCameraAutoLabel = stringResource(R.string.settings_macro_camera_id_auto)
+                            val selectedMacroCameraId = preferredMacroCameraId
+                                ?.takeIf { macroCameraIdOptions.contains(it) }
+                            val macroCameraIdLabels: List<Pair<String?, String>> =
+                                listOf(null to macroCameraAutoLabel) + macroCameraIdOptions.map { cameraId ->
+                                    cameraId to stringResource(R.string.settings_main_camera_id_option, cameraId)
+                                }
+                            val selectedMacroCameraLabel = macroCameraIdLabels
+                                .firstOrNull { it.first == selectedMacroCameraId }
+                                ?.second
+                                ?: macroCameraAutoLabel
+
+                            DropdownSettingItem(
+                                title = stringResource(R.string.settings_macro_camera_id),
+                                description = stringResource(R.string.settings_macro_camera_id_description),
+                                value = selectedMacroCameraLabel,
+                                options = macroCameraIdLabels.map { it.second },
+                                isLoading = false,
+                                onExpanded = {},
+                                onOptionSelected = { label ->
+                                    macroCameraIdLabels.firstOrNull { it.second == label }?.let {
+                                        viewModel.setPreferredMacroCameraId(it.first)
+                                    }
+                                }
+                            )
+                        }
+
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
                             modifier = Modifier.padding(vertical = 8.dp)
@@ -1009,12 +1140,25 @@ fun SettingsScreen(
 
                         QualityLevelSetting(
                             title = stringResource(R.string.settings_default_virtual_aperture),
-                            description = stringResource(R.string.settings_default_virtual_aperture_description),
+                            description = stringResource(
+                                R.string.settings_default_virtual_aperture_description
+                            ) + "\n" + stringResource(R.string.virtual_aperture_depth_model_description),
                             levels = listOf(0f to stringResource(R.string.settings_nr_level_off)) + listOf(
                                 1.0f, 1.2f, 1.4f, 1.8f, 2.0f, 2.8f, 4.0f, 5.6f, 8.0f, 11f, 16f
                             ).map { it to "f/${if (it % 1f == 0f) it.toInt() else it}" },
-                            currentLevel = defaultVirtualAperture,
-                            onLevelSelected = { viewModel.setDefaultVirtualAperture(it) }
+                            currentLevel = if (isDepthModelInstalled) {
+                                defaultVirtualAperture
+                            } else {
+                                0f
+                            },
+                            onLevelSelected = { aperture ->
+                                if (aperture <= 0f || isDepthModelInstalled) {
+                                    viewModel.setDefaultVirtualAperture(aperture)
+                                } else {
+                                    pendingDefaultVirtualAperture = aperture
+                                    showDepthModelDownloadDialog = true
+                                }
+                            }
                         )
 
                         HorizontalDivider(
@@ -1060,11 +1204,14 @@ fun SettingsScreen(
                             onValueChange = { viewModel.setLensIdBlacklist(it) }
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.CAPTURE_STORAGE -> {
                     // 拍摄行为
-                    SettingsSection(title = stringResource(R.string.settings_section_capture_storage)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_capture_storage),
+                        showTitle = false
+                    ) {
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_top_sheet_aspect_ratios),
                             description = stringResource(
@@ -1214,9 +1361,47 @@ fun SettingsScreen(
                     }
                 }
 
-                SettingsTab.IMAGING -> {
+                SettingsPage.CALIBRATION -> {
+                    // 相机校正设置
+                    val currentCameraId = state.currentCameraId
+                    val cameraOrientationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
+                        .collectAsState(initial = 0)
+                    val cameraName = state.getCurrentCameraInfo()?.let { info ->
+                        val prefix = when (info.lensFacing) {
+                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> stringResource(R.string.rear_camera)
+                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> stringResource(R.string.front_camera)
+                            else -> stringResource(R.string.camera)
+                        }
+                        "$prefix ${info.cameraId}"
+                    } ?: stringResource(R.string.current_camera)
+
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_calibration),
+                        isExpandable = true,
+                        isExpanded = calibrationExpanded,
+                        onToggleExpand = { calibrationExpanded = !calibrationExpanded }
+                    ) {
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_camera_orientation) + " ($cameraName)",
+                            description = stringResource(R.string.settings_camera_orientation_description),
+                            levels = listOf(
+                                0 to stringResource(R.string.settings_orientation_normal),
+                                90 to stringResource(R.string.settings_orientation_90),
+                                180 to stringResource(R.string.settings_orientation_180),
+                                270 to stringResource(R.string.settings_orientation_270)
+                            ),
+                            currentLevel = cameraOrientationOffset,
+                            onLevelSelected = { viewModel.setCameraOrientationOffset(currentCameraId, it) }
+                        )
+                    }
+                }
+
+                SettingsPage.QUALITY_PERFORMANCE -> {
                     // 画质与性能
-                    SettingsSection(title = stringResource(R.string.settings_section_quality_perf)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_quality_perf),
+                        showTitle = false
+                    ) {
                         QualityLevelSetting(
                             title = stringResource(R.string.settings_nr_level),
                             description = stringResource(R.string.settings_nr_level_description),
@@ -1281,17 +1466,19 @@ fun SettingsScreen(
                             )
                         }
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
+                        if (isJpeg444ExportSupported) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
 
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_use_gpu_acceleration),
-                            description = stringResource(R.string.settings_use_gpu_acceleration_description),
-                            checked = useGpuAcceleration,
-                            onCheckedChange = { viewModel.setUseGpuAcceleration(it) }
-                        )
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_use_jpeg_444_export),
+                                description = stringResource(R.string.settings_use_jpeg_444_export_description),
+                                checked = useJpeg444Export,
+                                onCheckedChange = { viewModel.setUseJpeg444Export(it) }
+                            )
+                        }
 
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
@@ -1317,11 +1504,14 @@ fun SettingsScreen(
                             onCheckedChange = { viewModel.setEnableDevelopAnimation(it) }
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.COLOR_HDR -> {
                     // 色彩与 HDR
-                    SettingsSection(title = stringResource(R.string.settings_section_color_hdr)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_color_hdr),
+                        showTitle = false
+                    ) {
                         BaselineColorCorrectionSettingItem(
                             title = stringResource(R.string.settings_baseline_jpg_title),
                             description = stringResource(R.string.settings_baseline_jpg_description),
@@ -1435,10 +1625,10 @@ fun SettingsScreen(
                             )
 
                             SwitchSettingItem(
-                                title = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture),
-                                description = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture_description),
-                                checked = autoEnableHdr,
-                                onCheckedChange = { viewModel.setAutoEnableHdrForHdrCapture(it) }
+                                title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                                description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
+                                checked = ultraHdrGainMapEnabled,
+                                onCheckedChange = { viewModel.setUltraHdrGainMapEnabled(it) }
                             )
 
                             HorizontalDivider(
@@ -1454,14 +1644,41 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.MULTIFRAME_EXPOSURE -> {
                     // 多帧与曝光
-                    SettingsSection(title = stringResource(R.string.settings_section_multiframe_exposure)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_multiframe_exposure),
+                        showTitle = false
+                    ) {
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_jpg_max_hdr_composition),
+                            description = stringResource(R.string.settings_jpg_max_hdr_composition_description),
+                            checked = useJpgMaxHdrComposition,
+                            onCheckedChange = viewModel::setUseJpgMaxHdrComposition
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_raw_max_hdr_composition),
+                            description = stringResource(R.string.settings_raw_max_hdr_composition_description),
+                            checked = useRawMaxHdrComposition,
+                            onCheckedChange = viewModel::setUseRawMaxHdrComposition
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         SliderSettingItem(
-                            title = stringResource(R.string.settings_multi_frame_count),
-                            description = stringResource(R.string.settings_multi_frame_count_description),
+                            title = stringResource(R.string.settings_max_frame_count),
+                            description = stringResource(R.string.settings_max_frame_count_description),
                             value = multiFrameCountSliderValue,
                             valueRange = MultiFrameConfig.MIN_FRAME_COUNT.toFloat()..MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
                             onValueChange = { multiFrameCountSliderValue = it.roundToInt().toFloat() },
@@ -1491,57 +1708,9 @@ fun SettingsScreen(
                             onLevelSelected = { viewModel.setMultipleExposureCount(it) }
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // AI 服务设置
-                    SettingsSection(title = stringResource(R.string.ai_service)) {
-                        TextInputSettingItem(
-                            title = stringResource(R.string.settings_openai_api_key),
-                            description = stringResource(R.string.settings_openai_api_key_desc),
-                            value = openAIApiKey ?: "",
-                            onValueChange = { viewModel.setOpenAIApiKey(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
-                        TextInputSettingItem(
-                            title = stringResource(R.string.settings_openai_base_url),
-                            description = stringResource(R.string.settings_openai_base_url_desc),
-                            value = openAIUrl ?: OpenAIApiClient.DEFAULT_API_URL,
-                            onValueChange = { viewModel.setOpenAIUrl(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
-                        val customModelLabel = stringResource(R.string.settings_ai_model_custom)
-                        DropdownSettingItem(
-                            title = stringResource(R.string.settings_ai_model),
-                            description = stringResource(R.string.settings_ai_model_desc),
-                            value = openAIModel ?: OpenAIApiClient.DEFAULT_MODEL,
-                            options = availableOpenAIModels + customModelLabel,
-                            isLoading = isFetchingAIModels,
-                            enabled = !openAIApiKey.isNullOrBlank(),
-                            onExpanded = { viewModel.fetchAvailableAIModels() },
-                            onOptionSelected = {
-                                if (it == customModelLabel) {
-                                    customAIModelValue = openAIModel ?: ""
-                                    showCustomAIModelDialog = true
-                                } else {
-                                    viewModel.setOpenAIModel(it)
-                                }
-                            }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.SOFTWARE_PROCESSING -> {
                     // 细节微调
                     SettingsSection(
                         title = stringResource(R.string.settings_section_software_processing),
@@ -1593,44 +1762,9 @@ fun SettingsScreen(
                             onValueChangeFinished = ::commitSoftwareProcessingSliderValues
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // 相机校正设置
-                    val currentCameraId = state.currentCameraId
-                    val cameraOrientationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
-                        .collectAsState(initial = 0)
-                    val cameraName = state.getCurrentCameraInfo()?.let { info ->
-                        val prefix = when (info.lensFacing) {
-                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> stringResource(R.string.rear_camera)
-                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> stringResource(R.string.front_camera)
-                            else -> stringResource(R.string.camera)
-                        }
-                        "$prefix ${info.cameraId}"
-                    } ?: stringResource(R.string.current_camera)
-
-                    SettingsSection(
-                        title = stringResource(R.string.settings_section_calibration),
-                        isExpandable = true,
-                        isExpanded = calibrationExpanded,
-                        onToggleExpand = { calibrationExpanded = !calibrationExpanded }
-                    ) {
-                        QualityLevelSetting(
-                            title = stringResource(R.string.settings_camera_orientation) + " ($cameraName)",
-                            description = stringResource(R.string.settings_camera_orientation_description),
-                            levels = listOf(
-                                0 to stringResource(R.string.settings_orientation_normal),
-                                90 to stringResource(R.string.settings_orientation_90),
-                                180 to stringResource(R.string.settings_orientation_180),
-                                270 to stringResource(R.string.settings_orientation_270)
-                            ),
-                            currentLevel = cameraOrientationOffset,
-                            onLevelSelected = { viewModel.setCameraOrientationOffset(currentCameraId, it) }
-                        )
-                    }
                 }
 
-                SettingsTab.RAW -> {
+                SettingsPage.RAW -> {
                     RawEditPanel(
                         selectedDcpId = rawDcpId,
                         rawDcpIdsByLens = rawDcpIdsByLens,
@@ -1694,6 +1828,14 @@ fun SettingsScreen(
                         onSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
                         onAdjustmentStart = { isRawSliderAdjusting = true },
                         onAdjustmentEnd = { commitRawSliderValues() },
+                        showRawMaxOutputScaleControl = true,
+                        rawMaxOutputScale = rawMaxOutputScale,
+                        onRawMaxOutputScaleChange = viewModel::setRawMaxOutputScale,
+                        selectedHncsProfileId = rawHncsProfileId,
+                        availableHncsProfiles = availableHncsProfiles,
+                        onSelectHncsProfile = viewModel::setRawHncsProfileId,
+                        hncsFilmCurveMode = rawHncsFilmCurveMode,
+                        onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
                         contentMode = RawEditPanelContentMode.FULL
                     )
 
@@ -1837,17 +1979,33 @@ fun SettingsScreen(
                             RawWhiteLevelCorrection.MODE_RAW10 to stringResource(R.string.settings_white_level_raw10),
                             RawWhiteLevelCorrection.MODE_RAW12 to stringResource(R.string.settings_white_level_raw12),
                             RawWhiteLevelCorrection.MODE_RAW14 to stringResource(R.string.settings_white_level_raw14),
-                            RawWhiteLevelCorrection.MODE_RAW_SENSOR to stringResource(R.string.settings_white_level_raw_sensor)
+                            RawWhiteLevelCorrection.MODE_RAW_SENSOR to stringResource(R.string.settings_white_level_raw_sensor),
+                            RawWhiteLevelCorrection.MODE_CUSTOM to stringResource(R.string.settings_white_level_custom)
                         ),
                         currentLevel = rawWhiteLevelMode,
                         onLevelSelected = { viewModel.setRawWhiteLevelMode(it) }
                     )
+
+                    if (rawWhiteLevelMode == RawWhiteLevelCorrection.MODE_CUSTOM) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_white_level_custom),
+                            description = null,
+                            value = if (rawCustomWhiteLevel == 0f) "" else rawCustomWhiteLevel.toString(),
+                            onValueChange = {
+                                it.toFloatOrNull()?.let { value -> viewModel.setRawCustomWhiteLevel(value) }
+                            }
+                        )
+                    }
                 }
 
-                SettingsTab.PHANTOM -> {
+                SettingsPage.PHANTOM -> {
                     if (DeviceUtil.canShowPhantom) {
                         // 幻影模式设置
-                        SettingsSection(title = stringResource(R.string.ghost_mode)) {
+                        SettingsSection(
+                            title = stringResource(R.string.ghost_mode),
+                            showTitle = false
+                        ) {
                             SwitchSettingItem(
                                 title = stringResource(R.string.ghost_mode),
                                 description = stringResource(R.string.ghost_mode_dialog_description),
@@ -1925,6 +2083,19 @@ fun SettingsScreen(
                                 modifier = Modifier.padding(vertical = 12.dp)
                             )
 
+                            FrameWatermarkSetting(
+                                title = stringResource(R.string.settings_phantom_frame_title),
+                                description = stringResource(R.string.settings_phantom_frame_description),
+                                availableFrames = availableFrames,
+                                currentFrameId = phantomFrameId,
+                                onFrameSelected = viewModel::setPhantomFrame
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+
                             BaselineColorCorrectionSettingItem(
                                 title = stringResource(R.string.settings_baseline_phantom_title),
                                 description = stringResource(R.string.settings_baseline_phantom_description),
@@ -1935,25 +2106,23 @@ fun SettingsScreen(
                     }
                 }
 
-                SettingsTab.SYSTEM -> {
-                    if (!isPurchased) {
-                        PremiumCard(
-                            onClick = {
-                                val activity = context.findActivity()
-                                if (activity != null) {
-                                    viewModel.purchase(activity)
-                                }
-                            }
-                        )
-                        Spacer(modifier = Modifier.height(24.dp))
-                    }
-
+                SettingsPage.INTERFACE -> {
                     // 界面样式
-                    SettingsSection(title = stringResource(R.string.settings_section_interface)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_interface),
+                        showTitle = false
+                    ) {
                         BackgroundSetting(
                             viewModel = viewModel,
                             modifier = Modifier.padding(bottom = 16.dp)
                         )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        CaptureButtonAppearanceSetting(viewModel = viewModel)
 
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
@@ -1972,11 +2141,14 @@ fun SettingsScreen(
                             onLevelSelected = { viewModel.setWidgetTheme(it) }
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.CONTENT_MANAGEMENT -> {
                     // 内容管理
-                    SettingsSection(title = stringResource(R.string.settings_section_management)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_management),
+                        showTitle = false
+                    ) {
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_filter_management),
                             description = stringResource(R.string.settings_filter_management_description),
@@ -2005,11 +2177,65 @@ fun SettingsScreen(
                             onClick = onPresetManagementClick
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
+                SettingsPage.AI_SERVICE -> {
+                    // AI 服务设置
+                    SettingsSection(
+                        title = stringResource(R.string.ai_service),
+                        showTitle = false
+                    ) {
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_openai_api_key),
+                            description = stringResource(R.string.settings_openai_api_key_desc),
+                            value = openAIApiKey ?: "",
+                            onValueChange = { viewModel.setOpenAIApiKey(it) }
+                        )
 
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_openai_base_url),
+                            description = stringResource(R.string.settings_openai_base_url_desc),
+                            value = openAIUrl ?: OpenAIApiClient.DEFAULT_API_URL,
+                            onValueChange = { viewModel.setOpenAIUrl(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        val customModelLabel = stringResource(R.string.settings_ai_model_custom)
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_ai_model),
+                            description = stringResource(R.string.settings_ai_model_desc),
+                            value = openAIModel ?: OpenAIApiClient.DEFAULT_MODEL,
+                            options = availableOpenAIModels + customModelLabel,
+                            isLoading = isFetchingAIModels,
+                            enabled = !openAIApiKey.isNullOrBlank(),
+                            onExpanded = { viewModel.fetchAvailableAIModels() },
+                            onOptionSelected = {
+                                if (it == customModelLabel) {
+                                    customAIModelValue = openAIModel ?: ""
+                                    showCustomAIModelDialog = true
+                                } else {
+                                    viewModel.setOpenAIModel(it)
+                                }
+                            }
+                        )
+                    }
+                }
+
+                SettingsPage.SYSTEM_CONTROL -> {
                     // 系统与控制
-                    SettingsSection(title = stringResource(R.string.settings_section_system_control)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_system_control),
+                        showTitle = false
+                    ) {
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_shutter_sound),
                             description = stringResource(R.string.settings_shutter_sound_description),
@@ -2080,11 +2306,14 @@ fun SettingsScreen(
                             onActionSelected = { viewModel.setVolumeKeyAction(it) }
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.DATA_MAINTENANCE -> {
                     // 数据维护
-                    SettingsSection(title = stringResource(R.string.settings_section_data_maintenance)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_data_maintenance),
+                        showTitle = false
+                    ) {
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_backup_settings),
                             description = if (backupOperation == BackupOperation.BACKUP) {
@@ -2114,17 +2343,16 @@ fun SettingsScreen(
                             onClick = { restoreLauncher.launch("*/*") }
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
+                SettingsPage.HELP_ABOUT -> {
                     // 帮助与关于
                     val isGoogleFlavor = BuildConfig.FLAVOR == "google"
-                    val communityGroupUrl = TELEGRAM_GROUP_URL
-                    val communityGroupDescription = stringResource(
-                        R.string.settings_community_group_telegram_description
-                    )
 
-                    SettingsSection(title = stringResource(R.string.settings_section_help_about)) {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_help_about),
+                        showTitle = false
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2223,8 +2451,10 @@ fun SettingsScreen(
 
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_community_group),
-                            description = communityGroupDescription,
-                            onClick = { openExternalUrl(context, communityGroupUrl) }
+                            description = stringResource(
+                                R.string.settings_community_group_telegram_description
+                            ),
+                            onClick = { openExternalUrl(context, TELEGRAM_GROUP_URL) }
                         )
 
                         HorizontalDivider(
@@ -2233,37 +2463,52 @@ fun SettingsScreen(
                         )
 
                         NavigationSettingItem(
-                            title = stringResource(R.string.settings_donation),
-                            description = stringResource(R.string.settings_donation_description),
-                            onClick = {
-                                val qrCodeUrl = "https://qr.alipay.com/fkx103287mz2sqvs1esdh30"
-                                val alipayUrl =
-                                    "alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=${
-                                        java.net.URLEncoder.encode(
-                                            qrCodeUrl,
-                                            "UTF-8"
-                                        )
-                                    }"
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(alipayUrl))
-                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                try {
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(qrCodeUrl))
-                                    webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            title = stringResource(R.string.settings_community_group),
+                            description = stringResource(
+                                R.string.settings_community_group_qq_description
+                            ),
+                            onClick = { openExternalUrl(context, QQ_GROUP_URL) }
+                        )
+
+                        if (!isGoogleFlavor) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            NavigationSettingItem(
+                                title = stringResource(R.string.settings_donation),
+                                description = stringResource(R.string.settings_donation_description),
+                                onClick = {
+                                    val qrCodeUrl = "https://qr.alipay.com/fkx103287mz2sqvs1esdh30"
+                                    val alipayUrl =
+                                        "alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=${
+                                            java.net.URLEncoder.encode(
+                                                qrCodeUrl,
+                                                "UTF-8"
+                                            )
+                                        }"
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(alipayUrl))
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     try {
-                                        context.startActivity(webIntent)
-                                    } catch (e2: Exception) {
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(qrCodeUrl))
+                                        webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        try {
+                                            context.startActivity(webIntent)
+                                        } catch (e2: Exception) {
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
-        }
+                Spacer(modifier = Modifier.height(32.dp))
+            }
         }
     }
 
@@ -2325,18 +2570,29 @@ fun SettingsScreen(
             availableCameras = state.availableCameras,
             iszLensConfigs = iszLensConfigs,
             vendorCaptureSettingsByLens = vendorCaptureSettingsByLens,
-            onAddLens = { baseCameraId, iszZoomRatio, isMacro, rawBlackBorderCrop, settings ->
+            onAddLens = { baseCameraId, iszZoomRatio, isMacro, rawBlackBorderCrop, rawDngMetadataCorrections, settings ->
                 viewModel.addIszLensConfig(
                     baseCameraId,
                     iszZoomRatio,
                     isMacro,
                     rawBlackBorderCrop,
+                    rawDngMetadataCorrections,
                     settings
                 )
                 showAddIszLensDialog = false
             },
             onRemoveLens = { viewModel.removeIszLensConfig(it) },
             onDismiss = { showAddIszLensDialog = false }
+        )
+    }
+
+    if (showCustomVendorKeysDialog) {
+        CustomVendorKeysDialog(
+            availableCameras = state.availableCameras,
+            settings = customVendorKeySettings,
+            onSave = viewModel::upsertCustomVendorKey,
+            onDelete = viewModel::removeCustomVendorKey,
+            onDismiss = { showCustomVendorKeysDialog = false }
         )
     }
 
@@ -2432,6 +2688,215 @@ fun SettingsScreen(
     }
 }
 
+@Composable
+private fun SettingsCategoryOverview(
+    showPremium: Boolean,
+    onPremiumClick: () -> Unit,
+    onPageSelected: (SettingsPage) -> Unit
+) {
+    if (showPremium) {
+        PremiumCard(onClick = onPremiumClick)
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+
+    SettingsSection(title = stringResource(R.string.settings_tab_camera)) {
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_assist),
+            description = listOf(
+                stringResource(R.string.settings_grid_lines),
+                stringResource(R.string.settings_level_indicator),
+                stringResource(R.string.settings_focus_peaking)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.ASSIST) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_focus_lens),
+            description = listOf(
+                stringResource(R.string.settings_ai_focus_target),
+                stringResource(R.string.settings_default_focal_length),
+                stringResource(R.string.settings_add_isz_lens)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.FOCUS_LENS) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_capture_storage),
+            description = listOf(
+                stringResource(R.string.settings_top_sheet_aspect_ratios),
+                stringResource(R.string.settings_auto_save),
+                stringResource(R.string.settings_save_location)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.CAPTURE_STORAGE) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_calibration),
+            description = stringResource(R.string.settings_camera_orientation_description),
+            onClick = { onPageSelected(SettingsPage.CALIBRATION) }
+        )
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    SettingsSection(title = stringResource(R.string.imaging)) {
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_quality_perf),
+            description = listOf(
+                stringResource(R.string.settings_photo_quality),
+                stringResource(R.string.settings_use_live_photo),
+                stringResource(R.string.settings_develop_animation)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.QUALITY_PERFORMANCE) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_color_hdr),
+            description = listOf(
+                stringResource(R.string.settings_baseline_jpg_title),
+                stringResource(R.string.settings_tonemap_mode),
+                stringResource(R.string.settings_screen_hdr)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.COLOR_HDR) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_multiframe_exposure),
+            description = listOf(
+                stringResource(R.string.settings_jpg_max_hdr_composition),
+                stringResource(R.string.settings_raw_max_hdr_composition),
+                stringResource(R.string.settings_max_frame_count),
+                stringResource(R.string.settings_multiple_exposure_count)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.MULTIFRAME_EXPOSURE) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_software_processing),
+            description = stringResource(R.string.settings_detail_enhancement_description),
+            onClick = { onPageSelected(SettingsPage.SOFTWARE_PROCESSING) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.baseline_target_raw),
+            description = listOf(
+                stringResource(R.string.raw_dcp_title),
+                stringResource(R.string.settings_raw_profile_tone_map),
+                stringResource(R.string.settings_raw_cfa_correction)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.RAW) }
+        )
+
+        if (DeviceUtil.canShowPhantom) {
+            SettingsCategoryDivider()
+
+            NavigationSettingItem(
+                title = stringResource(R.string.phantom),
+                description = listOf(
+                    stringResource(R.string.settings_phantom_pip_preview),
+                    stringResource(R.string.settings_phantom_save_as_new),
+                    stringResource(R.string.settings_phantom_frame_title),
+                    stringResource(R.string.settings_baseline_phantom_title)
+                ).joinToString(" · "),
+                onClick = { onPageSelected(SettingsPage.PHANTOM) }
+            )
+        }
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    SettingsSection(title = stringResource(R.string.settings_tab_system)) {
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_interface),
+            description = listOf(
+                stringResource(R.string.settings_background),
+                stringResource(R.string.settings_widget_theme)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.INTERFACE) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_management),
+            description = listOf(
+                stringResource(R.string.settings_filter_management),
+                stringResource(R.string.settings_frame_management),
+                stringResource(R.string.settings_preset_management)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.CONTENT_MANAGEMENT) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.ai_service),
+            description = listOf(
+                stringResource(R.string.settings_openai_api_key),
+                stringResource(R.string.settings_openai_base_url),
+                stringResource(R.string.settings_ai_model)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.AI_SERVICE) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_system_control),
+            description = listOf(
+                stringResource(R.string.settings_shutter_sound),
+                stringResource(R.string.settings_keep_screen_on),
+                stringResource(R.string.settings_volume_key_action)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.SYSTEM_CONTROL) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_data_maintenance),
+            description = listOf(
+                stringResource(R.string.settings_backup_settings),
+                stringResource(R.string.settings_restore_settings)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.DATA_MAINTENANCE) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_help_about),
+            description = listOf(
+                stringResource(R.string.settings_log_viewer),
+                stringResource(R.string.settings_community_group)
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.HELP_ABOUT) }
+        )
+    }
+}
+
+@Composable
+private fun SettingsCategoryDivider() {
+    HorizontalDivider(
+        color = Color.White.copy(alpha = 0.1f),
+        modifier = Modifier.padding(vertical = 8.dp)
+    )
+}
+
 /**
  * 设置分组
  */
@@ -2440,13 +2905,14 @@ fun SettingsSection(
     title: String,
     modifier: Modifier = Modifier,
     description: String? = null,
+    showTitle: Boolean = true,
     isExpandable: Boolean = false,
     isExpanded: Boolean = true,
     onToggleExpand: () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(modifier = modifier) {
-        if (!isExpandable) {
+        if (showTitle && !isExpandable) {
             Text(
                 text = title,
                 color = Color.White.copy(alpha = 0.6f),
@@ -3192,6 +3658,8 @@ fun NavigationSettingItem(
  */
 @Composable
 fun FrameWatermarkSetting(
+    title: String,
+    description: String,
     availableFrames: List<FrameInfo>,
     currentFrameId: String?,
     onFrameSelected: (String?) -> Unit,
@@ -3200,18 +3668,18 @@ fun FrameWatermarkSetting(
 
     val frameScrollState = rememberLazyListState()
 
-    LaunchedEffect(currentFrameId) {
-        currentFrameId?.let { lutId ->
-            val selectedIndex = availableFrames.indexOfFirst { it.id == lutId }
-            if (selectedIndex >= 1) {
-                frameScrollState.animateScrollToItem(selectedIndex - 1)
-            }
-        }
+    LaunchedEffect(currentFrameId, availableFrames) {
+        val selectedIndex = currentFrameId
+            ?.let { frameId -> availableFrames.indexOfFirst { it.id == frameId } }
+            ?.takeIf { it >= 0 }
+            ?.plus(1)
+            ?: 0
+        frameScrollState.animateScrollToItem(selectedIndex)
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = stringResource(R.string.settings_frame_style),
+            text = title,
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.Normal,
@@ -3249,7 +3717,7 @@ fun FrameWatermarkSetting(
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = stringResource(R.string.settings_frame_description),
+            text = description,
             color = Color.White.copy(alpha = 0.6f),
             fontSize = 13.sp
         )
@@ -3425,6 +3893,369 @@ private fun PremiumCard(
 }
 
 
+@Composable
+private fun CustomVendorKeysDialog(
+    availableCameras: List<CameraInfo>,
+    settings: CustomVendorKeySettings,
+    onSave: (CustomVendorKey) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var showEditor by remember { mutableStateOf(false) }
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var keyNameText by remember { mutableStateOf("") }
+    var target by remember { mutableStateOf(CustomVendorKeyTarget.CAPTURE_REQUEST) }
+    var valueType by remember { mutableStateOf(CustomVendorKeyValueType.INT32) }
+    var valueText by remember { mutableStateOf("0") }
+    var lensId by remember { mutableStateOf<String?>(null) }
+
+    val lensIds = remember(availableCameras, settings.keys) {
+        (availableCameras.map { it.cameraId } + settings.keys.mapNotNull { it.lensId })
+            .distinct()
+    }
+    val allLensesLabel = stringResource(R.string.settings_custom_vendor_key_all_lenses)
+    val captureTargetLabel = stringResource(R.string.settings_custom_vendor_key_target_capture)
+    val sessionTargetLabel = stringResource(R.string.settings_custom_vendor_key_target_session)
+    val int32TypeLabel = stringResource(R.string.settings_custom_vendor_key_type_int32)
+    val u8TypeLabel = stringResource(R.string.settings_custom_vendor_key_type_u8)
+    val targetOptions = listOf(
+        CustomVendorKeyTarget.CAPTURE_REQUEST to captureTargetLabel,
+        CustomVendorKeyTarget.SESSION_PARAMETER to sessionTargetLabel
+    )
+    val valueTypeOptions = listOf(
+        CustomVendorKeyValueType.INT32 to int32TypeLabel,
+        CustomVendorKeyValueType.U8 to u8TypeLabel
+    )
+    val lensOptions = listOf<String?>(null) + lensIds
+    val lensLabels = lensOptions.map { id ->
+        id to if (id == null) {
+            allLensesLabel
+        } else {
+            stringResource(R.string.settings_custom_vendor_key_lens_id, id)
+        }
+    }
+
+    fun beginAdd() {
+        editingId = null
+        keyNameText = ""
+        target = CustomVendorKeyTarget.CAPTURE_REQUEST
+        valueType = CustomVendorKeyValueType.INT32
+        valueText = "0"
+        lensId = null
+        showEditor = true
+    }
+
+    fun beginEdit(key: CustomVendorKey) {
+        editingId = key.id
+        keyNameText = key.keyName
+        target = key.target
+        valueType = key.valueType
+        valueText = key.normalizedValue.toString()
+        lensId = key.lensId
+        showEditor = true
+    }
+
+    val normalizedKeyName = keyNameText.trim()
+    val isKeyNameValid = CustomVendorKey.isValidKeyName(normalizedKeyName)
+    val parsedValue = valueText.toIntOrNull()
+    val isValueValid = parsedValue != null && valueType.isValid(parsedValue)
+    val hasDuplicate = settings.keys.any { existing ->
+        if (
+            existing.id == editingId ||
+            existing.keyName != normalizedKeyName ||
+            existing.target != target
+        ) {
+            false
+        } else {
+            val lensScopesOverlap =
+                existing.lensId == null || lensId == null || existing.lensId == lensId
+            existing.lensId == lensId ||
+                (lensScopesOverlap && existing.valueType != valueType)
+        }
+    }
+    val isDraftValid = isKeyNameValid && isValueValid && !hasDuplicate
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(
+                    if (showEditor) {
+                        R.string.settings_custom_vendor_key_editor_title
+                    } else {
+                        R.string.settings_custom_vendor_keys
+                    }
+                )
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_custom_vendor_keys_warning),
+                    color = Color(0xFFFFB74D),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (showEditor) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = keyNameText,
+                        onValueChange = { keyNameText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.settings_custom_vendor_key_name)) },
+                        supportingText = {
+                            Text(
+                                when {
+                                    hasDuplicate ->
+                                        stringResource(R.string.settings_custom_vendor_key_duplicate)
+                                    keyNameText.isNotEmpty() && !isKeyNameValid ->
+                                        stringResource(R.string.settings_custom_vendor_key_invalid_name)
+                                    else ->
+                                        stringResource(R.string.settings_custom_vendor_key_name_description)
+                                }
+                            )
+                        },
+                        isError = hasDuplicate || (keyNameText.isNotEmpty() && !isKeyNameValid),
+                        singleLine = true,
+                        colors = customVendorKeyTextFieldColors()
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_custom_vendor_key_target),
+                        description = stringResource(
+                            if (target == CustomVendorKeyTarget.CAPTURE_REQUEST) {
+                                R.string.settings_custom_vendor_key_target_capture_description
+                            } else {
+                                R.string.settings_custom_vendor_key_target_session_description
+                            }
+                        ),
+                        value = targetOptions.first { it.first == target }.second,
+                        options = targetOptions.map { it.second },
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selected ->
+                            targetOptions.firstOrNull { it.second == selected }?.let {
+                                target = it.first
+                            }
+                        }
+                    )
+
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_custom_vendor_key_value_type),
+                        value = valueTypeOptions.first { it.first == valueType }.second,
+                        options = valueTypeOptions.map { it.second },
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selected ->
+                            valueTypeOptions.firstOrNull { it.second == selected }?.let {
+                                valueType = it.first
+                            }
+                        }
+                    )
+
+                    androidx.compose.material3.OutlinedTextField(
+                        value = valueText,
+                        onValueChange = { valueText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.settings_custom_vendor_key_value)) },
+                        supportingText = {
+                            Text(
+                                if (isValueValid) {
+                                    stringResource(
+                                        if (valueType == CustomVendorKeyValueType.INT32) {
+                                            R.string.settings_custom_vendor_key_int32_range
+                                        } else {
+                                            R.string.settings_custom_vendor_key_u8_range
+                                        }
+                                    )
+                                } else {
+                                    stringResource(R.string.settings_custom_vendor_key_invalid_value)
+                                }
+                            )
+                        },
+                        isError = !isValueValid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = if (valueType == CustomVendorKeyValueType.INT32) {
+                                KeyboardType.Ascii
+                            } else {
+                                KeyboardType.Number
+                            }
+                        ),
+                        colors = customVendorKeyTextFieldColors()
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_custom_vendor_key_lens),
+                        value = lensLabels.firstOrNull { it.first == lensId }?.second ?: allLensesLabel,
+                        options = lensLabels.map { it.second },
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selected ->
+                            lensLabels.firstOrNull { it.second == selected }?.let {
+                                lensId = it.first
+                            }
+                        }
+                    )
+                } else {
+                    if (settings.keys.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.settings_custom_vendor_keys_empty),
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    } else {
+                        settings.keys.forEachIndexed { index, key ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    color = Color.White.copy(alpha = 0.08f),
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                )
+                            }
+                            val keyTargetLabel = when (key.target) {
+                                CustomVendorKeyTarget.CAPTURE_REQUEST -> captureTargetLabel
+                                CustomVendorKeyTarget.SESSION_PARAMETER -> sessionTargetLabel
+                            }
+                            val keyTypeLabel = when (key.valueType) {
+                                CustomVendorKeyValueType.INT32 -> int32TypeLabel
+                                CustomVendorKeyValueType.U8 -> u8TypeLabel
+                            }
+                            val keyLensLabel = lensLabels.firstOrNull { it.first == key.lensId }
+                                ?.second
+                                ?: key.lensId.orEmpty()
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { beginEdit(key) }
+                                        .padding(vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = key.keyName,
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(
+                                            R.string.settings_custom_vendor_key_summary,
+                                            keyTargetLabel,
+                                            keyTypeLabel,
+                                            key.normalizedValue,
+                                            keyLensLabel
+                                        ),
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 12.sp,
+                                        lineHeight = 17.sp
+                                    )
+                                }
+                                IconButton(onClick = { beginEdit(key) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = stringResource(R.string.edit),
+                                        tint = Color.White.copy(alpha = 0.7f)
+                                    )
+                                }
+                                IconButton(onClick = { onDelete(key.id) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = stringResource(R.string.delete),
+                                        tint = Color(0xFFFF8A80)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    TextButton(
+                        onClick = ::beginAdd,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.settings_custom_vendor_key_add))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (showEditor) {
+                TextButton(
+                    enabled = isDraftValid,
+                    onClick = {
+                        val validValue = parsedValue ?: return@TextButton
+                        onSave(
+                            CustomVendorKey(
+                                id = editingId ?: UUID.randomUUID().toString(),
+                                keyName = normalizedKeyName,
+                                target = target,
+                                valueType = valueType,
+                                value = validValue,
+                                lensId = lensId
+                            )
+                        )
+                        showEditor = false
+                    }
+                ) {
+                    Text(stringResource(R.string.save))
+                }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        },
+        dismissButton = if (showEditor) {
+            {
+                TextButton(onClick = { showEditor = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        } else {
+            null
+        }
+    )
+}
+
+@Composable
+private fun customVendorKeyTextFieldColors() =
+    androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+        focusedTextColor = Color.White,
+        unfocusedTextColor = Color.White,
+        focusedBorderColor = Color(0xFFE5A324),
+        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+        focusedLabelColor = Color(0xFFE5A324),
+        unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
+        focusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
+        unfocusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
+        errorTextColor = Color.White,
+        errorSupportingTextColor = Color(0xFFFF8A80),
+        errorBorderColor = Color(0xFFFF8A80),
+        cursorColor = Color(0xFFE5A324)
+    )
+
 /**
  * 图像质量等级设置（通用组件）
  */
@@ -3433,7 +4264,7 @@ private fun AddIszLensDialog(
     availableCameras: List<CameraInfo>,
     iszLensConfigs: List<IszLensConfig>,
     vendorCaptureSettingsByLens: VendorCaptureSettingsByLens,
-    onAddLens: (String, Float, Boolean, RawBlackBorderCrop, VendorCaptureSettings) -> Unit,
+    onAddLens: (String, Float, Boolean, RawBlackBorderCrop, IszRawDngMetadataCorrections, VendorCaptureSettings) -> Unit,
     onRemoveLens: (IszLensConfig) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -3451,6 +4282,11 @@ private fun AddIszLensDialog(
     var rawBlackBorderCropTopText by remember { mutableStateOf("0") }
     var rawBlackBorderCropRightText by remember { mutableStateOf("0") }
     var rawBlackBorderCropBottomText by remember { mutableStateOf("0") }
+    var rawBlackLevelMode by remember { mutableStateOf(RawCfaCorrection.MODE_DEFAULT) }
+    var rawCustomBlackLevel by remember { mutableStateOf(0f) }
+    var rawWhiteLevelMode by remember { mutableStateOf(RawWhiteLevelCorrection.MODE_DEFAULT) }
+    var rawCustomWhiteLevel by remember { mutableStateOf(0f) }
+    var rawCfaCorrectionMode by remember { mutableStateOf(RawCfaCorrection.MODE_DEFAULT) }
     var settings by remember {
         mutableStateOf(
             VendorCaptureSettings(emptyMap())
@@ -3466,7 +4302,11 @@ private fun AddIszLensDialog(
     val selectedBaseCamera = baseLensCandidates.firstOrNull { it.cameraId == selectedBaseCameraId }
     val selectedBaseLabel = selectedBaseCamera?.let { iszBaseLensLabel(it) }.orEmpty()
     val baseLensLabels = baseLensCandidates.map { it.cameraId to iszBaseLensLabel(it) }
-    val virtualLensId = IszLensConfig.createVirtualCameraId(selectedBaseCameraId, selectedIszZoomRatio)
+    val virtualLensId = IszLensConfig.createVirtualCameraId(
+        selectedBaseCameraId,
+        selectedIszZoomRatio,
+        settings.toVirtualLensProfileId()
+    )
     val virtualLensName = selectedBaseCamera?.let {
         stringResource(
             R.string.settings_isz_virtual_lens_name,
@@ -3482,6 +4322,13 @@ private fun AddIszLensDialog(
             rightPx = rawBlackBorderCropRightText.toIntOrNull() ?: 0,
             bottomPx = rawBlackBorderCropBottomText.toIntOrNull() ?: 0
         )
+    )
+    val rawDngMetadataCorrections = IszRawDngMetadataCorrections(
+        blackLevelMode = rawBlackLevelMode,
+        customBlackLevel = rawCustomBlackLevel,
+        whiteLevelMode = rawWhiteLevelMode,
+        customWhiteLevel = rawCustomWhiteLevel,
+        cfaCorrectionMode = rawCfaCorrectionMode
     )
 
     AlertDialog(
@@ -3599,6 +4446,24 @@ private fun AddIszLensDialog(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
+                    RawDngMetadataCorrectionSettings(
+                        rawBlackLevelMode = rawBlackLevelMode,
+                        rawCustomBlackLevel = rawCustomBlackLevel,
+                        rawWhiteLevelMode = rawWhiteLevelMode,
+                        rawCustomWhiteLevel = rawCustomWhiteLevel,
+                        rawCfaCorrectionMode = rawCfaCorrectionMode,
+                        onRawBlackLevelModeChange = { rawBlackLevelMode = it },
+                        onRawCustomBlackLevelChange = { rawCustomBlackLevel = it },
+                        onRawWhiteLevelModeChange = { rawWhiteLevelMode = it },
+                        onRawCustomWhiteLevelChange = { rawCustomWhiteLevel = it },
+                        onRawCfaCorrectionModeChange = { rawCfaCorrectionMode = it }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
                     VendorCaptureSettingsPanel(
                         currentLensId = virtualLensId,
                         currentLensName = virtualLensName,
@@ -3627,6 +4492,8 @@ private fun AddIszLensDialog(
                         val displayRatio = baseCamera?.let {
                             IszLensConfig.displayRatioLabel(it.displayIntrinsicZoomRatio * config.iszZoomRatio)
                         } ?: IszLensConfig.displayRatioLabel(config.iszZoomRatio)
+                        val vendorSettings = vendorCaptureSettingsByLens.settingsFor(config.virtualCameraId)
+                        val vendorProfileSummary = vendorCaptureSettingsSummary(vendorSettings)
                         val lensKind = stringResource(
                             if (config.isMacro) {
                                 R.string.settings_isz_lens_kind_macro
@@ -3645,7 +4512,7 @@ private fun AddIszLensDialog(
                                 config.virtualCameraId,
                                 displayRatio,
                                 lensKind,
-                                vendorCaptureSettingsByLens.settingsFor(config.virtualCameraId).values.size,
+                                vendorProfileSummary,
                                 stringResource(
                                     R.string.settings_isz_raw_black_border_crop_summary,
                                     config.rawBlackBorderCrop.leftPx,
@@ -3668,6 +4535,7 @@ private fun AddIszLensDialog(
                         selectedIszZoomRatio,
                         isMacroLens,
                         rawBlackBorderCrop,
+                        rawDngMetadataCorrections,
                         settings
                     )
                 },
@@ -3765,6 +4633,23 @@ private fun iszBaseLensLabel(camera: CameraInfo): String {
         stringResource(R.string.settings_isz_lens_unknown_focal_length)
     }
     return stringResource(R.string.settings_isz_lens_label, prefix, camera.cameraId, focalLength)
+}
+
+@Composable
+private fun vendorCaptureSettingsSummary(settings: VendorCaptureSettings): String {
+    if (!settings.isEnabled) {
+        return stringResource(R.string.settings_isz_vendor_profile_none)
+    }
+
+    val parts = mutableListOf<String>()
+    for ((key, value) in settings.values.entries.sortedBy { it.key.ordinal }) {
+        parts += stringResource(
+            R.string.settings_isz_vendor_profile_entry,
+            key.displayName(),
+            key.normalizeValue(value)
+        )
+    }
+    return parts.joinToString(" / ")
 }
 
 @Composable
@@ -3916,6 +4801,7 @@ private fun VendorCaptureKey.displayName(): String {
         VendorCaptureKey.INSENSOR_ZOOM -> stringResource(R.string.settings_vendor_capture_insensor_zoom)
         VendorCaptureKey.QCOM_SENSOR_CURRENT_MODE -> stringResource(R.string.settings_vendor_capture_qcom_sensor_mode)
         VendorCaptureKey.VIVO_FORCE_SENSOR_MODE -> stringResource(R.string.settings_vendor_capture_vivo_sensor_mode)
+        VendorCaptureKey.MTK_RAW_BPP -> stringResource(R.string.settings_vendor_capture_mtk_raw_bpp)
         VendorCaptureKey.OPLUS_AGINGTEST_MODE_SELECT -> stringResource(R.string.settings_vendor_capture_oplus_agingtest_mode)
     }
 }
@@ -4253,6 +5139,156 @@ fun BackgroundSetting(
             text = stringResource(R.string.settings_background_description),
             color = Color.White.copy(alpha = 0.6f),
             fontSize = 13.sp
+        )
+    }
+}
+
+@Composable
+private fun CaptureButtonAppearanceSetting(
+    viewModel: CameraViewModel,
+    modifier: Modifier = Modifier
+) {
+    val style by viewModel.captureButtonStyle.collectAsState()
+    val color by viewModel.captureButtonColor.collectAsState()
+    val imagePath by viewModel.captureButtonImagePath.collectAsState()
+    var showColorPicker by remember { mutableStateOf(false) }
+
+    val imageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let(viewModel::saveCustomCaptureButtonImage)
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.settings_capture_button),
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CaptureButtonAppearanceItem(
+                label = stringResource(R.string.settings_capture_button_default),
+                selected = style == CaptureButtonStyle.DEFAULT,
+                onClick = { viewModel.setCaptureButtonStyle(CaptureButtonStyle.DEFAULT) },
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.White, Color(0xFFD7D7D7))
+                            )
+                        )
+                )
+            }
+
+            CaptureButtonAppearanceItem(
+                label = stringResource(R.string.settings_capture_button_color),
+                selected = style == CaptureButtonStyle.COLOR,
+                onClick = { showColorPicker = true },
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color(color))
+                        .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                )
+            }
+
+            CaptureButtonAppearanceItem(
+                label = stringResource(R.string.settings_capture_button_image),
+                selected = style == CaptureButtonStyle.IMAGE,
+                onClick = { imageLauncher.launch("image/*") },
+                modifier = Modifier.weight(1f)
+            ) {
+                val imageFile = imagePath?.let(::File)
+                if (imageFile?.isFile == true) {
+                    AsyncImage(
+                        model = imageFile,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                    )
+                } else {
+                    Icon(
+                        imageVector = AppIcons.FilterNone,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = stringResource(R.string.settings_capture_button_description),
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp
+        )
+    }
+
+    if (showColorPicker) {
+        ColorPickerDialog(
+            title = stringResource(R.string.settings_capture_button_color_picker),
+            initialColor = color,
+            onDismiss = { showColorPicker = false },
+            onConfirm = {
+                showColorPicker = false
+                viewModel.setCaptureButtonColor(it)
+            }
+        )
+    }
+}
+
+@Composable
+private fun CaptureButtonAppearanceItem(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    preview: @Composable () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.06f))
+            .border(
+                width = 2.dp,
+                color = if (selected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier.height(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            preview()
+        }
+        Text(
+            text = label,
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

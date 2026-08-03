@@ -1,0 +1,37 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 18c919f2a855b3727299372c559d2974204d7af412e135e2a4e5d540671d98c0
+ * ELF offsets: 0x301ded0
+ * Symbols: clarityPackedU16MaxToR32F_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp uimage2D;
+precision highp image2D;
+
+layout(rgba16ui, binding=0) readonly  uniform uimage2D uSrc;
+layout(r32f,     binding=1) writeonly uniform image2D uDst;
+
+layout(std140, binding=2) uniform ClarityPackedMaxParams_UBO {
+    int pixW;
+    int pixH;
+    int pad0;
+    int pad1;
+};
+
+layout(local_size_x=16, local_size_y=16) in;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    if (gid.x >= imageSize(uDst).x || gid.y >= imageSize(uDst).y) return;
+
+    uvec4 p = imageLoad(uSrc, gid);
+    int base = gid.x * 4;
+    // Exclude padding pixels in the last texel column, normalize to [0,1].
+    float v0 = (base + 0 < pixW) ? float(p.r) / 65535.0 : 0.0;
+    float v1 = (base + 1 < pixW) ? float(p.g) / 65535.0 : 0.0;
+    float v2 = (base + 2 < pixW) ? float(p.b) / 65535.0 : 0.0;
+    float v3 = (base + 3 < pixW) ? float(p.a) / 65535.0 : 0.0;
+    imageStore(uDst, gid, vec4(max(max(v0, v1), max(v2, v3)), 0.0, 0.0, 0.0));
+}

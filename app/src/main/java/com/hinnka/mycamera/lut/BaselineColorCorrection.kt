@@ -99,24 +99,25 @@ class ColorCorrectionPipelineResolver(
         creativeLutId: String?,
         creativeRecipeParams: ColorRecipeParams?,
     ): ResolvedColorCorrectionStack {
-        val baselineLayer = baselineLutId?.let { lutId ->
-            LutRenderLayer(
-                lutConfig = lutManager.loadLut(lutId),
-                colorRecipeParams = baselineRecipeParams ?: ColorRecipeParams.DEFAULT,
-            )
-        }
-        val creativeLayer = creativeLutId?.let { lutId ->
-            LutRenderLayer(
-                lutConfig = lutManager.loadLut(lutId),
-                colorRecipeParams = creativeRecipeParams ?: ColorRecipeParams.DEFAULT,
-            )
-        }
+        val baselineLayer = resolveLayer(baselineLutId, baselineRecipeParams)
+        val creativeLayer = resolveLayer(creativeLutId, creativeRecipeParams)
         return ResolvedColorCorrectionStack(
             target = target,
             baselineLutId = baselineLutId,
             creativeLutId = creativeLutId,
             baselineLayer = baselineLayer,
             creativeLayer = creativeLayer,
+        )
+    }
+
+    private suspend fun resolveLayer(
+        lutId: String?,
+        colorRecipeParams: ColorRecipeParams?,
+    ): LutRenderLayer? {
+        if (lutId == null && colorRecipeParams == null) return null
+        return LutRenderLayer(
+            lutConfig = lutId?.let { lutManager.loadLut(it) },
+            colorRecipeParams = colorRecipeParams ?: ColorRecipeParams.DEFAULT,
         )
     }
 }

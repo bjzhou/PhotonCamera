@@ -78,14 +78,8 @@
     <string name="settings_level_description">Afficher l\'indicateur de niveau horizontal pendant la prise de vue</string>
     <string name="settings_grid_lines">Grille de composition</string>
     <string name="settings_grid_description">Afficher la grille pour la composition</string>
-    <string name="settings_use_multi_frame">Stacking multi-images</string>
-    <string name="settings_multi_frame_count">Nombre d\'images</string>
-    <string name="settings_multi_frame_count_description">Nombre d\'images pour le stacking multi-images (plus d\'images = meilleure qualité mais plus lent).</string>
-    <string name="settings_use_super_resolution">Super Résolution</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturez un court clip vidéo avec votre photo pour un effet Live Photo dynamique.</string>
-    <string name="settings_use_gpu_acceleration">Accélération GPU</string>
-    <string name="settings_use_gpu_acceleration_description">Utilisez le GPU (Vulkan) pour accélérer le stacking multi-images. Activé par défaut.</string>
     <string name="settings_section_frame">Cadre et Filigrane</string>
     <string name="settings_frame_style">Style de cadre</string>
     <string name="settings_frame_description">Ajouter un cadre décoratif et un filigrane aux photos</string>
@@ -166,6 +160,7 @@
     <string name="recipe_param_shadows">Ombres</string>
     <string name="recipe_param_film_grain">Grain</string>
     <string name="recipe_param_vignette">Vignettage</string>
+    <string name="recipe_param_flash">Flash</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Lumière douce</string>
@@ -173,7 +168,16 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">Mettre aussi à jour la LUT actuelle</string>
+    <string name="edit_sync_lut_recipe_description">La couleur, les effets et l’intensité LUT sont aussi enregistrés dans la LUT sélectionnée.</string>
+    <string name="edit_select_lut_hint">Sélectionnez d’abord une LUT pour régler la couleur et les effets.</string>
+    <string name="edit_color_and_effects">Régler la couleur et les effets</string>
     <string name="recipe_tab_color">Couleur</string>
+    <string name="recipe_color_basic">Base</string>
+    <string name="recipe_color_grading">Étalonnage</string>
+    <string name="recipe_grading_midtones">Tons moyens</string>
+    <string name="recipe_grading_balance">Balance</string>
+    <string name="recipe_grading_blending">Transition</string>
     <string name="recipe_tab_light">Lumière</string>
     <string name="recipe_tab_texture">Texture</string>
     <string name="recipe_tab_post">Développement</string>
@@ -252,4 +256,7 @@
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_use_p010">P010 (YUV 10 bits)</string>
     <string name="settings_use_p010_description">Active la sortie YUV 10 bits pour une meilleure précision des données d\'image. Efficace sur les appareils compatibles lorsque le mode RAW est désactivé.</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution : un système de gestion des couleurs développé indépendamment par Hasselblad</string>
+    <string name="settings_raw_max_hdr_composition">Fusion HDR RAWmax</string>
+    <string name="settings_raw_max_hdr_composition_description">Utilise le bracketing d’exposition pour la fusion HDR dans RAWmax. Désactivez cette option pour accélérer le traitement.</string>
 </resources>

@@ -1,8 +1,9 @@
 package com.hinnka.mycamera.ui.components
 
-import android.content.ClipData
-import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -17,14 +18,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.ui.icons.AppIcons
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 日志查看器弹窗
@@ -35,8 +44,11 @@ fun LogViewerDialog(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val logs = remember { PLog.getAllLogs() }
     val logStats = remember { PLog.getLogStats() }
+    val downloadSuccessMessage = stringResource(R.string.log_download_success)
+    val downloadFailedMessage = stringResource(R.string.log_download_failed)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -59,9 +71,19 @@ fun LogViewerDialog(
                 // 标题栏
                 LogViewerHeader(
                     logCount = logs.size,
-                    onCopyAll = {
+                    onDownload = {
                         val formattedLogs = PLog.getFormattedLogs()
-                        copyToClipboard(context, formattedLogs)
+                        coroutineScope.launch {
+                            val fileName = withContext(Dispatchers.IO) {
+                                downloadLogs(context, formattedLogs).getOrNull()
+                            }
+                            val message = if (fileName != null) {
+                                downloadSuccessMessage.format(fileName)
+                            } else {
+                                downloadFailedMessage
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        }
                     },
                     onClear = {
                         PLog.clearLogs()
@@ -96,7 +118,7 @@ fun LogViewerDialog(
 @Composable
 private fun LogViewerHeader(
     logCount: Int,
-    onCopyAll: () -> Unit,
+    onDownload: () -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -124,16 +146,16 @@ private fun LogViewerHeader(
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // 复制全部按钮
+            // 下载日志按钮
             IconButton(
-                onClick = onCopyAll,
+                onClick = onDownload,
                 colors = IconButtonDefaults.iconButtonColors(
                     containerColor = Color(0xFF4CAF50).copy(alpha = 0.2f)
                 )
             ) {
                 Icon(
-                    imageVector = AppIcons.ContentCopy,
-                    contentDescription = "复制全部",
+                    imageVector = AppIcons.Download,
+                    contentDescription = stringResource(R.string.log_download),
                     tint = Color(0xFF4CAF50)
                 )
             }
@@ -372,11 +394,35 @@ private fun LogEntryItem(
 }
 
 /**
- * 复制到剪贴板
+ * 将日志直接保存到系统下载目录。
  */
-private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("日志", text)
-    clipboard.setPrimaryClip(clip)
-    Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
+private fun downloadLogs(context: Context, text: String): Result<String> = runCatching {
+    val fileName = "Photon_logs_${
+        SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+    }.txt"
+    val resolver = context.contentResolver
+    val values = ContentValues().apply {
+        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+        put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        put(MediaStore.Downloads.IS_PENDING, 1)
+    }
+    val uri = checkNotNull(
+        resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+    ) { "Unable to create log file in Downloads" }
+
+    try {
+        checkNotNull(resolver.openOutputStream(uri, "w")) {
+            "Unable to open log file for writing"
+        }.bufferedWriter(Charsets.UTF_8).use { writer ->
+            writer.write(text)
+        }
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        fileName
+    } catch (error: Throwable) {
+        resolver.delete(uri, null, null)
+        throw error
+    }
 }

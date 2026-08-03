@@ -1,8 +1,31 @@
 package com.hinnka.mycamera.raw
 
+import kotlin.math.pow
+
 internal object DngProfileToneCurve {
+    const val PHOTON_PGTM_PROFILE_NAME = "Photon HDR"
+
     private const val POINT_TOLERANCE = 2e-4f
     private const val LUT_TOLERANCE = 2e-3f
+    private const val DNG_PROFILE_TONE_CURVE_POINT_COUNT = 257
+
+    private val LINEAR_TONE_CURVE_POINTS = floatArrayOf(0f, 0f, 1f, 1f)
+
+    fun profileNameForPgtmMode(mode: RawProfileToneMapMode): String? {
+        return when (mode) {
+            RawProfileToneMapMode.Photon -> PHOTON_PGTM_PROFILE_NAME
+            RawProfileToneMapMode.Default,
+            RawProfileToneMapMode.OppoMaster -> null
+        }
+    }
+
+    fun profileToneCurveForPgtmMode(mode: RawProfileToneMapMode): FloatArray? {
+        return when (mode) {
+            RawProfileToneMapMode.Photon -> photonPgtmToneCurvePoints()
+            RawProfileToneMapMode.Default,
+            RawProfileToneMapMode.OppoMaster -> null
+        }
+    }
 
     private val GOOGLE_HDR_TONE_CURVE_Y = floatArrayOf(
         0f, 0.000817775668f, 0.00170822139f, 0.00267076469f, 0.0037048338f, 0.00480985641f, 0.00598525954f, 0.00723047229f,
@@ -75,6 +98,19 @@ internal object DngProfileToneCurve {
         0.97638f, 0.99517f, 0.98425f, 0.99686f, 0.99213f, 0.99845f, 1f, 1f
     )
 
+    // Larger toe power deepens the lowest shadows; toe width extends that behavior upward.
+    // Mid power controls the body contrast. Larger shoulder power softens the approach to white.
+    // Balance moves the curve vertically without changing either endpoint.
+    private const val PHOTON_PGTM_TOE_POWER = 1.5
+    private const val PHOTON_PGTM_TOE_WIDTH = 0.01
+    private const val PHOTON_PGTM_MID_POWER = 1.25
+    private const val PHOTON_PGTM_SHOULDER_POWER = 1.2
+    private const val PHOTON_PGTM_BALANCE = 0.97
+
+    private val PHOTON_PGTM_TONE_CURVE_LUT by lazy {
+        DcpToneCurve(photonPgtmToneCurvePoints()).toLut(256)
+    }
+
     fun googleHdrToneCurvePoints(): FloatArray {
         return FloatArray(GOOGLE_HDR_TONE_CURVE_Y.size * 2) { index ->
             val pointIndex = index / 2
@@ -86,8 +122,67 @@ internal object DngProfileToneCurve {
         }
     }
 
-    fun googleHdrToneCurveLut(sampleCount: Int = 256): FloatArray {
-        return DcpToneCurve(googleHdrToneCurvePoints()).toLut(sampleCount)
+    fun linearToneCurvePoints(): FloatArray {
+        return LINEAR_TONE_CURVE_POINTS.copyOf()
+    }
+
+    fun linearToneCurveLut(sampleCount: Int = 256): FloatArray {
+        return DcpToneCurve(linearToneCurvePoints()).toLut(sampleCount)
+    }
+
+    fun photonPgtmToneCurvePoints(): FloatArray {
+        return FloatArray(DNG_PROFILE_TONE_CURVE_POINT_COUNT * 2) { index ->
+            val pointIndex = index / 2
+            val input = pointIndex.toDouble() / (DNG_PROFILE_TONE_CURVE_POINT_COUNT - 1).toDouble()
+            if ((index and 1) == 0) {
+                input.toFloat()
+            } else {
+                photonPgtmToneCurve(input).toFloat()
+            }
+        }
+    }
+
+    private fun photonPgtmToneCurve(input: Double): Double {
+        if (input <= 0.0) return 0.0
+        if (input >= 1.0) return 1.0
+
+        // n(x) is strictly increasing and s(x) is strictly decreasing for positive parameters.
+        // Therefore n(x) / (n(x) + s(x)) is smooth and strictly increasing on (0, 1).
+        val normalizedToeInput =
+            (input + PHOTON_PGTM_TOE_WIDTH) / (1.0 + PHOTON_PGTM_TOE_WIDTH)
+        val toeTransition = normalizedToeInput
+            .pow(PHOTON_PGTM_MID_POWER - PHOTON_PGTM_TOE_POWER)
+        val numerator = input.pow(PHOTON_PGTM_TOE_POWER) * toeTransition
+        val shoulder = PHOTON_PGTM_BALANCE *
+            (1.0 - input).pow(PHOTON_PGTM_SHOULDER_POWER)
+        return numerator / (numerator + shoulder)
+    }
+
+    fun photonPgtmToneCurveLut(sampleCount: Int = 256): FloatArray {
+        return if (sampleCount == PHOTON_PGTM_TONE_CURVE_LUT.size) {
+            PHOTON_PGTM_TONE_CURVE_LUT.copyOf()
+        } else {
+            DcpToneCurve(photonPgtmToneCurvePoints()).toLut(sampleCount)
+        }
+    }
+
+    internal fun photonPgtmInputForOutput(output: Float): Float {
+        val target = output.coerceIn(0f, 1f)
+        val lut = PHOTON_PGTM_TONE_CURVE_LUT
+        if (target <= lut.first()) return 0f
+        if (target >= lut.last()) return 1f
+        for (index in 1 until lut.size) {
+            val upper = lut[index]
+            if (upper < target) continue
+            val lower = lut[index - 1]
+            val amount = if (upper > lower) {
+                (target - lower) / (upper - lower)
+            } else {
+                0f
+            }
+            return (index - 1 + amount) / (lut.size - 1f)
+        }
+        return 1f
     }
 
     fun oppoEmbeddedToneCurvePoints(): FloatArray {
@@ -96,17 +191,6 @@ internal object DngProfileToneCurve {
 
     fun oppoEmbeddedToneCurveLut(sampleCount: Int = 256): FloatArray {
         return DcpToneCurve(oppoEmbeddedToneCurvePoints()).toLut(sampleCount)
-    }
-
-    fun isGoogleHdrToneCurve(toneCurve: DcpToneCurve?): Boolean {
-        if (toneCurve?.isValid != true) return false
-        val googlePoints = googleHdrToneCurvePoints()
-        if (toneCurve.points.size == googlePoints.size) {
-            return toneCurve.points.indices.all { index ->
-                kotlin.math.abs(toneCurve.points[index] - googlePoints[index]) <= POINT_TOLERANCE
-            }
-        }
-        return isGoogleHdrToneCurveLut(toneCurve.toLut())
     }
 
     fun isOppoEmbeddedToneCurve(toneCurve: DcpToneCurve?): Boolean {
@@ -120,12 +204,26 @@ internal object DngProfileToneCurve {
         return isOppoEmbeddedToneCurveLut(toneCurve.toLut())
     }
 
-    fun isGoogleHdrToneCurveLut(lut: FloatArray?): Boolean {
-        if (lut == null || lut.isEmpty()) return false
-        val googleLut = googleHdrToneCurveLut(lut.size)
-        return lut.indices.all { index ->
-            kotlin.math.abs(lut[index] - googleLut[index]) <= LUT_TOLERANCE
+    fun isLinearToneCurve(toneCurve: DcpToneCurve?): Boolean {
+        if (toneCurve?.isValid != true) return false
+        val linearPoints = LINEAR_TONE_CURVE_POINTS
+        if (toneCurve.points.size == linearPoints.size) {
+            return toneCurve.points.indices.all { index ->
+                kotlin.math.abs(toneCurve.points[index] - linearPoints[index]) <= POINT_TOLERANCE
+            }
         }
+        return isLinearToneCurveLut(toneCurve.toLut())
+    }
+
+    fun isPhotonPgtmToneCurve(toneCurve: DcpToneCurve?): Boolean {
+        if (toneCurve?.isValid != true) return false
+        val photonPoints = photonPgtmToneCurvePoints()
+        if (toneCurve.points.size == photonPoints.size) {
+            return toneCurve.points.indices.all { index ->
+                kotlin.math.abs(toneCurve.points[index] - photonPoints[index]) <= POINT_TOLERANCE
+            }
+        }
+        return isPhotonPgtmToneCurveLut(toneCurve.toLut())
     }
 
     fun isOppoEmbeddedToneCurveLut(lut: FloatArray?): Boolean {
@@ -135,4 +233,21 @@ internal object DngProfileToneCurve {
             kotlin.math.abs(lut[index] - oppoLut[index]) <= LUT_TOLERANCE
         }
     }
+
+    fun isLinearToneCurveLut(lut: FloatArray?): Boolean {
+        if (lut == null || lut.isEmpty()) return false
+        val linearLut = linearToneCurveLut(lut.size)
+        return lut.indices.all { index ->
+            kotlin.math.abs(lut[index] - linearLut[index]) <= LUT_TOLERANCE
+        }
+    }
+
+    fun isPhotonPgtmToneCurveLut(lut: FloatArray?): Boolean {
+        if (lut == null || lut.isEmpty()) return false
+        val photonLut = photonPgtmToneCurveLut(lut.size)
+        return lut.indices.all { index ->
+            kotlin.math.abs(lut[index] - photonLut[index]) <= LUT_TOLERANCE
+        }
+    }
+
 }

@@ -1,0 +1,192 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 76ab07ae2bc82a0a7f67d73044d2eff9fdda40e911b98645b3cb935129eeef0c
+ * ELF offsets: 0x300a1ea
+ * Symbols: grayVignetteCS_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+//precision highp int;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+layout(r32f, binding = 1) readonly uniform image2D uVignetteTable;
+layout(rgba16f, binding = 2) writeonly uniform image2D uOutputImage;
+
+layout(std140, binding = 0) uniform VignetteParams {
+    vec3 matA;
+    float redOffset;
+    vec3 matB;
+    float greenOffset;
+    vec3 matC;
+    float blueOffset;
+    vec4 redParam;
+    vec4 greenParam;
+    vec4 blueParam;
+
+    vec2 centerOffset;
+    ivec2 srcRectLeftTop;
+    ivec2 dstRectLeftTop;
+    ivec2 maxRectSize;
+    ivec2 keystoneLimit;
+    float pixelSize;
+    float vignAmount;
+    float imageScale;
+    int vignTableDiv;
+    bool blackOutOfBounds;
+    int padding;
+} uParams;
+
+uniform int uDebugMode;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+
+// Cubic interpolation function (Catmull-Rom spline)
+vec4 cubic(vec4 v_1, vec4 v0, vec4 v1, vec4 v2, float delta) {
+    vec4 a = v2 * (1.0/6.0) - v1 * 0.5 + v0 * 0.5 - v_1 * (1.0/6.0);
+    vec4 b = v_1 * 0.5 + v1 * 0.5 - v0;
+    vec4 c = -v2 * (1.0/6.0) + v1 - v0 * 0.5 - v_1 * (1.0/3.0);
+    vec4 d = v0;
+    
+    return a * (delta * delta * delta) + b * (delta * delta) + c * delta + d;
+}
+
+vec2 cubic2(vec2 v_1, vec2 v0, vec2 v1, vec2 v2, float delta) {
+    vec2 a = v2 * (1.0/6.0) - v1 * 0.5 + v0 * 0.5 - v_1 * (1.0/6.0);
+    vec2 b = v_1 * 0.5 + v1 * 0.5 - v0;
+    vec2 c = -v2 * (1.0/6.0) + v1 - v0 * 0.5 - v_1 * (1.0/3.0);
+    vec2 d = v0;
+    
+    return a * (delta * delta * delta) + b * (delta * delta) + c * delta + d;
+}
+
+// Keystone transform (homogeneous 3x3 matrix)
+vec2 keystoneTransform(vec3 matA, vec3 matB, vec3 matC, vec2 pos) {
+    vec3 posH = vec3(pos.x, pos.y, 1.0);
+    vec3 transformed;
+    transformed.x = dot(matA, posH);
+    transformed.y = dot(matB, posH);
+    transformed.z = dot(matC, posH);
+    return vec2(transformed.x / transformed.z, transformed.y / transformed.z);
+}
+
+// Select red or blue channel from packed bayer (match Metal: .xz/.yw = 1st+3rd / 2nd+4th = .rb/.ga)
+vec2 selectRedBlue(vec4 packed, bool isRed) {
+    return isRed ? packed.rb : packed.ga;
+}
+
+// Mix cubic line for packed bayer format
+vec2 mixCubicLine(ivec2 pos, float delta, bool isRed, inout vec2 minimum, inout vec2 maximum) {
+    // cubic2 algorithm is in data format ushort
+    vec2 l = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x - 1, pos.y)), isRed) * vec2(65535.0);
+    vec2 m = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x + 0, pos.y)), isRed) * vec2(65535.0);
+    vec2 r = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x + 1, pos.y)), isRed) * vec2(65535.0);
+    vec2 r2 = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x + 2, pos.y)), isRed) * vec2(65535.0);
+
+    if (delta < 1.0) {
+        vec2 p0 = m.xy;
+        vec2 p1 = vec2(m.y, r.x);
+        minimum = min(minimum, min(p0, p1));
+        maximum = max(maximum, max(p0, p1));
+        return cubic2(vec2(l.y, m.x), p0, p1, r.xy, delta);
+    } else {
+        vec2 p0 = vec2(m.y, r.x);
+        vec2 p1 = r.xy;
+        minimum = min(minimum, min(p0, p1));
+        maximum = max(maximum, max(p0, p1));
+        return cubic2(m.xy, p0, p1, vec2(r.y, r2.x), delta - 1.0);
+    }
+}
+
+// Interpolate cubic packed bayer
+vec4 interpolateCubicPacked(vec2 offset, ivec2 pos, bool isRed) {
+    ivec2 inputSize = imageSize(uInputImage);
+    vec2 indexPos = vec2(pos) + vec2(offset.x / 4.0, offset.y);
+    vec2 maxPos = vec2(inputSize.x - 3, inputSize.y - 5);
+    vec2 resPos = clamp(indexPos, vec2(1.0, 2.0), maxPos);
+
+    int blueOffset = isRed ? 0 : 1;
+    ivec2 base = ivec2(resPos.x, int((resPos.y - float(blueOffset)) / 2.0) * 2 + blueOffset);
+
+    vec2 delta = resPos - vec2(base);
+    vec2 maximum = vec2(0.0);
+    vec2 minimum = vec2(65535.0);
+    vec2 unused = vec2(0.0);
+    vec2 v_1 = mixCubicLine(ivec2(base.x, base.y - 2), delta.x * 2.0, isRed, unused, unused);
+    vec2 v0 = mixCubicLine(ivec2(base.x, base.y + 0), delta.x * 2.0, isRed, minimum, maximum);
+    vec2 v1 = mixCubicLine(ivec2(base.x, base.y + 2), delta.x * 2.0, isRed, minimum, maximum);
+    vec2 v2 = mixCubicLine(ivec2(base.x, base.y + 4), delta.x * 2.0, isRed, unused, unused);
+
+    vec2 h = cubic2(v_1, v0.xy, v1.xy, v2, delta.y / 2.0);
+    h = clamp(round(h), minimum, maximum) / vec2(65535.0);
+
+    vec4 inVal = imageLoad(uInputImage, pos);
+    if (isRed) {
+        // Red line: replace R only (1st and 3rd), keep G (2nd and 4th) - match Metal
+        return vec4(h.x, inVal.y, h.y, inVal.w);
+    } else {
+        // Blue line: replace B only (2nd and 4th), keep G (1st and 3rd) - match Metal
+        return vec4(inVal.x, h.x, inVal.z, h.y);
+    }
+
+}
+
+
+
+// Calculate vignetting factor from lookup table
+float calculateVignFactor(vec2 gid) {
+    vec2 rad = gid / uParams.imageScale * uParams.pixelSize;
+    float radius = length(rad) * float(uParams.vignTableDiv);
+    float readVal = imageLoad(uVignetteTable, ivec2(radius, 0)).r;
+    float factor = 1.0 + (readVal - 1.0) * uParams.vignAmount;
+    return factor;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(uOutputImage);
+    
+    // Boundary check
+    if (gid.x >= outputSize.x || gid.y >= outputSize.y) {
+        return;
+    }
+    
+    // Calculate positions for 4 pixels in packed bayer
+    vec2 pos0 = keystoneTransform(uParams.matA, uParams.matB, uParams.matC,
+                                  vec2(4.0 * float(gid.x) + 0.0, float(gid.y)) + vec2(uParams.dstRectLeftTop));
+    vec2 pos1 = keystoneTransform(uParams.matA, uParams.matB, uParams.matC,
+                                  vec2(4.0 * float(gid.x) + 1.0, float(gid.y)) + vec2(uParams.dstRectLeftTop));
+    vec2 pos2 = keystoneTransform(uParams.matA, uParams.matB, uParams.matC,
+                                  vec2(4.0 * float(gid.x) + 2.0, float(gid.y)) + vec2(uParams.dstRectLeftTop));
+    vec2 pos3 = keystoneTransform(uParams.matA, uParams.matB, uParams.matC,
+                                  vec2(4.0 * float(gid.x) + 3.0, float(gid.y)) + vec2(uParams.dstRectLeftTop));
+    
+    vec2 lensPos0 = pos0 + uParams.centerOffset;
+    vec2 lensPos1 = pos1 + uParams.centerOffset;
+    vec2 lensPos2 = pos2 + uParams.centerOffset;
+    vec2 lensPos3 = pos3 + uParams.centerOffset;
+    
+    vec4 cor = vec4(calculateVignFactor(lensPos0),
+                    calculateVignFactor(lensPos1),
+                    calculateVignFactor(lensPos2),
+                    calculateVignFactor(lensPos3));
+    
+    vec4 inVal = imageLoad(uInputImage, gid);
+    
+    // Debug mode handling
+    if (uDebugMode == 1) {
+        // Pass through
+        imageStore(uOutputImage, gid, inVal);
+    } else if (uDebugMode == 2) {
+        // Visualize vignetting factors
+        float avgCor = (cor.r + cor.g + cor.b + cor.a) / 4.0;
+        vec4 color = vec4(avgCor, avgCor, avgCor, 1.0);
+        imageStore(uOutputImage, gid, color);
+    } else {
+        // Normal processing
+        vec4 result = inVal * cor;
+        imageStore(uOutputImage, gid, result);
+    }
+}

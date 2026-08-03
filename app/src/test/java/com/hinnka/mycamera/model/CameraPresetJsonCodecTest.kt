@@ -18,6 +18,7 @@ class CameraPresetJsonCodecTest {
             colorRecipe = ColorRecipeParams.DEFAULT,
             effects = EffectParams.DEFAULT,
             useRaw = true,
+            ultraHdrGainMapEnabled = false,
             rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
             rawSpectralFilmStock = "kodak_gold_200",
             rawSpectralFilmPrint = "kodak_2383",
@@ -32,10 +33,57 @@ class CameraPresetJsonCodecTest {
         assertEquals("kodak_2383", preset.rawSpectralFilmPrint)
         assertEquals("DR400", preset.rawDROMode)
         assertTrue(preset.useRaw)
+        assertFalse(preset.ultraHdrGainMapEnabled)
     }
 
     @Test
-    fun fromJson_resolvesRawAndMfsrConflict() {
+    fun fromJson_normalizesNoneLutSentinelToNull() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_without_lut",
+              "name": "No LUT",
+              "lutId": "none",
+              "colorRecipe": {},
+              "effects": {}
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertNull(preset.lutId)
+        assertFalse(preset.toJson().contains("\"lutId\":\"none\""))
+    }
+
+    @Test
+    fun toJson_writesOnlyNormalizedMaxFields() {
+        val source = CameraPreset(
+            id = "preset_current_raw_max",
+            name = "Current RAWmax",
+            lutId = null,
+            colorRecipe = ColorRecipeParams.DEFAULT,
+            effects = EffectParams.DEFAULT,
+            useRaw = false,
+            useJpgMax = true,
+            useRawMax = true,
+        )
+
+        val json = source.toJson()
+        val preset = CameraPreset.fromJson(json)
+
+        requireNotNull(preset)
+        assertTrue(json.contains("\"useRawMax\""))
+        assertTrue(json.contains("\"useJpgMax\""))
+        assertFalse(json.contains("\"useMFNR\""))
+        assertFalse(json.contains("\"useMFSR\""))
+        assertFalse(json.contains("\"useHdrComposition\""))
+        assertTrue(preset.useRaw)
+        assertTrue(preset.useRawMax)
+        assertFalse(preset.useJpgMax)
+    }
+
+    @Test
+    fun fromJson_migratesLegacyRawMultiFrameToRawMax() {
         val preset = CameraPreset.fromJson(
             """
             {
@@ -53,7 +101,54 @@ class CameraPresetJsonCodecTest {
 
         requireNotNull(preset)
         assertTrue(preset.useRaw)
-        assertFalse(preset.useMFSR)
+        assertTrue(preset.useRawMax)
+        assertFalse(preset.useJpgMax)
+    }
+
+    @Test
+    fun fromJson_ignoresLegacyYuvHdrFlagForRawMaxMigration() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_raw_mfsr_hdr_preference",
+              "name": "RAW MFSR with HDR Preference",
+              "useRaw": true,
+              "useMFNR": false,
+              "useHdrComposition": true,
+              "useMFSR": true,
+              "colorRecipe": {},
+              "effects": {}
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertTrue(preset.useRaw)
+        assertTrue(preset.useRawMax)
+        assertFalse(preset.useJpgMax)
+    }
+
+    @Test
+    fun fromJson_migratesLegacyYuvMultiFrameAndHdrToJpgMax() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_yuv_mfsr_hdr_conflict",
+              "name": "YUV MFSR HDR Conflict",
+              "useRaw": false,
+              "useMFNR": false,
+              "useHdrComposition": true,
+              "useMFSR": true,
+              "colorRecipe": {},
+              "effects": {}
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertTrue(preset.useJpgMax)
+        assertFalse(preset.useRawMax)
+        assertFalse(preset.useRaw)
     }
 
     @Test
@@ -68,10 +163,20 @@ class CameraPresetJsonCodecTest {
                 "unknownFutureField": "ignored",
                 "colorRecipe": {
                   "exposure": 0.25,
+                  "flash": 0.15,
+                  "gradingShadowHue": 0.08,
+                  "gradingShadowAmount": 0.22,
+                  "gradingMidtoneHue": 0.31,
+                  "gradingMidtoneAmount": 0.44,
+                  "gradingHighlightHue": 0.58,
+                  "gradingHighlightAmount": 0.66,
+                  "gradingBalance": -0.18,
+                  "gradingBlending": 0.72,
                   "unknownColorField": 10
                 },
                 "effects": {
                   "vignette": -0.2,
+                  "flash": 0.65,
                   "hdf": 0.7
                 }
               }
@@ -85,14 +190,25 @@ class CameraPresetJsonCodecTest {
         assertEquals("Legacy Preset", preset.name)
         assertEquals(RawRenderingEngine.AdobeCurve.name, preset.rawRenderingEngine)
         assertEquals(AspectRatio.RATIO_4_3.name, preset.aspectRatio)
-        assertFalse(preset.useHdrComposition)
-        assertFalse(preset.useMFSR)
+        assertFalse(preset.useJpgMax)
+        assertFalse(preset.useRawMax)
+        assertTrue(preset.ultraHdrGainMapEnabled)
         assertEquals(0.25f, preset.colorRecipe.exposure, 0.0001f)
         assertEquals(1f, preset.colorRecipe.contrast, 0.0001f)
         assertEquals(1f, preset.colorRecipe.saturation, 0.0001f)
         assertEquals(0.5f, preset.colorRecipe.paletteX, 0.0001f)
         assertEquals(1f, preset.colorRecipe.lutIntensity, 0.0001f)
+        assertEquals(0.15f, preset.colorRecipe.flash, 0.0001f)
+        assertEquals(0.08f, preset.colorRecipe.gradingShadowHue, 0.0001f)
+        assertEquals(0.22f, preset.colorRecipe.gradingShadowAmount, 0.0001f)
+        assertEquals(0.31f, preset.colorRecipe.gradingMidtoneHue, 0.0001f)
+        assertEquals(0.44f, preset.colorRecipe.gradingMidtoneAmount, 0.0001f)
+        assertEquals(0.58f, preset.colorRecipe.gradingHighlightHue, 0.0001f)
+        assertEquals(0.66f, preset.colorRecipe.gradingHighlightAmount, 0.0001f)
+        assertEquals(-0.18f, preset.colorRecipe.gradingBalance, 0.0001f)
+        assertEquals(0.72f, preset.colorRecipe.gradingBlending, 0.0001f)
         assertEquals(-0.2f, preset.effects.vignette, 0.0001f)
+        assertEquals(0.65f, preset.effects.flash, 0.0001f)
         assertEquals(0f, preset.effects.hdf, 0.0001f)
     }
 

@@ -33,6 +33,16 @@ data class VendorCaptureSettings(
         return withOverride(key, enabled = true, value = value)
     }
 
+    fun toVirtualLensProfileId(): String? {
+        if (!isEnabled) return null
+        return values.entries
+            .sortedBy { it.key.ordinal }
+            .joinToString("-") { (key, value) ->
+                "${key.persistedName}_${formatProfileValue(key.normalizeValue(value))}"
+            }
+            .takeIf { it.isNotBlank() }
+    }
+
     internal fun toJsonObject(): JSONObject {
         return JSONObject().apply {
             VendorCaptureKey.entries.forEach { key ->
@@ -43,6 +53,14 @@ data class VendorCaptureSettings(
 
     companion object {
         val Empty = VendorCaptureSettings()
+
+        private fun formatProfileValue(value: Int): String {
+            return if (value < 0) {
+                "n${value.toString().drop(1)}"
+            } else {
+                value.toString()
+            }
+        }
 
         internal fun fromJsonObject(json: JSONObject): VendorCaptureSettings {
             val parsedValues = VendorCaptureKey.entries
@@ -131,6 +149,12 @@ enum class VendorCaptureKey(
         requestKeyName = "vivo.control.forceSensorMode",
         valueType = VendorCaptureValueType.INT,
         defaultValue = 1
+    ),
+    MTK_RAW_BPP(
+        persistedName = "mtk_raw_bpp",
+        requestKeyName = "com.mediatek.control.capture.raw.bpp",
+        valueType = VendorCaptureValueType.INT,
+        defaultValue = 14
     ),
     OPLUS_AGINGTEST_MODE_SELECT(
         persistedName = "oplus_agingtest_mode_select",

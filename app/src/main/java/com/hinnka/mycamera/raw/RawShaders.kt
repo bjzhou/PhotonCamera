@@ -113,6 +113,14 @@ object RawShaders {
                 includeAdobeProfilePipeline = false,
                 includeShadowsHighlights = includeShadowsHighlights
             )
+
+            RawRenderingEngine.HncsCcm,
+            RawRenderingEngine.HncsLut -> combinedFragmentShader(
+                engineUniforms = HNCS_COMBINED_UNIFORMS,
+                engineFunctions = HNCS_COMBINED_FUNCTIONS,
+                includeAdobeProfilePipeline = false,
+                includeShadowsHighlights = includeShadowsHighlights
+            )
         }
     }
 
@@ -199,6 +207,7 @@ object RawShaders {
         return """
         #version 300 es
         precision highp float;
+        precision highp int;
         $sampler3DPrecision
         
         in vec2 vTexCoord;
@@ -274,7 +283,9 @@ object RawShaders {
             color = applyEngineTone(color);
             $shadowsHighlightsApply
             color = applyBlackWhiteLevels(color);
-            color = linearToSrgb(color);
+            // Engine tone and adjustment passes have a linear-RGB output contract.
+            // RawSrgbPassShaders performs the single display encoding after all
+            // linear-domain adjustments are complete.
             fragColor = vec4(color, 1.0);
         }
     """.trimIndent()
@@ -330,6 +341,7 @@ object RawShaders {
         uniform float uProfileExposureRampBlack;
         uniform float uProfileExposureRampRadius;
         uniform float uProfileExposureRampQScale;
+        uniform bool uProfileExposureSupportOverrange;
         uniform bool uProfileExposureToneEnabled;
         uniform float uProfileExposureToneSlope;
         uniform float uProfileExposureToneA;
@@ -348,8 +360,26 @@ object RawShaders {
         uniform int uSpectralFilmSize;
     """.trimIndent()
 
+    private val HNCS_COMBINED_UNIFORMS = """
+        uniform sampler2D uHncsColorMapTexture;
+        uniform sampler2D uHncsCurveTexture;
+        uniform int uHncsColorMapEnabled;
+        uniform ivec2 uHncsColorMapSize;
+        uniform vec3 uHncsColorMapGrid;
+        uniform mat3 uHncsRgbToYcc;
+        uniform mat3 uHncsYccToRgb;
+        uniform vec2 uHncsGrayThresholds;
+        uniform vec4 uHncsLowLightDesaturation;
+        uniform float uHncsFilmCurveGain;
+        uniform int uHncsGammaFilterEnabled;
+        uniform float uHncsGamma;
+        uniform float uHncsHdrMaxGain;
+        uniform float uHncsHdrRgbLimit;
+        uniform int uHncsDiagnosticStage;
+    """.trimIndent()
+
     private val CURVE_COMBINED_FUNCTIONS = """
-        float sampleCurve(float value) {
+        float sampleBaseCurve(float value) {
             if (!uCurveEnabled || uCurveSize <= 1.0) {
                 return value;
             }
@@ -358,12 +388,31 @@ object RawShaders {
             return texture(uCurveTexture, vec2(coordX, 0.5)).r;
         }
 
+        float sampleProfileToneCurve(float value) {
+            value = clamp(value, 0.0, 1.0);
+            return sampleBaseCurve(applyProfileExposureToneValue(value));
+        }
+
+        float sampleProfileToneCurveOverrange(float value) {
+            if (!(value > 1.0)) {
+                return sampleProfileToneCurve(max(value, 0.0));
+            }
+            const float dx = 0.001;
+            float y1 = sampleProfileToneCurve(1.0);
+            float slope = (y1 - sampleProfileToneCurve(1.0 - dx)) / dx;
+            return y1 + slope * (value - 1.0);
+        }
+
         void adobeRgbTone(inout float maxValue, inout float midValue, inout float minValue) {
             float oldMax = maxValue;
             float oldMid = midValue;
             float oldMin = minValue;
-            maxValue = sampleCurve(oldMax);
-            minValue = sampleCurve(oldMin);
+            maxValue = uProfileExposureSupportOverrange
+                ? sampleProfileToneCurveOverrange(oldMax)
+                : sampleProfileToneCurve(oldMax);
+            minValue = uProfileExposureSupportOverrange
+                ? sampleProfileToneCurveOverrange(oldMin)
+                : sampleProfileToneCurve(oldMin);
             if (abs(oldMax - oldMin) < 1e-6) {
                 midValue = minValue;
             } else {
@@ -372,7 +421,13 @@ object RawShaders {
         }
 
         vec3 applyAdobeCurve(vec3 color) {
-            color = clamp(color, vec3(0.0), vec3(1.0));
+            color = uProfileExposureSupportOverrange
+                ? vec3(
+                    encodeProfileOverrangeValue(color.r),
+                    encodeProfileOverrangeValue(color.g),
+                    encodeProfileOverrangeValue(color.b)
+                )
+                : clamp(color, vec3(0.0), vec3(1.0));
             float r = color.r;
             float g = color.g;
             float b = color.b;
@@ -385,8 +440,12 @@ object RawShaders {
                 } else if (b > g) {
                     adobeRgbTone(r, b, g);
                 } else {
-                    r = sampleCurve(r);
-                    g = sampleCurve(g);
+                    r = uProfileExposureSupportOverrange
+                        ? sampleProfileToneCurveOverrange(r)
+                        : sampleProfileToneCurve(r);
+                    g = uProfileExposureSupportOverrange
+                        ? sampleProfileToneCurveOverrange(g)
+                        : sampleProfileToneCurve(g);
                     b = g;
                 }
             } else {
@@ -399,18 +458,32 @@ object RawShaders {
                 }
             }
 
-            return clamp(vec3(r, g, b), vec3(0.0), vec3(1.0));
+            vec3 toned = vec3(r, g, b);
+            if (uProfileExposureSupportOverrange) {
+                return vec3(
+                    decodeProfileOverrangeValue(toned.r),
+                    decodeProfileOverrangeValue(toned.g),
+                    decodeProfileOverrangeValue(toned.b)
+                );
+            }
+            return clamp(toned, vec3(0.0), vec3(1.0));
         }
     """.trimIndent()
 
     private val ADOBE_PROFILE_COMBINED_FUNCTIONS = """
-        const float PROFILE_HIGHLIGHT_SHOULDER_START = 0.58;
-        const float PROFILE_HIGHLIGHT_SHOULDER_SOFTNESS = 0.30;
-        const float PROFILE_HIGHLIGHT_NEUTRAL_BLEND_MAX = 0.71;
-        const float PROFILE_HIGHLIGHT_NEUTRAL_BLEND_POWER = 1.91;
-
         float clampDcpTableCoordinate(float value) {
             return clamp(value, 0.0, 1.0);
+        }
+
+        float encodeProfileOverrangeValue(float value) {
+            value = max(value, 0.0);
+            return value * (256.0 + value) / (256.0 * (1.0 + value));
+        }
+
+        float decodeProfileOverrangeValue(float value) {
+            value = max(value, 0.0);
+            float discriminant = max(64.0 * value * value - 127.0 * value + 64.0, 0.0);
+            return 16.0 * (8.0 * value - 8.0 + sqrt(discriminant));
         }
 
         float encodeLookupValue(float value, int encoding) {
@@ -540,7 +613,16 @@ object RawShaders {
         }
 
         vec3 applyDcpHsvMap(vec3 color, sampler3D tableTexture, ivec3 divisions, int encoding) {
-            vec3 hsv = rgbToDcpHsv(color);
+            bool encodeOverrange = uProfileExposureSupportOverrange && divisions.z > 1;
+            vec3 mapColor = max(color, vec3(0.0));
+            if (encodeOverrange) {
+                mapColor = vec3(
+                    encodeProfileOverrangeValue(mapColor.r),
+                    encodeProfileOverrangeValue(mapColor.g),
+                    encodeProfileOverrangeValue(mapColor.b)
+                );
+            }
+            vec3 hsv = rgbToDcpHsv(mapColor);
             float lookupValue = hsv.z;
             float vEncoded = hsv.z;
             if (encoding == 1 && divisions.z > 1) {
@@ -559,7 +641,15 @@ object RawShaders {
                 hsv.z = vEncoded;
             }
 
-            return dcpHsvToRgb(hsv);
+            vec3 mapped = dcpHsvToRgb(hsv);
+            if (encodeOverrange) {
+                mapped = vec3(
+                    decodeProfileOverrangeValue(mapped.r),
+                    decodeProfileOverrangeValue(mapped.g),
+                    decodeProfileOverrangeValue(mapped.b)
+                );
+            }
+            return mapped;
         }
 
         float applyProfileExposureRampValue(float value) {
@@ -569,7 +659,8 @@ object RawShaders {
                 return 0.0;
             }
             if (value >= black + radius) {
-                return max((value - black) * uProfileExposureRampSlope, 0.0);
+                float ramped = max((value - black) * uProfileExposureRampSlope, 0.0);
+                return uProfileExposureSupportOverrange ? ramped : min(ramped, 1.0);
             }
             float y = value - (black - radius);
             return uProfileExposureRampQScale * y * y;
@@ -584,19 +675,7 @@ object RawShaders {
                 applyProfileExposureRampValue(color.g),
                 applyProfileExposureRampValue(color.b)
             );
-            float peak = max(ramped.r, max(ramped.g, ramped.b));
-            if (peak <= PROFILE_HIGHLIGHT_SHOULDER_START) {
-                return ramped;
-            }
-            float shoulderInput = peak - PROFILE_HIGHLIGHT_SHOULDER_START;
-            float shoulderAmount = shoulderInput / (shoulderInput + PROFILE_HIGHLIGHT_SHOULDER_SOFTNESS);
-            float compressedPeak = PROFILE_HIGHLIGHT_SHOULDER_START +
-                (1.0 - PROFILE_HIGHLIGHT_SHOULDER_START) *
-                shoulderAmount;
-            vec3 compressed = ramped * (compressedPeak / max(peak, 1e-6));
-            float neutralBlend = PROFILE_HIGHLIGHT_NEUTRAL_BLEND_MAX *
-                pow(shoulderAmount, PROFILE_HIGHLIGHT_NEUTRAL_BLEND_POWER);
-            return mix(compressed, vec3(compressedPeak), neutralBlend);
+            return ramped;
         }
 
         float applyProfileExposureToneValue(float value) {
@@ -608,17 +687,6 @@ object RawShaders {
             }
             return (uProfileExposureToneA * value + uProfileExposureToneB) * value +
                 uProfileExposureToneC;
-        }
-
-        vec3 applyProfileExposureTone(vec3 color) {
-            if (!uProfileExposureRampEnabled) {
-                return color;
-            }
-            return vec3(
-                applyProfileExposureToneValue(color.r),
-                applyProfileExposureToneValue(color.g),
-                applyProfileExposureToneValue(color.b)
-            );
         }
 
         vec3 applyDcpHueSatMap(vec3 color) {
@@ -640,7 +708,6 @@ object RawShaders {
             if (uProfileExposureRampEnabled) {
                 color = applyProfileExposureRamp(color);
                 color = applyDcpLookTable(color);
-                color = applyProfileExposureTone(color);
             } else {
                 color = applyDcpLookTable(color);
                 color = applyProfileExposureRamp(color);
@@ -653,6 +720,159 @@ object RawShaders {
         vec3 applyEngineTone(vec3 color) {
             color = applyAdobeCurve(color);
             return uOutputTransform * color;
+        }
+    """.trimIndent()
+
+    /**
+     * Phocus HNCS color-correction and selectable FilmCurve path.
+     *
+     * The camera matrix is applied by the linear RAW pass. The exact 65,536-entry
+     * B, C, and E curves come from the original Phocus CGradationManager.
+     * Phocus still constructs the later Gradation stage and conditionally
+     * constructs SelectiveColor, but both require real CImageCorrection/user
+     * tables. With no such tables in a PhotonCamera RAW render plan,
+     * non-identity versions of those stages are not synthesized.
+     */
+    private val HNCS_COMBINED_FUNCTIONS = """
+        const float HNCS_EPSILON = 0.000001;
+        const float HNCS_CURVE_SAMPLE_COUNT = 65536.0;
+        const vec2 HNCS_CURVE_TEXTURE_DIMENSIONS = vec2(256.0, 256.0);
+
+        vec2 hncsFetchColorMap(ivec2 point) {
+            return texelFetch(uHncsColorMapTexture, point, 0).rg;
+        }
+
+        vec2 hncsSampleColorMap(vec2 grid) {
+            vec2 maximum = vec2(uHncsColorMapSize - ivec2(1));
+            grid = clamp(grid, vec2(0.0), maximum);
+            ivec2 lower = ivec2(floor(grid));
+            vec2 fraction = fract(grid);
+            lower = clamp(
+                lower,
+                ivec2(0),
+                uHncsColorMapSize - ivec2(2)
+            );
+            ivec2 upper = lower + ivec2(1);
+            vec2 row0 = mix(
+                hncsFetchColorMap(ivec2(lower.x, lower.y)),
+                hncsFetchColorMap(ivec2(upper.x, lower.y)),
+                fraction.x
+            );
+            vec2 row1 = mix(
+                hncsFetchColorMap(ivec2(lower.x, upper.y)),
+                hncsFetchColorMap(ivec2(upper.x, upper.y)),
+                fraction.x
+            );
+            return mix(row0, row1, fraction.y);
+        }
+
+        float hncsColorMapWeight(vec3 source, float luma) {
+            float grayWeight = 1.0;
+            float grayRange = uHncsGrayThresholds.y - uHncsGrayThresholds.x;
+            float average = (source.r + source.g + source.b) / 3.0;
+            if (grayRange > HNCS_EPSILON && abs(average) > HNCS_EPSILON) {
+                vec3 distanceFromAverage = abs(source - vec3(average));
+                float relativeDistance =
+                    max(distanceFromAverage.r, max(distanceFromAverage.g, distanceFromAverage.b)) /
+                    abs(average);
+                grayWeight = clamp(
+                    (relativeDistance - uHncsGrayThresholds.x) / grayRange,
+                    0.0,
+                    1.0
+                );
+            }
+
+            float luma16 = luma * 65535.0;
+            if (luma16 < uHncsLowLightDesaturation.x) {
+                float lowLightWeight =
+                    uHncsLowLightDesaturation.y * luma16 * luma16 +
+                    uHncsLowLightDesaturation.z * luma16 +
+                    uHncsLowLightDesaturation.w;
+                grayWeight = min(grayWeight, lowLightWeight);
+            }
+            return clamp(grayWeight, 0.0, 1.0);
+        }
+
+        vec3 hncsApplyCameraColorMap(vec3 color) {
+            if (uHncsColorMapEnabled == 0 ||
+                uHncsColorMapSize.x < 2 ||
+                uHncsColorMapSize.y < 2) {
+                return color;
+            }
+            // ColorCorrectAll clamps camera-domain input before its input matrix.
+            // This pass receives the already transformed HNCS value, so applying
+            // a second [0,1] clamp here would incorrectly destroy matrix overrange.
+            vec3 source = color;
+            vec3 ycc = uHncsRgbToYcc * source;
+            if (!(ycc.x > HNCS_EPSILON)) {
+                return source;
+            }
+            vec2 position =
+                uHncsColorMapGrid.z * ycc.yz / ycc.x -
+                uHncsColorMapGrid.xy;
+            vec2 mapped = hncsSampleColorMap(position);
+            float colorMapWeight = hncsColorMapWeight(source, ycc.x);
+            vec2 normalizedChroma =
+                mapped * ycc.x * colorMapWeight / uHncsColorMapGrid.z;
+            return uHncsYccToRgb * vec3(ycc.x, normalizedChroma);
+        }
+
+        float hncsSampleFilmCurve(float value) {
+            // Match Phocus filmCurveShader: keep the 65,536-entry index in highp
+            // floating point and sample at normalized texel centers. A mediump
+            // fragment integer cannot represent 65,535/65,536 on every GLES
+            // driver and collapses the lookup to the zero sample.
+            float sampleIndex = clamp(
+                floor(value * HNCS_CURVE_SAMPLE_COUNT),
+                0.0,
+                HNCS_CURVE_SAMPLE_COUNT - 1.0
+            );
+            vec2 coordinate = vec2(
+                0.5 + floor(mod(sampleIndex, HNCS_CURVE_TEXTURE_DIMENSIONS.x)),
+                0.5 + floor(sampleIndex / HNCS_CURVE_TEXTURE_DIMENSIONS.x)
+            ) / HNCS_CURVE_TEXTURE_DIMENSIONS;
+            return texture(
+                uHncsCurveTexture,
+                coordinate
+            ).r;
+        }
+
+        vec3 hncsApplyFilmCurve(vec3 color) {
+            float gain = max(uHncsFilmCurveGain, HNCS_EPSILON);
+            vec3 source = max(color, vec3(0.0)) / gain;
+            return vec3(
+                hncsSampleFilmCurve(source.r),
+                hncsSampleFilmCurve(source.g),
+                hncsSampleFilmCurve(source.b)
+            );
+        }
+
+        vec3 hncsGammaEncode(vec3 color) {
+            return pow(
+                max(color * uHncsHdrMaxGain, vec3(0.0)),
+                vec3(1.0 / uHncsGamma)
+            ) / uHncsHdrRgbLimit;
+        }
+
+        vec3 applyEngineTone(vec3 color) {
+            if (uHncsDiagnosticStage == 1) {
+                return color;
+            }
+            color = hncsApplyCameraColorMap(color);
+            if (uHncsDiagnosticStage == 2) {
+                return color;
+            }
+            color = hncsApplyFilmCurve(color);
+            if (uHncsDiagnosticStage == 3) {
+                return color;
+            }
+            if (uHncsGammaFilterEnabled != 0) {
+                color = hncsGammaEncode(color);
+            }
+            if (uHncsDiagnosticStage == 4) {
+                return color;
+            }
+            return color;
         }
     """.trimIndent()
 
@@ -1504,40 +1724,6 @@ object RawShaders {
             vec3 result = center + center * (detail / max(centerLuma, 1e-5)) * uSharpening;
 
             fragColor = vec4(clamp(result, 0.0, 1.0), 1.0);
-        }
-    """.trimIndent()
-
-    /**
-     * HDR Reference Shader
-     *
-     * RAW 线性输入已经按传感器白点归一化，直接输出会让拍到白点的灯光仍然只有
-     * SDR reference white (= 1.0)，gainmap 没有高光余量可写。这里只按原始亮度比例
-     * 从普通高光开始逐步扩展到 scene-linear HDR headroom，保留白云等扩散高光的局部层次。
-     */
-    val HDR_REFERENCE_FRAGMENT_SHADER = """
-        #version 300 es
-        precision highp float;
-
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-
-        uniform sampler2D uInputTexture;
-        uniform float uHighlightStart;
-        uniform float uWhitePointSceneLuma;
-
-        float luminance(vec3 color) {
-            return max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
-        }
-
-        void main() {
-            vec3 color = max(texture(uInputTexture, vTexCoord).rgb, vec3(0.0));
-            float luma = luminance(color);
-            float highlight = smoothstep(uHighlightStart, 1.0, luma);
-            float whitePoint = max(uWhitePointSceneLuma, 1.0);
-            float lift = mix(1.0, whitePoint, highlight);
-            float targetLuma = max(luma, min(luma * lift, whitePoint));
-            color *= targetLuma / luma;
-            fragColor = vec4(max(color, vec3(0.0)), 1.0);
         }
     """.trimIndent()
 

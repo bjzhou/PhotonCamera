@@ -15,15 +15,25 @@ object StartupMlPreloader {
         val appContext = context.applicationContext
         StartupTrace.mark(
             "StartupMlPreloader.preloadForStartup start",
-            "useRaw=${preferences.useRaw}, defaultVirtualAperture=${preferences.defaultVirtualAperture}, aiFocus=${preferences.aiFocusTargetMode}"
+            "defaultVirtualAperture=${preferences.defaultVirtualAperture}, " +
+                "aiFocus=${preferences.aiFocusTargetMode}"
         )
 
-        if (preferences.useRaw || preferences.defaultVirtualAperture > 0f) {
+        // RAW processing does not consume a depth map. Keep the model resident only when the
+        // configured virtual-aperture path will actually use it.
+        if (
+            preferences.defaultVirtualAperture > 0f &&
+            DepthModelManager.isInstalled(appContext)
+        ) {
             prewarm("DepthEstimator") {
                 SharedDepthEstimator.prewarm(appContext)
             }
         } else {
-            PLog.d(TAG, "Skip DepthEstimator preload")
+            PLog.d(
+                TAG,
+                "Skip DepthEstimator preload: enabled=${preferences.defaultVirtualAperture > 0f}, " +
+                    "modelInstalled=${DepthModelManager.isInstalled(appContext)}"
+            )
         }
 
         if (preferences.aiFocusTargetMode != AiFocusTargetMode.OFF) {

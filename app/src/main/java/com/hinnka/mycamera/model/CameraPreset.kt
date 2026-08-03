@@ -3,6 +3,8 @@ package com.hinnka.mycamera.model
 import androidx.annotation.Keep
 import com.google.gson.Gson
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 
 /**
@@ -17,16 +19,19 @@ data class CameraPreset(
     val effects: EffectParams,          // 独立物理效果
     val aspectRatio: String = AspectRatio.RATIO_4_3.name,
     val useRaw: Boolean = false,
-    val useMFNR: Boolean = false,
-    val useHdrComposition: Boolean = false,
-    val useMFSR: Boolean = false,
+    val useJpgMax: Boolean = false,
+    val useRawMax: Boolean = false,
+    val ultraHdrGainMapEnabled: Boolean = true,
     val frameId: String? = null,
     // Quick RAW 功能
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: String = HncsRenderIntent.Standard.assetValue,
+    val rawHncsFilmCurveMode: String = HncsFilmCurveMode.Standard.persistedValue,
     val rawRenderingEngine: String = RawRenderingEngine.AdobeCurve.name,
-    val rawGooglePixelToneMap: Boolean = false,
     val rawOppoMasterToneMap: Boolean = false,
+    val rawPhotonPgtmToneMap: Boolean = false,
     val rawSpectralFilmStock: String? = null,
     val rawSpectralFilmPrint: String? = null,
     val rawDROMode: String = "OFF",
@@ -47,11 +52,25 @@ data class CameraPreset(
     }
 
     fun withSupportedCaptureCombination(): CameraPreset {
-        val resolvedUseMFSR = useMFSR && !useRaw && !useMFNR
-        return if (resolvedUseMFSR == useMFSR) {
+        val resolvedUseRawMax = useRawMax
+        val resolvedUseJpgMax = useJpgMax && !resolvedUseRawMax
+        val resolvedUseRaw = when {
+            resolvedUseRawMax -> true
+            resolvedUseJpgMax -> false
+            else -> useRaw
+        }
+        return if (
+            resolvedUseRaw == useRaw &&
+            resolvedUseJpgMax == useJpgMax &&
+            resolvedUseRawMax == useRawMax
+        ) {
             this
         } else {
-            copy(useMFSR = resolvedUseMFSR)
+            copy(
+                useRaw = resolvedUseRaw,
+                useJpgMax = resolvedUseJpgMax,
+                useRawMax = resolvedUseRawMax,
+            )
         }
     }
 
@@ -72,13 +91,24 @@ data class CameraPreset(
         return withSupportedCaptureCombination()
             .withoutLegacyHdf()
             .copy(
+                lutId = normalizeLutId(lutId),
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),
-                rawGooglePixelToneMap = rawGooglePixelToneMap && !rawOppoMasterToneMap
+                rawHncsProfileId = rawHncsProfileId?.takeIf(String::isNotBlank),
+                rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
+                rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                    rawHncsFilmCurveMode
+                ).persistedValue,
+                rawOppoMasterToneMap = rawOppoMasterToneMap,
+                rawPhotonPgtmToneMap = rawPhotonPgtmToneMap && !rawOppoMasterToneMap
             )
     }
 
     companion object {
         private val gson = Gson()
+
+        internal fun normalizeLutId(lutId: String?): String? {
+            return lutId?.takeIf { it.isNotBlank() && it != "none" }
+        }
 
         internal fun normalizeRawDcpIdsByLens(rawDcpIdsByLens: Map<String, String?>): Map<String, String?> {
             return rawDcpIdsByLens
@@ -97,9 +127,26 @@ data class CameraPreset(
                 effects = EffectParams.DEFAULT,
                 frameId = null,
                 useRaw = false,
-                useMFNR = false,
+                useJpgMax = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
+                isBuiltIn = true
+            ),
+            CameraPreset(
+                id = "builtin_hasselblad_natural",
+                name = "builtin_hasselblad_natural",
+                lutId = null,
+                colorRecipe = ColorRecipeParams.DEFAULT.copy(
+                    masterCurvePoints = floatArrayOf(
+                        0f, 0f,
+                        0.2784f, 0.2392f,
+                        0.7216f, 0.7569f,
+                        1f, 1f
+                    )
+                ),
+                effects = EffectParams.DEFAULT,
+                useRaw = true,
+                rawRenderingEngine = RawRenderingEngine.HncsCcm.name,
                 isBuiltIn = true
             ),
             CameraPreset(
@@ -112,7 +159,7 @@ data class CameraPreset(
                 effects = EffectParams.DEFAULT,
                 frameId = "polaroid",
                 useRaw = false,
-                useMFNR = true,
+                useJpgMax = true,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true
@@ -136,7 +183,7 @@ data class CameraPreset(
                 ),
                 frameId = "leica",
                 useRaw = true,
-                useMFNR = false,
+                useJpgMax = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true

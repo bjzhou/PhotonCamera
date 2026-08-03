@@ -1,0 +1,343 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: f5810f8bf53819324502a8696d7d0bdb94238280be29b7f72139e9701e276111
+ * ELF offsets: 0x30466e2
+ * Symbols: demosaic_pass_3_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+precision highp iimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D rgbdTex;
+layout(rgba16ui, binding = 1) readonly  uniform uimage2D bayerTex;
+layout(rgba16i,  binding = 2) readonly  uniform iimage2D edgeTex;
+layout(rgba16ui, binding = 3) writeonly uniform uimage2D outTex;
+
+layout(std140, binding = 4) uniform DemosaicPass3Params_UBO {
+    int ubo_uParams_l;
+    int ubo_uParams_t;
+    int ubo_uParams_r;
+    int ubo_uParams_b;
+    int ubo_uParams_minThresholdEdge;
+    int ubo_uParams_minThresholdVNG;
+    int ubo_uParams_pad0;
+    int ubo_uParams_pad1;
+};
+
+void shiftInts(out vec4 out_vec4, out float out_val, vec4 a, vec4 b, int offset) {
+    if (offset == 0) {
+        out_vec4 = vec4(a.x, a.y, a.z, a.w);
+        out_val = b.x;
+    } else if (offset == 1) {
+        out_vec4 = vec4(a.y, a.z, a.w, b.x);
+        out_val = b.y;
+    } else if (offset == 2) {
+        out_vec4 = vec4(a.z, a.w, b.x, b.y);
+        out_val = b.z;
+    } else {
+        out_vec4 = vec4(a.w, b.x, b.y, b.z);
+        out_val = b.w;
+    }
+}
+
+void gradientSingleStep(out vec4 edgGrad0, out vec4 edgGrad1, ivec2 imgPos) {
+    int offset = (imgPos.x - 2) & 3;
+    int x = (imgPos.x - 2) / 4;
+    int y = imgPos.y;
+
+    vec4 edg_2_v4, edg_1_v4, edg0_v4, edg1_v4, edg2_v4;
+    float edg_2_f, edg_1_f, edg0_f, edg1_f, edg2_f;
+
+    vec4 a = vec4(imageLoad(edgeTex, ivec2(x, y-2)));
+    vec4 b = vec4(imageLoad(edgeTex, ivec2(x+1, y-2)));
+    shiftInts(edg_2_v4, edg_2_f, a, b, offset);
+
+    a = vec4(imageLoad(edgeTex, ivec2(x, y-1)));
+    b = vec4(imageLoad(edgeTex, ivec2(x+1, y-1)));
+    shiftInts(edg_1_v4, edg_1_f, a, b, offset);
+
+    a = vec4(imageLoad(edgeTex, ivec2(x, y)));
+    b = vec4(imageLoad(edgeTex, ivec2(x+1, y)));
+    shiftInts(edg0_v4, edg0_f, a, b, offset);
+
+    a = vec4(imageLoad(edgeTex, ivec2(x, y+1)));
+    b = vec4(imageLoad(edgeTex, ivec2(x+1, y+1)));
+    shiftInts(edg1_v4, edg1_f, a, b, offset);
+
+    a = vec4(imageLoad(edgeTex, ivec2(x, y+2)));
+    b = vec4(imageLoad(edgeTex, ivec2(x+1, y+2)));
+    shiftInts(edg2_v4, edg2_f, a, b, offset);
+
+    float hGrad = abs(edg0_v4.y - edg0_v4.z) + abs(edg0_v4.z - edg0_v4.w) +
+                 (abs(edg_1_v4.y - edg_1_v4.z) + abs(edg_1_v4.z - edg_1_v4.w) +
+                  abs(edg1_v4.y - edg1_v4.z) + abs(edg1_v4.z - edg1_v4.w)) * 0.5;
+
+    float vGrad = abs(edg_1_v4.z - edg0_v4.z) + abs(edg0_v4.z - edg1_v4.z) +
+                 (abs(edg_1_v4.y - edg0_v4.y) + abs(edg0_v4.y - edg1_v4.y) +
+                  abs(edg_1_v4.w - edg0_v4.w) + abs(edg0_v4.w - edg1_v4.w)) * 0.5;
+
+    edgGrad0.x = (vGrad + abs(edg_2_v4.z - edg_1_v4.z) + (abs(edg_2_v4.y - edg_1_v4.y) + abs(edg_2_v4.w - edg_1_v4.w)) * 0.5) * 0.25;
+    edgGrad0.z = (vGrad + abs(edg2_v4.z - edg1_v4.z) + (abs(edg2_v4.y - edg1_v4.y) + abs(edg2_v4.w - edg1_v4.w)) * 0.5) * 0.25;
+    edgGrad0.w = (hGrad + abs(edg0_v4.x - edg0_v4.y) + (abs(edg_1_v4.x - edg_1_v4.y) + abs(edg1_v4.x - edg1_v4.y)) * 0.5) * 0.25;
+    edgGrad0.y = (hGrad + abs(edg0_f - edg0_v4.w) + (abs(edg_1_f - edg_1_v4.w) + abs(edg1_f - edg1_v4.w)) * 0.5) * 0.25;
+
+    float senwGrad = abs(edg_1_v4.y - edg0_v4.z) + abs(edg0_v4.z - edg1_v4.w) + abs(edg_1_v4.z - edg0_v4.w) + abs(edg0_v4.y - edg1_v4.z);
+    float neswGrad = abs(edg_1_v4.w - edg0_v4.z) + abs(edg0_v4.z - edg1_v4.y) + abs(edg0_v4.y - edg_1_v4.z) + abs(edg0_v4.w - edg1_v4.z);
+
+    edgGrad1.w = (senwGrad + abs(edg_1_v4.y - edg_2_v4.x) + (abs(edg_1_v4.z - edg_2_v4.y) + abs(edg0_v4.y - edg_1_v4.x)) * 0.5) * 0.25;
+    edgGrad1.z = (neswGrad + abs(edg1_v4.y - edg2_v4.x) + (abs(edg0_v4.y - edg1_v4.x) + abs(edg1_v4.z - edg2_v4.y)) * 0.5) * 0.25;
+    edgGrad1.y = (senwGrad + abs(edg1_v4.w - edg2_f) + (abs(edg0_v4.w - edg1_f) + abs(edg1_v4.z - edg2_v4.w)) * 0.5) * 0.25;
+    edgGrad1.x = (neswGrad + abs(edg_1_v4.w - edg_2_f) + (abs(edg_1_v4.z - edg_2_v4.w) + abs(edg0_v4.w - edg_1_f)) * 0.5) * 0.25;
+}
+
+void gradientVNG_G(out vec4 bayGrad0, out vec4 bayGrad1, ivec2 imgPos) {
+    int offset = (imgPos.x - 2) & 3;
+    int x = (imgPos.x - 2) / 4;
+    int y = imgPos.y;
+
+    vec4 bayer_2_v4, bayer_1_v4, bayer0_v4, bayer1_v4, bayer2_v4;
+    float bayer_2_f, bayer_1_f, bayer0_f, bayer1_f, bayer2_f;
+
+    vec4 a = vec4(imageLoad(bayerTex, ivec2(x, y-2)));
+    vec4 b = vec4(imageLoad(bayerTex, ivec2(x+1, y-2)));
+    shiftInts(bayer_2_v4, bayer_2_f, a, b, offset);
+
+    a = vec4(imageLoad(bayerTex, ivec2(x, y-1)));
+    b = vec4(imageLoad(bayerTex, ivec2(x+1, y-1)));
+    shiftInts(bayer_1_v4, bayer_1_f, a, b, offset);
+
+    a = vec4(imageLoad(bayerTex, ivec2(x, y)));
+    b = vec4(imageLoad(bayerTex, ivec2(x+1, y)));
+    shiftInts(bayer0_v4, bayer0_f, a, b, offset);
+
+    a = vec4(imageLoad(bayerTex, ivec2(x, y+1)));
+    b = vec4(imageLoad(bayerTex, ivec2(x+1, y+1)));
+    shiftInts(bayer1_v4, bayer1_f, a, b, offset);
+
+    a = vec4(imageLoad(bayerTex, ivec2(x, y+2)));
+    b = vec4(imageLoad(bayerTex, ivec2(x+1, y+2)));
+    shiftInts(bayer2_v4, bayer2_f, a, b, offset);
+
+    float vGrad = abs(bayer_1_v4.z - bayer1_v4.z) + (abs(bayer_1_v4.y - bayer1_v4.y) + abs(bayer_1_v4.w - bayer1_v4.w)) * 0.5;
+    float hGrad = abs(bayer0_v4.w - bayer0_v4.y) + (abs(bayer_1_v4.w - bayer_1_v4.y) + abs(bayer1_v4.w - bayer1_v4.y)) * 0.5;
+
+    bayGrad0.x = (vGrad + abs(bayer_2_v4.z - bayer0_v4.z) + (abs(bayer_2_v4.y - bayer0_v4.y) + abs(bayer_2_v4.w - bayer0_v4.w)) * 0.5) / 8.0;
+    bayGrad0.z = (vGrad + abs(bayer2_v4.z - bayer0_v4.z) + (abs(bayer2_v4.y - bayer0_v4.y) + abs(bayer2_v4.w - bayer0_v4.w)) * 0.5) / 8.0;
+    bayGrad0.w = (hGrad + abs(bayer0_v4.x - bayer0_v4.z) + (abs(bayer_1_v4.x - bayer_1_v4.z) + abs(bayer1_v4.x - bayer1_v4.z)) * 0.5) / 8.0;
+    bayGrad0.y = (hGrad + abs(bayer0_f - bayer0_v4.z) + (abs(bayer_1_f - bayer_1_v4.z) + abs(bayer1_f - bayer1_v4.z)) * 0.5) / 8.0;
+
+    bayGrad1.z = (abs(bayer2_v4.x - bayer0_v4.z) + abs(bayer1_v4.y - bayer_1_v4.w) + abs(bayer_1_v4.z - bayer1_v4.x) + abs(bayer2_v4.y - bayer0_v4.w)) / 8.0;
+    bayGrad1.w = (abs(bayer_2_v4.x - bayer0_v4.z) + abs(bayer_1_v4.y - bayer1_v4.w) + abs(bayer1_v4.z - bayer_1_v4.x) + abs(bayer_2_v4.y - bayer0_v4.w)) / 8.0;
+    bayGrad1.x = (abs(bayer_2_f - bayer0_v4.z) + abs(bayer_1_v4.w - bayer1_v4.y) + abs(bayer1_v4.z - bayer_1_f) + abs(bayer_2_v4.w - bayer0_v4.y)) / 8.0;
+    bayGrad1.y = (abs(bayer2_f - bayer0_v4.z) + abs(bayer1_v4.w - bayer_1_v4.y) + abs(bayer_1_v4.z - bayer1_f) + abs(bayer2_v4.w - bayer0_v4.y)) / 8.0;
+}
+
+vec4 gradientMask(vec4 rgbd, ivec2 imgPos) {
+    vec4 edgGrad0, edgGrad1;
+    gradientSingleStep(edgGrad0, edgGrad1, imgPos);
+
+    vec4 bayGrad0, bayGrad1;
+    gradientVNG_G(bayGrad0, bayGrad1, imgPos);
+
+    float maxGradient = max(max(edgGrad0.x, edgGrad0.y), max(edgGrad0.z, edgGrad0.w));
+    maxGradient = max(maxGradient, max(max(edgGrad1.x, edgGrad1.y), max(edgGrad1.z, edgGrad1.w)));
+    float minGradient = min(min(edgGrad0.x, edgGrad0.y), min(edgGrad0.z, edgGrad0.w));
+    minGradient = min(minGradient, min(min(edgGrad1.x, edgGrad1.y), min(edgGrad1.z, edgGrad1.w)));
+
+    float maxGradientVNG = max(max(bayGrad0.x, bayGrad0.y), max(bayGrad0.z, bayGrad0.w));
+    maxGradientVNG = max(maxGradientVNG, max(max(bayGrad1.x, bayGrad1.y), max(bayGrad1.z, bayGrad1.w)));
+    float minGradientVNG = min(min(bayGrad0.x, bayGrad0.y), min(bayGrad0.z, bayGrad0.w));
+    minGradientVNG = min(minGradientVNG, min(min(bayGrad1.x, bayGrad1.y), min(bayGrad1.z, bayGrad1.w)));
+
+    float dif = (maxGradient - minGradient) / 8.0;
+    float dif1 = (maxGradient - minGradient) / 32.0;
+    dif = dif - dif1;
+    float threshold = 1.5 * minGradient + dif;
+    threshold = max(threshold, float(ubo_uParams_minThresholdEdge)) + 8.0;
+    float max2 = maxGradientVNG * 0.5;
+    float min2 = minGradientVNG * 0.5;
+    dif = max2 - min2;
+    float thresholdVNG = 3.0 * min2 + dif + 8.0;
+    thresholdVNG = max(thresholdVNG, float(ubo_uParams_minThresholdVNG));
+
+    maxGradient = max(maxGradient, maxGradientVNG);
+
+    int mask = 0;
+    int count = 0;
+    if ((edgGrad0.x < threshold) && (bayGrad0.x < thresholdVNG)) { mask |= (1 << 0); count++; }
+    if ((edgGrad0.y < threshold) && (bayGrad0.y < thresholdVNG)) { mask |= (1 << 1); count++; }
+    if ((edgGrad0.z < threshold) && (bayGrad0.z < thresholdVNG)) { mask |= (1 << 2); count++; }
+    if ((edgGrad0.w < threshold) && (bayGrad0.w < thresholdVNG)) { mask |= (1 << 3); count++; }
+    if ((edgGrad1.x < threshold) && (bayGrad1.x < thresholdVNG)) { mask |= (1 << 4); count++; }
+    if ((edgGrad1.y < threshold) && (bayGrad1.y < thresholdVNG)) { mask |= (1 << 5); count++; }
+    if ((edgGrad1.z < threshold) && (bayGrad1.z < thresholdVNG)) { mask |= (1 << 6); count++; }
+    if ((edgGrad1.w < threshold) && (bayGrad1.w < thresholdVNG)) { mask |= (1 << 7); count++; }
+
+    if (mask == 0) {
+
+        if (edgGrad0.x < threshold) { mask |= (1 << 0); count++; }
+        if (edgGrad0.y < threshold) { mask |= (1 << 1); count++; }
+        if (edgGrad0.z < threshold) { mask |= (1 << 2); count++; }
+        if (edgGrad0.w < threshold) { mask |= (1 << 3); count++; }
+        if (edgGrad1.x < threshold) { mask |= (1 << 4); count++; }
+        if (edgGrad1.y < threshold) { mask |= (1 << 5); count++; }
+        if (edgGrad1.z < threshold) { mask |= (1 << 6); count++; }
+        if (edgGrad1.w < threshold) { mask |= (1 << 7); count++; }
+
+        if (count == 0) {
+            mask = 0xff;
+            count = 8;
+        }
+    }
+    rgbd.w = float(mask | (count << 8));
+    return rgbd;
+}
+
+vec4 redBlueAtGreen(ivec2 imgPos, vec4 rgbd) {
+    float llGreen = rgbd.y;
+    uint w = uint(clamp(rgbd.w, 0.0, 65535.0));
+    float bc = 0.0, rc = 0.0, count = 0.0;
+
+    ivec2 pos = imgPos;
+    pos.y--;
+    vec4 over = vec4(imageLoad(rgbdTex, pos));
+    pos.y += 2;
+    vec4 under = vec4(imageLoad(rgbdTex, pos));
+    pos.x--;
+    pos.y--;
+    vec4 left = vec4(imageLoad(rgbdTex, pos));
+    pos.x += 2;
+    vec4 right = vec4(imageLoad(rgbdTex, pos));
+
+    vec4 r4 = vec4(over.x, left.x, right.x, under.x);
+    vec4 g4 = vec4(over.y, left.y, right.y, under.y);
+    vec4 b4 = vec4(over.z, left.z, right.z, under.z);
+
+    vec4 dif4 = vec4(1.0) + abs(vec4(rgbd.y) - g4) * 0.25;
+
+    float greenScale = g4[3] * dif4[0] + g4[0] * dif4[3];
+    float blueScale = b4[3] * dif4[0] + b4[0] * dif4[3];
+    float redScale = r4[3] * dif4[0] + r4[0] * dif4[3];
+    if ((w & (1u << 0)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    if ((w & (1u << 2)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    greenScale = g4[1] * dif4[2] + g4[2] * dif4[1];
+    blueScale = b4[1] * dif4[2] + b4[2] * dif4[1];
+    redScale = r4[1] * dif4[2] + r4[2] * dif4[1];
+    if ((w & (1u << 1)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    if ((w & (1u << 3)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    greenScale = g4[2] * dif4[0] + g4[0] * dif4[2];
+    blueScale = b4[2] * dif4[0] + b4[0] * dif4[2];
+    redScale = r4[2] * dif4[0] + r4[0] * dif4[2];
+    if ((w & (1u << 4)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    greenScale = g4[2] * dif4[3] + g4[3] * dif4[2];
+    blueScale = b4[2] * dif4[3] + b4[3] * dif4[2];
+    redScale = r4[2] * dif4[3] + r4[3] * dif4[2];
+    if ((w & (1u << 5)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    greenScale = g4[1] * dif4[0] + g4[0] * dif4[1];
+    blueScale = b4[1] * dif4[0] + b4[0] * dif4[1];
+    redScale = r4[1] * dif4[0] + r4[0] * dif4[1];
+    if ((w & (1u << 7)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    greenScale = g4[1] * dif4[3] + g4[3] * dif4[1];
+    blueScale = b4[1] * dif4[3] + b4[3] * dif4[1];
+    redScale = r4[1] * dif4[3] + r4[3] * dif4[1];
+    if ((w & (1u << 6)) != 0u && greenScale != 0.0) {
+        bc += llGreen * blueScale / greenScale;
+        rc += llGreen * redScale / greenScale;
+        count += 1.0;
+    }
+
+    float redVal = (count > 0.0) ? rc / count : (r4[0] + r4[1] + r4[2] + r4[3]) * 0.25;
+    float blueVal = (count > 0.0) ? bc / count : (b4[0] + b4[1] + b4[2] + b4[3]) * 0.25;
+
+    rgbd.x = min(redVal, 65534.0);
+    rgbd.z = min(blueVal, 65534.0);
+    return rgbd;
+}
+
+vec4 rgb2ycc(vec4 rgbx) {
+    float ly = rgbx.x + rgbx.y * 2.0 + rgbx.z + 1.0;
+    vec2 c = vec2(rgbx.x - rgbx.y, rgbx.z - rgbx.y);
+    c *= 32768.0 / ly;
+    vec4 res;
+    res.y = (c.x >= 0.0) ? min(32767.0, c.x) : min(65535.0, 65536.0 + c.x);
+    res.z = (c.y >= 0.0) ? min(32767.0, c.y) : min(65535.0, 65536.0 + c.y);
+    res.x = 0.25 * (ly - 1.0);
+    res.w = rgbx.w;
+    return res;
+}
+
+uvec4 rgb2ycc_u16(vec4 rgbx) {
+    vec4 ycc = rgb2ycc(rgbx);
+    return uvec4(
+        uint(ycc.x),
+        uint(ycc.y),
+        uint(ycc.z),
+        uint(ycc.w)
+    );
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    uvec4 outV = uvec4(0u);
+    if (gid.x >= ubo_uParams_l && gid.x < ubo_uParams_r &&
+        gid.y >= ubo_uParams_t && gid.y < ubo_uParams_b) {
+        int x = gid.x & 1;
+        int y = gid.y & 1;
+        vec4 rgbDPix = vec4(imageLoad(rgbdTex, gid));
+        if (x == 1 && y == 0) {
+            rgbDPix = gradientMask(rgbDPix, gid);
+            rgbDPix = redBlueAtGreen(gid, rgbDPix);
+            outV = rgb2ycc_u16(rgbDPix);
+        } else if (x == 0 && y == 1) {
+            rgbDPix = gradientMask(rgbDPix, gid);
+            rgbDPix = redBlueAtGreen(gid, rgbDPix);
+            outV = rgb2ycc_u16(rgbDPix);
+        } else if (x == 0 && y == 0) {
+            outV = rgb2ycc_u16(rgbDPix);
+        } else if (x == 1 && y == 1){
+            outV = rgb2ycc_u16(rgbDPix);
+        }
+    }
+    imageStore(outTex, gid, outV);
+}

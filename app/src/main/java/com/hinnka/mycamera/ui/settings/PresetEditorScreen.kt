@@ -29,11 +29,13 @@ import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
-import com.hinnka.mycamera.ui.components.LutSelectorWithRecipeAction
+import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.CurveChannel
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
-import com.hinnka.mycamera.ui.components.EffectsBottomSheet
 import com.hinnka.mycamera.ui.components.FrameSelector
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
 import com.hinnka.mycamera.ui.components.RawDcpSelector
@@ -57,6 +59,10 @@ fun PresetEditorScreen(
     val availableLuts = viewModel.availableLutList
     val availableDcps = viewModel.availableDcps
     val availableFrames = viewModel.availableFrameList
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val availableHncsProfiles = remember(context) {
+        HncsProfileManager(context.applicationContext).getAvailableProfiles()
+    }
     val defaultNewPresetName = stringResource(R.string.preset_new_preset_default)
 
     // 寻找是否存在编辑目标，如果不存在（新建预设），则尝试从 ViewModel.draftPreset 初始化，或者基于当前状态新建
@@ -92,19 +98,24 @@ fun PresetEditorScreen(
     // 相机参数
     var aspectRatio by remember { mutableStateOf(sourcePreset?.aspectRatio ?: AspectRatio.RATIO_4_3.name) }
     var useRaw by remember { mutableStateOf(sourcePreset?.useRaw ?: false) }
-    var useMFNR by remember { mutableStateOf(sourcePreset?.useMFNR ?: false) }
-    var useHdrComposition by remember { mutableStateOf(sourcePreset?.useHdrComposition ?: true) }
-    var useMFSR by remember { mutableStateOf(sourcePreset?.useMFSR ?: false) }
+    var useJpgMax by remember { mutableStateOf(sourcePreset?.useJpgMax ?: false) }
+    var useRawMax by remember { mutableStateOf(sourcePreset?.useRawMax ?: false) }
+    var ultraHdrGainMapEnabled by remember {
+        mutableStateOf(sourcePreset?.ultraHdrGainMapEnabled ?: true)
+    }
     var frameId by remember { mutableStateOf(sourcePreset?.frameId) }
 
     // Quick RAW 参数
     var rawDcpId by remember { mutableStateOf(sourcePreset?.rawDcpId) }
     var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset?.rawDcpIdsByLens ?: emptyMap()) }
+    var rawHncsProfileId by remember { mutableStateOf(sourcePreset?.rawHncsProfileId) }
+    val rawHncsFilmCurveMode =
+        sourcePreset?.rawHncsFilmCurveMode ?: HncsFilmCurveMode.Standard.persistedValue
     var rawRenderingEngine by remember {
         mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine))
     }
-    var rawGooglePixelToneMap by remember { mutableStateOf(sourcePreset?.rawGooglePixelToneMap ?: false) }
     var rawOppoMasterToneMap by remember { mutableStateOf(sourcePreset?.rawOppoMasterToneMap ?: false) }
+    var rawPhotonPgtmToneMap by remember { mutableStateOf(sourcePreset?.rawPhotonPgtmToneMap ?: false) }
     var rawSpectralFilmStock by remember { mutableStateOf(sourcePreset?.rawSpectralFilmStock ?: "kodak_portra_400") }
     var rawSpectralFilmPrint by remember { mutableStateOf(sourcePreset?.rawSpectralFilmPrint ?: "kodak_2383") }
     var rawDROMode by remember { mutableStateOf(sourcePreset?.rawDROMode ?: "OFF") }
@@ -118,8 +129,7 @@ fun PresetEditorScreen(
     var expandSettings by remember { mutableStateOf(false) }
     var expandQuickRaw by remember { mutableStateOf(false) }
     var expandBaseline by remember { mutableStateOf(false) }
-    var showColorRecipeSheet by remember { mutableStateOf(false) }
-    var showEffectsSheet by remember { mutableStateOf(false) }
+    var showEditSheet by remember { mutableStateOf(false) }
     var baselineRecipeEditLutId by remember { mutableStateOf<String?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<LutEditorTarget?>(null) }
 
@@ -135,15 +145,17 @@ fun PresetEditorScreen(
             effects = effects,
             aspectRatio = aspectRatio,
             useRaw = useRaw,
-            useMFNR = useMFNR,
-            useHdrComposition = useHdrComposition,
-            useMFSR = useMFSR,
+            useJpgMax = useJpgMax,
+            useRawMax = useRawMax,
+            ultraHdrGainMapEnabled = ultraHdrGainMapEnabled,
             frameId = frameId,
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
+            rawHncsProfileId = rawHncsProfileId,
+            rawHncsFilmCurveMode = rawHncsFilmCurveMode,
             rawRenderingEngine = rawRenderingEngine.name,
-            rawGooglePixelToneMap = rawGooglePixelToneMap,
             rawOppoMasterToneMap = rawOppoMasterToneMap,
+            rawPhotonPgtmToneMap = rawPhotonPgtmToneMap,
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
             rawDROMode = rawDROMode,
@@ -232,16 +244,30 @@ fun PresetEditorScreen(
             }
 
             SettingsSection(title = stringResource(R.string.filter), isExpandable = false) {
-                LutSelectorWithRecipeAction(
+                LutSelector(
                     availableLuts = availableLuts,
                     currentLutId = selectedLutId,
                     thumbnail = null,
                     onLutSelected = { selectedLutId = it },
-                    onEditRecipeClick = { showColorRecipeSheet = true },
-                    onEditEffectClick = { showEffectsSheet = true },
-                    recipeIsCustomized = !colorRecipe.isDefault(),
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+
+            SettingsSection(title = stringResource(R.string.edit), isExpandable = false) {
+                OutlinedButton(
+                    onClick = { showEditSheet = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        Color.White.copy(alpha = 0.18f)
+                    )
+                ) {
+                    Text(
+                        text = stringResource(R.string.edit_color_and_effects),
+                        fontSize = 13.sp
+                    )
+                }
             }
 
             SettingsSection(title = stringResource(R.string.settings_section_frame), isExpandable = false) {
@@ -277,28 +303,45 @@ fun PresetEditorScreen(
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
 
                 SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_multi_frame),
-                    checked = useMFNR,
+                    title = stringResource(R.string.settings_use_jpg_max),
+                    checked = useJpgMax,
                     onCheckedChange = {
-                        useMFNR = it
+                        useJpgMax = it
+                        if (it) {
+                            useRaw = false
+                            useRawMax = false
+                        }
                     }
                 )
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
 
                 SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_hdr_composition),
-                    checked = useHdrComposition,
+                    title = stringResource(R.string.settings_use_raw_max),
+                    checked = useRawMax,
                     onCheckedChange = {
-                        useHdrComposition = it
+                        useRawMax = it
+                        if (it) {
+                            useRaw = true
+                            useJpgMax = false
+                        }
                     }
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                    description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
+                    checked = ultraHdrGainMapEnabled,
+                    onCheckedChange = { ultraHdrGainMapEnabled = it }
                 )
 
             }
 
-            if (showColorRecipeSheet) {
+            if (showEditSheet) {
                 ModalBottomSheet(
-                    onDismissRequest = { showColorRecipeSheet = false },
+                    onDismissRequest = { showEditSheet = false },
                     containerColor = Color.Black.copy(alpha = 0.86f),
                     scrimColor = Color.Transparent,
                     dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
@@ -337,19 +380,14 @@ fun PresetEditorScreen(
                             }
                         },
                         hideNonBakeable = true,
+                        showLutIntensity = true,
+                        currentEffects = effects,
+                        onEffectsChange = { effects = it },
                         modifier = Modifier
                             .fillMaxWidth()
                             .navigationBarsPadding()
                     )
                 }
-            }
-
-            if (showEffectsSheet) {
-                EffectsBottomSheet(
-                    currentParams = effects,
-                    onParamsChange = { effects = it },
-                    onDismiss = { showEffectsSheet = false }
-                )
             }
 
             val editBaselineRecipe: (String, LutEditorTarget) -> Unit = { lutId, target ->
@@ -379,6 +417,11 @@ fun PresetEditorScreen(
                     checked = useRaw,
                     onCheckedChange = {
                         useRaw = it
+                        if (it) {
+                            useJpgMax = false
+                        } else {
+                            useRawMax = false
+                        }
                     }
                 )
 
@@ -391,6 +434,12 @@ fun PresetEditorScreen(
                         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid)
                         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic)
                         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
+                        RawRenderingEngine.HncsCcm -> stringResource(
+                            R.string.settings_raw_color_engine_hncs_ccm
+                        )
+                        RawRenderingEngine.HncsLut -> stringResource(
+                            R.string.settings_raw_color_engine_hncs_lut
+                        )
                     }
                 }
                 DropdownSettingItem(
@@ -417,23 +466,30 @@ fun PresetEditorScreen(
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
 
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_raw_google_pixel_tone_map),
-                            description = stringResource(R.string.settings_raw_google_pixel_tone_map_description),
-                            checked = rawGooglePixelToneMap,
-                            onCheckedChange = { enabled ->
-                                rawGooglePixelToneMap = enabled
-                                if (enabled) rawOppoMasterToneMap = false
-                            }
+                        val toneMapLabels = mapOf(
+                            RawProfileToneMapMode.Default to stringResource(R.string.settings_raw_profile_tone_map_default),
+                            RawProfileToneMapMode.Photon to stringResource(R.string.settings_raw_profile_tone_map_photon_pgtm),
+                            RawProfileToneMapMode.OppoMaster to stringResource(R.string.settings_raw_profile_tone_map_oppo_master),
                         )
-
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_raw_oppo_master_tone_map),
-                            description = stringResource(R.string.settings_raw_oppo_master_tone_map_description),
-                            checked = rawOppoMasterToneMap,
-                            onCheckedChange = { enabled ->
-                                rawOppoMasterToneMap = enabled
-                                if (enabled) rawGooglePixelToneMap = false
+                        val selectedToneMapMode = when {
+                            rawOppoMasterToneMap -> RawProfileToneMapMode.OppoMaster
+                            rawPhotonPgtmToneMap -> RawProfileToneMapMode.Photon
+                            else -> RawProfileToneMapMode.Default
+                        }
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_raw_profile_tone_map),
+                            description = stringResource(R.string.settings_raw_profile_tone_map_description),
+                            value = toneMapLabels[selectedToneMapMode].orEmpty(),
+                            options = RawProfileToneMapMode.values().mapNotNull { toneMapLabels[it] },
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { selectedLabel ->
+                                val selectedMode = toneMapLabels.entries
+                                    .firstOrNull { it.value == selectedLabel }
+                                    ?.key
+                                    ?: RawProfileToneMapMode.Default
+                                rawOppoMasterToneMap = selectedMode == RawProfileToneMapMode.OppoMaster
+                                rawPhotonPgtmToneMap = selectedMode == RawProfileToneMapMode.Photon
                             }
                         )
 
@@ -450,6 +506,34 @@ fun PresetEditorScreen(
                             onSelectDcp = { rawDcpId = it },
                             onRawDcpIdsByLensChange = { rawDcpIdsByLens = it }
                         )
+                    }
+                }
+
+                AnimatedVisibility(visible = rawRenderingEngine == RawRenderingEngine.HncsLut) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.05f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        val profileNames = availableHncsProfiles.associate { profile ->
+                            profile.id to profile.displayName
+                        }
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_raw_hncs_2d_lut),
+                            description = stringResource(
+                                R.string.settings_raw_hncs_profile_description
+                            ),
+                            value = profileNames[rawHncsProfileId].orEmpty(),
+                            options = profileNames.values.toList(),
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { selectedName ->
+                                rawHncsProfileId = profileNames.entries
+                                    .firstOrNull { it.value == selectedName }
+                                    ?.key
+                            }
+                        )
+
                     }
                 }
 

@@ -8,5 +8,7 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "colour-science>=0.4.7",
     "numpy>=2.4.2",
+    "pillow>=11.0.0",
+    "rawpy>=0.27.0",
     "requests>=2.34.2",
 ]

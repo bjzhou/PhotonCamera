@@ -4,15 +4,27 @@ import android.graphics.Bitmap
 import androidx.core.graphics.scale
 
 object AiImagePreprocessor {
-    private const val MAX_EDGE = 1024
+    private const val VISION_MAX_EDGE = 1024
+    private const val IMAGE_EDIT_MAX_EDGE = 1024
+
+    fun prepareForVisionAnalysis(bitmap: Bitmap): Bitmap {
+        if (bitmap.width <= VISION_MAX_EDGE && bitmap.height <= VISION_MAX_EDGE) {
+            return bitmap
+        }
+
+        val scale = VISION_MAX_EDGE.toFloat() / maxOf(bitmap.width, bitmap.height)
+        val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        return bitmap.scale(width, height)
+    }
 
     fun prepareForImageToImage(bitmap: Bitmap): Bitmap {
         val squareBitmap = cropBitmapToSquare(bitmap)
-        if (squareBitmap.width <= MAX_EDGE && squareBitmap.height <= MAX_EDGE) {
+        if (squareBitmap.width <= IMAGE_EDIT_MAX_EDGE && squareBitmap.height <= IMAGE_EDIT_MAX_EDGE) {
             return squareBitmap
         }
 
-        return squareBitmap.scale(MAX_EDGE, MAX_EDGE)
+        return squareBitmap.scale(IMAGE_EDIT_MAX_EDGE, IMAGE_EDIT_MAX_EDGE)
     }
 
     private fun cropBitmapToSquare(bitmap: Bitmap): Bitmap {

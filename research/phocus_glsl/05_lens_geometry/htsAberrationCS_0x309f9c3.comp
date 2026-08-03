@@ -1,0 +1,189 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: a7d6c853553ca43a007eca52070267af41ea92582da3e951654cd68728e732c2
+ * ELF offsets: 0x309f9c3
+ * Symbols: htsAberrationCS_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+//precision highp int;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+layout(rgba32f, binding = 1) readonly uniform image2D uHtsTexture;
+layout(rgba16f, binding = 2) writeonly uniform image2D uOutputImage;
+
+layout(std140, binding = 0) uniform AberrationParams {
+    vec4 redParam;
+    vec4 blueParam;
+    float redOffset;
+    float blueOffset;
+    vec2 offsetFromCenter;
+    ivec2 marginToSrcRect;
+    ivec2 fullImageSize;
+} uParams;
+
+uniform int uDebugMode;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+
+// Cubic interpolation function (Catmull-Rom spline)
+vec4 cubic(vec4 v_1, vec4 v0, vec4 v1, vec4 v2, float delta) {
+    vec4 a = v2 * (1.0/6.0) - v1 * 0.5 + v0 * 0.5 - v_1 * (1.0/6.0);
+    vec4 b = v_1 * 0.5 + v1 * 0.5 - v0;
+    vec4 c = -v2 * (1.0/6.0) + v1 - v0 * 0.5 - v_1 * (1.0/3.0);
+    vec4 d = v0;
+    
+    return a * (delta * delta * delta) + b * (delta * delta) + c * delta + d;
+}
+
+vec2 cubic2(vec2 v_1, vec2 v0, vec2 v1, vec2 v2, float delta) {
+    vec2 a = v2 * (1.0/6.0) - v1 * 0.5 + v0 * 0.5 - v_1 * (1.0/6.0);
+    vec2 b = v_1 * 0.5 + v1 * 0.5 - v0;
+    vec2 c = -v2 * (1.0/6.0) + v1 - v0 * 0.5 - v_1 * (1.0/3.0);
+    vec2 d = v0;
+    
+    return a * (delta * delta * delta) + b * (delta * delta) + c * delta + d;
+}
+
+// Keystone transform (homogeneous 3x3 matrix)
+vec2 keystoneTransform(vec3 matA, vec3 matB, vec3 matC, vec2 pos) {
+    vec3 posH = vec3(pos.x, pos.y, 1.0);
+    vec3 transformed;
+    transformed.x = dot(matA, posH);
+    transformed.y = dot(matB, posH);
+    transformed.z = dot(matC, posH);
+    return vec2(transformed.x / transformed.z, transformed.y / transformed.z);
+}
+
+// Select red or blue channel from packed bayer (match Metal: .xz/.yw = 1st+3rd / 2nd+4th = .rb/.ga)
+vec2 selectRedBlue(vec4 packed, bool isRed) {
+    return isRed ? packed.rb : packed.ga;
+}
+
+// Mix cubic line for packed bayer format
+vec2 mixCubicLine(ivec2 pos, float delta, bool isRed, inout vec2 minimum, inout vec2 maximum) {
+    // cubic2 algorithm is in data format ushort
+    vec2 l = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x - 1, pos.y)), isRed) * vec2(65535.0);
+    vec2 m = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x + 0, pos.y)), isRed) * vec2(65535.0);
+    vec2 r = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x + 1, pos.y)), isRed) * vec2(65535.0);
+    vec2 r2 = selectRedBlue(imageLoad(uInputImage, ivec2(pos.x + 2, pos.y)), isRed) * vec2(65535.0);
+
+    if (delta < 1.0) {
+        vec2 p0 = m.xy;
+        vec2 p1 = vec2(m.y, r.x);
+        minimum = min(minimum, min(p0, p1));
+        maximum = max(maximum, max(p0, p1));
+        return cubic2(vec2(l.y, m.x), p0, p1, r.xy, delta);
+    } else {
+        vec2 p0 = vec2(m.y, r.x);
+        vec2 p1 = r.xy;
+        minimum = min(minimum, min(p0, p1));
+        maximum = max(maximum, max(p0, p1));
+        return cubic2(m.xy, p0, p1, vec2(r.y, r2.x), delta - 1.0);
+    }
+}
+
+// Interpolate cubic packed bayer
+vec4 interpolateCubicPacked(vec2 offset, ivec2 pos, bool isRed) {
+    ivec2 inputSize = imageSize(uInputImage);
+    vec2 indexPos = vec2(pos) + vec2(offset.x / 4.0, offset.y);
+    vec2 maxPos = vec2(inputSize.x - 3, inputSize.y - 5);
+    vec2 resPos = clamp(indexPos, vec2(1.0, 2.0), maxPos);
+
+    int blueOffset = isRed ? 0 : 1;
+    ivec2 base = ivec2(resPos.x, int((resPos.y - float(blueOffset)) / 2.0) * 2 + blueOffset);
+
+    vec2 delta = resPos - vec2(base);
+    vec2 maximum = vec2(0.0);
+    vec2 minimum = vec2(65535.0);
+    vec2 unused = vec2(0.0);
+    vec2 v_1 = mixCubicLine(ivec2(base.x, base.y - 2), delta.x * 2.0, isRed, unused, unused);
+    vec2 v0 = mixCubicLine(ivec2(base.x, base.y + 0), delta.x * 2.0, isRed, minimum, maximum);
+    vec2 v1 = mixCubicLine(ivec2(base.x, base.y + 2), delta.x * 2.0, isRed, minimum, maximum);
+    vec2 v2 = mixCubicLine(ivec2(base.x, base.y + 4), delta.x * 2.0, isRed, unused, unused);
+
+    vec2 h = cubic2(v_1, v0.xy, v1.xy, v2, delta.y / 2.0);
+    h = clamp(round(h), minimum, maximum) / vec2(65535.0);
+
+    vec4 inVal = imageLoad(uInputImage, pos);
+    if (isRed) {
+        // Red line: replace R only (1st and 3rd), keep G (2nd and 4th) - match Metal
+        return vec4(h.x, inVal.y, h.y, inVal.w);
+    } else {
+        // Blue line: replace B only (2nd and 4th), keep G (1st and 3rd) - match Metal
+        return vec4(inVal.x, h.x, inVal.z, h.y);
+    }
+
+}
+
+
+
+// Get HTS aberration offsets from lookup texture
+vec4 getHtsAberrationOffsets(vec2 pos) {
+    ivec2 htsSize = imageSize(uHtsTexture);
+    vec2 adjustedPos = pos + uParams.offsetFromCenter + 
+        vec2(uParams.fullImageSize) / 2.0;
+    vec2 htsSizeF = vec2(htsSize - ivec2(1));
+    vec2 relative0 = adjustedPos / vec2(uParams.fullImageSize - ivec2(1)) * htsSizeF;
+    vec2 relative1 = clamp(relative0 + vec2(1.0), vec2(0.0), htsSizeF);
+    
+    ivec2 base0 = ivec2(relative0);
+    ivec2 base1 = ivec2(relative1);
+    vec2 delta = relative0 - vec2(base0);
+    
+    // Bilinear interpolation
+    vec4 p00 = imageLoad(uHtsTexture, ivec2(base0.x, base0.y));
+    vec4 p10 = imageLoad(uHtsTexture, ivec2(base1.x, base0.y));
+    vec4 p01 = imageLoad(uHtsTexture, ivec2(base0.x, base1.y));
+    vec4 p11 = imageLoad(uHtsTexture, ivec2(base1.x, base1.y));
+    
+    vec4 p0 = mix(p00, p10, delta.x);
+    vec4 p1 = mix(p01, p11, delta.x);
+    vec4 result = mix(p0, p1, delta.y);
+    
+    // Order is rY, bY, rX, bX -> rearrange to rX, rY, bX, bY
+    return result.zwxy;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(uOutputImage);
+    
+    // Boundary check
+    if (gid.x >= outputSize.x || gid.y >= (outputSize.y + 1) / 2) {
+        return;
+    }
+    
+    vec2 realPos = vec2(gid.x * 4, gid.y * 2);
+    vec4 offsets = getHtsAberrationOffsets(realPos);
+    
+    ivec2 inOffset = ivec2(uParams.marginToSrcRect.x / 4, uParams.marginToSrcRect.y);
+    ivec2 posRed = ivec2(gid.x, gid.y * 2 + 0);
+    ivec2 posBlue = ivec2(gid.x, gid.y * 2 + 1);
+    
+    // Debug: 0 = normal
+    // 1 = pass-through
+    // 2 = green overlay (after BayerFastInterpolation, bright green = where correction was applied)
+    if (uDebugMode == 1) {
+        imageStore(uOutputImage, posRed, imageLoad(uInputImage, posRed + inOffset));
+        imageStore(uOutputImage, posBlue, imageLoad(uInputImage, posBlue + inOffset));
+    } else if (uDebugMode == 2) {
+        vec4 inRed = imageLoad(uInputImage, posRed + inOffset);
+        vec4 inBlue = imageLoad(uInputImage, posBlue + inOffset);
+        vec4 resultRed = interpolateCubicPacked(offsets.xy, posRed + inOffset, true);
+        vec4 resultBlue = interpolateCubicPacked(offsets.zw, posBlue + inOffset, false);
+        float diffR = length(resultRed - inRed);
+        float diffB = length(resultBlue - inBlue);
+        float v = clamp(max(diffR, diffB) * 20.0, 0.0, 1.0);
+        imageStore(uOutputImage, posRed, vec4(0.0, v, 0.0, v));
+        imageStore(uOutputImage, posBlue, vec4(v, 0.0, v, 0.0));
+    } else {
+        vec4 resultRed = interpolateCubicPacked(offsets.xy, posRed + inOffset, true);
+        vec4 resultBlue = interpolateCubicPacked(offsets.zw, posBlue + inOffset, false);
+        imageStore(uOutputImage, posRed, resultRed);
+        imageStore(uOutputImage, posBlue, resultBlue);
+    }
+}

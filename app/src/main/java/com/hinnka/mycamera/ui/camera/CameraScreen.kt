@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.SurfaceTexture
 import android.os.Environment
 import android.provider.Settings
 import android.view.WindowManager
@@ -59,16 +60,18 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import coil.compose.AsyncImage
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.data.AiFocusTargetMode
+import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.SpectralFilmSelection
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -79,9 +82,9 @@ import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.*
 import com.hinnka.mycamera.ui.icons.AppIcons
 
@@ -92,20 +95,22 @@ enum class ActivePanel {
     NONE,
     SETTINGS,
     FILTERS,
-    LUT_EDIT,
+    EDIT,
     PRESETS
 }
 
 private const val InitialPreviewTransitionDelayMillis = 150L
 private const val PreviewTransitionRevealDurationMillis = 800
 private const val RawCaptureTapDebounceMillis = 1000L
-private const val EffectsParamsSaveDebounceMillis = 250L
 private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
 private const val DefaultIso = 100f
 private const val DefaultAwbTemperature = 5000f
 private const val DefaultFocusDistance = 0f
 private val CameraTopBarBaseTopPadding = 32.dp
 private val CameraTopBarBaseHeight = 80.dp
+private val VideoViewfinderRaisedOffset = 16.dp
+private val OpenGateVideoViewfinderRaisedOffset = 56.dp
+private val VideoTopBarLoweredOffset = 36.dp
 
 @Composable
 private fun cameraTopSafePadding(): Dp {
@@ -203,30 +208,23 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
+    val isCameraInitialized by viewModel.isInitialized.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
+    val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
-    val currentEffectParams by viewModel.currentEffectParams.collectAsState()
     val activePresetId by viewModel.activePresetId.collectAsState()
     val customPresets by viewModel.customPresets.collectAsState()
-    var previewEffectParamsOverride by remember { mutableStateOf<EffectParams?>(null) }
-    var pendingEffectParamsToSave by remember { mutableStateOf<EffectParams?>(null) }
-    var effectParamsSaveJob by remember { mutableStateOf<Job?>(null) }
-    val previewEffectParams = previewEffectParamsOverride ?: currentEffectParams
-    val mergedRecipeParams = remember(currentRecipeParams, previewEffectParams) {
-        previewEffectParams.applyTo(currentRecipeParams)
-    }
     val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
-    val useMFNR by viewModel.useMFNR.collectAsState()
-    val useHdrComposition by viewModel.useHdrComposition.collectAsState()
+    val useJpgMax by viewModel.useJpgMax.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
-    val useMFSR by viewModel.useMFSR.collectAsState()
+    val useRawMax by viewModel.useRawMax.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val aiFocusTargetMode by viewModel.aiFocusTargetMode.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
@@ -238,6 +236,8 @@ fun CameraScreen(
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
+    val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
+    val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
@@ -251,6 +251,9 @@ fun CameraScreen(
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
     val naturalLightEnabled by viewModel.naturalLightEnabled.collectAsState()
+    val availableHncsProfiles = remember(context) {
+        HncsProfileManager(context.applicationContext).getAvailableProfiles()
+    }
     val naturalLightWarningShown by viewModel.naturalLightWarningShown.collectAsState()
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
@@ -266,6 +269,7 @@ fun CameraScreen(
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
     var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
+    var parameterRulerBounds by remember { mutableStateOf<Rect?>(null) }
     var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
     var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
     var previewTransitionActive by remember { mutableStateOf(true) }
@@ -278,51 +282,32 @@ fun CameraScreen(
     var baselineEditLutId by remember { mutableStateOf<String?>(null) }
     var baselineEditTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
 
-    fun saveEffectParamsDebounced(params: EffectParams) {
-        previewEffectParamsOverride = params
-        pendingEffectParamsToSave = params
-        effectParamsSaveJob?.cancel()
-        effectParamsSaveJob = scope.launch {
-            delay(EffectsParamsSaveDebounceMillis)
-            viewModel.setEffectParams(params)
-            pendingEffectParamsToSave = null
-            effectParamsSaveJob = null
-        }
-    }
-
-    fun flushEffectParamsSave() {
-        effectParamsSaveJob?.cancel()
-        effectParamsSaveJob = null
-        pendingEffectParamsToSave?.let(viewModel::setEffectParams)
-        pendingEffectParamsToSave = null
-    }
-
     fun discardTransientLookEdits() {
-        effectParamsSaveJob?.cancel()
-        effectParamsSaveJob = null
-        pendingEffectParamsToSave = null
-        previewEffectParamsOverride = null
         previewRecipeParamsOverride = null
     }
 
-    LaunchedEffect(currentEffectParams) {
-        if (previewEffectParamsOverride == currentEffectParams) {
-            previewEffectParamsOverride = null
+    LaunchedEffect(currentRecipeParams) {
+        if (previewRecipeParamsOverride?.isSameAs(currentRecipeParams) == true) {
+            previewRecipeParamsOverride = null
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            flushEffectParamsSave()
-        }
-    }
+    // Surface may become ready while persisted camera settings are still being restored.
+    // Retain the exact instance and open only after initialization has completed.
+    var previewSurfaceTexture by remember { mutableStateOf<SurfaceTexture?>(null) }
 
-    // 标记相机是否已打开
-    var cameraOpened by remember { mutableStateOf(false) }
+    LaunchedEffect(
+        isCameraInitialized,
+        previewSurfaceTexture,
+        state.availableCameras.isNotEmpty()
+    ) {
+        val surfaceTexture = previewSurfaceTexture ?: return@LaunchedEffect
+        if (!isCameraInitialized) return@LaunchedEffect
+        viewModel.openCamera(surfaceTexture)
+    }
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
-    var showEffectsSheet by remember { mutableStateOf(false) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showVideoParameterRuler by remember { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
@@ -530,24 +515,15 @@ fun CameraScreen(
 
     fun presetRequiresPreviewTransition(preset: CameraPreset?): Boolean {
         val targetAspectRatio = presetTargetAspectRatio(preset)
-        var targetUseRaw = preset?.useRaw ?: false
-        var targetUseMFNR = preset?.useMFNR ?: false
-        var targetUseMFSR = preset?.useMFSR ?: false
-
-        if (targetUseRaw) {
-            targetUseMFSR = false
-        }
-        if (targetUseMFNR) {
-            targetUseMFSR = false
-        }
-        if (targetUseMFSR && targetUseRaw) {
-            targetUseMFSR = false
-        }
+        val targetPreset = preset?.withSupportedCaptureCombination()
+        val targetUseRaw = targetPreset?.useRaw ?: false
+        val targetUseJpgMax = targetPreset?.useJpgMax ?: false
+        val targetUseRawMax = targetPreset?.useRawMax ?: false
 
         return targetAspectRatio != state.aspectRatio ||
             targetUseRaw != useRaw ||
-            targetUseMFNR != useMFNR ||
-            targetUseMFSR != useMFSR
+            targetUseJpgMax != useJpgMax ||
+            targetUseRawMax != useRawMax
     }
 
     LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
@@ -720,31 +696,52 @@ fun CameraScreen(
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
+        LaunchedEffect(isPhotoStyleMode) {
+            if (!isPhotoStyleMode) {
+                parameterRulerBounds = null
+            }
+        }
         val videoAspectRatio =
             state.videoConfig.aspectRatio.getPortraitAspectRatio(state.videoCapabilities.openGatePortraitAspectRatio)
+        val isOpenGateVideo =
+            isVideoMode && state.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
 
         val density = LocalDensity.current
         val width = with(density) { constraints.maxWidth.toDp() }
         val height = with(density) { constraints.maxHeight.toDp() }
         val topSafePadding = cameraTopSafePadding()
         val topBarHeight = CameraTopBarBaseHeight + topSafePadding
+        val navigationBarHeight = with(density) {
+            WindowInsets.navigationBars.getBottom(this).toDp()
+        }
         val cardWidth = if (isXpan) {
             (height - topSafePadding - 280.dp) * 24 / 65 + 8.dp
         } else {
             width
         }
         val cardHeight = if (isXpan) {
-            height - topSafePadding - 224.dp
+            height - topSafePadding - 272.dp
         } else if (isVideoMode) {
             width / videoAspectRatio
         } else {
-            val standardHeight = (width - 24.dp) * 4 / 3 + 50.dp
-            val bottomMinHeight = 196.dp // Precise height for parameterBar (52.dp) + controls (136.dp min + 8.dp buffer)
-            val navigationBarHeight = with(density) {
-                WindowInsets.navigationBars.getBottom(this).toDp()
-            }
+            val standardHeight = width * 4 / 3
+            val bottomMinHeight = 188.dp // parameterBar (44.dp) + controls (136.dp min) + 8.dp buffer
             val maxCardHeight = (height - topBarHeight - bottomMinHeight - navigationBarHeight).coerceAtLeast(300.dp)
             standardHeight.coerceAtMost(maxCardHeight)
+        }
+        val videoContentHeight = (height - navigationBarHeight).coerceAtLeast(0.dp)
+        val requestedVideoViewfinderOffset = if (isOpenGateVideo) {
+            OpenGateVideoViewfinderRaisedOffset
+        } else {
+            VideoViewfinderRaisedOffset
+        }
+        val videoViewfinderOffset = if (
+            isVideoMode &&
+            (videoContentHeight - cardHeight) / 2 >= requestedVideoViewfinderOffset
+        ) {
+            -requestedVideoViewfinderOffset
+        } else {
+            0.dp
         }
 
         val topBar = @Composable {
@@ -784,7 +781,15 @@ fun CameraScreen(
                 onSettingsClick = {
                     activePanel = if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
                 },
-                modifier = Modifier.padding(top = topSafePadding)
+                modifier = Modifier
+                    .padding(top = topSafePadding)
+                    .offset(
+                        y = if (isVideoMode && !isOpenGateVideo) {
+                            VideoTopBarLoweredOffset
+                        } else {
+                            0.dp
+                        }
+                    )
             )
         }
 
@@ -813,7 +818,14 @@ fun CameraScreen(
             }
         }
 
-        val parameterRuler = @Composable {
+        val parameterRuler = @Composable { rulerModifier: Modifier ->
+            val whiteBalanceCurrentValue = if (
+                state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+            ) {
+                state.actualAwbTemperature?.toFloat() ?: state.awbTemperature.toFloat()
+            } else {
+                state.awbTemperature.toFloat()
+            }
             ParameterRuler(
                 parameter = selectedParameter,
                 currentValue = when (selectedParameter) {
@@ -821,32 +833,38 @@ fun CameraScreen(
                     CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
                     CameraParameter.ISO -> state.iso.toFloat()
                     CameraParameter.FOCUS -> state.focusDistance
-                    CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
+                    CameraParameter.WHITE_BALANCE -> whiteBalanceCurrentValue
                 },
                 minValue = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
                     CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
                     CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
                     CameraParameter.FOCUS -> 0f
-                    CameraParameter.WHITE_BALANCE -> 2000f
+                    CameraParameter.WHITE_BALANCE -> state.awbTemperatureMin.toFloat()
                 },
                 maxValue = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
                     CameraParameter.SHUTTER_SPEED -> maxOf(state.getShutterSpeedRange().upper, 1_000_000_000L * 15).toFloat()
                     CameraParameter.ISO -> maxOf(state.getIsoRange().upper, 3200).toFloat()
                     CameraParameter.FOCUS -> state.minimumFocusDistance
-                    CameraParameter.WHITE_BALANCE -> 10000f
+                    CameraParameter.WHITE_BALANCE -> state.awbTemperatureMax.toFloat()
                 },
                 isAdjustable = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
                     CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
                     CameraParameter.ISO -> !state.isIsoAuto
                     CameraParameter.FOCUS -> !state.isAutoFocus
-                    CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                    CameraParameter.WHITE_BALANCE ->
+                        state.canAdjustWhiteBalance &&
+                                state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
                 },
                 showAutoButton = when (selectedParameter) {
                     CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.FOCUS -> true
                     else -> false
+                },
+                isAutoModeToggleEnabled = when (selectedParameter) {
+                    CameraParameter.WHITE_BALANCE -> state.canAdjustWhiteBalance
+                    else -> true
                 },
                 resetValue = selectedParameter.defaultResetValue(),
                 showHyperfocalButton = selectedParameter == CameraParameter.FOCUS && state.minimumFocusDistance > 0f,
@@ -869,10 +887,12 @@ fun CameraScreen(
                         CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
                         CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
                         CameraParameter.WHITE_BALANCE -> {
-                            if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
-                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
-                            } else {
-                                viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+                            if (state.canAdjustWhiteBalance) {
+                                if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
+                                    viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
+                                } else {
+                                    viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
+                                }
                             }
                         }
 
@@ -880,6 +900,7 @@ fun CameraScreen(
                         else -> {}
                     }
                 },
+                modifier = rulerModifier,
             )
         }
 
@@ -896,17 +917,16 @@ fun CameraScreen(
                 modifier = Modifier
                     .animateContentSize(alignment = Alignment.Center)
                     .width(cardWidth)
-                    .height(cardHeight)
-                    .padding(horizontal = if (isXpan || isVideoMode) 0.dp else 8.dp),
-                shape = RoundedCornerShape(if (isVideoMode) 0.dp else 4.dp),
+                    .height(cardHeight),
+                shape = RoundedCornerShape(if (isXpan) 4.dp else 0.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = Color.Black
                 )
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(if (isVideoMode) 0.dp else 4.dp)
-                        .weight(1f)
+                        .padding(if (isXpan) 4.dp else 0.dp)
+                        .fillMaxSize()
                         .background(Color.Black)
                         .onGloballyPositioned { coordinates ->
                             previewBounds = coordinates.boundsInRoot()
@@ -914,23 +934,24 @@ fun CameraScreen(
                         .pointerInput(state.availableCameras) {
                             var totalDrag = 0f
                             awaitEachGesture {
-                                var gestureStartedInZoomBar: Boolean? = null
+                                var gestureStartedInPreviewControl: Boolean? = null
                                 while (true) {
                                     val event = awaitPointerEvent()
-                                    if (gestureStartedInZoomBar == null) {
+                                    if (gestureStartedInPreviewControl == null) {
                                         val firstPressedChange =
                                             event.changes.firstOrNull { it.pressed }
                                         val currentPreviewBounds = previewBounds
-                                        gestureStartedInZoomBar =
+                                        gestureStartedInPreviewControl =
                                             if (firstPressedChange != null && currentPreviewBounds != null) {
                                                 val positionInRoot =
                                                     currentPreviewBounds.topLeft + firstPressedChange.position
-                                                zoomBarBounds?.contains(positionInRoot) == true
+                                                zoomBarBounds?.contains(positionInRoot) == true ||
+                                                    parameterRulerBounds?.contains(positionInRoot) == true
                                             } else {
                                                 false
                                             }
                                     }
-                                    if (gestureStartedInZoomBar == true) {
+                                    if (gestureStartedInPreviewControl == true) {
                                         if (event.changes.all { !it.pressed }) {
                                             viewModel.isZooming = false
                                             totalDrag = 0f
@@ -961,10 +982,13 @@ fun CameraScreen(
                                         } else {
                                             // onDragEnd logic
                                             if (abs(totalDrag) > 100) {
-                                                if (totalDrag > 0) {
+                                                val selectedLut = if (totalDrag > 0) {
                                                     viewModel.switchToPreviousLut()
                                                 } else {
                                                     viewModel.switchToNextLut()
+                                                }
+                                                selectedLut?.let {
+                                                    lutNameOverlayState.show(it.getName())
                                                 }
                                             }
                                             totalDrag = 0f
@@ -998,7 +1022,7 @@ fun CameraScreen(
                         baselineLut = viewModel.currentBaselineLutConfig,
                         currentLut = viewModel.currentLutConfig,
                         baselineColorRecipeParams = currentBaselineRecipeParams,
-                        colorRecipeParams = previewRecipeParamsOverride ?: mergedRecipeParams,
+                        colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                         focusPoint = state.focusPoint,
                         focusPointSource = state.focusPointSource,
                         isFocusLocked = state.isFocusLocked,
@@ -1006,12 +1030,13 @@ fun CameraScreen(
                         focusSuccess = state.focusSuccess,
                         meteringMode = state.meteringMode,
                         onSurfaceTextureReady = { surfaceTexture ->
-                            viewModel.openCamera(surfaceTexture)
-                            cameraOpened = true
+                            previewSurfaceTexture = surfaceTexture
                         },
                         onSurfaceDestroyed = { surfaceTexture ->
+                            if (previewSurfaceTexture === surfaceTexture) {
+                                previewSurfaceTexture = null
+                            }
                             viewModel.closeCamera(surfaceTexture)
-                            cameraOpened = false
                         },
                         onTap = { x, y, w, h ->
                             if (state.isFocusLocked) {
@@ -1042,7 +1067,6 @@ fun CameraScreen(
                             viewModel.glSurfaceView = it
                         },
                         livePhotoRecorder = viewModel.livePhotoRecorder,
-                        videoRecorder = viewModel.videoRecorder,
                         videoLogProfile = state.videoConfig.logProfile,
                         isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
                         naturalLightEnabled = naturalLightEnabled,
@@ -1050,6 +1074,7 @@ fun CameraScreen(
                         rawBlackPointCorrection = rawBlackPointCorrection,
                         rawWhitePointCorrection = rawWhitePointCorrection,
                         rawRenderingEngine = rawColorEngine,
+                        rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                         rawToneMappingParameters = rawToneMappingParameters,
                         aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
                         isAutoFocus = state.isAutoFocus,
@@ -1090,7 +1115,10 @@ fun CameraScreen(
                     if (state.captureMode == CaptureMode.PHOTO && useLivePhoto) {
                         Surface(
                             modifier = Modifier
-                                .padding(12.dp)
+                                .padding(
+                                    top = CameraParameterValuesOverlayHeight + 8.dp,
+                                    end = 12.dp
+                                )
                                 .align(Alignment.TopEnd),
                             color = Color.Black.copy(alpha = 0.8f),
                             shape = CircleShape
@@ -1128,7 +1156,10 @@ fun CameraScreen(
                             HistogramView(
                                 histogram = state.histogram,
                                 modifier = Modifier
-                                    .padding(8.dp)
+                                    .padding(
+                                        start = 8.dp,
+                                        top = CameraParameterValuesOverlayHeight + 8.dp
+                                    )
                                     .size(80.dp, 40.dp)
                                     .align(Alignment.TopStart)
                                     .autoRotate(dx = -20.dp, dy = 20.dp)
@@ -1162,7 +1193,9 @@ fun CameraScreen(
                         if (state.burstCapturing && burstCapturingCount > 0) {
                             BurstCaptureOverlay(
                                 count = burstCapturingCount,
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(top = CameraParameterValuesOverlayHeight)
                             )
                         }
 
@@ -1172,7 +1205,27 @@ fun CameraScreen(
                                 onFinish = { viewModel.finishMultipleExposureSession() },
                                 onUndo = { viewModel.undoLastMultipleExposureFrame() },
                                 onCancel = { viewModel.cancelMultipleExposureSession() },
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(top = CameraParameterValuesOverlayHeight)
+                            )
+                        }
+
+                        if (isPhotoStyleMode) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(CameraParameterRulerHeight + 64.dp)
+                                    .align(Alignment.BottomCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                Color.Black.copy(alpha = 0.2f),
+                                                Color.Black.copy(alpha = 0.6f)
+                                            )
+                                        )
+                                    )
                             )
                         }
 
@@ -1181,7 +1234,7 @@ fun CameraScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(bottom = 8.dp),
+                                    .padding(bottom = CameraParameterRulerHeight),
                                 contentAlignment = Alignment.BottomCenter
                             ) {
                                 zoomBar()
@@ -1191,12 +1244,29 @@ fun CameraScreen(
 
                     CornerOverlay(
                         modifier = Modifier.fillMaxSize(),
-                        radius = if (isVideoMode) 0.dp else 4.dp,
+                        radius = if (isXpan) 4.dp else 0.dp,
                         color = Color.Black
                     )
-                }
-                if (isPhotoStyleMode) {
-                    parameterRuler()
+
+                    CameraParameterValuesOverlay(
+                        state = state,
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    )
+
+                    if (isPhotoStyleMode) {
+                        parameterRuler(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .onGloballyPositioned { coordinates ->
+                                    parameterRulerBounds = coordinates.boundsInRoot()
+                                }
+                        )
+                    }
+
+                    LutNameOverlay(
+                        state = lutNameOverlayState,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 }
             }
 
@@ -1297,12 +1367,13 @@ fun CameraScreen(
                     .paint(backgroundPainter, contentScale = ContentScale.Crop)
                     .navigationBarsPadding(),
             ) {
-                // Viewfinder centered
+                // Keep the viewfinder centered on compact screens; use spare height on taller screens.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(cardHeight)
                         .align(Alignment.Center)
+                        .offset(y = videoViewfinderOffset)
                         .onGloballyPositioned { coordinates ->
                             viewfinderAreaBounds = coordinates.boundsInRoot()
                         },
@@ -1318,7 +1389,7 @@ fun CameraScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         zoomBar()
                         AnimatedVisibility(visible = showVideoParameterRuler) {
-                            parameterRuler()
+                            parameterRuler(Modifier)
                         }
                         parameterBar { param ->
                             val wasSelected = selectedParameter == param
@@ -1437,6 +1508,9 @@ fun CameraScreen(
             rawDcpIdsByLens = rawDcpIdsByLens,
             rawDcpLensOptions = rawDcpLensOptions(state.availableCameras),
             availableDcps = viewModel.availableDcps,
+            rawHncsProfileId = rawHncsProfileId,
+            rawHncsFilmCurveMode = rawHncsFilmCurveMode,
+            availableHncsProfiles = availableHncsProfiles,
             rawBaselineLutId = rawBaselineLutId,
             availableLuts = viewModel.availableLutList,
             previewThumbnail = viewModel.previewThumbnail,
@@ -1453,6 +1527,8 @@ fun CameraScreen(
             rawSpectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
             onRawDcpChange = { viewModel.setRawDcpId(it) },
             onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
+            onRawHncsProfileChange = { viewModel.setRawHncsProfileId(it) },
+            onRawHncsFilmCurveModeChange = { viewModel.setRawHncsFilmCurveMode(it) },
             onImportRawDcp = { dcpImportLauncher.launch("*/*") },
             onDeleteRawDcp = { dcp ->
                 viewModel.deleteRawDcp(dcp.id) { success ->
@@ -1485,6 +1561,10 @@ fun CameraScreen(
                 activePanel = ActivePanel.NONE
                 onFrameManagementClick()
             },
+            onPresetManageClick = {
+                activePanel = ActivePanel.NONE
+                onPresetManagementClick()
+            },
             onToolboxClick = {
                 activePanel = ActivePanel.NONE
                 onToolboxClick()
@@ -1493,17 +1573,17 @@ fun CameraScreen(
                 activePanel = ActivePanel.NONE
                 onSettingsClick()
             },
-            useMFNR = useMFNR,
-            onMFNRToggle = {
-                viewModel.setUseMFNR(it)
+            useJpgMax = useJpgMax,
+            onJpgMaxToggle = {
+                viewModel.setUseJpgMax(it)
             },
-            useHdrComposition = useHdrComposition,
-            onHdrCompositionToggle = {
-                viewModel.setUseHdrComposition(it)
+            useRawMax = useRawMax,
+            onRawMaxToggle = {
+                viewModel.setUseRawMax(it)
             },
             useMultipleExposure = useMultipleExposure,
             onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
-            modifier = Modifier.padding(top = topSafePadding)
+            contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding
         )
 
         AnimatedVisibility(
@@ -1577,7 +1657,7 @@ fun CameraScreen(
                                     .clip(RoundedCornerShape(16.dp))
                                     .background(Color.White.copy(alpha = 0.15f))
                                     .clickable {
-                                        activePanel = ActivePanel.LUT_EDIT
+                                        activePanel = ActivePanel.EDIT
                                     }
                                     .padding(horizontal = 12.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1585,21 +1665,17 @@ fun CameraScreen(
                             ) {
                                 Icon(
                                     imageVector = AppIcons.Tune,
-                                    contentDescription = stringResource(R.string.color_recipe),
+                                    contentDescription = stringResource(R.string.edit),
                                     tint = Color(0xFFFFD700), // Gold color to match VIP/Premium feel
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = stringResource(R.string.color_recipe),
+                                    text = stringResource(R.string.edit),
                                     color = Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
-
-                            EffectsActionChip(
-                                onClick = { showEffectsSheet = true }
-                            )
                         }
                     }
 
@@ -1631,7 +1707,7 @@ fun CameraScreen(
                         },
                         onPresetManagementClick = onPresetManagementClick,
                         onEditClick = {
-                            activePanel = ActivePanel.LUT_EDIT
+                            activePanel = ActivePanel.EDIT
                         },
                         onManageClick = { lutId ->
                             activePanel = ActivePanel.NONE
@@ -1643,25 +1719,16 @@ fun CameraScreen(
             }
         }
 
-        if (activePanel == ActivePanel.LUT_EDIT) {
+        if (activePanel == ActivePanel.EDIT) {
             LutEditBottomSheet(
                 lutId = currentLutId,
+                initialParams = previewRecipeParamsOverride ?: currentRecipeParams,
                 onParamsPreviewChange = { previewRecipeParamsOverride = it },
+                showEffects = true,
                 onDismiss = {
                     previewRecipeParamsOverride = null
                     viewModel.refreshActivePresetMatch()
                     activePanel = ActivePanel.FILTERS
-                }
-            )
-        }
-
-        if (showEffectsSheet) {
-            EffectsBottomSheet(
-                currentParams = previewEffectParams,
-                onParamsChange = { saveEffectParamsDebounced(it) },
-                onDismiss = {
-                    flushEffectParamsSave()
-                    showEffectsSheet = false
                 }
             )
         }
@@ -1802,6 +1869,10 @@ fun Controls(
     onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
+    val captureButtonStyle by viewModel.captureButtonStyle.collectAsState()
+    val captureButtonColor by viewModel.captureButtonColor.collectAsState()
+    val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
+
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center
@@ -1837,6 +1908,7 @@ fun Controls(
                     captureMode = state.captureMode,
                     isCapturing = state.isCapturing,
                     isVideoRecording = state.videoRecordingState.isRecording,
+                    isVideoProcessing = state.videoRecordingState.isProcessing,
                     isPaused = state.videoRecordingState.isPaused,
                     allowLongPress = state.captureMode == CaptureMode.QUICK_SHOT ||
                         (!naturalLightEnabled &&
@@ -1845,6 +1917,9 @@ fun Controls(
                     multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
                     multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
                             multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
+                    customStyle = captureButtonStyle,
+                    customColor = captureButtonColor,
+                    customImagePath = captureButtonImagePath,
                     onTap = onCaptureTap,
                     onLongPressStart = { viewModel.startContinuousCapture() },
                     onLongPressEnd = { viewModel.stopContinuousCapture() }
@@ -1889,19 +1964,26 @@ fun Controls(
                         )
                     }
                 } else {
-                    IconButton(
-                        onClick = onSwitchCameraClick,
+                    PhysicalButton(
+                        onClick = {
+                            if (!state.videoRecordingState.isProcessing) {
+                                onSwitchCameraClick()
+                            }
+                        },
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .padding(end = 40.dp)
                             .size(48.dp)
-                            .autoRotate()
+                            .autoRotate(),
+                        shape = CircleShape
                     ) {
                         Icon(
                             imageVector = AppIcons.Cameraswitch,
                             contentDescription = stringResource(R.string.switch_camera),
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp)
+                            tint = Color.White.copy(
+                                alpha = if (state.videoRecordingState.isProcessing) 0.35f else 1f
+                            ),
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
@@ -1911,7 +1993,8 @@ fun Controls(
 
             CaptureModeSwitcher(
                 captureMode = state.captureMode,
-                enabled = !state.videoRecordingState.isRecording,
+                enabled = !state.videoRecordingState.isRecording &&
+                    !state.videoRecordingState.isProcessing,
                 onModeSelected = onCaptureModeSelected
             )
         }
@@ -1927,19 +2010,29 @@ fun CaptureButton(
     captureMode: CaptureMode,
     isCapturing: Boolean,
     isVideoRecording: Boolean,
+    isVideoProcessing: Boolean,
     isPaused: Boolean,
     allowLongPress: Boolean,
     multipleExposureEnabled: Boolean,
     multipleExposureProgress: Float,
+    customStyle: CaptureButtonStyle,
+    customColor: Int,
+    customImagePath: String?,
     onTap: () -> Unit,
     onLongPressStart: () -> Unit,
     onLongPressEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "infinite transition")
+    var isPressed by remember { mutableStateOf(false) }
+    val customImage = remember(customImagePath) {
+        customImagePath
+            ?.let(::File)
+            ?.takeIf(File::isFile)
+    }
 
     val scale by animateFloatAsState(
-        targetValue = if (isCapturing || isVideoRecording) 0.95f else 1f,
+        targetValue = if (isPressed || isCapturing || isVideoRecording || isVideoProcessing) 0.95f else 1f,
         animationSpec = spring(dampingRatio = 0.5f),
         label = "captureScale"
     )
@@ -1961,9 +2054,13 @@ fun CaptureButton(
         label = "livePhotoRotation"
     )
 
-    val currentDisabled by rememberUpdatedState(isCapturing || (captureMode == CaptureMode.VIDEO && isVideoRecording))
+    val currentDisabled by rememberUpdatedState(
+        isCapturing ||
+            isVideoProcessing ||
+            (captureMode == CaptureMode.VIDEO && isVideoRecording)
+    )
 
-    Box(
+    PhysicalButton(
         modifier = modifier
             .size(72.dp)
             .scale(scale)
@@ -1971,7 +2068,7 @@ fun CaptureButton(
                 var isLongPressStarted = false
                 detectTapGestures(
                     onTap = {
-                        if (!isCapturing) {
+                        if (!isCapturing && !isVideoProcessing) {
                             onTap()
                         }
                     },
@@ -1984,10 +2081,12 @@ fun CaptureButton(
                         }
                     } else null,
                     onPress = {
+                        isPressed = true
                         isLongPressStarted = false
                         try {
                             tryAwaitRelease()
                         } finally {
+                            isPressed = false
                             if (isLongPressStarted) {
                                 onLongPressEnd()
                             }
@@ -1995,6 +2094,7 @@ fun CaptureButton(
                     }
                 )
             },
+        shape = CircleShape,
         contentAlignment = Alignment.Center
     ) {
         if (multipleExposureEnabled) {
@@ -2015,22 +2115,21 @@ fun CaptureButton(
         }
 
         val ringColor = when {
+            captureMode == CaptureMode.VIDEO && isVideoProcessing ->
+                Color.White.copy(alpha = 0.5f)
             captureMode == CaptureMode.VIDEO && isVideoRecording -> {
                 if (isPaused) Color.White.copy(alpha = 0.8f)
                 else Color.Red.copy(alpha = pulseAlpha)
             }
-            captureMode == CaptureMode.VIDEO -> Color.White.copy(alpha = 0.8f)
-            multipleExposureEnabled -> Color.White.copy(alpha = 0.55f)
-            else -> Color(0xFFFFD700)
+            captureMode == CaptureMode.VIDEO -> Color.White.copy(alpha = 0.32f)
+            else -> Color.Transparent
         }
-
-        val ringWidth = if (multipleExposureEnabled) 1.dp else 2.dp
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .border(
-                    width = ringWidth,
+                    width = 1.dp,
                     color = ringColor,
                     shape = CircleShape
                 )
@@ -2052,9 +2151,9 @@ fun CaptureButton(
             }
         }
 
-        // Center Solid Button
+        // Center shutter surface
         val centerPadding by animateDpAsState(
-            targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 24.dp else 6.dp,
+            targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 19.dp else 2.dp,
             animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessLow),
             label = "centerPadding"
         )
@@ -2062,15 +2161,57 @@ fun CaptureButton(
             targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 8.dp else 36.dp,
             label = "centerCorner"
         )
-        val centerColor = if (captureMode == CaptureMode.VIDEO) Color(0xFFFF4D4F) else Color.White
+        val defaultCenterBrush = if (captureMode == CaptureMode.VIDEO) {
+            Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFFFF6668),
+                    Color(0xFFE4383C)
+                )
+            )
+        } else {
+            Brush.verticalGradient(
+                colors = listOf(
+                    Color.White,
+                    Color(0xFFD7D7D7)
+                )
+            )
+        }
+        val useCustomAppearance = captureMode != CaptureMode.VIDEO
+        val centerBackgroundModifier = when {
+            useCustomAppearance && customStyle == CaptureButtonStyle.COLOR ->
+                Modifier.background(Color(customColor))
+            else -> Modifier.background(defaultCenterBrush)
+        }
 
         Box(
             modifier = Modifier
                 .padding(centerPadding)
                 .fillMaxSize()
                 .clip(RoundedCornerShape(centerCorner))
-                .background(centerColor)
-        )
+                .then(centerBackgroundModifier)
+        ) {
+            if (
+                useCustomAppearance &&
+                customStyle == CaptureButtonStyle.IMAGE &&
+                customImage != null
+            ) {
+                AsyncImage(
+                    model = customImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .autoRotate(matchParentSize = true)
+                )
+            }
+        }
+        if (captureMode == CaptureMode.VIDEO && isVideoProcessing) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(34.dp),
+                color = Color.White,
+                strokeWidth = 3.dp
+            )
+        }
     }
 }
 

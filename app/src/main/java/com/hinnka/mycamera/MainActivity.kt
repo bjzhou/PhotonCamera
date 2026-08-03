@@ -189,7 +189,6 @@ class MainActivity : ComponentActivity() {
         arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
     private var hasPermissions by mutableStateOf(false)
-    private var mlPreloadComplete by mutableStateOf(false)
     private var pendingRoute by mutableStateOf<String?>(null)
     private var pendingLutImportUris by mutableStateOf<List<Uri>>(emptyList())
     private var externalGalleryReviewReturnToCaller by mutableStateOf(false)
@@ -287,15 +286,14 @@ class MainActivity : ComponentActivity() {
                     preferences = cameraViewModel.userPreferences.value
                 )
             } finally {
-                mlPreloadComplete = true
-                StartupTrace.mark("MainActivity.mlPreloadComplete")
+                StartupTrace.mark("MainActivity.mlPreloadFinished")
             }
         }
 
         splashScreen.setKeepOnScreenCondition {
             val cameraInitialized = cameraViewModel.isInitialized.value
             val galleryInitialized = galleryViewModel.isInitialized.value
-            !(cameraInitialized && galleryInitialized && mlPreloadComplete)
+            !(cameraInitialized && galleryInitialized)
         }
 
 
@@ -303,13 +301,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             StartupComposeReadyEffect()
             val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
-            val currentEffectParams by cameraViewModel.currentEffectParams.collectAsState()
             val phantomPipCrop by cameraViewModel.phantomPipCrop.collectAsState()
             ScreenCaptureRenderConfigStore.save(
                 baselineLutConfig = cameraViewModel.currentBaselineLutConfig,
                 baselineColorRecipeParams = cameraViewModel.currentBaselineRecipeParams.value,
                 creativeLutConfig = cameraViewModel.currentLutConfig,
-                creativeColorRecipeParams = currentEffectParams.applyTo(currentRecipeParams),
+                creativeColorRecipeParams = currentRecipeParams,
                 crop = phantomPipCrop
             )
 

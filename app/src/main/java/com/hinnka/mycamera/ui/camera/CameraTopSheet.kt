@@ -4,6 +4,7 @@ import android.media.AudioDeviceInfo
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.animation.*
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,10 +19,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
@@ -29,6 +37,8 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -45,6 +55,44 @@ private enum class VideoSettingPanel {
     BITRATE,
     CODEC,
     MICROPHONE
+}
+
+private val CameraTopSheetContentTopPadding = 32.dp
+
+/**
+ * Keeps scroll-boundary drag and fling remainders inside the RAW sheet content.
+ *
+ * ModalBottomSheet otherwise settles its own anchors with those remainders. When the sheet is
+ * already expanded, repeated settling can still produce a visible bounce on some devices. The
+ * connection only consumes forward scrolling at the content bottom, so dragging down from the
+ * content top and dragging the sheet handle retain their standard collapse/dismiss behavior.
+ */
+private class RawSheetScrollBoundaryConnection(
+    private val scrollState: ScrollState
+) : NestedScrollConnection {
+    override fun onPostScroll(
+        consumed: Offset,
+        available: Offset,
+        source: NestedScrollSource
+    ): Offset {
+        return if (
+            source == NestedScrollSource.UserInput &&
+            available.y < 0f &&
+            !scrollState.canScrollForward
+        ) {
+            Offset(x = 0f, y = available.y)
+        } else {
+            Offset.Zero
+        }
+    }
+
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+        return if (available.y < 0f && !scrollState.canScrollForward) {
+            Velocity(x = 0f, y = available.y)
+        } else {
+            Velocity.Zero
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -80,6 +128,9 @@ fun CameraTopSheet(
     rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     rawDcpLensOptions: List<RawDcpLensOption> = emptyList(),
     availableDcps: List<DcpInfo>,
+    rawHncsProfileId: String?,
+    rawHncsFilmCurveMode: HncsFilmCurveMode,
+    availableHncsProfiles: List<HncsProfileInfo>,
     rawBaselineLutId: String?,
     availableLuts: List<LutInfo>,
     previewThumbnail: Bitmap?,
@@ -96,6 +147,8 @@ fun CameraTopSheet(
     rawSpectralFilmPrint: String?,
     onRawDcpChange: (String?) -> Unit,
     onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
+    onRawHncsProfileChange: (String?) -> Unit,
+    onRawHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit,
     onImportRawDcp: () -> Unit,
     onDeleteRawDcp: (DcpInfo) -> Unit,
     onRawBaselineLutChange: (String?) -> Unit,
@@ -109,19 +162,26 @@ fun CameraTopSheet(
     onMeteringModeChange: (MeteringMode) -> Unit,
     onFilterManageClick: () -> Unit,
     onFrameManageClick: () -> Unit,
+    onPresetManageClick: () -> Unit,
     onToolboxClick: () -> Unit,
     onMoreSettingsClick: () -> Unit,
-    useMFNR: Boolean,
-    onMFNRToggle: (Boolean) -> Unit,
-    useHdrComposition: Boolean,
-    onHdrCompositionToggle: (Boolean) -> Unit,
+    useJpgMax: Boolean,
+    onJpgMaxToggle: (Boolean) -> Unit,
+    useRawMax: Boolean,
+    onRawMaxToggle: (Boolean) -> Unit,
     useMultipleExposure: Boolean,
     onMultipleExposureToggle: (Boolean) -> Unit,
+    contentTopPadding: Dp = CameraTopSheetContentTopPadding,
     modifier: Modifier = Modifier
 ) {
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
     var showRawSheet by rememberSaveable { mutableStateOf(false) }
     var showNaturalLightWarning by rememberSaveable { mutableStateOf(false) }
+    var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
+    fun handleContentManagementAction(action: () -> Unit) {
+        showContentManagementOptions = false
+        action()
+    }
 
     fun handleNaturalLightToggle(enabled: Boolean) {
         if (enabled && !useNaturalLight && !naturalLightWarningShown) {
@@ -129,6 +189,10 @@ fun CameraTopSheet(
         } else {
             onNaturalLightToggle(enabled)
         }
+    }
+
+    LaunchedEffect(visible, captureMode) {
+        showContentManagementOptions = false
     }
 
     if (showNaturalLightWarning) {
@@ -172,7 +236,7 @@ fun CameraTopSheet(
                 .verticalScroll(rememberScrollState())
                 .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
                 .background(Color.Black.copy(alpha = 0.8f))
-                .padding(top = 32.dp, bottom = 0.dp, start = 24.dp, end = 24.dp)
+                .padding(top = contentTopPadding, bottom = 0.dp, start = 24.dp, end = 24.dp)
                 .autoRotate()
         ) {
             if (captureMode == CaptureMode.PHOTO) {
@@ -213,32 +277,17 @@ fun CameraTopSheet(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_multi_frame),
-                        checked = useMFNR,
-                        onCheckedChange = onMFNRToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_hdr_composition),
-                        checked = useHdrComposition,
-                        onCheckedChange = onHdrCompositionToggle,
+                        title = stringResource(R.string.settings_use_jpg_max),
+                        checked = useJpgMax,
+                        onCheckedChange = onJpgMaxToggle,
                         modifier = Modifier.weight(1f)
                     )
 
                     if (isRawSupported) {
-                        QuickSettingButton2(
-                            title = stringResource(R.string.baseline_target_raw),
-                            checked = useRaw,
-                            onClick = { showRawSheet = true },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    if (!isRawSupported) {
-                        NaturalLightQuickSetting(
-                            checked = useNaturalLight,
-                            onCheckedChange = ::handleNaturalLightToggle,
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_use_raw_max),
+                            checked = useRawMax,
+                            onCheckedChange = onRawMaxToggle,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -251,6 +300,19 @@ fun CameraTopSheet(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (isRawSupported) {
+                        QuickSettingButton2(
+                            title = stringResource(R.string.baseline_target_raw),
+                            checked = useRaw,
+                            onClick = { showRawSheet = true },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        NaturalLightQuickSetting(
+                            checked = useNaturalLight,
+                            onCheckedChange = ::handleNaturalLightToggle,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
                         NaturalLightQuickSetting(
                             checked = useNaturalLight,
                             onCheckedChange = ::handleNaturalLightToggle,
@@ -265,15 +327,10 @@ fun CameraTopSheet(
                         modifier = Modifier.weight(1f)
                     )
 
-                    MeteringModeQuickSetting(
-                        meteringMode = meteringMode,
-                        onMeteringModeChange = onMeteringModeChange,
-                        modifier = Modifier.weight(1f)
-                    )
-
                     if (!isRawSupported) {
-                        ToolboxQuickSetting(
-                            onToolboxClick = onToolboxClick,
+                        MeteringModeQuickSetting(
+                            meteringMode = meteringMode,
+                            onMeteringModeChange = onMeteringModeChange,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -286,23 +343,20 @@ fun CameraTopSheet(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (isRawSupported) {
-                        ToolboxQuickSetting(
-                            onToolboxClick = onToolboxClick,
+                        MeteringModeQuickSetting(
+                            meteringMode = meteringMode,
+                            onMeteringModeChange = onMeteringModeChange,
                             modifier = Modifier.weight(1f)
                         )
                     }
 
-                    QuickSettingButton(
-                        title = stringResource(R.string.settings_filter_management),
-                        icon = AppIcons.AutoAwesome,
-                        onClick = onFilterManageClick,
+                    ToolboxQuickSetting(
+                        onToolboxClick = onToolboxClick,
                         modifier = Modifier.weight(1f)
                     )
 
-                    QuickSettingButton(
-                        title = stringResource(R.string.settings_frame_management),
-                        icon = AppIcons.BorderBottom,
-                        onClick = onFrameManageClick,
+                    ContentManagementQuickSetting(
+                        onClick = { showContentManagementOptions = !showContentManagementOptions },
                         modifier = Modifier.weight(1f)
                     )
 
@@ -310,6 +364,19 @@ fun CameraTopSheet(
                         Spacer(modifier = Modifier.weight(1f).height(40.dp))
                     }
                 }
+
+                ContentManagementOptionsPanel(
+                    visible = showContentManagementOptions,
+                    onFilterManageClick = {
+                        handleContentManagementAction(onFilterManageClick)
+                    },
+                    onFrameManageClick = {
+                        handleContentManagementAction(onFrameManageClick)
+                    },
+                    onPresetManageClick = {
+                        handleContentManagementAction(onPresetManageClick)
+                    }
+                )
             } else if (captureMode == CaptureMode.VIDEO) {
                 SectionLabel(title = stringResource(R.string.video_aspect_chip))
                 Row(
@@ -526,24 +593,23 @@ fun CameraTopSheet(
             if (captureMode != CaptureMode.PHOTO) {
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    QuickSettingButton(
-                        title = stringResource(R.string.settings_filter_management),
-                        icon = AppIcons.AutoAwesome,
-                        onClick = onFilterManageClick,
-                        modifier = Modifier.weight(1f)
-                    )
+                ContentManagementQuickSetting(
+                    onClick = { showContentManagementOptions = !showContentManagementOptions },
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-                    QuickSettingButton(
-                        title = stringResource(R.string.settings_frame_management),
-                        icon = AppIcons.BorderBottom,
-                        onClick = onFrameManageClick,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                ContentManagementOptionsPanel(
+                    visible = showContentManagementOptions,
+                    onFilterManageClick = {
+                        handleContentManagementAction(onFilterManageClick)
+                    },
+                    onFrameManageClick = {
+                        handleContentManagementAction(onFrameManageClick)
+                    },
+                    onPresetManageClick = {
+                        handleContentManagementAction(onPresetManageClick)
+                    }
+                )
             }
 
             Spacer(Modifier.weight(1f))
@@ -597,6 +663,10 @@ fun CameraTopSheet(
     }
 
     if (showRawSheet) {
+        val rawSheetScrollState = rememberScrollState()
+        val rawSheetScrollBoundaryConnection = remember(rawSheetScrollState) {
+            RawSheetScrollBoundaryConnection(rawSheetScrollState)
+        }
         ModalBottomSheet(
             onDismissRequest = { showRawSheet = false },
             containerColor = Color(0xFF1E1E1E),
@@ -605,6 +675,8 @@ fun CameraTopSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .nestedScroll(rawSheetScrollBoundaryConnection)
+                    .verticalScroll(rawSheetScrollState)
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
@@ -643,6 +715,11 @@ fun CameraTopSheet(
                     onRawDcpIdsByLensChange = onRawDcpIdsByLensChange,
                     onImportDcp = onImportRawDcp,
                     onDeleteDcp = onDeleteRawDcp,
+                    selectedHncsProfileId = rawHncsProfileId,
+                    availableHncsProfiles = availableHncsProfiles,
+                    onSelectHncsProfile = onRawHncsProfileChange,
+                    hncsFilmCurveMode = rawHncsFilmCurveMode,
+                    onHncsFilmCurveModeChange = onRawHncsFilmCurveModeChange,
                     onRawExposureCompensationChange = {},
                     onRawAutoExposureChange = {},
                     onRawHighlightsAdjustmentChange = {},
@@ -920,6 +997,60 @@ private fun ToolboxQuickSetting(
 }
 
 @Composable
+private fun ContentManagementQuickSetting(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    QuickSettingButton(
+        title = stringResource(R.string.settings_section_management),
+        icon = AppIcons.Tune,
+        onClick = onClick,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun ContentManagementOptionsPanel(
+    visible: Boolean,
+    onFilterManageClick: () -> Unit,
+    onFrameManageClick: () -> Unit,
+    onPresetManageClick: () -> Unit
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut()
+    ) {
+        Column {
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_filter_management),
+                    icon = AppIcons.AutoAwesome,
+                    onClick = onFilterManageClick,
+                    modifier = Modifier.weight(1f)
+                )
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_frame_management),
+                    icon = AppIcons.BorderBottom,
+                    onClick = onFrameManageClick,
+                    modifier = Modifier.weight(1f)
+                )
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_preset_management),
+                    icon = AppIcons.Bookmark,
+                    onClick = onPresetManageClick,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun QuickSettingValue(
     title: String,
     value: String,
@@ -979,7 +1110,10 @@ fun QuickSettingButton(
                 text = title,
                 color = Color.White,
                 fontSize = 10.sp,
-                fontWeight = FontWeight.Normal
+                fontWeight = FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
             Icon(
                 imageVector = icon,

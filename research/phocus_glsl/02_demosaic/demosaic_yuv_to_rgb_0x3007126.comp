@@ -1,0 +1,64 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: dd4384ae8724f2c7edb40a44214966d9d390cba0e9fa00329be17c814ff0e1c7
+ * ELF offsets: 0x3007126
+ * Symbols: demosaic_yuv_to_rgb_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+precision highp image2D;
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
+layout(rgba16f,  binding = 1) writeonly uniform image2D  outTex;
+
+layout(std140, binding = 2) uniform DemosaicYuvToRgbParams_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+    float uParams_gain;
+    float uPad0;
+    float uPad1;
+    float uPad2;
+};
+
+int convert2compliment(int x) {
+    return ((x & (1 << 15)) != 0) ? (x | ~((1 << 16) - 1)) : x;
+}
+
+vec4 ycc2rgb(vec4 ycc, float gain) {
+    vec4 res;
+    float ly = clamp(gain * ycc.r, 0.0, 65534.0);
+    int lr = int(round(ycc.g));
+    int lb = int(round(ycc.b));
+    lr = convert2compliment(lr);
+    lb = convert2compliment(lb);
+    res.r = clamp(ly * 3.0 * float(lr) / 32768.0 - ly * float(lb) / 32768.0 + ly, 0.0, 65535.0);
+    res.b = clamp(ly * 3.0 * float(lb) / 32768.0 - ly * float(lr) / 32768.0 + ly, 0.0, 65535.0);
+    res.g = clamp((4.0 * ly - (res.r + res.b)) / 2.0, 0.0, 65535.0);
+    res.a = ycc.a;
+    return res;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 srcPos = gid + ivec2(uParams_l, uParams_t);
+
+    if (gid.x >= (uParams_r - uParams_l) || gid.y >= (uParams_b - uParams_t)) return;
+
+    uvec4 uYcc = imageLoad(yccdTex, srcPos);
+    vec4 yccdPix = vec4(float(uYcc.r), float(uYcc.g), float(uYcc.b), float(uYcc.a));
+
+    vec4 result = ycc2rgb(yccdPix, uParams_gain);
+    vec4 outF = vec4(
+        clamp(result.r, 0.0, 65535.0),
+        clamp(result.g, 0.0, 65535.0),
+        clamp(result.b, 0.0, 65535.0),
+        clamp(result.a, 0.0, 65535.0)
+    ) / 65535.0;
+    imageStore(outTex, gid, outF);
+}

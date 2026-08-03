@@ -4,6 +4,8 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 
@@ -36,6 +38,19 @@ internal object CameraPresetJsonCodec {
         val obj = element.asJsonObject
         val id = obj.stringOrNull("id")?.takeIf { it.isNotBlank() } ?: return null
         val name = obj.stringOrNull("name")?.takeIf { it.isNotBlank() } ?: id
+        val useRaw = obj.boolean("useRaw", false)
+        val hasCurrentMaxFields = obj.has("useJpgMax") || obj.has("useRawMax")
+        val legacyMultiFrameEnabled = obj.boolean("useMFNR", false) || obj.boolean("useMFSR", false)
+        val useJpgMax = if (hasCurrentMaxFields) {
+            obj.boolean("useJpgMax", false)
+        } else {
+            !useRaw && (legacyMultiFrameEnabled || obj.boolean("useHdrComposition", false))
+        }
+        val useRawMax = if (hasCurrentMaxFields) {
+            obj.boolean("useRawMax", false)
+        } else {
+            useRaw && legacyMultiFrameEnabled
+        }
 
         return CameraPreset(
             id = id,
@@ -44,18 +59,25 @@ internal object CameraPresetJsonCodec {
             colorRecipe = parseColorRecipe(obj.get("colorRecipe")),
             effects = parseEffects(obj.get("effects")),
             aspectRatio = parseAspectRatio(obj.stringOrNull("aspectRatio")),
-            useRaw = obj.boolean("useRaw", false),
-            useMFNR = obj.boolean("useMFNR", false),
-            useHdrComposition = obj.boolean("useHdrComposition", false),
-            useMFSR = obj.boolean("useMFSR", false),
+            useRaw = useRaw,
+            useJpgMax = useJpgMax,
+            useRawMax = useRawMax,
+            ultraHdrGainMapEnabled = obj.boolean("ultraHdrGainMapEnabled", true),
             frameId = obj.stringOrNull("frameId"),
             rawDcpId = obj.stringOrNull("rawDcpId"),
             rawDcpIdsByLens = parseRawDcpIdsByLens(obj.get("rawDcpIdsByLens")),
+            rawHncsProfileId = obj.stringOrNull("rawHncsProfileId"),
+            rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
+            rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                obj.stringOrNull("rawHncsFilmCurveMode")
+            ).persistedValue,
             rawRenderingEngine = parseRawRenderingEngine(
                 obj.stringOrNull("rawRenderingEngine") ?: obj.stringOrNull("rawColorEngine")
             ),
-            rawGooglePixelToneMap = obj.boolean("rawGooglePixelToneMap", false),
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
+            rawPhotonPgtmToneMap =
+                obj.boolean("rawPhotonPgtmToneMap", false) ||
+                    obj.boolean("rawGooglePixelToneMap", false),
             rawSpectralFilmStock = obj.stringOrNull("rawSpectralFilmStock"),
             rawSpectralFilmPrint = obj.stringOrNull("rawSpectralFilmPrint"),
             rawDROMode = parseDroMode(obj.stringOrNull("rawDROMode")),
@@ -114,6 +136,7 @@ internal object CameraPresetJsonCodec {
             paletteDensity = obj.float("paletteDensity", default.paletteDensity),
             filmGrain = obj.float("filmGrain", default.filmGrain),
             vignette = obj.float("vignette", default.vignette),
+            flash = obj.float("flash", default.flash),
             bleachBypass = obj.float("bleachBypass", default.bleachBypass),
             bloom = obj.float("bloom", default.bloom),
             softLight = obj.float("softLight", default.softLight),
@@ -158,6 +181,14 @@ internal object CameraPresetJsonCodec {
             primaryBlueHue = obj.float("primaryBlueHue", default.primaryBlueHue),
             primaryBlueSaturation = obj.float("primaryBlueSaturation", default.primaryBlueSaturation),
             primaryBlueLightness = obj.float("primaryBlueLightness", default.primaryBlueLightness),
+            gradingShadowHue = obj.float("gradingShadowHue", default.gradingShadowHue),
+            gradingShadowAmount = obj.float("gradingShadowAmount", default.gradingShadowAmount),
+            gradingMidtoneHue = obj.float("gradingMidtoneHue", default.gradingMidtoneHue),
+            gradingMidtoneAmount = obj.float("gradingMidtoneAmount", default.gradingMidtoneAmount),
+            gradingHighlightHue = obj.float("gradingHighlightHue", default.gradingHighlightHue),
+            gradingHighlightAmount = obj.float("gradingHighlightAmount", default.gradingHighlightAmount),
+            gradingBalance = obj.float("gradingBalance", default.gradingBalance),
+            gradingBlending = obj.float("gradingBlending", default.gradingBlending),
             lutIntensity = obj.float("lutIntensity", default.lutIntensity),
             remarks = obj.stringOrNull("remarks") ?: default.remarks,
             masterCurvePoints = obj.floatArrayOrNull("masterCurvePoints") ?: default.masterCurvePoints,
@@ -173,6 +204,7 @@ internal object CameraPresetJsonCodec {
         val default = EffectParams.DEFAULT
         return EffectParams(
             vignette = obj.float("vignette", default.vignette),
+            flash = obj.float("flash", default.flash),
             filmGrain = obj.float("filmGrain", default.filmGrain),
             bloom = obj.float("bloom", default.bloom),
             softLight = obj.float("softLight", default.softLight),

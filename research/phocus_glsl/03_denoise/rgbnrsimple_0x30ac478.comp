@@ -1,0 +1,102 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 9069bc90a27a2f0b5a7724407e599df01fe3ff0bcd1e09204c41b787eca9886e
+ * ELF offsets: 0x30ac478
+ * Symbols: rgbnrsimple_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(rgba16f, binding = 0) readonly uniform image2D inputImage;
+layout(rgba16f, binding = 1) writeonly uniform image2D outputImage;
+
+uniform float blackOffset;
+uniform vec4 compVecThr;
+uniform int uKernelRadius;
+uniform ivec2 uImageSize;
+
+shared vec4 sharedTile[32][32]; // Max tile: (16 + 2*8) = 32
+
+float Luminance(vec4 pix) {
+    return pix.r + pix.g + pix.b;
+}
+
+vec4 thrCompare(vec4 pix, vec4 pixS, vec4 vecThr) {
+    vec4 diff = abs(pix - pixS);
+    vec4 compare = step(diff, vecThr);  // step(edge, x): 0.0 if x < edge, else 1.0
+    return compare;
+}
+
+vec4 CheckPositionFromShared(ivec2 centerLocal, ivec2 offset, vec4 refPix, vec4 compVecThr) {
+    ivec2 searchLocal = centerLocal + offset;
+    // Bounds are guaranteed safe due to shared tile padding
+    vec4 searchPix = sharedTile[searchLocal.y][searchLocal.x];
+    float searchLuma = Luminance(searchPix);
+    searchPix.a = searchLuma; // overwrite alpha with luminance for compare
+
+    vec4 comp = thrCompare(refPix, searchPix, compVecThr);
+    float compVal = comp.r * comp.g * comp.b * comp.a;
+
+    searchPix.a = 1.0; // fake count
+    return compVal * searchPix;
+}
+
+// Calculate mean from sum and count, apply black offset
+vec4 CalculateMean(vec4 sumCount, float alpha, float blackOffset) {
+    vec3 avg = sumCount.rgb / sumCount.a;
+    avg -= blackOffset;
+    avg = max(vec3(0.0), avg);  // Clamp to non-negative
+    return vec4(avg, alpha);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 lid = ivec2(gl_LocalInvocationID.xy);
+    ivec2 groupID = ivec2(gl_WorkGroupID.xy);
+
+    vec4 pixel = imageLoad(inputImage, gid);
+
+    int R = uKernelRadius;
+    int TILE_SIZE = 16 + 2 * R;
+    ivec2 tileBase = groupID * 16 - ivec2(R);
+
+    for (int dy = 0; dy < TILE_SIZE; dy += 16) {
+        for (int dx = 0; dx < TILE_SIZE; dx += 16) {
+            ivec2 loadPos = lid + ivec2(dx, dy);
+            ivec2 globalPos = tileBase + loadPos;
+            // Clamp to image bounds
+            globalPos = clamp(globalPos, ivec2(0), uImageSize - ivec2(1));
+            sharedTile[loadPos.y][loadPos.x] = imageLoad(inputImage, globalPos);
+        }
+    }
+
+    // Synchronize: ensure all data is loaded
+    groupMemoryBarrier();
+    barrier();
+
+    if (gid.x >= uImageSize.x || gid.y >= uImageSize.y) {
+        return;
+    }
+
+    ivec2 centerLocal = lid + ivec2(R, R);
+    vec4 res = sharedTile[centerLocal.y][centerLocal.x];
+
+    float alpha = res.a;
+    res.a = Luminance(res);
+
+    vec4 sumCount = vec4(res.r, res.g, res.b, 1.0);
+    int k = uKernelRadius;
+
+    for (int j = -R; j <= R; ++j) {
+        for (int i = -R; i <= R; ++i) {
+            sumCount += CheckPositionFromShared(centerLocal, ivec2(i, j), res, compVecThr);
+        }
+    }
+
+    vec4 result = CalculateMean(sumCount, alpha, blackOffset);
+    imageStore(outputImage, gid, result);
+}

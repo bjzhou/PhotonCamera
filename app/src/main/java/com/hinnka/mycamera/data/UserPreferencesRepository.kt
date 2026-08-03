@@ -12,7 +12,10 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CustomFocalLengthValue
+import com.hinnka.mycamera.camera.CustomVendorKey
+import com.hinnka.mycamera.camera.CustomVendorKeySettings
 import com.hinnka.mycamera.camera.IszLensConfig
+import com.hinnka.mycamera.camera.IszRawDngMetadataCorrections
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.camera.VendorCaptureSettings
@@ -20,6 +23,8 @@ import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -29,7 +34,6 @@ import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAspectRatio
@@ -59,6 +63,16 @@ private fun sanitizeTonemapMode(mode: String): String {
     }
 }
 
+private fun resolveStoredRawAutoExposure(mode: String?, legacyValue: Boolean?): Boolean {
+    return when {
+        mode.equals("OFF", ignoreCase = true) -> false
+        mode.equals("VIEWFINDER_MATCH", ignoreCase = true) -> true
+        // Migrate the removed dynamic-scene option to the remaining viewfinder matcher.
+        mode.equals("DYNAMIC_SCENE_ESTIMATION", ignoreCase = true) -> true
+        else -> legacyValue ?: true
+    }
+}
+
 enum class VolumeKeyAction {
     NONE,
     CAPTURE,
@@ -70,6 +84,18 @@ enum class WidgetTheme {
     FOLLOW_SYSTEM,
     LIGHT,
     DARK
+}
+
+enum class CaptureButtonStyle {
+    DEFAULT,
+    COLOR,
+    IMAGE;
+
+    companion object {
+        fun fromPersistedName(name: String?): CaptureButtonStyle {
+            return entries.firstOrNull { it.name == name } ?: DEFAULT
+        }
+    }
 }
 
 enum class AiFocusTargetMode {
@@ -98,6 +124,9 @@ data class UserPreferences(
     val phantomBaselineLutId: String? = null,
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+    val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val rawNlmNoiseFactor: Float = 0f,
@@ -114,9 +143,11 @@ data class UserPreferences(
     val rawBlackLevelModes: Map<String, String> = emptyMap(),
     val rawCustomBlackLevels: Map<String, Float> = emptyMap(),
     val rawWhiteLevelModes: Map<String, String> = emptyMap(),
+    val rawCustomWhiteLevels: Map<String, Float> = emptyMap(),
     val rawCfaCorrectionModes: Map<String, String> = emptyMap(),
     val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
+    val phantomFrameId: String? = null,
     val showHistogram: Boolean = true,
     val showGrid: Boolean = false,  // 网格线显示
     val showLevelIndicator: Boolean = false,  // 水平仪显示
@@ -134,6 +165,7 @@ data class UserPreferences(
     val nrLevel: Int = 5,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto
     val edgeLevel: Int = 1, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
+    val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
     val useRaw: Boolean = false,                // 使用 RAW 格式拍摄
     val meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT, // 测光模式
     val sharpening: Float = 0f,              // 0.0 ~ 1.0 锐化强度
@@ -148,19 +180,23 @@ data class UserPreferences(
     val lutSelectorMode: LutSelectorMode = LutSelectorMode.Style,
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val zoomDisplayMode: String = "FOCAL_LENGTH",
-    val useMFNR: Boolean = false, // 是否使用多帧降噪
-    val useHdrComposition: Boolean = false, // 是否使用 HDR 包围曝光合成
-    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT, // 多帧降噪帧数
+    val useJpgMax: Boolean = false, // JPGmax：YUV 多帧降噪
+    val useJpgMaxHdrComposition: Boolean = false, // JPGmax：额外启用包围曝光 HDR 合成
+    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT, // Max 管线帧数
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
-    val useMFSR: Boolean = false, // 是否启用 RAW 多帧超分
-    val superResolutionScale: Float = 1.5f, // RAW 多帧超分倍率
+    val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
+    val useRawMaxHdrComposition: Boolean = true, // RAWmax：包围曝光 HDR 融合
+    val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
+    val useJpeg444Export: Boolean = false, // 是否使用 JPEG 4:4:4 色度采样导出
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val enableDevelopAnimation: Boolean = false, // 是否启用拍摄后的显影动画
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
-    val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
+    val captureButtonStyle: CaptureButtonStyle = CaptureButtonStyle.DEFAULT,
+    val captureButtonColor: Int = 0xFFFFFFFF.toInt(),
+    val captureButtonImagePath: String? = null,
     val droMode: String = "OFF", // DRO 模式
     val tonemapMode: String = "SYSTEM_DEFAULT", // 色调映射模式
     val naturalLightEnabled: Boolean = false, // 是否启用自然光影
@@ -187,7 +223,7 @@ data class UserPreferences(
     val videoStabilizationMode: com.hinnka.mycamera.video.VideoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.OIS,
     val videoTorchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
-    val autoEnableHdr: Boolean = false,
+    val ultraHdrGainMapEnabled: Boolean = true,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
@@ -208,6 +244,7 @@ data class UserPreferences(
     val lensIdBlacklist: List<String> = emptyList(), // 主动探测黑名单镜头 ID，逗号分隔存储
     val iszLensConfigs: List<IszLensConfig> = emptyList(), // 用户新增的 ISZ 虚拟镜头
     val preferredMainCameraId: String? = null, // 用户选择的主摄 ID
+    val preferredMacroCameraId: String? = null, // 用户选择的微距镜头 ID
     val enableLogicalMultiCameraDiscovery: Boolean = false, // 是否自动探测逻辑多摄物理镜头绑定
     val logicalCameraBindingWhitelist: List<String> = emptyList(), // 强制启用的逻辑/物理镜头绑定，格式 logical/physical
     val hiddenFocalLengths: List<Float> = emptyList(), // 隐藏的焦段 (35mm等效)
@@ -249,13 +286,16 @@ data class CameraFeaturePreferencesUpdate(
     val effects: PreferenceUpdateValue<EffectParams>? = null,
     val aspectRatio: PreferenceUpdateValue<String>? = null,
     val useRaw: PreferenceUpdateValue<Boolean>? = null,
-    val useMFNR: PreferenceUpdateValue<Boolean>? = null,
-    val useHdrComposition: PreferenceUpdateValue<Boolean>? = null,
-    val useMFSR: PreferenceUpdateValue<Boolean>? = null,
+    val useJpgMax: PreferenceUpdateValue<Boolean>? = null,
+    val useRawMax: PreferenceUpdateValue<Boolean>? = null,
+    val ultraHdrGainMapEnabled: PreferenceUpdateValue<Boolean>? = null,
     val useMultipleExposure: PreferenceUpdateValue<Boolean>? = null,
     val frameId: PreferenceUpdateValue<String?>? = null,
     val rawDcpId: PreferenceUpdateValue<String?>? = null,
     val rawDcpIdsByLens: PreferenceUpdateValue<Map<String, String?>>? = null,
+    val rawHncsProfileId: PreferenceUpdateValue<String?>? = null,
+    val rawHncsRenderIntent: PreferenceUpdateValue<HncsRenderIntent>? = null,
+    val rawHncsFilmCurveMode: PreferenceUpdateValue<HncsFilmCurveMode>? = null,
     val rawRenderingEngine: PreferenceUpdateValue<RawRenderingEngine>? = null,
     val rawToneMappingParameters: PreferenceUpdateValue<RawToneMappingParameters>? = null,
     val rawSpectralFilmStock: PreferenceUpdateValue<String?>? = null,
@@ -286,6 +326,9 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_BASELINE_LUT_CONFIGURED_KEY = booleanPreferencesKey("raw_baseline_lut_configured")
         private val RAW_DCP_ID_KEY = stringPreferencesKey("raw_dcp_id")
         private val RAW_DCP_IDS_BY_LENS_KEY = stringPreferencesKey("raw_dcp_ids_by_lens")
+        private val RAW_HNCS_PROFILE_ID_KEY = stringPreferencesKey("raw_hncs_profile_id")
+        private val RAW_HNCS_RENDER_INTENT_KEY = stringPreferencesKey("raw_hncs_render_intent")
+        private val RAW_HNCS_FILM_CURVE_MODE_KEY = stringPreferencesKey("raw_hncs_film_curve_mode")
         private val RAW_COLOR_ENGINE_KEY = stringPreferencesKey("raw_color_engine")
         private val RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_agx_black_relative_exposure")
         private val RAW_AGX_WHITE_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_agx_white_relative_exposure")
@@ -293,11 +336,13 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_AGX_SHOULDER_KEY = floatPreferencesKey("raw_agx_shoulder")
         private val RAW_FILMIC_BLACK_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_filmic_black_relative_exposure")
         private val RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_filmic_white_relative_exposure")
-        private val RAW_GOOGLE_PIXEL_TONE_MAP_KEY = booleanPreferencesKey("raw_google_pixel_tone_map")
+        private val LEGACY_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_google_pixel_tone_map")
         private val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
+        private val RAW_PHOTON_PGTM_TONE_MAP_KEY = booleanPreferencesKey("raw_photon_pgtm_tone_map")
         private val RAW_NLM_NOISE_FACTOR_KEY = floatPreferencesKey("raw_nlm_noise_factor")
         private val RAW_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_exposure_compensation")
         private val RAW_AUTO_EXPOSURE_KEY = booleanPreferencesKey("raw_auto_exposure")
+        private val RAW_AUTO_EXPOSURE_MODE_KEY = stringPreferencesKey("raw_auto_exposure_mode")
         private val RAW_HIGHLIGHTS_ADJUSTMENT_KEY = floatPreferencesKey("raw_highlights_adjustment")
         private val RAW_SHADOWS_ADJUSTMENT_KEY = floatPreferencesKey("raw_shadows_adjustment")
         private val RAW_MIN_SHUTTER_SPEED_NS_KEY = longPreferencesKey("raw_min_shutter_speed_ns")
@@ -309,10 +354,12 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_BLACK_LEVEL_MODES_KEY = stringPreferencesKey("raw_black_level_modes")
         private val RAW_CUSTOM_BLACK_LEVELS_KEY = stringPreferencesKey("raw_custom_black_levels")
         private val RAW_WHITE_LEVEL_MODES_KEY = stringPreferencesKey("raw_white_level_modes")
+        private val RAW_CUSTOM_WHITE_LEVELS_KEY = stringPreferencesKey("raw_custom_white_levels")
         private val RAW_CFA_CORRECTION_MODES_KEY = stringPreferencesKey("raw_cfa_correction_modes")
         private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
         private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
+        private val PHANTOM_FRAME_ID_KEY = stringPreferencesKey("phantom_frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
         private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
@@ -330,6 +377,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val NR_LEVEL = intPreferencesKey("nr_level")
         private val EDGE_LEVEL = intPreferencesKey("edge_level")
         private val VENDOR_CAPTURE_SETTINGS = stringPreferencesKey("vendor_capture_settings")
+        private val CUSTOM_VENDOR_KEY_SETTINGS = stringPreferencesKey("custom_vendor_key_settings")
         private val USE_RAW = booleanPreferencesKey("use_raw")
         private val RAW_LENS_SHADING_CORRECTION_ENABLED = booleanPreferencesKey("raw_lens_shading_correction_enabled")
         private val METERING_MODE = stringPreferencesKey("metering_mode")
@@ -353,19 +401,29 @@ class UserPreferencesRepository(private val context: Context) {
         private val ZOOM_DISPLAY_MODE = stringPreferencesKey("zoom_display_mode")
 
         // 多帧合成 Key
-        private val USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
-        private val USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
+        private val USE_JPG_MAX = booleanPreferencesKey("use_jpg_max")
+        private val USE_JPG_MAX_HDR_COMPOSITION =
+            booleanPreferencesKey("use_jpg_max_hdr_composition")
+        private val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
+        private val USE_RAW_MAX_HDR_COMPOSITION =
+            booleanPreferencesKey("use_raw_max_hdr_composition")
+        private val LEGACY_USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
+        private val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
         private val USE_MULTIPLE_EXPOSURE = booleanPreferencesKey("use_multiple_exposure")
         private val MULTIPLE_EXPOSURE_COUNT = intPreferencesKey("multiple_exposure_count")
-        private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
-        private val RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
+        private val LEGACY_USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
+        private val RAW_MAX_OUTPUT_SCALE = floatPreferencesKey("raw_max_output_scale")
+        private val LEGACY_RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_HEIC_EXPORT = booleanPreferencesKey("use_heic_export")
+        private val USE_JPEG_444_EXPORT = booleanPreferencesKey("use_jpeg_444_export")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
         private val ENABLE_DEVELOP_ANIMATION = booleanPreferencesKey("enable_develop_animation")
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
-        private val USE_GPU_ACCELERATION = booleanPreferencesKey("use_gpu_acceleration")
+        private val CAPTURE_BUTTON_STYLE = stringPreferencesKey("capture_button_style")
+        private val CAPTURE_BUTTON_COLOR = intPreferencesKey("capture_button_color")
+        private val CAPTURE_BUTTON_IMAGE_PATH = stringPreferencesKey("capture_button_image_path")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
         private val TONEMAP_MODE = stringPreferencesKey("tonemap_mode")
         private val NATURAL_LIGHT_ENABLED = booleanPreferencesKey("natural_light_enabled")
@@ -391,7 +449,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
-        private val AUTO_ENABLE_HDR_FOR_HDR_CAPTURE = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
+        // Keep the persisted key for compatibility with existing installations.
+        private val ULTRA_HDR_GAIN_MAP_ENABLED = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
         private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
         private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
@@ -414,6 +473,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val LENS_ID_BLACKLIST = stringPreferencesKey("lens_id_blacklist")
         private val ISZ_LENS_CONFIGS = stringPreferencesKey("isz_lens_configs")
         private val PREFERRED_MAIN_CAMERA_ID = stringPreferencesKey("preferred_main_camera_id")
+        private val PREFERRED_MACRO_CAMERA_ID = stringPreferencesKey("preferred_macro_camera_id")
         private val ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY = booleanPreferencesKey("enable_logical_multi_camera_discovery")
         private val LOGICAL_CAMERA_BINDING_WHITELIST = stringPreferencesKey("logical_camera_binding_whitelist")
         private val HIDDEN_FOCAL_LENGTHS = stringPreferencesKey("hidden_focal_lengths")
@@ -439,6 +499,27 @@ class UserPreferencesRepository(private val context: Context) {
             val availableAspectRatios = AspectRatio.entries + customAspectRatios
             val rawBaselineLutConfigured = preferences[RAW_BASELINE_LUT_CONFIGURED_KEY]
                 ?: preferences.contains(RAW_BASELINE_LUT_ID_KEY)
+            val storedUseRaw = preferences[USE_RAW] ?: false
+            val hasCurrentMaxPreferences = preferences.contains(USE_JPG_MAX) ||
+                preferences.contains(USE_RAW_MAX)
+            val legacyMultiFrameEnabled = preferences[LEGACY_USE_MULTI_FRAME] == true ||
+                preferences[LEGACY_USE_SUPER_RESOLUTION] == true
+            val requestedUseJpgMax = if (hasCurrentMaxPreferences) {
+                preferences[USE_JPG_MAX] ?: false
+            } else {
+                !storedUseRaw &&
+                    (legacyMultiFrameEnabled || preferences[LEGACY_USE_HDR_COMPOSITION] == true)
+            }
+            val requestedUseRawMax = if (hasCurrentMaxPreferences) {
+                preferences[USE_RAW_MAX] ?: false
+            } else {
+                storedUseRaw && legacyMultiFrameEnabled
+            }
+            val useRawMax = requestedUseRawMax
+            val useJpgMax = requestedUseJpgMax && !useRawMax
+            val useHeicExport = preferences[USE_HEIC_EXPORT] ?: false
+            val useJpeg444Export =
+                (preferences[USE_JPEG_444_EXPORT] ?: false) && !useHeicExport
             UserPreferences(
                 captureMode = CaptureMode.valueOf(preferences[CAPTURE_MODE] ?: CaptureMode.PHOTO.name),
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
@@ -454,6 +535,11 @@ class UserPreferencesRepository(private val context: Context) {
                 rawBaselineLutConfigured = rawBaselineLutConfigured,
                 rawDcpId = preferences[RAW_DCP_ID_KEY],
                 rawDcpIdsByLens = parseNullableStringMap(preferences[RAW_DCP_IDS_BY_LENS_KEY]),
+                rawHncsProfileId = preferences[RAW_HNCS_PROFILE_ID_KEY],
+                rawHncsRenderIntent = HncsRenderIntent.Standard,
+                rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                    preferences[RAW_HNCS_FILM_CURVE_MODE_KEY]
+                ),
                 rawRenderingEngine = RawRenderingEngine.fromPersistedName(preferences[RAW_COLOR_ENGINE_KEY]),
                 rawToneMappingParameters = RawToneMappingParameters(
                     agxBlackRelativeExposure = preferences[RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY]
@@ -466,12 +552,17 @@ class UserPreferencesRepository(private val context: Context) {
                         ?: RawToneMappingParameters.FILMIC_BLACK_RELATIVE_EXPOSURE_DEFAULT,
                     filmicWhiteRelativeExposure = preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY]
                         ?: RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
-                    useGooglePixelToneMap = preferences[RAW_GOOGLE_PIXEL_TONE_MAP_KEY] ?: false,
-                    useOppoMasterToneMap = preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false
+                    useOppoMasterToneMap = preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false,
+                    usePhotonPgtmToneMap =
+                        (preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] ?: false) ||
+                            (preferences[LEGACY_PROFILE_TONE_MAP_KEY] ?: false)
                 ).normalized(),
                 rawNlmNoiseFactor = preferences[RAW_NLM_NOISE_FACTOR_KEY] ?: 0f,
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
-                rawAutoExposure = preferences[RAW_AUTO_EXPOSURE_KEY] ?: true,
+                rawAutoExposure = resolveStoredRawAutoExposure(
+                    mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
+                    legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
+                ),
                 rawHighlightsAdjustment = preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] ?: 0f,
                 rawShadowsAdjustment = preferences[RAW_SHADOWS_ADJUSTMENT_KEY] ?: 0f,
                 rawMinShutterSpeedNs = preferences[RAW_MIN_SHUTTER_SPEED_NS_KEY] ?: 0L,
@@ -483,10 +574,12 @@ class UserPreferencesRepository(private val context: Context) {
                 rawBlackLevelModes = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY]),
                 rawCustomBlackLevels = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY]),
                 rawWhiteLevelModes = parseMapString(preferences[RAW_WHITE_LEVEL_MODES_KEY]),
+                rawCustomWhiteLevels = parseMapFloat(preferences[RAW_CUSTOM_WHITE_LEVELS_KEY]),
                 rawCfaCorrectionModes = parseMapString(preferences[RAW_CFA_CORRECTION_MODES_KEY]),
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
+                phantomFrameId = preferences[PHANTOM_FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
                 showGrid = preferences[SHOW_GRID] ?: false,
                 showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
@@ -510,7 +603,14 @@ class UserPreferencesRepository(private val context: Context) {
                 vendorCaptureSettingsByLens = VendorCaptureSettingsByLens.deserialize(
                     preferences[VENDOR_CAPTURE_SETTINGS]
                 ),
-                useRaw = preferences[USE_RAW] ?: false,
+                customVendorKeySettings = CustomVendorKeySettings.deserialize(
+                    preferences[CUSTOM_VENDOR_KEY_SETTINGS]
+                ),
+                useRaw = when {
+                    useRawMax -> true
+                    useJpgMax -> false
+                    else -> storedUseRaw
+                },
                 meteringMode = MeteringMode.valueOf(
                     preferences[METERING_MODE] ?: MeteringMode.SYSTEM_DEFAULT.name
                 ),
@@ -529,21 +629,34 @@ class UserPreferencesRepository(private val context: Context) {
                 }.getOrDefault(LutSelectorMode.Style),
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 zoomDisplayMode = preferences[ZOOM_DISPLAY_MODE] ?: "FOCAL_LENGTH",
-                useMFNR = preferences[USE_MULTI_FRAME] ?: false,
-                useHdrComposition = preferences[USE_HDR_COMPOSITION] ?: false,
+                useJpgMax = useJpgMax,
+                useJpgMaxHdrComposition = preferences[USE_JPG_MAX_HDR_COMPOSITION] ?: false,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT]
                     ?.coerceIn(MultiFrameConfig.MIN_FRAME_COUNT, MultiFrameConfig.MAX_FRAME_COUNT)
                     ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
-                useMFSR = preferences[USE_SUPER_RESOLUTION] ?: false,
-                superResolutionScale = preferences[RAW_SUPER_RESOLUTION_SCALE] ?: 1.5f,
+                useRawMax = useRawMax,
+                useRawMaxHdrComposition = preferences[USE_RAW_MAX_HDR_COMPOSITION] ?: true,
+                rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
+                    ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
+                    MultiFrameConfig.normalizeOutputScale(
+                        outputScale = it,
+                        fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                    )
+                } ?: MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
-                useHeicExport = preferences[USE_HEIC_EXPORT] ?: false,
+                useHeicExport = useHeicExport,
+                useJpeg444Export = useJpeg444Export,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: false,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
-                useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
+                captureButtonStyle = CaptureButtonStyle.fromPersistedName(
+                    preferences[CAPTURE_BUTTON_STYLE]
+                ),
+                captureButtonColor = preferences[CAPTURE_BUTTON_COLOR] ?: 0xFFFFFFFF.toInt(),
+                captureButtonImagePath = preferences[CAPTURE_BUTTON_IMAGE_PATH]
+                    ?.takeIf { it.isNotBlank() },
                 droMode = preferences[DRO_MODE] ?: if (preferences[RAW_DRO_ENABLED_KEY] == true) "DR100" else "OFF",
                 tonemapMode = sanitizeTonemapMode(preferences[TONEMAP_MODE] ?: "SYSTEM_DEFAULT"),
                 naturalLightEnabled = preferences[NATURAL_LIGHT_ENABLED] ?: false,
@@ -588,7 +701,7 @@ class UserPreferencesRepository(private val context: Context) {
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
-                autoEnableHdr = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: false,
+                ultraHdrGainMapEnabled = preferences[ULTRA_HDR_GAIN_MAP_ENABLED] ?: true,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
@@ -616,6 +729,7 @@ class UserPreferencesRepository(private val context: Context) {
                 lensIdBlacklist = parseLensIds(preferences[LENS_ID_BLACKLIST]),
                 iszLensConfigs = IszLensConfig.deserializeList(preferences[ISZ_LENS_CONFIGS]),
                 preferredMainCameraId = preferences[PREFERRED_MAIN_CAMERA_ID]?.takeIf { it.isNotBlank() },
+                preferredMacroCameraId = preferences[PREFERRED_MACRO_CAMERA_ID]?.takeIf { it.isNotBlank() },
                 enableLogicalMultiCameraDiscovery = preferences[ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY] ?: false,
                 logicalCameraBindingWhitelist = parseLogicalCameraBindingWhitelist(
                     preferences[LOGICAL_CAMERA_BINDING_WHITELIST]
@@ -936,6 +1050,28 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveRawHncsProfileId(profileId: String?) {
+        context.dataStore.edit { preferences ->
+            if (profileId.isNullOrBlank()) {
+                preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
+            } else {
+                preferences[RAW_HNCS_PROFILE_ID_KEY] = profileId
+            }
+        }
+    }
+
+    suspend fun saveRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_HNCS_RENDER_INTENT_KEY] = renderIntent.assetValue
+        }
+    }
+
+    suspend fun saveRawHncsFilmCurveMode(mode: HncsFilmCurveMode) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_HNCS_FILM_CURVE_MODE_KEY] = mode.persistedValue
+        }
+    }
+
     suspend fun removeRawDcpReferences(dcpId: String) {
         context.dataStore.edit { preferences ->
             if (preferences[RAW_DCP_ID_KEY] == dcpId) {
@@ -966,8 +1102,9 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_AGX_SHOULDER_KEY] = normalized.agxShoulder
             preferences[RAW_FILMIC_BLACK_RELATIVE_EXPOSURE_KEY] = normalized.filmicBlackRelativeExposure
             preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.filmicWhiteRelativeExposure
-            preferences[RAW_GOOGLE_PIXEL_TONE_MAP_KEY] = normalized.useGooglePixelToneMap
+            preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
             preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
+            preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] = normalized.usePhotonPgtmToneMap
         }
     }
 
@@ -980,6 +1117,11 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawAutoExposure(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[RAW_AUTO_EXPOSURE_KEY] = enabled
+            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (enabled) {
+                "VIEWFINDER_MATCH"
+            } else {
+                "OFF"
+            }
         }
     }
 
@@ -991,7 +1133,16 @@ class UserPreferencesRepository(private val context: Context) {
             }
             preferences[TONEMAP_MODE] = "SYSTEM_DEFAULT"
             preferences[NATURAL_LIGHT_ENABLED] = false
-            preferences[RAW_AUTO_EXPOSURE_KEY] = true
+            val rawAutoExposure = resolveStoredRawAutoExposure(
+                mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
+                legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
+            )
+            preferences[RAW_AUTO_EXPOSURE_KEY] = rawAutoExposure
+            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (rawAutoExposure) {
+                "VIEWFINDER_MATCH"
+            } else {
+                "OFF"
+            }
             preferences[CAMERA_STARTUP_DEFAULTS_RESTORED_V1] = true
             restored = true
         }
@@ -1059,6 +1210,62 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Stores the DNG metadata corrections selected while creating an ISZ lens.
+     * All values are committed together so they are always associated with the same
+     * virtual camera ID.
+     */
+    suspend fun saveRawDngMetadataCorrections(
+        cameraId: String,
+        corrections: IszRawDngMetadataCorrections
+    ) {
+        if (cameraId.isBlank()) return
+
+        context.dataStore.edit { preferences ->
+            val blackLevelModes = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY]).toMutableMap()
+            val customBlackLevels = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY]).toMutableMap()
+            val whiteLevelModes = parseMapString(preferences[RAW_WHITE_LEVEL_MODES_KEY]).toMutableMap()
+            val customWhiteLevels = parseMapFloat(preferences[RAW_CUSTOM_WHITE_LEVELS_KEY]).toMutableMap()
+            val cfaCorrectionModes = parseMapString(preferences[RAW_CFA_CORRECTION_MODES_KEY]).toMutableMap()
+
+            blackLevelModes[cameraId] = corrections.blackLevelMode
+            customBlackLevels[cameraId] = corrections.customBlackLevel
+            whiteLevelModes[cameraId] = corrections.whiteLevelMode
+            customWhiteLevels[cameraId] = corrections.customWhiteLevel
+            cfaCorrectionModes[cameraId] = corrections.cfaCorrectionMode
+
+            preferences[RAW_BLACK_LEVEL_MODES_KEY] = serializeMapString(blackLevelModes)
+            preferences[RAW_CUSTOM_BLACK_LEVELS_KEY] = serializeMapFloat(customBlackLevels)
+            preferences[RAW_WHITE_LEVEL_MODES_KEY] = serializeMapString(whiteLevelModes)
+            preferences[RAW_CUSTOM_WHITE_LEVELS_KEY] = serializeMapFloat(customWhiteLevels)
+            preferences[RAW_CFA_CORRECTION_MODES_KEY] = serializeMapString(cfaCorrectionModes)
+        }
+    }
+
+    suspend fun clearRawDngMetadataCorrections(cameraId: String) {
+        if (cameraId.isBlank()) return
+
+        context.dataStore.edit { preferences ->
+            val blackLevelModes = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY]).toMutableMap()
+            val customBlackLevels = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY]).toMutableMap()
+            val whiteLevelModes = parseMapString(preferences[RAW_WHITE_LEVEL_MODES_KEY]).toMutableMap()
+            val customWhiteLevels = parseMapFloat(preferences[RAW_CUSTOM_WHITE_LEVELS_KEY]).toMutableMap()
+            val cfaCorrectionModes = parseMapString(preferences[RAW_CFA_CORRECTION_MODES_KEY]).toMutableMap()
+
+            blackLevelModes.remove(cameraId)
+            customBlackLevels.remove(cameraId)
+            whiteLevelModes.remove(cameraId)
+            customWhiteLevels.remove(cameraId)
+            cfaCorrectionModes.remove(cameraId)
+
+            preferences[RAW_BLACK_LEVEL_MODES_KEY] = serializeMapString(blackLevelModes)
+            preferences[RAW_CUSTOM_BLACK_LEVELS_KEY] = serializeMapFloat(customBlackLevels)
+            preferences[RAW_WHITE_LEVEL_MODES_KEY] = serializeMapString(whiteLevelModes)
+            preferences[RAW_CUSTOM_WHITE_LEVELS_KEY] = serializeMapFloat(customWhiteLevels)
+            preferences[RAW_CFA_CORRECTION_MODES_KEY] = serializeMapString(cfaCorrectionModes)
+        }
+    }
+
     suspend fun saveRawCustomBlackLevel(cameraId: String, value: Float) {
         context.dataStore.edit { preferences ->
             val current = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY])
@@ -1074,6 +1281,15 @@ class UserPreferencesRepository(private val context: Context) {
             val updated = current.toMutableMap()
             updated[cameraId] = mode
             preferences[RAW_WHITE_LEVEL_MODES_KEY] = serializeMapString(updated)
+        }
+    }
+
+    suspend fun saveRawCustomWhiteLevel(cameraId: String, value: Float) {
+        context.dataStore.edit { preferences ->
+            val current = parseMapFloat(preferences[RAW_CUSTOM_WHITE_LEVELS_KEY])
+            val updated = current.toMutableMap()
+            updated[cameraId] = value
+            preferences[RAW_CUSTOM_WHITE_LEVELS_KEY] = serializeMapFloat(updated)
         }
     }
 
@@ -1095,6 +1311,19 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[FRAME_ID_KEY] = frameId
             } else {
                 preferences.remove(FRAME_ID_KEY)
+            }
+        }
+    }
+
+    /**
+     * 保存幻影模式独立使用的边框。
+     */
+    suspend fun savePhantomFrameConfig(frameId: String?) {
+        context.dataStore.edit { preferences ->
+            if (frameId != null) {
+                preferences[PHANTOM_FRAME_ID_KEY] = frameId
+            } else {
+                preferences.remove(PHANTOM_FRAME_ID_KEY)
             }
         }
     }
@@ -1253,6 +1482,34 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[VENDOR_CAPTURE_SETTINGS] = updatedSettings.serialize()
             } else {
                 preferences.remove(VENDOR_CAPTURE_SETTINGS)
+            }
+        }
+    }
+
+    suspend fun upsertCustomVendorKey(key: CustomVendorKey) {
+        context.dataStore.edit { preferences ->
+            val current = CustomVendorKeySettings.deserialize(
+                preferences[CUSTOM_VENDOR_KEY_SETTINGS]
+            )
+            val updated = current.upsert(key)
+            if (updated.isEnabled) {
+                preferences[CUSTOM_VENDOR_KEY_SETTINGS] = updated.serialize()
+            } else {
+                preferences.remove(CUSTOM_VENDOR_KEY_SETTINGS)
+            }
+        }
+    }
+
+    suspend fun removeCustomVendorKey(id: String) {
+        context.dataStore.edit { preferences ->
+            val current = CustomVendorKeySettings.deserialize(
+                preferences[CUSTOM_VENDOR_KEY_SETTINGS]
+            )
+            val updated = current.remove(id)
+            if (updated.isEnabled) {
+                preferences[CUSTOM_VENDOR_KEY_SETTINGS] = updated.serialize()
+            } else {
+                preferences.remove(CUSTOM_VENDOR_KEY_SETTINGS)
             }
         }
     }
@@ -1450,6 +1707,17 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun savePreferredMacroCameraId(cameraId: String?) {
+        context.dataStore.edit { preferences ->
+            val normalizedCameraId = cameraId?.trim()?.takeIf { it.isNotEmpty() }
+            if (normalizedCameraId == null) {
+                preferences.remove(PREFERRED_MACRO_CAMERA_ID)
+            } else {
+                preferences[PREFERRED_MACRO_CAMERA_ID] = normalizedCameraId
+            }
+        }
+    }
+
     suspend fun saveEnableLogicalMultiCameraDiscovery(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY] = enabled
@@ -1464,15 +1732,6 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     /**
-     * 保存是否使用多帧合成
-     */
-    suspend fun setUseMFNR(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_MULTI_FRAME] = enabled
-        }
-    }
-
-    /**
      * 保存多帧合成帧数
      */
     suspend fun saveMultiFrameCount(count: Int) {
@@ -1481,6 +1740,18 @@ class UserPreferencesRepository(private val context: Context) {
                 MultiFrameConfig.MIN_FRAME_COUNT,
                 MultiFrameConfig.MAX_FRAME_COUNT
             )
+        }
+    }
+
+    suspend fun saveUseJpgMaxHdrComposition(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_JPG_MAX_HDR_COMPOSITION] = enabled
+        }
+    }
+
+    suspend fun saveUseRawMaxHdrComposition(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_RAW_MAX_HDR_COMPOSITION] = enabled
         }
     }
 
@@ -1502,18 +1773,12 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 保存是否使用超分辨率
-     */
-    suspend fun saveUseMFSR(enabled: Boolean) {
+    suspend fun saveRawMaxOutputScale(scale: Float) {
         context.dataStore.edit { preferences ->
-            preferences[USE_SUPER_RESOLUTION] = enabled
-        }
-    }
-
-    suspend fun saveSuperResolutionScale(scale: Float) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_SUPER_RESOLUTION_SCALE] = scale.coerceIn(1.0f, 2.0f)
+            preferences[RAW_MAX_OUTPUT_SCALE] = MultiFrameConfig.normalizeOutputScale(
+                outputScale = scale,
+                fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+            )
         }
     }
 
@@ -1529,6 +1794,18 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseHeicExport(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_HEIC_EXPORT] = enabled
+            if (enabled) {
+                preferences[USE_JPEG_444_EXPORT] = false
+            }
+        }
+    }
+
+    suspend fun saveUseJpeg444Export(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_JPEG_444_EXPORT] = enabled
+            if (enabled) {
+                preferences[USE_HEIC_EXPORT] = false
+            }
         }
     }
 
@@ -1559,12 +1836,23 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 保存是否启用 GPU 加速
-     */
-    suspend fun saveUseGpuAcceleration(enabled: Boolean) {
+    suspend fun saveCaptureButtonStyle(style: CaptureButtonStyle) {
         context.dataStore.edit { preferences ->
-            preferences[USE_GPU_ACCELERATION] = enabled
+            preferences[CAPTURE_BUTTON_STYLE] = style.name
+        }
+    }
+
+    suspend fun saveCaptureButtonColor(color: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[CAPTURE_BUTTON_COLOR] = color
+            preferences[CAPTURE_BUTTON_STYLE] = CaptureButtonStyle.COLOR.name
+        }
+    }
+
+    suspend fun saveCaptureButtonImage(path: String) {
+        context.dataStore.edit { preferences ->
+            preferences[CAPTURE_BUTTON_IMAGE_PATH] = path
+            preferences[CAPTURE_BUTTON_STYLE] = CaptureButtonStyle.IMAGE.name
         }
     }
 
@@ -1759,15 +2047,9 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveAutoEnableHdrForHdrCapture(enabled: Boolean) {
+    suspend fun saveUltraHdrGainMapEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
-            preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] = enabled
-        }
-    }
-
-    suspend fun saveUseHdrComposition(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_HDR_COMPOSITION] = enabled
+            preferences[ULTRA_HDR_GAIN_MAP_ENABLED] = enabled
         }
     }
 
@@ -1954,14 +2236,14 @@ class UserPreferencesRepository(private val context: Context) {
             update.useRaw?.let {
                 preferences[USE_RAW] = it.value
             }
-            update.useMFNR?.let {
-                preferences[USE_MULTI_FRAME] = it.value
+            update.useJpgMax?.let {
+                preferences[USE_JPG_MAX] = it.value
             }
-            update.useHdrComposition?.let {
-                preferences[USE_HDR_COMPOSITION] = it.value
+            update.useRawMax?.let {
+                preferences[USE_RAW_MAX] = it.value
             }
-            update.useMFSR?.let {
-                preferences[USE_SUPER_RESOLUTION] = it.value
+            update.ultraHdrGainMapEnabled?.let {
+                preferences[ULTRA_HDR_GAIN_MAP_ENABLED] = it.value
             }
             update.useMultipleExposure?.let {
                 preferences[USE_MULTIPLE_EXPOSURE] = it.value
@@ -1988,6 +2270,19 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[RAW_DCP_IDS_BY_LENS_KEY] = serializeNullableStringMap(normalized)
                 }
             }
+            update.rawHncsProfileId?.let {
+                if (it.value.isNullOrBlank()) {
+                    preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
+                } else {
+                    preferences[RAW_HNCS_PROFILE_ID_KEY] = it.value
+                }
+            }
+            update.rawHncsRenderIntent?.let {
+                preferences[RAW_HNCS_RENDER_INTENT_KEY] = it.value.assetValue
+            }
+            update.rawHncsFilmCurveMode?.let {
+                preferences[RAW_HNCS_FILM_CURVE_MODE_KEY] = it.value.persistedValue
+            }
             update.rawRenderingEngine?.let {
                 preferences[RAW_COLOR_ENGINE_KEY] = it.value.name
             }
@@ -1999,8 +2294,9 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_AGX_SHOULDER_KEY] = normalized.agxShoulder
                 preferences[RAW_FILMIC_BLACK_RELATIVE_EXPOSURE_KEY] = normalized.filmicBlackRelativeExposure
                 preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.filmicWhiteRelativeExposure
-                preferences[RAW_GOOGLE_PIXEL_TONE_MAP_KEY] = normalized.useGooglePixelToneMap
+                preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
                 preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
+                preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] = normalized.usePhotonPgtmToneMap
             }
             update.rawSpectralFilmStock?.let {
                 if (it.value != null) {

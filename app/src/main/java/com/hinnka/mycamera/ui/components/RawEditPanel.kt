@@ -26,11 +26,15 @@ import android.hardware.camera2.CameraCharacteristics
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -90,6 +94,7 @@ fun RawEditPanel(
     rawBlackLevelMode: String = RawCfaCorrection.MODE_DEFAULT,
     rawCustomBlackLevel: Float = 0f,
     rawWhiteLevelMode: String = RawWhiteLevelCorrection.MODE_DEFAULT,
+    rawCustomWhiteLevel: Float = 0f,
     rawCfaCorrectionMode: String = RawCfaCorrection.MODE_DEFAULT,
     rawRenderingEngine: RawRenderingEngine,
     rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
@@ -108,6 +113,7 @@ fun RawEditPanel(
     onRawBlackLevelModeChange: (String) -> Unit = {},
     onRawCustomBlackLevelChange: (Float) -> Unit = {},
     onRawWhiteLevelModeChange: (String) -> Unit = {},
+    onRawCustomWhiteLevelChange: (Float) -> Unit = {},
     onRawCfaCorrectionModeChange: (String) -> Unit = {},
     onRawColorEngineChange: (RawRenderingEngine) -> Unit,
     onRawToneMappingParametersChange: (RawToneMappingParameters) -> Unit = {},
@@ -117,22 +123,113 @@ fun RawEditPanel(
     onAdjustmentEnd: () -> Unit,
     onRawExposureCompensationReset: ((Float) -> Unit)? = null,
     onOpenBaselineLutSheet: (() -> Unit)? = null,
+    showRawMaxOutputScaleControl: Boolean = false,
+    rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+    onRawMaxOutputScaleChange: (Float) -> Unit = {},
     showAutoExposureControl: Boolean = true,
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
+    selectedHncsProfileId: String? = null,
+    availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
+    onSelectHncsProfile: (String?) -> Unit = {},
+    hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
+    onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var rawMaxOutputScaleDraft by remember {
+        mutableFloatStateOf(MultiFrameConfig.normalizeOutputScale(rawMaxOutputScale))
+    }
+    LaunchedEffect(rawMaxOutputScale) {
+        rawMaxOutputScaleDraft = MultiFrameConfig.normalizeOutputScale(rawMaxOutputScale)
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        if (showRawMaxOutputScaleControl && contentMode == RawEditPanelContentMode.FULL) {
+            val valueFormat = stringResource(R.string.settings_raw_max_output_scale_value)
+            SliderSettingItem(
+                title = stringResource(R.string.settings_raw_max_output_scale),
+                value = rawMaxOutputScaleDraft,
+                valueRange = MultiFrameConfig.MIN_OUTPUT_SCALE..MultiFrameConfig.MAX_OUTPUT_SCALE,
+                resetValue = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                onResetValue = { scale ->
+                    rawMaxOutputScaleDraft = scale
+                    onRawMaxOutputScaleChange(scale)
+                },
+                onValueChange = {
+                    rawMaxOutputScaleDraft = MultiFrameConfig.normalizeOutputScale(it)
+                },
+                onValueChangeFinished = {
+                    onRawMaxOutputScaleChange(rawMaxOutputScaleDraft)
+                },
+                valueTextFormatter = { scale -> String.format(valueFormat, scale) }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         RawRenderingEngineSelector(
             selectedEngine = rawRenderingEngine,
             onSelectEngine = onRawColorEngineChange
         )
         Spacer(modifier = Modifier.height(16.dp))
+
+        if (rawRenderingEngine.isHncs) {
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_hncs_color_branch),
+                description = stringResource(R.string.settings_raw_hncs_color_branch_description),
+                levels = listOf(
+                    RawRenderingEngine.HncsCcm.name to
+                        stringResource(R.string.settings_raw_hncs_color_branch_ccm),
+                    RawRenderingEngine.HncsLut.name to
+                        stringResource(R.string.settings_raw_hncs_color_branch_lut)
+                ),
+                currentLevel = rawRenderingEngine.name,
+                onLevelSelected = { persistedName ->
+                    onRawColorEngineChange(
+                        RawRenderingEngine.fromPersistedName(
+                            persistedName,
+                            RawRenderingEngine.HncsCcm
+                        )
+                    )
+                }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            if (rawRenderingEngine == RawRenderingEngine.HncsLut &&
+                availableHncsProfiles.isNotEmpty()
+            ) {
+                RawChoiceSetting(
+                    title = stringResource(R.string.settings_raw_hncs_2d_lut),
+                    description = stringResource(R.string.settings_raw_hncs_profile_description),
+                    levels = availableHncsProfiles.map { profile ->
+                        profile.id to profile.displayName
+                    },
+                    currentLevel = selectedHncsProfileId.orEmpty(),
+                    onLevelSelected = { onSelectHncsProfile(it) }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_hncs_film_curve),
+                description = stringResource(R.string.settings_raw_hncs_film_curve_description),
+                levels = listOf(
+                    HncsFilmCurveMode.Standard.persistedValue to
+                        stringResource(R.string.settings_raw_hncs_film_curve_standard),
+                    HncsFilmCurveMode.Reproduction.persistedValue to
+                        stringResource(R.string.settings_raw_hncs_film_curve_reproduction)
+                ),
+                currentLevel = hncsFilmCurveMode.persistedValue,
+                onLevelSelected = { persistedValue ->
+                    onHncsFilmCurveModeChange(
+                        HncsFilmCurveMode.fromPersistedValue(persistedValue)
+                    )
+                }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
             RawDcpSelector(
@@ -249,61 +346,17 @@ fun RawEditPanel(
                 onValueChangeFinished = onAdjustmentEnd
             )
             if (showDngMetadataControls) {
-                RawChoiceSetting(
-                    title = stringResource(R.string.settings_raw_black_level_correction),
-                    description = stringResource(R.string.settings_raw_black_level_correction_description),
-                    levels = listOf(
-                        RawCfaCorrection.MODE_DEFAULT to stringResource(R.string.settings_black_level_default),
-                        "0" to "0",
-                        "16" to "16",
-                        "64" to "64",
-                        "256" to "256",
-                        "512" to "512",
-                        "Custom" to stringResource(R.string.settings_black_level_custom)
-                    ),
-                    currentLevel = rawBlackLevelMode,
-                    onLevelSelected = onRawBlackLevelModeChange
-                )
-                if (rawBlackLevelMode == "Custom") {
-                    RawNumberInputSetting(
-                        title = stringResource(R.string.settings_black_level_custom),
-                        value = rawCustomBlackLevel,
-                        onValueChange = onRawCustomBlackLevelChange
-                    )
-                }
-                RawChoiceSetting(
-                    title = stringResource(R.string.settings_raw_white_level_correction),
-                    description = stringResource(R.string.settings_raw_white_level_correction_description),
-                    levels = listOf(
-                        RawWhiteLevelCorrection.MODE_DEFAULT to stringResource(R.string.settings_white_level_default),
-                        RawWhiteLevelCorrection.MODE_RAW10 to stringResource(R.string.settings_white_level_raw10),
-                        RawWhiteLevelCorrection.MODE_RAW12 to stringResource(R.string.settings_white_level_raw12),
-                        RawWhiteLevelCorrection.MODE_RAW14 to stringResource(R.string.settings_white_level_raw14),
-                        RawWhiteLevelCorrection.MODE_RAW_SENSOR to stringResource(R.string.settings_white_level_raw_sensor)
-                    ),
-                    currentLevel = rawWhiteLevelMode,
-                    onLevelSelected = onRawWhiteLevelModeChange
-                )
-                RawChoiceSetting(
-                    title = stringResource(R.string.settings_raw_cfa_correction),
-                    description = stringResource(R.string.settings_raw_cfa_correction_description),
-                    levels = listOf(
-                        RawCfaCorrection.MODE_DEFAULT to stringResource(R.string.settings_cfa_correction_default),
-                        RawCfaCorrection.MODE_2X2_RGGB to stringResource(R.string.settings_cfa_correction_2x2_rggb),
-                        RawCfaCorrection.MODE_2X2_GRBG to stringResource(R.string.settings_cfa_correction_2x2_grbg),
-                        RawCfaCorrection.MODE_2X2_GBRG to stringResource(R.string.settings_cfa_correction_2x2_gbrg),
-                        RawCfaCorrection.MODE_2X2_BGGR to stringResource(R.string.settings_cfa_correction_2x2_bggr),
-                        RawCfaCorrection.MODE_4X4_RGGB to stringResource(R.string.settings_cfa_correction_4x4_rggb),
-                        RawCfaCorrection.MODE_4X4_GRBG to stringResource(R.string.settings_cfa_correction_4x4_grbg),
-                        RawCfaCorrection.MODE_4X4_GBRG to stringResource(R.string.settings_cfa_correction_4x4_gbrg),
-                        RawCfaCorrection.MODE_4X4_BGGR to stringResource(R.string.settings_cfa_correction_4x4_bggr),
-                        RawCfaCorrection.MODE_8X8_RGGB to stringResource(R.string.settings_cfa_correction_8x8_rggb),
-                        RawCfaCorrection.MODE_8X8_GRBG to stringResource(R.string.settings_cfa_correction_8x8_grbg),
-                        RawCfaCorrection.MODE_8X8_GBRG to stringResource(R.string.settings_cfa_correction_8x8_gbrg),
-                        RawCfaCorrection.MODE_8X8_BGGR to stringResource(R.string.settings_cfa_correction_8x8_bggr)
-                    ),
-                    currentLevel = rawCfaCorrectionMode,
-                    onLevelSelected = onRawCfaCorrectionModeChange
+                RawDngMetadataCorrectionSettings(
+                    rawBlackLevelMode = rawBlackLevelMode,
+                    rawCustomBlackLevel = rawCustomBlackLevel,
+                    rawWhiteLevelMode = rawWhiteLevelMode,
+                    rawCustomWhiteLevel = rawCustomWhiteLevel,
+                    rawCfaCorrectionMode = rawCfaCorrectionMode,
+                    onRawBlackLevelModeChange = onRawBlackLevelModeChange,
+                    onRawCustomBlackLevelChange = onRawCustomBlackLevelChange,
+                    onRawWhiteLevelModeChange = onRawWhiteLevelModeChange,
+                    onRawCustomWhiteLevelChange = onRawCustomWhiteLevelChange,
+                    onRawCfaCorrectionModeChange = onRawCfaCorrectionModeChange
                 )
             }
         }
@@ -317,6 +370,89 @@ fun RawEditPanel(
             onOpenSheet = onOpenBaselineLutSheet
         )
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+/** Shared RAW DNG metadata correction controls for a lens-specific configuration. */
+@Composable
+fun RawDngMetadataCorrectionSettings(
+    rawBlackLevelMode: String,
+    rawCustomBlackLevel: Float,
+    rawWhiteLevelMode: String,
+    rawCustomWhiteLevel: Float,
+    rawCfaCorrectionMode: String,
+    onRawBlackLevelModeChange: (String) -> Unit,
+    onRawCustomBlackLevelChange: (Float) -> Unit,
+    onRawWhiteLevelModeChange: (String) -> Unit,
+    onRawCustomWhiteLevelChange: (Float) -> Unit,
+    onRawCfaCorrectionModeChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        RawChoiceSetting(
+            title = stringResource(R.string.settings_raw_black_level_correction),
+            description = stringResource(R.string.settings_raw_black_level_correction_description),
+            levels = listOf(
+                RawCfaCorrection.MODE_DEFAULT to stringResource(R.string.settings_black_level_default),
+                "0" to "0",
+                "16" to "16",
+                "64" to "64",
+                "256" to "256",
+                "512" to "512",
+                "Custom" to stringResource(R.string.settings_black_level_custom)
+            ),
+            currentLevel = rawBlackLevelMode,
+            onLevelSelected = onRawBlackLevelModeChange
+        )
+        if (rawBlackLevelMode == "Custom") {
+            RawNumberInputSetting(
+                title = stringResource(R.string.settings_black_level_custom),
+                value = rawCustomBlackLevel,
+                onValueChange = onRawCustomBlackLevelChange
+            )
+        }
+        RawChoiceSetting(
+            title = stringResource(R.string.settings_raw_white_level_correction),
+            description = stringResource(R.string.settings_raw_white_level_correction_description),
+            levels = listOf(
+                RawWhiteLevelCorrection.MODE_DEFAULT to stringResource(R.string.settings_white_level_default),
+                RawWhiteLevelCorrection.MODE_RAW10 to stringResource(R.string.settings_white_level_raw10),
+                RawWhiteLevelCorrection.MODE_RAW12 to stringResource(R.string.settings_white_level_raw12),
+                RawWhiteLevelCorrection.MODE_RAW14 to stringResource(R.string.settings_white_level_raw14),
+                RawWhiteLevelCorrection.MODE_RAW_SENSOR to stringResource(R.string.settings_white_level_raw_sensor),
+                RawWhiteLevelCorrection.MODE_CUSTOM to stringResource(R.string.settings_white_level_custom)
+            ),
+            currentLevel = rawWhiteLevelMode,
+            onLevelSelected = onRawWhiteLevelModeChange
+        )
+        if (rawWhiteLevelMode == RawWhiteLevelCorrection.MODE_CUSTOM) {
+            RawNumberInputSetting(
+                title = stringResource(R.string.settings_white_level_custom),
+                value = rawCustomWhiteLevel,
+                onValueChange = onRawCustomWhiteLevelChange
+            )
+        }
+        RawChoiceSetting(
+            title = stringResource(R.string.settings_raw_cfa_correction),
+            description = stringResource(R.string.settings_raw_cfa_correction_description),
+            levels = listOf(
+                RawCfaCorrection.MODE_DEFAULT to stringResource(R.string.settings_cfa_correction_default),
+                RawCfaCorrection.MODE_2X2_RGGB to stringResource(R.string.settings_cfa_correction_2x2_rggb),
+                RawCfaCorrection.MODE_2X2_GRBG to stringResource(R.string.settings_cfa_correction_2x2_grbg),
+                RawCfaCorrection.MODE_2X2_GBRG to stringResource(R.string.settings_cfa_correction_2x2_gbrg),
+                RawCfaCorrection.MODE_2X2_BGGR to stringResource(R.string.settings_cfa_correction_2x2_bggr),
+                RawCfaCorrection.MODE_4X4_RGGB to stringResource(R.string.settings_cfa_correction_4x4_rggb),
+                RawCfaCorrection.MODE_4X4_GRBG to stringResource(R.string.settings_cfa_correction_4x4_grbg),
+                RawCfaCorrection.MODE_4X4_GBRG to stringResource(R.string.settings_cfa_correction_4x4_gbrg),
+                RawCfaCorrection.MODE_4X4_BGGR to stringResource(R.string.settings_cfa_correction_4x4_bggr),
+                RawCfaCorrection.MODE_8X8_RGGB to stringResource(R.string.settings_cfa_correction_8x8_rggb),
+                RawCfaCorrection.MODE_8X8_GRBG to stringResource(R.string.settings_cfa_correction_8x8_grbg),
+                RawCfaCorrection.MODE_8X8_GBRG to stringResource(R.string.settings_cfa_correction_8x8_gbrg),
+                RawCfaCorrection.MODE_8X8_BGGR to stringResource(R.string.settings_cfa_correction_8x8_bggr)
+            ),
+            currentLevel = rawCfaCorrectionMode,
+            onLevelSelected = onRawCfaCorrectionModeChange
+        )
     }
 }
 
@@ -428,21 +564,20 @@ private fun RawProfileToneMapSwitches(
     onParamsChange: (RawToneMappingParameters) -> Unit,
     onAdjustmentEnd: () -> Unit
 ) {
-    RawSwitchSettingItem(
-        title = stringResource(R.string.settings_raw_google_pixel_tone_map),
-        description = stringResource(R.string.settings_raw_google_pixel_tone_map_description),
-        checked = params.useGooglePixelToneMap,
-        onCheckedChange = { enabled ->
-            onParamsChange(params.withGooglePixelToneMap(enabled))
-            onAdjustmentEnd()
-        }
-    )
-    RawSwitchSettingItem(
-        title = stringResource(R.string.settings_raw_oppo_master_tone_map),
-        description = stringResource(R.string.settings_raw_oppo_master_tone_map_description),
-        checked = params.useOppoMasterToneMap,
-        onCheckedChange = { enabled ->
-            onParamsChange(params.withOppoMasterToneMap(enabled))
+    RawChoiceSetting(
+        title = stringResource(R.string.settings_raw_profile_tone_map),
+        description = stringResource(R.string.settings_raw_profile_tone_map_description),
+        levels = listOf(
+            RawProfileToneMapMode.Default.name to stringResource(R.string.settings_raw_profile_tone_map_default),
+            RawProfileToneMapMode.Photon.name to stringResource(R.string.settings_raw_profile_tone_map_photon_pgtm),
+            RawProfileToneMapMode.OppoMaster.name to stringResource(R.string.settings_raw_profile_tone_map_oppo_master),
+        ),
+        currentLevel = params.profileToneMapMode.name,
+        onLevelSelected = { selected ->
+            val mode = RawProfileToneMapMode.values()
+                .firstOrNull { it.name == selected }
+                ?: RawProfileToneMapMode.Default
+            onParamsChange(params.withProfileToneMapMode(mode))
             onAdjustmentEnd()
         }
     )
@@ -487,7 +622,9 @@ private fun RawToneMappingControls(
     fun formatPower(value: Float): String = String.format("%.2f", value)
 
     when (rawRenderingEngine) {
-        RawRenderingEngine.AdobeCurve -> Unit
+        RawRenderingEngine.AdobeCurve,
+        RawRenderingEngine.HncsCcm,
+        RawRenderingEngine.HncsLut -> Unit
 
         RawRenderingEngine.AgX -> {
             SliderSettingItem(
@@ -823,13 +960,25 @@ private fun RawRenderingEngineSelector(
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                RawRenderingEngine.entries.forEach { engine ->
+                RawRenderingEngine.entries
+                    .filterNot { it == RawRenderingEngine.HncsLut }
+                    .forEach { engine ->
                     RawColorEngineItem(
                         name = rawRenderingEngineName(engine),
                         description = rawColorEngineDescription(engine),
-                        isSelected = selectedEngine == engine,
+                        isSelected = if (engine == RawRenderingEngine.HncsCcm) {
+                            selectedEngine.isHncs
+                        } else {
+                            selectedEngine == engine
+                        },
                         onClick = {
-                            onSelectEngine(engine)
+                            onSelectEngine(
+                                if (engine == RawRenderingEngine.HncsCcm && selectedEngine.isHncs) {
+                                    selectedEngine
+                                } else {
+                                    engine
+                                }
+                            )
                             showSheet = false
                         }
                     )
@@ -848,6 +997,8 @@ private fun rawRenderingEngineName(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
+        RawRenderingEngine.HncsCcm,
+        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs)
     }
 }
 
@@ -859,6 +1010,8 @@ private fun rawColorEngineDescription(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid_description)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic_description)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film_description)
+        RawRenderingEngine.HncsCcm,
+        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs_description)
     }
 }
 

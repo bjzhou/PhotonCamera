@@ -66,6 +66,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.viewmodel.GalleryBatchOperation
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -135,15 +136,23 @@ fun GalleryScreen(
     val isSystemLoadingMore by viewModel.isSystemLoadingMore.collectAsState()
     val isPhotonLoadingMore by viewModel.isPhotonLoadingMore.collectAsState()
     val isSharing by viewModel.isSharing.collectAsState()
+    val isExporting by viewModel.isExporting.collectAsState()
+    val isPastingSettings by viewModel.isPastingSettings.collectAsState()
+    val hasCopiedEditSettings by viewModel.hasCopiedEditSettings.collectAsState()
+    val batchOperationProgress by viewModel.batchOperationProgress.collectAsState()
     val isSelectionMode = viewModel.isSelectionMode
     val selectedPhotos = viewModel.selectedPhotos
+    val selectedImageCount = selectedPhotos.count { it.isImage }
     val selectedTab = viewModel.selectedTab
     val hasPermission = viewModel.hasGalleryPermission
+    val isBatchOperationRunning = isExporting || isPastingSettings
     val scope = rememberCoroutineScope()
     var shouldRenderGrid by rememberSaveable { mutableStateOf(false) }
 
     BackHandler(enabled = isSelectionMode) {
-        viewModel.exitSelectionMode()
+        if (!isBatchOperationRunning) {
+            viewModel.exitSelectionMode()
+        }
     }
 
     fun importSelectedMedia(uris: List<Uri>, videoUris: List<Uri?>? = null) {
@@ -291,7 +300,7 @@ fun GalleryScreen(
                             )
                         } else {
                             Text(
-                                text = stringResource(R.string.gallery_photon),
+                                text = stringResource(R.string.gallery),
                                 color = Color.White,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold
@@ -299,27 +308,41 @@ fun GalleryScreen(
                         }
                     },
                     navigationIcon = {
-                        IconButton(onClick = {
-                            if (isSelectionMode) {
-                                viewModel.exitSelectionMode()
-                            } else {
-                                onBack()
-                            }
-                        }) {
+                        IconButton(
+                            onClick = {
+                                if (isSelectionMode) {
+                                    viewModel.exitSelectionMode()
+                                } else {
+                                    onBack()
+                                }
+                            },
+                            enabled = !isBatchOperationRunning
+                        ) {
                             Icon(
                                 imageVector = if (isSelectionMode) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(R.string.back),
-                                tint = Color.White
+                                tint = if (isBatchOperationRunning) {
+                                    Color.White.copy(alpha = 0.38f)
+                                } else {
+                                    Color.White
+                                }
                             )
                         }
                     },
                     actions = {
                         if (isSelectionMode) {
-                            IconButton(onClick = { viewModel.toggleSelectAll() }) {
+                            IconButton(
+                                onClick = { viewModel.toggleSelectAll() },
+                                enabled = !isBatchOperationRunning
+                            ) {
                                 Icon(
                                     imageVector = AppIcons.SelectAll,
                                     contentDescription = stringResource(R.string.select_all),
-                                    tint = Color.White
+                                    tint = if (isBatchOperationRunning) {
+                                        Color.White.copy(alpha = 0.38f)
+                                    } else {
+                                        Color.White
+                                    }
                                 )
                             }
                         } else {
@@ -363,97 +386,193 @@ fun GalleryScreen(
                         .fillMaxWidth()
                         .navigationBarsPadding()
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        // 删除按钮
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.clickable { showDeleteDialog = true }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = stringResource(R.string.delete),
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(R.string.delete),
-                                color = Color.White,
-                                fontSize = 12.sp
-                            )
-                        }
-
-                        // 分享按钮
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.clickable(enabled = !isSharing) { viewModel.shareSelectedPhotos() }
-                        ) {
-                            if (isSharing) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    modifier = Modifier.size(28.dp),
-                                    strokeWidth = 2.dp
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        batchOperationProgress?.let { progress ->
+                            val progressLabel = when (progress.operation) {
+                                GalleryBatchOperation.PASTE_SETTINGS ->
+                                    R.string.pasting_settings_progress
+                                GalleryBatchOperation.EXPORT ->
+                                    R.string.exporting_progress
+                            }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 16.dp, top = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        progressLabel,
+                                        progress.completed,
+                                        progress.total
+                                    ),
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 12.sp
                                 )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = stringResource(R.string.share),
-                                    tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
+                                LinearProgressIndicator(
+                                    progress = {
+                                        progress.completed.toFloat() /
+                                            progress.total.coerceAtLeast(1).toFloat()
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(4.dp),
+                                    color = AccentOrange,
+                                    trackColor = Color.White.copy(alpha = 0.15f)
                                 )
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(R.string.share),
-                                color = Color.White,
-                                fontSize = 12.sp
-                            )
                         }
 
-                        // 导出按钮
-                        if (viewModel.selectedTab == GalleryTab.PHOTON) {
-                            val isExporting by viewModel.isExporting.collectAsState()
-                            val context = LocalContext.current
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            // 删除按钮
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.clickable(enabled = !isExporting) {
-                                    viewModel.exportSelectedPhotos { count ->
-                                        if (count > 0) {
-                                            Toast.makeText(context, R.string.export_complete, Toast.LENGTH_SHORT).show()
-                                        }
+                                modifier = Modifier.clickable(
+                                    enabled = !isBatchOperationRunning
+                                ) {
+                                    showDeleteDialog = true
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = stringResource(R.string.delete),
+                                    tint = if (isBatchOperationRunning) {
+                                        Color.White.copy(alpha = 0.38f)
+                                    } else {
+                                        Color.White
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.delete),
+                                    color = Color.White,
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            // 分享按钮
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.clickable(
+                                    enabled = !isSharing && !isBatchOperationRunning
+                                ) {
+                                    viewModel.shareSelectedPhotos()
+                                }
+                            ) {
+                                if (isSharing) {
+                                    CircularProgressIndicator(
+                                        color = Color.White,
+                                        modifier = Modifier.size(28.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = stringResource(R.string.share),
+                                        tint = if (isBatchOperationRunning) {
+                                            Color.White.copy(alpha = 0.38f)
+                                        } else {
+                                            Color.White
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.share),
+                                    color = Color.White,
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            // 批量粘贴设置
+                            val canPasteSettings = hasCopiedEditSettings &&
+                                selectedImageCount > 0 &&
+                                !isBatchOperationRunning
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.clickable(enabled = canPasteSettings) {
+                                    viewModel.pasteCopiedSettingsToSelectedPhotos {
+                                            successCount,
+                                            total ->
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(
+                                                    R.string.paste_settings_complete,
+                                                    successCount,
+                                                    total
+                                                ),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                     }
                                 }
                             ) {
-                                if (isExporting) {
-                                    val progress = viewModel.exportProgress
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        CircularProgressIndicator(
-                                            color = Color.White,
-                                            modifier = Modifier.size(28.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                        Text(
-                                            text = "${progress.first}/${progress.second}",
-                                            color = Color.White,
-                                            fontSize = 10.sp
-                                        )
+                                Icon(
+                                    imageVector = AppIcons.ContentCopy,
+                                    contentDescription =
+                                        stringResource(R.string.paste_settings),
+                                    tint = if (canPasteSettings) {
+                                        AccentOrange
+                                    } else {
+                                        Color.White.copy(alpha = 0.38f)
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.paste_settings),
+                                    color = if (canPasteSettings) {
+                                        Color.White
+                                    } else {
+                                        Color.White.copy(alpha = 0.38f)
+                                    },
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            // 批量导出
+                            if (viewModel.selectedTab == GalleryTab.PHOTON) {
+                                val canExport = selectedImageCount > 0 &&
+                                    !isBatchOperationRunning
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.clickable(enabled = canExport) {
+                                        viewModel.exportSelectedPhotos { count ->
+                                            if (count > 0) {
+                                                Toast.makeText(
+                                                    context,
+                                                    R.string.export_complete,
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
                                     }
-                                } else {
+                                ) {
                                     Icon(
                                         imageVector = AppIcons.Output,
-                                        contentDescription = stringResource(R.string.export),
-                                        tint = AccentOrange,
+                                        contentDescription =
+                                            stringResource(R.string.export),
+                                        tint = if (canExport) {
+                                            AccentOrange
+                                        } else {
+                                            Color.White.copy(alpha = 0.38f)
+                                        },
                                         modifier = Modifier.size(28.dp)
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
                                         text = stringResource(R.string.export),
-                                        color = Color.White,
+                                        color = if (canExport) {
+                                            Color.White
+                                        } else {
+                                            Color.White.copy(alpha = 0.38f)
+                                        },
                                         fontSize = 12.sp
                                     )
                                 }
@@ -1298,7 +1417,12 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         videoDuration.text = photo.getFormattedDuration()
         motionIcon.visibility = if (photo.isMotionPhoto) VISIBLE else GONE
         burstIcon.visibility = if (photo.isBurstPhoto) VISIBLE else GONE
-        rawBadge.visibility = if (photo.isImage && viewModel.isRawInGallery(photo.id)) VISIBLE else GONE
+        val isRawPhoto = when (viewModel.selectedTab) {
+            GalleryTab.PHOTON -> viewModel.isRawInGallery(photo.id)
+            GalleryTab.SYSTEM -> photo.isSystemRawImage()
+        }
+        rawBadge.visibility = if (photo.isImage && isRawPhoto) VISIBLE else GONE
+        rawBadge.text = context.getString(R.string.gallery_raw_badge)
         importedBadge.visibility =
             if (viewModel.selectedTab == GalleryTab.PHOTON && photo.sourceUri != null) VISIBLE else GONE
         importedBadge.text = context.getString(R.string.imported)
@@ -1391,6 +1515,23 @@ private fun Bitmap.galleryBitmapAspectRatio(): Float {
     } else {
         resolvedWidth.toFloat() / resolvedHeight.toFloat()
     }
+}
+
+private fun MediaData.isSystemRawImage(): Boolean {
+    if (!isImage) return false
+    if (mimeType?.let { type ->
+            type.contains("raw", ignoreCase = true) ||
+                    type.contains("dng", ignoreCase = true)
+        } == true
+    ) {
+        return true
+    }
+
+    return displayName.substringAfterLast('.', missingDelimiterValue = "")
+        .lowercase()
+        .let { extension ->
+            extension in setOf("dng", "arw", "cr2", "cr3", "nef", "nrw", "orf", "pef", "raf", "rw2", "srw")
+        }
 }
 
 private fun MediaData.galleryAspectRatio(isLandscape: Boolean): Float {

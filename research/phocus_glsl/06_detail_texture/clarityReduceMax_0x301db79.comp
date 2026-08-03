@@ -1,0 +1,34 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: d39ab75d0a0c31220083b5b7dd7532f3918e7bd91c09a7eb482c9ad546043832
+ * ELF offsets: 0x301db79
+ * Symbols: clarityReduceMax_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+layout(r32f, binding=0) readonly  uniform image2D uSrc;
+layout(r32f, binding=1) writeonly uniform image2D uDst;
+
+layout(std140, binding=2) uniform ClarityReduceMaxParams_UBO {
+    int srcW;
+    int srcH;
+    int pad0;
+    int pad1;
+};
+
+layout(local_size_x=16, local_size_y=16) in;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    if (gid.x >= imageSize(uDst).x || gid.y >= imageSize(uDst).y) return;
+
+    ivec2 s = gid * 2;
+    float v0 = imageLoad(uSrc, ivec2(s.x, s.y)).r;
+    float v1 = imageLoad(uSrc, ivec2(min(s.x+1, srcW-1), s.y )).r;
+    float v2 = imageLoad(uSrc, ivec2(s.x, min(s.y+1, srcH-1))).r;
+    float v3 = imageLoad(uSrc, ivec2(min(s.x+1, srcW-1), min(s.y+1, srcH-1))).r;
+    imageStore(uDst, gid, vec4(max(max(v0, v1), max(v2, v3)), 0.0, 0.0, 0.0));
+}

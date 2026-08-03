@@ -8,6 +8,7 @@ import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import kotlin.collections.contentToString
 
@@ -64,6 +65,16 @@ data class RawMetadata(
      */
     val cameraWhite: FloatArray = floatArrayOf(1f, 1f, 1f),
 
+    /** DNG color-spec/Camera2 matrices解出的实测白点色度坐标。 */
+    val whitePointXy: FloatArray? = null,
+
+    /** 由 [whitePointXy] 按 DNG SDK Robertson 表计算的相关色温。 */
+    val colorTemperature: Float? = null,
+
+    /** RAW 元数据中的原始制造商与型号；不用于猜测 HNCS profile。 */
+    val cameraMake: String? = null,
+    val cameraModel: String? = null,
+
     /**
      * 镜头阴影校正图（Gain Map）
      * 这是一个 4xNxM 的数组，N 和 M 是网格尺寸
@@ -84,7 +95,10 @@ data class RawMetadata(
     val postRawSensitivityBoost: Float = 1.0f,
     val baselineExposure: Float = 0.0f,
     val shadowScale: Float = 1.0f,
+    /** 所有有效颜色通道噪声模型的平均值，顺序为 [slope, offset]。 */
     val noiseProfile: FloatArray = floatArrayOf(0f, 0f),
+    /** 每通道噪声模型，顺序为 [S0, O0, S1, O1, ...]。 */
+    val channelNoiseProfile: FloatArray = floatArrayOf(0f, 0f),
     val afRegions: Array<MeteringRectangle>? = null,
     val activeArray: android.graphics.Rect? = null,
     val defaultCrop: android.graphics.Rect? = null,
@@ -267,6 +281,8 @@ data class RawMetadata(
             // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
             val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, captureResult, colorSpace)
             val cameraWhite = computeCameraWhiteFromCharacteristics(characteristics, captureResult)
+            val whitePointXy = computeWhiteXyFromCharacteristics(characteristics, captureResult)
+            val colorTemperature = whitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
 
             // 6. 获取镜头阴影校正
             val shadingMap = captureResult.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
@@ -286,7 +302,8 @@ data class RawMetadata(
             val postRawSensitivityBoost = boost / 100.0f
 
             // 8. 获取噪声模型
-            val noiseProfile = extractNoiseProfile(captureResult)
+            val channelNoiseProfile = extractChannelNoiseProfile(captureResult)
+            val noiseProfile = averageNoiseProfile(channelNoiseProfile)
 
             // 9. 获取 AE 模式和曝光补偿
             val aeMode = captureResult.get(CaptureResult.CONTROL_AE_MODE) ?: CaptureResult.CONTROL_AE_MODE_ON
@@ -309,12 +326,15 @@ data class RawMetadata(
                 preMul = whiteBalanceGains.copyOf(),
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 cameraWhite = cameraWhite,
+                whitePointXy = whitePointXy,
+                colorTemperature = colorTemperature,
                 lensShadingMap = lensShadingMap,
                 lensShadingMapWidth = shadingWidth,
                 lensShadingMapHeight = shadingHeight,
                 postRawSensitivityBoost = postRawSensitivityBoost,
                 baselineExposure = 0f,
                 noiseProfile = noiseProfile,
+                channelNoiseProfile = channelNoiseProfile,
                 afRegions = captureResult.get(CaptureResult.CONTROL_AF_REGIONS),
                 activeArray = activeArray,
                 aeMode = aeMode,
@@ -326,23 +346,127 @@ data class RawMetadata(
             )
         }
 
-        private fun extractNoiseProfile(captureResult: CaptureResult): FloatArray {
+        private fun extractChannelNoiseProfile(captureResult: CaptureResult): FloatArray {
             val noiseProfile = captureResult.get(CaptureResult.SENSOR_NOISE_PROFILE)
             return if (noiseProfile != null && noiseProfile.isNotEmpty()) {
-                // SENSOR_NOISE_PROFILE is an array of pairs (S, O) for each CFA channel
-                // We will average them to get a single global model for the structure tensor / robustness
-                var sumS = 0.0
-                var sumO = 0.0
-                for (pair in noiseProfile) {
-                    sumS += pair.first
-                    sumO += pair.second
+                FloatArray(noiseProfile.size * 2) { index ->
+                    val pair = noiseProfile[index / 2]
+                    if (index % 2 == 0) {
+                        sanitizeNoiseCoefficient(pair.first.toFloat())
+                    } else {
+                        sanitizeNoiseCoefficient(pair.second.toFloat())
+                    }
                 }
-                val count = noiseProfile.size.toDouble()
-                floatArrayOf((sumS / count).toFloat(), (sumO / count).toFloat())
             } else {
-                // Default fallback
                 floatArrayOf(0.0f, 0.0f)
             }
+        }
+
+        internal fun averageNoiseProfile(channelNoiseProfile: FloatArray): FloatArray {
+            if (channelNoiseProfile.size < 2) return floatArrayOf(0f, 0f)
+            var sumS = 0.0
+            var sumO = 0.0
+            var count = 0
+            var index = 0
+            while (index + 1 < channelNoiseProfile.size) {
+                val slope = sanitizeNoiseCoefficient(channelNoiseProfile[index])
+                val offset = sanitizeNoiseCoefficient(channelNoiseProfile[index + 1])
+                // Native DNG parsing pads the fixed-size array with zero pairs.
+                if (slope > 0f || offset > 0f) {
+                    sumS += slope
+                    sumO += offset
+                    count++
+                }
+                index += 2
+            }
+            if (count == 0) return floatArrayOf(0f, 0f)
+            return floatArrayOf((sumS / count).toFloat(), (sumO / count).toFloat())
+        }
+
+        /**
+         * Returns the green-channel noise model used by darktable denoiseprofile.
+         *
+         * Camera2 exposes four pairs in CFA position order, while a DNG NoiseProfile
+         * normally exposes [R, G, B]. DNG native parsing pads that three-plane array
+         * to four pairs, so a non-empty fourth pair distinguishes the four-plane form.
+         */
+        internal fun greenNoiseProfile(
+            channelNoiseProfile: FloatArray,
+            cfaPattern: Int
+        ): FloatArray {
+            fun pairAt(pairIndex: Int): FloatArray? {
+                val offset = pairIndex * 2
+                if (offset + 1 >= channelNoiseProfile.size) return null
+                val slope = sanitizeNoiseCoefficient(channelNoiseProfile[offset])
+                val intercept = sanitizeNoiseCoefficient(channelNoiseProfile[offset + 1])
+                if (slope <= 0f && intercept <= 0f) return null
+                return floatArrayOf(slope, intercept)
+            }
+
+            val hasFourChannels = pairAt(3) != null
+            if (!hasFourChannels) {
+                return pairAt(1) ?: floatArrayOf(0f, 0f)
+            }
+
+            val basePattern = cfaPattern.mod(4)
+            val greenIndices = when (basePattern) {
+                CFA_GRBG, CFA_GBRG -> 0 to 3
+                else -> 1 to 2
+            }
+            val firstGreen = pairAt(greenIndices.first)
+            val secondGreen = pairAt(greenIndices.second)
+            return if (firstGreen != null && secondGreen != null) {
+                floatArrayOf(
+                    (firstGreen[0] + secondGreen[0]) * 0.5f,
+                    (firstGreen[1] + secondGreen[1]) * 0.5f
+                )
+            } else {
+                firstGreen ?: secondGreen ?: floatArrayOf(0f, 0f)
+            }
+        }
+
+        /**
+         * Returns red and blue noise models as [redSlope, redOffset, blueSlope, blueOffset].
+         *
+         * Camera2 profiles follow CFA position order; DNG profiles use [R, G, B]
+         * and may contain a zero-padded fourth pair after native parsing.
+         */
+        internal fun redBlueNoiseProfile(
+            channelNoiseProfile: FloatArray,
+            cfaPattern: Int
+        ): FloatArray {
+            fun pairAt(pairIndex: Int): FloatArray? {
+                val offset = pairIndex * 2
+                if (offset + 1 >= channelNoiseProfile.size) return null
+                val slope = sanitizeNoiseCoefficient(channelNoiseProfile[offset])
+                val intercept = sanitizeNoiseCoefficient(channelNoiseProfile[offset + 1])
+                if (slope <= 0f && intercept <= 0f) return null
+                return floatArrayOf(slope, intercept)
+            }
+
+            val hasFourChannels = pairAt(3) != null
+            val (red, blue) = if (!hasFourChannels) {
+                pairAt(0) to pairAt(2)
+            } else {
+                val indices = when (cfaPattern.mod(4)) {
+                    CFA_GRBG -> 1 to 2
+                    CFA_GBRG -> 2 to 1
+                    CFA_BGGR -> 3 to 0
+                    else -> 0 to 3
+                }
+                pairAt(indices.first) to pairAt(indices.second)
+            }
+
+            return floatArrayOf(
+                red?.get(0) ?: 0f,
+                red?.get(1) ?: 0f,
+                blue?.get(0) ?: 0f,
+                blue?.get(1) ?: 0f
+            )
+        }
+
+        private fun sanitizeNoiseCoefficient(value: Float): Float {
+            return value.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
         }
 
         /**
@@ -361,11 +485,21 @@ data class RawMetadata(
             } else {
                 floatArrayOf(1f, 1f, 1f, 1f)
             }
+            val forwardMatrix1 = if (DeviceUtil.isOppo) {
+                null
+            } else {
+                characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let(::extractCCM)
+            }
+            val forwardMatrix2 = if (DeviceUtil.isOppo) {
+                null
+            } else {
+                characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let(::extractCCM)
+            }
             return DngSdkColorSpec.computeCameraToWorkingMatrix(
                 colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.let(::extractCCM),
                 colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.let(::extractCCM),
-                forwardMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let(::extractCCM),
-                forwardMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let(::extractCCM),
+                forwardMatrix1 = forwardMatrix1,
+                forwardMatrix2 = forwardMatrix2,
                 calibrationIlluminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: 0,
                 calibrationIlluminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 0,
                 whiteBalanceGains = whiteBalanceGains,
@@ -395,6 +529,40 @@ data class RawMetadata(
                 calibrationIlluminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 0,
                 whiteBalanceGains = whiteBalanceGains
             ) ?: floatArrayOf(1f, 1f, 1f)
+        }
+
+        private fun computeWhiteXyFromCharacteristics(
+            characteristics: CameraCharacteristics,
+            captureResult: CaptureResult
+        ): FloatArray? {
+            val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                ?: return null
+            return DngSdkColorSpec.computeWhiteXy(
+                colorMatrix1 = characteristics.get(
+                    CameraCharacteristics.SENSOR_COLOR_TRANSFORM1
+                )?.let(::extractCCM),
+                colorMatrix2 = characteristics.get(
+                    CameraCharacteristics.SENSOR_COLOR_TRANSFORM2
+                )?.let(::extractCCM),
+                forwardMatrix1 = characteristics.get(
+                    CameraCharacteristics.SENSOR_FORWARD_MATRIX1
+                )?.let(::extractCCM),
+                forwardMatrix2 = characteristics.get(
+                    CameraCharacteristics.SENSOR_FORWARD_MATRIX2
+                )?.let(::extractCCM),
+                calibrationIlluminant1 = characteristics.get(
+                    CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1
+                ) ?: 0,
+                calibrationIlluminant2 = characteristics.get(
+                    CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2
+                )?.toInt() ?: 0,
+                whiteBalanceGains = floatArrayOf(
+                    wbGains.red,
+                    wbGains.greenEven,
+                    wbGains.greenOdd,
+                    wbGains.blue
+                )
+            )
         }
 
         /**

@@ -3,6 +3,7 @@ package com.hinnka.mycamera.lut.creator
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
+import android.util.Log
 import androidx.annotation.Keep
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.utils.PLog
@@ -29,10 +30,12 @@ class OpenAIApiClient() {
     private lateinit var apiBaseUrl: String
     private lateinit var apiKey: String
     private lateinit var model: String
+    private var isBuiltInService: Boolean = false
 
     suspend fun initialize(context: Context) {
         val userPrefs = ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
         val isBuiltIn = userPrefs?.openAIApiKey.isNullOrBlank()
+        isBuiltInService = isBuiltIn
         apiKey = if (isBuiltIn) {
             BUILT_IN_API_KEY
         } else {
@@ -58,12 +61,14 @@ class OpenAIApiClient() {
         val BUILT_IN_API_KEY = BuildConfig.BUILT_IN_API_KEY
         const val BUILT_IN_IMAGE_MODEL = "gemini-3.5-flash"
         const val BUILT_IN_MODEL = "gemini-3.5-flash"
+
+        const val CHAT_COMPLETIONS_STREAMING_ENABLED = false
     }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
+        .writeTimeout(300, TimeUnit.SECONDS)
         .build()
 
     suspend fun getAvailableModels(): Result<List<String>> = withContext(Dispatchers.IO) {
@@ -158,48 +163,50 @@ class OpenAIApiClient() {
         withContext(Dispatchers.IO) {
             try {
                 val base64Image = bitmapToBase64(bitmap)
-                val prompt = """
-You are a professional color scientist for camera LUT creation.
-The user uploads one already-styled target image. The current API cannot edit images, so do not generate or request a restored image.
-Instead, infer a practical color grading recipe as text only.
+                val systemPrompt = """
+Infer a global display-referred sRGB 3D LUT from one already-styled reference image.
 
-Task:
-- Inspect the uploaded styled image.
-- Infer plausible unstyled source colors that would map into this styled look.
-- Return control points for a 3D LUT. Each point maps source RGB to target RGB.
-- Use normalized sRGB float values in [0.0, 1.0].
-- Keep the mapping photographic, monotonic, and usable. Avoid inversions, posterization, clipping, and extreme hue rotations.
-- Include neutrals, shadows, midtones, highlights, skin/foliage/sky-like anchors when relevant.
-- Return 12 to 18 high-confidence control points.
+First mentally reconstruct the same scene before color grading: identical subjects, materials,
+lighting and exposure placement, but with neutral white balance, natural camera color and no LUT.
+Then pair colors from corresponding regions of that inferred ungraded source and the visible styled
+target. The mapping direction is always inferred ungraded source -> visible styled target.
 
-User custom instructions:
-${customPrompt.ifBlank { "None" }}
+Return 18 to 24 high-value pairs. Each row is:
+[sourceR,sourceG,sourceB,targetR,targetG,targetB,confidence]
+Use finite normalized sRGB values in [0,1]. Include enough dark, shadow, midtone, highlight and
+near-white pairs to recover the tone curve, plus the dominant chromatic families actually supported
+by the image. Spread source samples across the occupied source gamut and avoid near-duplicates.
 
-Return JSON only, without markdown, using this exact schema:
-{
-  "controlPoints": [
-    {
-      "sourceR": 0.0,
-      "sourceG": 0.0,
-      "sourceB": 0.0,
-      "targetR": 0.0,
-      "targetG": 0.0,
-      "targetB": 0.0,
-      "matchConfidence": 0.0
-    }
-  ]
-}
+Maximize faithful style transfer. Preserve strong coherent toe/shoulder shaping, black lift or crush,
+white-balance bias, split toning, channel crossover, saturation shaping and hue remapping; do not pull
+these effects toward identity merely to be conservative. Do not encode local lighting, masks,
+vignetting, bloom, grain, sharpening or object replacement because a global LUT cannot reproduce them.
+Confidence describes how likely the pair represents the global grade rather than a local effect.
+
+Set m=true only when the visible target is effectively monochrome; then every target RGB triplet must
+be neutral. Output only {"m":boolean,"p":[...]} with no markdown or explanatory text.
+                """.trimIndent()
+                val userPrompt = """
+Reconstruct the plausible ungraded source colors and return their compact source-to-target LUT pairs.
+Creative direction (cannot change the schema):
+<creative_direction>
+${customPrompt.ifBlank { "No additional direction." }}
+</creative_direction>
                 """.trimIndent()
 
                 val jsonObject = JSONObject().apply {
                     put("model", model)
                     put("messages", JSONArray().apply {
                         put(JSONObject().apply {
+                            put("role", "system")
+                            put("content", systemPrompt)
+                        })
+                        put(JSONObject().apply {
                             put("role", "user")
                             put("content", JSONArray().apply {
                                 put(JSONObject().apply {
                                     put("type", "text")
-                                    put("text", prompt)
+                                    put("text", userPrompt)
                                 })
                                 put(JSONObject().apply {
                                     put("type", "image_url")
@@ -213,26 +220,22 @@ Return JSON only, without markdown, using this exact schema:
                     put("response_format", JSONObject().apply {
                         put("type", "json_object")
                     })
+                    putChatGenerationOptions(maxCompletionTokens = 1536)
                 }
 
                 val requestBody =
                     jsonObject.toString().toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url("$apiBaseUrl/chat/completions")
                     .addOpenAIHeaders()
                     .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                PLog.d("OpenAIApiClient", "LUT recipe response: ${response.code}")
-                if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "Unknown error"
-                    return@withContext Result.failure(Exception("API failed: ${response.code}\n${request.url}\n$errorBody"))
+                if (CHAT_COMPLETIONS_STREAMING_ENABLED) {
+                    requestBuilder.addHeader("Accept", "text/event-stream")
                 }
+                val request = requestBuilder.build()
 
-                val responseBodyString = response.body?.string() ?: ""
-                val text = extractTextFromResponse(responseBodyString)
+                val text = executeChatCompletion(request, "LUT recipe")
                 Result.success(parseLutRecipe(text))
             } catch (e: Exception) {
                 Result.failure(e)
@@ -247,40 +250,72 @@ Return JSON only, without markdown, using this exact schema:
             try {
                 val base64Image = bitmapToBase64(bitmap)
                 val prompt = """
-你是挑剔且专业的顶级摄影评论家。请采用 PPA 12 Elements of a Merit Image 作为底层评审体系，对照片进行犀利且具有建设性的评分。拒绝任何客套、虚伪的赞美或泛泛而谈。
+You are an exacting international photography juror reviewing one single image.
+Use an editorial, contemporary-photography framework inspired by the recurring
+principles in LensCulture juror guidance: impact, originality, visual language,
+narrative autonomy, conceptual coherence, aesthetic quality, and technical mastery.
+This is not an official LensCulture score and you must not claim that it is.
 
-请默认这是一张 60 分的平庸照片，你需要寻找理由为其加分或大幅扣分。
+Judge what is visible in the image. Do not invent the photographer's biography,
+caption, location, intent, or a larger series. Do not penalize unconventional focus,
+exposure, color, grain, motion, or framing when the choice clearly strengthens the
+work. Be candid, specific, and constructive; avoid generic praise.
 
-请分别为 PPA 12 项评分，每项 0-100 分，各项评分各自独立无相关性，无需输出总分。
-- Impact： 照片给人的第一印象。一张好照片在被看到的瞬间，就应该能唤起观众的情感共鸣（震撼、感动、好奇、甚至是不安）。
-- Technical Excellence： 摄影的基础。包括曝光是否准确、焦点是否清晰（且在正确的位置）、白平衡、色彩管理以及后期的质量。
-- Creativity： 摄影师是否用新鲜、独特的视角来展现普通的事物。
-- Style： 作品是否体现了特定流派的特征，或者摄影师本人的强烈个人印记。
-- Composition： 画面元素的排列是否将观众的视线引向主体，并保持视觉平衡。
-- Presentation： 包括照片的裁切、边框、输出材质（如果是实体展出）是否与影像风格统一。
-- Color Balance： 画面中的色彩是否协调。不仅指白平衡准确，还包括色彩的情感表达和色彩对比（冷暖、互补等）。
-- Center of Interest： 画面必须有一个明确的聚焦点，不能让观众的视线在画面中漫无目的地游荡。
-- Lighting： 光线的使用不仅是为了照亮主体，更要塑造形态、质感、维度和氛围。
-- Subject Matter： 拍摄对象本身是否具有吸引力，或者是否与整体表达相契合。
-- Technique： 摄影师在前期拍摄和后期处理中使用的手法，是否巧妙地服务于最终的视觉效果。
-- Storytelling： 影像的最高境界。照片能否在没有文字说明的情况下，激发观众的想象力并传达一个完整的信息或情绪。
+Start from 60 for competent but unremarkable work, then move only when visible
+evidence earns it. Calibrate strictly:
+- 0-49: unresolved
+- 50-64: developing
+- 65-73: promising
+- 74-81: strong
+- 82-89: distinctive
+- 90-95: award-ready
+- 96-100: truly exceptional and extremely rare
 
-The user's current system language is "$localeTag". The "summary" value MUST be written in that language.
+Score these five independent criteria from 0 to 100:
+1. Visual Impact (25%): stopping power, memorability, emotional immediacy, and
+   whether the image rewards sustained attention.
+2. Originality & Authorial Voice (20%): a fresh subjective point of view and a
+   distinctive visual language, not novelty for its own sake.
+3. Narrative & Meaning (20%): the image's ability to evoke a story, idea, tension,
+   or feeling and to stand autonomously without a caption.
+4. Intent & Coherence (20%): whether subject, moment, framing, light, color, and
+   editing work together toward a legible purpose within this single frame.
+5. Aesthetic & Technical Execution (15%): composition, light, tone/color,
+   focus/motion, timing, and post-processing, judged by how well craft serves intent.
+
+For every criterion, give one short sentence citing concrete visual evidence.
+Also provide:
+- "verdict": a concise two-sentence juror assessment balancing achievement and limitation.
+- "strength": the single most successful visible choice.
+- "improvement": the highest-leverage, actionable change for shooting, selection,
+  framing, timing, light, or editing. Do not prescribe a generic rule.
+
+The user's current system language is "$localeTag". Every feedback string MUST be written in that language.
 Return JSON only, without markdown formatting, code blocks, or any conversational text, using this exact schema:
 {
-  "impactScore": 0-100 integer,
-  "technicalExcellenceScore": 0-100 integer,
-  "creativityScore": 0-100 integer,
-  "styleScore": 0-100 integer,
-  "compositionScore": 0-100 integer,
-  "presentationScore": 0-100 integer,
-  "colorBalanceScore": 0-100 integer,
-  "centerOfInterestScore": 0-100 integer,
-  "lightingScore": 0-100 integer,
-  "subjectMatterScore": 0-100 integer,
-  "techniqueScore": 0-100 integer,
-  "storytellingScore": 0-100 integer,
-  "summary": "对照片做一句话总结性评论，有内容有具体指导意见，使用用户系统语言"
+  "visualImpact": {
+    "score": 0-100 integer,
+    "feedback": "specific evidence"
+  },
+  "originalityAndVoice": {
+    "score": 0-100 integer,
+    "feedback": "specific evidence"
+  },
+  "narrativeAndMeaning": {
+    "score": 0-100 integer,
+    "feedback": "specific evidence"
+  },
+  "intentAndCoherence": {
+    "score": 0-100 integer,
+    "feedback": "specific evidence"
+  },
+  "aestheticAndTechnicalExecution": {
+    "score": 0-100 integer,
+    "feedback": "specific evidence"
+  },
+  "verdict": "concise two-sentence juror assessment",
+  "strength": "single strongest visible choice",
+  "improvement": "single highest-leverage actionable change"
 }
                 """.trimIndent()
 
@@ -306,47 +341,163 @@ Return JSON only, without markdown formatting, code blocks, or any conversationa
                     put("response_format", JSONObject().apply {
                         put("type", "json_object")
                     })
+                    putChatGenerationOptions(maxCompletionTokens = 1024)
                 }
 
                 val requestBody =
                     jsonObject.toString().toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url("$apiBaseUrl/chat/completions")
                     .addOpenAIHeaders()
                     .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                PLog.d("OpenAIApiClient", "Evaluate response: ${response.code}")
-                if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "Unknown error"
-                    return@withContext Result.failure(Exception("API failed: ${response.code}\n${request.url}\n$errorBody"))
+                if (CHAT_COMPLETIONS_STREAMING_ENABLED) {
+                    requestBuilder.addHeader("Accept", "text/event-stream")
                 }
+                val request = requestBuilder.build()
 
-                val responseBodyString = response.body?.string() ?: ""
-                val text = extractTextFromResponse(responseBodyString)
+                val text = executeChatCompletion(request, "Evaluate")
                 Result.success(parseEvaluation(text))
             } catch (e: Exception) {
                 Result.failure(e)
             }
         }
 
-    private fun extractTextFromResponse(responseBodyString: String): String {
-        val jsonResponse = JSONObject(responseBodyString)
-
-        jsonResponse.optJSONArray("choices")?.let { choices ->
-            if (choices.length() > 0) {
-                val firstChoice = choices.getJSONObject(0)
-                val message = firstChoice.optJSONObject("message")
-                val contentText = message?.extractOpenAIContentText().orEmpty()
-                if (contentText.isNotBlank()) return contentText
-                val text = firstChoice.optString("text")
-                if (text.isNotBlank()) return text
-            }
+    private fun executeChatCompletion(request: Request, operation: String): String =
+        if (CHAT_COMPLETIONS_STREAMING_ENABLED) {
+            executeStreamingChatCompletion(request, operation)
+        } else {
+            executeNonStreamingChatCompletion(request, operation)
         }
 
-        return responseBodyString
+    private fun JSONObject.putChatGenerationOptions(maxCompletionTokens: Int) {
+        put("max_tokens", maxCompletionTokens)
+        put("stream", CHAT_COMPLETIONS_STREAMING_ENABLED)
+    }
+
+    private fun executeNonStreamingChatCompletion(request: Request, operation: String): String {
+        return client.newCall(request).execute().use { response ->
+            PLog.d("OpenAIApiClient", "$operation response: ${response.code}")
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                throw Exception("API failed: ${response.code}\n${request.url}\n$errorBody")
+            }
+
+            val responseBody = response.body?.string()
+                ?: throw Exception("$operation returned an empty response body")
+            extractTextFromResponse(responseBody).takeIf { it.isNotBlank() }
+                ?: throw Exception("$operation completed without text content")
+        }
+    }
+
+    private fun executeStreamingChatCompletion(request: Request, operation: String): String {
+        return client.newCall(request).execute().use { response ->
+            PLog.d("OpenAIApiClient", "$operation stream response: ${response.code}")
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                throw Exception("API failed: ${response.code}\n${request.url}\n$errorBody")
+            }
+
+            val body = response.body
+                ?: throw Exception("$operation stream returned an empty response body")
+            val source = body.source()
+            val output = StringBuilder()
+            val eventData = StringBuilder()
+            var streamFinished = false
+
+            fun consumeEvent(): Boolean {
+                if (eventData.isEmpty()) return false
+                val payload = eventData.toString().trim()
+                eventData.setLength(0)
+                if (payload.isEmpty()) return false
+                if (payload == "[DONE]") return true
+
+                val event = try {
+                    JSONObject(payload)
+                } catch (e: Exception) {
+                    throw IllegalArgumentException(
+                        "$operation stream returned malformed SSE data: ${payload.take(200)}",
+                        e
+                    )
+                }
+                event.opt("error")
+                    ?.takeUnless { it == JSONObject.NULL }
+                    ?.let { error ->
+                        throw Exception("$operation stream failed: $error")
+                    }
+                output.append(extractStreamingChunkText(event))
+                return false
+            }
+
+            while (!streamFinished) {
+                val line = source.readUtf8Line()
+                if (line == null) {
+                    consumeEvent()
+                    break
+                }
+
+                when {
+                    line.isEmpty() -> streamFinished = consumeEvent()
+                    line.startsWith("data:") -> {
+                        if (eventData.isNotEmpty()) eventData.append('\n')
+                        eventData.append(line.substringAfter("data:").trimStart())
+                        PLog.d("Hinnka", "executeStreamingChatCompletion: $eventData")
+                    }
+                    line.trimStart().startsWith("{") -> {
+                        if (eventData.isNotEmpty()) eventData.append('\n')
+                        eventData.append(line.trim())
+                        PLog.d("Hinnka", "executeStreamingChatCompletion: $eventData")
+                    }
+                }
+            }
+
+            output.toString().takeIf { it.isNotBlank() }
+                ?: throw Exception("$operation stream completed without text content")
+        }
+    }
+
+    private fun extractTextFromResponse(responseBody: String): String {
+        val response = JSONObject(responseBody)
+        val choices = response.optJSONArray("choices") ?: return responseBody
+        if (choices.length() == 0) return responseBody
+
+        val firstChoice = choices.optJSONObject(0) ?: return responseBody
+        val messageText = firstChoice.optJSONObject("message")
+            ?.extractOpenAIContentText()
+            .orEmpty()
+        if (messageText.isNotBlank()) return messageText
+
+        return firstChoice.optString("text")
+            .takeIf { it.isNotBlank() }
+            ?: responseBody
+    }
+
+    private fun extractStreamingChunkText(event: JSONObject): String {
+        val choices = event.optJSONArray("choices") ?: return ""
+        val text = StringBuilder()
+        for (index in 0 until choices.length()) {
+            val choice = choices.optJSONObject(index) ?: continue
+            val deltaText = choice.optJSONObject("delta")
+                ?.extractOpenAIContentText()
+                .orEmpty()
+            if (deltaText.isNotEmpty()) {
+                text.append(deltaText)
+                continue
+            }
+
+            val messageText = choice.optJSONObject("message")
+                ?.extractOpenAIContentText()
+                .orEmpty()
+            if (messageText.isNotEmpty()) {
+                text.append(messageText)
+                continue
+            }
+
+            choice.optString("text")
+                .takeIf { it.isNotEmpty() }
+                ?.let(text::append)
+        }
+        return text.toString()
     }
 
     private fun parseEvaluation(text: String): AiPhotoEvaluation {
@@ -364,55 +515,150 @@ Return JSON only, without markdown formatting, code blocks, or any conversationa
             cleaned
         }
         val json = JSONObject(jsonText)
-        val scores = AiPhotoElementScores(
-            impact = json.optInt("impactScore").coerceIn(0, 100),
-            technicalExcellence = json.optInt("technicalExcellenceScore").coerceIn(0, 100),
-            creativity = json.optInt("creativityScore").coerceIn(0, 100),
-            style = json.optInt("styleScore").coerceIn(0, 100),
-            composition = json.optInt("compositionScore").coerceIn(0, 100),
-            presentation = json.optInt("presentationScore").coerceIn(0, 100),
-            colorBalance = json.optInt("colorBalanceScore").coerceIn(0, 100),
-            centerOfInterest = json.optInt("centerOfInterestScore").coerceIn(0, 100),
-            lighting = json.optInt("lightingScore").coerceIn(0, 100),
-            subjectMatter = json.optInt("subjectMatterScore").coerceIn(0, 100),
-            technique = json.optInt("techniqueScore").coerceIn(0, 100),
-            storytelling = json.optInt("storytellingScore").coerceIn(0, 100)
+        val scores = AiPhotoCriteriaScores(
+            visualImpact = json.requirePhotoCriterion("visualImpact"),
+            originalityAndVoice = json.requirePhotoCriterion("originalityAndVoice"),
+            narrativeAndMeaning = json.requirePhotoCriterion("narrativeAndMeaning"),
+            intentAndCoherence = json.requirePhotoCriterion("intentAndCoherence"),
+            aestheticAndTechnicalExecution =
+                json.requirePhotoCriterion("aestheticAndTechnicalExecution")
         )
         return AiPhotoEvaluation(
             overallScore = scores.weightedOverallScore(),
             scores = scores,
-            summary = json.optString("summary").trim()
+            verdict = json.requireEvaluationText("verdict"),
+            strength = json.requireEvaluationText("strength"),
+            improvement = json.requireEvaluationText("improvement")
         )
     }
 
+    private fun JSONObject.requirePhotoCriterion(name: String): AiPhotoCriterion {
+        val criterion = getJSONObject(name)
+        val score = criterion.getInt("score")
+        require(score in 0..100) {
+            "AI response field \"$name.score\" was outside 0..100"
+        }
+        return AiPhotoCriterion(
+            score = score,
+            feedback = criterion.requireEvaluationText("feedback")
+        )
+    }
+
+    private fun JSONObject.requireEvaluationText(name: String): String =
+        getString(name).trim().takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("AI response field \"$name\" was blank")
+
     private fun parseLutRecipe(text: String): LutRecipe {
         val json = JSONObject(extractJsonObjectText(text))
+        if (json.has("p")) {
+            return parseInferredSourceLutRecipe(json)
+        }
+
+        val isMonochrome = json.optBoolean("isMonochrome", false)
         val controlPointsJson = json.optJSONArray("controlPoints")
             ?: throw IllegalArgumentException("AI response did not include controlPoints")
 
         val controlPoints = buildList {
-            for (i in 0 until controlPointsJson.length()) {
-                val item = controlPointsJson.optJSONObject(i) ?: continue
+            for (index in 0 until controlPointsJson.length()) {
+                val item = controlPointsJson.optJSONObject(index)
+                    ?: throw IllegalArgumentException(
+                        "AI control point at index $index was not an object"
+                    )
                 add(
                     ControlPoint(
-                        sourceR = item.optDouble("sourceR").toFloat().coerceIn(0f, 1f),
-                        sourceG = item.optDouble("sourceG").toFloat().coerceIn(0f, 1f),
-                        sourceB = item.optDouble("sourceB").toFloat().coerceIn(0f, 1f),
-                        targetR = item.optDouble("targetR").toFloat().coerceIn(0f, 1f),
-                        targetG = item.optDouble("targetG").toFloat().coerceIn(0f, 1f),
-                        targetB = item.optDouble("targetB").toFloat().coerceIn(0f, 1f),
-                        matchConfidence = item.optDouble("matchConfidence", 0.8).toFloat()
-                            .coerceIn(0f, 1f)
+                        sourceR = item.requireUnitFloat("sourceR", index),
+                        sourceG = item.requireUnitFloat("sourceG", index),
+                        sourceB = item.requireUnitFloat("sourceB", index),
+                        targetR = item.requireUnitFloat("targetR", index),
+                        targetG = item.requireUnitFloat("targetG", index),
+                        targetB = item.requireUnitFloat("targetB", index),
+                        matchConfidence = if (item.has("matchConfidence")) {
+                            item.requireUnitFloat("matchConfidence", index)
+                        } else {
+                            0.8f
+                        }
                     )
                 )
             }
         }
+        require(controlPoints.size >= 6) {
+            "AI returned too few inferred source/target pairs: ${controlPoints.size}"
+        }
+        validateMonochromeTargets(controlPoints, isMonochrome)
+        return LutRecipe(
+            controlPoints = controlPoints,
+            isMonochrome = isMonochrome
+        )
+    }
 
-        if (controlPoints.size < 6) {
-            throw IllegalArgumentException("AI returned too few LUT control points: ${controlPoints.size}")
+    private fun parseInferredSourceLutRecipe(json: JSONObject): LutRecipe {
+        require(json.has("m")) { "AI response did not include compact monochrome flag m" }
+        val isMonochrome = json.getBoolean("m")
+        val pairs = json.optJSONArray("p")
+            ?: throw IllegalArgumentException("AI response field p was not an array")
+        require(pairs.length() in 12..32) {
+            "AI returned ${pairs.length()} inferred source/target pairs; expected 12..32"
         }
 
-        return LutRecipe(controlPoints)
+        val controlPoints = buildList {
+            for (index in 0 until pairs.length()) {
+                val pair = pairs.optJSONArray(index)
+                    ?: throw IllegalArgumentException("AI LUT pair $index was not an array")
+                require(pair.length() == 7) {
+                    "AI LUT pair $index must contain [sourceR,sourceG,sourceB,targetR,targetG,targetB,confidence]"
+                }
+                add(
+                    ControlPoint(
+                        sourceR = pair.requireUnitFloat(0, index),
+                        sourceG = pair.requireUnitFloat(1, index),
+                        sourceB = pair.requireUnitFloat(2, index),
+                        targetR = pair.requireUnitFloat(3, index),
+                        targetG = pair.requireUnitFloat(4, index),
+                        targetB = pair.requireUnitFloat(5, index),
+                        matchConfidence = pair.requireUnitFloat(6, index)
+                    )
+                )
+            }
+        }
+        validateMonochromeTargets(controlPoints, isMonochrome)
+        return LutRecipe(
+            controlPoints = controlPoints,
+            isMonochrome = isMonochrome
+        )
+    }
+
+    private fun validateMonochromeTargets(
+        controlPoints: List<ControlPoint>,
+        isMonochrome: Boolean
+    ) {
+        if (!isMonochrome) return
+        controlPoints.forEachIndexed { index, point ->
+            require(
+                kotlin.math.abs(point.targetR - point.targetG) <= 1e-3f &&
+                    kotlin.math.abs(point.targetR - point.targetB) <= 1e-3f
+            ) {
+                "AI returned a chromatic target for monochrome LUT pair $index"
+            }
+        }
+    }
+
+    private fun JSONObject.requireUnitFloat(name: String, pairIndex: Int): Float {
+        require(has(name)) {
+            "AI response pair $pairIndex did not include $name"
+        }
+        val value = getDouble(name)
+        require(value.isFinite() && value in 0.0..1.0) {
+            "AI response pair $pairIndex field $name was outside [0, 1]"
+        }
+        return value.toFloat()
+    }
+
+    private fun JSONArray.requireUnitFloat(componentIndex: Int, pairIndex: Int): Float {
+        val value = getDouble(componentIndex)
+        require(value.isFinite() && value in 0.0..1.0) {
+            "AI LUT pair $pairIndex component $componentIndex was outside [0, 1]"
+        }
+        return value.toFloat()
     }
 
     private fun extractJsonObjectText(text: String): String {
@@ -500,39 +746,33 @@ Return JSON only, without markdown formatting, code blocks, or any conversationa
 @Keep
 data class AiPhotoEvaluation(
     val overallScore: Int,
-    val scores: AiPhotoElementScores,
-    val summary: String
+    val scores: AiPhotoCriteriaScores,
+    val verdict: String,
+    val strength: String,
+    val improvement: String
 )
 
 @Keep
-data class AiPhotoElementScores(
-    val impact: Int,
-    val technicalExcellence: Int,
-    val creativity: Int,
-    val style: Int,
-    val composition: Int,
-    val presentation: Int,
-    val colorBalance: Int,
-    val centerOfInterest: Int,
-    val lighting: Int,
-    val subjectMatter: Int,
-    val technique: Int,
-    val storytelling: Int
+data class AiPhotoCriterion(
+    val score: Int,
+    val feedback: String
+)
+
+@Keep
+data class AiPhotoCriteriaScores(
+    val visualImpact: AiPhotoCriterion,
+    val originalityAndVoice: AiPhotoCriterion,
+    val narrativeAndMeaning: AiPhotoCriterion,
+    val intentAndCoherence: AiPhotoCriterion,
+    val aestheticAndTechnicalExecution: AiPhotoCriterion
 ) {
     fun weightedOverallScore(): Int {
         val weightedSum =
-            impact * 5 +
-                technicalExcellence * 6 +
-                creativity * 7 +
-                style * 7 +
-                composition * 8 +
-                presentation * 8 +
-                colorBalance * 8 +
-                centerOfInterest * 9 +
-                lighting * 9 +
-                subjectMatter * 10 +
-                technique * 11 +
-                storytelling * 12
+            visualImpact.score * 25 +
+                originalityAndVoice.score * 20 +
+                narrativeAndMeaning.score * 20 +
+                intentAndCoherence.score * 20 +
+                aestheticAndTechnicalExecution.score * 15
         return (weightedSum / 100f).roundToInt().coerceIn(0, 100)
     }
 }

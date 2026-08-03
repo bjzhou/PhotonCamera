@@ -22,10 +22,11 @@ import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 
 /**
- * 视频帧渲染引擎 (重构版)
+ * GL 纹理编码渲染引擎
  *
  * 专门负责将纹理(GL_TEXTURE_2D)渲染到 MediaCodec 的 InputSurface。
- * 此版本不再处理 LUT 和色彩配方，而是直接接受已经处理好的 FBO 纹理。
+ * 此类仅由 Live Photo 使用；常规视频使用独立 Camera2 SurfaceTexture 和
+ * RealtimeVideoRenderer，不再消费屏幕预览纹理。
  */
 class HardwareLutVideoRenderer(
     private val width: Int,

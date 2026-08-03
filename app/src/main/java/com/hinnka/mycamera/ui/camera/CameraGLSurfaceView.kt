@@ -14,12 +14,12 @@ import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
-import com.hinnka.mycamera.video.VideoRecorder
 
 /**
  * 相机预览 GLSurfaceView
@@ -36,7 +36,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         private const val TAG = "CameraGLSurfaceView"
     }
 
-    private val renderer: LutRenderer = LutRenderer()
+    private val renderer: LutRenderer = LutRenderer(context.applicationContext)
 
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
@@ -202,6 +202,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         blackPointCorrection: Float,
         whitePointCorrection: Float,
         renderingEngine: RawRenderingEngine,
+        hncsFilmCurveMode: HncsFilmCurveMode,
         toneMappingParameters: RawToneMappingParameters
     ) {
         queueEvent {
@@ -211,6 +212,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
                 blackPointCorrection = blackPointCorrection,
                 whitePointCorrection = whitePointCorrection,
                 renderingEngine = renderingEngine,
+                hncsFilmCurveMode = hncsFilmCurveMode,
                 toneMappingParameters = toneMappingParameters
             )
             requestRender()
@@ -345,17 +347,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRenderImmediately: Boolean,
         callback: (Bitmap?) -> Unit
     ) {
-        renderer.onPreviewFrameCaptured = { bitmap ->
-            // 在主线程回调
-            post {
-                callback(bitmap)
-            }
-        }
         queueEvent {
+            val onCaptured: (Bitmap) -> Unit = { bitmap ->
+                // 在主线程回调
+                post {
+                    callback(bitmap)
+                }
+            }
             if (maxLongEdge != null) {
-                renderer.capturePreviewFrame(maxLongEdge, source)
+                renderer.capturePreviewFrame(maxLongEdge, source, onCaptured)
             } else {
-                renderer.capturePreviewFrame(source = source)
+                renderer.capturePreviewFrame(source = source, onCaptured = onCaptured)
             }
             if (requestRenderImmediately) {
                 requestRender()
@@ -368,10 +370,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      */
     fun setLivePhotoRecorder(recorder: LivePhotoRecorder?) {
         renderer.livePhotoRecorder = recorder
-    }
-
-    fun setVideoRecorder(recorder: VideoRecorder?) {
-        renderer.videoRecorder = recorder
     }
 
     fun setVideoLogProfile(profile: VideoLogProfile) {

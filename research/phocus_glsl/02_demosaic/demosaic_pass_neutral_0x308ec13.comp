@@ -1,0 +1,67 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: ca62ac0831390a5415c5703b3a22c344faf8cc3de01c9665783d1ce6a6790da0
+ * ELF offsets: 0x308ec13
+ * Symbols: demosaic_pass_neutral_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16f,  binding = 0) readonly  uniform image2D  inTex;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
+layout(std140, binding = 2) uniform DemosaicPassNeutralParams_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+    int uParams_rNeutral;
+    int uParams_gNeutral;
+    int uParams_bNeutral;
+    int uParams_clampAllowZero;
+    int uParams_gainScaleBits;
+    int pad1;
+    int pad2;
+    int pad3;
+};
+
+uint shiftRightRoundUint(float v, int shiftBits) {
+    int divisor = 1 << shiftBits;
+    float roundUp = float(divisor + 1) * 0.5;
+    return uint(clamp((v + roundUp) / float(divisor), 0.0, 65535.0));
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (coord.x < uParams_l || coord.x >= uParams_r ||
+        coord.y < uParams_t || coord.y >= uParams_b) {
+        return;
+    }
+
+    vec4 pix4 = imageLoad(inTex, coord);
+    vec4 pix4Scaled = pix4 * 65535.0;
+
+    vec4 mul4;
+    if ((coord.y & 1) == 0) {
+        mul4 = vec4(float(uParams_rNeutral), float(uParams_gNeutral),
+                    float(uParams_rNeutral), float(uParams_gNeutral));
+    } else {
+        mul4 = vec4(float(uParams_gNeutral), float(uParams_bNeutral),
+                    float(uParams_gNeutral), float(uParams_bNeutral));
+    }
+
+    vec4 res = pix4Scaled * mul4;
+
+    uvec4 uout = uvec4(
+        shiftRightRoundUint(res.r, uParams_gainScaleBits),
+        shiftRightRoundUint(res.g, uParams_gainScaleBits),
+        shiftRightRoundUint(res.b, uParams_gainScaleBits),
+        shiftRightRoundUint(res.a, uParams_gainScaleBits));
+    imageStore(outTex, coord, uout);
+}

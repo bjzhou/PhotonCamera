@@ -79,14 +79,8 @@
     <string name="settings_level_description">촬영 중 수평계 표시</string>
     <string name="settings_grid_lines">격자선</string>
     <string name="settings_grid_description">구도를 위한 격자선 표시</string>
-    <string name="settings_use_multi_frame">멀티 프레임 스태킹</string>
-    <string name="settings_multi_frame_count">멀티 프레임 수</string>
-    <string name="settings_multi_frame_count_description">멀티 프레임 스태킹을 위한 프레임 수 (프레임이 많을수록 품질은 좋아지지만 속도가 느려집니다).</string>
-    <string name="settings_use_super_resolution">슈퍼 해상도</string>
     <string name="settings_use_live_photo">라이브 포토</string>
     <string name="settings_use_live_photo_description">역동적인 라이브 포토 효과를 위해 사진과 함께 짧은 비디오 클립을 촬영합니다.</string>
-    <string name="settings_use_gpu_acceleration">GPU 가속</string>
-    <string name="settings_use_gpu_acceleration_description">멀티 프레임 스태킹 속도를 높이기 위해 GPU(Vulkan)를 사용합니다. 기본값은 켬입니다.</string>
     <string name="settings_section_frame">프레임 워터마크</string>
     <string name="settings_frame_style">프레임 스타일</string>
     <string name="settings_frame_description">사진에 장식용 프레임과 워터마크 추가</string>
@@ -167,6 +161,7 @@
     <string name="recipe_param_shadows">어두운 영역</string>
     <string name="recipe_param_film_grain">그레인</string>
     <string name="recipe_param_vignette">비네팅</string>
+    <string name="recipe_param_flash">플래시</string>
     <string name="recipe_param_bleach_bypass">블리치 바이패스</string>
     <string name="recipe_param_bloom">블룸</string>
     <string name="recipe_param_soft_light">소프트 라이트</string>
@@ -174,7 +169,16 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">현재 LUT도 업데이트</string>
+    <string name="edit_sync_lut_recipe_description">색상, 효과, LUT 강도도 선택한 LUT에 저장합니다.</string>
+    <string name="edit_select_lut_hint">색상과 효과를 조정하기 전에 LUT를 선택하세요.</string>
+    <string name="edit_color_and_effects">색상 및 효과 조정</string>
     <string name="recipe_tab_color">색상</string>
+    <string name="recipe_color_basic">기본</string>
+    <string name="recipe_color_grading">그레이딩</string>
+    <string name="recipe_grading_midtones">중간톤</string>
+    <string name="recipe_grading_balance">밸런스</string>
+    <string name="recipe_grading_blending">블렌딩</string>
     <string name="recipe_tab_light">빛</string>
     <string name="recipe_tab_texture">질감</string>
     <string name="recipe_tab_post">후보정</string>
@@ -253,4 +257,7 @@
     <string name="settings_dro_dr100">DR100</string>
     <string name="settings_dro_dr200">DR200</string>
     <string name="settings_dro_dr400">DR400</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: 핫셀블라드가 독자적으로 개발한 컬러 매니지먼트 시스템</string>
+    <string name="settings_raw_max_hdr_composition">RAWmax HDR 합성</string>
+    <string name="settings_raw_max_hdr_composition_description">RAWmax에서 브래킷 노출을 사용해 HDR을 합성합니다. 끄면 처리 속도가 향상됩니다.</string>
 </resources>

@@ -1,0 +1,100 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: cbbd4fee1875088d68c839eb922dffa6be9b1c175ff33941b4465deb990dca95
+ * ELF offsets: 0x306798d
+ * Symbols: demosaic_pass_0c_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp iimage2D;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D  inTex;
+layout(rgba16i, binding = 1) writeonly uniform iimage2D  outTex;
+
+layout(std140, binding = 2) uniform DemosaicPass0cParams_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+};
+
+ivec4 sobelFlt(ivec2 pos) {
+    ivec4 v1 = ivec4(imageLoad(inTex, pos + ivec2(-1, -1)));
+    ivec4 v2 = ivec4(imageLoad(inTex, pos + ivec2(-1,  1)));
+    ivec4 v3 = ivec4(imageLoad(inTex, pos + ivec2( 0,  1)));
+    ivec4 v4 = ivec4(imageLoad(inTex, pos + ivec2( 1,  1)));
+    ivec4 v5 = ivec4(imageLoad(inTex, pos + ivec2( 0,  0)));
+    ivec4 v6 = ivec4(imageLoad(inTex, pos + ivec2( 0, -1)));
+    ivec4 v7 = ivec4(imageLoad(inTex, pos + ivec2( 1, -1)));
+
+    ivec4 sum;
+    sum.r = -v1.a - v2.a - v3.g + 4 * v5.r - v6.g;
+    sum.g = -v3.r - v3.b + 4 * v5.g - v6.r - v6.b;
+    sum.b = -v3.g - v3.a + 4 * v5.b - v6.g - v6.a;
+    sum.a = -v3.b - v4.r + 4 * v5.a - v6.b - v7.r;
+
+    return clamp(sum >> 3, ivec4(-32768), ivec4(32767));
+}
+
+ivec4 sobelLR(ivec2 pos, bool skipL, bool skipR) {
+    ivec4 sum = ivec4(0);
+
+    if (!skipL) {
+        ivec4 v1 = ivec4(imageLoad(inTex, pos + ivec2(-1, -1)));
+        ivec4 v2 = ivec4(imageLoad(inTex, pos + ivec2(-1,  1)));
+        sum.r -= v1.a + v2.a;
+    }
+
+    ivec4 v3 = ivec4(imageLoad(inTex, pos + ivec2(0,  1)));
+    sum.r -= v3.g;
+    sum.g  = -v3.r - v3.b;
+    sum.b  = -v3.g - v3.a;
+    sum.a  = -v3.b;
+
+    ivec4 v4 = ivec4(imageLoad(inTex, pos));
+    sum += 4 * v4;
+
+    ivec4 v5 = ivec4(imageLoad(inTex, pos + ivec2(0, -1)));
+    sum.r -= v5.g;
+    sum.g -= v5.r + v5.b;
+    sum.b -= v5.g + v5.a;
+    sum.a -= v5.b;
+
+    if (!skipR) {
+        ivec4 v6 = ivec4(imageLoad(inTex, pos + ivec2(1, -1)));
+        ivec4 v7 = ivec4(imageLoad(inTex, pos + ivec2(1,  1)));
+        sum.a -= v6.r + v7.r;
+    }
+    if (skipR)
+        sum.a = 0;
+    if (skipL)
+        sum.r = 0;
+
+    return clamp(sum >> 3, ivec4(-32768), ivec4(32767));
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    ivec4 result = ivec4(0);
+
+    bool inV = (gid.y >= uParams_t && gid.y < uParams_b);
+    bool inH = (gid.x > uParams_l  && gid.x < uParams_r);
+    bool onL = (gid.x == uParams_l && gid.y >= uParams_t && gid.y < uParams_b);
+    bool onR = (gid.x == uParams_r && gid.y >= uParams_t && gid.y < uParams_b);
+
+    if (inH && inV) {
+        result = sobelFlt(gid);
+    } else if (onL && gid.x < uParams_r) {
+        result = sobelLR(gid, true, false);
+    } else if (onR && gid.x > uParams_l) {
+        result = sobelLR(gid, false, true);
+    }
+
+    imageStore(outTex, gid, result);
+}

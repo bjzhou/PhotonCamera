@@ -56,7 +56,7 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
                 val context = getApplication<Application>()
                 val client = OpenAIApiClient()
                 client.initialize(context)
-                val preparedBitmap = AiImagePreprocessor.prepareForImageToImage(bitmap)
+                val preparedBitmap = AiImagePreprocessor.prepareForVisionAnalysis(bitmap)
 
                 PLog.d(
                     "LutCreatorViewModel",

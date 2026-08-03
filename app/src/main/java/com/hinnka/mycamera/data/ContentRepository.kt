@@ -48,7 +48,7 @@ class ContentRepository private constructor(context: Context) {
     val frameManager = startupInit("FrameManager()") { FrameManager(appContext) }
     private val customImportManager = startupInit("CustomImportManager()") { CustomImportManager(appContext) }
 
-    val imageProcessor = startupInit("LutImageProcessor()") { LutImageProcessor() }
+    val imageProcessor = startupInit("LutImageProcessor()") { LutImageProcessor(appContext) }
 
     // 使用 StateFlow 存储可用内容列表，支持响应式更新
     private val _availableLuts = MutableStateFlow<List<LutInfo>>(emptyList())

@@ -93,6 +93,15 @@
       "isVip": false
     },
     {
+      "id": "astia",
+      "name": {
+        "en": "Astia",
+        "zh": "富士Astia"
+      },
+      "path": "astia.plut",
+      "isVip": false
+    },
+    {
       "id": "ricoh_negative",
       "name": {
         "en": "Negative",

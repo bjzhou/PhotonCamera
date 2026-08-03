@@ -1,0 +1,123 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 77ecea4a4085c9678c82864b7a3a1633b9a173a2746a1c4fae420049edf24f6c
+ * ELF offsets: 0x3024978
+ * Symbols: demosaic_color_noise_pass_2_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
+
+layout(std140, binding = 2) uniform DemosaicColorNoisePass2Params_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+};
+
+int chromaSigned(uint c) {
+    int ic = int(c);
+    return (ic > 32767) ? (ic - 65536) : ic;
+}
+
+uint chromaUnsigned(int v) {
+    return uint(v & 0xFFFF);
+}
+
+void fetchYCbCr(ivec2 pos, out int y, out int cr, out int cb) {
+    uvec4 t = imageLoad(inTex, pos);
+    y = int(t.r);
+    cr = chromaSigned(t.g);
+    cb = chromaSigned(t.b);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    uvec4 outV = uvec4(0u);
+    if (gid.x >= uParams_l && gid.x < uParams_r &&
+        gid.y >= uParams_t && gid.y < uParams_b) {
+
+        uvec4 res0 = imageLoad(inTex, gid);
+        ivec2 pixelCoord = gid;
+
+        int y; int cr; int cb;
+        uvec4 cornerNN = imageLoad(inTex, pixelCoord + ivec2(-1, -1));
+        y = int(cornerNN.r);
+        cr = chromaSigned(cornerNN.g);
+        cb = chromaSigned(cornerNN.b);
+        ivec4 ycbcrTmp1_short = ivec4(y, cr, cb, int(cornerNN.a));
+
+        fetchYCbCr(pixelCoord + ivec2(0, -1), y, cr, cb);
+        ivec4 ycbcrTmp_short = ivec4(y, cr, cb, 0);
+
+        ivec4 cbcrMax = max(ycbcrTmp_short, ycbcrTmp1_short);
+        ivec4 cbcrMin = min(ycbcrTmp_short, ycbcrTmp1_short);
+        ivec2 cbcrSum = ivec2(ycbcrTmp1_short.y + ycbcrTmp_short.y, ycbcrTmp1_short.z + ycbcrTmp_short.z);
+        int ySum = ycbcrTmp1_short.x + 2 * ycbcrTmp_short.x;
+
+        fetchYCbCr(pixelCoord + ivec2(1, -1), y, cr, cb);
+        ycbcrTmp_short = ivec4(y, cr, cb, 0);
+        cbcrMax = max(ycbcrTmp_short, cbcrMax);
+        cbcrMin = min(ycbcrTmp_short, cbcrMin);
+        cbcrSum.x += ycbcrTmp_short.y - cbcrMax.y - cbcrMin.y;
+        cbcrSum.y += ycbcrTmp_short.z - cbcrMax.z - cbcrMin.z;
+        ivec2 cbcrMinG = cbcrSum;
+        ivec2 cbcrMaxG = cbcrSum;
+        ivec2 cbcrSumG = cbcrSum;
+        ySum += ycbcrTmp_short.x;
+
+        fetchYCbCr(pixelCoord + ivec2(-1, 0), y, cr, cb);
+        ycbcrTmp1_short = ivec4(y, cr, cb, 0);
+
+        fetchYCbCr(pixelCoord + ivec2(0, 0), y, cr, cb);
+        ycbcrTmp_short = ivec4(y, cr, cb, 0);
+        cbcrMax = max(ycbcrTmp_short, ycbcrTmp1_short);
+        cbcrMin = min(ycbcrTmp_short, ycbcrTmp1_short);
+        cbcrSum = ivec2(ycbcrTmp1_short.y + ycbcrTmp_short.y, ycbcrTmp1_short.z + ycbcrTmp_short.z);
+        ySum += 2 * ycbcrTmp1_short.x + 4 * ycbcrTmp_short.x;
+
+        fetchYCbCr(pixelCoord + ivec2(1, 0), y, cr, cb);
+        ycbcrTmp_short = ivec4(y, cr, cb, 0);
+        cbcrMax = max(ycbcrTmp_short, cbcrMax);
+        cbcrMin = min(ycbcrTmp_short, cbcrMin);
+        cbcrSum.x += ycbcrTmp_short.y - cbcrMax.y - cbcrMin.y;
+        cbcrSum.y += ycbcrTmp_short.z - cbcrMax.z - cbcrMin.z;
+        cbcrSumG += cbcrSum;
+        cbcrMinG = min(cbcrMinG, cbcrSum);
+        cbcrMaxG = max(cbcrMaxG, cbcrSum);
+        ySum += 2 * ycbcrTmp_short.x;
+
+        fetchYCbCr(pixelCoord + ivec2(-1, 1), y, cr, cb);
+        ycbcrTmp1_short = ivec4(y, cr, cb, 0);
+
+        fetchYCbCr(pixelCoord + ivec2(0, 1), y, cr, cb);
+        ycbcrTmp_short = ivec4(y, cr, cb, 0);
+        cbcrMax = max(ycbcrTmp_short, ycbcrTmp1_short);
+        cbcrMin = min(ycbcrTmp_short, ycbcrTmp1_short);
+        cbcrSum = ivec2(ycbcrTmp1_short.y + ycbcrTmp_short.y, ycbcrTmp1_short.z + ycbcrTmp_short.z);
+        ySum += ycbcrTmp1_short.x + 2 * ycbcrTmp_short.x;
+
+        fetchYCbCr(pixelCoord + ivec2(1, 1), y, cr, cb);
+        ycbcrTmp_short = ivec4(y, cr, cb, 0);
+        cbcrMax = max(ycbcrTmp_short, cbcrMax);
+        cbcrMin = min(ycbcrTmp_short, cbcrMin);
+        cbcrSum.x += ycbcrTmp_short.y - cbcrMax.y - cbcrMin.y;
+        cbcrSum.y += ycbcrTmp_short.z - cbcrMax.z - cbcrMin.z;
+        cbcrSumG += cbcrSum - min(cbcrMinG, cbcrSum) - max(cbcrMaxG, cbcrSum);
+        ySum += ycbcrTmp_short.x;
+
+        outV.r = uint(ySum / 16);
+        outV.g = chromaUnsigned(cbcrSumG.x);
+        outV.b = chromaUnsigned(cbcrSumG.y);
+        outV.a = res0.a;
+    }
+    imageStore(outTex, gid, outV);
+}

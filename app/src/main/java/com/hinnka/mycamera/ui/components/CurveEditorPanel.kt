@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.lut.CurveUtils
 import com.hinnka.mycamera.model.ColorRecipeParams
+import kotlin.math.sqrt
 
 /**
  * 曲线通道枚举
@@ -51,6 +52,7 @@ enum class CurveChannel(val label: String, val color: Color) {
 fun CurveEditorPanel(
     currentParams: ColorRecipeParams,
     onCurveChange: (CurveChannel, FloatArray?) -> Unit,
+    imageHistogram: ImageHistogram? = null,
     modifier: Modifier = Modifier
 ) {
     var selectedChannel by remember { mutableStateOf(CurveChannel.MASTER) }
@@ -96,6 +98,7 @@ fun CurveEditorPanel(
             CurveCanvas(
                 points = currentPoints ?: identityPoints(),
                 curveColor = selectedChannel.color,
+                histogram = imageHistogram?.binsFor(selectedChannel),
                 onPointsChange = { newPoints ->
                     val arr = if (newPoints.size <= 4 && CurveUtils.isIdentityCurve(newPoints)) null else newPoints
                     onCurveChange(selectedChannel, arr)
@@ -110,6 +113,7 @@ fun CurveEditorPanel(
 private fun CurveCanvas(
     points: FloatArray,
     curveColor: Color,
+    histogram: IntArray?,
     onPointsChange: (FloatArray) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -258,6 +262,7 @@ private fun CurveCanvas(
             drawCurveCanvas(
                 controlPoints = controlPoints,
                 curveColor = curveColor,
+                histogram = histogram,
                 canvasSize = size,
                 graphInset = graphInsetPx
             )
@@ -268,6 +273,7 @@ private fun CurveCanvas(
 private fun DrawScope.drawCurveCanvas(
     controlPoints: List<Pair<Float, Float>>,
     curveColor: Color,
+    histogram: IntArray?,
     canvasSize: Size,
     graphInset: Float
 ) {
@@ -281,6 +287,15 @@ private fun DrawScope.drawCurveCanvas(
         color = Color(0x661A1A1A),
         topLeft = Offset(left, top),
         size = Size(w, h)
+    )
+
+    drawImageHistogram(
+        histogram = histogram,
+        color = curveColor,
+        left = left,
+        top = top,
+        width = w,
+        height = h,
     )
 
     // 网格线（4×4）
@@ -345,6 +360,31 @@ private fun DrawScope.drawCurveCanvas(
         )
         drawCircle(curveColor.copy(alpha = 0.7f), radius = pointRadius - pointBorderWidth - 1f, center = Offset(cx, cy))
     }
+}
+
+private fun DrawScope.drawImageHistogram(
+    histogram: IntArray?,
+    color: Color,
+    left: Float,
+    top: Float,
+    width: Float,
+    height: Float,
+) {
+    if (histogram == null || histogram.size < 2) return
+
+    val peak = histogram.maxOrNull()?.takeIf { it > 0 } ?: return
+    val peakScale = sqrt(peak.toFloat())
+    val path = Path().apply {
+        moveTo(left, top + height)
+        histogram.forEachIndexed { index, count ->
+            val x = left + index.toFloat() / histogram.lastIndex * width
+            val normalizedHeight = sqrt(count.toFloat()) / peakScale
+            lineTo(x, top + height * (1f - normalizedHeight))
+        }
+        lineTo(left + width, top + height)
+        close()
+    }
+    drawPath(path, color.copy(alpha = 0.18f))
 }
 
 // ──────────────────────── 辅助函数 ────────────────────────

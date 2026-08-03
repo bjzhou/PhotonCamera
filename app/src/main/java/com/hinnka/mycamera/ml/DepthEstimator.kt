@@ -2,98 +2,55 @@ package com.hinnka.mycamera.ml
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.CompatibilityList
-import org.tensorflow.lite.gpu.GpuDelegate
 import org.tensorflow.lite.nnapi.NnApiDelegate
-import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.common.ops.NormalizeOp
-import org.tensorflow.lite.support.image.ImageProcessor
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.support.image.ops.ResizeOp
 import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 
-class DepthEstimator(
-    context: Context,
-    val modelAssetName: String = MODEL_MIDAS
-) {
+class DepthEstimator(context: Context) {
     private var interpreter: Interpreter? = null
-    private var gpuDelegate: GpuDelegate? = null
     private var nnApiDelegate: NnApiDelegate? = null
     private var isInitialized = false
-    private var inputWidth = 256
-    private var inputHeight = 256
-    private var outputWidth = 256
-    private var outputHeight = 256
+    private var inputWidth = 518
+    private var inputHeight = 518
+    private var outputWidth = 518
+    private var outputHeight = 518
     private var inputChannelsFirst = false
+    internal val isReady: Boolean
+        get() = isInitialized
 
     init {
+        val modelFile = DepthModelManager.requireInstalledModelFile(context)
         try {
-            val modelFile = StartupTrace.measure("DepthEstimator.loadMappedFile.$modelAssetName") {
-                FileUtil.loadMappedFile(context, modelAssetName)
+            val modelBuffer = StartupTrace.measure("DepthEstimator.mapModelFile") {
+                FileInputStream(modelFile).channel.use { channel ->
+                    channel.map(
+                        java.nio.channels.FileChannel.MapMode.READ_ONLY,
+                        0L,
+                        channel.size()
+                    )
+                }
             }
             val delegateCache = MlDelegateCacheFactory.create(
                 context = context,
                 tag = TAG,
                 cacheName = "depth_estimator",
-                modelAssetName = modelAssetName,
-                modelSizeBytes = modelFile.capacity()
+                modelAssetName = modelFile.name,
+                modelSizeBytes = modelBuffer.capacity()
             )
 
-            if (modelAssetName != MODEL_DEPTH_ANYTHING) {
-                // Try GPU. Depth Anything V2 is skipped here because the TFLite
-                // GPU delegate can compile it but return a constant depth map on
-                // some Qualcomm devices.
-                val gpuOptions = Interpreter.Options()
-                val compatList = StartupTrace.measure("DepthEstimator.CompatibilityList()") {
-                    CompatibilityList()
-                }
-                gpuDelegate = StartupTrace.measure("DepthEstimator.GpuDelegate()") {
-                    if (compatList.isDelegateSupportedOnThisDevice) {
-                        val delegateOptions = compatList.bestOptionsForThisDevice
-                        delegateCache?.let {
-                            delegateOptions.setSerializationParams(
-                                it.directory.absolutePath,
-                                it.modelToken
-                            )
-                        }
-                        GpuDelegate(delegateOptions)
-                    } else {
-                        val delegateOptions = GpuDelegate.Options()
-                        delegateCache?.let {
-                            delegateOptions.setSerializationParams(
-                                it.directory.absolutePath,
-                                it.modelToken
-                            )
-                        }
-                        GpuDelegate(delegateOptions)
-                    }
-                }
-                StartupTrace.measure("DepthEstimator.gpuOptions.addDelegate") {
-                    gpuOptions.addDelegate(gpuDelegate)
-                }
-                try {
-                    interpreter = StartupTrace.measure("DepthEstimator.Interpreter(GPU)") {
-                        Interpreter(modelFile, gpuOptions)
-                    }
-                    isInitialized = true
-                    PLog.d(TAG, "Using GPU Delegate for Depth Estimator: $modelAssetName")
-                } catch (e: Exception) {
-                    PLog.w(TAG, "Failed to initialize GPU delegate, falling back to NNAPI", e)
-                    gpuDelegate?.close()
-                    gpuDelegate = null
-                }
-            } else {
-                PLog.d(TAG, "Skipping GPU Delegate for Depth Anything V2; trying NNAPI first")
-            }
-
-            // Try NNAPI (NPU) if GPU failed or not supported
-            if (!isInitialized) {
+            // The GPU delegate is deliberately not used: this model can compile but
+            // produce a constant map on affected Qualcomm GLES drivers.
+            PLog.d(TAG, "Depth Anything V2: trying NNAPI first")
+            try {
                 val nnApiOptions = Interpreter.Options()
                 nnApiDelegate = StartupTrace.measure("DepthEstimator.NnApiDelegate()") {
                     val delegateOptions = NnApiDelegate.Options()
@@ -107,17 +64,15 @@ class DepthEstimator(
                 StartupTrace.measure("DepthEstimator.nnApiOptions.addDelegate") {
                     nnApiOptions.addDelegate(nnApiDelegate)
                 }
-                try {
-                    interpreter = StartupTrace.measure("DepthEstimator.Interpreter(NNAPI)") {
-                        Interpreter(modelFile, nnApiOptions)
-                    }
-                    isInitialized = true
-                    PLog.d(TAG, "Using NNAPI (NPU) for Depth Estimator: $modelAssetName")
-                } catch (e: Exception) {
-                    PLog.w(TAG, "Failed to initialize NNAPI delegate, falling back to CPU", e)
-                    nnApiDelegate?.close()
-                    nnApiDelegate = null
+                interpreter = StartupTrace.measure("DepthEstimator.Interpreter(NNAPI)") {
+                    Interpreter(modelBuffer, nnApiOptions)
                 }
+                isInitialized = true
+                PLog.d(TAG, "Using NNAPI (NPU) for Depth Anything V2")
+            } catch (e: Exception) {
+                PLog.w(TAG, "Failed to initialize NNAPI delegate, falling back to CPU", e)
+                nnApiDelegate?.close()
+                nnApiDelegate = null
             }
 
             // Fallback to CPU
@@ -125,17 +80,18 @@ class DepthEstimator(
                 val cpuOptions = Interpreter.Options()
                 cpuOptions.setNumThreads(4)
                 interpreter = StartupTrace.measure("DepthEstimator.Interpreter(CPU)") {
-                    Interpreter(modelFile, cpuOptions)
+                    Interpreter(modelBuffer, cpuOptions)
                 }
                 isInitialized = true
-                PLog.d(TAG, "Using CPU for Depth Estimator: $modelAssetName")
+                PLog.d(TAG, "Using CPU for Depth Anything V2")
             }
 
             interpreter?.let {
                 updateTensorDimensions(it)
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Error initializing DepthEstimator: $modelAssetName", e)
+            close()
+            PLog.e(TAG, "Error initializing Depth Anything V2", e)
         }
     }
 
@@ -146,10 +102,11 @@ class DepthEstimator(
      */
     fun estimateDepth(inputBitmap: Bitmap): Bitmap? {
         if (!isInitialized || interpreter == null) {
-            PLog.e(TAG, "DepthEstimator is not initialized: $modelAssetName")
+            PLog.e(TAG, "DepthEstimator is not initialized")
             return null
         }
 
+        var modelInputBitmap: Bitmap? = null
         try {
             // 1. Get input/output metadata
             val inputTensor = interpreter!!.getInputTensor(0)
@@ -158,16 +115,9 @@ class DepthEstimator(
             val outputDataType = outputTensor.dataType()
 
             // 2. Preprocess the input image
-            val inputUsesLargeDirectAllocator = modelAssetName == MODEL_DEPTH_ANYTHING
-            val inputBuffer = if (inputUsesLargeDirectAllocator) {
-                createDepthAnythingInputBuffer(inputBitmap, inputDataType)
-            } else {
-                val imageProcessor = buildImageProcessor()
-                var tensorImage = TensorImage(inputDataType)
-                tensorImage.load(inputBitmap)
-                tensorImage = imageProcessor.process(tensorImage)
-                tensorImage.buffer
-            }
+            val preparedInput = prepareModelInputBitmap(inputBitmap)
+            modelInputBitmap = preparedInput
+            val inputBuffer = createDepthAnythingInputBuffer(preparedInput, inputDataType)
 
             // 3. Prepare the output buffer
             val outputBuffer = TensorBuffer.createFixedSize(outputTensor.shape(), outputDataType)
@@ -198,33 +148,43 @@ class DepthEstimator(
                     convertOutputToBitmap(floatArray, outputWidth, outputHeight)
                 }
             } finally {
-                if (inputUsesLargeDirectAllocator) {
-                    LargeDirectBuffer.free(inputBuffer)
-                }
+                LargeDirectBuffer.free(inputBuffer)
             }
             
         } catch (e: Exception) {
-            PLog.e(TAG, "Error during depth estimation: $modelAssetName", e)
+            PLog.e(TAG, "Error during Depth Anything V2 inference", e)
             return null
+        } finally {
+            modelInputBitmap?.let { bitmap ->
+                if (bitmap !== inputBitmap && !bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
         }
     }
 
-    private fun buildImageProcessor(): ImageProcessor {
-        val builder = ImageProcessor.Builder()
-            .add(ResizeOp(inputHeight, inputWidth, ResizeOp.ResizeMethod.BILINEAR))
-
-        if (modelAssetName == MODEL_DEPTH_ANYTHING) {
-            builder
-                .add(NormalizeOp(0.0f, 255.0f))
-                .add(
-                    NormalizeOp(
-                        floatArrayOf(0.485f, 0.456f, 0.406f),
-                        floatArrayOf(0.229f, 0.224f, 0.225f)
-                    )
-                )
+    /**
+     * Depth models consume a small, display-referred RGB guide. Convert and resize
+     * in one Canvas draw so RGBA_F16 captures never create a full-resolution
+     * ARGB_8888 intermediate bitmap.
+     */
+    private fun prepareModelInputBitmap(inputBitmap: Bitmap): Bitmap {
+        if (
+            inputBitmap.config == Bitmap.Config.ARGB_8888 &&
+            inputBitmap.width == inputWidth &&
+            inputBitmap.height == inputHeight
+        ) {
+            return inputBitmap
         }
 
-        return builder.build()
+        return Bitmap.createBitmap(inputWidth, inputHeight, Bitmap.Config.ARGB_8888).also { output ->
+            Canvas(output).drawBitmap(
+                inputBitmap,
+                null,
+                Rect(0, 0, inputWidth, inputHeight),
+                Paint(Paint.FILTER_BITMAP_FLAG),
+            )
+        }
     }
 
     private fun createDepthAnythingInputBuffer(inputBitmap: Bitmap, inputDataType: DataType): ByteBuffer {
@@ -247,34 +207,25 @@ class DepthEstimator(
             inputWidth.toLong() * inputHeight.toLong() * 3L * 4L,
             "Depth Anything input"
         ) ?: throw OutOfMemoryError("Failed to allocate Depth Anything input buffer")
-        val mean = floatArrayOf(0.485f, 0.456f, 0.406f)
-        val std = floatArrayOf(0.229f, 0.224f, 0.225f)
-        val skipNormalization = modelAssetName == MODEL_DEPTH_ANYTHING
-
-        fun normalized(pixel: Int, channel: Int): Float {
-            val value = when (channel) {
+        fun channelValue(pixel: Int, channel: Int): Float {
+            return when (channel) {
                 0 -> (pixel shr 16) and 0xFF
                 1 -> (pixel shr 8) and 0xFF
                 else -> pixel and 0xFF
             } / 255.0f
-            
-            if (skipNormalization) {
-                return value
-            }
-            return (value - mean[channel]) / std[channel]
         }
 
         if (inputChannelsFirst) {
             for (channel in 0 until 3) {
                 for (pixel in pixels) {
-                    buffer.putFloat(normalized(pixel, channel))
+                    buffer.putFloat(channelValue(pixel, channel))
                 }
             }
         } else {
             for (pixel in pixels) {
-                buffer.putFloat(normalized(pixel, 0))
-                buffer.putFloat(normalized(pixel, 1))
-                buffer.putFloat(normalized(pixel, 2))
+                buffer.putFloat(channelValue(pixel, 0))
+                buffer.putFloat(channelValue(pixel, 1))
+                buffer.putFloat(channelValue(pixel, 2))
             }
         }
         buffer.rewind()
@@ -296,7 +247,7 @@ class DepthEstimator(
         }
 
         if (validCount == 0) {
-            PLog.e(TAG, "Depth output has no finite values: $modelAssetName")
+            PLog.e(TAG, "Depth output has no finite values")
             return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         }
 
@@ -315,7 +266,7 @@ class DepthEstimator(
 
         val range = max - min
         val finalRange = if (range <= 0f) 1f else range // avoid division by zero
-        PLog.d(TAG, "Depth output range: asset=$modelAssetName min=$min max=$max range=$range valid=$validCount")
+//        PLog.d(TAG, "Depth output range: min=$min max=$max range=$range valid=$validCount")
 
         val pixels = IntArray(width * height)
         val limit = minOf(outputArray.size, pixels.size)
@@ -344,7 +295,7 @@ class DepthEstimator(
             inputHeight = inputShape[2]
             inputWidth = inputShape[3]
         } else {
-            PLog.w(TAG, "Unexpected depth input shape for $modelAssetName: ${inputShape.contentToString()}")
+            PLog.w(TAG, "Unexpected depth input shape: ${inputShape.contentToString()}")
         }
 
         val outputDims = outputShape.filter { it > 1 }
@@ -361,15 +312,13 @@ class DepthEstimator(
 
         PLog.d(
             TAG,
-            "Depth model ready: asset=$modelAssetName input=${inputWidth}x$inputHeight output=${outputWidth}x$outputHeight inputLayout=${if (inputChannelsFirst) "NCHW" else "NHWC"} inputType=${interpreter.getInputTensor(0).dataType()} outputType=${interpreter.getOutputTensor(0).dataType()} inputShape=${inputShape.contentToString()} outputShape=${outputShape.contentToString()}"
+            "Depth Anything V2 ready: input=${inputWidth}x$inputHeight output=${outputWidth}x$outputHeight inputLayout=${if (inputChannelsFirst) "NCHW" else "NHWC"} inputType=${interpreter.getInputTensor(0).dataType()} outputType=${interpreter.getOutputTensor(0).dataType()} inputShape=${inputShape.contentToString()} outputShape=${outputShape.contentToString()}"
         )
     }
 
     fun close() {
         interpreter?.close()
         interpreter = null
-        gpuDelegate?.close()
-        gpuDelegate = null
         nnApiDelegate?.close()
         nnApiDelegate = null
         isInitialized = false
@@ -377,7 +326,5 @@ class DepthEstimator(
 
     companion object {
         private const val TAG = "DepthEstimator"
-        const val MODEL_MIDAS = "midas.tflite"
-        const val MODEL_DEPTH_ANYTHING = "MGC/depth_anything_v3.tflite"
     }
 }

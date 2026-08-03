@@ -54,12 +54,17 @@ internal object PreviewColorShader {
             uniform float uTonePivot;
             uniform float uFilmGrain;
             uniform float uVignette;
+            uniform float uFlash;
             uniform float uBleachBypass;
             uniform float uChromaticAberration;
             uniform float uNoise;
             uniform float uNoiseSeed;
             uniform float uLowRes;
             uniform float uAspectRatio;
+            uniform vec3 uGradingHues;
+            uniform vec3 uGradingAmounts;
+            uniform float uGradingBalance;
+            uniform float uGradingBlending;
             uniform mat3 uPrimaryCalibrationMatrix;
             uniform float uAperture;
             uniform vec2 uFocusPoint;
@@ -73,7 +78,10 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
             ${if (variant.includeHlgInput) PreviewColorShaderModules.HLG_TO_LINEAR else PreviewColorShaderModules.HLG_TO_LINEAR_STUB}
             ${PreviewColorShaderModules.EXPOSURE}
+            ${DirectFlashShader.GLSL}
+            ${ThreeWayColorGradingShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
+            ${BasicToneLutShader.GLSL}
 
             float getLuma(vec3 color) {
                 return dot(color, W);
@@ -181,9 +189,12 @@ internal object PreviewColorShader {
                     color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
                     color.rgb = sanitizeColor(color.rgb);
 
+                    color.rgb = applyBasicToneLut(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
                     color.r += uTemperature * 0.1;
                     color.b -= uTemperature * 0.1;
-                    color.g += uTint * 0.05;
+                    color.g -= uTint * 0.05;
                     color.rgb = sanitizeColor(color.rgb);
 
                     if (abs(uSaturation - 1.0) > 0.001) {
@@ -203,6 +214,16 @@ internal object PreviewColorShader {
                     color.rgb = applyLchColorMixer(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
 
+                    color.rgb = applyThreeWayColorGrading(
+                        color.rgb,
+                        uGradingHues,
+                        uGradingAmounts,
+                        uGradingBalance,
+                        uGradingBlending,
+                        W
+                    );
+                    color.rgb = sanitizeColor(color.rgb);
+
                     if (uFade > 0.001) {
                         float fadeAmount = uFade * 0.3;
                         color.rgb = mix(color.rgb, vec3(0.5), fadeAmount) + fadeAmount * 0.1;
@@ -217,6 +238,11 @@ internal object PreviewColorShader {
                         desaturated.g *= 1.02;
                         desaturated.b *= 1.05;
                         color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    if (uFlash > 0.001) {
+                        color.rgb = applyDirectFlash(color.rgb, vTexCoord, uAspectRatio, uFlash);
                         color.rgb = sanitizeColor(color.rgb);
                     }
 

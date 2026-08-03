@@ -1,0 +1,84 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 69b2e3e5510029dac6d1416980e258fdf5c924a43de19e2cb36feb8bc223dd34
+ * ELF offsets: 0x2ffe79a
+ * Symbols: rgb2Gray_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+// Input: 16-bit half float texture (RGB, stored as RGBA16F)
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+// Output: 16-bit half float texture (PackedBayer format - 4 gray values per texel)
+layout(rgba16f, binding = 1) writeonly uniform image2D uOutputImage;
+
+// Uniform buffer object for parameters
+struct GrayParams {
+    vec4 factors;       // RGB factors (R, G, B, unused)
+    ivec2 margin;       // Texture coordinate margin
+    int debugMode;      // Debug mode
+    int pad;            // Padding for std140 alignment
+};
+
+layout(std140, binding = 2) uniform GrayParams_UBO {
+    GrayParams params;
+} uParams;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Convert RGB to grayscale
+// iOS Metal: ushort(clamp(dot(float3(value.rgb), factors), 0., 65535.))
+// Android: operates in normalized [0,1] space
+float AsGray(vec4 rgb, vec3 factors) {
+    return clamp(dot(rgb.rgb, factors), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    int debugMode = uParams.params.debugMode;
+    
+    // Boundary check for output (PackedBayer texture coordinates)
+    ivec2 outputSize = imageSize(uOutputImage);
+    if (gid.x >= outputSize.x || gid.y >= outputSize.y || gid.x < 0 || gid.y < 0) {
+        return;  // Skip out-of-bounds pixels
+    }
+    
+    // Calculate input position (each output texel corresponds to 4 input pixels)
+    // gid is in packed texture space, need to expand to pixel space
+    ivec2 inBasePos = ivec2(gid.x * 4, gid.y) + uParams.params.margin;
+    
+    // Boundary check for input texture
+    ivec2 inputSize = imageSize(uInputImage);
+    
+    // Read 4 consecutive RGB pixels
+    vec4 rgb0 = imageLoad(uInputImage, clamp(inBasePos + ivec2(0, 0), ivec2(0), inputSize - ivec2(1)));
+    vec4 rgb1 = imageLoad(uInputImage, clamp(inBasePos + ivec2(1, 0), ivec2(0), inputSize - ivec2(1)));
+    vec4 rgb2 = imageLoad(uInputImage, clamp(inBasePos + ivec2(2, 0), ivec2(0), inputSize - ivec2(1)));
+    vec4 rgb3 = imageLoad(uInputImage, clamp(inBasePos + ivec2(3, 0), ivec2(0), inputSize - ivec2(1)));
+    
+    // Debug mode 1: Pass-through first pixel's RGB (for debugging)
+    if (debugMode == 1) {
+        imageStore(uOutputImage, gid, rgb0);
+        return;
+    }
+    
+    // Debug mode 2: Visualize factors as color
+    if (debugMode == 2) {
+        vec4 factorViz = vec4(uParams.params.factors.rgb, 1.0);
+        imageStore(uOutputImage, gid, factorViz);
+        return;
+    }
+    
+    // Convert each RGB pixel to grayscale
+    float gray0 = AsGray(rgb0, uParams.params.factors.rgb);
+    float gray1 = AsGray(rgb1, uParams.params.factors.rgb);
+    float gray2 = AsGray(rgb2, uParams.params.factors.rgb);
+    float gray3 = AsGray(rgb3, uParams.params.factors.rgb);
+    
+    // Pack 4 grayscale values into one RGBA texel (PackedBayer format)
+    vec4 packed = vec4(gray0, gray1, gray2, gray3);
+    
+    imageStore(uOutputImage, gid, packed);
+}

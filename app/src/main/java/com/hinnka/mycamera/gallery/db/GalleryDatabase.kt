@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 20,
+    version = 31,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -163,6 +163,116 @@ abstract class GalleryDatabase : RoomDatabase() {
         private val MIGRATION_19_20 = object : androidx.room.migration.Migration(19, 20) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 rebuildGalleryMediaWithoutLegacyGoogleToneMapFlag(db)
+            }
+        }
+
+        private val MIGRATION_20_21 = object : androidx.room.migration.Migration(20, 21) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawCustomWhiteLevel REAL")
+            }
+        }
+
+        private val MIGRATION_21_22 = object : androidx.room.migration.Migration(21, 22) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawAppleProRawToneMap INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        private val MIGRATION_22_23 = object : androidx.room.migration.Migration(22, 23) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawPhotonPgtmToneMap INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        private val MIGRATION_23_24 = object : androidx.room.migration.Migration(23, 24) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawAutoExposureMode TEXT")
+                db.execSQL(
+                    """
+                    UPDATE gallery_media
+                    SET rawAutoExposureMode = CASE
+                        WHEN rawAutoExposure = 1 THEN 'VIEWFINDER_MATCH'
+                        WHEN rawAutoExposure = 0 THEN 'OFF'
+                        ELSE NULL
+                    END
+                    """.trimIndent()
+                )
+            }
+        }
+
+        private val MIGRATION_24_25 = object : androidx.room.migration.Migration(24, 25) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawHncsProfileId TEXT")
+            }
+        }
+
+        private val MIGRATION_25_26 = object : androidx.room.migration.Migration(25, 26) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN rawHncsRenderIntent TEXT " +
+                        "NOT NULL DEFAULT 'standard'"
+                )
+            }
+        }
+
+        private val MIGRATION_26_27 = object : androidx.room.migration.Migration(26, 27) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN rawHncsFilmCurveMode TEXT " +
+                        "NOT NULL DEFAULT 'standard'"
+                )
+            }
+        }
+
+        private val MIGRATION_27_28 = object : androidx.room.migration.Migration(27, 28) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN postRotationDegrees INTEGER " +
+                        "NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        private val MIGRATION_28_29 = object : androidx.room.migration.Migration(28, 29) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN postMirrorHorizontal INTEGER " +
+                        "NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        private val MIGRATION_29_30 = object : androidx.room.migration.Migration(29, 30) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN recipe_flash REAL")
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN baseline_recipe_flash REAL")
+            }
+        }
+
+        private val MIGRATION_30_31 = object : androidx.room.migration.Migration(30, 31) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                val gradingColumns = listOf(
+                    "gradingShadowHue",
+                    "gradingShadowAmount",
+                    "gradingMidtoneHue",
+                    "gradingMidtoneAmount",
+                    "gradingHighlightHue",
+                    "gradingHighlightAmount",
+                    "gradingBalance",
+                    "gradingBlending"
+                )
+                gradingColumns.forEach { column ->
+                    db.execSQL("ALTER TABLE gallery_media ADD COLUMN recipe_$column REAL")
+                    db.execSQL("ALTER TABLE gallery_media ADD COLUMN baseline_recipe_$column REAL")
+                }
+                db.execSQL(
+                    "UPDATE gallery_media SET recipe_gradingBlending = 0.5 " +
+                        "WHERE recipe_exposure IS NOT NULL"
+                )
+                db.execSQL(
+                    "UPDATE gallery_media SET baseline_recipe_gradingBlending = 0.5 " +
+                        "WHERE baseline_recipe_exposure IS NOT NULL"
+                )
             }
         }
 
@@ -517,7 +627,18 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_16_17,
                         MIGRATION_17_18,
                         MIGRATION_18_19,
-                        MIGRATION_19_20
+                        MIGRATION_19_20,
+                        MIGRATION_20_21,
+                        MIGRATION_21_22,
+                        MIGRATION_22_23,
+                        MIGRATION_23_24,
+                        MIGRATION_24_25,
+                        MIGRATION_25_26,
+                        MIGRATION_26_27,
+                        MIGRATION_27_28,
+                        MIGRATION_28_29,
+                        MIGRATION_29_30,
+                        MIGRATION_30_31
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

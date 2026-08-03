@@ -248,6 +248,13 @@ enum class FocusPointSource {
     AI
 }
 
+data class WhiteBalanceGains(
+    val red: Float,
+    val greenEven: Float,
+    val greenOdd: Float,
+    val blue: Float
+)
+
 /**
  * 相机状态数据类
  */
@@ -269,6 +276,13 @@ data class CameraState(
 
     val awbMode: Int = 1, // 自动白平衡模式
     val awbTemperature: Int = 5000, // 色温 (K)
+    val actualAwbTemperature: Int? = null, // 相机当前实际/估算色温 (K)
+    val actualAwbTint: Int? = null,
+    val actualAwbGains: WhiteBalanceGains? = null,
+    val canAdjustWhiteBalance: Boolean = false,
+    val supportsCctWhiteBalance: Boolean = false,
+    val awbTemperatureMin: Int = 2000,
+    val awbTemperatureMax: Int = 8000,
 
     // 测光模式
     val meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT,
@@ -290,7 +304,7 @@ data class CameraState(
     val currentAfMode: Int? = null, // 当前的 AF 模式
 
     //闪光灯
-    val flashMode: Int = 0, // 0: off, 1: auto, 2: torch
+    val flashMode: Int = 0, // 0: off, 1: forced flash, 2: torch
 
     // 变焦
     val zoomRatio: Float = 1.0f,
@@ -327,12 +341,13 @@ data class CameraState(
     val nrLevel: Int = 5,
     val availableNrModes: IntArray = intArrayOf(),
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
+    val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
 
     val isRawSupported: Boolean = false,
-    val useMFNR: Boolean = false,
-    val useHdrComposition: Boolean = false,
-    val multiFrameCount: Int = 0,
-    val useMFSR: Boolean = false,
+    val multiFrameOutputScale: Float? = null,
+    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT,
+    val useJpgMaxHdrComposition: Boolean = false,
+    val useRawMaxHdrComposition: Boolean = true,
     val useRaw: Boolean = false,
     val useMultipleExposure: Boolean = false,
     val rawMinShutterSpeedNs: Long = 0L,
@@ -376,6 +391,21 @@ data class CameraState(
 
     val isHLG: Boolean
         get() = currentDynamicRangeProfile == "HLG10"
+
+    val isMultiFrameEnabled: Boolean
+        get() = multiFrameOutputScale != null && (!useRaw || isRawSupported)
+
+    val isJpgMaxEnabled: Boolean
+        get() = isMultiFrameEnabled && !useRaw
+
+    val isJpgMaxHdrEnabled: Boolean
+        get() = isJpgMaxEnabled && useJpgMaxHdrComposition
+
+    val isRawMaxEnabled: Boolean
+        get() = isMultiFrameEnabled && useRaw
+
+    val isRawMaxHdrEnabled: Boolean
+        get() = isRawMaxEnabled && useRawMaxHdrComposition
 
     /**
      * 获取当前相机信息

@@ -1,0 +1,45 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 914e2b18fb091144567c4ae84d992c382bd7796c43b148b6e0cc25ca78e394f4
+ * ELF offsets: 0x301e2b0
+ * Symbols: clarityRgb2Gray4U16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+precision highp uimage2D;
+
+layout(rgba16f,  binding = 0) readonly  uniform image2D  uSrc;   // RGB input (per-pixel)
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D uDst;   // PackedUint16 gray output
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// iOS: ushort Rgb2Gray(ushort4 pix) { int4 scaled = int4(pix) * 21845;
+//      return (scaled.r + scaled.g + scaled.b) >> 16; }
+// This is equivalent to (r + g + b) / 3 in uint16 space, using integer math
+// to avoid floating-point precision issues.
+uint rgb2grayU16(vec4 pix) {
+    // Convert from [0,1] float to [0,65535] uint16 space
+    ivec4 u16 = ivec4(clamp(pix * 65535.0, 0.0, 65535.0));
+    // iOS integer math: int4(pix) * 21845 → (scaled.r + scaled.g + scaled.b) >> 16
+    // 21845 = floor(65536 / 3), so (a * 21845) >> 16 ~ a / 3
+    ivec4 scaled = u16 * 21845;
+    return uint((scaled.r + scaled.g + scaled.b) >> 16);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    // iOS: ushort pix0 = Rgb2Gray(src.read(ushort2(gid.x*4 + 0, gid.y)))
+    uint g0 = rgb2grayU16(imageLoad(uSrc, ivec2(gid.x * 4 + 0, gid.y)));
+    uint g1 = rgb2grayU16(imageLoad(uSrc, ivec2(gid.x * 4 + 1, gid.y)));
+    uint g2 = rgb2grayU16(imageLoad(uSrc, ivec2(gid.x * 4 + 2, gid.y)));
+    uint g3 = rgb2grayU16(imageLoad(uSrc, ivec2(gid.x * 4 + 3, gid.y)));
+
+    // iOS: dst.write(ushort4(pix0, pix1, pix2, pix3), gid)
+    imageStore(uDst, gid, uvec4(g0, g1, g2, g3));
+}

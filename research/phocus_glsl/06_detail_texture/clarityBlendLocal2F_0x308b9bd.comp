@@ -1,0 +1,53 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: f9fe5e156ec69fb7cb7368c5691d79a4d33a6e178974d4765cbe291550ff6527
+ * ELF offsets: 0x308b9bd
+ * Symbols: clarityBlendLocal2F_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly  uniform image2D uFullCorrA;
+layout(rgba16f, binding = 1) writeonly uniform image2D uDst;
+layout(rgba16f, binding = 2) readonly  uniform image2D uBefore;
+layout(r32f,    binding = 3) readonly  uniform image2D uLocalMap;
+layout(rgba16f, binding = 4) readonly  uniform image2D uFullCorrB;
+
+layout(std140, binding = 5) uniform ClarityBlendLocalParams_UBO {
+    int w; int h;
+    float global_val; float local_val;
+    float alphaNeg; float alphaPos;
+    float localMapScaleX; float localMapScaleY;
+    int type;
+    int pad1;
+    int pad2;
+    int pad3;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Mirrors iOS LookupLocal: blend = clamp(map[pos] * local + global, minVal, 1.0)
+vec4 lookupLocal(ivec2 gid) {
+    ivec2 pos = ivec2(round(vec2(gid) * vec2(localMapScaleX, localMapScaleY)));
+    float mapVal = imageLoad(uLocalMap, pos).r;
+    float minValue = (type == 0) ? -1.0 : 0.0;  // Clarity allows negative, SF/HR does not
+    return vec4(clamp(mapVal * local_val + global_val, minValue, 1.0));
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    vec4 uncorr = imageLoad(uBefore, gid);
+    vec4 corrA = imageLoad(uFullCorrA, gid) - uncorr;
+    vec4 corrB = imageLoad(uFullCorrB, gid) - uncorr;
+    vec4 blend = lookupLocal(gid);
+    // select: a = (blend < 0) ? alphaNeg : alphaPos (per-component check via blend.r scalar)
+    vec4 a = (blend.r < 0.0) ? vec4(alphaNeg) : vec4(alphaPos);
+    vec4 corr = a * corrB + (1.0 - a) * corrA;
+    imageStore(uDst, gid, clamp(uncorr + corr * blend, 0.0, 1.0));
+}

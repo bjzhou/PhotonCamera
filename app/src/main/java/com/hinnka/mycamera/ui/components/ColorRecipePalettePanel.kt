@@ -1,28 +1,46 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.ColorPaletteState
-import kotlin.math.min
+import kotlin.math.roundToInt
+
+private val PaletteHorizontalInset = 18.dp
+private val PaletteVerticalInset = 16.dp
+private val PaletteAccent = Color(0xFFFFC76B)
+private const val PaletteReferenceStepCount = 9
 
 @Composable
 fun ColorRecipePalettePanel(
@@ -32,227 +50,304 @@ fun ColorRecipePalettePanel(
 ) {
     val currentOnPaletteStateChange = rememberUpdatedState(onPaletteStateChange)
     val currentPaletteState = rememberUpdatedState(paletteState)
+    val normalizedState = paletteState.normalized()
+    val toneLabel = stringResource(R.string.recipe_palette_tone)
+    val saturationLabel = stringResource(R.string.recipe_param_saturation)
 
     Column(
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f)
-                .padding(horizontal = 8.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onDoubleTap = { offset ->
-                            val width = size.width.toFloat().coerceAtLeast(1f)
-                            val height = size.height.toFloat().coerceAtLeast(1f)
-                            val currentState = currentPaletteState.value
-                            val thumbX = currentState.x.coerceIn(0f, 1f) * width
-                            val thumbY = currentState.y.coerceIn(0f, 1f) * height
-                            val thumbRadius = min(width, height) * 0.065f
-                            val dx = offset.x - thumbX
-                            val dy = offset.y - thumbY
-                            if (dx * dx + dy * dy <= thumbRadius * thumbRadius * 2.2f) {
-                                currentOnPaletteStateChange.value(
-                                    currentState.copy(x = 0.5f, y = 0.5f)
-                                )
-                            }
-                        },
-                        onTap = { offset ->
-                            val width = size.width.toFloat().coerceAtLeast(1f)
-                            val height = size.height.toFloat().coerceAtLeast(1f)
-                            currentOnPaletteStateChange.value(
-                                currentPaletteState.value.copy(
-                                    x = (offset.x / width).coerceIn(0f, 1f),
-                                    y = (offset.y / height).coerceIn(0f, 1f)
-                                )
-                            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PaletteAxisValue(
+                label = toneLabel,
+                value = normalizedState.toneValue,
+                modifier = Modifier.weight(1f)
+            )
+            PaletteAxisValue(
+                label = saturationLabel,
+                value = normalizedState.saturationValue,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .padding(start = 30.dp)
+                    .fillMaxWidth()
+                    .aspectRatio(2f)
+                    .semantics {
+                        contentDescription =
+                            "$toneLabel ${formatAxisValue(normalizedState.toneValue)}, " +
+                            "$saturationLabel ${formatAxisValue(normalizedState.saturationValue)}"
+                    }
+                    .pointerInput(Unit) {
+                        fun stateAt(position: Offset): ColorPaletteState {
+                            val left = PaletteHorizontalInset.toPx()
+                            val right = size.width - left
+                            val top = PaletteVerticalInset.toPx()
+                            val bottom = size.height - top
+                            val horizontalPosition =
+                                ((position.x - left) / (right - left).coerceAtLeast(1f))
+                                    .coerceIn(0f, 1f)
+                            val verticalPosition =
+                                ((position.y - top) / (bottom - top).coerceAtLeast(1f))
+                                    .coerceIn(0f, 1f)
+                            return currentPaletteState.value.copy(
+                                x = horizontalPosition,
+                                y = verticalPosition
+                            ).normalized()
                         }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures { change, _ ->
-                        change.consume()
-                        val width = size.width.toFloat().coerceAtLeast(1f)
-                        val height = size.height.toFloat().coerceAtLeast(1f)
-                        currentOnPaletteStateChange.value(
-                            currentPaletteState.value.copy(
-                                x = (change.position.x / width).coerceIn(0f, 1f),
-                                y = (change.position.y / height).coerceIn(0f, 1f)
-                            )
+
+                        detectTapGestures(
+                            onDoubleTap = { position ->
+                                val current = currentPaletteState.value.normalized()
+                                val left = PaletteHorizontalInset.toPx()
+                                val top = PaletteVerticalInset.toPx()
+                                val gridWidth = size.width - left * 2f
+                                val gridHeight = size.height - top * 2f
+                                val thumb = Offset(
+                                    x = left + current.x * gridWidth,
+                                    y = top + current.y * gridHeight
+                                )
+                                val distance = position - thumb
+                                val hitRadius = 24.dp.toPx()
+                                if (distance.getDistanceSquared() <= hitRadius * hitRadius) {
+                                    currentOnPaletteStateChange.value(
+                                        currentPaletteState.value.withValues(
+                                            saturation = 0f,
+                                            tone = 0f
+                                        )
+                                    )
+                                }
+                            },
+                            onTap = { position ->
+                                val next = stateAt(position)
+                                val current = currentPaletteState.value.normalized()
+                                if (next.x != current.x || next.y != current.y) {
+                                    currentOnPaletteStateChange.value(next)
+                                }
+                            }
                         )
                     }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, _ ->
+                            change.consume()
+                            val left = PaletteHorizontalInset.toPx()
+                            val right = size.width - left
+                            val top = PaletteVerticalInset.toPx()
+                            val bottom = size.height - top
+                            val horizontalPosition =
+                                ((change.position.x - left) / (right - left).coerceAtLeast(1f))
+                                    .coerceIn(0f, 1f)
+                            val verticalPosition =
+                                ((change.position.y - top) / (bottom - top).coerceAtLeast(1f))
+                                    .coerceIn(0f, 1f)
+                            val current = currentPaletteState.value
+                            val next = current.copy(
+                                x = horizontalPosition,
+                                y = verticalPosition
+                            ).normalized()
+                            val normalizedCurrent = current.normalized()
+                            if (next.x != normalizedCurrent.x || next.y != normalizedCurrent.y) {
+                                currentOnPaletteStateChange.value(next)
+                            }
+                        }
+                    }
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawPalette(
+                        x = normalizedState.x,
+                        y = normalizedState.y
+                    )
                 }
-        ) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val corner = CornerRadius(20.dp.toPx(), 20.dp.toPx())
+            }
 
-                drawRoundRect(
-                    brush = Brush.horizontalGradient(
-                        listOf(
-                            Color(0xFF6C8A91),
-                            Color(0xFFB8AEA0),
-                            Color(0xFFD36A72)
-                        )
-                    ),
-                    size = size,
-                    cornerRadius = corner
-                )
-
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.36f),
-                        0.52f to Color.Transparent,
-                        1f to Color(0xFF001F22).copy(alpha = 0.88f)
-                    ),
-                    size = size,
-                    cornerRadius = corner
-                )
-
-                drawRoundRect(
-                    color = Color.Black.copy(alpha = 0.16f),
-                    style = Stroke(width = 1.5.dp.toPx()),
-                    size = size,
-                    cornerRadius = corner
-                )
-
-                drawPaletteGrid(size)
-
-                val thumbX = paletteState.x.coerceIn(0f, 1f) * size.width
-                val thumbY = paletteState.y.coerceIn(0f, 1f) * size.height
-                val thumbRadius = min(size.width, size.height) * 0.065f
-
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.18f),
-                    radius = thumbRadius * 1.35f,
-                    center = Offset(thumbX, thumbY)
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = thumbRadius,
-                    center = Offset(thumbX, thumbY)
-                )
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.18f),
-                    radius = thumbRadius,
-                    center = Offset(thumbX, thumbY),
-                    style = Stroke(width = 1.dp.toPx())
-                )
+            Column(
+                modifier = Modifier
+                    .matchParentSize()
+                    .padding(top = 9.dp, end = 6.dp, bottom = 9.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.Start
+            ) {
+                AxisMarker("+100")
+                AxisMarker("0")
+                AxisMarker("-100")
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        PaletteDensitySlider(
-            value = paletteState.density,
-            onValueChange = {
-                currentOnPaletteStateChange.value(
-                    currentPaletteState.value.copy(density = it)
-                )
-            },
-            modifier = Modifier.padding(horizontal = 8.dp)
-        )
-    }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPaletteGrid(size: Size) {
-    val columns = 9
-    val rows = 9
-    val dotRadius = min(size.width, size.height) * 0.012f
-    val left = size.width * 0.07f
-    val top = size.height * 0.10f
-    val gridWidth = size.width * 0.86f
-    val gridHeight = size.height * 0.80f
-
-    for (row in 0 until rows) {
-        for (column in 0 until columns) {
-            val x = left + gridWidth * column / (columns - 1)
-            val y = top + gridHeight * row / (rows - 1)
-            val alpha = 0.18f + (column.toFloat() / (columns - 1)) * 0.34f + (1f - row.toFloat() / (rows - 1)) * 0.18f
-            drawCircle(
-                color = Color.White.copy(alpha = alpha.coerceIn(0.14f, 0.62f)),
-                radius = dotRadius,
-                center = Offset(x, y)
-            )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 48.dp, end = 18.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            AxisMarker("-100")
+            AxisMarker("0")
+            AxisMarker("+100")
         }
     }
 }
 
 @Composable
-private fun PaletteDensitySlider(
+private fun PaletteAxisValue(
+    label: String,
     value: Float,
-    onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(28.dp)
-        ) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val trackHeight = 14.dp.toPx()
-                val thumbRadius = trackHeight * 0.62f
-                val top = (size.height - trackHeight) * 0.5f
-                val corner = CornerRadius(trackHeight / 2f, trackHeight / 2f)
-                val thumbTravelWidth = (size.width - thumbRadius * 2f).coerceAtLeast(1f)
-                drawRoundRect(
-                    brush = Brush.horizontalGradient(
-                        listOf(
-                            Color(0xFF5BC1FF),
-                            Color(0xFFDFD3B0),
-                            Color(0xFFFFB064),
-                            Color(0xFFF0526A)
-                        )
-                    ),
-                    topLeft = Offset(0f, top),
-                    size = Size(size.width, trackHeight),
-                    cornerRadius = corner
-                )
-                drawRoundRect(
-                    color = Color.Black.copy(alpha = 0.18f),
-                    topLeft = Offset(0f, top),
-                    size = Size(size.width, trackHeight),
-                    cornerRadius = corner,
-                    style = Stroke(width = 1.dp.toPx())
-                )
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.68f),
+            fontSize = 11.sp,
+            maxLines = 1
+        )
+        Text(
+            text = formatAxisValue(value),
+            color = if (value == 0f) Color.White.copy(alpha = 0.72f) else PaletteAccent,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
 
-                val thumbX = thumbRadius + value.coerceIn(0f, 1f) * thumbTravelWidth
-                val center = Offset(thumbX, size.height / 2f)
-                drawCircle(
-                    color = Color.White,
-                    radius = thumbRadius,
-                    center = center
-                )
-                drawCircle(
-                    color = Color(0xFFE95A78),
-                    radius = thumbRadius,
-                    center = center,
-                    style = Stroke(width = 2.dp.toPx())
-                )
-            }
+@Composable
+private fun AxisMarker(text: String) {
+    Text(
+        text = text,
+        color = Color.White.copy(alpha = 0.42f),
+        fontSize = 9.sp,
+        fontFamily = FontFamily.Monospace
+    )
+}
 
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            val trackHeight = 14.dp.toPx()
-                            val thumbRadius = trackHeight * 0.62f
-                            val width = (size.width.toFloat() - thumbRadius * 2f).coerceAtLeast(1f)
-                            onValueChange(((offset.x - thumbRadius) / width).coerceIn(0f, 1f))
-                        }
-                    }
-                    .pointerInput(Unit) {
-                        detectDragGestures { change, _ ->
-                            change.consume()
-                            val trackHeight = 14.dp.toPx()
-                            val thumbRadius = trackHeight * 0.62f
-                            val width = (size.width.toFloat() - thumbRadius * 2f).coerceAtLeast(1f)
-                            onValueChange(((change.position.x - thumbRadius) / width).coerceIn(0f, 1f))
-                        }
-                    }
+private fun formatAxisValue(value: Float): String {
+    val rounded = value.roundToInt()
+    return when {
+        rounded > 0 -> "+$rounded"
+        else -> rounded.toString()
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPalette(
+    x: Float,
+    y: Float
+) {
+    val corner = CornerRadius(14.dp.toPx(), 14.dp.toPx())
+    val horizontalInset = PaletteHorizontalInset.toPx()
+    val verticalInset = PaletteVerticalInset.toPx()
+    val grid = Rect(
+        left = horizontalInset,
+        top = verticalInset,
+        right = size.width - horizontalInset,
+        bottom = size.height - verticalInset
+    )
+
+    drawRoundRect(
+        brush = Brush.horizontalGradient(
+            colors = listOf(
+                Color(0xFF777A78),
+                Color(0xFF9B8173),
+                Color(0xFFDF694E)
+            )
+        ),
+        size = size,
+        cornerRadius = corner
+    )
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colorStops = arrayOf(
+                0f to Color.White.copy(alpha = 0.40f),
+                0.48f to Color.Transparent,
+                1f to Color(0xFF081113).copy(alpha = 0.72f)
+            )
+        ),
+        size = size,
+        cornerRadius = corner
+    )
+    drawRoundRect(
+        color = Color.White.copy(alpha = 0.12f),
+        size = size,
+        cornerRadius = corner,
+        style = Stroke(width = 1.dp.toPx())
+    )
+
+    for (index in 0 until PaletteReferenceStepCount) {
+        val fraction = index.toFloat() / (PaletteReferenceStepCount - 1)
+        val x = grid.left + grid.width * fraction
+        val y = grid.top + grid.height * fraction
+        val isCenter = index == PaletteReferenceStepCount / 2
+
+        drawLine(
+            color = Color.White.copy(alpha = if (isCenter) 0.28f else 0.10f),
+            start = Offset(x, grid.top),
+            end = Offset(x, grid.bottom),
+            strokeWidth = if (isCenter) 1.25.dp.toPx() else 0.75.dp.toPx()
+        )
+        drawLine(
+            color = Color.White.copy(alpha = if (isCenter) 0.28f else 0.10f),
+            start = Offset(grid.left, y),
+            end = Offset(grid.right, y),
+            strokeWidth = if (isCenter) 1.25.dp.toPx() else 0.75.dp.toPx()
+        )
+    }
+
+    val selectedX = grid.left + grid.width * x.coerceIn(0f, 1f)
+    val selectedY = grid.top + grid.height * y.coerceIn(0f, 1f)
+
+    drawLine(
+        color = PaletteAccent.copy(alpha = 0.30f),
+        start = Offset(selectedX, grid.top),
+        end = Offset(selectedX, grid.bottom),
+        strokeWidth = 1.dp.toPx()
+    )
+    drawLine(
+        color = PaletteAccent.copy(alpha = 0.30f),
+        start = Offset(grid.left, selectedY),
+        end = Offset(grid.right, selectedY),
+        strokeWidth = 1.dp.toPx()
+    )
+
+    for (row in 0 until PaletteReferenceStepCount) {
+        for (column in 0 until PaletteReferenceStepCount) {
+            val x =
+                grid.left + grid.width * column / (PaletteReferenceStepCount - 1)
+            val y =
+                grid.top + grid.height * row / (PaletteReferenceStepCount - 1)
+            drawCircle(
+                color = Color.White.copy(alpha = if (row == 4 && column == 4) 0.72f else 0.42f),
+                radius = if (row == 4 && column == 4) 2.1.dp.toPx() else 1.5.dp.toPx(),
+                center = Offset(x, y)
             )
         }
     }
+
+    val thumbCenter = Offset(selectedX, selectedY)
+    drawCircle(
+        color = Color.Black.copy(alpha = 0.30f),
+        radius = 12.dp.toPx(),
+        center = thumbCenter
+    )
+    drawCircle(
+        color = PaletteAccent,
+        radius = 9.dp.toPx(),
+        center = thumbCenter
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = 0.92f),
+        radius = 4.dp.toPx(),
+        center = thumbCenter
+    )
 }

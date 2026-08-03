@@ -58,7 +58,13 @@ data class MediaData(
     /**
      * 分辨率字符串
      */
-    fun getResolution(): String = "${width}x${height}"
+    fun getResolution(): String {
+        val displayedPhoto = relatedPhoto ?: this
+        val displayedMetadata = displayedPhoto.metadata
+        val displayedWidth = displayedMetadata?.width?.takeIf { it > 0 } ?: displayedPhoto.width
+        val displayedHeight = displayedMetadata?.height?.takeIf { it > 0 } ?: displayedPhoto.height
+        return "${displayedWidth}x${displayedHeight}"
+    }
 
     fun getFormattedDuration(): String {
         val totalSeconds = ((durationMs ?: 0L) / 1000L).coerceAtLeast(0L)

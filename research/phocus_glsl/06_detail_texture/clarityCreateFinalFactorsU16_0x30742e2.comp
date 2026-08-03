@@ -1,0 +1,58 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 447319113a0246e3a4198ff07eb0fcbe40f1bc25ce32f667bb79e698e206b3d5
+ * ELF offsets: 0x30742e2
+ * Symbols: clarityCreateFinalFactorsU16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+precision highp image2D;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D uGrayRef;   // reference (uncorrected) PackedUint16
+layout(rgba16ui, binding = 1) readonly  uniform uimage2D uGray;      // processed PackedUint16
+layout(rgba16f,  binding = 2) writeonly uniform image2D  uFactors;   // output factor map (.r channel, half-float)
+
+layout(std140, binding = 3) uniform ClarityCreateFinalFactorsParams_UBO {
+    float xGamma;
+    float stretchFactor;
+    float pad1;
+    float pad2;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 srcSize = imageSize(uGrayRef);
+    if (gid.x >= srcSize.x || gid.y >= srcSize.y) return;
+
+    // iOS: float4 ref = float4(grayRef.read(gid)) / 65535.0f
+    vec4 refIn = vec4(imageLoad(uGrayRef, gid)) / 65535.0;
+    // iOS: float4 graysIn = float4(gray.read(gid)) / 65535.0f
+    vec4 grayIn = vec4(imageLoad(uGray, gid)) / 65535.0;
+
+    // iOS: ref = pow(ref, 2.0 / gamma.xGamma) / gamma.stretchFactor
+    vec4 ref = pow(refIn, vec4(2.0 / xGamma)) / stretchFactor;
+    // iOS: auto grays = pow(graysIn, 2.0 / gamma.xGamma) / gamma.stretchFactor
+    vec4 grays = pow(grayIn, vec4(2.0 / xGamma)) / stretchFactor;
+
+    // iOS: float4 result = select(grays / ref, float4(1.0), ref <= 0.00002)
+    // Defense-in-depth: clamp factor to [0.25, 4.0] to prevent extreme ratios
+    const float kFactorMin = 0.25;
+    const float kFactorMax = 4.0;
+    vec4 result;
+    result.x = (ref.x > 0.00002) ? clamp(grays.x / ref.x, kFactorMin, kFactorMax) : 1.0;
+    result.y = (ref.y > 0.00002) ? clamp(grays.y / ref.y, kFactorMin, kFactorMax) : 1.0;
+    result.z = (ref.z > 0.00002) ? clamp(grays.z / ref.z, kFactorMin, kFactorMax) : 1.0;
+    result.w = (ref.w > 0.00002) ? clamp(grays.w / ref.w, kFactorMin, kFactorMax) : 1.0;
+
+    // Write 4 individual float values to the r32f factor map (unpacking PackedGray)
+    // iOS: factors.write(float4(result[0]), uint2(gid.x * 4 + 0, gid.y))
+    imageStore(uFactors, ivec2(gid.x * 4 + 0, gid.y), vec4(result.x, 0.0, 0.0, 0.0));
+    imageStore(uFactors, ivec2(gid.x * 4 + 1, gid.y), vec4(result.y, 0.0, 0.0, 0.0));
+    imageStore(uFactors, ivec2(gid.x * 4 + 2, gid.y), vec4(result.z, 0.0, 0.0, 0.0));
+    imageStore(uFactors, ivec2(gid.x * 4 + 3, gid.y), vec4(result.w, 0.0, 0.0, 0.0));
+}

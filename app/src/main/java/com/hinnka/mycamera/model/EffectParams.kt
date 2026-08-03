@@ -9,6 +9,7 @@ import com.google.gson.Gson
 @Keep
 data class EffectParams(
     val vignette: Float = 0f,               // 暗角 (-1.0 ~ 1.0)
+    val flash: Float = 0f,                  // 镜头轴向直闪模拟 (0.0 ~ 1.0)
     val filmGrain: Float = 0f,             // 胶片颗粒 (0.0 ~ 1.0)
     val bloom: Float = 0f,                 // Bevy Bloom 泛光 (0.0 ~ 1.0)
     val softLight: Float = 0f,             // 柔光扩散 (0.0 ~ 1.0)
@@ -23,6 +24,7 @@ data class EffectParams(
      */
     fun isDefault(): Boolean {
         return vignette == 0f &&
+                flash == 0f &&
                 filmGrain == 0f &&
                 bloom == 0f &&
                 softLight == 0f &&
@@ -39,6 +41,7 @@ data class EffectParams(
     fun applyTo(recipe: ColorRecipeParams): ColorRecipeParams {
         return recipe.copy(
             vignette = vignette,
+            flash = flash,
             filmGrain = filmGrain,
             bloom = bloom,
             softLight = softLight,
@@ -69,6 +72,7 @@ data class EffectParams(
 fun ColorRecipeParams.toEffectParams(): EffectParams {
     return EffectParams(
         vignette = vignette,
+        flash = flash,
         filmGrain = filmGrain,
         bloom = bloom,
         softLight = softLight,

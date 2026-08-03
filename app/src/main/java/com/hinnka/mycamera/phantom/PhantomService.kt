@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
@@ -102,13 +103,13 @@ import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
-import com.hinnka.mycamera.ui.camera.LutIntensitySlider
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.CurveChannel
-import com.hinnka.mycamera.ui.components.EffectsPanel
-import com.hinnka.mycamera.ui.components.LutSelectorWithRecipeAction
+import com.hinnka.mycamera.ui.components.LutSelector
+import com.hinnka.mycamera.ui.icons.AppIcons
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -126,7 +127,6 @@ import kotlin.io.inputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.use
-import com.hinnka.mycamera.ui.icons.AppIcons
 
 class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryOwner {
 
@@ -134,6 +134,25 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         const val TAG = "GhostService"
         const val MIN_IMPORT_SIZE = 1024 * 1024L
         const val MIN_PHANTOM_SHORT_SIDE = 1080
+        const val PHANTOM_PROCESS_DELAY_MS = 200L
+        const val RAW_PROCESS_DELAY_MS = 1200L
+        const val MIN_FINAL_RAW_SIZE = 8 * 1024 * 1024L
+        const val RAW_JPEG_PAIR_WAIT_MS = 1200L
+        const val RAW_JPEG_PAIR_WINDOW_MS = 3000L
+        const val PHANTOM_EXPORT_PREFIX = "PhotonCamera_"
+        val RAW_FILE_EXTENSIONS = setOf(
+            ".dng",
+            ".rw2",
+            ".arw",
+            ".cr3",
+            ".cr2",
+            ".nef",
+            ".orf",
+            ".raf",
+            ".pef",
+            ".srw",
+            ".3fr"
+        )
     }
 
     private data class ImageResolution(
@@ -150,6 +169,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val photoId: String,
         val thumbnail: Bitmap? = null,
         val size: Long,
+        val sourceWidth: Int = 0,
+        val sourceHeight: Int = 0,
         val newUri: Uri? = null,
         val newName: String = "",
         val newSize: Long = 0L
@@ -176,13 +197,14 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private val userPreferencesRepository = UserPreferencesRepository(context)
 
     private val processPhotoTaskMap = mutableMapOf<String, Job>()
-    private val activePhotoProcessPaths = mutableSetOf<String>()
+    private val pendingJpegProcessPathsByPairKey = mutableMapOf<String, String>()
+    private val recentRawPairDetections = mutableMapOf<String, Long>()
+    private val activePhotoProcessJobs = mutableMapOf<String, Job>()
 
     private var processingInfo: ProcessingInfo? by mutableStateOf(null)
     private var expanded by mutableStateOf(false)
     private var showFilterPicker by mutableStateOf(false)
     private var showRecipeEditor by mutableStateOf(false)
-    private var showEffectsEditor by mutableStateOf(false)
     private var floatingWindowYBeforeEditor: Int? = null
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -190,7 +212,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             super.onChange(selfChange, uri)
             uri ?: return
             if (selfChange) return
-
             val projection = arrayOf(
                 OpenableColumns.DISPLAY_NAME,
                 MediaStore.MediaColumns.DATA,
@@ -201,6 +222,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 MediaStore.MediaColumns.RELATIVE_PATH,
                 MediaStore.MediaColumns.WIDTH,
                 MediaStore.MediaColumns.HEIGHT,
+                MediaStore.MediaColumns.MIME_TYPE,
             )
 
             try {
@@ -217,6 +239,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
                     val widthIndex = cursor.getColumnIndex(MediaStore.MediaColumns.WIDTH)
                     val heightIndex = cursor.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
+                    val mimeTypeIndex = cursor.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
 
                     val name = if (nameIndex != -1) cursor.getString(nameIndex) else "Unknown"
                     val isPending = if (pendingIndex != -1) cursor.getInt(pendingIndex) else 0
@@ -228,6 +251,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         if (relativePathIndex != -1) cursor.getString(relativePathIndex) else ""
                     val width = if (widthIndex != -1) cursor.getInt(widthIndex) else 0
                     val height = if (heightIndex != -1) cursor.getInt(heightIndex) else 0
+                    val mimeType = if (mimeTypeIndex != -1) cursor.getString(mimeTypeIndex) else null
 
                     if (isPending != 0) return
                     if (isTrashed != 0) return
@@ -244,20 +268,60 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         val dir = File(Environment.getExternalStorageDirectory(), relativePath)
                         File(dir, name).absolutePath
                     }
-                    PLog.d(
-                        TAG,
-                        "Content changed detected: ${uri.lastPathSegment} $name size=$size resolution=${width}x${height}"
-                    )
-                    if (activePhotoProcessPaths.contains(path)) {
-                        PLog.d(TAG, "Ignore change for $path because phantom export is already running")
+                    val rawJpegPairKey = buildRawJpegPairKey(relativePath, name)
+                    val isRawCandidate = isRawMedia(name, mimeType)
+                    val isJpegCandidate = isJpegMedia(name, mimeType)
+                    val detectedAtMs = SystemClock.elapsedRealtime()
+                    pruneRecentRawPairDetections(detectedAtMs)
+                    if (isRawCandidate && size < MIN_FINAL_RAW_SIZE) {
+                        PLog.d(TAG, "Ignore provisional RAW $path because size $size < $MIN_FINAL_RAW_SIZE")
                         return
                     }
+                    if (isRawCandidate && rawJpegPairKey != null) {
+                        recentRawPairDetections[rawJpegPairKey] = detectedAtMs
+                        cancelPendingJpegForRawPair(rawJpegPairKey, path)
+                    } else if (isJpegCandidate &&
+                        rawJpegPairKey != null &&
+                        hasRecentRawPairDetection(rawJpegPairKey, detectedAtMs)
+                    ) {
+                        PLog.d(TAG, "Ignore JPG $path because RAW pair was detected recently")
+                        return
+                    }
+                    PLog.d(
+                        TAG,
+                        "Content changed detected: ${uri.lastPathSegment} $name size=$size resolution=${width}x${height} mime=$mimeType"
+                    )
+                    val activeJob = activePhotoProcessJobs[path]
+                    if (activeJob != null) {
+                        if (!isRawCandidate) {
+                            PLog.d(TAG, "Ignore change for $path because phantom export is already running")
+                            return
+                        }
+                        PLog.d(TAG, "Cancel active RAW phantom export for $path because a newer RAW update arrived")
+                        activeJob.cancel()
+                    }
                     processPhotoTaskMap[path]?.cancel()
-                    processPhotoTaskMap[path] = lifecycleScope.launch {
+                    if (isJpegCandidate && rawJpegPairKey != null) {
+                        pendingJpegProcessPathsByPairKey[rawJpegPairKey] = path
+                    }
+                    val task = lifecycleScope.launch(start = CoroutineStart.LAZY) {
                         var exportStarted = false
                         try {
-                            delay(200L)
+                            val processDelayMs = resolvePhantomProcessDelayMs(
+                                isRawCandidate = isRawCandidate,
+                                isJpegCandidate = isJpegCandidate,
+                                rawJpegPairKey = rawJpegPairKey,
+                                size = size
+                            )
+                            delay(processDelayMs)
                             if (!isActive) return@launch
+                            if (isJpegCandidate &&
+                                rawJpegPairKey != null &&
+                                hasRecentRawPairDetection(rawJpegPairKey, SystemClock.elapsedRealtime())
+                            ) {
+                                PLog.d(TAG, "Ignore JPG $path because RAW pair won the priority window")
+                                return@launch
+                            }
 
                             val resolution = withContext(Dispatchers.IO) {
                                 resolveImageResolution(uri, width, height)
@@ -277,6 +341,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 && info.relativePath == relativePath
                                 && info.name == name
                                 && info.size >= size
+                                && info.hasSameSourceResolution(resolution)
                             ) {
                                 PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
                                 return@launch
@@ -285,25 +350,88 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 && info.relativePath == relativePath
                                 && info.newName == name
                                 && info.newSize >= size
+                                && info.hasSameSourceResolution(resolution)
                             ) {
                                 PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
                                 return@launch
                             }
 
-                            activePhotoProcessPaths += path
+                            coroutineContext[Job]?.let { currentJob ->
+                                activePhotoProcessJobs[path] = currentJob
+                            }
                             exportStarted = true
-                            photoProcessTask(uri, name, size, relativePath)
+                            photoProcessTask(
+                                uri = uri,
+                                name = name,
+                                size = size,
+                                relativePath = relativePath,
+                                mimeType = mimeType,
+                                sourceWidth = resolution?.width ?: width,
+                                sourceHeight = resolution?.height ?: height
+                            )
                         } finally {
                             if (exportStarted) {
-                                activePhotoProcessPaths -= path
+                                if (activePhotoProcessJobs[path] === coroutineContext[Job]) {
+                                    activePhotoProcessJobs.remove(path)
+                                }
                             }
-                            processPhotoTaskMap.remove(path)
+                            if (isJpegCandidate && rawJpegPairKey != null) {
+                                pendingJpegProcessPathsByPairKey.remove(rawJpegPairKey, path)
+                            }
+                            if (processPhotoTaskMap[path] === coroutineContext[Job]) {
+                                processPhotoTaskMap.remove(path)
+                            }
                         }
                     }
+                    processPhotoTaskMap[path] = task
+                    task.start()
                 }
             } catch (e: Exception) {
                 PLog.e(TAG, "Error querying content: $uri", e)
             }
+        }
+    }
+
+    private fun buildRawJpegPairKey(relativePath: String, fileName: String): String? {
+        val baseName = fileName.substringBefore('.').trim()
+        if (baseName.isEmpty()) return null
+        return "${relativePath.trimEnd('/').lowercase()}/${baseName.lowercase()}"
+    }
+
+    private fun ProcessingInfo.hasSameSourceResolution(resolution: ImageResolution?): Boolean {
+        resolution ?: return true
+        if (sourceWidth <= 0 || sourceHeight <= 0) return true
+        return sourceWidth == resolution.width && sourceHeight == resolution.height
+    }
+
+    private fun resolvePhantomProcessDelayMs(
+        isRawCandidate: Boolean,
+        isJpegCandidate: Boolean,
+        rawJpegPairKey: String?,
+        size: Long
+    ): Long {
+        return when {
+            isJpegCandidate && rawJpegPairKey != null -> RAW_JPEG_PAIR_WAIT_MS
+            isRawCandidate -> RAW_PROCESS_DELAY_MS
+            else -> PHANTOM_PROCESS_DELAY_MS
+        }
+    }
+
+    private fun cancelPendingJpegForRawPair(pairKey: String, rawPath: String) {
+        val jpegPath = pendingJpegProcessPathsByPairKey.remove(pairKey) ?: return
+        if (jpegPath == rawPath) return
+        processPhotoTaskMap[jpegPath]?.cancel()
+        PLog.d(TAG, "Cancel pending JPG $jpegPath because RAW pair was detected")
+    }
+
+    private fun hasRecentRawPairDetection(pairKey: String, nowMs: Long): Boolean {
+        val rawDetectedAtMs = recentRawPairDetections[pairKey] ?: return false
+        return nowMs - rawDetectedAtMs <= RAW_JPEG_PAIR_WINDOW_MS
+    }
+
+    private fun pruneRecentRawPairDetections(nowMs: Long) {
+        recentRawPairDetections.entries.removeAll { (_, detectedAtMs) ->
+            nowMs - detectedAtMs > RAW_JPEG_PAIR_WINDOW_MS
         }
     }
 
@@ -446,7 +574,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         uri: Uri,
         name: String,
         size: Long,
-        relativePath: String
+        relativePath: String,
+        mimeType: String?,
+        sourceWidth: Int,
+        sourceHeight: Int
     ) = withContext(Dispatchers.IO) {
         var shouldNotifyGallery = false
         val userPreferencesRepository =
@@ -457,12 +588,20 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val lutId = preferences?.lutId
             ?: availableLutList.firstOrNull { it.isDefault }?.id
         val saveAsNew = preferences?.phantomSaveAsNew ?: false
+        val phantomFrameId = preferences?.phantomFrameId
         val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
+        val isRawSource = isRawMedia(name, mimeType)
         val photoId =
-            GalleryManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
+            GalleryManager.importPhoto(
+                context,
+                uri,
+                lutId,
+                computationalAperture,
+                existingPhotoId
+            ) ?: run {
                 return@withContext
-        }
+            }
         val phantomBaselineLutId = preferences?.phantomBaselineLutId
         val baselineTarget = if (phantomBaselineLutId != null) BaselineColorCorrectionTarget.PHANTOM else null
         val baselineLutId = phantomBaselineLutId
@@ -479,10 +618,11 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val metadataCreativeColorRecipeParams = effectiveCreativeColorRecipeParams
             .takeUnless { it.isDefault() }
 
-        val updatedMetadata = GalleryManager.updateMetadata(context, photoId) { current ->
+        var updatedMetadata = GalleryManager.updateMetadata(context, photoId) { current ->
             if (baselineTarget != null) {
                 current.copy(
                     lutId = lutId,
+                    frameId = phantomFrameId,
                     colorRecipeParams = metadataCreativeColorRecipeParams,
                     baselineTarget = baselineTarget,
                     baselineLutId = baselineLutId,
@@ -491,6 +631,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             } else {
                 current.copy(
                     lutId = lutId,
+                    frameId = phantomFrameId,
                     colorRecipeParams = metadataCreativeColorRecipeParams,
                     baselineTarget = null,
                     baselineLutId = null,
@@ -500,16 +641,29 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         } ?: return@withContext
         if (!isActive) return@withContext
 
-        if (uri != processingInfo?.uri) {
-            if (name != processingInfo?.name || relativePath != processingInfo?.relativePath) {
-                processingInfo = ProcessingInfo(
-                    uri = uri,
-                    photoId = photoId,
-                    name = name,
-                    size = size,
-                    relativePath = relativePath,
-                )
-            }
+        val currentProcessingInfo = processingInfo
+        if (currentProcessingInfo != null && currentProcessingInfo.uri == uri) {
+            processingInfo = currentProcessingInfo.copy(
+                photoId = photoId,
+                name = name,
+                size = size,
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                relativePath = relativePath,
+            )
+        } else if (currentProcessingInfo == null ||
+            name != currentProcessingInfo.name ||
+            relativePath != currentProcessingInfo.relativePath
+        ) {
+            processingInfo = ProcessingInfo(
+                uri = uri,
+                photoId = photoId,
+                name = name,
+                size = size,
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                relativePath = relativePath,
+            )
         }
 
         val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
@@ -517,11 +671,16 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             // 读取照片
             val processedBitmap = photoProcessor.process(
                 context, photoId, updatedMetadata,
-                0f, 0f, 0f
+                0f, 0f, 0f,
+                onRawMetadata = { raw ->
+                    updatedMetadata = updatedMetadata.merge(raw)
+                }
             ) ?: return@withContext
+            if (!isActive) return@withContext
 
             val videoFile = GalleryManager.getVideoFile(context, photoId)
             val photoFile = GalleryManager.getPhotoFile(context, photoId)
+            val shouldSaveAsNew = saveAsNew || isRawSource
 
             val exportedWidth = processedBitmap.width
             val exportedHeight = processedBitmap.height
@@ -537,38 +696,24 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     imageHeight = exportedHeight
                 )
             )
+            if (!isActive) return@withContext
 
             var newSize = 0L
             var newName = name
 
-            val writeUri = if (saveAsNew) {
+            if (shouldSaveAsNew) {
                 val lutName =
                     updatedMetadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
-                var withSuffix = ""
-                lutName?.let {
-                    withSuffix += ".$lutName"
-                }
-
-                newName = "PhotonCamera_" + name.replace(".jpg", "$withSuffix.jpg")
+                newName = buildPhantomExportName(name, lutName)
 
                 processingInfo = processingInfo?.copy(
                     newName = newName,
                     newSize = newSize
                 )
+            }
 
-                if (processingInfo?.newUri != null) {
-                    processingInfo!!.newUri!!
-                } else {
-                    val contentValues = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, newName)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                    }
-                    context.contentResolver.insert(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        contentValues
-                    ) ?: uri
-                }
+            val writeUri = if (shouldSaveAsNew) {
+                createPhantomExportUri(uri, relativePath, newName) ?: return@withContext
             } else {
                 uri
             }
@@ -647,7 +792,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 }
             }
 
-            // Save exported URI to metadata
             GalleryManager.updateMetadata(context, photoId) { current ->
                 current.copy(
                     exportedUris = current.exportedUris + writeUri.toString()
@@ -675,6 +819,59 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             GalleryManager.notifyPhotoLibraryChanged()
         }
         delay(200L)
+    }
+
+    private fun isRawMimeType(mimeType: String?): Boolean {
+        return mimeType?.contains("raw", ignoreCase = true) == true ||
+            mimeType?.contains("dng", ignoreCase = true) == true
+    }
+
+    private fun isRawMedia(fileName: String, mimeType: String?): Boolean {
+        return isRawMimeType(mimeType) || isRawFileName(fileName)
+    }
+
+    private fun isRawFileName(fileName: String): Boolean {
+        val lowerName = fileName.lowercase()
+        return RAW_FILE_EXTENSIONS.any { lowerName.endsWith(it) }
+    }
+
+    private fun isJpegMedia(fileName: String, mimeType: String?): Boolean {
+        return mimeType.equals("image/jpeg", ignoreCase = true) ||
+            mimeType.equals("image/jpg", ignoreCase = true) ||
+            fileName.endsWith(".jpg", ignoreCase = true) ||
+            fileName.endsWith(".jpeg", ignoreCase = true)
+    }
+
+    private fun buildPhantomExportName(sourceName: String, lutName: String?): String {
+        val baseName = sourceName.substringBeforeLast('.', sourceName)
+        val lutSuffix = lutName?.takeIf { it.isNotBlank() }?.let { ".$it" } ?: ""
+        return "$PHANTOM_EXPORT_PREFIX$baseName$lutSuffix.jpg"
+    }
+
+    private fun createPhantomExportUri(
+        sourceUri: Uri,
+        relativePath: String,
+        displayName: String
+    ): Uri? {
+        processingInfo
+            ?.takeIf { it.uri == sourceUri }
+            ?.newUri
+            ?.takeIf { it != sourceUri }
+            ?.let { return it }
+
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+        }
+        return context.contentResolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            contentValues
+        ).also { newUri ->
+            if (newUri == null) {
+                PLog.e(TAG, "Failed to create Phantom export URI for $displayName")
+            }
+        }
     }
 
     private fun createOverlayThumbnail(source: Bitmap): Bitmap? {
@@ -721,7 +918,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     }
 
     private fun updateWindowParams(hidden: Boolean) {
-        val editorVisible = showRecipeEditor || showEffectsEditor
+        val editorVisible = showRecipeEditor
         if (hidden) {
             windowParams.width = 1
             windowParams.height = 1
@@ -804,7 +1001,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     }
                 }
 
-                if (!showRecipeEditor && !showEffectsEditor) {
+                if (!showRecipeEditor) {
                     Row(
                         modifier = Modifier
                             .padding(4.dp)
@@ -909,34 +1106,26 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     composeView?.let { windowManager.updateViewLayout(it, windowParams) }
                                 }
 
-                                LutSelectorWithRecipeAction(
-                                    availableLuts = availableLuts,
-                                    currentLutId = currentLutId,
-                                    thumbnail = processingInfo?.thumbnail?.takeIf { !it.isRecycled },
-                                    onLutSelected = { lutId ->
-                                        scope.launch {
-                                            userPreferencesRepository.saveLutConfig(lutId)
-                                            syncScreenCaptureRenderConfig(lutId)
-                                            closeFilterPicker()
-                                        }
-                                    },
-                                    onEditRecipeClick = if (currentLutId != null) {
-                                        {
-                                            showRecipeEditor = true
-                                            updateWindowParams(false)
-                                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                                        }
-                                    } else null,
-                                    onEditEffectClick = {
-                                        showEffectsEditor = true
-                                        updateWindowParams(false)
-                                        composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                                    },
-                                    categoryOrder = categoryOrder,
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 32.dp)
-                                )
+                                ) {
+                                    LutSelector(
+                                        availableLuts = availableLuts,
+                                        currentLutId = currentLutId,
+                                        thumbnail = processingInfo?.thumbnail?.takeIf { !it.isRecycled },
+                                        onLutSelected = { lutId ->
+                                            scope.launch {
+                                                userPreferencesRepository.saveLutConfig(lutId)
+                                                syncScreenCaptureRenderConfig(lutId)
+                                                closeFilterPicker()
+                                            }
+                                        },
+                                        categoryOrder = categoryOrder,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
 
                                 Row(
                                     modifier = Modifier
@@ -981,6 +1170,35 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                             imageVector = AppIcons.AutoAwesome,
                                             contentDescription = "LUT",
                                             tint = Color.White
+                                        )
+                                    }
+                                }
+
+                                Box(
+                                    modifier = Modifier.width(48.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            if (currentLutId != null) {
+                                                showRecipeEditor = true
+                                                updateWindowParams(false)
+                                                composeView?.let {
+                                                    windowManager.updateViewLayout(it, windowParams)
+                                                }
+                                            }
+                                        },
+                                        enabled = currentLutId != null,
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = AppIcons.Tune,
+                                            contentDescription = stringResource(R.string.edit),
+                                            tint = if (currentLutId != null) {
+                                                Color.White
+                                            } else {
+                                                Color.White.copy(alpha = 0.3f)
+                                            }
                                         )
                                     }
                                 }
@@ -1055,9 +1273,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     }
 
                     LaunchedEffect(editingLutId) {
-                        val params = ContentRepository.getInstance(context)
-                            .lutManager
-                            .loadColorRecipeParams(editingLutId)
+                        val params = recipePreviewParams
+                            ?: ContentRepository.getInstance(context)
+                                .lutManager
+                                .loadColorRecipeParams(editingLutId)
                         editingParams = params
                         paletteState = ColorPaletteState(
                             x = params.paletteX,
@@ -1073,14 +1292,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         PhantomEditorHeader(
-                            title = stringResource(R.string.color_recipe),
+                            title = stringResource(R.string.edit),
                             onClose = { closeRecipeEditor() }
-                        )
-                        LutIntensitySlider(
-                            intensity = editingParams.lutIntensity,
-                            onIntensityChange = {
-                                updateRecipeParams(editingParams.copy(lutIntensity = it))
-                            }
                         )
                         ColorRecipePanel(
                             currentParams = editingParams,
@@ -1119,38 +1332,14 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     }
                                 )
                             },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-
-                if (showEffectsEditor) {
-                    fun closeEffectsEditor() {
-                        showEffectsEditor = false
-                        scope.launch {
-                            syncScreenCaptureRenderConfig(currentLutId)
-                            updateWindowParams(false)
-                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.88f))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        PhantomEditorHeader(
-                            title = stringResource(R.string.effects_title),
-                            onClose = { closeEffectsEditor() }
-                        )
-                        EffectsPanel(
-                            currentParams = currentEffectParams,
-                            onParamsChange = { effects ->
+                            showLutIntensity = true,
+                            currentEffects = currentEffectParams,
+                            onEffectsChange = { effects ->
                                 scope.launch {
                                     userPreferencesRepository.saveActiveEffectParams(effects)
                                     syncScreenCaptureRenderConfig(
                                         lutId = currentLutId,
+                                        creativeRecipeParamsOverride = editingParams,
                                         effectParamsOverride = effects
                                     )
                                 }
@@ -1244,7 +1433,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             expanded = false
             showFilterPicker = false
             showRecipeEditor = false
-            showEffectsEditor = false
             floatingWindowYBeforeEditor = null
         }
     }

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import android.content.Context
 import android.graphics.Bitmap
 import com.hinnka.mycamera.lut.creator.LutGenerator
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -10,6 +11,7 @@ object BakedLutExporter {
     private const val HALD_LEVEL = 8
 
     suspend fun exportBakedCube(
+        context: Context,
         lutConfig: LutConfig,
         recipe: ColorRecipeParams,
         name: String
@@ -23,7 +25,7 @@ object BakedLutExporter {
                 .toByteArray(Charsets.UTF_8)
         }
 
-        val imageProcessor = LutImageProcessor()
+        val imageProcessor = LutImageProcessor(context)
         return try {
             val clutBitmap = createIdentityUnwrappedClutBitmap(UNWRAPPED_CLUT_SIZE)
             val processedBitmap = imageProcessor.applyLut(
@@ -41,10 +43,11 @@ object BakedLutExporter {
     }
 
     suspend fun exportBakedHaldPng(
+        context: Context,
         lutConfig: LutConfig,
         recipe: ColorRecipeParams
     ): ByteArray? {
-        val imageProcessor = LutImageProcessor()
+        val imageProcessor = LutImageProcessor(context)
         return try {
             val haldBitmap = createIdentityHaldBitmap(HALD_LEVEL)
             val processedBitmap = imageProcessor.applyLut(
@@ -69,6 +72,7 @@ object BakedLutExporter {
         return copy(
             filmGrain = 0f,
             vignette = 0f,
+            flash = 0f,
             bloom = 0f,
             softLight = 0f,
             halation = 0f,

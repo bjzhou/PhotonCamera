@@ -1,0 +1,67 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 626b18a415bd88111972b31b26529cbc4c3f0fe86f066c6da8e5ba9b77c0052d
+ * ELF offsets: 0x3081fb1
+ * Symbols: demosaic_color_noise_pass_1_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
+
+layout(std140, binding = 2) uniform DemosaicColorNoisePass1Params_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+};
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    uvec4 outV = uvec4(0u);
+    if (gid.x >= uParams_l && gid.x +1 < uParams_r &&
+        gid.y >= uParams_t && gid.y + 1 < uParams_b) {
+        uvec4 res = imageLoad(inTex, gid);
+        float yCtr = float(res.r);
+
+        float tmp1 = float(imageLoad(inTex, gid + ivec2(-1, -1)).r);
+        float tmp = float(imageLoad(inTex, gid + ivec2(0, -1)).r);
+        float yMax = max(tmp, tmp1);
+        float yMin = min(tmp, tmp1);
+
+        tmp = float(imageLoad(inTex, gid + ivec2(1, -1)).r);
+        yMax = max(tmp, yMax);
+        yMin = min(tmp, yMin);
+
+        tmp = float(imageLoad(inTex, gid + ivec2(1, 0)).r);
+        yMax = max(tmp, yMax);
+        yMin = min(tmp, yMin);
+
+        tmp = float(imageLoad(inTex, gid + ivec2(1, 1)).r);
+        yMax = max(tmp, yMax);
+        yMin = min(tmp, yMin);
+
+        tmp = float(imageLoad(inTex, gid + ivec2(0, 1)).r);
+        yMax = max(tmp, yMax);
+        yMin = min(tmp, yMin);
+
+        tmp = float(imageLoad(inTex, gid + ivec2(-1, 1)).r);
+        yMax = max(tmp, yMax);
+        yMin = min(tmp, yMin);
+
+        tmp = float(imageLoad(inTex, gid + ivec2(-1, 0)).r);
+        yMax = max(tmp, yMax);
+        yMin = min(tmp, yMin);
+
+        res.r = uint(clamp(yCtr, yMin, yMax));
+        outV = res;
+    }
+    imageStore(outTex, gid, outV);
+}

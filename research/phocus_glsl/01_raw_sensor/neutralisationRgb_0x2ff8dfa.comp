@@ -1,0 +1,77 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: f139a1b07826c300489b4392699d94238e6f34a998d4dba8d9ca80bf605e6539
+ * ELF offsets: 0x2ff8dfa
+ * Symbols: neutralisationRgb_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+// Input: 16-bit half float texture (RGB, stored as RGBA16F)
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+// Output: 16-bit half float texture
+layout(rgba16f, binding = 1) writeonly uniform image2D uOutputImage;
+
+// Uniform buffer object for parameters
+struct NeutralisationRgbParams {
+    vec4 gain;          // RGB gains (R, G, B, 1.0)
+    ivec2 margin;       // Texture coordinate margin
+    int debugMode;      // Debug mode
+    int pad;            // Padding for std140 alignment
+};
+
+layout(std140, binding = 2) uniform NeutralisationRgbParams_UBO {
+    NeutralisationRgbParams params;
+} uParams;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    int debugMode = uParams.params.debugMode;
+    
+    // Boundary check for output
+    ivec2 outputSize = imageSize(uOutputImage);
+    if (gid.x >= outputSize.x || gid.y >= outputSize.y || gid.x < 0 || gid.y < 0) {
+        return;  // Skip out-of-bounds pixels
+    }
+    
+    // Calculate source position with margin
+    ivec2 srcPos = gid + uParams.params.margin;
+    
+    // Boundary check for input texture
+    ivec2 inputSize = imageSize(uInputImage);
+    if (srcPos.x < 0 || srcPos.y < 0 || srcPos.x >= inputSize.x || srcPos.y >= inputSize.y) {
+        if (debugMode > 2) {
+            imageStore(uOutputImage, gid, vec4(1.0, 0.0, 1.0, 1.0)); // Magenta for boundary error
+            return;
+        }
+        srcPos = clamp(srcPos, ivec2(0), inputSize - ivec2(1));
+    }
+    
+    vec4 val = imageLoad(uInputImage, srcPos);
+    
+    // Debug mode 1: Pass-through input
+    if (debugMode == 1) {
+        imageStore(uOutputImage, gid, val);
+        return;
+    }
+    
+    // Debug mode 2: Visualize gain values
+    if (debugMode == 2) {
+        vec4 gainViz = (uParams.params.gain - 0.5) / 1.0; // Map [0.5, 1.5] → [0, 1]
+        imageStore(uOutputImage, gid, clamp(gainViz, 0.0, 1.0));
+        return;
+    }
+    
+    // Apply gain (iOS Metal: gain * input, then clamp)
+    // Note: iOS uses ushort [0,65535], Android uses half float [0,1]
+    // So we multiply/clamp in [0,1] space directly
+    vec4 gain = vec4(uParams.params.gain.rgb, 1.0);  // Preserve alpha
+    vec4 result = val * gain;
+    result = clamp(result, 0.0, 1.0);
+    
+    imageStore(uOutputImage, gid, result);
+}

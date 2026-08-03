@@ -6,7 +6,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private const val DefaultItemSize = 32f
-private const val DefaultSpacing = 8f
+private const val DefaultSpacing = 4f
 private const val SeparatorThickness = 1f
 
 internal data class ZoomRulerAdaptiveMetrics(
@@ -61,14 +61,9 @@ internal fun calculateZoomRulerAdaptiveMetrics(
     )
 
     if (defaultItemsNoSpacingLength <= availableSpace.value) {
-        val spacing = if (gapCount == 0) {
-            0f
-        } else {
-            ((availableSpace.value - defaultItemsNoSpacingLength) / gapCount).coerceIn(0f, DefaultSpacing)
-        }
         return buildZoomRulerAdaptiveMetrics(
             itemSize = DefaultItemSize,
-            spacing = spacing,
+            spacing = 0f,
             itemCount = safeItemCount,
             separatorCount = safeSeparatorCount,
             gapCount = gapCount

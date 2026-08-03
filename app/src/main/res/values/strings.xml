@@ -106,6 +106,8 @@
     <string name="crop_free">Free</string>
     <string name="crop_original">Original</string>
     <string name="crop_reset">Reset</string>
+    <string name="rotate">Rotate</string>
+    <string name="flip_horizontal">Flip horizontally</string>
     <string name="delete_confirm">Delete this photo?</string>
     <string name="delete_multiple_confirm">Delete %d photos?</string>
     <string name="delete_exported_photos_count">Also delete %d exported photos</string>
@@ -192,23 +194,26 @@
     <string name="settings_ai_focus_sensitivity_description">Minimum detection score required to trigger AI focus.</string>
     <string name="settings_grid_lines">Grid Lines</string>
     <string name="settings_grid_description">Show grid lines for composition</string>
-    <string name="settings_use_multi_frame">Multi-Frame Denoise</string>
-    <string name="settings_use_hdr_composition">HDR Fusion</string>
+    <string name="settings_use_jpg_max">JPGmax</string>
+    <string name="settings_jpg_max_hdr_composition">JPGmax HDR Composition</string>
+    <string name="settings_jpg_max_hdr_composition_description">Use bracketed exposures for HDR fusion in JPGmax. Keep the camera steady or use a tripod while shooting. When disabled, JPGmax only performs multi-frame noise reduction.</string>
+    <string name="settings_use_raw_max">RAWmax</string>
+    <string name="settings_raw_max_hdr_composition">RAWmax HDR Composition</string>
+    <string name="settings_raw_max_hdr_composition_description">Use bracketed exposures for HDR fusion in RAWmax. Turn it off to improve processing performance.</string>
     <string name="settings_use_multiple_exposure">Multiple Exposure</string>
     <string name="multiple_exposure_finish">Finish</string>
     <string name="multiple_exposure_undo">Undo</string>
     <string name="multiple_exposure_cancel">Cancel Session</string>
     <string name="settings_multiple_exposure_count">Multiple Exposure Count</string>
     <string name="settings_multiple_exposure_count_description">How many exposures to combine for one final image. Default is 2 for a classic double exposure workflow.</string>
-    <string name="settings_multi_frame_count">Multi-Frame Denoise Count</string>
-    <string name="settings_multi_frame_count_description">Number of frames used for YUV multi-frame denoise (more frames reduce noise more, but take longer).</string>
-    <string name="settings_use_super_resolution">Multi-Frame Super Resolution</string>
+    <string name="settings_raw_max_output_scale">RAWmax super-resolution scale</string>
+    <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
+    <string name="settings_max_frame_count">Max Frame Count</string>
+    <string name="settings_max_frame_count_description">Number of frames used by JPGmax and RAWmax. More frames improve noise reduction but take longer to process.</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capture a short video clip along with your photo for a dynamic live photo effect.</string>
     <string name="settings_develop_animation">Develop Animation</string>
     <string name="settings_develop_animation_description">Show the film-like developing animation after capture.</string>
-    <string name="settings_use_gpu_acceleration">GPU Acceleration</string>
-    <string name="settings_use_gpu_acceleration_description">Use GPU (Vulkan) to speed up multi-frame stacking. Default is on.</string>
     <string name="settings_section_frame">Frame Watermark</string>
     <string name="settings_frame_style">Frame Style</string>
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>
@@ -300,7 +305,9 @@
     <string name="settings_isz_lens_no_physical_lens">No usable rear physical lens is available.</string>
     <string name="settings_isz_added_lenses">Added ISZ/DCG Lenses</string>
     <string name="settings_isz_existing_lens_title">%1$s + ISZ %2$s</string>
-    <string name="settings_isz_existing_lens_description">%1$s · visible %2$s · %3$s · vendor keys %4$d · %5$s</string>
+    <string name="settings_isz_existing_lens_description">%1$s · visible %2$s · %3$s · %4$s · %5$s</string>
+    <string name="settings_isz_vendor_profile_none">no vendor key</string>
+    <string name="settings_isz_vendor_profile_entry">%1$s=%2$d</string>
     <string name="settings_isz_lens_kind_normal">normal</string>
     <string name="settings_isz_lens_kind_macro">macro</string>
     <string name="settings_isz_add_lens_confirm">Add Lens</string>
@@ -313,11 +320,38 @@
     <string name="settings_vendor_capture_insensor_zoom">Qualcomm In-sensor Zoom</string>
     <string name="settings_vendor_capture_qcom_sensor_mode">Qualcomm sensor mode</string>
     <string name="settings_vendor_capture_vivo_sensor_mode">vivo force sensor mode</string>
+    <string name="settings_vendor_capture_mtk_raw_bpp">MediaTek RAW bit depth</string>
     <string name="settings_vendor_capture_oplus_agingtest_mode">Oplus aging test mode</string>
     <string name="settings_vendor_capture_value_label">Value</string>
     <string name="settings_vendor_capture_int_value">Int value</string>
     <string name="settings_vendor_capture_byte_value">Byte value, -128 to 127</string>
     <string name="settings_vendor_capture_invalid_value">Invalid value</string>
+    <string name="settings_custom_vendor_keys">Custom Vendor Keys</string>
+    <string name="settings_custom_vendor_keys_description">Create Camera2 vendor keys and assign them to a lens or every lens. Configured: %1$d</string>
+    <string name="settings_custom_vendor_keys_warning">Vendor keys are device-specific and may prevent a camera session or request from working. Remove an unsupported key if camera startup, preview, recording, or capture fails.</string>
+    <string name="settings_custom_vendor_keys_empty">No custom vendor keys configured.</string>
+    <string name="settings_custom_vendor_key_add">Add custom key</string>
+    <string name="settings_custom_vendor_key_editor_title">Custom Vendor Key</string>
+    <string name="settings_custom_vendor_key_name">Key name</string>
+    <string name="settings_custom_vendor_key_name_description">Full Camera2 vendor key name; whitespace is not allowed.</string>
+    <string name="settings_custom_vendor_key_invalid_name">Enter a key name without whitespace.</string>
+    <string name="settings_custom_vendor_key_duplicate">This key already targets the same scope, or an overlapping scope uses a different value type.</string>
+    <string name="settings_custom_vendor_key_target">Key target</string>
+    <string name="settings_custom_vendor_key_target_capture">Capture key</string>
+    <string name="settings_custom_vendor_key_target_session">Session key</string>
+    <string name="settings_custom_vendor_key_target_capture_description">Applied to preview, video, and still CaptureRequest builders.</string>
+    <string name="settings_custom_vendor_key_target_session_description">Applied when the Camera2 session is created. Saving a change recreates the active session.</string>
+    <string name="settings_custom_vendor_key_value_type">Value type</string>
+    <string name="settings_custom_vendor_key_type_int32">int32</string>
+    <string name="settings_custom_vendor_key_type_u8">u8</string>
+    <string name="settings_custom_vendor_key_value">Value</string>
+    <string name="settings_custom_vendor_key_int32_range">Signed 32-bit integer</string>
+    <string name="settings_custom_vendor_key_u8_range">Unsigned 8-bit integer, 0 to 255</string>
+    <string name="settings_custom_vendor_key_invalid_value">Value is outside the selected type range.</string>
+    <string name="settings_custom_vendor_key_lens">Lens ID</string>
+    <string name="settings_custom_vendor_key_all_lenses">All lenses</string>
+    <string name="settings_custom_vendor_key_lens_id">Lens ID: %1$s</string>
+    <string name="settings_custom_vendor_key_summary">%1$s · %2$s=%3$d · %4$s</string>
     <string name="settings_sharpening">Sharpening</string>
     <string name="settings_sharpening_description">Enhance image sharpness and edge definition</string>
     <string name="settings_noise_reduction">Noise Reduction</string>
@@ -329,6 +363,8 @@
     <string name="settings_photo_quality_description">Select the JPEG compression quality for photos (higher = better quality, larger file size)</string>
     <string name="settings_use_heic_export">HEIC Export</string>
     <string name="settings_use_heic_export_description">Prefer native HEIC export on supported devices.</string>
+    <string name="settings_use_jpeg_444_export">JPEG 4:4:4 Export</string>
+    <string name="settings_use_jpeg_444_export_description">Export JPEGs with 4:4:4 chroma sampling for maximum color detail. Files are larger, HEIC export is disabled, and Ultra HDR gain maps are preserved when available.</string>
     <string name="settings_tonemap_mode">Tone Mapping</string>
     <string name="settings_tonemap_mode_description">Adjust the hardware tone mapping (contrast/gamma) mode</string>
     <string name="settings_tonemap_mode_system_default">System Default</string>
@@ -344,6 +380,12 @@
     <string name="settings_background">Background</string>
     <string name="settings_background_description">Change the app background image</string>
     <string name="settings_custom_background">Custom...</string>
+    <string name="settings_capture_button">Capture Button</string>
+    <string name="settings_capture_button_description">Customize the capture button with the default design, a color, or an image. Video controls keep their standard red appearance.</string>
+    <string name="settings_capture_button_default">Default</string>
+    <string name="settings_capture_button_color">Color</string>
+    <string name="settings_capture_button_image">Image</string>
+    <string name="settings_capture_button_color_picker">Capture Button Color</string>
 
     <!-- LUT -->
     <string name="filter_intensity">LUT Intensity</string>
@@ -371,16 +413,17 @@
     <!-- Color Recipe -->
     <string name="color_recipe">Color Recipe</string>
     <string name="effects_title">Effects</string>
-    <string name="recipe_scope_lut">LUT Default</string>
-    <string name="recipe_scope_photo">This Photo</string>
-    <string name="recipe_scope_photo_reset">Reset to LUT Default</string>
-    <string name="color_recipe_reset_all">Reset all parameters</string>
-    <string name="recipe_scope_photo_hint">Adjustments apply to this photo only</string>
+    <string name="color_recipe_reset_all">Reset</string>
+    <string name="edit_sync_lut_recipe">Update current LUT too</string>
+    <string name="edit_sync_lut_recipe_description">Color, effects, and LUT intensity are also saved to the selected LUT.</string>
+    <string name="edit_select_lut_hint">Select a LUT before adjusting color and effects.</string>
+    <string name="edit_color_and_effects">Adjust color and effects</string>
 
     <!-- Color Recipe Parameters -->
     <string name="recipe_param_exposure">Exposure</string>
     <string name="recipe_param_contrast">Contrast</string>
     <string name="recipe_param_saturation">Saturation</string>
+    <string name="recipe_palette_tone">High/Low Key</string>
     <string name="recipe_param_temperature">Temp</string>
     <string name="recipe_param_tint">Tint</string>
     <string name="recipe_param_fade">Fade</string>
@@ -389,6 +432,7 @@
     <string name="recipe_param_shadows">Shadows</string>
     <string name="recipe_param_film_grain">Grain</string>
     <string name="recipe_param_vignette">Vignette</string>
+    <string name="recipe_param_flash">Flash</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Soft Light</string>
@@ -437,6 +481,11 @@
 
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">Color</string>
+    <string name="recipe_color_basic">Basic</string>
+    <string name="recipe_color_grading">Grading</string>
+    <string name="recipe_grading_midtones">Midtones</string>
+    <string name="recipe_grading_balance">Balance</string>
+    <string name="recipe_grading_blending">Blending</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">Light</string>
     <string name="recipe_tab_curve">Curve</string>
@@ -462,6 +511,9 @@
     <string name="settings_log_viewer">Log Viewer</string>
     <string name="settings_log_viewer_description">View and export app logs for diagnostics</string>
     <string name="logs">Logs</string>
+    <string name="log_download">Download logs</string>
+    <string name="log_download_success">Saved to Downloads as %1$s</string>
+    <string name="log_download_failed">Failed to download logs</string>
 
     <!-- Filter/Frame Management -->
     <string name="settings_section_management">Content Management</string>
@@ -537,6 +589,8 @@
     <string name="favorite">Favorites</string>
     <string name="add_to_favorites">Add to Favorites</string>
     <string name="remove_from_favorites">Remove from Favorites</string>
+    <string name="favorite_empty_title">No favorites yet</string>
+    <string name="favorite_empty_message">Tap the star on a filter to find it here.</string>
     <string name="built_in">Built-in</string>
     <string name="custom">Custom</string>
     <string name="uncategorized">Uncategorized</string>
@@ -547,6 +601,15 @@
 
     <!-- Frame Import Help -->
     <string name="more_options">More options</string>
+    <string name="copy_settings">Copy settings</string>
+    <string name="paste_settings">Paste settings</string>
+    <string name="copy_settings_success">Settings copied</string>
+    <string name="paste_settings_success">Settings pasted</string>
+    <string name="copy_settings_failed">Couldn’t copy settings</string>
+    <string name="paste_settings_failed">Couldn’t paste settings</string>
+    <string name="paste_settings_complete">Settings pasted to %1$d of %2$d photos</string>
+    <string name="pasting_settings_progress">Pasting settings · %1$d/%2$d</string>
+    <string name="exporting_progress">Exporting · %1$d/%2$d</string>
     <string name="discard">Discard</string>
     <string name="frame_editor_create_menu">Create or import frame</string>
     <string name="frame_editor_new_title">New Frame</string>
@@ -696,6 +759,9 @@
     <string name="settings_main_camera_id">Main Camera ID</string>
     <string name="settings_main_camera_id_description">Choose which 1x rear camera ID is used as the main camera.</string>
     <string name="settings_main_camera_id_option">Camera ID %1$s</string>
+    <string name="settings_macro_camera_id">Macro Camera ID</string>
+    <string name="settings_macro_camera_id_description">Choose a rear camera ID to force as the macro lens. Auto keeps the current camera discovery behavior.</string>
+    <string name="settings_macro_camera_id_auto">Auto</string>
     <string name="settings_logical_multi_camera_discovery">Logical Multi-Camera Discovery</string>
     <string name="settings_logical_multi_camera_discovery_description">Detect physical lenses exposed by logical multi-camera IDs. Off by default for compatibility.</string>
     <string name="settings_logical_camera_binding_whitelist">Logical/Physical Camera Whitelist</string>
@@ -726,10 +792,28 @@
     <string name="settings_raw_color_engine_darktable_filmic_description">Film-like tonal range rendering.</string>
     <string name="settings_raw_color_engine_spectral_film">Spektrafilm</string>
     <string name="settings_raw_color_engine_spectral_film_description">Film stock and print medium simulation with density tuning.</string>
-    <string name="settings_raw_google_pixel_tone_map">Google Pixel-style tone mapping</string>
-    <string name="settings_raw_google_pixel_tone_map_description">Use Google Pixel-style tonal rendering.</string>
+    <string name="settings_raw_color_engine_hncs">HNCS</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: a colour management system independently developed by Hasselblad</string>
+    <string name="settings_raw_color_engine_hncs_ccm">HNCS (Original color matrix)</string>
+    <string name="settings_raw_color_engine_hncs_lut">HNCS (2D LUT)</string>
+    <string name="settings_raw_hncs_color_branch">Color reproduction profile</string>
+    <string name="settings_raw_hncs_color_branch_description">Choose the RAW original color matrix or the Hasselblad-exclusive Cb/Y–Cr/Y color map.</string>
+    <string name="settings_raw_hncs_color_branch_ccm">Original color matrix</string>
+    <string name="settings_raw_hncs_color_branch_lut">2D LUT</string>
+    <string name="settings_raw_hncs_profile">HNCS camera profile</string>
+    <string name="settings_raw_hncs_2d_lut">Hasselblad camera-exclusive 2D LUT</string>
+    <string name="settings_raw_hncs_profile_description">Uses Hasselblad camera-specific Cb/Y-Cr/Y chroma tables.</string>
+    <string name="settings_raw_hncs_film_curve">Response Curve</string>
+    <string name="settings_raw_hncs_film_curve_description">Choose a response curve.</string>
+    <string name="settings_raw_hncs_film_curve_standard">Standard</string>
+    <string name="settings_raw_hncs_film_curve_reproduction">Reproduction</string>
     <string name="settings_raw_oppo_master_tone_map">OPPO Master tone mapping</string>
     <string name="settings_raw_oppo_master_tone_map_description">Use OPPO embedded master tonal rendering.</string>
+    <string name="settings_raw_profile_tone_map">RAW tone curve</string>
+    <string name="settings_raw_profile_tone_map_description">Choose the tone curve rendering.</string>
+    <string name="settings_raw_profile_tone_map_default">Default</string>
+    <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
+    <string name="settings_raw_profile_tone_map_photon_pgtm">Photon HDR</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX Black Relative Exposure</string>
     <string name="settings_raw_agx_shoulder">AgX Shoulder</string>
@@ -754,7 +838,7 @@
     <string name="settings_raw_blacks_adjustment">Blacks</string>
     <string name="settings_raw_whites_adjustment">Whites</string>
     <string name="settings_raw_lens_shading_correction">Lens Shading Correction</string>
-    <string name="settings_raw_lens_shading_correction_description">Apply lens shading gain maps during RAW development, including RAW multi-frame and RAW HDR processing.</string>
+    <string name="settings_raw_lens_shading_correction_description">Apply lens shading gain maps during RAW development, including RAW multi-frame processing.</string>
     <string name="settings_export_dng_with_raw_export">Export DNG with RAW photos</string>
     <string name="settings_export_dng_with_raw_export_description">When exporting a RAW photo, also export its original DNG file to the system gallery.</string>
     <string name="settings_raw_black_level_correction">Black Level Correction</string>
@@ -770,6 +854,7 @@
     <string name="settings_white_level_raw12">RAW12</string>
     <string name="settings_white_level_raw14">RAW14</string>
     <string name="settings_white_level_raw_sensor">RAW Sensor(65535)</string>
+    <string name="settings_white_level_custom">Custom</string>
     <string name="settings_raw_cfa_correction">CFA Channel Correction</string>
     <string name="settings_raw_cfa_correction_with_lens">CFA Channel Correction (Lens %1$s · %2$dmm)</string>
     <string name="settings_raw_cfa_correction_description">Override the RAW CFA channel pattern written to DNG. Applied per camera lens.</string>
@@ -794,8 +879,8 @@
     <string name="settings_hlg_hardware_compatibility_description">Some devices render dark or washed-out images under HLG. Enable this to manually decode HLG in shader if preview is abnormal.</string>
     <string name="settings_use_p3_color_space">P3 Color Space</string>
     <string name="settings_use_p3_color_space_description">Enable Display P3 output on supported devices. Default is off.</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture">Enable HDR by default</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture_description">Enable HDR display by default.</string>
+    <string name="settings_ultra_hdr_gain_map">Ultra HDR Gain Map</string>
+    <string name="settings_ultra_hdr_gain_map_description">Generate an Ultra HDR gain map for captured photos.</string>
     <string name="settings_screen_hdr">HDR Display</string>
     <string name="settings_screen_hdr_description">Enable High Dynamic Range (HDR) for the screen window. Turn off if screen causes yellowing or dimming.</string>
     <string name="hdr_label">HDR</string>
@@ -830,6 +915,8 @@
     <string name="settings_phantom_pip_crop_reset">Reset Crop</string>
     <string name="settings_phantom_pip_crop_choose_background">Choose Background</string>
     <string name="settings_phantom_pip_crop_default_background">Default Background</string>
+    <string name="settings_phantom_frame_title">Phantom Mode Frame</string>
+    <string name="settings_phantom_frame_description">Choose a frame used only for Phantom Mode exports. The app\'s default frame is not used.</string>
     <string name="settings_phantom_save_as_new">Save as New Image</string>
     <string name="settings_phantom_save_as_new_description">When enabled, the app will save the edited photo as a new image instead of overwriting the original one.</string>
     <string name="color_space">Color Space</string>
@@ -876,27 +963,31 @@
     <string name="lut_creator_finish">Finish</string>
     <string name="lut_creator_error">Error: %s</string>
     <string name="lut_creator_try_again">Try Again</string>
-    <string name="gallery_ai_analysis">AI Analysis</string>
-    <string name="gallery_ai_quality_title">AI Photo Analysis</string>
-    <string name="gallery_ai_premium_required">AI photo analysis is a Pro feature. Upgrade to unlock AI scoring and comments.</string>
-    <string name="gallery_ai_analyzing">Analyzing photo...</string>
-    <string name="gallery_ai_rank_excellent_plus">Outstanding</string>
-    <string name="gallery_ai_rank_excellent">Excellent</string>
-    <string name="gallery_ai_rank_good">Good</string>
-    <string name="gallery_ai_rank_pass">Pass</string>
-    <string name="gallery_ai_rank_needs_work">Needs Work</string>
-    <string name="gallery_ai_element_impact">Impact</string>
-    <string name="gallery_ai_element_technical_excellence">Technical</string>
-    <string name="gallery_ai_element_creativity">Creativity</string>
-    <string name="gallery_ai_element_style">Style</string>
-    <string name="gallery_ai_element_composition">Composition</string>
-    <string name="gallery_ai_element_presentation">Presentation</string>
-    <string name="gallery_ai_element_color_balance">Color Balance</string>
-    <string name="gallery_ai_element_center_of_interest">Center</string>
-    <string name="gallery_ai_element_lighting">Lighting</string>
-    <string name="gallery_ai_element_subject_matter">Subject</string>
-    <string name="gallery_ai_element_technique">Technique</string>
-    <string name="gallery_ai_element_storytelling">Storytelling</string>
+    <string name="gallery_ai_analysis">AI Review</string>
+    <string name="gallery_ai_quality_title">AI Photo Review</string>
+    <string name="gallery_ai_premium_required">AI photo review is a Pro feature. Upgrade to unlock jury-style scoring and critique.</string>
+    <string name="gallery_ai_analyzing">Reviewing the photograph…</string>
+    <string name="gallery_ai_analyzing_description">Evaluating five editorial criteria and grounding the critique in visible evidence.</string>
+    <string name="gallery_ai_analysis_failed">The review could not be completed</string>
+    <string name="gallery_ai_analysis_failed_description">Check your AI service settings and connection, then try again.</string>
+    <string name="gallery_ai_rank_excellent_plus">Award-ready</string>
+    <string name="gallery_ai_rank_excellent">Distinctive</string>
+    <string name="gallery_ai_rank_good">Strong</string>
+    <string name="gallery_ai_rank_pass">Promising</string>
+    <string name="gallery_ai_rank_needs_work">Developing</string>
+    <string name="gallery_ai_editorial_framework">EDITORIAL JURY · 5 CRITERIA</string>
+    <string name="gallery_ai_score_label">JURY SCORE</string>
+    <string name="gallery_ai_score_out_of">/ 100</string>
+    <string name="gallery_ai_strength">WHAT WORKS</string>
+    <string name="gallery_ai_next_step">NEXT STEP</string>
+    <string name="gallery_ai_criteria_title">Criteria review</string>
+    <string name="gallery_ai_criteria_description">Each criterion is scored independently from evidence visible in the frame.</string>
+    <string name="gallery_ai_criterion_visual_impact">Visual Impact</string>
+    <string name="gallery_ai_criterion_originality_voice">Originality &amp; Voice</string>
+    <string name="gallery_ai_criterion_narrative_meaning">Narrative &amp; Meaning</string>
+    <string name="gallery_ai_criterion_intent_coherence">Intent &amp; Coherence</string>
+    <string name="gallery_ai_criterion_aesthetic_technical">Aesthetic &amp; Technical</string>
+    <string name="gallery_ai_scale_note">Inspired by recurring principles in LensCulture juror guidance; this is an independent AI critique, not an official LensCulture score.</string>
 
     <string name="settings_ai_model">AI Model</string>
     <string name="settings_ai_model_desc">Select the model for AI.</string>
@@ -912,6 +1003,24 @@
     <string name="virtual_aperture">Virtual Aperture</string>
     <string name="settings_default_virtual_aperture">Default Virtual Aperture</string>
     <string name="settings_default_virtual_aperture_description">Automatically enable virtual aperture with the selected f-stop value for new photos.</string>
+    <string name="virtual_aperture_depth_model_description">Uses Depth Anything V2. Download or import the model on first use (about 100 MB).</string>
+    <string name="gallery_large_aperture_blur_title">Wide-Aperture Blur</string>
+    <string name="gallery_large_aperture_blur_description">Uses Depth Anything V2 to estimate scene depth and simulate a shallow depth of field, background blur, and soft bokeh highlights. Tap the image to change the focus point. Lower f-numbers produce stronger blur. Download or import the model on first use (about 100 MB).</string>
+    <string name="edit_panel_title">Editing Controls</string>
+    <string name="edit_panel_expand">Expand editing controls</string>
+    <string name="edit_panel_minimize">Minimize editing controls</string>
+    <string name="depth_model_download_title">Depth Model</string>
+    <string name="depth_model_download_description">Depth-aware blur requires the Depth Anything V2 model. Download about 100 MB, or import the official ZIP or extracted TFLite file. The model will be stored privately by the app.</string>
+    <string name="depth_model_download_action">Download</string>
+    <string name="depth_model_import_action">Import</string>
+    <string name="depth_model_downloading">Downloading model…</string>
+    <string name="depth_model_downloading_progress">Downloading model… %1$d%%</string>
+    <string name="depth_model_importing">Importing and verifying model…</string>
+    <string name="depth_model_installing">Verifying and installing model…</string>
+    <string name="depth_model_download_failed">The model could not be imported, downloaded, or verified. Check the selected file or your connection and try again.</string>
+    <string name="depth_model_download_ready">Depth Anything V2 is ready.</string>
+    <string name="depth_model_retry">Retry</string>
+    <string name="depth_model_done">Done</string>
     <string name="ai_service">AI Service</string>
     <string name="ai_denoise_title">AI Deep Denoise</string>
     <string name="ai_denoise_description">Use neural network to reconstruct image details</string>
@@ -978,6 +1087,7 @@
     <string name="preset_new">New Preset</string>
     <string name="preset_delete_confirm">Are you sure you want to delete this preset?</string>
     <string name="preset_name_hint">Preset name</string>
+    <string name="preset_builtin_hasselblad_natural">Hasselblad Natural</string>
     <string name="preset_builtin_portrait">Portrait Style</string>
     <string name="preset_builtin_classic_film">Classic Film</string>
     <string name="preset_builtin_monochrome">Monochrome</string>
@@ -993,4 +1103,5 @@
     <string name="preset_restore_defaults_confirm">Restoring default presets will clear all custom modifications. Do you want to continue?</string>
     <string name="preset_custom_badge">Custom</string>
     <string name="preset_builtin_badge">Built-in</string>
+    <string name="gallery">Gallery</string>
 </resources>

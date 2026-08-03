@@ -78,14 +78,8 @@
     <string name="settings_level_description">撮影中に水平を表示します</string>
     <string name="settings_grid_lines">グリッド線</string>
     <string name="settings_grid_description">構図用のグリッド線を表示します</string>
-    <string name="settings_use_multi_frame">マルチフレーム合成</string>
-    <string name="settings_multi_frame_count">合成本数</string>
-    <string name="settings_multi_frame_count_description">マルチフレーム合成に使用するフレーム数（多いほど高画質ですが、処理が遅くなります）。</string>
-    <string name="settings_use_super_resolution">超解像</string>
     <string name="settings_use_live_photo">ライブフォト</string>
     <string name="settings_use_live_photo_description">写真と一緒に短い動画を撮影し、動きのあるライブフォト効果を作成します。</string>
-    <string name="settings_use_gpu_acceleration">GPU加速</string>
-    <string name="settings_use_gpu_acceleration_description">GPU(Vulkan)を使用してマルチフレーム合成を高速化します。デフォルトはオンです。</string>
     <string name="settings_section_frame">フレームと透かし</string>
     <string name="settings_frame_style">フレームスタイル</string>
     <string name="settings_frame_description">写真に装飾フレームや透かしを追加します</string>
@@ -166,6 +160,7 @@
     <string name="recipe_param_shadows">シャドウ</string>
     <string name="recipe_param_film_grain">粒子</string>
     <string name="recipe_param_vignette">周辺減光</string>
+    <string name="recipe_param_flash">フラッシュ</string>
     <string name="recipe_param_bleach_bypass">銀残し</string>
     <string name="recipe_param_bloom">ブルーム</string>
     <string name="recipe_param_soft_light">ソフトライト</string>
@@ -173,7 +168,16 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">現在の LUT も更新</string>
+    <string name="edit_sync_lut_recipe_description">カラー、エフェクト、LUT 強度も選択中の LUT に保存します。</string>
+    <string name="edit_select_lut_hint">カラーとエフェクトを調整する前に LUT を選択してください。</string>
+    <string name="edit_color_and_effects">カラーとエフェクトを調整</string>
     <string name="recipe_tab_color">カラー</string>
+    <string name="recipe_color_basic">基本</string>
+    <string name="recipe_color_grading">グレーディング</string>
+    <string name="recipe_grading_midtones">中間調</string>
+    <string name="recipe_grading_balance">バランス</string>
+    <string name="recipe_grading_blending">ブレンド</string>
     <string name="recipe_tab_light">ライト</string>
     <string name="recipe_tab_texture">テクスチャ</string>
     <string name="recipe_tab_post">現像</string>
@@ -252,4 +256,7 @@
     <string name="settings_dro_dr100">DR100</string>
     <string name="settings_dro_dr200">DR200</string>
     <string name="settings_dro_dr400">DR400</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution：ハッセルブラッドが独自に開発したカラーマネジメントシステム</string>
+    <string name="settings_raw_max_hdr_composition">RAWmax HDR 合成</string>
+    <string name="settings_raw_max_hdr_composition_description">RAWmax でブラケット露出を使用して HDR 合成します。オフにすると処理速度が向上します。</string>
 </resources>

@@ -1,0 +1,76 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 52a7d714fa3dcf908389eec8b53aa2dff3e506042127e90909b014dae1708afd
+ * ELF offsets: 0x30a4eb3
+ * Symbols: rgbnrcdiff_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+layout(rgba16f, binding = 1) writeonly uniform image2D outputImage;
+
+uniform float uMarginX;
+uniform float uMarginY;
+uniform int uBlackOffset;
+uniform int uKernSize;
+uniform int uSkip;
+uniform float uLumaThr;
+uniform float uChannelThr;
+uniform ivec2 uImageSize;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+shared vec4 s_cache[41][41];
+
+vec4 CnrDiffColor(ivec2 globalPos) {
+    vec4 sum = vec4(0.0);
+    float count = 0.0;
+    vec2 texSizeF = vec2(uImageSize);
+
+    vec4 center = imageLoad(uInputImage, globalPos) * 65535.0;
+
+    float lumaC = center.r + center.g + center.b;
+    vec3 lumGrDiffC = vec3(lumaC, center.g - center.r, center.g - center.b);
+    vec3 lumCDiffThr = vec3(uLumaThr, uChannelThr, uChannelThr);
+
+    for (int j = -uKernSize; j <= uKernSize; j += uSkip) {
+        for (int i = -uKernSize; i <= uKernSize; i += uSkip) {
+            ivec2 searchPos = globalPos + ivec2(i, j);
+            // 边界 clamp
+            searchPos = clamp(searchPos, ivec2(0), uImageSize - ivec2(1));
+            vec4 candidate = imageLoad(uInputImage, searchPos) * 65535.0;
+
+            float luma = candidate.r + candidate.g + candidate.b;
+            vec3 lumGrDiffS = vec3(luma, candidate.g - candidate.r, candidate.g - candidate.b);
+
+            bvec3 cond = lessThan(abs(lumGrDiffS - lumGrDiffC), lumCDiffThr);
+            if (all(cond)) {
+                sum += candidate;
+                count += 1.0;
+            }
+        }
+    }
+
+    vec4 avg = (count > 0.0) ? (sum / count) : center;
+    vec4 res = avg - float(uBlackOffset);
+    res = max(res, vec4(0.0));
+    res.a = center.a;
+    return res / 65535.0;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 globalPos = gid + ivec2(uMarginX, uMarginY);
+
+    // 边界检查（如果 margin 足够，可省略）
+    if (globalPos.x >= uImageSize.x || globalPos.y >= uImageSize.y ||
+        globalPos.x < 0 || globalPos.y < 0) {
+        imageStore(outputImage, gid, vec4(0.0));
+        return;
+    }
+
+    vec4 result = CnrDiffColor(globalPos);
+    imageStore(outputImage, gid, result);
+}

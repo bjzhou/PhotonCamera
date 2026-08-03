@@ -1,0 +1,17 @@
+name: "image_io"
+description:
+    "Image_io is a library for manipulating image files, especially XMP metadata"
+
+third_party {
+  url {
+    type: PIPER
+    value: "http://google3/photos/editing/formats/image_io"
+  }
+  version: "222429857"
+  last_upgrade_date {
+    year: 2018
+    month: 11
+    day: 21
+  }
+  license_type: NOTICE
+}

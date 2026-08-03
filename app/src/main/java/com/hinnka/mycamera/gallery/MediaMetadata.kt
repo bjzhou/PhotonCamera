@@ -14,8 +14,11 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.utils.DeviceUtil
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
@@ -23,13 +26,23 @@ import kotlin.math.log2
 
 const val TONEMAP_MODE_NATURAL_LIGHT = "NATURAL_LIGHT"
 
+private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
+    if (!isNull("rawAutoExposureMode")) {
+        when (optString("rawAutoExposureMode")) {
+            "OFF" -> return false
+            "VIEWFINDER_MATCH", "DYNAMIC_SCENE_ESTIMATION" -> return true
+        }
+    }
+    return if (isNull("rawAutoExposure")) null else optBoolean("rawAutoExposure")
+}
+
 /**
  * 照片元数据
  *
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 23,
+    val version: Int = 29,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -54,6 +67,9 @@ data class MediaMetadata(
     val rawAutoWhiteBalanceEstimate: Boolean? = null,
     val rawLensShadingCorrectionEnabled: Boolean? = null,
     val rawDcpId: String? = null,
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+    val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val cameraId: String? = null,
@@ -66,7 +82,7 @@ data class MediaMetadata(
     val cropRegion: Rect? = null,
     val rotation: Int = 0,
     // 拍摄信息
-    val deviceModel: String? = null,
+    val deviceModel: String? = null, // 边框水印显示的机型名称
     val brand: String? = null,
     val dateTaken: Long? = null,
     val location: String? = null,
@@ -99,6 +115,8 @@ data class MediaMetadata(
     val focusPointX: Float? = null,
     val focusPointY: Float? = null,
     val postCropRegion: Rect? = null,
+    val postRotationDegrees: Int = 0,
+    val postMirrorHorizontal: Boolean = false,
     // Live Photo 演示时间戳 (us)
     val presentationTimestampUs: Long? = null,
     // DRO 模式
@@ -117,6 +135,7 @@ data class MediaMetadata(
     val rawBlackLevelMode: String? = null,
     val rawCustomBlackLevel: Float? = null,
     val rawWhiteLevelMode: String? = null,
+    val rawCustomWhiteLevel: Float? = null,
     val rawCfaCorrectionMode: String? = null,
     val rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
     val applyEffectsToVideo: Boolean = false,
@@ -128,12 +147,19 @@ data class MediaMetadata(
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
+     *
+     * 导入照片的 deviceModel 来自原图 EXIF，应优先保留；本机照片仍使用
+     * EXIF 安全的设备型号，不复用边框水印展示名称。
      */
     fun toCaptureInfo(): com.hinnka.mycamera.camera.CaptureInfo {
         return com.hinnka.mycamera.camera.CaptureInfo(
             iso = iso,
             make = brand ?: Build.MANUFACTURER,
-            model = deviceModel ?: Build.MODEL,
+            model = if (isImported) {
+                deviceModel?.takeIf { it.isNotBlank() } ?: DeviceUtil.exifModel
+            } else {
+                DeviceUtil.exifModel
+            },
             captureTime = dateTaken ?: System.currentTimeMillis(),
             imageWidth = width,
             imageHeight = height,
@@ -144,7 +170,7 @@ data class MediaMetadata(
             software = software ?: "PhotonCamera",
             latitude = latitude,
             longitude = longitude,
-            altitude = altitude
+            altitude = altitude,
         )
     }
 
@@ -295,7 +321,7 @@ data class MediaMetadata(
                     captureNoiseReductionLevel = if (obj.isNull("captureNoiseReductionLevel")) null else obj.optInt("captureNoiseReductionLevel"),
                     rawDenoiseValue = if (obj.isNull("denoiseValue")) null else obj.optDouble("denoiseValue").toFloat(),
                     rawExposureCompensation = if (obj.isNull("rawExposureCompensation")) null else obj.optDouble("rawExposureCompensation").toFloat(),
-                    rawAutoExposure = if (obj.isNull("rawAutoExposure")) null else obj.optBoolean("rawAutoExposure"),
+                    rawAutoExposure = obj.optCompatibleRawAutoExposure(),
                     rawHighlightsAdjustment = if (obj.isNull("rawHighlightsAdjustment")) null else obj.optDouble("rawHighlightsAdjustment").toFloat(),
                     rawShadowsAdjustment = if (obj.isNull("rawShadowsAdjustment")) null else obj.optDouble("rawShadowsAdjustment").toFloat(),
                     rawBlackPointCorrection = if (obj.isNull("rawBlackPointCorrection")) null else obj.optDouble("rawBlackPointCorrection").toFloat(),
@@ -303,6 +329,25 @@ data class MediaMetadata(
                     rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
                     rawLensShadingCorrectionEnabled = if (obj.isNull("rawLensShadingCorrectionEnabled")) null else obj.optBoolean("rawLensShadingCorrectionEnabled"),
                     rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
+                    rawHncsProfileId = if (obj.isNull("rawHncsProfileId")) {
+                        null
+                    } else {
+                        obj.optString("rawHncsProfileId")
+                    },
+                    rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
+                        if (obj.isNull("rawHncsRenderIntent")) {
+                            null
+                        } else {
+                            obj.optString("rawHncsRenderIntent")
+                        }
+                    ),
+                    rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                        if (obj.isNull("rawHncsFilmCurveMode")) {
+                            null
+                        } else {
+                            obj.optString("rawHncsFilmCurveMode")
+                        }
+                    ),
                     rawRenderingEngine = RawRenderingEngine.fromPersistedName(
                         if (obj.isNull("rawColorEngine")) null else obj.optString("rawColorEngine"),
                         fallback = RawRenderingEngine.AdobeCurve
@@ -338,12 +383,15 @@ data class MediaMetadata(
                         } else {
                             obj.optDouble("rawFilmicWhiteRelativeExposure").toFloat()
                         },
-                        useGooglePixelToneMap = obj.optBoolean("rawGooglePixelToneMap", false),
-                        useOppoMasterToneMap = obj.optBoolean("rawOppoMasterToneMap", false)
+                        useOppoMasterToneMap = obj.optBoolean("rawOppoMasterToneMap", false),
+                        usePhotonPgtmToneMap =
+                            obj.optBoolean("rawPhotonPgtmToneMap", false) ||
+                                obj.optBoolean("rawGooglePixelToneMap", false)
                     ).normalized(),
                     rawBlackLevelMode = if (obj.isNull("rawBlackLevelMode")) null else obj.optString("rawBlackLevelMode"),
                     rawCustomBlackLevel = if (obj.isNull("rawCustomBlackLevel")) null else obj.optDouble("rawCustomBlackLevel").toFloat(),
                     rawWhiteLevelMode = if (obj.isNull("rawWhiteLevelMode")) null else obj.optString("rawWhiteLevelMode"),
+                    rawCustomWhiteLevel = if (obj.isNull("rawCustomWhiteLevel")) null else obj.optDouble("rawCustomWhiteLevel").toFloat(),
                     rawCfaCorrectionMode = if (obj.isNull("rawCfaCorrectionMode")) null else obj.optString("rawCfaCorrectionMode"),
                     cameraId = if (obj.isNull("cameraId")) null else obj.optString("cameraId"),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
@@ -368,6 +416,8 @@ data class MediaMetadata(
                             pcObj.getInt("bottom")
                         )
                     },
+                    postRotationDegrees = obj.optInt("postRotationDegrees", 0),
+                    postMirrorHorizontal = obj.optBoolean("postMirrorHorizontal", false),
                     rotation = obj.optInt("rotation", 0),
                     // 拍摄信息
                     deviceModel = if (obj.isNull("deviceModel")) null else obj.optString("deviceModel"),
@@ -441,7 +491,7 @@ data class MediaMetadata(
          */
         fun createDefault(width: Int, height: Int): MediaMetadata {
             return MediaMetadata(
-                deviceModel = Build.MODEL,
+                deviceModel = DeviceUtil.model,
                 brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
                 dateTaken = System.currentTimeMillis(),
                 width = width,
@@ -503,9 +553,9 @@ data class MediaMetadata(
 
                     val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 }
                         ?.let { "f/${String.format("%.1f", it)}" }
-                    val focalLength = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0).let {
-                        "${it.toInt()}mm"
-                    }
+                    val focalLength = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0)
+                        .takeIf { it > 0.0 }
+                        ?.let { "${it.toInt()}mm" }
                     val focalLength35mm = exif.getAttributeInt(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0)
                         .takeIf { it > 0 }?.let { "${it}mm" }
 

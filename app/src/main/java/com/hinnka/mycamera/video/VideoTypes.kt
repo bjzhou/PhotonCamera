@@ -140,7 +140,8 @@ data class VideoCapabilities(
     val availableLogProfiles: List<VideoLogProfile> = listOf(VideoLogProfile.OFF),
     val availableBitrates: List<VideoBitratePreset> = VideoBitratePreset.entries.toList(),
     val availableCodecs: List<VideoCodec> = VideoCodec.entries.toList(),
-    val previewSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
+    val cameraInputSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
+    val recordingSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
     val openGatePortraitAspectRatio: Float = 3f / 4f,
     val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),
     val supportsTorch: Boolean = false,
@@ -150,13 +151,15 @@ data class VideoCapabilities(
 data class VideoRecordingState(
     val isRecording: Boolean = false,
     val isPaused: Boolean = false,
+    val isProcessing: Boolean = false,
     val elapsedMs: Long = 0L
 )
 
 data class VideoCapabilitySnapshot(
     val config: VideoConfig,
     val capabilities: VideoCapabilities,
-    val previewSize: Size
+    val previewSize: Size,
+    val recordingSize: Size
 )
 
 fun resolveOpenGatePortraitAspectRatio(

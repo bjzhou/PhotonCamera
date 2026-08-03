@@ -1449,7 +1449,7 @@ private fun ColorField(
 }
 
 @Composable
-private fun ColorPickerDialog(
+internal fun ColorPickerDialog(
     title: String,
     initialColor: Int,
     onDismiss: () -> Unit,
@@ -1491,6 +1491,7 @@ private fun ColorPickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(

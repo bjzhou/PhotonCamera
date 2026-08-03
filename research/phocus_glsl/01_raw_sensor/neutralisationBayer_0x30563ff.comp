@@ -1,0 +1,106 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 54c8e19ec4e856f0546700e84db38fd1983f139aaf7c43e3323fb08650dcd9d4
+ * ELF offsets: 0x30563ff
+ * Symbols: neutralisationBayer_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+// Input: 16-bit half float texture (PackedBayer, stored as RGBA16F)
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+// Output: 16-bit half float texture
+layout(rgba16f, binding = 1) writeonly uniform image2D uOutputImage;
+
+// Uniform buffer object for parameters
+struct NeutralisationBayerParams {
+    vec4 gain;          // RGGB gains (R, G1, G2, B)
+    ivec2 margin;       // Texture coordinate margin (pre-divided by 4 for x)
+    ivec2 rectOffset;   // rect.left, rect.top for gain index calculation
+    float blackLevel;   // Black level offset (normalized to [0,1])
+    int debugMode;      // Debug mode: 0=normal, 1=pass-through, 2=gain viz, 3+=boundary
+    int pad0;           // Padding for std140 alignment
+    int pad1;
+};
+
+layout(std140, binding = 2) uniform NeutralisationBayerParams_UBO {
+    NeutralisationBayerParams params;
+} uParams;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Apply gain to pixel value (matching iOS Metal logic)
+// Input: half float normalized [0,1]
+// Processing: directly in [0,1] space to avoid precision loss
+// Output: half float normalized [0,1]
+//
+// iOS Metal logic (in uint16 space [0,65535]):
+//   result = blackLevel + (input - blackLevel) * gain
+// Normalized to [0,1]:
+//   result_norm = blackLevel_norm + (input_norm - blackLevel_norm) * gain
+vec4 ApplyGain(vec4 val, vec4 gain, float blackLevel) {
+    // Apply gain directly in normalized [0,1] space
+    // v = blackLevel + (val - blackLevel) * gain
+    vec4 result = blackLevel + (val - blackLevel) * gain;
+    // Clamp to valid range [0,1]
+    return clamp(result, 0.0, 1.0);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    int debugMode = uParams.params.debugMode;
+    
+    // Boundary check for output
+    ivec2 outputSize = imageSize(uOutputImage);
+    if (gid.x >= outputSize.x || gid.y >= outputSize.y || gid.x < 0 || gid.y < 0) {
+        return;  // Skip out-of-bounds pixels
+    }
+    
+    // Calculate source position with margin
+    ivec2 srcPos = gid + uParams.params.margin;
+    
+    // Boundary check for input texture
+    ivec2 inputSize = imageSize(uInputImage);
+    if (srcPos.x < 0 || srcPos.y < 0 || srcPos.x >= inputSize.x || srcPos.y >= inputSize.y) {
+        if (debugMode > 2) {
+            imageStore(uOutputImage, gid, vec4(1.0, 0.0, 1.0, 1.0)); // Magenta for boundary error
+            return;
+        }
+        srcPos = clamp(srcPos, ivec2(0), inputSize - ivec2(1));
+    }
+    
+    vec4 val = imageLoad(uInputImage, srcPos);
+    
+    // Debug mode 1: Pass-through input
+    if (debugMode == 1) {
+        imageStore(uOutputImage, gid, val);
+        return;
+    }
+    
+    // Calculate gain index based on Bayer pattern (matching iOS Metal lines 46-50)
+    // iOS: int yOffset = opts.rectOffset.y & 1;
+    //      int xOffset = opts.rectOffset.x & 1;
+    //      gainRed = xOffset == 0 ? gain.xyxy : gain.yxyx;
+    //      gainGreen = xOffset == 0 ? gain.zwzw : gain.wzwz;
+    //      gain = (yOffset+gid.y) % 2 == 0 ? gainRed : gainGreen;
+    int yOffset = uParams.params.rectOffset.y & 1;
+    int xOffset = uParams.params.rectOffset.x & 1;
+    vec4 gainRed = (xOffset == 0) ? uParams.params.gain.xyxy : uParams.params.gain.yxyx;
+    vec4 gainGreen = (xOffset == 0) ? uParams.params.gain.zwzw : uParams.params.gain.wzwz;
+    vec4 gain = ((yOffset + gid.y) % 2 == 0) ? gainRed : gainGreen;
+    
+    // Debug mode 2: Visualize gain values
+    if (debugMode == 2) {
+        // Normalize gain to [0,1] for visualization (assuming gain is around 0.5-1.5)
+        vec4 gainViz = (gain - 0.5) / 1.0; // Map [0.5, 1.5] → [0, 1]
+        imageStore(uOutputImage, gid, clamp(gainViz, 0.0, 1.0));
+        return;
+    }
+    
+    // Apply gain and black level correction
+    vec4 result = ApplyGain(val, gain, uParams.params.blackLevel);
+    
+    imageStore(uOutputImage, gid, result);
+}

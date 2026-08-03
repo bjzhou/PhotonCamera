@@ -7,14 +7,15 @@ internal object DngPgtmDiagnostic {
 
     // 0 disables gain mutation. For halo isolation, use BLOCK_ONLY and sweep 7..18.
     private const val PGTM_DIAGNOSTIC_BAND_INDEX = 0
-    private val PGTM_DIAGNOSTIC_MODE = DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY
+    private val PGTM_DIAGNOSTIC_MODE =
+        DngPhotonProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY
 
     // Draws tableInput 0.080..0.140 as 0.005-wide false-color bands in RAW preview.
     private const val PGTM_VISUAL_OVERLAY_MODE = 0
 
     private var visualOverlayLogged = false
 
-    fun activeBandForSource(source: String): DngHdrProfileGainTableGenerator.DiagnosticBand? {
+    fun activeBandForSource(source: String): DngPhotonProfileGainTableGenerator.DiagnosticBand? {
         val band = activeBand() ?: return null
         PLog.w(
             TAG,
@@ -37,16 +38,7 @@ internal object DngPgtmDiagnostic {
         return PGTM_VISUAL_OVERLAY_MODE
     }
 
-    fun applyToEmbeddedMap(
-        map: DngProfileGainTableMap?,
-        source: String,
-    ): DngProfileGainTableMap? {
-        val embeddedMap = map ?: return null
-        val band = activeBandForSource(source) ?: return embeddedMap
-        return DngHdrProfileGainTableGenerator.withDiagnosticBand(embeddedMap, band)
-    }
-
-    private fun activeBand(): DngHdrProfileGainTableGenerator.DiagnosticBand? {
+    private fun activeBand(): DngPhotonProfileGainTableGenerator.DiagnosticBand? {
         return when (PGTM_DIAGNOSTIC_BAND_INDEX) {
             1 -> band(0.000f, 0.005f, feather = 0.0010f)
             2 -> band(0.005f, 0.010f, feather = 0.0010f)
@@ -78,8 +70,8 @@ internal object DngPgtmDiagnostic {
         start: Float,
         end: Float,
         feather: Float = 0.0010f,
-    ): DngHdrProfileGainTableGenerator.DiagnosticBand {
-        return DngHdrProfileGainTableGenerator.DiagnosticBand(
+    ): DngPhotonProfileGainTableGenerator.DiagnosticBand {
+        return DngPhotonProfileGainTableGenerator.DiagnosticBand(
             start = start,
             end = end,
             feather = feather,

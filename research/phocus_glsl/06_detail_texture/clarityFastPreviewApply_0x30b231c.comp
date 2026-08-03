@@ -1,0 +1,62 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: ec451ea570b0870fb0b16d88ca2ba0ca3b4d5c135696acffaa0d9f070349d659
+ * ELF offsets: 0x30b231c
+ * Symbols: clarityFastPreviewApply_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly uniform image2D uInput;
+layout(rgba16f, binding = 1) readonly uniform image2D uHiResMap;  // factor map (rgba16f, .r channel)
+layout(rgba16f, binding = 2) writeonly uniform image2D uOutput;
+
+layout(std140, binding = 3) uniform ClarityFastPreviewParams_UBO {
+    float hiMapScaleX;
+    float hiMapScaleY;
+    int offsetX;
+    int offsetY;
+    int absRectLeft;   // rect.left in absolute image coords (for factor map position fix)
+    int absRectTop;    // rect.top in absolute image coords
+    int pad0;
+    int pad1;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(uOutput);
+    if (gid.x >= outSize.x || gid.y >= outSize.y) return;
+
+    ivec2 srcPos = gid + ivec2(offsetX, offsetY);
+    vec4 src = imageLoad(uInput, srcPos);
+
+    // Compute position in factor map space using absolute image coordinates.
+    vec2 fullPos = vec2(srcPos + ivec2(absRectLeft, absRectTop)) + 0.5;
+    vec2 mapPos = fullPos * vec2(hiMapScaleX, hiMapScaleY);
+
+    // Manual bilinear interpolation on image2D (replaces sampler2D + GL_LINEAR)
+    ivec2 mapSize = imageSize(uHiResMap);
+    vec2 texelPos = mapPos - 0.5;  // shift to texel center
+    ivec2 p0 = ivec2(floor(texelPos));
+    vec2 frac = texelPos - vec2(p0);
+
+    // Clamp coordinates (equivalent to GL_CLAMP_TO_EDGE)
+    ivec2 p00 = clamp(p0,              ivec2(0), mapSize - 1);
+    ivec2 p10 = clamp(p0 + ivec2(1,0), ivec2(0), mapSize - 1);
+    ivec2 p01 = clamp(p0 + ivec2(0,1), ivec2(0), mapSize - 1);
+    ivec2 p11 = clamp(p0 + ivec2(1,1), ivec2(0), mapSize - 1);
+
+    float f00 = imageLoad(uHiResMap, p00).r;
+    float f10 = imageLoad(uHiResMap, p10).r;
+    float f01 = imageLoad(uHiResMap, p01).r;
+    float f11 = imageLoad(uHiResMap, p11).r;
+
+    float factor = mix(mix(f00, f10, frac.x), mix(f01, f11, frac.x), frac.y);
+    vec4 result = vec4(src.rgb * factor, src.a);
+    imageStore(uOutput, gid, result);
+}

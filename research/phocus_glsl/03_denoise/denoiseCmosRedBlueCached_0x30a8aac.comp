@@ -1,0 +1,173 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: ca61491ffb337d564307251c8a95970840228afdc8555f3bb23f75210ea13c12
+ * ELF offsets: 0x30a8aac
+ * Symbols: denoiseCmosRedBlueCached_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+// 输入纹理（使用 GL_RGBA16F 格式，半精度浮点）
+layout(rgba16f, binding = 0) readonly restrict uniform image2D uInputImage0;
+layout(rgba16f, binding = 1) readonly restrict uniform image2D uInputImage1;
+layout(rgba16f, binding = 2) readonly restrict uniform image2D uInputImage2;
+layout(rgba16f, binding = 3) readonly restrict uniform image2D uInputImage3;
+layout(rgba16f, binding = 4) writeonly uniform image2D outputImage;
+
+// Uniforms（完全一致）
+uniform float uLumaSqThr;
+uniform float uDarkLumaMinThr;
+uniform float uAvg4GreenAtRedRelThr;
+uniform float uAvg4BlueAtRedRelThr;
+uniform float uCrossRedBlueThr;
+uniform float uOffset;
+uniform float uOfsSub;
+uniform float uOfsAdd;
+uniform int uKernSizeX; // = 2
+uniform int uKernSizeY; // = 8
+uniform ivec2 uImageSize;
+uniform ivec2 uMargin;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+struct NLMCheckRedBlue {
+    vec2 redvalRed;
+    vec2 horizSum;
+    vec2 vertSum;
+    vec2 grAveRed;
+    vec2 blueAveRed;
+    vec2 lumaRed;
+};
+
+NLMCheckRedBlue getRedBlueCached(ivec2 pos) {
+    vec4 val0 = imageLoad(uInputImage1, pos) * 65535.0;
+    vec4 val1 = imageLoad(uInputImage2, pos) * 65535.0;
+    vec4 val2 = imageLoad(uInputImage3, pos) * 65535.0;
+
+    NLMCheckRedBlue res;
+    res.redvalRed  = val0.xy * 1.0;      // redvalRed
+    res.horizSum   = val0.zw * 3.0;      // horizSum
+    res.vertSum    = val1.xy * 3.0;      // vertSum
+    res.grAveRed   = val1.zw * 1.0;      // grAveRed
+    res.blueAveRed = val2.xy * 1.0;      // blueAveRed
+    res.lumaRed    = val2.zw * 4.0;      // lumaRed
+    return res;
+}
+
+vec2 noiseThreshold(vec2 value, float ofsSub, float ofsAdd) {
+    return sqrt(max(value - vec2(ofsSub), vec2(0.0))) + vec2(ofsAdd);
+}
+
+vec4 doRedBlueBNR(ivec2 pos, bool isRedRow) {
+    NLMCheckRedBlue c = getRedBlueCached(pos);
+
+    vec2 avg4GreenAtRedThr = noiseThreshold(c.grAveRed * 4.0, uOfsSub, uOfsAdd) * vec2(uLumaSqThr * uAvg4GreenAtRedRelThr);
+    vec2 avg4BlueAtRedThr = noiseThreshold(c.blueAveRed * 4.0, uOfsSub, uOfsAdd) * vec2(uLumaSqThr * uAvg4BlueAtRedRelThr);
+    vec2 lumaRThr = noiseThreshold(c.lumaRed, uOfsSub, uOfsAdd) * vec2(uLumaSqThr);
+    lumaRThr = max(lumaRThr, vec2(uDarkLumaMinThr));
+    vec2 crossRedCThr = lumaRThr * vec2(uCrossRedBlueThr);
+
+    vec2 sum = vec2(0.0);
+    vec2 count = vec2(0.0);
+
+    for (int j = -uKernSizeY; j <= uKernSizeY; j += 2) {
+        for (int i = -uKernSizeX; i <= uKernSizeX; i++) {
+            ivec2 searchPos = pos + ivec2(i, j);
+            NLMCheckRedBlue s = getRedBlueCached(searchPos);
+
+            bvec4 rb_check = bvec4(
+                    abs(s.lumaRed.x - c.lumaRed.x) <= lumaRThr.x,
+                    abs(s.lumaRed.y - c.lumaRed.y) <= lumaRThr.y,
+                    abs(s.lumaRed.y - c.lumaRed.x) <= lumaRThr.x,
+                    abs(s.lumaRed.x - c.lumaRed.y) <= lumaRThr.y
+            );
+
+            bvec4 temp = bvec4(
+                    abs(s.grAveRed.x - c.grAveRed.x) <= avg4GreenAtRedThr.x,
+                    abs(s.grAveRed.y - c.grAveRed.y) <= avg4GreenAtRedThr.y,
+                    abs(s.grAveRed.y - c.grAveRed.x) <= avg4GreenAtRedThr.x,
+                    abs(s.grAveRed.x - c.grAveRed.y) <= avg4GreenAtRedThr.y
+            );
+            rb_check = bvec4(rb_check.x && temp.x, rb_check.y && temp.y, rb_check.z && temp.z, rb_check.w && temp.w);
+
+            temp = bvec4(
+                    abs(s.blueAveRed.x - c.blueAveRed.x) <= avg4BlueAtRedThr.x,
+                    abs(s.blueAveRed.y - c.blueAveRed.y) <= avg4BlueAtRedThr.y,
+                    abs(s.blueAveRed.y - c.blueAveRed.x) <= avg4BlueAtRedThr.x,
+                    abs(s.blueAveRed.x - c.blueAveRed.y) <= avg4BlueAtRedThr.y
+            );
+            rb_check = bvec4(rb_check.x && temp.x, rb_check.y && temp.y, rb_check.z && temp.z, rb_check.w && temp.w);
+
+            temp = bvec4(
+                    abs(s.horizSum.x - c.horizSum.x) <= crossRedCThr.x,
+                    abs(s.horizSum.y - c.horizSum.y) <= crossRedCThr.y,
+                    abs(s.horizSum.y - c.horizSum.x) <= crossRedCThr.x,
+                    abs(s.horizSum.x - c.horizSum.y) <= crossRedCThr.y
+            );
+            rb_check = bvec4(rb_check.x && temp.x, rb_check.y && temp.y, rb_check.z && temp.z, rb_check.w && temp.w);
+
+            temp = bvec4(
+                    abs(s.vertSum.x - c.vertSum.x) <= crossRedCThr.x,
+                    abs(s.vertSum.y - c.vertSum.y) <= crossRedCThr.y,
+                    abs(s.vertSum.y - c.vertSum.x) <= crossRedCThr.x,
+                    abs(s.vertSum.x - c.vertSum.y) <= crossRedCThr.y
+            );
+            rb_check = bvec4(rb_check.x && temp.x, rb_check.y && temp.y, rb_check.z && temp.z, rb_check.w && temp.w);
+
+            if (i == -uKernSizeX) {
+                rb_check.w = false;
+            }
+            if (i == uKernSizeX) {
+                rb_check.z = false;
+            }
+
+            if (rb_check.x) {
+                sum.x += s.redvalRed.x;
+                count.x += 1.0;
+            }
+            if (rb_check.y) {
+                sum.y += s.redvalRed.y;
+                count.y += 1.0;
+            }
+            if (rb_check.z) {
+                sum.x += s.redvalRed.y;
+                count.x += 1.0;
+            }
+            if (rb_check.w) {
+                sum.y += s.redvalRed.x;
+                count.y += 1.0;
+            }
+        }
+    }
+
+    vec4 opix = imageLoad(uInputImage0, pos)  * 65535.0;
+    if (isRedRow) {
+        if (count.x > 1.0) opix.x = round(sum.x / count.x);
+        if (count.y > 1.0) opix.z = round(sum.y / count.y);
+    } else {
+        if (count.x > 1.0) opix.y = round(sum.x / count.x);
+        if (count.y > 1.0) opix.w = round(sum.y / count.y);
+    }
+    opix = max(opix - vec4(uOffset), vec4(0.0));
+    return opix / 65535.0;
+}
+
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 globalPos = gid + uMargin;
+
+    if (globalPos.x >= uImageSize.x - uKernSizeX ||
+        globalPos.y >= uImageSize.y - uKernSizeY ||
+        globalPos.x < 0 || globalPos.y < 0) {
+        vec4 pixel = imageLoad(uInputImage0, globalPos);
+        imageStore(outputImage, gid, pixel);
+        return;
+    }
+
+    bool isRedRow = (globalPos.y & 1) == 0;
+    vec4 result = doRedBlueBNR(globalPos, isRedRow);
+    imageStore(outputImage, gid, result);
+}

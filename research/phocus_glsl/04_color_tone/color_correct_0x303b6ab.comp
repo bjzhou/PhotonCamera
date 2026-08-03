@@ -1,0 +1,150 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 708bb034bd1ad908db5512e780831df43eae055e5b1752f29d49d8710d1ed0b5
+ * ELF offsets: 0x303b6ab
+ * Symbols: color_correct_computeShaderSource
+ */
+
+#version 310 es
+layout(local_size_x = 16, local_size_y = 16) in;
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(std140, binding = 5) uniform ColorCorrectParams {
+    vec4 uRgb2YccR;      // 0-16
+    vec4 uRgb2YccG;      // 16-32
+    vec4 uRgb2YccB;      // 32-48
+    vec4 uCbVec;         // 48-64
+    vec4 uCrVec;         // 64-80
+    vec4 uDesatParabel;  // 80-96
+
+    float uOutputScale;  // 96
+    float uGrayLow;      // 100
+    float uGrayHigh;     // 104
+    float uNoDesatLimit; // 108
+
+    float uCbStart;      // 112
+    float uCrStart;      // 116
+    float uEv;           // 120
+    int uIsRepo;         // 124
+
+    int uMarginX;        // 128
+    int uMarginY;        // 132
+    int uHasLinearization;// 136
+    int uLutW;           // 140 — CbCrLut width (passed explicitly; imageSize unreliable on IMG)
+    int uLutH;           // 144 — CbCrLut height
+    int pad0;            // 148
+    int pad1;            // 152 (total 160 bytes)
+} params;
+
+layout(rgba16f, binding = 0) readonly  uniform highp image2D  uInput;
+layout(rgba16ui,binding = 1) readonly  uniform highp uimage2D uLinearization;
+layout(rgba16ui,binding = 2) readonly  uniform highp uimage2D uLinearizationF;
+layout(rgba16f, binding = 3) readonly  uniform highp image2D  uCbCrLut;
+layout(rgba16f, binding = 4) writeonly uniform highp image2D  uOutput;
+
+float getLinearizationSample(float value) {
+    int base = clamp(int(value), 0, 65535);
+    int next = min(base + 1, 65535);
+    float delta = value - float(base);
+    float res0 = float(imageLoad(uLinearization, ivec2(base % 256, base / 256)).r);
+    float res1 = float(imageLoad(uLinearization, ivec2(next % 256, next / 256)).r);
+    return mix(res0, res1, delta);
+}
+
+float getLinearizationFSample(float value) {
+    int base = clamp(int(value), 0, 65535);
+    int next = min(base + 1, 65535);
+    float delta = value - float(base);
+    float res0 = float(imageLoad(uLinearizationF, ivec2(base % 256, base / 256)).r);
+    float res1 = float(imageLoad(uLinearizationF, ivec2(next % 256, next / 256)).r);
+    return mix(res0, res1, delta);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(uOutput);
+    if (gid.x >= outSize.x || gid.y >= outSize.y) return;
+
+    ivec2 inputCoord = gid + ivec2(params.uMarginX, params.uMarginY);
+    vec4 inputPixel = imageLoad(uInput, inputCoord) * 65535.0;
+
+    if (params.uHasLinearization == 1) {
+        vec3 fnoEV = inputPixel.rgb / params.uEv;
+
+        if (fnoEV.r <= 65535.0) {
+            float lin = getLinearizationSample(fnoEV.r);
+            inputPixel.r = clamp(lin * params.uEv, 0.0, 65535.0);
+        }
+        if (fnoEV.g <= 65535.0) {
+            float lin = getLinearizationSample(fnoEV.g);
+            inputPixel.g = clamp(lin * params.uEv, 0.0, 65535.0);
+        }
+        if (fnoEV.b <= 65535.0) {
+            float lin = getLinearizationSample(fnoEV.b);
+            inputPixel.b = clamp(lin * params.uEv, 0.0, 65535.0);
+        }
+    }
+
+    float averageRaw = (inputPixel.r + inputPixel.g + inputPixel.b) / 3.0;
+    vec3 d = abs(inputPixel.rgb - averageRaw);
+    float dMax = max(d.r, max(d.g, d.b));
+
+    float grayWeight = 1.0;
+    if (dMax < params.uGrayHigh * averageRaw) {
+        grayWeight = (dMax / averageRaw - params.uGrayLow) / (params.uGrayHigh - params.uGrayLow);
+    }
+
+    vec4 yccVec = inputPixel.r * params.uRgb2YccR +
+                  inputPixel.g * params.uRgb2YccG +
+                  inputPixel.b * params.uRgb2YccB;
+
+    vec3 ycc = yccVec.xyz;
+    float Y = ycc.x;
+
+    if (params.uIsRepo == 0) {
+        float lowDesat = 1.0;
+        if (ycc.x > params.uNoDesatLimit) {
+            lowDesat = 1.0;
+        } else {
+            lowDesat = params.uDesatParabel.x * Y * Y + params.uDesatParabel.y * Y + params.uDesatParabel.z;
+        }
+        grayWeight = min(lowDesat, grayWeight);
+    }
+    grayWeight = max(0.0, grayWeight);
+
+    float invYxDiv = params.uOutputScale / Y;
+
+    float Cbo = ycc.y;
+    float Cro = ycc.z;
+
+    ivec2 lutSize = ivec2(params.uLutW, params.uLutH) - 1;
+
+    vec2 lutIdx = vec2(Cbo * invYxDiv - params.uCbStart, Cro * invYxDiv - params.uCrStart);
+    lutIdx = clamp(lutIdx, vec2(0.0), vec2(lutSize));
+
+    ivec2 lutIdx0 = ivec2(lutIdx);
+    ivec2 lutIdx1 = clamp(lutIdx0 + 1, ivec2(0), lutSize);
+    vec2 delta = lutIdx - vec2(lutIdx0);
+
+    vec2 v00 = imageLoad(uCbCrLut, ivec2(lutIdx0.x, lutIdx0.y)).xy;
+    vec2 v10 = imageLoad(uCbCrLut, ivec2(lutIdx1.x, lutIdx0.y)).xy;
+    vec2 v01 = imageLoad(uCbCrLut, ivec2(lutIdx0.x, lutIdx1.y)).xy;
+    vec2 v11 = imageLoad(uCbCrLut, ivec2(lutIdx1.x, lutIdx1.y)).xy;
+
+    vec2 resY = mix(v00, v10, delta.x);
+    vec2 resX = mix(v01, v11, delta.x);
+    vec2 cbcr = mix(resY, resX, delta.y);
+
+    ycc.yz = cbcr * grayWeight * Y;
+
+    vec3 rgb;
+    rgb = vec3(ycc.x) + (params.uCbVec.rgb * ycc.y) + (params.uCrVec.rgb * ycc.z);
+
+    rgb.r = getLinearizationFSample(rgb.r);
+    rgb.g = getLinearizationFSample(rgb.g);
+    rgb.b = getLinearizationFSample(rgb.b);
+
+    imageStore(uOutput, gid, vec4(rgb / 65535.0, 1.0));
+}

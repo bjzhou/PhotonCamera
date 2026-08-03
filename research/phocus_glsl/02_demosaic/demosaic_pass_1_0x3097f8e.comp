@@ -1,0 +1,395 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 16b1675cddccc6ef185afa37b2b9d4f5af38b3c64e51ec7b0854b474c678221a
+ * ELF offsets: 0x3097f8e
+ * Symbols: demosaic_pass_1_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+precision highp uimage2D;
+precision highp iimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly uniform uimage2D uInputTexture0;
+layout(rgba16i, binding = 1) readonly uniform iimage2D uInputTexture1;
+layout(rgba16f, binding = 2) readonly uniform image2D uInputTexture2;
+layout(rgba16f, binding = 3) readonly uniform image2D uInputTexture3;
+layout(rgba16ui, binding = 4) writeonly uniform uimage2D uOutputTexture;
+
+layout(std140, binding = 5) uniform DemosaicPass1Params_UBO {
+    int ubo_uParams_l;
+    int ubo_uParams_t;
+    int ubo_uParams_r;
+    int ubo_uParams_b;
+    int ubo_uParams_minThresholdEdge;
+    int ubo_uParams_minThresholdVNG;
+    int ubo_uParams_pad0;
+    int ubo_uParams_pad1;
+};
+
+#define texelFetch(tex, coord, lod) imageLoad(tex, coord)
+
+void shiftInts(out vec4 out_vec4, out float out_val, vec4 a, vec4 b, int offset) {
+    if (offset == 0) {
+        out_vec4 = vec4(a.x, a.y, a.z, a.w);
+        out_val = b.x;
+    } else if (offset == 1) {
+        out_vec4 = vec4(a.y, a.z, a.w, b.x);
+        out_val = b.y;
+    } else if (offset == 2) {
+        out_vec4 = vec4(a.z, a.w, b.x, b.y);
+        out_val = b.z;
+    } else {
+        out_vec4 = vec4(a.w, b.x, b.y, b.z);
+        out_val = b.w;
+    }
+}
+
+void gradientSingleStep(out vec4 edgGrad0, out vec4 edgGrad1, ivec2 imgPos) {
+    int offset = (imgPos.x - 2) & 3;
+    int x = (imgPos.x - 2) / 4;
+    int y = imgPos.y;
+
+    vec4 edg_2_v4, edg_1_v4, edg0_v4, edg1_v4, edg2_v4;
+    float edg_2_f, edg_1_f, edg0_f, edg1_f, edg2_f;
+
+    vec4 a = vec4(texelFetch(uInputTexture1, ivec2(x, y-2), 0));
+    vec4 b = vec4(texelFetch(uInputTexture1, ivec2(x+1, y-2), 0));
+    shiftInts(edg_2_v4, edg_2_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture1, ivec2(x, y-1), 0));
+    b = vec4(texelFetch(uInputTexture1, ivec2(x+1, y-1), 0));
+    shiftInts(edg_1_v4, edg_1_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture1, ivec2(x, y), 0));
+    b = vec4(texelFetch(uInputTexture1, ivec2(x+1, y), 0));
+    shiftInts(edg0_v4, edg0_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture1, ivec2(x, y+1), 0));
+    b = vec4(texelFetch(uInputTexture1, ivec2(x+1, y+1), 0));
+    shiftInts(edg1_v4, edg1_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture1, ivec2(x, y+2), 0));
+    b = vec4(texelFetch(uInputTexture1, ivec2(x+1, y+2), 0));
+    shiftInts(edg2_v4, edg2_f, a, b, offset);
+
+    float hGrad = abs(edg0_v4.y - edg0_v4.z) + abs(edg0_v4.z - edg0_v4.w) +
+                 (abs(edg_1_v4.y - edg_1_v4.z) + abs(edg_1_v4.z - edg_1_v4.w) +
+                  abs(edg1_v4.y - edg1_v4.z) + abs(edg1_v4.z - edg1_v4.w)) * 0.5;
+
+    float vGrad = abs(edg_1_v4.z - edg0_v4.z) + abs(edg0_v4.z - edg1_v4.z) +
+                 (abs(edg_1_v4.y - edg0_v4.y) + abs(edg0_v4.y - edg1_v4.y) +
+                  abs(edg_1_v4.w - edg0_v4.w) + abs(edg0_v4.w - edg1_v4.w)) * 0.5;
+
+    edgGrad0.x = (vGrad + abs(edg_2_v4.z - edg_1_v4.z) + (abs(edg_2_v4.y - edg_1_v4.y) + abs(edg_2_v4.w - edg_1_v4.w)) * 0.5) * 0.25;
+    edgGrad0.z = (vGrad + abs(edg2_v4.z - edg1_v4.z) + (abs(edg2_v4.y - edg1_v4.y) + abs(edg2_v4.w - edg1_v4.w)) * 0.5) * 0.25;
+    edgGrad0.w = (hGrad + abs(edg0_v4.x - edg0_v4.y) + (abs(edg_1_v4.x - edg_1_v4.y) + abs(edg1_v4.x - edg1_v4.y)) * 0.5) * 0.25;
+    edgGrad0.y = (hGrad + abs(edg0_f - edg0_v4.w) + (abs(edg_1_f - edg_1_v4.w) + abs(edg1_f - edg1_v4.w)) * 0.5) * 0.25;
+
+    float senwGrad = abs(edg_1_v4.y - edg0_v4.z) + abs(edg0_v4.z - edg1_v4.w) + abs(edg_1_v4.z - edg0_v4.w) + abs(edg0_v4.y - edg1_v4.z);
+    float neswGrad = abs(edg_1_v4.w - edg0_v4.z) + abs(edg0_v4.z - edg1_v4.y) + abs(edg0_v4.y - edg_1_v4.z) + abs(edg0_v4.w - edg1_v4.z);
+
+    edgGrad1.w = (senwGrad + abs(edg_1_v4.y - edg_2_v4.x) + (abs(edg_1_v4.z - edg_2_v4.y) + abs(edg0_v4.y - edg_1_v4.x)) * 0.5) * 0.25;
+    edgGrad1.z = (neswGrad + abs(edg1_v4.y - edg2_v4.x) + (abs(edg0_v4.y - edg1_v4.x) + abs(edg1_v4.z - edg2_v4.y)) * 0.5) * 0.25;
+    edgGrad1.y = (senwGrad + abs(edg1_v4.w - edg2_f) + (abs(edg0_v4.w - edg1_f) + abs(edg1_v4.z - edg2_v4.w)) * 0.5) * 0.25;
+    edgGrad1.x = (neswGrad + abs(edg_1_v4.w - edg_2_f) + (abs(edg_1_v4.z - edg_2_v4.w) + abs(edg0_v4.w - edg_1_f)) * 0.5) * 0.25;
+}
+
+void gradientVNG_RB(out vec4 bayGrad0, out vec4 bayGrad1, ivec2 imgPos) {
+    int offset = (imgPos.x - 2) & 3;
+    int x = (imgPos.x - 2) / 4;
+    int y = imgPos.y;
+
+    vec4 bayer_2_v4, bayer_1_v4, bayer0_v4, bayer1_v4, bayer2_v4;
+    float bayer_2_f, bayer_1_f, bayer0_f, bayer1_f, bayer2_f;
+
+    vec4 a = vec4(texelFetch(uInputTexture0, ivec2(x, y-2), 0));
+    vec4 b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y-2), 0));
+    shiftInts(bayer_2_v4, bayer_2_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture0, ivec2(x, y-1), 0));
+    b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y-1), 0));
+    shiftInts(bayer_1_v4, bayer_1_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture0, ivec2(x, y), 0));
+    b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y), 0));
+    shiftInts(bayer0_v4, bayer0_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture0, ivec2(x, y+1), 0));
+    b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y+1), 0));
+    shiftInts(bayer1_v4, bayer1_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture0, ivec2(x, y+2), 0));
+    b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y+2), 0));
+    shiftInts(bayer2_v4, bayer2_f, a, b, offset);
+
+    float vGrad = abs(bayer_1_v4.z - bayer1_v4.z) + (abs(bayer_1_v4.y - bayer1_v4.y) + abs(bayer_1_v4.w - bayer1_v4.w))*0.5;
+    float hGrad = abs(bayer0_v4.w - bayer0_v4.y) + (abs(bayer_1_v4.w - bayer_1_v4.y) + abs(bayer1_v4.w - bayer1_v4.y))*0.5;
+
+    bayGrad0.x = (vGrad + abs(bayer_2_v4.z - bayer0_v4.z) + (abs(bayer_2_v4.y - bayer0_v4.y) + abs(bayer_2_v4.w - bayer0_v4.w))*0.5) / 8.0;
+    bayGrad0.z = (vGrad + abs(bayer2_v4.z - bayer0_v4.z) + (abs(bayer2_v4.y - bayer0_v4.y) + abs(bayer2_v4.w - bayer0_v4.w))*0.5) / 8.0;
+    bayGrad0.w = (hGrad + abs(bayer0_v4.x - bayer0_v4.z) + (abs(bayer_1_v4.x - bayer_1_v4.z) + abs(bayer1_v4.x - bayer1_v4.z))*0.5) / 8.0;
+    bayGrad0.y = (hGrad + abs(bayer0_f - bayer0_v4.z) + (abs(bayer_1_f - bayer_1_v4.z) + abs(bayer1_f - bayer1_v4.z))*0.5) / 8.0;
+
+    float neswGrad = abs(bayer_1_v4.w - bayer1_v4.y) + abs(bayer0_v4.y - bayer_1_v4.z) + abs(bayer0_v4.w - bayer1_v4.z);
+    float senwGrad = abs(bayer1_v4.w - bayer_1_v4.y) + abs(bayer_1_v4.z - bayer0_v4.w) + abs(bayer0_v4.y - bayer1_v4.z);
+
+    bayGrad1.x = (neswGrad + abs(bayer_2_f - bayer0_v4.z) + abs(bayer_2_v4.w - bayer_1_v4.z) + abs(bayer_1_f - bayer0_v4.w)) / 8.0;
+    bayGrad1.z = (neswGrad + abs(bayer2_v4.x - bayer0_v4.z) + abs(bayer1_v4.x - bayer0_v4.y) + abs(bayer2_v4.y - bayer1_v4.z)) / 8.0;
+    bayGrad1.y = (senwGrad + abs(bayer2_f - bayer0_v4.z) + abs(bayer1_f - bayer0_v4.w) + abs(bayer2_v4.w - bayer1_v4.z)) / 8.0;
+    bayGrad1.w = (senwGrad + abs(bayer_2_v4.x - bayer0_v4.z) + abs(bayer_2_v4.y - bayer_1_v4.z) + abs(bayer_1_v4.x - bayer0_v4.y)) / 8.0;
+}
+
+
+uvec4 greenAtRedBlue(ivec2 pos, int offsetBayer, int rbIndex) {
+    vec4 edgGrad0, edgGrad1, bayGrad0, bayGrad1;
+    gradientSingleStep(edgGrad0, edgGrad1, pos);
+    gradientVNG_RB(bayGrad0, bayGrad1, pos);
+
+    float minGradient = edgGrad0.x;
+    int minGradientIndex = 0;
+    if (edgGrad0.y < minGradient) { minGradient = edgGrad0.y; minGradientIndex = 1; }
+    if (edgGrad0.z < minGradient) { minGradient = edgGrad0.z; minGradientIndex = 2; }
+    if (edgGrad0.w < minGradient) { minGradient = edgGrad0.w; minGradientIndex = 3; }
+    if (edgGrad1.x < minGradient) { minGradient = edgGrad1.x; minGradientIndex = 4; }
+    if (edgGrad1.y < minGradient) { minGradient = edgGrad1.y; minGradientIndex = 5; }
+    if (edgGrad1.z < minGradient) { minGradient = edgGrad1.z; minGradientIndex = 6; }
+    if (edgGrad1.w < minGradient) { minGradient = edgGrad1.w; minGradientIndex = 7; }
+
+    float maxG = max(max(edgGrad0.x, edgGrad0.y), max(edgGrad0.z, edgGrad0.w));
+    maxG = max(maxG, max(max(edgGrad1.x, edgGrad1.y), max(edgGrad1.z, edgGrad1.w)));
+
+    float dif = (maxG - minGradient) / 8.0;
+    float dif1 = (maxG - minGradient) / 32.0;
+    dif = dif - dif1;
+    float threshold = 1.5 * minGradient + dif + 8.0;
+    threshold = max(threshold, float(ubo_uParams_minThresholdEdge));
+
+    float maxGVNG = max(max(bayGrad0.x, bayGrad0.y), max(bayGrad0.z, bayGrad0.w));
+    maxGVNG = max(maxGVNG, max(max(bayGrad1.x, bayGrad1.y), max(bayGrad1.z, bayGrad1.w)));
+    float minGVNG = min(min(bayGrad0.x, bayGrad0.y), min(bayGrad0.z, bayGrad0.w));
+    minGVNG = min(minGVNG, min(min(bayGrad1.x, bayGrad1.y), min(bayGrad1.z, bayGrad1.w)));
+    maxGVNG *= 0.5;
+    minGVNG *= 0.5;
+    dif = maxGVNG - minGVNG;
+    float thresholdVNG = 3.0 * minGVNG + dif + 8.0;
+    thresholdVNG = max(thresholdVNG, float(ubo_uParams_minThresholdVNG));
+
+    int offset = (pos.x - 2) & 3;
+    int x = (pos.x - 2) / 4;
+    int y = pos.y;
+
+    vec4 bayer_1_v4, bayer0_v4, bayer1_v4;
+    float bayer_1_f, bayer0_f, bayer1_f;
+
+    vec4 a = vec4(texelFetch(uInputTexture0, ivec2(x, y-1), 0));
+    vec4 b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y-1), 0));
+    shiftInts(bayer_1_v4, bayer_1_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture0, ivec2(x, y), 0));
+    b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y), 0));
+    shiftInts(bayer0_v4, bayer0_f, a, b, offset);
+
+    a = vec4(texelFetch(uInputTexture0, ivec2(x, y+1), 0));
+    b = vec4(texelFetch(uInputTexture0, ivec2(x+1, y+1), 0));
+    shiftInts(bayer1_v4, bayer1_f, a, b, offset);
+
+    vec4 medianY_2_v4, medianY_1_v4, medianY0_v4, medianY1_v4, medianY2_v4;
+    float medianY_2_f, medianY_1_f, medianY0_f, medianY1_f, medianY2_f;
+
+    a = texelFetch(uInputTexture3, ivec2(x, (y-2)/2), 0);
+    b = texelFetch(uInputTexture3, ivec2(x+1, (y-2)/2), 0);
+    shiftInts(medianY_2_v4, medianY_2_f, a, b, offset);
+
+    a = texelFetch(uInputTexture3, ivec2(x, y/2), 0);
+    b = texelFetch(uInputTexture3, ivec2(x+1, y/2), 0);
+    shiftInts(medianY0_v4, medianY0_f, a, b, offset);
+
+    a = texelFetch(uInputTexture3, ivec2(x, (y+2)/2), 0);
+    b = texelFetch(uInputTexture3, ivec2(x+1, (y+2)/2), 0);
+    shiftInts(medianY2_v4, medianY2_f, a, b, offset);
+
+    if (offsetBayer == 1) {
+        medianY_1_v4 = medianY0_v4;
+        medianY_1_f = medianY0_f;
+        medianY1_v4 = medianY2_v4;
+        medianY1_f = medianY2_f;
+    } else {
+        medianY_1_v4 = medianY_2_v4;
+        medianY_1_f = medianY_2_f;
+        medianY1_v4 = medianY0_v4;
+        medianY1_f = medianY0_f;
+    }
+
+    float target = bayer0_v4.z;
+    float greenTest[8];
+
+    greenTest[0] = texelFetch(uInputTexture2, ivec2(pos.x, (pos.y - 1) / 2), 0).g * target;
+    greenTest[1] = texelFetch(uInputTexture2, ivec2(pos.x + 1, pos.y / 2), 0).r * target;
+    greenTest[2] = texelFetch(uInputTexture2, ivec2(pos.x, (pos.y + 1) / 2), 0).g * target;
+    greenTest[3] = texelFetch(uInputTexture2, ivec2(pos.x - 1, pos.y / 2), 0).r * target;
+    {
+        float scaleA = medianY2_f;
+        float scaleB = medianY_2_v4.x;
+        float scaleMax = max(1.0, max(scaleA, scaleB));
+        float scaleMin = min(1.0, min(scaleA, scaleB));
+
+        float medScale = medianY0_v4.z;
+        float scaleC = clamp(medScale, scaleMin, scaleMax);
+
+        float sum = (bayer_1_v4.w + bayer1_v4.y) * 0.5;
+        float minDif = min(abs(sum - bayer1_v4.w), abs(sum - bayer_1_v4.y));
+        if (minDif < sum / 4.0) scaleC = medScale;
+        float greenC = scaleC * target;
+
+        scaleA = medianY1_v4.w;
+        scaleB = medianY_1_v4.y;
+        scaleMax = max(1.0, max(scaleA, scaleB));
+        scaleMin = min(1.0, min(scaleA, scaleB));
+
+        greenTest[4] = (greenC + bayer_1_v4.w * clamp(medianY_1_v4.w, scaleMin, scaleMax)) * 0.5; // NorthEast
+        greenTest[6] = (greenC + bayer1_v4.y * clamp(medianY1_v4.y, scaleMin, scaleMax)) * 0.5; // SouthWest
+
+        scaleA = medianY_2_f;
+        scaleB = medianY2_v4.x;
+        scaleMax = max(1.0, max(scaleA, scaleB));
+        scaleMin = min(1.0, min(scaleA, scaleB));
+
+        scaleC = clamp(medScale, scaleMin, scaleMax);
+
+        sum = (bayer_1_v4.y + bayer1_v4.w)*0.5;
+        minDif = min(abs(sum - bayer_1_v4.w), abs(sum - bayer1_v4.y));
+        if (minDif < sum / 4.0) scaleC = medScale;
+        greenC = scaleC * target;
+
+        scaleA = medianY_1_v4.w;
+        scaleB = medianY1_v4.y;
+        scaleMax = max(1.0, max(scaleA, scaleB));
+        scaleMin = min(1.0, min(scaleA, scaleB));
+
+        greenTest[5] = (greenC + bayer1_v4.w * clamp(medianY1_v4.w, scaleMin, scaleMax)) * 0.5;
+        greenTest[7] = (greenC + bayer_1_v4.y * clamp(medianY_1_v4.y, scaleMin, scaleMax)) * 0.5;
+    }
+
+    int mask = 0;
+    float maxGreen = 0.0;
+    float minGreen = 65535.0;
+    float maxUsedGradient = 0.0;
+
+    if (threshold > edgGrad0.x && thresholdVNG > bayGrad0.x) { maxUsedGradient = max(edgGrad0.x, maxUsedGradient); maxGreen = max(maxGreen, greenTest[0]); minGreen = min(minGreen, greenTest[0]); mask |= (1 << 0); }
+    if (threshold > edgGrad0.y && thresholdVNG > bayGrad0.y) { maxUsedGradient = max(edgGrad0.y, maxUsedGradient); maxGreen = max(maxGreen, greenTest[1]); minGreen = min(minGreen, greenTest[1]); mask |= (1 << 1); }
+    if (threshold > edgGrad0.z && thresholdVNG > bayGrad0.z) { maxUsedGradient = max(edgGrad0.z, maxUsedGradient); maxGreen = max(maxGreen, greenTest[2]); minGreen = min(minGreen, greenTest[2]); mask |= (1 << 2); }
+    if (threshold > edgGrad0.w && thresholdVNG > bayGrad0.w) { maxUsedGradient = max(edgGrad0.w, maxUsedGradient); maxGreen = max(maxGreen, greenTest[3]); minGreen = min(minGreen, greenTest[3]); mask |= (1 << 3); }
+    if (threshold > edgGrad1.x && thresholdVNG > bayGrad1.x) { maxUsedGradient = max(edgGrad1.x, maxUsedGradient); maxGreen = max(maxGreen, greenTest[4]); minGreen = min(minGreen, greenTest[4]); mask |= (1 << 4); }
+    if (threshold > edgGrad1.y && thresholdVNG > bayGrad1.y) { maxUsedGradient = max(edgGrad1.y, maxUsedGradient); maxGreen = max(maxGreen, greenTest[5]); minGreen = min(minGreen, greenTest[5]); mask |= (1 << 5); }
+    if (threshold > edgGrad1.z && thresholdVNG > bayGrad1.z) { maxUsedGradient = max(edgGrad1.z, maxUsedGradient); maxGreen = max(maxGreen, greenTest[6]); minGreen = min(minGreen, greenTest[6]); mask |= (1 << 6); }
+    if (threshold > edgGrad1.w && thresholdVNG > bayGrad1.w) { maxUsedGradient = max(edgGrad1.w, maxUsedGradient); maxGreen = max(maxGreen, greenTest[7]); minGreen = min(minGreen, greenTest[7]); mask |= (1 << 7); }
+
+    bool bDitch = false;
+    float lGreen = 0.0;
+    int count = 0;
+    for (int i = 0; i < 32; i++) {
+        if ((mask & (1 << i)) != 0) count++;
+    }
+
+    if (minGradientIndex < 4 && 2 < count && count < 6 &&
+        maxUsedGradient < 2.0 * minGradient && (mask & 15) == 15) {
+        lGreen = (greenTest[0] + greenTest[1] + greenTest[2] + greenTest[3]) / 4.0;
+        float sign0 = lGreen - greenTest[0];
+        float sign1 = lGreen - greenTest[1];
+        float sign2 = lGreen - greenTest[2];
+        float sign3 = lGreen - greenTest[3];
+        bDitch = (sign0 * sign2 >= 0.0 && sign1 * sign3 >= 0.0);
+    }
+
+    float minDif2 = 65535.0;
+    if (bDitch) {
+        const float kScaleThreshold = 1.3;
+        const float kScaleDifThreshold = (kScaleThreshold - (1.0 / kScaleThreshold)) /
+                                         (kScaleThreshold + (1.0 / kScaleThreshold));
+        bDitch = ((maxGreen - minGreen) > kScaleDifThreshold * (maxGreen + minGreen));
+
+        if (bDitch) {
+            int minDifIndex = 0;
+            for (int i = 0; i < 4; i++) {
+                if ((mask & (1 << i)) != 0) {
+                    float difLoc = abs(greenTest[i] - target);
+                    if (difLoc < minDif2) {
+                        minDif2 = difLoc;
+                        minDifIndex = i;
+                    }
+                }
+            }
+            lGreen = greenTest[minDifIndex];
+            if (minDif2 > 0.0) {
+                mask = 1 << minDifIndex;
+                count = 1;
+            }
+        }
+    }
+
+    if (minDif2 == 65535.0) {
+        if (count > 0) {
+            float sum2 = 0.0;
+            for (int i = 0; i < 8; i++) {
+                if ((mask & (1 << i)) != 0) sum2 += greenTest[i];
+            }
+            lGreen = clamp(sum2 / float(count), 0.0, 65534.0);
+        } else {
+            lGreen = (bayer0_v4.w + bayer0_v4.y + bayer1_v4.z + bayer_1_v4.z) * 0.25;
+        }
+    }
+
+    uvec4 result;
+    result.g = uint(clamp(min(lGreen, 65534.0), 0.0, 65534.0));
+    result[rbIndex] = uint(clamp(target, 0.0, 65535.0));
+    result[2 - rbIndex] = 0u;
+    uint encodedValue;
+    if (mask == 0) {
+        encodedValue = uint(0xFF | (8 << 8));
+    } else
+    {
+        count = 0;
+        for (int i = 0; i < 32; i++) {
+            if ((mask & (1 << i)) != 0) count++;
+        }
+        encodedValue = uint(mask | (count << 8));
+    }
+    result.a = encodedValue;
+    return result;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    int x = gid.x & 1;
+    int y = gid.y & 1;
+    int bayerIndex = x + y * 2;
+
+    uvec4 result = uvec4(0u);
+
+    if (bayerIndex == 0) {
+        result = greenAtRedBlue(gid, 0, 0);
+    } else if (bayerIndex == 1) {
+        int bayX = gid.x / 4;
+        int bayChannel = gid.x & 3;
+        uvec4 bayPixel = texelFetch(uInputTexture0, ivec2(bayX, gid.y), 0);
+        result = uvec4(0u, bayPixel[bayChannel], 0u, 0u);
+    } else if (bayerIndex == 2) {
+        int bayX = gid.x / 4;
+        int bayChannel = gid.x & 3;
+        uvec4 bayPixel = texelFetch(uInputTexture0, ivec2(bayX, gid.y), 0);
+        result = uvec4(0u, bayPixel[bayChannel], 0u, 0u);
+    } else {
+        result = greenAtRedBlue(gid, 1, 2);
+    }
+
+    if (gid.x >= ubo_uParams_l && gid.x < ubo_uParams_r &&
+        gid.y >= ubo_uParams_t && gid.y < ubo_uParams_b) {
+        imageStore(uOutputTexture, gid, result);
+    }
+}

@@ -78,14 +78,8 @@
     <string name="settings_level_description">Tampilkan indikator level horizontal saat memotret</string>
     <string name="settings_grid_lines">Garis Kisi</string>
     <string name="settings_grid_description">Tampilkan garis kisi untuk komposisi</string>
-    <string name="settings_use_multi_frame">Penumpukan Multi-Frame</string>
-    <string name="settings_multi_frame_count">Jumlah Multi-frame</string>
-    <string name="settings_multi_frame_count_description">Jumlah frame untuk penumpukan multi-frame (lebih banyak frame = kualitas lebih baik tetapi lebih lambat).</string>
-    <string name="settings_use_super_resolution">Resolusi Super</string>
     <string name="settings_use_live_photo">Foto Live</string>
     <string name="settings_use_live_photo_description">Tangkap klip video pendek bersama foto Anda untuk efek foto live yang dinamis.</string>
-    <string name="settings_use_gpu_acceleration">Akselerasi GPU</string>
-    <string name="settings_use_gpu_acceleration_description">Gunakan GPU (Vulkan) untuk mempercepat penumpukan multi-frame. Default-nya menyala.</string>
     <string name="settings_section_frame">Tanda Air Bingkai</string>
     <string name="settings_frame_style">Gaya Bingkai</string>
     <string name="settings_frame_description">Tambahkan bingkai dekoratif dan tanda air ke foto</string>
@@ -166,6 +160,7 @@
     <string name="recipe_param_shadows">Bayangan</string>
     <string name="recipe_param_film_grain">Grain</string>
     <string name="recipe_param_vignette">Vinyet</string>
+    <string name="recipe_param_flash">Lampu Kilat</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Cahaya Lembut</string>
@@ -173,7 +168,16 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">Perbarui juga LUT saat ini</string>
+    <string name="edit_sync_lut_recipe_description">Warna, efek, dan intensitas LUT juga disimpan ke LUT yang dipilih.</string>
+    <string name="edit_select_lut_hint">Pilih LUT sebelum menyesuaikan warna dan efek.</string>
+    <string name="edit_color_and_effects">Sesuaikan warna dan efek</string>
     <string name="recipe_tab_color">Warna</string>
+    <string name="recipe_color_basic">Dasar</string>
+    <string name="recipe_color_grading">Gradasi</string>
+    <string name="recipe_grading_midtones">Nada Tengah</string>
+    <string name="recipe_grading_balance">Keseimbangan</string>
+    <string name="recipe_grading_blending">Transisi</string>
     <string name="recipe_tab_light">Cahaya</string>
     <string name="recipe_tab_texture">Tekstur</string>
     <string name="recipe_tab_post">Pasca</string>
@@ -252,4 +256,7 @@
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Aktifkan output YUV 10-bit untuk presisi data gambar yang lebih baik. Efektif pada perangkat yang didukung saat RAW dinonaktifkan.</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: sistem manajemen warna yang dikembangkan secara independen oleh Hasselblad</string>
+    <string name="settings_raw_max_hdr_composition">Penggabungan HDR RAWmax</string>
+    <string name="settings_raw_max_hdr_composition_description">Gunakan pencahayaan bertingkat untuk penggabungan HDR di RAWmax. Nonaktifkan untuk meningkatkan kecepatan pemrosesan.</string>
 </resources>

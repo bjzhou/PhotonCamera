@@ -1,0 +1,158 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: da8e09ea72af7aacdf5cdcfbee513b4b7deca33651e75506d7d245a8606e756d
+ * ELF offsets: 0x3050cc9
+ * Symbols: clarityDownScaleBlurU16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D uSrc;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D uDst;
+
+layout(std140, binding = 2) uniform ClarityBlurDownParams_UBO {
+    int srcW;
+    int srcH;
+    float blurA;
+    float blurB;
+    float blurC;
+    int pad1;
+    int pad2;
+    int pad3;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Returns float4 in [0, 65535] — NOT normalized (matches iOS readPadded behavior)
+vec4 readPaddedU16(ivec2 pos, ivec2 pixSize) {
+    ivec2 maxPos = ivec2((pixSize.x + 3) / 4, pixSize.y) - 1;
+    vec4 val = vec4(imageLoad(uSrc, clamp(pos, ivec2(0), maxPos)));
+    if (pos.x >= maxPos.x) {
+        int rem = pixSize.x % 4;
+        if (rem == 1) val = val.xxxx;
+        else if (rem == 2) val = vec4(val.x, val.y, val.y, val.y);
+        else if (rem == 3) val = vec4(val.x, val.y, val.z, val.z);
+        if (pos.x > maxPos.x)
+            val = val.wwww;
+    }
+    return val;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    ivec2 size = ivec2(srcW, srcH);
+    vec4 v, t;
+    ivec2 p, pos;
+    pos = 2 * gid;
+    if (gid.y > 0) pos.y -= 1;
+    if (gid.x > 0) pos.x--;
+
+    // --- Row 0 (top row, weights c/b) ---
+    p = pos; pos.y++;
+    if (gid.y == 0) p.y = 0;
+    t = readPaddedU16(p, size);
+    p.x++;
+    if (gid.x == 0) {
+        v.x = blurC * t.x;
+    } else {
+        v.x = blurC * t.w;
+        t = readPaddedU16(p, size);
+        p.x++;
+    }
+    v.x += blurB * t.x + blurB * t.y + blurC * t.z;
+    v.y  = blurC * t.y + blurB * t.z + blurB * t.w;
+    v.z  = blurC * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.y += blurC * t.x;
+    v.z += blurB * t.x + blurB * t.y + blurC * t.z;
+    v.w  = blurC * t.y + blurB * t.z + blurB * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.w += blurC * t.x;
+
+    // --- Row 1 (center-top, weights a/b) ---
+    pos.y = 2 * gid.y;
+    p = pos;
+    pos.y++;
+    if (pos.y >= srcH) pos.y = srcH - 1;
+    t = readPaddedU16(p, size);
+    p.x++;
+    if (gid.x == 0) {
+        v.x += blurB * t.x;
+    } else {
+        v.x += blurB * t.w;
+        t = readPaddedU16(p, size);
+        p.x++;
+    }
+    v.x += blurA * t.x + blurA * t.y + blurB * t.z;
+    v.y += blurB * t.y + blurA * t.z + blurA * t.w;
+    v.z += blurB * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.y += blurB * t.x;
+    v.z += blurA * t.x + blurA * t.y + blurB * t.z;
+    v.w += blurB * t.y + blurA * t.z + blurA * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.w += blurB * t.x;
+
+    // --- Row 2 (center-bottom, weights a/b) ---
+    p = pos;
+    pos.y++;
+    if (pos.y >= srcH) pos.y = srcH - 1;
+    t = readPaddedU16(p, size);
+    p.x++;
+    if (gid.x == 0) {
+        v.x += blurB * t.x;
+    } else {
+        v.x += blurB * t.w;
+        t = readPaddedU16(p, size);
+        p.x++;
+    }
+    v.x += blurA * t.x + blurA * t.y + blurB * t.z;
+    v.y += blurB * t.y + blurA * t.z + blurA * t.w;
+    v.z += blurB * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.y += blurB * t.x;
+    v.z += blurA * t.x + blurA * t.y + blurB * t.z;
+    v.w += blurB * t.y + blurA * t.z + blurA * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.w += blurB * t.x;
+
+    // --- Row 3 (bottom row, weights c/b) ---
+    p = pos;
+    pos.y++;
+    if (pos.y >= srcH) pos.y = srcH - 1;
+    t = readPaddedU16(p, size);
+    p.x++;
+    if (gid.x == 0) {
+        v.x += blurC * t.x;
+    } else {
+        v.x += blurC * t.w;
+        t = readPaddedU16(p, size);
+        p.x++;
+    }
+    v.x += blurB * t.x + blurB * t.y + blurC * t.z;
+    v.y += blurC * t.y + blurB * t.z + blurB * t.w;
+    v.z += blurC * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.y += blurC * t.x;
+    v.z += blurB * t.x + blurB * t.y + blurC * t.z;
+    v.w += blurC * t.y + blurB * t.z + blurB * t.w;
+    t = readPaddedU16(p, size);
+    p.x++;
+    v.w += blurC * t.x;
+
+    // iOS: dst.write(ushort4(clamp(v, 0.0f, 65535.0f)), gid)
+    imageStore(uDst, gid, uvec4(clamp(v, 0.0, 65535.0)));
+}

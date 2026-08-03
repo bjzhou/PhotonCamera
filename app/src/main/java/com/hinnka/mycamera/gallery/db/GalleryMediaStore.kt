@@ -14,6 +14,8 @@ import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.utils.PLog
@@ -221,6 +223,7 @@ object GalleryMediaStore {
             rawDenoiseValue = metadata.rawDenoiseValue,
             rawExposureCompensation = metadata.rawExposureCompensation,
             rawAutoExposure = metadata.rawAutoExposure,
+            rawAutoExposureMode = null,
             rawHighlightsAdjustment = metadata.rawHighlightsAdjustment,
             rawShadowsAdjustment = metadata.rawShadowsAdjustment,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection,
@@ -228,6 +231,9 @@ object GalleryMediaStore {
             rawAutoWhiteBalanceEstimate = metadata.rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = metadata.rawLensShadingCorrectionEnabled,
             rawDcpId = metadata.rawDcpId,
+            rawHncsProfileId = metadata.rawHncsProfileId,
+            rawHncsRenderIntent = metadata.rawHncsRenderIntent.assetValue,
+            rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode.persistedValue,
             rawColorEngine = metadata.rawRenderingEngine.name,
             rawAgxBlackRelativeExposure = metadata.rawToneMappingParameters.agxBlackRelativeExposure,
             rawAgxWhiteRelativeExposure = metadata.rawToneMappingParameters.agxWhiteRelativeExposure,
@@ -235,8 +241,10 @@ object GalleryMediaStore {
             rawAgxShoulder = metadata.rawToneMappingParameters.agxShoulder,
             rawFilmicBlackRelativeExposure = metadata.rawToneMappingParameters.filmicBlackRelativeExposure,
             rawFilmicWhiteRelativeExposure = metadata.rawToneMappingParameters.filmicWhiteRelativeExposure,
-            rawGooglePixelToneMap = metadata.rawToneMappingParameters.useGooglePixelToneMap,
+            legacyPhotonToneMap = false,
             rawOppoMasterToneMap = metadata.rawToneMappingParameters.useOppoMasterToneMap,
+            rawPhotonPgtmToneMap = metadata.rawToneMappingParameters.usePhotonPgtmToneMap,
+            rawAppleProRawToneMap = false,
             frameId = metadata.frameId,
             width = metadata.width,
             height = metadata.height,
@@ -278,6 +286,8 @@ object GalleryMediaStore {
             postCropTop = metadata.postCropRegion?.top,
             postCropRight = metadata.postCropRegion?.right,
             postCropBottom = metadata.postCropRegion?.bottom,
+            postRotationDegrees = metadata.postRotationDegrees,
+            postMirrorHorizontal = metadata.postMirrorHorizontal,
             presentationTimestampUs = metadata.presentationTimestampUs,
             droMode = metadata.droMode,
             software = metadata.software,
@@ -294,6 +304,7 @@ object GalleryMediaStore {
             rawBlackLevelMode = metadata.rawBlackLevelMode,
             rawCustomBlackLevel = metadata.rawCustomBlackLevel,
             rawWhiteLevelMode = metadata.rawWhiteLevelMode,
+            rawCustomWhiteLevel = metadata.rawCustomWhiteLevel,
             rawCfaCorrectionMode = metadata.rawCfaCorrectionMode,
             rawBlackBorderCropLeftPx = metadata.rawBlackBorderCrop.leftPx,
             rawBlackBorderCropTopPx = metadata.rawBlackBorderCrop.topPx,
@@ -381,6 +392,9 @@ object GalleryMediaStore {
     }
 
     private fun GalleryMediaEntity.toMetadata(): MediaMetadata {
+        val resolvedRawAutoExposure = rawAutoExposureMode?.let { mode ->
+            !mode.equals("OFF", ignoreCase = true)
+        } ?: rawAutoExposure
         return MediaMetadata(
             version = version.takeIf { it > 0 } ?: MediaMetadata().version,
             mediaType = runCatching { MediaType.valueOf(mediaType) }.getOrDefault(MediaType.IMAGE),
@@ -396,7 +410,7 @@ object GalleryMediaStore {
             captureNoiseReductionLevel = captureNoiseReductionLevel,
             rawDenoiseValue = rawDenoiseValue,
             rawExposureCompensation = rawExposureCompensation,
-            rawAutoExposure = rawAutoExposure,
+            rawAutoExposure = resolvedRawAutoExposure,
             rawHighlightsAdjustment = rawHighlightsAdjustment,
             rawShadowsAdjustment = rawShadowsAdjustment,
             rawBlackPointCorrection = rawBlackPointCorrection,
@@ -404,6 +418,11 @@ object GalleryMediaStore {
             rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = rawLensShadingCorrectionEnabled,
             rawDcpId = rawDcpId,
+            rawHncsProfileId = rawHncsProfileId,
+            rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(rawHncsRenderIntent),
+            rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                rawHncsFilmCurveMode
+            ),
             rawRenderingEngine = RawRenderingEngine.fromPersistedName(
                 rawColorEngine,
                 fallback = RawRenderingEngine.AdobeCurve
@@ -415,8 +434,8 @@ object GalleryMediaStore {
                 agxShoulder = rawAgxShoulder,
                 filmicBlackRelativeExposure = rawFilmicBlackRelativeExposure,
                 filmicWhiteRelativeExposure = rawFilmicWhiteRelativeExposure,
-                useGooglePixelToneMap = rawGooglePixelToneMap,
-                useOppoMasterToneMap = rawOppoMasterToneMap
+                useOppoMasterToneMap = rawOppoMasterToneMap,
+                usePhotonPgtmToneMap = rawPhotonPgtmToneMap || legacyPhotonToneMap
             ).normalized(),
             frameId = frameId,
             width = width,
@@ -453,6 +472,8 @@ object GalleryMediaStore {
             focusPointX = focusPointX,
             focusPointY = focusPointY,
             postCropRegion = rectOrNull(postCropLeft, postCropTop, postCropRight, postCropBottom),
+            postRotationDegrees = postRotationDegrees,
+            postMirrorHorizontal = postMirrorHorizontal,
             presentationTimestampUs = presentationTimestampUs,
             droMode = droMode,
             software = software,
@@ -469,6 +490,7 @@ object GalleryMediaStore {
             rawBlackLevelMode = rawBlackLevelMode,
             rawCustomBlackLevel = rawCustomBlackLevel,
             rawWhiteLevelMode = rawWhiteLevelMode,
+            rawCustomWhiteLevel = rawCustomWhiteLevel,
             rawCfaCorrectionMode = rawCfaCorrectionMode,
             rawBlackBorderCrop = RawBlackBorderCrop(
                 leftPx = rawBlackBorderCropLeftPx,

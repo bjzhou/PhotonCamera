@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
+import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
@@ -19,8 +20,11 @@ import java.nio.ByteOrder
 @UnstableApi
 class VideoLutEffect(
     @Volatile var lutConfig: LutConfig?,
-    @Volatile var recipeParams: ColorRecipeParams?
+    recipeParams: ColorRecipeParams?
 ) : GlEffect {
+    @Volatile
+    var recipeParams: ColorRecipeParams? = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
+        private set
 
     private var shaderProgram: VideoLutShaderProgram? = null
 
@@ -37,7 +41,7 @@ class VideoLutEffect(
     fun update(lutConfig: LutConfig?, recipeParams: ColorRecipeParams?) {
         PLog.d("VideoLutEffect", "update called, lutConfig: ${lutConfig?.title}, recipeParams: ${recipeParams != null}")
         this.lutConfig = lutConfig
-        this.recipeParams = recipeParams
+        this.recipeParams = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
         shaderProgram?.triggerUpdate()
     }
 }
@@ -104,11 +108,16 @@ private class VideoLutShaderProgram(
             uniform float uTonePivot;     // -1.0 ~ +1.0
             uniform float uFilmGrain;     // 0.0 ~ 1.0
             uniform float uVignette;      // -1.0 ~ +1.0
+            uniform float uFlash;         // 0.0 ~ 1.0
             uniform float uBleachBypass;  // 0.0 ~ 1.0
             uniform float uNoise;         // 0.0 ~ 1.0
             uniform float uNoiseSeed;     // 噪点随机种子
             uniform float uLowRes;        // 0.0 ~ 1.0
             uniform float uAspectRatio;   // 图像长宽比
+            uniform vec3 uGradingHues;
+            uniform vec3 uGradingAmounts;
+            uniform float uGradingBalance;
+            uniform float uGradingBlending;
             
             uniform vec3 uPrimaryCalibrationRow0;
             uniform vec3 uPrimaryCalibrationRow1;
@@ -169,6 +178,9 @@ private class VideoLutShaderProgram(
                 return linearToSrgb(linearColor);
             }
 
+            ${DirectFlashShader.GLSL}
+            ${ThreeWayColorGradingShader.GLSL}
+
             float sanitizeFloat(float value) {
                 if (value != value) return 0.0;
                 return value;
@@ -181,6 +193,8 @@ private class VideoLutShaderProgram(
                     sanitizeFloat(color.b)
                 );
             }
+
+            ${BasicToneLutShader.GLSL}
 
             float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
                 float safeLuma = clamp(luma, 0.0, 1.0);
@@ -550,9 +564,12 @@ private class VideoLutShaderProgram(
                     color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
                     color.rgb = sanitizeColor(color.rgb);
 
+                    color.rgb = applyBasicToneLut(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
                     color.r += uTemperature * 0.1;
                     color.b -= uTemperature * 0.1;
-                    color.g += uTint * 0.05;
+                    color.g -= uTint * 0.05;
                     color.rgb = sanitizeColor(color.rgb);
 
                     float gray = getLuma(color.rgb);
@@ -570,6 +587,18 @@ private class VideoLutShaderProgram(
                     color.rgb = applyLchColorMixer(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
 
+                    color.rgb = applyThreeWayColorGrading(
+                        color.rgb,
+                        uGradingHues,
+                        uGradingAmounts,
+                        uGradingBalance,
+                        uGradingBlending,
+                        (uInputColorSpace == 1)
+                            ? vec3(0.2290, 0.6917, 0.0793)
+                            : vec3(0.2126, 0.7152, 0.0722)
+                    );
+                    color.rgb = sanitizeColor(color.rgb);
+
                     if (uFade > 0.0) {
                         float fadeAmount = uFade * 0.3;
                         color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
@@ -585,6 +614,11 @@ private class VideoLutShaderProgram(
                         desaturated.g *= 1.02;
                         desaturated.b *= 1.05;
                         color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                    }
+
+                    if (uFlash > 0.001) {
+                        color.rgb = applyDirectFlash(color.rgb, uvCoord, uAspectRatio, uFlash);
+                        color.rgb = sanitizeColor(color.rgb);
                     }
 
                     if (abs(uVignette) > 0.0) {
@@ -695,9 +729,12 @@ private class VideoLutShaderProgram(
     private var positionVbo = 0
     private var texCoordVbo = 0
     private var isGles3Context = false
+    private var inputWidth = 1
+    private var inputHeight = 1
 
     private var lutTextureId = 0
     private var curveTextureId = 0
+    private val basicToneTextures = BasicToneGlTextures()
     private var lastLutConfig: LutConfig? = null
     private var lastRecipeParams: ColorRecipeParams? = null
 
@@ -730,6 +767,8 @@ private class VideoLutShaderProgram(
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         PLog.d("VideoLutShaderProgram", "configure called, inputWidth: $inputWidth, inputHeight: $inputHeight")
+        this.inputWidth = inputWidth.coerceAtLeast(1)
+        this.inputHeight = inputHeight.coerceAtLeast(1)
         return Size(inputWidth, inputHeight)
     }
 
@@ -828,6 +867,14 @@ private class VideoLutShaderProgram(
             GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uCurveEnabled"), 0)
         }
 
+        basicToneTextures.bind(
+            context = context.applicationContext,
+            textureUnit = 2,
+            samplerLocation = GLES30.glGetUniformLocation(programId, "uBasicToneLut"),
+            intensityLocation = GLES30.glGetUniformLocation(programId, "uBasicToneIntensity"),
+            amount = currentRecipeParams?.let(ColorPaletteMapper::basicToneAmount) ?: 0f,
+        )
+
         // 设置色彩配方 uniforms
         val colorRecipeEnabled = currentRecipeParams != null && !currentRecipeParams.isDefault()
         GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled"), if (colorRecipeEnabled) 1 else 0)
@@ -850,11 +897,35 @@ private class VideoLutShaderProgram(
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uTonePivot"), currentRecipeParams.tonePivot)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uFilmGrain"), currentRecipeParams.filmGrain)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uVignette"), currentRecipeParams.vignette)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uFlash"), currentRecipeParams.flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uBleachBypass"), currentRecipeParams.bleachBypass)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uNoise"), currentRecipeParams.noise)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uNoiseSeed"), (presentationTimeUs % 10000000L) / 1000000f)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uLowRes"), currentRecipeParams.lowRes)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uAspectRatio"), 16f / 9f)
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(programId, "uAspectRatio"),
+                inputWidth.toFloat() / inputHeight.toFloat()
+            )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(programId, "uGradingHues"),
+                currentRecipeParams.gradingShadowHue,
+                currentRecipeParams.gradingMidtoneHue,
+                currentRecipeParams.gradingHighlightHue
+            )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(programId, "uGradingAmounts"),
+                currentRecipeParams.gradingShadowAmount,
+                currentRecipeParams.gradingMidtoneAmount,
+                currentRecipeParams.gradingHighlightAmount
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(programId, "uGradingBalance"),
+                currentRecipeParams.gradingBalance
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(programId, "uGradingBlending"),
+                currentRecipeParams.gradingBlending
+            )
 
             // LCH 配方数组
             val lchHue = floatArrayOf(
@@ -999,6 +1070,7 @@ private class VideoLutShaderProgram(
         super.release()
         deleteLutTexture()
         deleteCurveTexture()
+        basicToneTextures.release()
         if (positionVbo != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(positionVbo), 0)
             positionVbo = 0

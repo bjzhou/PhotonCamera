@@ -13,6 +13,8 @@ import kotlin.math.abs
 object VideoCapabilitiesResolver {
 
     private const val TAG = "VideoCapabilitiesResolver"
+    private const val VIDEO_PREVIEW_SHORT_EDGE = 1080
+    private const val VIDEO_PREVIEW_ASPECT_TOLERANCE = 0.01f
 
     fun resolve(
         characteristics: CameraCharacteristics,
@@ -30,35 +32,40 @@ object VideoCapabilitiesResolver {
         val openGateAspect = resolveOpenGatePortraitAspectRatio(activeArray, sensorOrientation)
 
         val availableResolutions = VideoResolutionPreset.entries.filter { preset ->
-            findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
+            findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null &&
+                findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
         }
 
         val resolvedResolution = requestedConfig.resolution.takeIf { availableResolutions.contains(it) }
             ?: availableResolutions.firstOrNull()
             ?: VideoResolutionPreset.FHD_1080P
 
-        val previewSizesByResolution = availableResolutions.associateWith { preset ->
+        val recordingSizesByResolution = availableResolutions.mapNotNull { preset ->
+            findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
+                ?.let { preset to it }
+        }.toMap()
+        val cameraInputSizesByResolution = availableResolutions.mapNotNull { preset ->
             findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
-                ?: requestedConfig.resolution.resolveOutputSize(
-                    requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
-                )
-        }
+                ?.let { preset to it }
+        }.toMap()
 
-        val recordingSize = findBestOutputSize(
-            recordingOutputSizes,
-            resolvedResolution,
-            requestedConfig.aspectRatio,
-            openGateAspect
-        ) ?: resolvedResolution.resolveOutputSize(
+        val recordingSize = recordingSizesByResolution[resolvedResolution]
+            ?: resolvedResolution.resolveOutputSize(
+                requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
+            )
+
+        val previewSize = findFixedPreviewOutputSize(
+            outputSizes = previewOutputSizes,
+            aspectRatio = requestedConfig.aspectRatio,
+            openGatePortraitAspectRatio = openGateAspect
+        ) ?: VideoResolutionPreset.FHD_1080P.resolveOutputSize(
             requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
         )
-
-        val previewSize = previewSizesByResolution[resolvedResolution]
-            ?: resolvedResolution.resolveOutputSize(requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect))
+        val cameraInputSize = cameraInputSizesByResolution[resolvedResolution] ?: previewSize
 
         val availableFps = resolveAvailableFps(
             characteristics = characteristics,
-            recordingSize = recordingSize,
+            cameraInputSize = cameraInputSize,
             previewSize = previewSize
         )
         val resolvedFps = requestedConfig.fps.takeIf { availableFps.contains(it) }
@@ -69,6 +76,7 @@ object VideoCapabilitiesResolver {
             TAG,
             "Resolved video capabilities: resolution=${resolvedResolution.displayName}, " +
                 "recording=${recordingSize.width}x${recordingSize.height}, " +
+                "cameraInput=${cameraInputSize.width}x${cameraInputSize.height}, " +
                 "preview=${previewSize.width}x${previewSize.height}, " +
                 "fps=${availableFps.map { it.fps }}"
         )*/
@@ -114,13 +122,15 @@ object VideoCapabilitiesResolver {
                 availableAspectRatios = VideoAspectRatio.entries.toList(),
                 availableLogProfiles = availableLogProfiles,
                 availableBitrates = VideoBitratePreset.entries.toList(),
-                previewSizesByResolution = previewSizesByResolution,
+                cameraInputSizesByResolution = cameraInputSizesByResolution,
+                recordingSizesByResolution = recordingSizesByResolution,
                 openGatePortraitAspectRatio = openGateAspect,
                 availableStabilizationModes = availableStabilizationModes,
                 supportsTorch = isFlashSupported,
                 linearTonemapSupported = linearTonemapSupported
             ),
-            previewSize = previewSize
+            previewSize = previewSize,
+            recordingSize = recordingSize
         )
     }
 
@@ -155,14 +165,48 @@ object VideoCapabilitiesResolver {
             .firstOrNull()
     }
 
+    private fun findFixedPreviewOutputSize(
+        outputSizes: List<Size>,
+        aspectRatio: VideoAspectRatio,
+        openGatePortraitAspectRatio: Float
+    ): Size? {
+        val validSizes = outputSizes
+            .filter { it.width > 0 && it.height > 0 }
+            .distinctBy { it.width to it.height }
+        if (validSizes.isEmpty()) return null
+
+        val targetAspect = aspectRatio.getPortraitAspectRatio(openGatePortraitAspectRatio)
+        val aspectMatchedSizes = validSizes.filter {
+            abs(getPortraitAspectRatio(it) - targetAspect) <= VIDEO_PREVIEW_ASPECT_TOLERANCE
+        }
+        val candidates = aspectMatchedSizes.ifEmpty { validSizes }
+        val sizesWithinLimit = candidates.filter {
+            minOf(it.width, it.height) <= VIDEO_PREVIEW_SHORT_EDGE
+        }
+
+        return if (sizesWithinLimit.isNotEmpty()) {
+            sizesWithinLimit.sortedWith(
+                compareByDescending<Size> { minOf(it.width, it.height) }
+                    .thenBy { abs(getPortraitAspectRatio(it) - targetAspect) }
+                    .thenByDescending { it.width.toLong() * it.height.toLong() }
+            ).first()
+        } else {
+            candidates.sortedWith(
+                compareBy<Size> { minOf(it.width, it.height) }
+                    .thenBy { abs(getPortraitAspectRatio(it) - targetAspect) }
+                    .thenBy { it.width.toLong() * it.height.toLong() }
+            ).first()
+        }
+    }
+
     private fun resolveAvailableFps(
         characteristics: CameraCharacteristics,
-        recordingSize: Size,
+        cameraInputSize: Size,
         previewSize: Size
     ): List<VideoFpsPreset> {
         val outputRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             ?: emptyArray()
-        val minFrameDurationNs = resolveMinFrameDurationNs(characteristics, recordingSize, previewSize)
+        val minFrameDurationNs = resolveMinFrameDurationNs(characteristics, cameraInputSize, previewSize)
         val maxFpsByDuration = if (minFrameDurationNs > 0) {
             (1_000_000_000.0 / minFrameDurationNs.toDouble()).toInt()
         } else {
@@ -186,7 +230,7 @@ object VideoCapabilitiesResolver {
                 /*PLog.w(
                     TAG,
                     "Camera reports max $advertisedMaxFps fps only, keeping optimistic presets=${optimisticFps.map { it.fps }} " +
-                        "for recording=${recordingSize.width}x${recordingSize.height}"
+                        "for cameraInput=${cameraInputSize.width}x${cameraInputSize.height}"
                 )*/
                 return (strictAvailableFps + optimisticFps).distinctBy { it.fps }
             }
@@ -215,24 +259,25 @@ object VideoCapabilitiesResolver {
 
     private fun resolveMinFrameDurationNs(
         characteristics: CameraCharacteristics,
-        recordingSize: Size,
+        cameraInputSize: Size,
         previewSize: Size
     ): Long {
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         if (streamConfigMap == null) return 0L
 
-        return queryMinFrameDurationNs(
+        val cameraInputDurationNs = queryMinFrameDurationNs(
             streamConfigMap = streamConfigMap,
-            outputClass = MediaRecorder::class.java,
-            outputSize = recordingSize,
-            label = "MediaRecorder"
-        ).takeIf { it > 0L }
-            ?: queryMinFrameDurationNs(
-                streamConfigMap = streamConfigMap,
-                outputClass = SurfaceTexture::class.java,
-                outputSize = previewSize,
-                label = "SurfaceTexture"
-            )
+            outputClass = SurfaceTexture::class.java,
+            outputSize = cameraInputSize,
+            label = "recording SurfaceTexture"
+        )
+        val previewDurationNs = queryMinFrameDurationNs(
+            streamConfigMap = streamConfigMap,
+            outputClass = SurfaceTexture::class.java,
+            outputSize = previewSize,
+            label = "preview SurfaceTexture"
+        )
+        return maxOf(cameraInputDurationNs, previewDurationNs)
     }
 
     private fun <T> queryMinFrameDurationNs(

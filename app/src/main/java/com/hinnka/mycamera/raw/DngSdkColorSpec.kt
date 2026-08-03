@@ -130,6 +130,44 @@ internal object DngSdkColorSpec {
         return cameraWhiteForWhite(prepared, whiteXy)
     }
 
+    fun computeWhiteXy(
+        colorMatrix1: FloatArray?,
+        colorMatrix2: FloatArray?,
+        forwardMatrix1: FloatArray?,
+        forwardMatrix2: FloatArray?,
+        calibrationIlluminant1: Int,
+        calibrationIlluminant2: Int,
+        whiteBalanceGains: FloatArray,
+        analogBalance: FloatArray? = null,
+        cameraCalibration1: FloatArray? = null,
+        cameraCalibration2: FloatArray? = null
+    ): FloatArray? {
+        val prepared = prepareProfile(
+            colorMatrix1 = colorMatrix1,
+            colorMatrix2 = colorMatrix2,
+            forwardMatrix1 = forwardMatrix1,
+            forwardMatrix2 = forwardMatrix2,
+            calibrationIlluminant1 = calibrationIlluminant1,
+            calibrationIlluminant2 = calibrationIlluminant2,
+            analogBalance = analogBalance,
+            cameraCalibration1 = cameraCalibration1,
+            cameraCalibration2 = cameraCalibration2
+        ) ?: return null
+        return neutralToXy(prepared, cameraNeutralFromWb(whiteBalanceGains))
+    }
+
+    fun colorTemperatureForXy(whiteXy: FloatArray): Float? {
+        if (whiteXy.size < 2 ||
+            whiteXy[0] <= 0f ||
+            whiteXy[1] <= 0f ||
+            !whiteXy[0].isFinite() ||
+            !whiteXy[1].isFinite()
+        ) {
+            return null
+        }
+        return temperatureForXy(whiteXy).takeIf { it.isFinite() && it > 0f }
+    }
+
     fun computeCameraToPcsD50(
         colorMatrix1: FloatArray?,
         colorMatrix2: FloatArray?,

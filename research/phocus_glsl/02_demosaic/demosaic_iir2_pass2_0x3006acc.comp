@@ -1,0 +1,65 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 3880b76927b8cd1ca8c15558912f032c8594312e3180834b0fc36a1c55bd64b0
+ * ELF offsets: 0x3006acc
+ * Symbols: demosaic_iir2_pass2_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+layout(local_size_x = 1, local_size_y = 1) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D srcTex;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D dstTex;
+
+layout(std140, binding = 2) uniform IIR2Coefs_UBO {
+    vec4 a_10;
+    vec4 b_10;
+    vec4 a_dyn_1;
+    vec4 b_dyn_1;
+    vec4 a_dyn_2;
+    vec4 b_dyn_2;
+    int uWidth;
+    int uHeight;
+    int uDirection;
+    int uAxis;
+};
+
+struct Delayer {
+    float x0, x1, y0, y1;
+};
+
+float delayerApply(inout Delayer d, float val, vec4 pCoefA, vec4 pCoefB) {
+    float sum = pCoefA[0] * val;
+    sum += pCoefA[1] * d.x0 - pCoefB[1] * d.y0;
+    sum += pCoefA[2] * d.x1 - pCoefB[2] * d.y1;
+    d.x1 = d.x0;
+    d.y1 = d.y0;
+    d.x0 = val;
+    d.y0 = max(0.0, min(sum, 65535.0));
+    return d.y0;
+}
+
+void main() {
+    int outerIdx = (uAxis == 0) ? int(gl_GlobalInvocationID.y) : int(gl_GlobalInvocationID.x);
+    int outerLimit = (uAxis == 0) ? uHeight : uWidth;
+    int innerSize = (uAxis == 0) ? uWidth : uHeight;
+    if (outerIdx >= outerLimit) return;
+
+    int start = (uDirection == 0) ? 0 : innerSize - 1;
+    int step  = (uDirection == 0) ? 1 : -1;
+
+    Delayer d_p10 = Delayer(0.0, 0.0, 0.0, 0.0);
+
+    for (int i = 0; i < innerSize; i++) {
+        int innerIdx = start + i * step;
+        ivec2 pos = (uAxis == 0) ? ivec2(innerIdx, outerIdx) : ivec2(outerIdx, innerIdx);
+        uvec4 pix = imageLoad(srcTex, pos);
+
+        float err = delayerApply(d_p10, float(pix.a), a_10, b_10);
+
+        imageStore(dstTex, pos, uvec4(pix.r, pix.g, pix.b, uint(err)));
+    }
+}

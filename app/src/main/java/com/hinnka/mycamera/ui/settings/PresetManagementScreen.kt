@@ -293,9 +293,8 @@ private fun PresetManagementItem(
                     val rawRenderingEngine = RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine)
                     PresetFeatureText(preset.aspectRatio.removePrefix("RATIO_").replace("_", ":"))
                     if (preset.useRaw) PresetFeatureText("RAW")
-                    if (preset.useMFNR) PresetFeatureText("MFNR")
-                    if (preset.useHdrComposition) PresetFeatureText("HDR")
-                    if (preset.useMFSR) PresetFeatureText("MFSR")
+                    if (preset.useJpgMax) PresetFeatureText(stringResource(R.string.settings_use_jpg_max))
+                    if (preset.useRawMax) PresetFeatureText(stringResource(R.string.settings_use_raw_max))
                     if (rawRenderingEngine == RawRenderingEngine.Spektrafilm) PresetFeatureText("FILM")
                     if (preset.lutId != null) PresetFeatureText("LUT")
                     if (rawRenderingEngine == RawRenderingEngine.AdobeCurve && preset.hasRawDcpSelection()) {
@@ -328,6 +327,7 @@ private fun PresetManagementItem(
 private fun presetDisplayName(preset: CameraPreset): String {
     return when (preset.id) {
         "builtin_default" -> stringResource(R.string.default_text)
+        "builtin_hasselblad_natural" -> stringResource(R.string.preset_builtin_hasselblad_natural)
         "builtin_portrait" -> stringResource(R.string.preset_builtin_portrait)
         "builtin_classic_film" -> stringResource(R.string.preset_builtin_classic_film)
         "builtin_monochrome" -> stringResource(R.string.preset_builtin_monochrome)

@@ -1,0 +1,22 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: b99c85bb66f9676d006069f148994d40ab48bb4bfba6363d68f1bea39d10d62c
+ * ELF offsets: 0x3025b43
+ * Symbols: clarityReduceMaxFinalU16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp uimage2D;
+precision highp image2D;
+
+layout(r32f,    binding=0) readonly  uniform  image2D uSrc;
+layout(rgba16ui, binding=1) writeonly uniform uimage2D uDst;
+
+layout(local_size_x=1, local_size_y=1) in;
+
+void main() {
+    float v = imageLoad(uSrc, ivec2(0, 0)).r;
+    uint u = uint(clamp(v, 0.0, 1.0) * 65535.0 + 0.5);
+    imageStore(uDst, ivec2(0, 0), uvec4(u, 0u, 0u, 0u));
+}
