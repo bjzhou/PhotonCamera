@@ -6536,8 +6536,9 @@ class RawDemosaicProcessor {
                 rowCount = height,
                 width = width,
             )
-            finishLinearRawUint16ToFloat()
-            checkGlError("renderLinearRawRgbToTexture RGBA16UI")
+            finishLinearRawUint16ToFloat(
+                "LinearRaw RGBA16UI to RGBA16F ${width}x$height",
+            )
             return
         }
 
@@ -6593,11 +6594,11 @@ class RawDemosaicProcessor {
                     rowCount = rowCount,
                     width = width,
                 )
-                GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+                finishLinearRawUint16ToFloat(
+                    "LinearRaw RGB16UI to RGBA16F rows=$sourceY..${sourceY + rowCount}",
+                )
                 sourceY += rowCount
             }
-            finishLinearRawUint16ToFloat()
-            checkGlError("renderLinearRawRgbToTexture RGB16UI")
         } finally {
             GLES31.glBindImageTexture(
                 0,
@@ -6684,12 +6685,8 @@ class RawDemosaicProcessor {
         GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(rowCount), 1)
     }
 
-    private fun finishLinearRawUint16ToFloat() {
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
-                GLES31.GL_FRAMEBUFFER_BARRIER_BIT
-        )
+    private fun finishLinearRawUint16ToFloat(label: String) {
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         GLES31.glBindImageTexture(
             0,
             0,
@@ -6707,6 +6704,15 @@ class RawDemosaicProcessor {
             0,
             GLES31.GL_WRITE_ONLY,
             GLES31.GL_RGBA16F
+        )
+        checkGlError(label)
+        val startNs = System.nanoTime()
+        PLog.d(TAG, "RAW GPU checkpoint waiting label=$label")
+        GlesGpuScheduler.waitForGpuCheckpoint(TAG, label)
+        PLog.d(
+            TAG,
+            "RAW GPU checkpoint complete label=$label " +
+                "elapsedMs=${(System.nanoTime() - startNs) / 1_000_000L}",
         )
     }
 

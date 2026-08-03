@@ -1246,6 +1246,12 @@ internal class GlesRawRadianceStacker(
                     this@GlesRawRadianceStacker.checkGlError(label)
                 }
 
+                override fun waitForGpuCheckpoint(label: String) {
+                    this@GlesRawRadianceStacker.waitForRadianceGpuCheckpoint(
+                        "chroma $label",
+                    )
+                }
+
                 override fun yieldToUiRenderer() {
                     GlesGpuScheduler.yieldToUiRenderer()
                 }
@@ -6004,6 +6010,9 @@ internal class GlesRawRadianceStacker(
                     recordFusionRejections = false,
                 )
                 captureRadianceReferenceBase(tile.outputWorking.width, tile.outputWorking.height)
+                waitForRadianceGpuCheckpoint(
+                    "tile ${tile.index + 1}/${radianceTiles.size} reference fused",
+                )
 
                 acceptedFrames.forEachIndexed { statsFrameIndex, frame ->
                     val sourceRegion = radianceSourceRegion(tile, frame.flowBounds())
@@ -6031,6 +6040,10 @@ internal class GlesRawRadianceStacker(
                         fusionStatsCoreRegion = tile.outputCore,
                         recordFusionRejections = rejectionNormalFrame != null &&
                             statsFrameIndex == rejectionFrameOrdinal,
+                    )
+                    waitForRadianceGpuCheckpoint(
+                        "tile ${tile.index + 1}/${radianceTiles.size} " +
+                            "normal frame ${frame.frameIndex} fused",
                     )
                 }
 
@@ -6060,6 +6073,10 @@ internal class GlesRawRadianceStacker(
                         fusionStatsCoreRegion = tile.outputCore,
                         recordFusionRejections = rejectionLongFrame != null &&
                             longIndex == rejectionLongIndex,
+                    )
+                    waitForRadianceGpuCheckpoint(
+                        "tile ${tile.index + 1}/${radianceTiles.size} " +
+                            "long frame ${alignment.plan.sourceFrameIndex} fused",
                     )
                 }
 
@@ -6092,7 +6109,9 @@ internal class GlesRawRadianceStacker(
                     totalPixelTransferMs += timing.pixelTransferMs
                     totalCpuPackMs += timing.cpuPackMs
                 }
-                GlesGpuScheduler.yieldToUiRenderer()
+                waitForRadianceGpuCheckpoint(
+                    "tile ${tile.index + 1}/${radianceTiles.size} normalized",
+                )
             }
             if (chromaPostprocessor != null) {
                 GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
@@ -6315,11 +6334,24 @@ internal class GlesRawRadianceStacker(
             GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, 0)
         }
         GLES31.glDispatchCompute(groupCountX.coerceAtLeast(1), groupCountY.coerceAtLeast(1), 1)
-        // Every following VGN stage consumes an image written by the preceding stage. A GPU
-        // memory barrier is sufficient; unlike the single-frame path, tiled Radiance must not
-        // insert a CPU-visible fence after each pass.
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+        // Radiance repeatedly reuses the same VGN images and UBO for every frame in every tile.
+        // A memory barrier only establishes visibility; the checkpoint also bounds the
+        // background compute queue before those resources are updated by the next pass.
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         checkGlError("Radiance VGN $label")
+        waitForRadianceGpuCheckpoint("VGN $label")
+    }
+
+    private fun waitForRadianceGpuCheckpoint(label: String) {
+        val startNs = System.nanoTime()
+        /*RawStackRuntimeDebug.d(TAG) {
+            "Radiance GPU checkpoint waiting label=$label"
+        }*/
+        GlesGpuScheduler.waitForGpuCheckpoint(TAG, "Radiance $label")
+        /*RawStackRuntimeDebug.d(TAG) {
+            "Radiance GPU checkpoint complete label=$label " +
+                "elapsedMs=${(System.nanoTime() - startNs) / 1_000_000L}"
+        }*/
     }
 
     private fun runRadianceReferenceVgn(sourceRegion: RadianceTileRect, label: String) {
@@ -6382,8 +6414,9 @@ internal class GlesRawRadianceStacker(
         GLES31.glUniform1i(uniformLocation(prepare, "uReconstructHighlights"), 1)
         bindImage(0, radianceVgnPackedFloatTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
         GLES31.glDispatchCompute(groupsPackedX, groupsWorkY, 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         checkGlError("$label VGN prepare")
+        waitForRadianceGpuCheckpoint("$label VGN prepare")
 
         dispatchRadianceVgnPass(
             radianceVgnPrograms[VgnShaders.PROGRAM_NEUTRAL],
@@ -6633,10 +6666,9 @@ internal class GlesRawRadianceStacker(
             GLES30.GL_RGBA16F,
         )
         GLES31.glDispatchCompute(groupCount(sourceRegion.width), groupCount(sourceRegion.height), 1)
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-        )
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         checkGlError("$label VGN camera RGB")
+        waitForRadianceGpuCheckpoint("$label VGN camera RGB")
     }
 
     private fun runRadianceSemanticProxy(sourceRegion: RadianceTileRect, label: String) {
@@ -6671,8 +6703,9 @@ internal class GlesRawRadianceStacker(
             GLES30.GL_RGBA16F,
         )
         GLES31.glDispatchCompute(groupCount(sourceRegion.width), groupCount(sourceRegion.height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         checkGlError("$label semantic seed")
+        waitForRadianceGpuCheckpoint("$label semantic seed")
 
         val resolve = radianceSemanticResolveProgram
         GLES31.glUseProgram(resolve)
@@ -6701,10 +6734,9 @@ internal class GlesRawRadianceStacker(
             GLES30.GL_RGBA16F,
         )
         GLES31.glDispatchCompute(groupCount(sourceRegion.width), groupCount(sourceRegion.height), 1)
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-        )
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         checkGlError("$label semantic resolve")
+        waitForRadianceGpuCheckpoint("$label semantic resolve")
     }
 
     private fun normalizeRadianceTile(

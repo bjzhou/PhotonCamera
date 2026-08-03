@@ -39,6 +39,8 @@ internal class GlesRadianceVgnChromaPostprocessor(
 
         fun checkGlError(label: String)
 
+        fun waitForGpuCheckpoint(label: String)
+
         fun yieldToUiRenderer()
     }
 
@@ -405,11 +407,9 @@ internal class GlesRadianceVgnChromaPostprocessor(
         bindImage(0, originalYccd, GLES31.GL_READ_ONLY)
         bindImage(1, destination, GLES31.GL_WRITE_ONLY)
         // The result leaves this component and can be consumed as both an FBO attachment and a
-        // sampler by the persistent RAW renderer.
-        val nextAccessBarrier = GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-            GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
-            GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
-        dispatchImage(finalProgram, "final camera RGB", nextAccessBarrier)
+        // sampler by the persistent RAW renderer. dispatchImage establishes the full barrier and
+        // completion boundary before ownership is transferred.
+        dispatchImage(finalProgram, "final camera RGB")
     }
 
     private fun runIirRgb(
@@ -491,12 +491,11 @@ internal class GlesRadianceVgnChromaPostprocessor(
     private fun dispatchImage(
         program: Int,
         label: String,
-        barrierBits: Int = GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT,
     ) {
         GLES31.glDispatchCompute(groupCount(imageWidth), groupCount(imageHeight), 1)
-        GLES31.glMemoryBarrier(barrierBits)
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         backend.checkGlError("Radiance VGN chroma $label")
-        backend.yieldToUiRenderer()
+        backend.waitForGpuCheckpoint(label)
     }
 
     private fun dispatchIir(axis: Int, label: String) {
@@ -505,9 +504,9 @@ internal class GlesRadianceVgnChromaPostprocessor(
         } else {
             GLES31.glDispatchCompute(imageWidth, 1, 1)
         }
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         backend.checkGlError("Radiance VGN chroma $label")
-        backend.yieldToUiRenderer()
+        backend.waitForGpuCheckpoint(label)
     }
 
     private fun setImageUniforms(program: Int) {
