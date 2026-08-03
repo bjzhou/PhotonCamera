@@ -29,12 +29,13 @@ import com.hinnka.mycamera.hdr.SourceKind
 import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.lut.applyEffectsToVideoFile
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.model.SafeImage
-import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
+import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackBufferLayout
 import com.hinnka.mycamera.processor.RawStackFrame
@@ -43,6 +44,7 @@ import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
+import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
@@ -50,9 +52,12 @@ import com.hinnka.mycamera.raw.RawDngCaptureProfilePreparer
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
+import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawViewfinderExposureMatcher
 import com.hinnka.mycamera.raw.SpectralFilmTuning
+import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.DngBlackLevelPatcher
 import com.hinnka.mycamera.utils.DngCfaPatternPatcher
@@ -208,6 +213,154 @@ object GalleryManager {
 
     private fun resolveChromaNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
         return metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else fallback)
+    }
+
+    suspend fun saveMgcRawDngPhoto(
+        context: Context,
+        sourceDngFile: File,
+        sourcePackage: String? = null,
+        source: String? = null,
+        sourceUri: Uri? = null,
+        dateTaken: Long? = null,
+        rotation: Int = 0,
+        shouldAutoSave: Boolean = true,
+        photoQuality: Int = 95,
+    ): String? = withContext(Dispatchers.IO) {
+        if (!sourceDngFile.exists() || sourceDngFile.length() <= 0L) {
+            PLog.w(TAG, "saveMgcRawDngPhoto skipped empty source=${sourceDngFile.absolutePath}")
+            return@withContext null
+        }
+
+        val repository = ContentRepository.getInstance(context)
+        if (repository.getAvailableLuts().isEmpty()) {
+            repository.initialize()
+        }
+        val preferences = repository.userPreferencesRepository.userPreferences.firstOrNull()
+        val photoId = UUID.randomUUID().toString()
+        val photoDir = getPhotoDir(context, photoId, true)
+        val dngFile = File(photoDir, DNG_FILE)
+        val tempDngFile = File(photoDir, "temp_mgc.dng")
+        val rawSharpening = RawSharpeningDefaults.CAPTURE_DEFAULT
+        val rawNoiseReduction = preferences?.rawNlmNoiseFactor ?: 0f
+        val rawChromaNoiseReduction = 0f
+
+        try {
+            sourceDngFile.copyTo(tempDngFile, overwrite = true)
+            if (dngFile.exists() && !dngFile.delete()) {
+                PLog.w(TAG, "Unable to replace existing MGC DNG for $photoId")
+            }
+            if (!tempDngFile.renameTo(dngFile)) {
+                tempDngFile.copyTo(dngFile, overwrite = true)
+                tempDngFile.delete()
+            }
+
+            val baseMetadata = MediaMetadata.fromUri(context, Uri.fromFile(dngFile))
+            val lutId = preferences?.lutId
+                ?: repository.getAvailableLuts().firstOrNull { it.isDefault }?.id
+            val baselineLutId = preferences?.rawBaselineLutId
+            val rawToneMappingParameters =
+                (preferences?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT).normalized()
+            val spectralFilmStock = preferences?.rawSpectralFilmStock ?: "kodak_portra_400"
+            val spectralFilmTuning = (
+                preferences?.rawSpectralFilmTuningsByStock?.get(spectralFilmStock)
+                    ?: SpectralFilmTuning.DEFAULT
+                ).normalized()
+            val resolvedDateTaken = dateTaken
+                ?: baseMetadata.dateTaken
+                ?: System.currentTimeMillis()
+            val resolvedRotation = rotation.takeIf { it != 0 } ?: baseMetadata.rotation
+            val customProperties = baseMetadata.customProperties.toMutableMap().apply {
+                put("captureSource", "MGC")
+                sourcePackage?.takeIf { it.isNotBlank() }?.let { put("mgcSourcePackage", it) }
+                source?.takeIf { it.isNotBlank() }?.let { put("mgcSource", it) }
+            }
+            val metadata = baseMetadata.copy(
+                lutId = lutId,
+                tonemapMode = mgcTonemapMode(preferences?.naturalLightEnabled, preferences?.tonemapMode),
+                colorRecipeParams = lutId?.let { repository.lutManager.loadColorRecipeParams(it) },
+                baselineTarget = baselineLutId?.let { BaselineColorCorrectionTarget.RAW },
+                baselineLutId = baselineLutId,
+                baselineColorRecipeParams = baselineLutId?.let {
+                    repository.lutManager.loadColorRecipeParams(it, BaselineColorCorrectionTarget.RAW)
+                },
+                sharpening = rawSharpening,
+                noiseReduction = rawNoiseReduction,
+                chromaNoiseReduction = rawChromaNoiseReduction,
+                rawDcpId = preferences?.rawDcpIdForLens(null),
+                rawExposureCompensation = preferences?.rawExposureCompensation ?: 0f,
+                rawAutoExposure = preferences?.rawAutoExposure ?: true,
+                rawHighlightsAdjustment = preferences?.rawHighlightsAdjustment ?: 0f,
+                rawShadowsAdjustment = preferences?.rawShadowsAdjustment ?: 0f,
+                rawBlackPointCorrection = preferences?.rawBlackPointCorrection ?: 0f,
+                rawWhitePointCorrection = preferences?.rawWhitePointCorrection ?: 0f,
+                rawAutoWhiteBalanceEstimate = preferences?.rawAutoWhiteBalanceEstimate ?: false,
+                rawLensShadingCorrectionEnabled = preferences?.rawLensShadingCorrectionEnabled,
+                rawBlackLevelMode = RawCfaCorrection.MODE_DEFAULT,
+                rawCustomBlackLevel = 0f,
+                rawWhiteLevelMode = RawWhiteLevelCorrection.MODE_DEFAULT,
+                rawCfaCorrectionMode = RawCfaCorrection.MODE_DEFAULT,
+                rawRenderingEngine = preferences?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve,
+                rawToneMappingParameters = rawToneMappingParameters,
+                dateTaken = resolvedDateTaken,
+                rotation = resolvedRotation,
+                sourceUri = sourceUri?.toString(),
+                mimeType = "image/x-adobe-dng",
+                isImported = false,
+                software = baseMetadata.software ?: "MGC/libgcam",
+                customProperties = customProperties,
+                manualHdrEffectEnabled = preferences?.ultraHdrGainMapEnabled ?: true,
+                spectralFilmStock = spectralFilmStock,
+                spectralFilmPrint = preferences?.rawSpectralFilmPrint ?: "kodak_portra_endura",
+                spectralFilmCDensityGain = spectralFilmTuning.cDensityGain,
+                spectralFilmMDensityGain = spectralFilmTuning.mDensityGain,
+                spectralFilmYDensityGain = spectralFilmTuning.yDensityGain,
+            )
+
+            saveMetadata(context, photoId, metadata)
+            renderRawDngPhotoOutputs(
+                context = context,
+                photoId = photoId,
+                dngFile = dngFile,
+                aspectRatio = metadata.ratio ?: AspectRatio.RATIO_4_3,
+                metadata = metadata,
+                rotation = metadata.rotation,
+                exposureBias = metadata.exposureBias,
+                photoProcessor = repository.photoProcessor,
+                sharpeningValue = rawSharpening,
+                noiseReductionValue = rawNoiseReduction,
+                chromaNoiseReductionValue = rawChromaNoiseReduction,
+                photoQuality = photoQuality,
+                shouldAutoSave = shouldAutoSave
+            )
+
+            if (!getPhotoFile(context, photoId).exists()) {
+                PLog.e(TAG, "MGC RAW render did not produce JPEG for $photoId")
+                GalleryMediaStore.deleteMedia(context, photoId)
+                photoDir.deleteRecursively()
+                return@withContext null
+            }
+
+            notifyPhotoLibraryChanged()
+            PLog.d(TAG, "MGC RAW DNG rendered into Photon gallery photoId=$photoId")
+            photoId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save MGC RAW DNG", e)
+            GalleryMediaStore.deleteMedia(context, photoId)
+            photoDir.deleteRecursively()
+            null
+        } finally {
+            tempDngFile.delete()
+        }
+    }
+
+    private fun mgcTonemapMode(naturalLightEnabled: Boolean?, tonemapMode: String?): String {
+        if (naturalLightEnabled == true) return TONEMAP_MODE_NATURAL_LIGHT
+        return when (tonemapMode) {
+            "FAST", "HIGH_QUALITY", null -> "SYSTEM_DEFAULT"
+            "REC709" -> "SRGB"
+            "SYSTEM_DEFAULT", "SRGB" -> tonemapMode
+            else -> "SYSTEM_DEFAULT"
+        }
     }
 
     data class PhotoMetadataUpdate(

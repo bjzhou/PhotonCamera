@@ -228,7 +228,16 @@ class LutImageProcessor(context: Context? = null) {
      */
     fun initialize(): Boolean {
         if (isInitialized) return true
+        if (isOnGlThread()) {
+            return initializeInternal()
+        }
+        return runBlocking(glDispatcher) {
+            initializeInternal()
+        }
+    }
 
+    private fun initializeInternal(): Boolean {
+        if (isInitialized) return true
         try {
             // 获取 EGL Display
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
@@ -3330,7 +3339,17 @@ class LutImageProcessor(context: Context? = null) {
 
     private fun releaseOnGlThread() {
         if (!isInitialized) return
+        if (isOnGlThread()) {
+            releaseInternal()
+            return
+        }
+        runBlocking(glDispatcher) {
+            releaseInternal()
+        }
+    }
 
+    private fun releaseInternal() {
+        if (!isInitialized) return
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
         GLES30.glFinish()
 
@@ -3437,6 +3456,8 @@ class LutImageProcessor(context: Context? = null) {
         isInitialized = false
         PLog.d(TAG, "LutImageProcessor released")
     }
+
+    private fun isOnGlThread(): Boolean = Thread.currentThread() === glThread
 
     companion object {
         private const val TAG = "LutImageProcessor"

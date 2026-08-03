@@ -54,6 +54,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
+    var onFirstPreviewFrame: (() -> Unit)? = null
     private var currentSurface: Surface? = null
 
     init {

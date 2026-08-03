@@ -1119,6 +1119,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val context = getApplication<Application>()
             PLog.d(TAG, "Open external gallery content: $uri")
 
+            loadPhotos(reset = true)
+            findPhotonPhotoBySourceUri(uri)?.let { existing ->
+                selectedTab = GalleryTab.PHOTON
+                setCurrentPhotoById(existing.id)
+                onSuccess(GalleryTab.PHOTON, existing.id)
+                return@launch
+            }
+
             val systemMedia = repository.getSystemMediaByUri(uri)
             if (systemMedia != null) {
                 selectedTab = GalleryTab.SYSTEM
@@ -1130,14 +1138,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     loadSystemPhotos(reset = true)
                     setCurrentSystemPhotoById(systemMedia.id)
                 }
-                return@launch
-            }
-
-            loadPhotos(reset = true)
-            findPhotonPhotoBySourceUri(uri)?.let { existing ->
-                selectedTab = GalleryTab.PHOTON
-                setCurrentPhotoById(existing.id)
-                onSuccess(GalleryTab.PHOTON, existing.id)
                 return@launch
             }
 

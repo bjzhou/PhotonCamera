@@ -46,6 +46,7 @@ import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
+import com.hinnka.mycamera.mgc.PhotonLookContract
 import org.json.JSONObject
 
 /**
@@ -1004,6 +1005,7 @@ class UserPreferencesRepository(private val context: Context) {
             }
             preferences.remove(LEGACY_PHANTOM_LUT_ID_KEY)
         }
+        PhotonLookContract.notifyLookChanged(context)
     }
 
     suspend fun saveBaselineLutConfig(

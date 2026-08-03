@@ -10,6 +10,7 @@ import android.os.Build
 import android.provider.OpenableColumns
 import android.view.LayoutInflater
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -279,6 +280,10 @@ fun GalleryDetailScreen(
             }
             delay(300L)
         }
+    }
+
+    BackHandler {
+        onBack()
     }
 
     Scaffold(

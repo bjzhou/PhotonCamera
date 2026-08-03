@@ -157,6 +157,10 @@ enum class TransferCurve(
         }
 
     companion object {
+        fun fromShaderId(shaderId: Int): TransferCurve {
+            return entries.firstOrNull { it.shaderId == shaderId } ?: SRGB
+        }
+
         fun fromStorageId(storageId: Int): TransferCurve {
             if (storageId == 9) return LOGC4
             return entries.firstOrNull { it.storageId == storageId } ?: SRGB

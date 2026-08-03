@@ -71,6 +71,16 @@ internal object PreviewColorShader {
             uniform vec2 uTexelSize;
             uniform sampler2D uCurveTexture;
             uniform bool uCurveEnabled;
+            ${if (variant.includeSpatialRecipeEffects) """
+            uniform sampler2D uRedHalationTexture;
+            uniform float uRedHalation;
+            uniform sampler2D uSoftLightTexture;
+            uniform float uSoftLight;
+            """ else ""}
+            ${if (variant.includeJpegInputToneCurve) """
+            uniform highp sampler2D uJpegInputToneCurveTexture;
+            uniform int uJpegInputToneCurveSize;
+            """ else ""}
 
             const vec3 W = vec3(0.2126, 0.7152, 0.0722);
             const float PI = 3.14159265359;
@@ -82,6 +92,35 @@ internal object PreviewColorShader {
             ${ThreeWayColorGradingShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
+
+            ${if (variant.includeJpegInputToneCurve) """
+            float sampleJpegInputToneCurve(float value) {
+                int lastIndex = max(uJpegInputToneCurveSize - 1, 1);
+                float position = clamp(value, 0.0, 1.0) * float(lastIndex);
+                int lowerIndex = clamp(int(floor(position)), 0, lastIndex);
+                int upperIndex = min(lowerIndex + 1, lastIndex);
+                float amount = position - float(lowerIndex);
+                float lower = texelFetch(
+                    uJpegInputToneCurveTexture,
+                    ivec2(lowerIndex, 0),
+                    0
+                ).r;
+                float upper = texelFetch(
+                    uJpegInputToneCurveTexture,
+                    ivec2(upperIndex, 0),
+                    0
+                ).r;
+                return mix(lower, upper, amount);
+            }
+
+            vec3 applyJpegInputToneCurve(vec3 color) {
+                return vec3(
+                    sampleJpegInputToneCurve(color.r),
+                    sampleJpegInputToneCurve(color.g),
+                    sampleJpegInputToneCurve(color.b)
+                );
+            }
+            """ else ""}
 
             float getLuma(vec3 color) {
                 return dot(color, W);
@@ -169,6 +208,11 @@ internal object PreviewColorShader {
                     color.rgb = hlgToLinear(color.rgb);
                     color.rgb = linearToSrgb(color.rgb);
                 }
+
+                ${if (variant.includeJpegInputToneCurve) """
+                color.rgb = applyJpegInputToneCurve(color.rgb);
+                color.rgb = sanitizeColor(color.rgb);
+                """ else ""}
 
                 if (uColorRecipeEnabled) {
                     if (abs(uExposure) > 0.001) {
@@ -289,6 +333,16 @@ internal object PreviewColorShader {
                     color.rgb = sanitizeColor(vec3(r, g, b));
                 }
 
+                ${if (variant.includeSpatialRecipeEffects) """
+                if (uRedHalation > 0.0) {
+                    vec3 halationBlur = texture(uRedHalationTexture, uvCoord).rgb;
+                    float halationMask = smoothstep(0.001, 0.06, dot(halationBlur, W));
+                    vec3 halationStrength = vec3(0.42, 0.14, 0.02) * uRedHalation;
+                    color.rgb += halationBlur * halationStrength * halationMask;
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+                """ else ""}
+
                 if (uVideoLogEnabled) {
                     vec3 linearColor = srgbToLinear(max(color.rgb, vec3(0.0)));
                     vec3 outputColorSpace = applyLutColorSpace(linearColor, uVideoColorSpace);
@@ -313,6 +367,19 @@ internal object PreviewColorShader {
                     color.rgb = mix(color.rgb, lutColor.rgb, effectiveLutIntensity);
                     color.rgb = sanitizeColor(color.rgb);
                 }
+
+                ${if (variant.includeSpatialRecipeEffects) """
+                if (uSoftLight > 0.0) {
+                    vec3 softBlur = texture(uSoftLightTexture, uvCoord).rgb;
+                    vec3 screen = vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - softBlur);
+                    vec3 softGlow = mix(color.rgb, screen, 0.42);
+                    color.rgb = mix(color.rgb, softGlow, uSoftLight * 0.75);
+                    float softLuma = dot(softBlur, W);
+                    color.rgb += vec3(softLuma) * (uSoftLight * 0.025);
+                    color.rgb = (color.rgb - 0.5) * (1.0 - uSoftLight * 0.05) + 0.5;
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+                """ else ""}
 
                 fragColor = vec4(clamp(sanitizeColor(color.rgb), 0.0, 1.0), color.a);
             }

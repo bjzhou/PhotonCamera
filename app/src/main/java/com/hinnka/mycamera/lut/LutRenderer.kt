@@ -265,7 +265,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var postProcessScratchTextureId: Int = 0
     private var postProcessScratchWidth: Int = 0
     private var postProcessScratchHeight: Int = 0
-    
+
     // Bokeh 实时预览资源
     private var bokehProgramId: Int = 0
     private var uBokehInputTexLoc: Int = 0
@@ -501,6 +501,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var captureMaxLongEdge = DEFAULT_PREVIEW_CAPTURE_MAX_LONG_EDGE
     private var lastCaptureWidth = 0
     private var lastCaptureHeight = 0
+    private var firstFrameRendered = false
 
     /**
      * Surface 创建时调用
@@ -2140,7 +2141,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val spatialScale = getPreviewSpatialEffectScale(width, height)
         val texelW = spatialScale / dsW; val texelH = spatialScale / dsH
         val threshold = 0.72f - redHalation.coerceIn(0f, 1f) * 0.22f
-        
+
         GLES30.glUseProgram(halationExtractBlurHProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[0])
         GLES30.glViewport(0, 0, dsW, dsH)
@@ -2151,7 +2152,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uThreshold"), threshold)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uStrength"), redHalation)
         drawSimpleQuad(halationExtractBlurHProgram)
-        
+
         GLES30.glUseProgram(halationBlurVProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[1])
         GLES30.glViewport(0, 0, dsW, dsH)
@@ -2440,7 +2441,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uBloomTexture"), 1)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uHalation"), halation)
-        
+
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (redHalation > 0f) halationTexId[1] else 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uRedHalationTexture"), 2)
@@ -3571,24 +3572,24 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             var maxClusterLuma = -1.0
             var bestX = -1
             var bestY = -1
-            
+
             val kernelSize = 2 // 半径 2 代表 5x5 窗口
-            
+
             // 遍历所有可能的中心点
             for (y in kernelSize until METERING_SIZE - kernelSize) {
                 for (x in kernelSize until METERING_SIZE - kernelSize) {
                     val centerLuma = lumaGrid[y * METERING_SIZE + x]
-                    
+
                     // 只考虑中心像素达到阈值的候选点，减少计算量并过滤背景
                     if (centerLuma < dynamicThreshold) continue
-                    
+
                     var clusterSum = 0.0
                     for (ky in -kernelSize..kernelSize) {
                         for (kx in -kernelSize..kernelSize) {
                             clusterSum += lumaGrid[(y + ky) * METERING_SIZE + (x + kx)]
                         }
                     }
-                    
+
                     // 也可以加入距离权重，优先选择靠近对焦点或中心的高光
                     val bias: Double = if (focus != null) {
                         val fx = focus.x * METERING_SIZE
@@ -4055,7 +4056,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         return focusPeakingProgramId != 0
     }
-    
+
     private var uBokehDepthMatrixLoc: Int = 0
 
     private fun initBokehFbo(width: Int, height: Int) {

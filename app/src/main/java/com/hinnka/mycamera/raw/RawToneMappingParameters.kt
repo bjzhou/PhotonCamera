@@ -95,9 +95,3 @@ data class RawToneMappingParameters(
         val DEFAULT = RawToneMappingParameters()
     }
 }
-
-enum class RawProfileToneMapMode {
-    Default,
-    Photon,
-    OppoMaster,
-}
