@@ -170,7 +170,7 @@ internal data class PhotonLocalToneMappingParameters(
     val preToneMapExposureBoostEv: Float = 1.15f,
     val bilateralSpatialBinSize: Int = 16,
     val bilateralRangeSigma: Float = 1f / 12f,
-    val bilateralGuideCurveAlpha: Float = 0.8f,
+    val bilateralGuideCurveAlpha: Float = 0.92f,
     val bilateralRegularization: Float = 1f,
 ) {
     init {
