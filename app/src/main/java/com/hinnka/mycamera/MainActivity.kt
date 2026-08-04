@@ -425,12 +425,12 @@ class MainActivity : ComponentActivity() {
     private fun handleExternalGalleryLaunchIntent(intent: Intent) {
         val data = intent.data
         externalGalleryReviewReturnToCaller = intent.action in EXTERNAL_GALLERY_REVIEW_ACTIONS
+        pendingRoute = Routes.GALLERY
         PLog.d(
             "MainActivity",
-            "External gallery launch intent: action=${intent.action}, type=${intent.type}, data=$data, returnToCaller=$externalGalleryReviewReturnToCaller"
+            "External gallery launch intent: action=${intent.action}, type=${intent.type}, data=$data, returnToCaller=$externalGalleryReviewReturnToCaller; opening gallery while resolving content"
         )
         if (data == null) {
-            pendingRoute = Routes.GALLERY
             return
         }
 
@@ -442,8 +442,7 @@ class MainActivity : ComponentActivity() {
                 pendingRoute = route
             },
             onFallback = {
-                PLog.w("MainActivity", "External gallery content fallback to gallery: data=$data")
-                pendingRoute = Routes.GALLERY
+                PLog.w("MainActivity", "External gallery content unavailable; remaining in gallery: data=$data")
             }
         )
     }
