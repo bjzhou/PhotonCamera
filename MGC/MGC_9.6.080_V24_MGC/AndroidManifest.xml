@@ -15,6 +15,34 @@
             <data android:mimeType="image/*"/>
         </intent>
         <intent>
+            <action android:name="com.android.camera.action.REVIEW"/>
+            <data android:scheme="content"/>
+        </intent>
+        <intent>
+            <action android:name="android.provider.action.REVIEW"/>
+            <data android:scheme="content"/>
+        </intent>
+        <intent>
+            <action android:name="android.provider.action.REVIEW_SECURE"/>
+            <data android:scheme="content"/>
+        </intent>
+        <intent>
+            <action android:name="com.google.android.apps.photos.action.SECURE_REVIEW"/>
+            <data android:scheme="content"/>
+        </intent>
+        <intent>
+            <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW"/>
+            <data android:scheme="content"/>
+        </intent>
+        <intent>
+            <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW_SECURE"/>
+            <data android:scheme="content"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="content" android:mimeType="image/*"/>
+        </intent>
+        <intent>
             <action android:name="android.intent.action.SEND"/>
             <data android:mimeType="image/*"/>
         </intent>

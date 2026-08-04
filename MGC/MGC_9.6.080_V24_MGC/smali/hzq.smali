@@ -3356,6 +3356,12 @@
     :goto_13
     invoke-virtual {v0, v1}, Landroid/content/Intent;->setData(Landroid/net/Uri;)Landroid/content/Intent;
 
+    iget-object v1, p0, Lhzq;->b:Landroid/content/Context;
+
+    invoke-static {v1, v0}, Lcom/hinnka/mycamera/previewhook/api/MgcGalleryIntentHook;->applyPreferredGallery(Landroid/content/Context;Landroid/content/Intent;)Landroid/content/Intent;
+
+    move-result-object v0
+
     goto/32 :goto_c
 
     nop
@@ -10737,6 +10743,12 @@
 
     :goto_198
     invoke-virtual {v1, v3}, Landroid/content/Intent;->setData(Landroid/net/Uri;)Landroid/content/Intent;
+
+    iget-object v3, v0, Lhzq;->b:Landroid/content/Context;
+
+    invoke-static {v3, v1}, Lcom/hinnka/mycamera/previewhook/api/MgcGalleryIntentHook;->applyPreferredGallery(Landroid/content/Context;Landroid/content/Intent;)Landroid/content/Intent;
+
+    move-result-object v1
 
     :goto_199
     goto/32 :goto_16f

@@ -1220,10 +1220,6 @@
     nop
 
     :goto_21
-    invoke-static {p0}, Lcom/hinnka/mycamera/previewhook/api/MgcGalleryIntentHook;->applyPreferredGallery(Landroid/content/Intent;)Landroid/content/Intent;
-
-    move-result-object p0
-
     return-object p0
 
     nop
@@ -1471,10 +1467,6 @@
     nop
 
     :goto_32
-    invoke-static {v1}, Lcom/hinnka/mycamera/previewhook/api/MgcGalleryIntentHook;->applyPreferredGallery(Landroid/content/Intent;)Landroid/content/Intent;
-
-    move-result-object v1
-
     return-object v1
 
     nop
