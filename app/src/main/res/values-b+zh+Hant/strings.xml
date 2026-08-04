@@ -379,6 +379,7 @@
     <!-- LUT -->
     <string name="filter_intensity">濾鏡強度</string>
     <string name="filters_panel">濾鏡面板</string>
+    <string name="mgc_filter_selection_failed">無法套用濾鏡</string>
     <string name="toggle_display_mode">切換顯示模式</string>
 
     <!-- Billing & Premium -->

@@ -1678,35 +1678,11 @@ fun CameraScreen(
                             modifier = Modifier.weight(1f).basicMarquee()
                         )
 
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(Color.White.copy(alpha = 0.15f))
-                                    .clickable {
-                                        activePanel = ActivePanel.EDIT
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = AppIcons.Tune,
-                                    contentDescription = stringResource(R.string.edit),
-                                    tint = Color(0xFFFFD700), // Gold color to match VIP/Premium feel
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = stringResource(R.string.edit),
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
+                        LutEditButton(
+                            onClick = {
+                                activePanel = ActivePanel.EDIT
                             }
-                        }
+                        )
                     }
 
                     val allPresets by viewModel.allPresets.collectAsState()
