@@ -15,6 +15,7 @@ import android.os.Message
 import android.os.Parcel
 import android.util.Log
 import android.util.Size
+import android.view.Display
 import android.view.Surface
 import com.hinnka.mycamera.lut.LutConfig
 import java.nio.ByteBuffer
@@ -35,6 +36,17 @@ object MgcSurfaceProxyPreviewRenderer {
 
     @Volatile
     private var activeSession: SurfaceProxySession? = null
+
+    @Volatile
+    private var activeDisplay: Display? = null
+
+    @Volatile
+    private var lastLoggedTransformKey = Int.MIN_VALUE
+
+    @JvmStatic
+    fun recordDisplay(display: Display?) {
+        activeDisplay = display
+    }
 
     @JvmStatic
     fun recordOriginalSurface(surface: Surface?, size: Size?) {
@@ -72,6 +84,17 @@ object MgcSurfaceProxyPreviewRenderer {
         val size = activeSize ?: return false
         if (size.width <= 0 || size.height <= 0) return false
 
+        val displayRotation = activeDisplay?.rotation ?: Surface.ROTATION_0
+        val transformKey = (transformFlags shl 2) or displayRotation
+        if (lastLoggedTransformKey != transformKey) {
+            lastLoggedTransformKey = transformKey
+            Log.d(
+                TAG,
+                "preview transform buffer=0x${transformFlags.toString(16)} " +
+                    "sensorRotation=$rotationDegrees displayRotation=$displayRotation",
+            )
+        }
+
         val duplicate = duplicateHardwareBuffer(hardwareBuffer) ?: return false
         return runCatching {
             val session = synchronized(lock) {
@@ -89,7 +112,7 @@ object MgcSurfaceProxyPreviewRenderer {
                     current
                 }
             }
-            if (!session.renderFrame(duplicate, srcRect, dstRect, transformFlags, rotationDegrees)) {
+            if (!session.renderFrame(duplicate, srcRect, dstRect, transformFlags, displayRotation)) {
                 duplicate.close()
                 return false
             }
@@ -126,7 +149,7 @@ object MgcSurfaceProxyPreviewRenderer {
         val srcRect: Rect?,
         val dstRect: Rect?,
         val transformFlags: Int,
-        val rotationDegrees: Int,
+        val displayRotation: Int,
     )
 
     private class SurfaceProxySession(
@@ -169,7 +192,7 @@ object MgcSurfaceProxyPreviewRenderer {
         private var dummyCurveTextureId = 0
 
         private var vertexBuffer: FloatBuffer = floatBufferOf(VERTICES)
-        private var texCoordBuffer: FloatBuffer = floatBufferOf(textureCoordsForRotation(0, 0))
+        private var texCoordBuffer: FloatBuffer = floatBufferOf(textureCoordsForBufferTransform(0))
 
         private var uploadedSnapshotVersion = -1
         private var currentImage: ImageBinding? = null
@@ -215,11 +238,11 @@ object MgcSurfaceProxyPreviewRenderer {
             srcRect: Rect?,
             dstRect: Rect?,
             transformFlags: Int,
-            rotationDegrees: Int,
+            displayRotation: Int,
         ): Boolean {
             if (!glReady) return false
             val h = handler ?: return false
-            val params = RenderParams(buffer, srcRect, dstRect, transformFlags, rotationDegrees)
+            val params = RenderParams(buffer, srcRect, dstRect, transformFlags, displayRotation)
             h.sendMessage(h.obtainMessage(MSG_RENDER_FRAME, params))
             return true
         }
@@ -328,7 +351,7 @@ object MgcSurfaceProxyPreviewRenderer {
                     bindCurveTexture(snapshot)
                     bindMatricesAndGeometry(params)
                     bindSnapshotUniforms(snapshot, params.buffer, viewWidth, viewHeight)
-                    drawQuad(params.rotationDegrees, params.transformFlags)
+                    drawQuad(params.transformFlags, params.displayRotation)
                     checkGlError("surface proxy draw")
                 }
 
@@ -483,8 +506,13 @@ object MgcSurfaceProxyPreviewRenderer {
             )
         }
 
-        private fun drawQuad(rotationDegrees: Int, transformFlags: Int) {
-            texCoordBuffer = floatBufferOf(textureCoordsForRotation(rotationDegrees, transformFlags))
+        private fun drawQuad(
+            transformFlags: Int,
+            displayRotation: Int,
+        ) {
+            texCoordBuffer = floatBufferOf(
+                textureCoordsForBufferTransform(transformFlags, displayRotation)
+            )
             val posLoc = GLES30.glGetAttribLocation(programId, "aPosition")
             if (posLoc >= 0) {
                 vertexBuffer.position(0)
@@ -829,21 +857,50 @@ object MgcSurfaceProxyPreviewRenderer {
             .apply { position(0) }
     }
 
-    private fun textureCoordsForRotation(rotationDegrees: Int, transformFlags: Int): FloatArray {
-        val normalized = ((rotationDegrees % 360) + 360) % 360
-        val base = when (normalized) {
-            90 -> floatArrayOf(1f, 1f, 1f, 0f, 0f, 1f, 0f, 0f)
-            180 -> floatArrayOf(1f, 0f, 0f, 0f, 1f, 1f, 0f, 1f)
-            270 -> floatArrayOf(0f, 0f, 0f, 1f, 1f, 0f, 1f, 1f)
-            else -> floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f)
+    internal fun textureCoordsForBufferTransform(
+        transformFlags: Int,
+        displayRotation: Int = Surface.ROTATION_0,
+    ): FloatArray {
+        val bufferTransform = transformFlags and BUFFER_TRANSFORM_MASK
+        val base = if ((bufferTransform and BUFFER_TRANSFORM_ROTATE_90) != 0) {
+            floatArrayOf(1f, 1f, 1f, 0f, 0f, 1f, 0f, 0f)
+        } else {
+            floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f)
         }
-        val flipX = (transformFlags and 0x1) != 0
-        val flipY = (transformFlags and 0x2) != 0
-        if (!flipX && !flipY) return base
-        for (i in base.indices step 2) {
-            if (flipX) base[i] = 1f - base[i]
-            if (flipY) base[i + 1] = 1f - base[i + 1]
+        val flipX = (bufferTransform and BUFFER_TRANSFORM_MIRROR_HORIZONTAL) != 0
+        val flipY = (bufferTransform and BUFFER_TRANSFORM_MIRROR_VERTICAL) != 0
+        if (flipX || flipY) {
+            for (i in base.indices step 2) {
+                if (flipX) base[i] = 1f - base[i]
+                if (flipY) base[i + 1] = 1f - base[i + 1]
+            }
         }
-        return base
+        if ((transformFlags and BUFFER_TRANSFORM_INVERSE_DISPLAY) == 0) return base
+        return when (displayRotation) {
+            Surface.ROTATION_90 -> reorderTextureCorners(base, 2, 0, 3, 1)
+            Surface.ROTATION_180 -> reorderTextureCorners(base, 3, 2, 1, 0)
+            Surface.ROTATION_270 -> reorderTextureCorners(base, 1, 3, 0, 2)
+            else -> base
+        }
     }
+
+    private fun reorderTextureCorners(
+        coordinates: FloatArray,
+        bottomLeft: Int,
+        bottomRight: Int,
+        topLeft: Int,
+        topRight: Int,
+    ): FloatArray {
+        val corners = intArrayOf(bottomLeft, bottomRight, topLeft, topRight)
+        return FloatArray(coordinates.size) { index ->
+            val corner = corners[index / 2]
+            coordinates[corner * 2 + index % 2]
+        }
+    }
+
+    private const val BUFFER_TRANSFORM_MIRROR_HORIZONTAL = 0x1
+    private const val BUFFER_TRANSFORM_MIRROR_VERTICAL = 0x2
+    private const val BUFFER_TRANSFORM_ROTATE_90 = 0x4
+    private const val BUFFER_TRANSFORM_INVERSE_DISPLAY = 0x8
+    private const val BUFFER_TRANSFORM_MASK = 0x7
 }
