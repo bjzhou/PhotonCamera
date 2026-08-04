@@ -8,7 +8,6 @@ internal object DngProfileToneCurve {
     private const val POINT_TOLERANCE = 2e-4f
     private const val LUT_TOLERANCE = 2e-3f
     private const val DNG_PROFILE_TONE_CURVE_POINT_COUNT = 257
-    const val DEFAULT_JPEG_SRGB_INVERSE_S_STRENGTH = 0.12f
 
     private val LINEAR_TONE_CURVE_POINTS = floatArrayOf(0f, 0f, 1f, 1f)
 
@@ -183,32 +182,6 @@ internal object DngProfileToneCurve {
             }
         }
         return ((lower + upper) * 0.5).toFloat()
-    }
-
-    /**
-     * Builds a simple inverse-S curve for sRGB-encoded JPEG samples.
-     *
-     * Strength interpolates from identity at 0 to the full inverse-S polynomial at 1.
-     * The polynomial preserves black, 50% gray, and white exactly and remains strictly
-     * increasing throughout the supported strength range.
-     */
-    fun jpegSrgbInverseSCurveLut(
-        sampleCount: Int = 4096,
-        strength: Float = DEFAULT_JPEG_SRGB_INVERSE_S_STRENGTH,
-    ): FloatArray {
-        require(sampleCount >= 2) { "sampleCount must be at least 2" }
-        require(strength in 0f..1f) { "strength must be between 0 and 1" }
-        return FloatArray(sampleCount) { index ->
-            val encoded = index / (sampleCount - 1f)
-            applyJpegSrgbInverseSCurve(encoded, strength)
-        }
-    }
-
-    internal fun applyJpegSrgbInverseSCurve(encoded: Float, strength: Float): Float {
-        require(strength in 0f..1f) { "strength must be between 0 and 1" }
-        val input = encoded.coerceIn(0f, 1f)
-        val inverseSOffset = input * (1f - input) * (1f - 2f * input)
-        return input + strength * inverseSOffset
     }
 
     fun oppoEmbeddedToneCurvePoints(): FloatArray {

@@ -31,7 +31,6 @@ object MgcVfeLutRuntime {
 
     private val capturedJpegShaderVariant = previewShaderVariant.copy(
         textureSource = PreviewColorTextureSource.TEXTURE_2D,
-        includeJpegInputToneCurve = true,
         includeSpatialRecipeEffects = true,
     )
 

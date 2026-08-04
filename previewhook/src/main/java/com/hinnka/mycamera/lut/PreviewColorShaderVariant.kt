@@ -13,6 +13,5 @@ internal data class PreviewColorShaderVariant(
     val includeLchMixer: Boolean,
     val includeFilmGrain: Boolean,
     val includeLutMask: Boolean = false,
-    val includeJpegInputToneCurve: Boolean = false,
     val includeSpatialRecipeEffects: Boolean = false,
 )

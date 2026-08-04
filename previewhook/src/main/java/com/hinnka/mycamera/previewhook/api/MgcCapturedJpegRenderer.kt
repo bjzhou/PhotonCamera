@@ -10,7 +10,6 @@ import android.opengl.GLES30
 import android.opengl.GLUtils
 import android.util.Log
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.raw.DngProfileToneCurve
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -25,7 +24,6 @@ import java.nio.ShortBuffer
  */
 internal object MgcCapturedJpegRenderer {
     private const val TAG = "codex_post_lut"
-    private const val PREFERRED_JPEG_INPUT_TONE_CURVE_SIZE = 4096
 
     private val identityMatrix4 = floatArrayOf(
         1f, 0f, 0f, 0f,
@@ -59,8 +57,6 @@ internal object MgcCapturedJpegRenderer {
     private var lutTextureId = 0
     private var dummyLutTextureId = 0
     private var dummyCurveTextureId = 0
-    private var jpegInputToneCurveTextureId = 0
-    private var jpegInputToneCurveSize = 0
     private var uploadedSnapshotVersion = -1
     private var maxTextureSize = 0
     private var readbackBuffer: ByteBuffer? = null
@@ -107,7 +103,6 @@ internal object MgcCapturedJpegRenderer {
             GLES30.glUseProgram(programId)
 
             bindInputTexture()
-            bindJpegInputToneCurve()
             bindLutTexture(snapshot)
             bindBasicToneTexture(snapshot)
             bindCurveTexture(snapshot)
@@ -219,18 +214,10 @@ internal object MgcCapturedJpegRenderer {
             GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, size, 0)
             maxTextureSize = size[0]
             if (maxTextureSize <= 0) error("Invalid GL_MAX_TEXTURE_SIZE=$maxTextureSize")
-            jpegInputToneCurveSize = minOf(
-                PREFERRED_JPEG_INPUT_TONE_CURVE_SIZE,
-                maxTextureSize,
-            )
-            if (jpegInputToneCurveSize < 2) {
-                error("Invalid JPEG input tone curve size=$jpegInputToneCurveSize")
-            }
 
             inputTextureId = create2DTexture()
             dummyLutTextureId = createDummy3DTexture()
             dummyCurveTextureId = createDummy2DTexture()
-            jpegInputToneCurveTextureId = createJpegInputToneCurveTexture()
             programId = buildProgram(
                 MgcVfeLutRuntime.getVertexShaderSource(),
                 MgcVfeLutRuntime.getCapturedJpegFragmentShaderSource(),
@@ -238,11 +225,7 @@ internal object MgcCapturedJpegRenderer {
             if (programId == 0) error("Captured JPEG shader program unavailable")
             MgcCapturedJpegSpatialEffects.initialize()
             requireNoGlError("captured JPEG renderer init")
-            Log.d(
-                TAG,
-                "Captured JPEG renderer ready maxTextureSize=$maxTextureSize " +
-                    "inputToneCurveSize=$jpegInputToneCurveSize",
-            )
+            Log.d(TAG, "Captured JPEG renderer ready maxTextureSize=$maxTextureSize")
             true
         }.onFailure {
             Log.e(TAG, "Captured JPEG renderer init failed", it)
@@ -342,13 +325,6 @@ internal object MgcCapturedJpegRenderer {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
         uniform1i("uCameraTexture", 0)
-    }
-
-    private fun bindJpegInputToneCurve() {
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, jpegInputToneCurveTextureId)
-        uniform1i("uJpegInputToneCurveTexture", 4)
-        uniform1i("uJpegInputToneCurveSize", jpegInputToneCurveSize)
     }
 
     private fun bindLutTexture(snapshot: MgcVfeLutSnapshot) {
@@ -618,33 +594,6 @@ internal object MgcCapturedJpegRenderer {
         return id
     }
 
-    private fun createJpegInputToneCurveTexture(): Int {
-        val values = DngProfileToneCurve.jpegSrgbInverseSCurveLut(
-            jpegInputToneCurveSize,
-        )
-        val ids = IntArray(1)
-        GLES30.glGenTextures(1, ids, 0)
-        val id = ids[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, id)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_R32F,
-            values.size,
-            1,
-            0,
-            GLES30.GL_RED,
-            GLES30.GL_FLOAT,
-            floatBufferOf(values),
-        )
-        requireNoGlError("captured JPEG input tone curve upload")
-        return id
-    }
-
     private fun buildProgram(vertexSource: String, fragmentSource: String): Int {
         val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, vertexSource)
         val fragmentShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource)
@@ -708,7 +657,6 @@ internal object MgcCapturedJpegRenderer {
                 lutTextureId,
                 dummyLutTextureId,
                 dummyCurveTextureId,
-                jpegInputToneCurveTextureId,
             ).filter { it != 0 }.toIntArray()
             if (textures.isNotEmpty()) {
                 GLES30.glDeleteTextures(textures.size, textures, 0)
@@ -742,8 +690,6 @@ internal object MgcCapturedJpegRenderer {
         lutTextureId = 0
         dummyLutTextureId = 0
         dummyCurveTextureId = 0
-        jpegInputToneCurveTextureId = 0
-        jpegInputToneCurveSize = 0
         uploadedSnapshotVersion = -1
         maxTextureSize = 0
         readbackBuffer = null
