@@ -5353,7 +5353,7 @@
     nop
 
     :goto_10f
-    invoke-interface {p1, v2}, Lpnu;->o(Landroid/hardware/camera2/CameraCharacteristics$Key;)Ljava/lang/Object;
+    invoke-interface {p1, v2, v3}, Lpnu;->n(Landroid/hardware/camera2/CameraCharacteristics$Key;Ljava/lang/Object;)Ljava/lang/Object;
 
     move-result-object p1
 
@@ -5691,6 +5691,18 @@
 
     :goto_11f
     sget-object v2, Landroid/hardware/camera2/CameraCharacteristics;->CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE:Landroid/hardware/camera2/CameraCharacteristics$Key;
+
+    # Some front cameras omit this optional characteristic. A boost of 100
+    # represents the neutral 1x value, so keep the analog ISO limit unchanged.
+    const/16 v0, 0x64
+
+    invoke-static {v0}, Ljava/lang/Integer;->valueOf(I)Ljava/lang/Integer;
+
+    move-result-object v0
+
+    new-instance v3, Landroid/util/Range;
+
+    invoke-direct {v3, v0, v0}, Landroid/util/Range;-><init>(Ljava/lang/Comparable;Ljava/lang/Comparable;)V
 
     nop
 
