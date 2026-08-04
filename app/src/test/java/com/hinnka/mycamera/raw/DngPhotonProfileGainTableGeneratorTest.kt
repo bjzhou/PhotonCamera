@@ -1,7 +1,9 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import java.io.File
 import kotlin.math.ln
+import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -17,9 +19,9 @@ class DngPhotonProfileGainTableGeneratorTest {
         assertEquals(0.005f, parameters.percentileClip, 0f)
         assertEquals(100f, parameters.targetDynamicRange, 0f)
         assertEquals(16, parameters.bilateralSpatialBinSize)
-        assertEquals(1f / 8f, parameters.bilateralRangeSigma, 0f)
-        assertEquals(0.8f, parameters.bilateralGuideCurveAlpha, 0f)
-        assertEquals(0.1f, parameters.bilateralRegularization, 0f)
+        assertEquals(1f / 12f, parameters.bilateralRangeSigma, 0f)
+        assertEquals(0.92f, parameters.bilateralGuideCurveAlpha, 0f)
+        assertEquals(1f, parameters.bilateralRegularization, 0f)
         assertFloatArrayEquals(
             floatArrayOf(0.05f, 0.25f, 0.4f, 0.25f, 0.05f),
             DngPhotonLocalToneMapper.localLaplacianPyramidFilter,
@@ -94,15 +96,16 @@ class DngPhotonProfileGainTableGeneratorTest {
     }
 
     @Test
-    fun scalarGainBilateralGridPreservesDarkGainWithSampleScaledRegularization() {
+    fun scalarGainBilateralGridUsesConfiguredSampleScaledRegularization() {
         val gridWidth = 1
         val gridHeight = 1
         val width = DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
         val height = DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
         val sourceLevel = 0.01f
-        val expectedGain = 4f
+        val targetGain = 4f
+        val parameters = PhotonLocalToneMappingParameters()
         val source = FloatArray(width * height) { sourceLevel }
-        val target = FloatArray(width * height) { sourceLevel * expectedGain }
+        val target = FloatArray(width * height) { sourceLevel * targetGain }
 
         val grid = DngPhotonLocalToneMapper.fitScalarGainBilateralGrid(
             source = source,
@@ -111,15 +114,15 @@ class DngPhotonProfileGainTableGeneratorTest {
             height = height,
             gridWidth = gridWidth,
             gridHeight = gridHeight,
-            parameters = PhotonLocalToneMappingParameters(),
+            parameters = parameters,
         )
 
-        // The 0.1-sample prior may pull the fitted gain slightly towards one, but its relative
-        // influence must remain below 0.1% even at a 1% scene-linear input.
+        // The configured identity prior may pull the fitted gain slightly towards one, but the
+        // sample-energy scaling must keep it from dominating a 1% scene-linear input.
         assertEquals(
-            expectedGain,
+            targetGain,
             grid.gain(cell = 0, source = sourceLevel),
-            expectedGain * 0.001f,
+            targetGain * 0.01f,
         )
     }
 
@@ -188,7 +191,48 @@ class DngPhotonProfileGainTableGeneratorTest {
     }
 
     @Test
+    fun gpuBguHistogramHasOneLaneForEveryPlaneComponent() {
+        val parameters = PhotonLocalToneMappingParameters()
+        val rangeBinCount = (1f / parameters.bilateralRangeSigma).roundToInt()
+        val requiredLanes =
+            (rangeBinCount + 2) * DngPhotonLocalToneMapGpuShaders.BGU_COMPONENT_COUNT
+        val shader = DngPhotonLocalToneMapGpuShaders.sources[
+            DngPhotonLocalToneMapGpuShaders.Pass.BGU_HISTOGRAM.ordinal
+        ]
+        val workGroup = requireNotNull(GlesComputeWorkGroup.declaredSize(shader))
+
+        assertEquals(
+            DngPhotonLocalToneMapGpuShaders.BGU_HISTOGRAM_LOCAL_SIZE,
+            workGroup.x,
+        )
+        assertTrue(
+            "BGU histogram requires $requiredLanes lanes, shader has ${workGroup.x}",
+            workGroup.x >= requiredLanes,
+        )
+        assertTrue(shader.contains("if (item >= itemCount) return;"))
+        GlesComputeWorkGroup.requireBaselineCompatible(shader, "DNG_PHOTON_PGTM_BGU_HISTOGRAM")
+    }
+
+    @Test
+    fun gpuBguHistogramPassesAvailableNdkValidator() {
+        assertGpuPassesAvailableNdkValidator(
+            pass = DngPhotonLocalToneMapGpuShaders.Pass.BGU_HISTOGRAM,
+            fileLabel = "bgu-histogram",
+        )
+    }
+
+    @Test
     fun gpuBguSolvePassesAvailableNdkValidator() {
+        assertGpuPassesAvailableNdkValidator(
+            pass = DngPhotonLocalToneMapGpuShaders.Pass.BGU_SOLVE,
+            fileLabel = "bgu-solve",
+        )
+    }
+
+    private fun assertGpuPassesAvailableNdkValidator(
+        pass: DngPhotonLocalToneMapGpuShaders.Pass,
+        fileLabel: String,
+    ) {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val validator = sdkRoot?.let(::File)
             ?.resolve("ndk")
@@ -202,11 +246,9 @@ class DngPhotonProfileGainTableGeneratorTest {
             }
             ?.firstOrNull()
         assumeTrue("Android NDK glslc is unavailable", validator != null)
-        val shader = DngPhotonLocalToneMapGpuShaders.sources[
-            DngPhotonLocalToneMapGpuShaders.Pass.BGU_SOLVE.ordinal
-        ]
-        val sourceFile = File.createTempFile("photon-bgu-solve-", ".compute")
-        val outputFile = File.createTempFile("photon-bgu-solve-", ".spv")
+        val shader = DngPhotonLocalToneMapGpuShaders.sources[pass.ordinal]
+        val sourceFile = File.createTempFile("photon-$fileLabel-", ".compute")
+        val outputFile = File.createTempFile("photon-$fileLabel-", ".spv")
         try {
             sourceFile.writeText(shader)
             val process = ProcessBuilder(

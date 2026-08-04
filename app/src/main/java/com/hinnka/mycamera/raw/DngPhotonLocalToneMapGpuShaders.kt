@@ -34,6 +34,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
     const val HISTOGRAM_BIN_COUNT = 32_768
     const val BGU_FILTER_RADIUS = 3
     const val BGU_COMPONENT_COUNT = 5
+    const val BGU_HISTOGRAM_LOCAL_SIZE = 128
 
     val sources: Array<String> by lazy {
         arrayOf(
@@ -480,7 +481,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val bguHistogram = """
         #version 310 es
-        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = $BGU_HISTOGRAM_LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 

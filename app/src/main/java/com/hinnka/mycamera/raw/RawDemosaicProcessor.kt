@@ -3653,6 +3653,15 @@ class RawDemosaicProcessor {
         val extendedGridHeight =
             gridHeight + 2 * DngPhotonLocalToneMapGpuShaders.BGU_FILTER_RADIUS
         val componentCount = DngPhotonLocalToneMapGpuShaders.BGU_COMPONENT_COUNT
+        val histogramItemCount = rangePlaneCount * componentCount
+        check(
+            histogramItemCount <=
+                DngPhotonLocalToneMapGpuShaders.BGU_HISTOGRAM_LOCAL_SIZE
+        ) {
+            "Photon BGU histogram requires $histogramItemCount lanes for " +
+                "$rangePlaneCount planes x $componentCount components, but shader provides " +
+                "${DngPhotonLocalToneMapGpuShaders.BGU_HISTOGRAM_LOCAL_SIZE}"
+        }
         val extendedBguFloatCount =
             extendedGridWidth * extendedGridHeight * rangePlaneCount * componentCount
         val yBlurFloatCount =

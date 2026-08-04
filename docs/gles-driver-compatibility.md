@@ -46,6 +46,9 @@ Max number of total work group invocations exceeded.
   `GL_MAX_COMPUTE_WORK_GROUP_SIZE`。
 - 修改包含 shared memory 或 barrier 的 shader 时，同步检查共享数组几何、lane 索引、
   数据装载次数和每次 barrier 前后的完整参与关系。
+- 使用一个 work group 写固定 cell 的多分量 SSBO 时，`local_size` 必须覆盖全部分量，并为
+  超出有效分量的 lane 设置显式退出。不能让未覆盖的 SSBO 元素依赖新分配 buffer 恰好为零；
+  `glBufferData(..., null, ...)` 的内容未定义，不同驱动可能分别表现为零值或历史垃圾数据。
 
 `DNG_PGTM_CELL_STATS` 需要对每个 cell 的 256 个样本进行排序。兼容路径保留 256 项共享数组，
 由 128 个 lane 各装载两个样本，并在 bitonic sort 的每个阶段各处理两个 comparator；不能通过
