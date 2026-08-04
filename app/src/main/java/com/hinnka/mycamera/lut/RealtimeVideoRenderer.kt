@@ -333,8 +333,6 @@ class RealtimeVideoRenderer(
             amount = ColorPaletteMapper.basicToneAmount(layer.params),
         )
 
-        GLES30.glUniform1f(locations.uApertureLocation, 0f)
-        GLES30.glUniform2f(locations.uFocusPointLocation, 0.5f, 0.5f)
         GLES30.glUniform2f(
             locations.uTexelSizeLocation,
             1f / max(1, encoderOutputSize.width).toFloat(),

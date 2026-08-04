@@ -41,11 +41,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
-    var onDepthInputAvailable: ((Bitmap) -> Unit)? = null
-        set(value) {
-            field = value
-            renderer.onDepthInputAvailable = value
-        }
     var onAiFocusInputAvailable: ((Bitmap) -> Unit)? = null
         set(value) {
             field = value
@@ -260,14 +255,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     /**
      * 设置参数
      */
-    fun setParams(
-        params: ColorRecipeParams,
-        aperture: Float,
-    ) {
+    fun setParams(params: ColorRecipeParams) {
         val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
 
         renderer.setRecipeParams(effectiveParams)
-        renderer.aperture = aperture
         requestRender()
     }
 
@@ -374,21 +365,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     fun setVideoLogProfile(profile: VideoLogProfile) {
         renderer.videoLogProfile = profile
-        requestRender()
-    }
-
-    /**
-     * 设置实时景深图
-     */
-    fun setDepthMap(bitmap: Bitmap?) {
-        renderer.depthMap = bitmap
-    }
-
-    /**
-     * 设置光圈 (虚化强度)
-     */
-    fun setAperture(value: Float) {
-        renderer.aperture = value
         requestRender()
     }
 

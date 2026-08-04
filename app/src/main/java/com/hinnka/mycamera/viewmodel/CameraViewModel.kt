@@ -1921,13 +1921,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setFixTonemapCapture(prefs.fixTonemapCapture)
 
                 // 应用保存的虚拟光圈
-                if (
-                    prefs.defaultVirtualAperture > 0f &&
-                    DepthModelManager.isInstalled(getApplication())
-                ) {
-                    setVirtualApertureAuto(true)
-                    setAperture(prefs.defaultVirtualAperture)
-                }
+                applyDefaultVirtualAperture(prefs.defaultVirtualAperture)
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
@@ -1952,13 +1946,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     hasAppliedDefaultFocalLength = true
                 }
 
-                // 同步虚化参数到渲染器
                 glSurfaceView?.let { view ->
-                    if (currentState.isVirtualApertureEnabled) {
-                        view.setAperture(currentState.virtualAperture)
-                    } else {
-                        view.setAperture(0f)
-                    }
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
                     view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                     currentState.focusPoint?.let { fp ->
@@ -1966,13 +1954,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     view.setAutoFocus(currentState.isAutoFocus)
                 }
-            }
-        }
-
-        // 实时景深处理
-        viewModelScope.launch {
-            cameraController.previewDepthProcessor.latestDepthMap.collect { depth ->
-                glSurfaceView?.setDepthMap(depth)
             }
         }
 
@@ -2371,11 +2352,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 view.setBaselineParams(currentBaselineRecipeParams.value)
                 view.setLut(loadedLut)
                 view.setLutEnabled(loadedLut != null)
-                view.setParams(currentRecipeParams.value, if (currentState.isVirtualApertureEnabled) {
-                    currentState.virtualAperture
-                } else {
-                    0f
-                })
+                view.setParams(currentRecipeParams.value)
                 view.setColorRecipeEnabled(!currentRecipeParams.value.isDefault())
                 view.setVideoLogProfile(currentState.videoConfig.logProfile)
                 view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
@@ -3849,10 +3826,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun handleHighlightPointUpdate(x: Float, y: Float) {
         cameraController.updateHighlightPoint(x, y)
-    }
-
-    fun handleDepthMapUpdate(bitmap: Bitmap) {
-        cameraController.previewDepthProcessor.processBitmap(bitmap)
     }
 
     fun handleAiFocusInputUpdate(bitmap: Bitmap) {
@@ -6289,8 +6262,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setDefaultVirtualAperture(aperture: Float) {
+        applyDefaultVirtualAperture(aperture)
         viewModelScope.launch {
             userPreferencesRepository.saveDefaultVirtualAperture(aperture)
+        }
+    }
+
+    private fun applyDefaultVirtualAperture(aperture: Float) {
+        val enabled = aperture > 0f && DepthModelManager.isInstalled(getApplication())
+        setVirtualApertureAuto(enabled)
+        if (enabled) {
+            setAperture(aperture)
         }
     }
 

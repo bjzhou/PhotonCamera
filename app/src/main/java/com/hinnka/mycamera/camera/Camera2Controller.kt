@@ -244,7 +244,6 @@ class Camera2Controller(private val context: Context) {
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var imageReader: ImageReader? = null
 
-    val previewDepthProcessor = com.hinnka.mycamera.preview.PreviewDepthProcessor(context)
     val previewAiFocusProcessor = com.hinnka.mycamera.preview.PreviewAiFocusProcessor(context)
 
 
@@ -7448,7 +7447,6 @@ class Camera2Controller(private val context: Context) {
         } else {
             closeCamera()
         }
-        previewDepthProcessor.release()
         previewAiFocusProcessor.release()
         burstGyroRecorder.release()
         videoRecorder.release()

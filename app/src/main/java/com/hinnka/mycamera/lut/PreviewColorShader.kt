@@ -66,8 +66,6 @@ internal object PreviewColorShader {
             uniform float uGradingBalance;
             uniform float uGradingBlending;
             uniform mat3 uPrimaryCalibrationMatrix;
-            uniform float uAperture;
-            uniform vec2 uFocusPoint;
             uniform vec2 uTexelSize;
             uniform sampler2D uCurveTexture;
             uniform bool uCurveEnabled;

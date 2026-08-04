@@ -1000,6 +1000,7 @@
     <string name="imaging">影像</string>
     <string name="phantom">幻影</string>
     <string name="virtual_aperture">虚拟光圈</string>
+    <string name="virtual_aperture_viewfinder_hint">f/%1$s</string>
     <string name="settings_default_virtual_aperture">默认虚拟光圈</string>
     <string name="settings_default_virtual_aperture_description">开启后，拍摄及导入照片将自动应用所选光圈值的虚化效果。</string>
     <string name="virtual_aperture_depth_model_description">使用 Depth Anything V2。首次使用时需下载或导入模型（约 100 MB）。</string>

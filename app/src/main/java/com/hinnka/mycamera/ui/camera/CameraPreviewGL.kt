@@ -62,7 +62,6 @@ fun CameraPreviewGL(
     onHistogramUpdated: ((IntArray) -> Unit)? = null,
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onHighlightPointUpdated: ((Float, Float) -> Unit)? = null,
-    onDepthInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     onAiFocusInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
@@ -76,7 +75,6 @@ fun CameraPreviewGL(
     rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     isAiFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
-    aperture: Float = 0f,
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
     modifier: Modifier = Modifier
@@ -214,7 +212,6 @@ fun CameraPreviewGL(
                         glSurfaceView.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
                         glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
                         glSurfaceView.onHighlightPointUpdated = { hx, hy -> onHighlightPointUpdated?.invoke(hx, hy) }
-                        glSurfaceView.onDepthInputAvailable = { onDepthInputAvailable?.invoke(it) }
                         glSurfaceView.onAiFocusInputAvailable = { onAiFocusInputAvailable?.invoke(it) }
 
                         viewWidth = glSurfaceView.width
@@ -265,7 +262,7 @@ fun CameraPreviewGL(
                         glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
 
                         glSurfaceView.setBaselineParams(baselineColorRecipeParams)
-                        glSurfaceView.setParams(colorRecipeParams, aperture)
+                        glSurfaceView.setParams(colorRecipeParams)
 
                         glSurfaceView.setFocusPoint(focusPoint?.let {
                             android.graphics.PointF(

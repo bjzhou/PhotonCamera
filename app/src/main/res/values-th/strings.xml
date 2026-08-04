@@ -813,6 +813,7 @@
     <string name="imaging">ภาพ</string>
     <string name="phantom">ผี</string>
     <string name="virtual_aperture">รูรับแสงเสมือน</string>
+    <string name="virtual_aperture_viewfinder_hint">f/%1$s</string>
     <string name="settings_default_virtual_aperture">รูรับแสงเสมือนเริ่มต้น</string>
     <string name="settings_default_virtual_aperture_description">เมื่อเปิดใช้งาน เอฟเฟ็กต์เบลอของค่ารูรับแสงที่เลือกจะถูกนำไปใช้กับภาพที่ถ่ายและนำเข้าโดยอัตโนมัติ</string>
     <string name="recipe_tab_palette">จานสี</string>

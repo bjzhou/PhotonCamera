@@ -1001,6 +1001,7 @@
     <string name="imaging">Imaging</string>
     <string name="phantom">Phantom</string>
     <string name="virtual_aperture">Virtual Aperture</string>
+    <string name="virtual_aperture_viewfinder_hint">f/%1$s</string>
     <string name="settings_default_virtual_aperture">Default Virtual Aperture</string>
     <string name="settings_default_virtual_aperture_description">Automatically enable virtual aperture with the selected f-stop value for new photos.</string>
     <string name="virtual_aperture_depth_model_description">Uses Depth Anything V2. Download or import the model on first use (about 100 MB).</string>

@@ -112,6 +112,11 @@ private val VideoViewfinderRaisedOffset = 16.dp
 private val OpenGateVideoViewfinderRaisedOffset = 56.dp
 private val VideoTopBarLoweredOffset = 36.dp
 
+private fun formatVirtualApertureFStop(aperture: Float): String {
+    val rounded = aperture.roundToInt()
+    return if (aperture == rounded.toFloat()) rounded.toString() else aperture.toString()
+}
+
 @Composable
 private fun cameraTopSafePadding(): Dp {
     val density = LocalDensity.current
@@ -1057,7 +1062,6 @@ fun CameraScreen(
                         onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
                         onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
                         onHighlightPointUpdated = { hx, hy -> viewModel.handleHighlightPointUpdate(hx, hy) },
-                        onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
                         onAiFocusInputAvailable = if (aiFocusTargetMode == AiFocusTargetMode.OFF) {
                             null
                         } else {
@@ -1076,7 +1080,6 @@ fun CameraScreen(
                         rawRenderingEngine = rawColorEngine,
                         rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                         rawToneMappingParameters = rawToneMappingParameters,
-                        aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
                         isAutoFocus = state.isAutoFocus,
                         focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
                         modifier = Modifier.fillMaxSize()
@@ -1111,32 +1114,59 @@ fun CameraScreen(
                         )
                     }
 
-                    // Live Photo Indicator
-                    if (state.captureMode == CaptureMode.PHOTO && useLivePhoto) {
-                        Surface(
+                    val showLivePhotoIndicator =
+                        state.captureMode == CaptureMode.PHOTO && useLivePhoto
+                    val showVirtualApertureIndicator =
+                        state.captureMode != CaptureMode.VIDEO &&
+                            state.isVirtualApertureEnabled
+                    if (showLivePhotoIndicator || showVirtualApertureIndicator) {
+                        Column(
                             modifier = Modifier
                                 .padding(
                                     top = CameraParameterValuesOverlayHeight + 8.dp,
                                     end = 12.dp
                                 )
                                 .align(Alignment.TopEnd),
-                            color = Color.Black.copy(alpha = 0.8f),
-                            shape = CircleShape
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    painterResource(R.drawable.ic_live_photo),
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                            if (showLivePhotoIndicator) {
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.8f),
+                                    shape = CircleShape
+                                ) {
+                                    Icon(
+                                        painterResource(R.drawable.ic_live_photo),
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier
+                                            .padding(4.dp)
+                                            .size(18.dp)
+                                    )
+                                }
+                            }
+                            if (showVirtualApertureIndicator) {
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.virtual_aperture_viewfinder_hint,
+                                            formatVirtualApertureFStop(state.virtualAperture)
+                                        ),
+                                        color = Color.White,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(
+                                            horizontal = 6.dp,
+                                            vertical = 3.dp
+                                        )
+                                    )
+                                }
                             }
                         }
                     }
-
 
                     Box(
                         modifier = Modifier.fillMaxSize()
