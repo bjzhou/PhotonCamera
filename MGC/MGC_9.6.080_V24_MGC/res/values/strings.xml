@@ -1846,6 +1846,7 @@ Invalid format."</string>
     <string name="frame_auto">Auto</string>
     <string name="frame_auto_desc">Auto frames selection</string>
     <string name="mgc_filter_title">Filter Manager</string>
+    <string name="mgc_photon_filter_unavailable">Photon Camera is unavailable.</string>
     <string name="mgc_filter_refresh">Refresh</string>
     <string name="mgc_filter_import">Import</string>
     <string name="mgc_filter_empty">No LUTs found yet.</string>

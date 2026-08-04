@@ -184,6 +184,20 @@
             </intent-filter>
         </activity>
 
+        <activity
+                android:name=".mgc.MgcFilterSelectionActivity"
+                android:excludeFromRecents="true"
+                android:exported="true"
+                android:finishOnTaskLaunch="true"
+                android:label="@string/filters_panel"
+                android:launchMode="singleTop"
+                android:theme="@style/Theme.MyCamera.Transparent">
+            <intent-filter>
+                <action android:name="com.hinnka.mycamera.action.SELECT_MGC_LOOK" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <provider
                 android:name="androidx.core.content.FileProvider"
                 android:authorities="${applicationId}.fileprovider"

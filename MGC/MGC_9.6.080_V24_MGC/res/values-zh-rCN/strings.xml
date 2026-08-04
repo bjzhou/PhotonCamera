@@ -1596,6 +1596,7 @@ P = 61448"</string>
     <string name="shortcut_settings_short_label">设置</string>
     <string name="wear_picker_a11y_action_button_accept">下一步</string>
     <string name="mgc_filter_title">滤镜管理</string>
+    <string name="mgc_photon_filter_unavailable">未找到可用的光子相机。</string>
     <string name="mgc_filter_refresh">刷新</string>
     <string name="mgc_filter_import">导入</string>
     <string name="mgc_filter_rename">重命名</string>

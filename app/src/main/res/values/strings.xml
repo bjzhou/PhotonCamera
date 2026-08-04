@@ -390,6 +390,7 @@
     <!-- LUT -->
     <string name="filter_intensity">LUT Intensity</string>
     <string name="filters_panel">LUTs</string>
+    <string name="mgc_filter_selection_failed">Couldn’t apply the LUT</string>
     <string name="toggle_display_mode">Toggle Display Mode</string>
 
     <!-- Billing & Premium -->

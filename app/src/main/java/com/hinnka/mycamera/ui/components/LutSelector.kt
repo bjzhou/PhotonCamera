@@ -59,6 +59,38 @@ private fun LutCategoryTab.stableKey(): String = when (this) {
 private const val NONE_LUT_ITEM_KEY = "__photon_lut_selector_none__"
 
 /**
+ * LUT 面板右上角的编辑入口。相机页与跨应用 LUT 面板共享同一套样式。
+ */
+@Composable
+fun LutEditButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.15f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(
+            imageVector = AppIcons.Tune,
+            contentDescription = stringResource(R.string.edit),
+            tint = Color(0xFFFFD700),
+            modifier = Modifier.size(14.dp)
+        )
+        Text(
+            text = stringResource(R.string.edit),
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+/**
  * LUT 选择器组件
  *
  * 显示可用的 LUT 列表，支持选择和预览
