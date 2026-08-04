@@ -39,8 +39,6 @@ internal class GlesRadianceVgnChromaPostprocessor(
 
         fun checkGlError(label: String)
 
-        fun waitForGpuCheckpoint(label: String)
-
         fun yieldToUiRenderer()
     }
 
@@ -71,6 +69,8 @@ internal class GlesRadianceVgnChromaPostprocessor(
     }
     private val safeOutputScale = outputScale.takeIf { it.isFinite() && it > 0f } ?: 1f
     private val coefficients = RadianceVgnChromaIirCoefficients.forOutputScale(safeOutputScale)
+    private val passWindow =
+        GlesGpuScheduler.PassWindow("GlesRadianceVgnChroma", 2)
     private val readbackTileWidth: Int
     private val readbackTileHeight: Int
 
@@ -91,6 +91,8 @@ internal class GlesRadianceVgnChromaPostprocessor(
     private var writtenTileCount = 0
     private var readbackFbo = 0
     private val ownedTextures = ArrayList<Int>(3)
+    private val pendingImageReads = ArrayList<Long>(3)
+    private val pendingImageWrites = ArrayList<Long>(3)
 
     init {
         require(imageWidth > 0 && imageHeight > 0)
@@ -222,6 +224,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         val chromaSubmissionStartNs = System.nanoTime()
         originalYccd = createFullSizeTexture("original YCCD")
         smoothYccd = createFullSizeTexture("smooth YCCD")
+        clearImageBindings()
 
         dispatchSeed()
         dispatchLocal(colorNoise1Program, originalYccd, assembledRgb, "color noise 1")
@@ -316,6 +319,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
     }
 
     fun release() {
+        passWindow.drain("Radiance VGN chroma release")
         if (ownedTextures.isNotEmpty()) {
             GLES30.glDeleteTextures(ownedTextures.size, ownedTextures.toIntArray(), 0)
             ownedTextures.clear()
@@ -407,9 +411,10 @@ internal class GlesRadianceVgnChromaPostprocessor(
         bindImage(0, originalYccd, GLES31.GL_READ_ONLY)
         bindImage(1, destination, GLES31.GL_WRITE_ONLY)
         // The result leaves this component and can be consumed as both an FBO attachment and a
-        // sampler by the persistent RAW renderer. dispatchImage establishes the full barrier and
-        // completion boundary before ownership is transferred.
+        // sampler by the persistent RAW renderer, so this ownership boundary remains a
+        // CPU-visible checkpoint.
         dispatchImage(finalProgram, "final camera RGB")
+        passWindow.drain("final camera RGB handoff")
     }
 
     private fun runIirRgb(
@@ -492,21 +497,25 @@ internal class GlesRadianceVgnChromaPostprocessor(
         program: Int,
         label: String,
     ) {
+        beginTrackedPass(label)
         GLES31.glDispatchCompute(groupCount(imageWidth), groupCount(imageHeight), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+        GlesGpuScheduler.memoryBarrier()
         backend.checkGlError("Radiance VGN chroma $label")
-        backend.waitForGpuCheckpoint(label)
+        clearImageBindings()
+        passWindow.endPass()
     }
 
     private fun dispatchIir(axis: Int, label: String) {
+        beginTrackedPass(label)
         if (axis == 0) {
             GLES31.glDispatchCompute(1, imageHeight, 1)
         } else {
             GLES31.glDispatchCompute(imageWidth, 1, 1)
         }
-        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+        GlesGpuScheduler.memoryBarrier()
         backend.checkGlError("Radiance VGN chroma $label")
-        backend.waitForGpuCheckpoint(label)
+        clearImageBindings()
+        passWindow.endPass()
     }
 
     private fun setImageUniforms(program: Int) {
@@ -514,6 +523,13 @@ internal class GlesRadianceVgnChromaPostprocessor(
     }
 
     private fun bindImage(unit: Int, texture: Int, access: Int) {
+        val resource = GlesGpuScheduler.textureResource(texture)
+        if (access != GLES31.GL_WRITE_ONLY) {
+            pendingImageReads += resource
+        }
+        if (access != GLES31.GL_READ_ONLY) {
+            pendingImageWrites += resource
+        }
         GLES31.glBindImageTexture(
             unit,
             texture,
@@ -523,6 +539,30 @@ internal class GlesRadianceVgnChromaPostprocessor(
             access,
             GLES30.GL_RGBA16UI,
         )
+    }
+
+    private fun beginTrackedPass(label: String) {
+        passWindow.beginPass(
+            label,
+            reads = pendingImageReads.toLongArray(),
+            writes = pendingImageWrites.toLongArray(),
+        )
+        pendingImageReads.clear()
+        pendingImageWrites.clear()
+    }
+
+    private fun clearImageBindings() {
+        for (unit in 0..2) {
+            GLES31.glBindImageTexture(
+                unit,
+                0,
+                0,
+                false,
+                0,
+                GLES31.GL_READ_ONLY,
+                GLES30.GL_RGBA16UI,
+            )
+        }
     }
 
     private fun createFullSizeTexture(label: String): Int {

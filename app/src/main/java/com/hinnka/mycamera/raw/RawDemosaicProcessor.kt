@@ -238,6 +238,8 @@ class RawDemosaicProcessor {
         // It is also above the native level-35 gate, so the complete IIR2 pass 1/2/3 chain runs.
         private const val VGN_COLOR_NOISE_LEVEL = 50
         private const val VGN_ADVANCED_COLOR_NOISE_ENABLED = true
+        private const val VGN_DISPATCH_UBO_SLOT_COUNT = 2
+        private const val VGN_PASS_WINDOW_SIZE = 2
         private const val RAW_TILE_CORE_EDGE_PX = 3072
         private const val RAW_PREWARM_CORE_EDGE_PX = 2048
         // Phocus GetStripMargin(50) returns 60 pixels for gradient/color-noise interpolation.
@@ -855,6 +857,7 @@ class RawDemosaicProcessor {
     private var rcdStep43Program = 0
     private var rcdWriteOutputProgram = 0
     private val vgnPrograms = IntArray(VgnShaders.PROGRAM_SOURCES.size)
+    private var activeVgnPassWindow: GlesGpuScheduler.PassWindow? = null
     private var quadPopulateProgram = 0
     private var quadGreenProgram = 0
     private var quadChromaProgram = 0
@@ -6554,6 +6557,7 @@ class RawDemosaicProcessor {
             )
             finishLinearRawUint16ToFloat(
                 "LinearRaw RGBA16UI to RGBA16F ${width}x$height",
+                waitForCpuReuse = false,
             )
             return
         }
@@ -6612,6 +6616,7 @@ class RawDemosaicProcessor {
                 )
                 finishLinearRawUint16ToFloat(
                     "LinearRaw RGB16UI to RGBA16F rows=$sourceY..${sourceY + rowCount}",
+                    waitForCpuReuse = true,
                 )
                 sourceY += rowCount
             }
@@ -6701,8 +6706,15 @@ class RawDemosaicProcessor {
         GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(rowCount), 1)
     }
 
-    private fun finishLinearRawUint16ToFloat(label: String) {
-        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+    private fun finishLinearRawUint16ToFloat(
+        label: String,
+        waitForCpuReuse: Boolean,
+    ) {
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT
+        )
         GLES31.glBindImageTexture(
             0,
             0,
@@ -6722,6 +6734,7 @@ class RawDemosaicProcessor {
             GLES31.GL_RGBA16F
         )
         checkGlError(label)
+        if (!waitForCpuReuse) return
         val startNs = System.nanoTime()
         PLog.d(TAG, "RAW GPU checkpoint waiting label=$label")
         GlesGpuScheduler.waitForGpuCheckpoint(TAG, label)
@@ -7046,6 +7059,25 @@ class RawDemosaicProcessor {
         ubo: ByteBuffer? = null,
         vararg images: VgnImageBinding,
     ) {
+        val passWindow = checkNotNull(activeVgnPassWindow) {
+            "VGN pass window is unavailable for $label"
+        }
+        val imageReads = images
+            .filter { it.access != GLES31.GL_WRITE_ONLY }
+            .map { GlesGpuScheduler.textureResource(it.texture) }
+        val imageWrites = images
+            .filter { it.access != GLES31.GL_READ_ONLY }
+            .map { GlesGpuScheduler.textureResource(it.texture) }
+        val uboResource = if (uboBinding != null && ubo != null) {
+            GlesGpuScheduler.bufferResource(uboId)
+        } else {
+            0L
+        }
+        passWindow.beginPass(
+            label,
+            reads = (imageReads + uboResource).filter { it != 0L }.toLongArray(),
+            writes = (imageWrites + uboResource).filter { it != 0L }.toLongArray(),
+        )
         val program = vgnPrograms[programIndex]
         check(program != 0) { "VGN program unavailable: $label" }
         GLES31.glUseProgram(program)
@@ -7072,12 +7104,13 @@ class RawDemosaicProcessor {
             GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, 0)
         }
         GLES31.glDispatchCompute(groupCountX.coerceAtLeast(1), groupCountY.coerceAtLeast(1), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+        GlesGpuScheduler.memoryBarrier()
         checkGlError("VGN $label")
-        // Bound the background compute queue to one full-resolution pass. This provides an
-        // inter-context scheduling point for RenderThread/SurfaceFlinger and lets the driver
-        // reclaim VGN intermediates as soon as their last pass has completed.
-        GlesGpuScheduler.waitForGpuCheckpoint(TAG, "VGN $label")
+        unbindVgnImages()
+        if (uboBinding != null) {
+            GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, uboBinding, 0)
+        }
+        passWindow.endPass()
     }
 
     private fun unbindVgnImages() {
@@ -7188,9 +7221,18 @@ class RawDemosaicProcessor {
             }
         }
 
-        val uboIds = IntArray(1)
-        GLES31.glGenBuffers(1, uboIds, 0)
-        check(uboIds[0] != 0) { "Failed to allocate VGN UBO" }
+        val uboIds = IntArray(VGN_DISPATCH_UBO_SLOT_COUNT)
+        GLES31.glGenBuffers(uboIds.size, uboIds, 0)
+        check(uboIds.all { it != 0 }) { "Failed to allocate VGN dispatch UBO ring" }
+        var nextUboIndex = 0
+        fun nextVgnUboId(): Int {
+            val uboId = uboIds[nextUboIndex % uboIds.size]
+            nextUboIndex += 1
+            return uboId
+        }
+        check(activeVgnPassWindow == null) { "Nested VGN pass windows are unsupported" }
+        val passWindow = GlesGpuScheduler.PassWindow(TAG, VGN_PASS_WINDOW_SIZE)
+        activeVgnPassWindow = passWindow
 
         try {
             val packedFloat = allocate(GLES30.GL_RGBA16F, packedWidth, workHeight, "packed float")
@@ -7202,6 +7244,18 @@ class RawDemosaicProcessor {
             val full0 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 0")
             val full1 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 1")
 
+            unbindVgnImages()
+            for (binding in 2..5) {
+                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
+            }
+            passWindow.beginPass(
+                "prepare packed RAW",
+                reads = longArrayOf(
+                    GlesGpuScheduler.textureResource(rawTextureId),
+                    GlesGpuScheduler.textureResource(lensShadingTextureId),
+                ),
+                writes = longArrayOf(GlesGpuScheduler.textureResource(packedFloat)),
+            )
             val prepareProgram = vgnPrograms[VgnShaders.PROGRAM_PREPARE]
             GLES31.glUseProgram(prepareProgram)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
@@ -7279,16 +7333,17 @@ class RawDemosaicProcessor {
                 GLES30.GL_RGBA16F,
             )
             GLES31.glDispatchCompute(groupsPackedX, groupsWorkY, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+            GlesGpuScheduler.memoryBarrier()
             checkGlError("VGN prepare packed RAW")
-            GlesGpuScheduler.waitForGpuCheckpoint(TAG, "VGN prepare packed RAW")
+            unbindVgnImages()
+            passWindow.endPass()
 
             dispatchVgnPass(
                 VgnShaders.PROGRAM_NEUTRAL,
                 groupsPackedX,
                 groupsWorkY,
                 "neutral",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnUbo(48) {
                     putInt(0); putInt(0); putInt(packedWidth); putInt(workHeight)
@@ -7304,7 +7359,7 @@ class RawDemosaicProcessor {
                 groupsPackedX,
                 groupsWorkY,
                 "pass 0A1",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
                 VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7316,7 +7371,7 @@ class RawDemosaicProcessor {
                 groupsWorkX,
                 groupsHalfHeight,
                 "pass 0A2",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnUbo(32) {
                     putInt(0); putInt(1); putInt(packedWidth - 1); putInt((workHeight - 2) / 2)
@@ -7331,7 +7386,7 @@ class RawDemosaicProcessor {
                 groupsPackedX,
                 groupsHalfHeight,
                 "pass 0B",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnBoundsUbo(1, 0, packedWidth - 1, workHeight - 4),
                 VgnImageBinding(0, scaleTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
@@ -7343,7 +7398,7 @@ class RawDemosaicProcessor {
                 groupsPackedX,
                 groupsWorkY,
                 "pass 0C",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
                 VgnImageBinding(0, packedSmooth, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7355,7 +7410,7 @@ class RawDemosaicProcessor {
                 groupsWorkX,
                 groupsWorkY,
                 "pass 1",
-                uboIds[0],
+                nextVgnUboId(),
                 5,
                 vgnThresholdBoundsUbo(
                     12,
@@ -7377,7 +7432,7 @@ class RawDemosaicProcessor {
                 groupsWorkX,
                 groupsWorkY,
                 "pass 2",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnBoundsUbo(13, 13, workWidth - 13, workHeight - 13),
                 VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7389,7 +7444,7 @@ class RawDemosaicProcessor {
                 groupsWorkX,
                 groupsWorkY,
                 "pass 3",
-                uboIds[0],
+                nextVgnUboId(),
                 4,
                 vgnThresholdBoundsUbo(
                     16,
@@ -7406,6 +7461,17 @@ class RawDemosaicProcessor {
             )
 
             unbindVgnImages()
+            passWindow.awaitResources(
+                "release packed VGN intermediates",
+                longArrayOf(
+                    GlesGpuScheduler.textureResource(packedFloat),
+                    GlesGpuScheduler.textureResource(packedSmooth),
+                    GlesGpuScheduler.textureResource(scaleTexture),
+                    GlesGpuScheduler.textureResource(medianTexture),
+                    GlesGpuScheduler.textureResource(edgeTexture),
+                    GlesGpuScheduler.textureResource(packedBayer),
+                ),
+            )
             releaseTexture(packedFloat)
             releaseTexture(packedSmooth)
             releaseTexture(scaleTexture)
@@ -7420,7 +7486,7 @@ class RawDemosaicProcessor {
                 groupsWorkX,
                 groupsWorkY,
                 "color noise 1",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
                 VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7432,7 +7498,7 @@ class RawDemosaicProcessor {
                 groupsWorkX,
                 groupsWorkY,
                 "color noise 2",
-                uboIds[0],
+                nextVgnUboId(),
                 2,
                 vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
                 VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7447,7 +7513,7 @@ class RawDemosaicProcessor {
                     groupsWorkX,
                     groupsWorkY,
                     "color noise 3 YCCD",
-                    uboIds[0],
+                    nextVgnUboId(),
                     4,
                     vgnBoundsUbo(12, 12, workWidth - 12, workHeight - 12),
                     VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7461,7 +7527,7 @@ class RawDemosaicProcessor {
                     1,
                     workHeight,
                     "IIR2 pass 1 init",
-                    uboIds[0],
+                    nextVgnUboId(),
                     3,
                     vgnIirUbo(workWidth, workHeight, 0, 0, vgnIirPass1Coefficients),
                     VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7472,7 +7538,7 @@ class RawDemosaicProcessor {
                     VgnShaders.PROGRAM_IIR2_1,
                     full2,
                     full3,
-                    uboIds[0],
+                    nextVgnUboId(),
                     workWidth,
                     workHeight,
                     1,
@@ -7484,7 +7550,7 @@ class RawDemosaicProcessor {
                     VgnShaders.PROGRAM_IIR2_1,
                     full3,
                     full2,
-                    uboIds[0],
+                    nextVgnUboId(),
                     workWidth,
                     workHeight,
                     0,
@@ -7496,7 +7562,7 @@ class RawDemosaicProcessor {
                     VgnShaders.PROGRAM_IIR2_1,
                     full2,
                     full3,
-                    uboIds[0],
+                    nextVgnUboId(),
                     workWidth,
                     workHeight,
                     1,
@@ -7510,7 +7576,7 @@ class RawDemosaicProcessor {
                     groupsWorkX,
                     groupsWorkY,
                     "calculate color noise error",
-                    uboIds[0],
+                    nextVgnUboId(),
                     images = arrayOf(
                         VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
                         VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
@@ -7518,16 +7584,16 @@ class RawDemosaicProcessor {
                     ),
                 )
 
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, nextVgnUboId(), workWidth,
                     workHeight, 0, 0, vgnIirPass1Coefficients,
                     "IIR2 pass 2 horizontal forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, nextVgnUboId(), workWidth,
                     workHeight, 1, 0, vgnIirPass1Coefficients,
                     "IIR2 pass 2 horizontal reverse")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, nextVgnUboId(), workWidth,
                     workHeight, 0, 1, vgnIirPass1Coefficients,
                     "IIR2 pass 2 vertical forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, nextVgnUboId(), workWidth,
                     workHeight, 1, 1, vgnIirPass1Coefficients,
                     "IIR2 pass 2 vertical reverse")
 
@@ -7536,7 +7602,7 @@ class RawDemosaicProcessor {
                     groupsWorkX,
                     groupsWorkY,
                     "color noise filter",
-                    uboIds[0],
+                    nextVgnUboId(),
                     images = arrayOf(
                         VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
                         VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
@@ -7544,16 +7610,16 @@ class RawDemosaicProcessor {
                     ),
                 )
 
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, nextVgnUboId(), workWidth,
                     workHeight, 0, 0, vgnIirPass3Coefficients,
                     "IIR2 pass 3 horizontal forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, nextVgnUboId(), workWidth,
                     workHeight, 1, 0, vgnIirPass3Coefficients,
                     "IIR2 pass 3 horizontal reverse")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, nextVgnUboId(), workWidth,
                     workHeight, 0, 1, vgnIirPass3Coefficients,
                     "IIR2 pass 3 vertical forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, uboIds[0], workWidth,
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, nextVgnUboId(), workWidth,
                     workHeight, 1, 1, vgnIirPass3Coefficients,
                     "IIR2 pass 3 vertical reverse")
 
@@ -7562,7 +7628,7 @@ class RawDemosaicProcessor {
                     groupsOutputX,
                     groupsOutputY,
                     "YUV to RGB",
-                    uboIds[0],
+                    nextVgnUboId(),
                     2,
                     vgnUbo(32) {
                         putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
@@ -7581,7 +7647,7 @@ class RawDemosaicProcessor {
                     groupsOutputX,
                     groupsOutputY,
                     "color noise 3 RGB",
-                    uboIds[0],
+                    nextVgnUboId(),
                     3,
                     vgnUbo(32) {
                         putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
@@ -7595,6 +7661,15 @@ class RawDemosaicProcessor {
                 PLog.d(TAG, "Single-frame VGN color-noise IIR chain disabled")
             }
 
+            passWindow.beginPass(
+                "composite camera RGB",
+                reads = longArrayOf(
+                    GlesGpuScheduler.textureResource(linearOutputTextureId),
+                ),
+                writes = longArrayOf(
+                    GlesGpuScheduler.textureResource(demosaicTextureId),
+                ),
+            )
             val compositeProgram = vgnPrograms[VgnShaders.PROGRAM_COMPOSITE]
             GLES31.glUseProgram(compositeProgram)
             GLES31.glUniform2i(
@@ -7613,8 +7688,11 @@ class RawDemosaicProcessor {
             GLES31.glBindImageTexture(1, demosaicTextureId, 0, false, 0,
                 GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
             GLES31.glDispatchCompute(groupsOutputX, groupsOutputY, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+            GlesGpuScheduler.memoryBarrier()
             checkGlError("VGN composite camera RGB")
+            unbindVgnImages()
+            passWindow.endPass()
+            passWindow.drain("VGN camera RGB handoff")
 
             PLog.d(
                 TAG,
@@ -7627,11 +7705,13 @@ class RawDemosaicProcessor {
                     "lsc=${lensShadingLogString(metadata)}",
             )
         } finally {
+            passWindow.drain("VGN resource release")
+            activeVgnPassWindow = null
             unbindVgnImages()
             for (binding in 0..5) {
                 GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
             }
-            if (uboIds[0] != 0) GLES31.glDeleteBuffers(1, uboIds, 0)
+            GLES31.glDeleteBuffers(uboIds.size, uboIds, 0)
             if (liveTextures.isNotEmpty()) {
                 liveTextures.forEach(::recycleVgnTexture)
                 liveTextures.clear()

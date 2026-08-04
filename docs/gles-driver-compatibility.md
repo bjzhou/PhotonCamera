@@ -330,63 +330,34 @@ image load/store 访问。若同一纹理接下来改由 sampler 读取，或作
 - GPU 纹理跨组件交接的真机测试必须实际执行 `imageStore -> barrier -> sampler fetch`，并覆盖
   左上角、图像内部和右下角，不能只验证 program 编译或 CPU readback。
 
-## Mali 后台 compute 队列与可变资源复用
+## 后台 compute 的资源安全调度
 
 已确认设备：OPPO PKD130，MT6835，Mali-G57 MC2，驱动 `v1.r38p1`。
 
-### 问题
+Radiance/VGN 连续提交 compute、fusion 和 chroma pass 时，CPU 可能覆写 GPU 尚在读取的
+RAW texture 或 UBO。只限制队列长度、只加 barrier 或逐 pass 等待都不完整：前两者没有
+资源所有权，后者会破坏流水。
 
-Radiance tiled reconstruction 会在一个 tile 内连续提交多帧 VGN/semantic compute 和
-framebuffer fusion，并为下一帧重复使用同一组 image、UBO、RGB tile，以及通过
-`glTexSubImage2D` 覆写同一张 RAW region texture。仅在各 pass 后调用 `glMemoryBarrier`，
-最后才 `glFlush`/`Thread.yield`，可能让后台队列长期保持大量未完成工作。该设备会在第一个
-Radiance tile 内停止推进，应用没有 Java/native crash 或 ANR；关闭 long frame 只能少提交一帧，
-不能消除问题。只限制 tiled reconstruction 后，12 个 tile 可以完成，但未切片的全帧 chroma
-local/IIR 链、最终导出和紧随其后的 `RGBA16UI → RGBA16F` 转换仍会把同类停滞后移到
-EngineTone 开始处。相同分辨率的单帧 VGN 使用分 pass checkpoint 时可以正常完成。
+### 实现规则
 
-`glMemoryBarrier` 只声明指定访问类型之间的内存可见性和顺序，不表示 GPU 已完成，也不保证
-CPU 紧接着覆写的 UBO/texture 已不再被旧命令读取。`glFlush` 只提交命令，同样不是资源复用
-完成边界。
-
-### 错误做法
-
-- 把一个 tile 的所有帧和 pass 一次性排入后台 context，只在 tile 末尾 `glFlush`。
-- 只增加 barrier bits，然后立即用 `glBufferData` 或 `glTexSubImage2D` 更新仍可能被旧命令
-  使用的同一资源。
-- 认为关闭 long frame 后仍卡住，说明问题与多帧 GPU 队列无关。
-- 用一个覆盖整条 Radiance 链的 `glFinish` 代替调度；这会长期阻塞 CPU，也不给 UI renderer
-  留出稳定调度窗口。
-
-### 正确做法
-
-- VGN prepare、每个 VGN compute pass、最终 camera RGB，以及 semantic seed/resolve 完成后，
-  先使用 `GL_ALL_BARRIER_BITS` 建立完整访问交接，再通过
-  `GlesGpuScheduler.waitForGpuCheckpoint` 限制后台队列深度。
-- 每帧 fusion 完成后建立 checkpoint，确认该帧对 RAW region、semantic/RGB tile、UBO 和
-  accumulator 的访问结束，再上传下一帧到复用资源。
-- reference fusion 与 reference-base capture 作为一个资源复用单元；两者完成后再开始下一帧。
-- 每个 tile normalization 和输出标记/回读后建立 checkpoint，再清零并复用 accumulator 处理
-  下一 tile。
-- 全帧 chroma local pass、每个水平/垂直 IIR direction 和最终 camera RGB 导出同样建立
-  checkpoint。ping-pong texture 交换 Java/Kotlin 变量不代表 GPU 已结束旧角色的访问。
-- 下游把导出的 `RGBA16UI` 转成 `RGBA16F` 后建立 checkpoint，再允许 EngineTone fragment
-  sampler 读取目标 texture。三通道条带转换还必须在每个条带结束后等待，才能覆写复用的
-  expansion texture。
-- checkpoint 使用 fence 加短周期等待，并在完成后为 UI renderer 留出短暂调度窗口；保留等待
-  前后的 stage label 和耗时日志，出现驱动停滞时能定位到具体 pass/frame/tile。
-- 这里只在后台重计算链的资源复用边界等待。已经完成、只读且要交给下游的输出 texture 仍按
-  GPU→GPU 所有权交接处理，不额外执行 `glFinish` 或 CPU materialization。
+- VGN、semantic、fusion、normalization 和 chroma 共用容量为 2 的资源依赖窗口。pass
+  声明 texture/buffer 的读写集合；存在 RAW、WAR 或 WAW 冲突时，在提交 consumer 前等待
+  最新冲突 fence，无冲突时才允许两个 pass 同时在途。
+- CPU 会覆写的 RAW texture 和 UBO 各使用 A/B ring；回卷前只等待该槽最后一个使用者。
+  GPU-only 的 RGB、semantic、中间纹理和 accumulator 保持单份。
+- pass 结束后插入 fence，但不逐 pass `glFlush`。等待目标 fence 时，第一次
+  `glClientWaitSync` 使用 `GL_SYNC_FLUSH_COMMANDS_BIT`，后续轮询使用 flags=0。
+- VGN/Radiance compute 统一使用 `GL_ALL_BARRIER_BITS`，并在 pass 后解除 image、sampler
+  和 indexed buffer 绑定。
+- 不做逐 pass 或逐 tile checkpoint。只在资源冲突、ring 槽复用、CPU readback、纹理回收
+  和组件最终交接时等待。
+- 调度不得改变 shader、pass 数、帧选择、参数、累加顺序或输出格式。
 
 ### 验证
 
-- 同一设备分别测试 long frame 开启和关闭，确认所有 tile、色度后处理和最终导出均完成。
-- 检查 checkpoint 的 waiting/complete 日志成对出现；若停滞，最后一个 waiting label 必须能
-  唯一定位对应 VGN pass、semantic pass、frame fusion、chroma/IIR direction 或 LinearRaw
-  格式转换。
-- 拍照处理期间持续操作预览 UI，确认 renderer 可推进且应用可响应。
-- 对修复前后的可正常完成设备比较输出；checkpoint 只改变命令完成边界，不应改变帧选择、
-  shader 参数、累加顺序或像素结果。
+- long frame 开启和关闭时，Radiance、chroma、导出及单帧 RAW 都必须完成。
+- pending fence 不得超过 2；等待只能来自声明的资源冲突或所有权交接。
+- 修复前后输出像素应一致，并比较 Radiance、chroma 和单帧 RAW 总耗时。
 
 ## IMG/PowerVR `imageSize` 研究线索
 
