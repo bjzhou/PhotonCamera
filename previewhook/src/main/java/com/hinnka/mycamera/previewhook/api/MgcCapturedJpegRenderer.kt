@@ -619,7 +619,7 @@ internal object MgcCapturedJpegRenderer {
     }
 
     private fun createJpegInputToneCurveTexture(): Int {
-        val values = DngProfileToneCurve.googleToPhotonJpegToneCurveLut(
+        val values = DngProfileToneCurve.jpegSrgbInverseSCurveLut(
             jpegInputToneCurveSize,
         )
         val ids = IntArray(1)

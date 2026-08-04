@@ -3,7 +3,6 @@ package com.hinnka.mycamera.raw
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.pow
 
 class DngProfileToneCurveTest {
     @Test
@@ -36,32 +35,41 @@ class DngProfileToneCurveTest {
     }
 
     @Test
-    fun googleToPhotonJpegCurvePreservesEndpointsAndLinearMiddleGray() {
-        val lut = DngProfileToneCurve.googleToPhotonJpegToneCurveLut(4096)
+    fun jpegSrgbInverseSCurveIsMonotonicAndControllable() {
+        val strength = DngProfileToneCurve.DEFAULT_JPEG_SRGB_INVERSE_S_STRENGTH
+        val lut = DngProfileToneCurve.jpegSrgbInverseSCurveLut(
+            sampleCount = 4097,
+            strength = strength,
+        )
         assertEquals(0f, lut.first(), 0f)
-        assertEquals(1f, lut.last(), 1e-6f)
+        assertEquals(0.5f, lut[lut.lastIndex / 2], 0f)
+        assertEquals(1f, lut.last(), 0f)
 
         var previous = -1f
         lut.forEachIndexed { index, value ->
             assertTrue("curve must be finite at $index", value.isFinite())
             assertTrue("curve must stay normalized at $index", value in 0f..1f)
-            assertTrue("curve must be monotonic at $index", value >= previous)
+            assertTrue("curve must be strictly monotonic at $index", value > previous)
             previous = value
         }
 
-        val googleMiddleGrayLinear = DngProfileToneCurve.googleHdrToneCurveOutput(0.18f)
-        val googleMiddleGraySrgb = linearToSrgb(googleMiddleGrayLinear)
+        assertTrue(sampleLut(lut, 0.25f) > 0.25f)
+        assertTrue(sampleLut(lut, 0.75f) < 0.75f)
         assertEquals(
-            googleMiddleGraySrgb,
-            DngProfileToneCurve.applyGoogleToPhotonJpegToneCurve(googleMiddleGraySrgb),
-            1e-5f,
+            0.25f,
+            DngProfileToneCurve.applyJpegSrgbInverseSCurve(0.25f, 0f),
+            0f,
         )
         assertEquals(
-            googleMiddleGraySrgb,
-            sampleLut(lut, googleMiddleGraySrgb),
-            2e-5f,
+            0.34375f,
+            DngProfileToneCurve.applyJpegSrgbInverseSCurve(0.25f, 1f),
+            0f,
         )
-        assertTrue(DngProfileToneCurve.googleToPhotonMiddleGrayInput() < 0.18f)
+        assertEquals(
+            DngProfileToneCurve.applyJpegSrgbInverseSCurve(0.25f, strength),
+            sampleLut(lut, 0.25f),
+            1e-7f,
+        )
     }
 
     private fun outputAt(points: FloatArray, input: Float): Float {
@@ -76,13 +84,5 @@ class DngProfileToneCurveTest {
         val upperIndex = (lowerIndex + 1).coerceAtMost(lut.lastIndex)
         return lut[lowerIndex] +
             (lut[upperIndex] - lut[lowerIndex]) * (position - lowerIndex)
-    }
-
-    private fun linearToSrgb(value: Float): Float {
-        return if (value <= 0.0031308f) {
-            value * 12.92f
-        } else {
-            (1.055 * value.toDouble().pow(1.0 / 2.4) - 0.055).toFloat()
-        }
     }
 }
