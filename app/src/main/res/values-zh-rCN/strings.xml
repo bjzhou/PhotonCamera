@@ -478,6 +478,9 @@
     <string name="recipe_grading_blending">过渡</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">亮度</string>
+    <string name="effects_group_light">光效</string>
+    <string name="effects_group_optics">光学</string>
+    <string name="effects_group_texture">质感</string>
     <string name="recipe_tab_curve">曲线</string>
     <string name="recipe_tab_calibration">校准</string>
     <string name="recipe_lch_skin">肤色</string>

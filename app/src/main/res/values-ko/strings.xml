@@ -180,6 +180,9 @@
     <string name="recipe_grading_balance">밸런스</string>
     <string name="recipe_grading_blending">블렌딩</string>
     <string name="recipe_tab_light">빛</string>
+    <string name="effects_group_light">조명 효과</string>
+    <string name="effects_group_optics">광학</string>
+    <string name="effects_group_texture">질감</string>
     <string name="recipe_tab_texture">질감</string>
     <string name="recipe_tab_post">후보정</string>
     

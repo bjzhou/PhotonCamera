@@ -1,42 +1,28 @@
 package com.hinnka.mycamera.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.RecipeParam
-import kotlin.math.abs
 
 enum class EffectType(
-    val recipeParam: RecipeParam,
-    val color: Color,
-    val minValue: Float,
-    val maxValue: Float,
-    val defaultValue: Float
+    val recipeParam: RecipeParam
 ) {
-    FILM_GRAIN(RecipeParam.FILM_GRAIN, Color(0xFF9E9E9E), 0f, 1f, 0f),
-    VIGNETTE(RecipeParam.VIGNETTE, Color(0xFF795548), -1f, 1f, 0f),
-    FLASH(RecipeParam.FLASH, Color(0xFFE3F2FD), 0f, 1f, 0f),
-    BLOOM(RecipeParam.BLOOM, Color(0xFFFFD54F), 0f, 1f, 0f),
-    SOFT_LIGHT(RecipeParam.SOFT_LIGHT, Color(0xFFE8E1D4), 0f, 1f, 0f),
-    HALATION(RecipeParam.HALATION, Color(0xFFFF7043), 0f, 1f, 0f),
-    CHROMATIC_ABERRATION(RecipeParam.CHROMATIC_ABERRATION, Color(0xFFAB47BC), 0f, 1f, 0f),
-    NOISE(RecipeParam.NOISE, Color(0xFFA1887F), 0f, 1f, 0f),
-    LOW_RES(RecipeParam.LOW_RES, Color(0xFF8D6E63), 0f, 1f, 0f);
+    FILM_GRAIN(RecipeParam.FILM_GRAIN),
+    VIGNETTE(RecipeParam.VIGNETTE),
+    FLASH(RecipeParam.FLASH),
+    BLOOM(RecipeParam.BLOOM),
+    SOFT_LIGHT(RecipeParam.SOFT_LIGHT),
+    HALATION(RecipeParam.HALATION),
+    CHROMATIC_ABERRATION(RecipeParam.CHROMATIC_ABERRATION),
+    NOISE(RecipeParam.NOISE),
+    LOW_RES(RecipeParam.LOW_RES);
+
+    val defaultValue: Float
+        get() = recipeParam.defaultValue
 
     fun getValue(params: EffectParams): Float {
         return when (this) {
@@ -53,7 +39,7 @@ enum class EffectType(
     }
 
     fun setValue(params: EffectParams, value: Float): EffectParams {
-        val clamped = value.coerceIn(minValue, maxValue)
+        val clamped = value.coerceIn(recipeParam.minValue, recipeParam.maxValue)
         return when (this) {
             FILM_GRAIN -> params.copy(filmGrain = clamped)
             VIGNETTE -> params.copy(vignette = clamped)
@@ -68,6 +54,36 @@ enum class EffectType(
     }
 }
 
+private enum class EffectGroup {
+    LIGHT,
+    ATMOSPHERE,
+    TEXTURE,
+}
+
+private val effectGroups = listOf(
+    EffectGroup.LIGHT to listOf(
+        EffectType.FLASH,
+        EffectType.BLOOM,
+        EffectType.SOFT_LIGHT,
+    ),
+    EffectGroup.ATMOSPHERE to listOf(
+        EffectType.VIGNETTE,
+        EffectType.HALATION,
+        EffectType.CHROMATIC_ABERRATION,
+    ),
+    EffectGroup.TEXTURE to listOf(
+        EffectType.FILM_GRAIN,
+        EffectType.NOISE,
+        EffectType.LOW_RES,
+    ),
+)
+
+private val effectGroupTabs = listOf(
+    EffectGroup.LIGHT to R.string.effects_group_light,
+    EffectGroup.ATMOSPHERE to R.string.effects_group_optics,
+    EffectGroup.TEXTURE to R.string.effects_group_texture,
+)
+
 /**
  * 物理画面效果内容，由统一编辑面板作为“效果”参数组承载。
  */
@@ -77,108 +93,41 @@ fun EffectsPanel(
     onParamsChange: (EffectParams) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val haptic = LocalHapticFeedback.current
+    var selectedGroup by remember {
+        mutableStateOf(
+            effectGroups.firstOrNull { (_, effects) ->
+                effects.any { effect ->
+                    effect.getValue(currentParams) != effect.defaultValue
+                }
+            }?.first ?: EffectGroup.LIGHT
+        )
+    }
+    val visibleEffects = effectGroups
+        .first { (group) -> group == selectedGroup }
+        .second
 
     Column(
-        modifier = modifier
-            .fillMaxWidth()
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            EffectType.entries.forEach { effect ->
-                val currentValue = effect.getValue(currentParams)
-                val isActive = currentValue != effect.defaultValue
+        RecipeSectionTabs(
+            tabs = effectGroupTabs,
+            selectedTab = selectedGroup,
+            onTabSelected = { selectedGroup = it },
+        )
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(36.dp)
-                        .background(Color.White.copy(alpha = 0.02f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 1. 拟物发光 LED 状态指示灯
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(12.dp)
-                    ) {
-                        if (isActive) {
-                            Box(
-                                modifier = Modifier
-                                    .size(12.dp)
-                                    .clip(CircleShape)
-                                    .background(effect.color.copy(alpha = 0.25f))
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (isActive) effect.color else Color.White.copy(alpha = 0.2f)
-                                )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // 2. 效果名 (固定宽度以对齐)
-                    Text(
-                        text = stringResource(effect.recipeParam.displayNameRes),
-                        color = if (isActive) Color.White else Color.White.copy(alpha = 0.6f),
-                        fontSize = 11.sp,
-                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier.width(72.dp),
-                        maxLines = 1
-                    )
-
-                    // 3. 滑块
-                    CustomSlider(
-                        value = currentValue,
-                        onValueChange = { newValue ->
-                            if (abs(newValue - currentValue) > 0.05f) {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            }
-                            onParamsChange(effect.setValue(currentParams, newValue))
-                        },
-                        onDoubleTap = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val resetParams = effect.setValue(currentParams, effect.defaultValue)
-                            onParamsChange(resetParams)
-                        },
-                        valueRange = effect.minValue..effect.maxValue,
-                        activeTrackColor = effect.color,
-                        inactiveTrackColor = Color.Gray.copy(alpha = 0.2f),
-                        thumbColor = Color.White,
-                        thumbRadius = 7.dp,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp)
-                    )
-
-                    // 4. 当前数值
-                    Text(
-                        text = formatEffectValue(effect, currentValue),
-                        color = if (isActive) Color.White else Color.White.copy(alpha = 0.4f),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.width(42.dp)
-                    )
-                }
-            }
+        visibleEffects.forEach { effect ->
+            ColorRecipeSlider(
+                param = effect.recipeParam,
+                value = effect.getValue(currentParams),
+                onValueChange = { newValue ->
+                    onParamsChange(effect.setValue(currentParams, newValue))
+                },
+                onDoubleTap = {
+                    onParamsChange(effect.setValue(currentParams, effect.defaultValue))
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
-    }
-}
-
-private fun formatEffectValue(effect: EffectType, value: Float): String {
-    return when (effect) {
-        EffectType.VIGNETTE -> {
-            if (value >= 0) "+${String.format("%.2f", value)}" else String.format("%.2f", value)
-        }
-        else -> String.format("%.2f", value)
     }
 }

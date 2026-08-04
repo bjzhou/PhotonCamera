@@ -361,6 +361,9 @@
     <string name="recipe_grading_blending">การผสม</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">แสง</string>
+    <string name="effects_group_light">เอฟเฟกต์แสง</string>
+    <string name="effects_group_optics">ออปติก</string>
+    <string name="effects_group_texture">พื้นผิว</string>
     <string name="recipe_tab_curve">เส้นโค้ง</string>
     <string name="recipe_tab_calibration">การสอบเทียบ</string>
     <string name="recipe_lch_skin">สี</string>

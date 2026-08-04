@@ -531,6 +531,21 @@ private fun ColorSectionTabs(
         ColorPanelSection.LCH to R.string.recipe_tab_lch,
         ColorPanelSection.GRADING to R.string.recipe_color_grading,
     )
+    RecipeSectionTabs(
+        tabs = tabs,
+        selectedTab = selectedSection,
+        onTabSelected = onSectionSelected,
+        modifier = modifier
+    )
+}
+
+@Composable
+internal fun <T> RecipeSectionTabs(
+    tabs: List<Pair<T, Int>>,
+    selectedTab: T,
+    onTabSelected: (T) -> Unit,
+    modifier: Modifier = Modifier
+) {
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -538,8 +553,8 @@ private fun ColorSectionTabs(
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        tabs.forEach { (section, title) ->
-            val selected = section == selectedSection
+        tabs.forEach { (tab, title) ->
+            val selected = tab == selectedTab
             Text(
                 text = stringResource(title),
                 color = if (selected) Color.White else Color.White.copy(alpha = 0.5f),
@@ -550,7 +565,7 @@ private fun ColorSectionTabs(
                     .weight(1f)
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (selected) Color.White.copy(alpha = 0.14f) else Color.Transparent)
-                    .clickable { onSectionSelected(section) }
+                    .clickable { onTabSelected(tab) }
                     .padding(vertical = 7.dp)
             )
         }

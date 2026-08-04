@@ -179,6 +179,9 @@
     <string name="recipe_grading_balance">Balance</string>
     <string name="recipe_grading_blending">Übergang</string>
     <string name="recipe_tab_light">Licht</string>
+    <string name="effects_group_light">Lichteffekte</string>
+    <string name="effects_group_optics">Optik</string>
+    <string name="effects_group_texture">Textur</string>
     <string name="recipe_tab_texture">Textur</string>
     <string name="recipe_tab_post">Entwicklung</string>
     

@@ -179,6 +179,9 @@
     <string name="recipe_grading_balance">Keseimbangan</string>
     <string name="recipe_grading_blending">Transisi</string>
     <string name="recipe_tab_light">Cahaya</string>
+    <string name="effects_group_light">Efek Cahaya</string>
+    <string name="effects_group_optics">Optik</string>
+    <string name="effects_group_texture">Tekstur</string>
     <string name="recipe_tab_texture">Tekstur</string>
     <string name="recipe_tab_post">Pasca</string>
     

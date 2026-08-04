@@ -179,6 +179,9 @@
     <string name="recipe_grading_balance">バランス</string>
     <string name="recipe_grading_blending">ブレンド</string>
     <string name="recipe_tab_light">ライト</string>
+    <string name="effects_group_light">光効果</string>
+    <string name="effects_group_optics">光学</string>
+    <string name="effects_group_texture">テクスチャ</string>
     <string name="recipe_tab_texture">テクスチャ</string>
     <string name="recipe_tab_post">現像</string>
     

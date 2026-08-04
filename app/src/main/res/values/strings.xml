@@ -489,6 +489,9 @@
     <string name="recipe_grading_blending">Blending</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">Light</string>
+    <string name="effects_group_light">Light FX</string>
+    <string name="effects_group_optics">Optics</string>
+    <string name="effects_group_texture">Texture</string>
     <string name="recipe_tab_curve">Curve</string>
     <string name="recipe_tab_calibration">Calibration</string>
     <string name="recipe_lch_skin">Skin</string>

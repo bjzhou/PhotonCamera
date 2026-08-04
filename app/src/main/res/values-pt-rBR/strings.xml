@@ -180,6 +180,9 @@
     <string name="recipe_grading_balance">Balanço</string>
     <string name="recipe_grading_blending">Transição</string>
     <string name="recipe_tab_light">Luz</string>
+    <string name="effects_group_light">Efeitos de luz</string>
+    <string name="effects_group_optics">Óptica</string>
+    <string name="effects_group_texture">Textura</string>
     <string name="recipe_tab_texture">Textura</string>
     <string name="recipe_tab_post">Pós</string>
     
