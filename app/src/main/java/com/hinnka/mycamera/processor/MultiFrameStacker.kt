@@ -16,8 +16,14 @@ enum class RawStackBufferLayout {
     LINEAR_RGB,
 }
 
+enum class MgcSpatialOutputMode {
+    BAYER,
+    RGB,
+}
+
 /**
  * Opaque LinearRaw texture exported by the stacker into the persistent RAW renderer context.
+ * Storage is normalized RGBA16UI: RGB contains [0, 65535] linear camera values and A is 65535.
  * It may only be consumed or released on that context's GL dispatcher.
  */
 data class GpuLinearRgbSource(
@@ -44,6 +50,9 @@ data class RawStackResult(
     val inputColStepSamples: Int? = null,
     val baselineExposureEv: Float? = null,
     val gpuLinearRgbSource: GpuLinearRgbSource? = null,
+    /** True only when lens-shading gain has already been multiplied into the fused pixels. */
+    val lensShadingCorrectionApplied: Boolean = false,
+    val mergedFrameCount: Int = 1,
 )
 
 enum class YuvHdrStackFrameRole {
@@ -174,6 +183,7 @@ object MultiFrameStacker {
     fun processBurstRaw(
         frames: List<RawStackFrame>,
         cfaPattern: Int,
+        outputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
         outputScale: Float = 1f,
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
@@ -193,19 +203,24 @@ object MultiFrameStacker {
         val width = images[0].width
         val height = images[0].height
 
-        RawStackRuntimeDebug.d(TAG) {
-            "Starting RAW Radiance fusion for ${images.size} frames. Pattern=$cfaPattern " +
-                "outputScale=${MultiFrameConfig.normalizeOutputScale(outputScale)} " +
-                "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel"
+        val effectiveOutputScale = if (outputMode == MgcSpatialOutputMode.BAYER) {
+            1f
+        } else {
+            MultiFrameConfig.normalizeOutputScale(outputScale)
         }
-        val normalizedOutputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
+        RawStackRuntimeDebug.d(TAG) {
+            "Starting MGC Spatial ${outputMode.name} fusion for ${images.size} frames. " +
+                "Pattern=$cfaPattern outputScale=$effectiveOutputScale " +
+                "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel " +
+                "legacyHdrFlag=$enableHdrFusion"
+        }
         val stackLensShading = validLensShadingOrNull(
             lensShading = lensShading,
             width = lensShadingWidth,
             height = lensShadingHeight,
-            enabled = applyLensShadingCorrection,
+            enabled = applyLensShadingCorrection && outputMode == MgcSpatialOutputMode.RGB,
         )
-        return GlesRawRadianceFusion(
+        return GlesMgcRawFusion(
             width = width,
             height = height,
             cfaPattern = cfaPattern,
@@ -217,11 +232,10 @@ object MultiFrameStacker {
             lensShading = stackLensShading,
             lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
-            outputScale = normalizedOutputScale,
-            debugConfig = RawStackRuntimeDebug.debugConfig,
+            outputMode = outputMode,
+            outputScale = effectiveOutputScale,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
-            enableHdrFusion = enableHdrFusion,
         ).processFrames(frames)
     }
 

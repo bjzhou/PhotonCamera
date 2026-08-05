@@ -187,6 +187,7 @@ data class UserPreferences(
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
     val useRawMaxHdrComposition: Boolean = true, // RAWmax：包围曝光 HDR 融合
+    val useRawMaxSpatialRgb: Boolean = false, // RAWmax：可选 Spatial RGB；默认保留 Bayer
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
@@ -407,6 +408,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
         private val USE_RAW_MAX_HDR_COMPOSITION =
             booleanPreferencesKey("use_raw_max_hdr_composition")
+        private val USE_RAW_MAX_SPATIAL_RGB =
+            booleanPreferencesKey("use_raw_max_spatial_rgb")
         private val LEGACY_USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
@@ -638,6 +641,7 @@ class UserPreferencesRepository(private val context: Context) {
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useRawMax = useRawMax,
                 useRawMaxHdrComposition = preferences[USE_RAW_MAX_HDR_COMPOSITION] ?: true,
+                useRawMaxSpatialRgb = preferences[USE_RAW_MAX_SPATIAL_RGB] ?: false,
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
                     ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
                     MultiFrameConfig.normalizeOutputScale(
@@ -1752,6 +1756,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseRawMaxHdrComposition(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_RAW_MAX_HDR_COMPOSITION] = enabled
+        }
+    }
+
+    suspend fun saveUseRawMaxSpatialRgb(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_RAW_MAX_SPATIAL_RGB] = enabled
         }
     }
 

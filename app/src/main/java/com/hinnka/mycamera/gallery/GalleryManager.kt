@@ -35,6 +35,7 @@ import com.hinnka.mycamera.lut.applyEffectsToVideoFile
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
+import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackBufferLayout
@@ -2919,6 +2920,7 @@ object GalleryManager {
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
         rawMaxHdrFusionEnabled: Boolean = true,
+        rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
     ) = withContext(Dispatchers.IO) {
         var stackProcessor: RawDemosaicProcessor? = null
         var gpuSourceToRelease: GpuLinearRgbSource? = null
@@ -2978,7 +2980,8 @@ object GalleryManager {
                 )
             }
 
-            val currentUseSuperResolution = useSuperResolution
+            val currentUseSuperResolution =
+                useSuperResolution && rawMaxSpatialOutputMode == MgcSpatialOutputMode.RGB
             val rawStackOutputScale = if (currentUseSuperResolution) {
                 MultiFrameConfig.normalizeOutputScale(superResolutionScale)
             } else {
@@ -3008,6 +3011,7 @@ object GalleryManager {
                 MultiFrameStacker.processBurstRaw(
                     frames = effectiveRawStackFrames,
                     cfaPattern = stackCfaPattern,
+                    outputMode = rawMaxSpatialOutputMode,
                     outputScale = rawStackOutputScale,
                     masterBlackLevel = stackBlackLevel,
                     whiteLevel = stackWhiteLevel,
@@ -3102,6 +3106,8 @@ object GalleryManager {
                     imageLayout = imageLayout,
                     inputRowStepSamples = inputRowStepSamples,
                     inputColStepSamples = inputSamplesPerPixel,
+                    pixelsIncludeLensShadingCorrection =
+                        finalStackResult.lensShadingCorrectionApplied,
                     options = profileOptions,
                     defaultCrop = dngDefaultCrop,
                 )
@@ -3136,6 +3142,8 @@ object GalleryManager {
                         compression = finalStackResult.bufferLayout.toDngCompression(),
                         inputRowStepSamples = inputRowStepSamples,
                         inputColStepSamples = inputSamplesPerPixel,
+                        pixelsIncludeLensShadingCorrection =
+                            finalStackResult.lensShadingCorrectionApplied,
                         baselineExposureEv = finalStackResult.baselineExposureEv,
                         preparedDngProfile = dngProfilePreparation,
                         preparedProfileOptions = profileOptions,
@@ -3192,6 +3200,13 @@ object GalleryManager {
                     rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                     rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                     rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
+                    sourceFrameCount = if (
+                        finalStackResult.bufferLayout == RawStackBufferLayout.CFA
+                    ) {
+                        finalStackResult.mergedFrameCount
+                    } else {
+                        null
+                    },
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(
@@ -3682,6 +3697,7 @@ object GalleryManager {
         compression: SuperResolutionDngWriter.Compression = SuperResolutionDngWriter.Compression.UNCOMPRESSED,
         inputRowStepSamples: Int? = null,
         inputColStepSamples: Int? = null,
+        pixelsIncludeLensShadingCorrection: Boolean = false,
         preparedDngProfile: RawDngProfilePreparation? = null,
         preparedProfileOptions: RawDngProfilePreparationOptions? = null,
     ): Boolean {
@@ -3729,6 +3745,8 @@ object GalleryManager {
                     compression = compression,
                     inputRowStepSamples = inputRowStepSamples,
                     inputColStepSamples = inputColStepSamples,
+                    pixelsIncludeLensShadingCorrection =
+                        pixelsIncludeLensShadingCorrection,
                     dngProfilePreparationOptions = preparedProfileOptions
                         ?: rawDngProfilePreparationOptions(
                             context = context,
@@ -3842,6 +3860,7 @@ object GalleryManager {
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
         rawMaxHdrFusionEnabled: Boolean = true,
+        rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -3886,6 +3905,7 @@ object GalleryManager {
                     frameFocusDistances,
                     rawStackFrames,
                     rawMaxHdrFusionEnabled,
+                    rawMaxSpatialOutputMode,
                 )
             }
 

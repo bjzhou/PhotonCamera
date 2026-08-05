@@ -200,6 +200,8 @@
     <string name="settings_use_raw_max">RAWmax</string>
     <string name="settings_raw_max_hdr_composition">RAWmax HDR Composition</string>
     <string name="settings_raw_max_hdr_composition_description">Use bracketed exposures for HDR fusion in RAWmax. Turn it off to improve processing performance.</string>
+    <string name="settings_raw_max_spatial_rgb">RAWmax Spatial RGB</string>
+    <string name="settings_raw_max_spatial_rgb_description">Output demosaiced linear RGB and enable the super-resolution scale. Turn off to preserve the native Bayer mosaic.</string>
     <string name="settings_use_multiple_exposure">Multiple Exposure</string>
     <string name="multiple_exposure_finish">Finish</string>
     <string name="multiple_exposure_undo">Undo</string>

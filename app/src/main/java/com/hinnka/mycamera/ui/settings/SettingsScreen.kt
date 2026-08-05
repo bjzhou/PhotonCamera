@@ -301,6 +301,7 @@ fun SettingsScreen(
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useJpgMaxHdrComposition by viewModel.useJpgMaxHdrComposition.collectAsState()
     val useRawMaxHdrComposition by viewModel.useRawMaxHdrComposition.collectAsState()
+    val useRawMaxSpatialRgb by viewModel.useRawMaxSpatialRgb.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
@@ -1676,6 +1677,20 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_raw_max_spatial_rgb),
+                            description = stringResource(
+                                R.string.settings_raw_max_spatial_rgb_description
+                            ),
+                            checked = useRawMaxSpatialRgb,
+                            onCheckedChange = viewModel::setUseRawMaxSpatialRgb
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         SliderSettingItem(
                             title = stringResource(R.string.settings_max_frame_count),
                             description = stringResource(R.string.settings_max_frame_count_description),
@@ -1828,7 +1843,7 @@ fun SettingsScreen(
                         onSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
                         onAdjustmentStart = { isRawSliderAdjusting = true },
                         onAdjustmentEnd = { commitRawSliderValues() },
-                        showRawMaxOutputScaleControl = true,
+                        showRawMaxOutputScaleControl = useRawMaxSpatialRgb,
                         rawMaxOutputScale = rawMaxOutputScale,
                         onRawMaxOutputScaleChange = viewModel::setRawMaxOutputScale,
                         selectedHncsProfileId = rawHncsProfileId,

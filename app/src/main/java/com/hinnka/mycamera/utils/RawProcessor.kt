@@ -507,6 +507,7 @@ object RawProcessor {
         imageLayout: SuperResolutionDngWriter.ImageLayout = SuperResolutionDngWriter.ImageLayout.CFA,
         inputRowStepSamples: Int? = null,
         inputColStepSamples: Int? = null,
+        pixelsIncludeLensShadingCorrection: Boolean = false,
         options: RawDngProfilePreparationOptions,
         defaultCrop: Rect,
     ): RawDngProfilePreparation? {
@@ -537,7 +538,7 @@ object RawProcessor {
         } else {
             resolvedWhiteLevel.toFloat()
         }
-        val statsMetadata = buildAdobeDngColorMetadata(
+        val cameraStatsMetadata = buildAdobeDngColorMetadata(
             width = width,
             height = height,
             characteristics = characteristics,
@@ -551,6 +552,22 @@ object RawProcessor {
             baselineExposure = sourceBaselineExposureEv,
             defaultCrop = defaultCrop,
         )
+        val statsMetadata = if (pixelsIncludeLensShadingCorrection) {
+            cameraStatsMetadata.copy(
+                lensShadingMap = null,
+                lensShadingMapWidth = 0,
+                lensShadingMapHeight = 0,
+                lensShadingMapGrid = null,
+            ).also {
+                PLog.i(
+                    TAG,
+                    "RAW LSC ownership: fused pixels already corrected; " +
+                        "capture profile will not apply Camera2/DNG gain map",
+                )
+            }
+        } else {
+            cameraStatsMetadata
+        }
         val embeddedDngColorPlan = SuperResolutionDngWriter.resolveEmbeddedRenderPlan(
             characteristics = characteristics,
             metadata = statsMetadata,
@@ -658,6 +675,7 @@ object RawProcessor {
         compression: SuperResolutionDngWriter.Compression = SuperResolutionDngWriter.Compression.UNCOMPRESSED,
         inputRowStepSamples: Int? = null,
         inputColStepSamples: Int? = null,
+        pixelsIncludeLensShadingCorrection: Boolean = false,
         dngProfilePreparationOptions: RawDngProfilePreparationOptions? = null,
         defaultCrop: Rect,
         preparedDngProfile: RawDngProfilePreparation? = null,
@@ -669,7 +687,8 @@ object RawProcessor {
         val hasWhiteLevelOverride = RawWhiteLevelCorrection.isOverrideMode(whiteLevelMode)
         val requiresCustomWriter = imageLayout != SuperResolutionDngWriter.ImageLayout.CFA ||
                 compression != SuperResolutionDngWriter.Compression.UNCOMPRESSED ||
-                dngProfilePreparationOptions != null
+                dngProfilePreparationOptions != null ||
+                pixelsIncludeLensShadingCorrection
         if (hasCfaOverride && resolvedCfaPattern != cfaPattern) {
             PLog.d(TAG, "RAW DNG CFA override mode=$cfaCorrectionMode cfa=$cfaPattern->$resolvedCfaPattern")
         }
@@ -697,6 +716,7 @@ object RawProcessor {
                 imageLayout = imageLayout,
                 inputRowStepSamples = inputRowStepSamples,
                 inputColStepSamples = inputColStepSamples,
+                pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
                 options = options,
                 defaultCrop = defaultCrop,
             )
@@ -756,6 +776,7 @@ object RawProcessor {
                 compression = compression,
                 inputRowStepSamples = inputRowStepSamples,
                 inputColStepSamples = inputColStepSamples,
+                pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
                 defaultCrop = defaultCrop,
             )
         }

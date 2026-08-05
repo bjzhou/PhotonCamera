@@ -50,6 +50,7 @@ import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.RawBurstGyroSelector
+import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.RawRadianceExposurePlanner
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
@@ -1290,6 +1291,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useRawMaxHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMaxHdrComposition }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val useRawMaxSpatialRgb: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useRawMaxSpatialRgb }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -3959,6 +3963,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setUseRawMaxSpatialRgb(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseRawMaxSpatialRgb(enabled)
+        }
+    }
+
     /**
      * 设置多帧合成帧数
      */
@@ -5415,13 +5425,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            val useSuperRes = useRawMax.value
+            val rawSpatialOutputMode = if (
+                isRawStack && userPrefs?.useRawMaxSpatialRgb == true
+            ) {
+                MgcSpatialOutputMode.RGB
+            } else {
+                MgcSpatialOutputMode.BAYER
+            }
+            val useSuperRes = useRawMax.value &&
+                (!isRawStack || rawSpatialOutputMode == MgcSpatialOutputMode.RGB)
             val superResScale = when {
                 !useSuperRes -> 1f
                 isRawStack -> state.value.multiFrameOutputScale
                     ?.let(MultiFrameConfig::normalizeOutputScale)
                     ?: MultiFrameConfig.MIN_OUTPUT_SCALE
                 else -> 2f
+            }
+            if (isRawStack) {
+                PLog.i(
+                    TAG,
+                    "RAWmax output layout=${rawSpatialOutputMode.name} " +
+                        "outputScale=$superResScale " +
+                        "superResolution=${rawSpatialOutputMode == MgcSpatialOutputMode.RGB}",
+                )
             }
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
@@ -5567,6 +5593,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     capturePreviewThumbnail = previewThumbnail,
                     rawStackFrames = frames,
                     rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
+                    rawMaxSpatialOutputMode = rawSpatialOutputMode,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")

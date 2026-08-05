@@ -284,6 +284,7 @@ object SuperResolutionDngWriter {
         compression: Compression = Compression.UNCOMPRESSED,
         inputRowStepSamples: Int? = null,
         inputColStepSamples: Int? = null,
+        pixelsIncludeLensShadingCorrection: Boolean = false,
         defaultCrop: Rect,
     ): Boolean {
         if (width <= 0 || height <= 0) return false
@@ -393,6 +394,7 @@ object SuperResolutionDngWriter {
                 imageLayout = imageLayout,
                 compression = compression,
                 valueDomain = valueDomain,
+                pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
                 defaultCrop = defaultCrop,
             )
             val header = buildHeader(
@@ -412,6 +414,7 @@ object SuperResolutionDngWriter {
                     "layout=$imageLayout compression=$compression " +
                     "rowStepSamples=$rowStepSamples colStepSamples=$colStepSamples " +
                     "blackLevel=${encodedBlackLevel.joinToString()} whiteLevel=$encodedWhiteLevel " +
+                    "lscInPixels=$pixelsIncludeLensShadingCorrection " +
                     "baselineExposureEv=$baselineExposureEv " +
                     "ifdLayout=raw-ifd0 preview=none " +
                     "defaultBlackRender=${if (writtenProfileGainTableMap != null) "none" else "default"} " +
@@ -448,6 +451,7 @@ object SuperResolutionDngWriter {
         imageLayout: ImageLayout,
         compression: Compression,
         valueDomain: RawProcessor.RawBufferValueDomain,
+        pixelsIncludeLensShadingCorrection: Boolean,
         defaultCrop: Rect,
     ): TiffDirectories {
         // The custom writer is used when the fused RAW dimensions no longer
@@ -517,7 +521,7 @@ object SuperResolutionDngWriter {
         }
         val isCfa = imageLayout == ImageLayout.CFA
         val samplesPerPixel = imageLayout.samplesPerPixel
-        val opcodeList2 = if (isCfa && valueDomain != RawProcessor.RawBufferValueDomain.NORMALIZED_SENSOR_RANGE) {
+        val opcodeList2 = if (isCfa && !pixelsIncludeLensShadingCorrection) {
             buildOpcodeList2(
                 captureResult = captureResult,
                 cfaPattern = cfaPattern,

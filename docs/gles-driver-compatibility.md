@@ -218,6 +218,32 @@ blending：
 - 使用 `GL_RGBA_INTEGER + GL_UNSIGNED_SHORT` 回读 RGBA16。
 - 在 native 层批量执行 RGBA16 → RGB16，只改变内存布局，不改变通道数值和图像语义。
 
+## Framebuffer MRT 附件必须显式解除
+
+已确认设备：Adreno 840，驱动
+`OpenGL ES 3.2 V@0842.41 (GIT@8cfe428358, I8188c84bfe, 1777522173)`。
+
+### 问题
+
+Framebuffer 会保留之前绑定但本次未覆盖的颜色附件。从三个半分辨率 MRT attachment 切换到
+两个全分辨率 attachment 时，只调用两次 `glFramebufferTexture2D` 和
+`glDrawBuffers(2, ...)` 不会解除 `COLOR_ATTACHMENT2`。该驱动会按仍绑定附件的尺寸交集限制
+有效写入区域，使后续全分辨率 draw 只覆盖半宽乘半高的四分之一画面。
+
+### 错误做法
+
+- 认为 `glDrawBuffers` 缩短列表会自动解除多余 attachment。
+- 切换到更少的 render target 时只替换本次使用的 attachment。
+- 因 `glCheckFramebufferStatus` 返回 complete，就推断 viewport 覆盖了目标纹理完整尺寸。
+
+### 正确做法
+
+- render-target helper 记录前一次 attachment 数量。
+- 本次 target 数减少时，对尾部 attachment 显式调用
+  `glFramebufferTexture2D(..., texture=0, level=0)`。
+- 解除旧 attachment 后再调用 `glDrawBuffers`、检查 framebuffer 状态并设置 viewport。
+- MRT 数量变化且纹理尺寸也变化的路径，真机验证完整四角均被写入。
+
 ## 16-bit 整数纹理转浮点
 
 已确认设备：vivo V2242A，Mali-G715-Immortalis MC11，驱动 `v1.r38p1`。

@@ -1439,6 +1439,7 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        sourceFrameCount: Int? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): RawHdrRenderResult? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
@@ -1481,6 +1482,7 @@ class RawDemosaicProcessor {
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 dngFile = dngFile,
+                sourceFrameCountOverride = sourceFrameCount,
                 onMetadata = onMetadata,
                 includeHdrReference = true
             )
@@ -1683,6 +1685,7 @@ class RawDemosaicProcessor {
         onCaptureProfilePrepared: ((RawDngCaptureProfileResult?) -> Unit)? = null,
         sourceDngRenderPlan: DcpRenderPlan? = null,
         defaultCropIsAuthoritative: Boolean = false,
+        sourceFrameCountOverride: Int? = null,
     ): RawHdrRenderResult? = withContext(glDispatcher) {
         var actualRawData = rawData
         var actualWidth = width
@@ -1776,7 +1779,13 @@ class RawDemosaicProcessor {
                 rawWhiteLevelMode = rawWhiteLevelMode,
                 rawCustomWhiteLevel = rawCustomWhiteLevel,
                 rawCfaCorrectionMode = rawCfaCorrectionMode
-            ).copy(profileGainTableMap = profileGainTableMap ?: actualMetadata?.profileGainTableMap)
+            ).copy(
+                profileGainTableMap = profileGainTableMap ?: actualMetadata?.profileGainTableMap,
+                frameCount = maxOf(
+                    actualMetadata?.frameCount ?: 1,
+                    sourceFrameCountOverride?.coerceAtLeast(1) ?: 1,
+                ),
+            )
             profileGainTableMap?.let {
                 PLog.d(
                     TAG,
@@ -2330,6 +2339,15 @@ class RawDemosaicProcessor {
                     // darktable feeds Filmic after the raw highlight reconstruction module;
                     // keep the raw-domain repair enabled before Filmic HR.
                     val rawDomainHighlightReconstructionEnabled = true
+                    PLog.i(
+                        TAG,
+                        "RAW fused input layout=CFA frameCount=${actualMetadata.frameCount} " +
+                            "demosaic=${when {
+                                RawMetadata.isQuadBayer(actualMetadata.cfaPattern) -> "QUAD_BAYER"
+                                actualMetadata.frameCount > 1 -> "STANDARD_BAYER_RCD"
+                                else -> "SINGLE_FRAME_VGN"
+                            }}",
+                    )
                     if (RawMetadata.isQuadBayer(actualMetadata.cfaPattern)) {
                         check(ensureQuadBayerPrograms()) {
                             "Unable to initialize Quad Bayer demosaic programs"
