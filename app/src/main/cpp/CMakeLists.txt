@@ -8,28 +8,38 @@ set(ULTRAHDR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr)
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
 
 set(
-    MGC_GCASTARTUP_SO
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../MGC/MGC_9.6.080_V24_MGC/lib/arm64-v8a/libgcastartup.so"
+    MGC_DENOISE_CAPSULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_full_resolution_denoise_capsule.bin"
 )
 set(
-    MGC_GCASTARTUP_SHA256
-    "2103c54ebba1627733b79e3646105595ed1ccefa2b1629f63fb7e1785a48d6a0"
+    MGC_DENOISE_CAPSULE_SHA256
+    "ab17d95f5f07abec50a21af8534a3866777bcd043e29324e36f367d21c288879"
 )
-if(NOT EXISTS "${MGC_GCASTARTUP_SO}")
-    message(FATAL_ERROR "Pinned MGC libgcastartup.so is required for static denoise extraction")
+if(NOT EXISTS "${MGC_DENOISE_CAPSULE}")
+    message(
+        FATAL_ERROR
+        "MGC denoise capsule is missing; regenerate it with "
+        "scripts/research/generate_mgc_denoise_static_asm.py"
+    )
 endif()
-file(SHA256 "${MGC_GCASTARTUP_SO}" MGC_GCASTARTUP_ACTUAL_SHA256)
-if(NOT MGC_GCASTARTUP_ACTUAL_SHA256 STREQUAL MGC_GCASTARTUP_SHA256)
-    message(FATAL_ERROR "Pinned MGC libgcastartup.so hash mismatch")
+file(SHA256 "${MGC_DENOISE_CAPSULE}" MGC_DENOISE_CAPSULE_ACTUAL_SHA256)
+if(NOT MGC_DENOISE_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_DENOISE_CAPSULE_SHA256)
+    message(FATAL_ERROR "MGC denoise capsule hash mismatch")
 endif()
+set(
+    MGC_DENOISE_ASM
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
+)
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_full_resolution_denoise_static.S.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
+    "${MGC_DENOISE_ASM}"
     @ONLY
 )
 set_source_files_properties(
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
-    PROPERTIES GENERATED TRUE
+    "${MGC_DENOISE_ASM}"
+    PROPERTIES
+    GENERATED TRUE
+    OBJECT_DEPENDS "${MGC_DENOISE_CAPSULE}"
 )
 
 # 4. 添加头文件路径
@@ -117,7 +127,7 @@ add_library(my-native-lib SHARED
     dcp_parser.cpp
     mgc_denoise_static/mgc_denoise_static.cpp
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
+    "${MGC_DENOISE_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
 )

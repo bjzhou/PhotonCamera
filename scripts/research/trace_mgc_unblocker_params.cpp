@@ -322,25 +322,46 @@ int main(int argc, char **argv) {
         if (!read_fp_registers(tid, &floating_point)) {
             fprintf(stderr, "PTRACE_GETREGSET NT_PRFPREG failed errno=%d\n", errno);
         } else {
-            printf(
-                "hit tid=%d x1=%#" PRIx64 " x2=%#" PRIx64
-                " x3=%#" PRIx64 " x4=%#" PRIx64 "\n",
-                tid,
-                static_cast<uint64_t>(general.regs[1]),
-                static_cast<uint64_t>(general.regs[2]),
-                static_cast<uint64_t>(general.regs[3]),
-                static_cast<uint64_t>(general.regs[4]));
-            for (int index = 0; index < 6; ++index) {
+            printf("hit tid=%d pc=%#" PRIx64 " sp=%#" PRIx64 "\n",
+                   tid,
+                   static_cast<uint64_t>(general.pc),
+                   static_cast<uint64_t>(general.sp));
+            for (int index = 0; index < 8; ++index) {
+                printf(
+                    "x%d=%#" PRIx64 "\n",
+                    index,
+                    static_cast<uint64_t>(general.regs[index]));
+            }
+            for (int index = 0; index < 8; ++index) {
                 printf("s%d=%.9g\n", index, scalar_float(floating_point, index));
             }
-            print_remote_buffer(
-                tid,
-                "input",
-                static_cast<uintptr_t>(general.regs[1]));
-            print_remote_buffer(
-                tid,
-                "output",
-                static_cast<uintptr_t>(general.regs[4]));
+            for (int index = 1; index < 8; ++index) {
+                char label[16];
+                snprintf(label, sizeof(label), "buffer_x%d", index);
+                print_remote_buffer(
+                    tid,
+                    label,
+                    static_cast<uintptr_t>(general.regs[index]));
+            }
+            uint64_t stack_arguments[8] = {};
+            if (read_remote(
+                    tid,
+                    static_cast<uintptr_t>(general.sp),
+                    stack_arguments,
+                    sizeof(stack_arguments))) {
+                for (int index = 0; index < 8; ++index) {
+                    printf(
+                        "stack%d=%#" PRIx64 "\n",
+                        index,
+                        stack_arguments[index]);
+                    char label[20];
+                    snprintf(label, sizeof(label), "buffer_stack%d", index);
+                    print_remote_buffer(
+                        tid,
+                        label,
+                        static_cast<uintptr_t>(stack_arguments[index]));
+                }
+            }
             fflush(stdout);
         }
         detach_threads(attached, tid);

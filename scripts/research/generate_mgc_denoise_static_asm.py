@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Lift the pinned MGC Halide closure into normal link-time assembly.
 
-The generated source contains no executable bytes of its own.  It uses
-``.incbin`` to select the verified code/constant pages from libgcastartup.so
-and replaces every page-relative or cross-range reference with a standard ELF
-relocation.  Android's normal linker therefore owns code placement and
-relocation; no runtime page container, mmap, mprotect, or branch patching is
-required.
+The generator copies only the referenced, unpatched code and constant spans
+into a compact capsule.  The generated source uses ``.incbin`` against that
+capsule and replaces every page-relative or cross-range reference with a
+standard ELF relocation.  Android's normal linker therefore owns code
+placement and relocation; normal builds need neither the original
+libgcastartup.so nor a runtime page container, mmap, mprotect, or branch
+patching.
 
 This is a mechanical binary lift.  It intentionally does not translate the
 Halide schedule into a hand-written approximation.
@@ -153,12 +154,30 @@ def error_symbol(address: int) -> str:
     return f"photon_mgc_halide_error_{address:x}"
 
 
-def emit_incbin(lines: list[str], start: int, end: int) -> None:
-    if end <= start:
-        return
-    lines.append(
-        f'    .incbin "@MGC_GCASTARTUP_SO@", 0x{start:x}, 0x{end - start:x}'
-    )
+class CapsuleWriter:
+    def __init__(self, source: bytes) -> None:
+        self._source = source
+        self._capsule = bytearray()
+
+    def emit_incbin(self, lines: list[str], start: int, end: int) -> None:
+        if end <= start:
+            return
+        if start < 0 or end > len(self._source):
+            raise ValueError(
+                f"capsule span 0x{start:x}..0x{end:x} exceeds source size "
+                f"0x{len(self._source):x}"
+            )
+        capsule_offset = len(self._capsule)
+        self._capsule.extend(self._source[start:end])
+        lines.append(
+            f'    .incbin "@MGC_DENOISE_CAPSULE@", '
+            f"0x{capsule_offset:x}, 0x{end - start:x}"
+        )
+
+    def write(self, output_path: Path) -> str:
+        capsule = bytes(self._capsule)
+        output_path.write_bytes(capsule)
+        return hashlib.sha256(capsule).hexdigest()
 
 
 def validate_local_pc_relative(
@@ -193,7 +212,12 @@ def validate_local_pc_relative(
         )
 
 
-def generate(source_path: Path, manifest_path: Path, output_path: Path) -> None:
+def generate(
+    source_path: Path,
+    manifest_path: Path,
+    output_path: Path,
+    capsule_path: Path,
+) -> None:
     source = source_path.read_bytes()
     digest = hashlib.sha256(source).hexdigest()
     if digest != SOURCE_SHA256:
@@ -212,6 +236,7 @@ def generate(source_path: Path, manifest_path: Path, output_path: Path) -> None:
             f"manifest records {expected_task_count} do_par_for calls but "
             f"{len(task_relocations)} task relocations"
         )
+    capsule_writer = CapsuleWriter(source)
 
     code_pages: set[int] = set()
     labels: dict[int, list[str]] = {}
@@ -321,7 +346,7 @@ def generate(source_path: Path, manifest_path: Path, output_path: Path) -> None:
         )
         position = section_start
         for address in sorted(events):
-            emit_incbin(lines, position, address)
+            capsule_writer.emit_incbin(lines, position, address)
             if address % PAGE_SIZE == 0:
                 lines.append(f"{page_symbol(address)}:")
             for symbol in dict.fromkeys(labels.get(address, [])):
@@ -332,7 +357,7 @@ def generate(source_path: Path, manifest_path: Path, output_path: Path) -> None:
                 position = address + 4
             else:
                 position = address
-        emit_incbin(lines, position, section_end)
+        capsule_writer.emit_incbin(lines, position, section_end)
         lines.append("")
 
     relocation_pages = {page_floor(value) for value in task_relocations}
@@ -354,10 +379,10 @@ def generate(source_path: Path, manifest_path: Path, output_path: Path) -> None:
         )
         position = page
         for location, target in page_relocations:
-            emit_incbin(lines, position, location)
+            capsule_writer.emit_incbin(lines, position, location)
             lines.append(f"    .xword {address_symbol(target)}")
             position = location + 8
-        emit_incbin(lines, position, page + PAGE_SIZE)
+        capsule_writer.emit_incbin(lines, position, page + PAGE_SIZE)
         lines.append("")
 
     lines.extend(
@@ -367,11 +392,13 @@ def generate(source_path: Path, manifest_path: Path, output_path: Path) -> None:
         ]
     )
     output_path.write_text("\n".join(lines), encoding="utf-8")
+    capsule_sha256 = capsule_writer.write(capsule_path)
     print(
         f"generated={output_path} pages={len(pages)} "
         f"patches={len(patches)} "
         f"task_relocations={len(task_relocations)} "
-        f"error_targets={len(external_error_targets)}"
+        f"error_targets={len(external_error_targets)} "
+        f"capsule={capsule_path} capsule_sha256={capsule_sha256}"
     )
 
 
@@ -380,8 +407,9 @@ def main() -> None:
     parser.add_argument("source", type=Path)
     parser.add_argument("manifest", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("capsule", type=Path)
     args = parser.parse_args()
-    generate(args.source, args.manifest, args.output)
+    generate(args.source, args.manifest, args.output, args.capsule)
 
 
 if __name__ == "__main__":

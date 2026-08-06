@@ -892,10 +892,14 @@ class RawDemosaicProcessor {
             return@withContext null
         }
         if (gpuLinearRgbSource != null) {
-            val validGpuSource = gpuLinearRgbSource.textureId != 0 &&
+            // The stacker's exported texture is RGBA16UI, while samplesPerPixel describes the
+            // logical/persisted LinearRaw layout (normally packed RGB16). Keep those layouts
+            // separate: the alpha storage channel must not leak into the LinearRaw/DNG contract.
+            val validGpuSource = samplesPerPixel in 3..4 &&
+                gpuLinearRgbSource.textureId != 0 &&
                 gpuLinearRgbSource.width == width &&
                 gpuLinearRgbSource.height == height &&
-                gpuLinearRgbSource.samplesPerPixel == samplesPerPixel &&
+                gpuLinearRgbSource.samplesPerPixel == 4 &&
                 exportedStackTextureIds.contains(gpuLinearRgbSource.textureId)
             if (!validGpuSource) {
                 PLog.e(
@@ -904,7 +908,8 @@ class RawDemosaicProcessor {
                         "texture=${gpuLinearRgbSource.textureId} " +
                         "source=${gpuLinearRgbSource.width}x${gpuLinearRgbSource.height}" +
                         "x${gpuLinearRgbSource.samplesPerPixel} " +
-                        "expected=${width}x${height}x$samplesPerPixel",
+                        "expected=${width}x${height}x4 " +
+                        "logicalSamples=$samplesPerPixel",
                 )
                 return@withContext null
             }
@@ -998,7 +1003,7 @@ class RawDemosaicProcessor {
                     borrowedTexture = true
                     renderLinearRawRgbToTexture(
                         sourceTextureId = rawTextureId,
-                        sourceSamplesPerPixel = samplesPerPixel,
+                        sourceSamplesPerPixel = gpuLinearRgbSource.samplesPerPixel,
                         targetTextureId = demosaicTextureId,
                         width = width,
                         height = height,
@@ -1056,15 +1061,16 @@ class RawDemosaicProcessor {
                         height = height,
                         rowStride = rowStride,
                     )
-                    check(ensureStandardBayerRcdPrograms()) {
-                        "Unable to initialize Standard Bayer RCD programs for Spatial default denoise"
+                    check(ensureVgnPrograms()) {
+                        "Unable to initialize Standard Bayer VGN programs for Spatial default denoise"
                     }
-                    runStandardBayerRcdDemosaic(
+                    runStandardBayerVgnDemosaic(
                         metadata = pixelPreparationMetadata,
                         width = width,
                         height = height,
+                        highlightReconstructionEnabled = true,
                     )
-                    "SPATIAL_BAYER_RCD"
+                    "SPATIAL_BAYER_VGN"
                 }
             }
             val preparationMs = (System.nanoTime() - preparationStartNs) / 1_000_000L
@@ -2696,8 +2702,7 @@ class RawDemosaicProcessor {
                         "RAW fused input layout=CFA frameCount=${actualMetadata.frameCount} " +
                             "demosaic=${when {
                                 RawMetadata.isQuadBayer(actualMetadata.cfaPattern) -> "QUAD_BAYER"
-                                actualMetadata.frameCount > 1 -> "STANDARD_BAYER_RCD"
-                                else -> "SINGLE_FRAME_VGN"
+                                else -> "STANDARD_BAYER_VGN"
                             }}",
                     )
                     if (RawMetadata.isQuadBayer(actualMetadata.cfaPattern)) {
@@ -2710,16 +2715,11 @@ class RawDemosaicProcessor {
                             actualHeight,
                             highlightReconstructionEnabled = rawDomainHighlightReconstructionEnabled
                         )
-                    } else if (actualMetadata.frameCount > 1) {
-                        check(ensureStandardBayerRcdPrograms()) {
-                            "Unable to initialize Standard Bayer RCD programs"
-                        }
-                        runStandardBayerRcdDemosaic(actualMetadata, actualWidth, actualHeight)
                     } else {
                         check(ensureVgnPrograms()) {
-                            "Unable to initialize single-frame VGN demosaic programs"
+                            "Unable to initialize Standard Bayer VGN demosaic programs"
                         }
-                        runSingleFrameVgnDemosaic(
+                        runStandardBayerVgnDemosaic(
                             metadata = actualMetadata,
                             width = actualWidth,
                             height = actualHeight,
@@ -3321,24 +3321,11 @@ class RawDemosaicProcessor {
                         )
                     }
 
-                    config.metadata.frameCount > 1 -> {
-                        check(ensureStandardBayerRcdPrograms()) {
-                            "Unable to initialize Standard Bayer RCD tile programs"
-                        }
-                        runStandardBayerRcdDemosaic(
-                            metadata = config.metadata,
-                            width = workWidth,
-                            height = workHeight,
-                            globalOriginX = working.left,
-                            globalOriginY = working.top,
-                        )
-                    }
-
                     else -> {
                         check(ensureVgnPrograms()) {
-                            "Unable to initialize VGN tile programs"
+                            "Unable to initialize Standard Bayer VGN tile programs"
                         }
-                        runSingleFrameVgnDemosaic(
+                        runStandardBayerVgnDemosaic(
                             metadata = config.metadata,
                             width = workWidth,
                             height = workHeight,
@@ -7707,10 +7694,13 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Packed Bayer VGN demosaic used only by processInternal's ordinary single-frame CFA path.
-     * The multi-frame/HDR entry points deliberately retain runStandardBayerRcdDemosaic().
+     * Packed standard-Bayer VGN demosaic shared by single-frame RAW and Spatial Bayer.
+     *
+     * PREPARE_PACKED_RAW applies black normalization, CFA-aware LSC and calculation WB exactly
+     * once. COMPOSITE_CAMERA_RGB removes only the calculation WB, preserving the camera-RGB
+     * contract (LSC applied, WB unapplied) required by MGC full-resolution denoise and Linear DNG.
      */
-    private fun runSingleFrameVgnDemosaic(
+    private fun runStandardBayerVgnDemosaic(
         metadata: RawMetadata,
         width: Int,
         height: Int,
@@ -8248,7 +8238,7 @@ class RawDemosaicProcessor {
 
             PLog.d(
                 TAG,
-                "Single-frame VGN complete: size=${width}x$height work=${workWidth}x$workHeight " +
+                "Standard Bayer VGN complete: size=${width}x$height work=${workWidth}x$workHeight " +
                     "roi=$roiLeft,$roiTop,$roiRight,$roiBottom cfa=${metadata.cfaPattern} " +
                     "stdDev=$standardDeviation edgeThreshold=$edgeThreshold " +
                     "vngThreshold=$vngThreshold colorNoiseLevel=$VGN_COLOR_NOISE_LEVEL " +
