@@ -1,10 +1,36 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("native-tool")
+enable_language(ASM)
 
 set(ADOBE_DNG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/dng_sdk/source)
 set(ADOBE_XMP_STUB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/XMPStub/include)
 set(ULTRAHDR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr)
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
+
+set(
+    MGC_GCASTARTUP_SO
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../MGC/MGC_9.6.080_V24_MGC/lib/arm64-v8a/libgcastartup.so"
+)
+set(
+    MGC_GCASTARTUP_SHA256
+    "2103c54ebba1627733b79e3646105595ed1ccefa2b1629f63fb7e1785a48d6a0"
+)
+if(NOT EXISTS "${MGC_GCASTARTUP_SO}")
+    message(FATAL_ERROR "Pinned MGC libgcastartup.so is required for static denoise extraction")
+endif()
+file(SHA256 "${MGC_GCASTARTUP_SO}" MGC_GCASTARTUP_ACTUAL_SHA256)
+if(NOT MGC_GCASTARTUP_ACTUAL_SHA256 STREQUAL MGC_GCASTARTUP_SHA256)
+    message(FATAL_ERROR "Pinned MGC libgcastartup.so hash mismatch")
+endif()
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_full_resolution_denoise_static.S.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
+    @ONLY
+)
+set_source_files_properties(
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
+    PROPERTIES GENERATED TRUE
+)
 
 # 4. 添加头文件路径
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/LibRaw)
@@ -89,6 +115,9 @@ add_library(my-native-lib SHARED
     yuv_utils.cpp
     lut_processor.cpp
     dcp_parser.cpp
+    mgc_denoise_static/mgc_denoise_static.cpp
+    mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
 )

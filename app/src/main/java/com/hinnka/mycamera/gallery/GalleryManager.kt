@@ -2926,6 +2926,7 @@ object GalleryManager {
         var gpuSourceToRelease: GpuLinearRgbSource? = null
         var pendingDngWrite: Deferred<Boolean>? = null
         var releaseStackCpuBuffer: (() -> Unit)? = null
+        var defaultDenoisedBufferToRelease: ByteBuffer? = null
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -3030,25 +3031,6 @@ object GalleryManager {
 
             val finalStackResult = rawStackResult ?: return@withContext
             gpuSourceToRelease = finalStackResult.gpuLinearRgbSource
-
-            val outputRawBlackBorderCrop =
-                metadata.rawBlackBorderCrop.scaledForOutput(rawStackOutputScale)
-            val stackedMetadataBase = if (finalStackResult.isNormalizedSensorData) {
-                metadata.withNormalizedRawLevelCorrectionsCleared("RAW stack")
-            } else {
-                metadata
-            }
-            val stackedMetadata = stackedMetadataBase.copy(
-                rawBlackBorderCrop = outputRawBlackBorderCrop
-            )
-            if (outputRawBlackBorderCrop != metadata.rawBlackBorderCrop) {
-                PLog.i(
-                    TAG,
-                    "RAWmax black border crop mapped to output scale: " +
-                        "scale=$rawStackOutputScale native=${metadata.rawBlackBorderCrop} " +
-                        "output=$outputRawBlackBorderCrop"
-                )
-            }
             fun releaseInitialFusedBuffer() {
                 val buffer = finalStackResult.fusedBayerBuffer ?: return
                 finalStackResult.fusedBayerBuffer = null
@@ -3059,15 +3041,85 @@ object GalleryManager {
             }
             releaseStackCpuBuffer = ::releaseInitialFusedBuffer
 
+            val spatialInputSamples = finalStackResult.inputColStepSamples
+                ?: if (finalStackResult.bufferLayout == RawStackBufferLayout.LINEAR_RGB) 3 else 1
+            val spatialInputRowStepSamples = finalStackResult.inputRowStepSamples
+                ?: finalStackResult.width * spatialInputSamples
+            val spatialMergeMetadata = rawMetadata.copy(
+                width = finalStackResult.width,
+                height = finalStackResult.height,
+                blackLevel = if (finalStackResult.isNormalizedSensorData) {
+                    finalStackResult.blackLevel.copyOf()
+                } else {
+                    stackBlackLevel.copyOf()
+                },
+                whiteLevel = if (finalStackResult.isNormalizedSensorData) {
+                    65535f
+                } else {
+                    stackWhiteLevel.toFloat()
+                },
+                frameCount = finalStackResult.mergedFrameCount,
+                mgcDenoiseCorrelation = finalStackResult.mgcDenoiseCorrelation,
+                mgcDenoiseNoiseScale = finalStackResult.mgcDenoiseNoiseScale,
+            )
+            val defaultDenoised = processor.materializeMgcSpatialDefaultDenoisedLinearRgb(
+                context = context,
+                rawData = finalStackResult.fusedBayerBuffer,
+                width = finalStackResult.width,
+                height = finalStackResult.height,
+                rowStride = spatialInputRowStepSamples * Short.SIZE_BYTES,
+                samplesPerPixel = spatialInputSamples,
+                gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
+                metadata = spatialMergeMetadata,
+                sourcePixelsIncludeLensShadingCorrection =
+                    finalStackResult.lensShadingCorrectionApplied,
+                applyLensShadingCorrection = applyRawLensShading,
+            )
+            if (defaultDenoised == null) {
+                PLog.e(
+                    TAG,
+                    "RAW stack aborted: MGC Spatial default denoise did not produce " +
+                        "persistable LinearRaw pixels",
+                )
+                return@withContext
+            }
+            defaultDenoisedBufferToRelease = defaultDenoised.linearRgb16
+            // Spatial CFA/RGBA storage and its propagated model have both been consumed.
+            // Every downstream consumer sees only the default-denoised standard LinearRaw image.
+            releaseInitialFusedBuffer()
+            processor.releaseGpuLinearRgbSource(finalStackResult.gpuLinearRgbSource)
+            gpuSourceToRelease = null
+            val stackedRawMetadata = spatialMergeMetadata.copy(
+                blackLevel = FloatArray(4),
+                whiteLevel = 65535f,
+                frameCount = 1,
+                mgcDenoiseCorrelation = null,
+                mgcDenoiseNoiseScale = null,
+            )
+
+            val outputRawBlackBorderCrop =
+                metadata.rawBlackBorderCrop.scaledForOutput(rawStackOutputScale)
+            val stackedMetadata = metadata
+                .withNormalizedRawLevelCorrectionsCleared("MGC default-denoised RAW stack")
+                .copy(rawBlackBorderCrop = outputRawBlackBorderCrop)
+            if (outputRawBlackBorderCrop != metadata.rawBlackBorderCrop) {
+                PLog.i(
+                    TAG,
+                    "RAWmax black border crop mapped to output scale: " +
+                        "scale=$rawStackOutputScale native=${metadata.rawBlackBorderCrop} " +
+                        "output=$outputRawBlackBorderCrop"
+                )
+            }
+
             var updatedMetadata: MediaMetadata = stackedMetadata
             val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
             val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
                 ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
             val rawResult = try {
-                val imageLayout = finalStackResult.bufferLayout.toDngImageLayout()
-                val inputSamplesPerPixel = finalStackResult.inputColStepSamples
-                val inputRowStepSamples = finalStackResult.inputRowStepSamples
+                val imageLayout = SuperResolutionDngWriter.ImageLayout.LINEAR_RAW_RGB
+                val inputSamplesPerPixel = 3
+                val inputRowStepSamples = finalStackResult.width * inputSamplesPerPixel
                 val dngDefaultCrop = RawProcessor.resolveCameraRawDefaultCrop(
                     width = finalStackResult.width,
                     height = finalStackResult.height,
@@ -3087,27 +3139,23 @@ object GalleryManager {
                 )
                 val profileStartMs = System.currentTimeMillis()
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
-                    rawBuffer = finalStackResult.fusedBayerBuffer,
-                    gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
+                    rawBuffer = defaultDenoised.linearRgb16,
+                    gpuLinearRgbSource = null,
                     width = finalStackResult.width,
                     height = finalStackResult.height,
                     characteristics = characteristics,
                     captureResult = captureResult,
                     cfaPattern = rawMetadata.cfaPattern,
-                    blackLevel = finalStackResult.blackLevel,
-                    whiteLevel = stackWhiteLevel,
-                    valueDomain = if (finalStackResult.isNormalizedSensorData) {
-                        RawProcessor.RawBufferValueDomain.NORMALIZED_SENSOR_RANGE
-                    } else {
-                        RawProcessor.RawBufferValueDomain.SENSOR
-                    },
+                    blackLevel = FloatArray(4),
+                    whiteLevel = 65535,
+                    valueDomain = RawProcessor.RawBufferValueDomain.NORMALIZED_SENSOR_RANGE,
                     cfaCorrectionMode = stackedMetadata.rawCfaCorrectionMode,
                     baselineExposureEv = finalStackResult.baselineExposureEv,
                     imageLayout = imageLayout,
                     inputRowStepSamples = inputRowStepSamples,
                     inputColStepSamples = inputSamplesPerPixel,
                     pixelsIncludeLensShadingCorrection =
-                        finalStackResult.lensShadingCorrectionApplied,
+                        defaultDenoised.pixelsIncludeLensShadingCorrection,
                     options = profileOptions,
                     defaultCrop = dngDefaultCrop,
                 )
@@ -3125,10 +3173,10 @@ object GalleryManager {
                         fusedBayerBuffer = fusedBayerBuffer,
                         width = finalStackResult.width,
                         height = finalStackResult.height,
-                        rawMetadata = rawMetadata,
-                        stackBlackLevel = finalStackResult.blackLevel,
-                        stackWhiteLevel = stackWhiteLevel,
-                        isNormalizedSensorData = finalStackResult.isNormalizedSensorData,
+                        rawMetadata = stackedRawMetadata,
+                        stackBlackLevel = FloatArray(4),
+                        stackWhiteLevel = 65535,
+                        isNormalizedSensorData = true,
                         characteristics = characteristics,
                         captureResult = captureResult,
                         rotation = rotation,
@@ -3139,37 +3187,18 @@ object GalleryManager {
                         shouldAutoSave = shouldAutoSave,
                         exportDngWithRawExport = exportDngWithRawExport,
                         imageLayout = imageLayout,
-                        compression = finalStackResult.bufferLayout.toDngCompression(),
+                        compression = SuperResolutionDngWriter.Compression.JPEG_LOSSLESS,
                         inputRowStepSamples = inputRowStepSamples,
                         inputColStepSamples = inputSamplesPerPixel,
                         pixelsIncludeLensShadingCorrection =
-                            finalStackResult.lensShadingCorrectionApplied,
+                            defaultDenoised.pixelsIncludeLensShadingCorrection,
                         baselineExposureEv = finalStackResult.baselineExposureEv,
                         preparedDngProfile = dngProfilePreparation,
                         preparedProfileOptions = profileOptions,
                     )
 
-                suspend fun materializeAndPersistDng(): Boolean {
-                    val initialBuffer = finalStackResult.fusedBayerBuffer
-                    val materializedBuffer = initialBuffer
-                        ?: finalStackResult.gpuLinearRgbSource?.let { source ->
-                            processor.materializeGpuLinearRgbSource(source)
-                        }
-                    if (materializedBuffer == null) {
-                        PLog.e(TAG, "No CPU LinearRaw source available for stacked DNG")
-                        return false
-                    }
-                    return try {
-                        persistDng(materializedBuffer)
-                    } finally {
-                        if (materializedBuffer === finalStackResult.fusedBayerBuffer) {
-                            releaseInitialFusedBuffer()
-                        } else if (finalStackResult.fusedBayerUsesNativeAllocator) {
-                            LargeDirectBuffer.free(materializedBuffer)
-                            PLog.d(TAG, "Released deferred stacked RAW CPU buffer")
-                        }
-                    }
-                }
+                suspend fun materializeAndPersistDng(): Boolean =
+                    persistDng(defaultDenoised.linearRgb16)
 
                 suspend fun renderPersistedDng() = processor.processForHdrSources(
                     context,
@@ -3200,13 +3229,6 @@ object GalleryManager {
                     rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                     rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                     rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
-                    sourceFrameCount = if (
-                        finalStackResult.bufferLayout == RawStackBufferLayout.CFA
-                    ) {
-                        finalStackResult.mergedFrameCount
-                    } else {
-                        null
-                    },
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(
@@ -3217,10 +3239,7 @@ object GalleryManager {
                     onMetadata = { raw -> updatedMetadata = updatedMetadata.merge(raw) },
                 )
 
-                val directBufferCompatible = finalStackResult.bufferLayout == RawStackBufferLayout.LINEAR_RGB &&
-                    finalStackResult.isNormalizedSensorData &&
-                    inputSamplesPerPixel != null && inputSamplesPerPixel in 3..4 &&
-                    inputRowStepSamples != null &&
+                val directBufferCompatible =
                     RawProcessor.canRenderLinearDngBufferDirectly(
                         width = finalStackResult.width,
                         height = finalStackResult.height,
@@ -3232,7 +3251,7 @@ object GalleryManager {
                         height = finalStackResult.height,
                         characteristics = characteristics,
                         captureResult = captureResult,
-                        baseMetadata = rawMetadata,
+                        baseMetadata = stackedRawMetadata,
                         defaultCrop = dngDefaultCrop,
                         rotation = rotation,
                         profilePreparation = dngProfilePreparation,
@@ -3258,12 +3277,12 @@ object GalleryManager {
                     val renderStartMs = System.currentTimeMillis()
                     val inMemoryResult = processor.processLinearDngBufferForHdrSources(
                         context = context,
-                        rawData = finalStackResult.fusedBayerBuffer,
+                        rawData = defaultDenoised.linearRgb16,
                         width = finalStackResult.width,
                         height = finalStackResult.height,
-                        rowStride = checkNotNull(inputRowStepSamples) * Short.SIZE_BYTES,
-                        samplesPerPixel = checkNotNull(inputSamplesPerPixel),
-                        gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
+                        rowStride = inputRowStepSamples * Short.SIZE_BYTES,
+                        samplesPerPixel = inputSamplesPerPixel,
+                        gpuLinearRgbSource = null,
                         metadata = checkNotNull(renderMetadata),
                         aspectRatio = aspectRatio,
                         cropRegion = updatedMetadata.cropRegion,
@@ -3342,8 +3361,8 @@ object GalleryManager {
                 } else {
                     PLog.w(
                         TAG,
-                        "RAW_LINEAR_DNG_BYPASS unavailable layout=${finalStackResult.bufferLayout} " +
-                            "normalized=${finalStackResult.isNormalizedSensorData} " +
+                        "RAW_LINEAR_DNG_BYPASS unavailable layout=LINEAR_RGB " +
+                            "normalized=true " +
                             "bufferCompatible=$directBufferCompatible embeddedProfile=${embeddedRenderPlan != null}; " +
                             "using persisted DNG"
                     )
@@ -3356,11 +3375,7 @@ object GalleryManager {
                     renderPersistedDng() ?: return@withContext
                 }
             } finally {
-                // A deferred DNG owns its materialized buffer. The initial buffer is released
-                // here only when no DNG task consumed it (for example, an early render failure).
-                if (pendingDngWrite == null) {
-                    releaseInitialFusedBuffer()
-                }
+                releaseInitialFusedBuffer()
             }
             var bitmap = rawResult.sdrBitmap
 
@@ -3473,6 +3488,11 @@ object GalleryManager {
                         }
                 }
                 releaseStackCpuBuffer?.invoke()
+                defaultDenoisedBufferToRelease?.let { buffer ->
+                    LargeDirectBuffer.free(buffer)
+                    defaultDenoisedBufferToRelease = null
+                    PLog.d(TAG, "Released MGC default-denoised LinearRaw buffer")
+                }
                 stackProcessor?.releaseGpuLinearRgbSource(gpuSourceToRelease)
             }
         }

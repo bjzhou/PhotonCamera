@@ -252,6 +252,11 @@ internal class GlesMgcRawSpatialStacker(
             }
 
             val referenceExposure = validExposureProduct(frames.first().exposureProduct)
+            val supportsEqualExposureDenoiseModel = frames.all { frame ->
+                frame.role == RawBurstFrameRole.NORMAL &&
+                    validExposureProduct(frame.exposureProduct) == referenceExposure
+            }
+            val mergeFactors = ArrayList<Float>(frames.size).apply { add(1f) }
             val referenceCalibration = calibrationForFrame(
                 frame = frames.first(),
                 exposureScale = 1f,
@@ -579,6 +584,7 @@ internal class GlesMgcRawSpatialStacker(
                         accumulatorGb = accumulatorGb,
                         useFrameWeight = true,
                     )
+                    mergeFactors += meanR8Mask(mergeWeight, "Spatial merge weight frame $index")
                     mergedFrames += 1
                     GlesGpuScheduler.yieldToUiRenderer()
                 } finally {
@@ -607,6 +613,14 @@ internal class GlesMgcRawSpatialStacker(
                 cpuOutput = readBayer16(bayer16)
                 checkGlError("MGC Spatial Bayer merge")
             }
+            val denoiseModel = if (
+                supportsEqualExposureDenoiseModel &&
+                mergeFactors.size == mergedFrames
+            ) {
+                MgcSpatialDenoiseModel.fromEqualExposureMergeFactors(mergeFactors)
+            } else {
+                null
+            }
             returned = true
             PLog.i(
                 TAG,
@@ -617,7 +631,11 @@ internal class GlesMgcRawSpatialStacker(
                         exportedTexture != 0 -> "RGBA16UI_GPU"
                         outputMode == MgcSpatialOutputMode.RGB -> "RGB16_CPU"
                         else -> "BAYER16_CPU"
-                    }}",
+                    }} " +
+                    "denoiseNoiseModel=${denoiseModel?.let {
+                        "average=${it.averageMergeFactor} effective=${it.effectiveMergeFactor} " +
+                            "scale=${it.noiseScale}"
+                    } ?: "unsupported-bracketed"}",
             )
             RawStackResult(
                 fusedBayerBuffer = cpuOutput,
@@ -647,6 +665,8 @@ internal class GlesMgcRawSpatialStacker(
                 lensShadingCorrectionApplied =
                     outputMode == MgcSpatialOutputMode.RGB && hasLensShading(),
                 mergedFrameCount = mergedFrames,
+                mgcDenoiseCorrelation = denoiseModel?.correlation,
+                mgcDenoiseNoiseScale = denoiseModel?.noiseScale,
             )
         } catch (error: Exception) {
             PLog.e(TAG, "MGC Spatial Bayer merge failed", error)
@@ -1262,6 +1282,13 @@ internal class GlesMgcRawSpatialStacker(
         checkGlError(label)
         buffer.rewind()
         return ByteArray(byteCount.toInt()).also { output -> buffer.get(output) }
+    }
+
+    private fun meanR8Mask(texture: Int, label: String): Float {
+        val mask = readR8Mask(texture, label)
+        var sum = 0L
+        mask.forEach { value -> sum += value.toInt() and 0xff }
+        return (sum.toDouble() / 255.0 / mask.size.toDouble()).toFloat()
     }
 
     private fun assessBentoMasks(

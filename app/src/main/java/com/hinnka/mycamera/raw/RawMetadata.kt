@@ -109,6 +109,15 @@ data class RawMetadata(
     val shutterSpeed: Long = 0L,
     val aperture: Float = 0f,
     val frameCount: Int = 1,
+    /**
+     * MGC's normalized 128-bin power-correlation spectrum after spatial merge.
+     * Null means either a single uncorrelated source or an unsupported propagated model.
+     */
+    val mgcDenoiseCorrelation: FloatArray? = null,
+    /** Scale applied to shot/read coefficients by an equal-exposure MGC Spatial merge. */
+    val mgcDenoiseNoiseScale: Float? = null,
+    /** Gain coordinate used by luma_denoise_default.binarypb. */
+    val mgcDenoiseTuningGain: Float? = null,
     val rotation: Int? = null,
     val profileGainTableMap: DngProfileGainTableMap? = null
 ) {
@@ -987,6 +996,12 @@ data class RawMetadata(
         if (iso != other.iso) return false
         if (shutterSpeed != other.shutterSpeed) return false
         if (frameCount != other.frameCount) return false
+        if (mgcDenoiseCorrelation != null) {
+            if (other.mgcDenoiseCorrelation == null) return false
+            if (!mgcDenoiseCorrelation.contentEquals(other.mgcDenoiseCorrelation)) return false
+        } else if (other.mgcDenoiseCorrelation != null) return false
+        if (mgcDenoiseNoiseScale != other.mgcDenoiseNoiseScale) return false
+        if (mgcDenoiseTuningGain != other.mgcDenoiseTuningGain) return false
         if (rotation != other.rotation) return false
 
         return true
@@ -1011,6 +1026,9 @@ data class RawMetadata(
         result = 31 * result + iso
         result = 31 * result + shutterSpeed.hashCode()
         result = 31 * result + frameCount
+        result = 31 * result + (mgcDenoiseCorrelation?.contentHashCode() ?: 0)
+        result = 31 * result + (mgcDenoiseNoiseScale?.hashCode() ?: 0)
+        result = 31 * result + (mgcDenoiseTuningGain?.hashCode() ?: 0)
         result = 31 * result + (rotation ?: 0)
         return result
     }

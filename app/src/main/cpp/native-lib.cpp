@@ -3913,6 +3913,52 @@ Java_com_hinnka_mycamera_utils_DirectBufferPixelPacker_unpackRgba16TileToRgb16(
   return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_utils_DirectBufferPixelPacker_packRgba16fToRgb16(
+    JNIEnv *env, jobject, jobject sourceBuffer, jint width, jint height,
+    jobject destinationBuffer) {
+  if (!sourceBuffer || !destinationBuffer || width <= 0 || height <= 0) {
+    LOGE("packRgba16fToRgb16: invalid geometry %dx%d", width, height);
+    return JNI_FALSE;
+  }
+
+  const auto *source = static_cast<const uint16_t *>(
+      env->GetDirectBufferAddress(sourceBuffer));
+  auto *destination = static_cast<uint16_t *>(
+      env->GetDirectBufferAddress(destinationBuffer));
+  const int64_t pixelCount = static_cast<int64_t>(width) * height;
+  const int64_t sourceRequiredBytes =
+      pixelCount * 4 * static_cast<int64_t>(sizeof(uint16_t));
+  const int64_t destinationRequiredBytes =
+      pixelCount * 3 * static_cast<int64_t>(sizeof(uint16_t));
+  const jlong sourceCapacity = env->GetDirectBufferCapacity(sourceBuffer);
+  const jlong destinationCapacity =
+      env->GetDirectBufferCapacity(destinationBuffer);
+  if (!source || !destination || sourceCapacity < sourceRequiredBytes ||
+      destinationCapacity < destinationRequiredBytes) {
+    LOGE("packRgba16fToRgb16: invalid buffers src=%p %lld/%lld dst=%p %lld/%lld",
+         source, static_cast<long long>(sourceCapacity),
+         static_cast<long long>(sourceRequiredBytes), destination,
+         static_cast<long long>(destinationCapacity),
+         static_cast<long long>(destinationRequiredBytes));
+    return JNI_FALSE;
+  }
+
+  for (int64_t pixel = 0; pixel < pixelCount; ++pixel) {
+    for (int channel = 0; channel < 3; ++channel) {
+      _Float16 half = {};
+      const uint16_t bits = source[pixel * 4 + channel];
+      static_assert(sizeof(half) == sizeof(bits));
+      std::memcpy(&half, &bits, sizeof(bits));
+      const float normalized =
+          std::clamp(static_cast<float>(half), 0.0f, 1.0f);
+      destination[pixel * 3 + channel] = static_cast<uint16_t>(
+          std::lround(normalized * 65535.0f));
+    }
+  }
+  return JNI_TRUE;
+}
+
 JNIEXPORT jbyteArray JNICALL
 Java_com_hinnka_mycamera_utils_SuperResolutionDngWriter_encodeLosslessJpegNative(
     JNIEnv *env, jobject, jobject rawBuffer, jint width, jint height,

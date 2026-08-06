@@ -53,6 +53,19 @@ data class RawStackResult(
     /** True only when lens-shading gain has already been multiplied into the fused pixels. */
     val lensShadingCorrectionApplied: Boolean = false,
     val mergedFrameCount: Int = 1,
+    /**
+     * MGC's normalized 128-bin spatial-merge correlation spectrum.
+     *
+     * This is produced from the actual quantized R8 merge masks. It is null when the stack
+     * contains exposure-bracketed inputs whose output noise-model combination has not been
+     * recovered.
+     */
+    val mgcDenoiseCorrelation: FloatArray? = null,
+    /**
+     * Multiplicative scale for the reference shot/read coefficients after an equal-exposure
+     * Spatial merge. Null has the same unsupported meaning as [mgcDenoiseCorrelation].
+     */
+    val mgcDenoiseNoiseScale: Float? = null,
 )
 
 enum class YuvHdrStackFrameRole {
