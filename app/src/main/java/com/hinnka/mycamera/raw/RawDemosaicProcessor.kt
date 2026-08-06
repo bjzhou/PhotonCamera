@@ -76,6 +76,11 @@ internal data class MgcSpatialDefaultDenoiseResult(
     val pixelsIncludeLensShadingCorrection: Boolean,
 )
 
+internal enum class MgcSpatialMaterializationMode {
+    DEFAULT_DENOISE,
+    DIAGNOSTIC_BYPASS_DENOISE,
+}
+
 /**
  * RAW 图像解马赛克处理器
  *
@@ -838,12 +843,13 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Consumes the Spatial merge noise model exactly once and materializes the persisted DNG
-     * pixels. Bayer input is converted to un-white-balanced camera RGB first; Spatial RGB input
-     * stays in the same camera domain. The extracted MGC luma/chroma chain then runs at its
-     * protobuf default strength before the result is quantized as standard LinearRaw RGB16.
+     * Materializes Spatial output as standard LinearRaw RGB16. Bayer input is converted to
+     * un-white-balanced camera RGB first; Spatial RGB input stays in the same camera domain.
+     * The production mode consumes the merge noise model exactly once and runs MGC luma/chroma
+     * defaults. The debug isolation mode preserves the same conversion but bypasses only that
+     * post-merge denoise, so reference-frame Spatial reconstruction can be inspected.
      */
-    internal suspend fun materializeMgcSpatialDefaultDenoisedLinearRgb(
+    internal suspend fun materializeMgcSpatialLinearRgb(
         context: Context,
         rawData: ByteBuffer?,
         width: Int,
@@ -854,7 +860,9 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         sourcePixelsIncludeLensShadingCorrection: Boolean,
         applyLensShadingCorrection: Boolean,
+        mode: MgcSpatialMaterializationMode = MgcSpatialMaterializationMode.DEFAULT_DENOISE,
     ): MgcSpatialDefaultDenoiseResult? = withContext(glDispatcher) {
+        val applyDefaultDenoise = mode == MgcSpatialMaterializationMode.DEFAULT_DENOISE
         val rgbaBytes = width.toLong() * height.toLong() * 4L * Short.SIZE_BYTES
         val rgbBytes = width.toLong() * height.toLong() * 3L * Short.SIZE_BYTES
         val validGeometry = width > 0 && height > 0 &&
@@ -862,9 +870,11 @@ class RawDemosaicProcessor {
             rgbBytes in 1..Int.MAX_VALUE.toLong()
         val validLayout = samplesPerPixel == 1 || samplesPerPixel in 3..4
         val validSource = rawData != null || gpuLinearRgbSource != null
-        val validSpatialModel = metadata.frameCount > 1 &&
-            metadata.mgcDenoiseCorrelation?.size == 128 &&
-            metadata.mgcDenoiseNoiseScale?.let { it.isFinite() && it > 0f } == true
+        val validSpatialModel = !applyDefaultDenoise || (
+            metadata.frameCount > 1 &&
+                metadata.mgcDenoiseCorrelation?.size == 128 &&
+                metadata.mgcDenoiseNoiseScale?.let { it.isFinite() && it > 0f } == true
+            )
         if (!validGeometry || !validLayout || !validSource || rowStride <= 0 ||
             !validSpatialModel
         ) {
@@ -911,7 +921,7 @@ class RawDemosaicProcessor {
             )
             return@withContext null
         }
-        if (!MgcFullResolutionDenoise.ensureInitialized(context)) {
+        if (applyDefaultDenoise && !MgcFullResolutionDenoise.ensureInitialized(context)) {
             PLog.e(TAG, "MGC Spatial default denoise kernels are unavailable")
             return@withContext null
         }
@@ -1082,28 +1092,35 @@ class RawDemosaicProcessor {
             rgbaReadback.position(0)
             val readbackMs = (System.nanoTime() - readbackStartNs) / 1_000_000L
 
-            val tuningGain = metadata.mgcDenoiseTuningGain
-                ?: (
-                    metadata.iso.toFloat() / 100f *
-                        metadata.postRawSensitivityBoost
-                    ).coerceAtLeast(0.001f)
             val nativeStartNs = System.nanoTime()
-            check(
-                MgcFullResolutionDenoise.denoise(
-                    rgba16f = rgbaReadback,
-                    width = width,
-                    height = height,
-                    globalOriginX = 0,
-                    globalOriginY = 0,
-                    fullWidth = width,
-                    fullHeight = height,
-                    metadata = denoiseMetadata,
-                    tuningGain = tuningGain,
-                    pass = MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT,
-                    lumaStrengthScale = 1f,
-                    chromaStrengthScale = 1f,
+            if (applyDefaultDenoise) {
+                val tuningGain = metadata.mgcDenoiseTuningGain
+                    ?: (
+                        metadata.iso.toFloat() / 100f *
+                            metadata.postRawSensitivityBoost
+                        ).coerceAtLeast(0.001f)
+                check(
+                    MgcFullResolutionDenoise.denoise(
+                        rgba16f = rgbaReadback,
+                        width = width,
+                        height = height,
+                        globalOriginX = 0,
+                        globalOriginY = 0,
+                        fullWidth = width,
+                        fullHeight = height,
+                        metadata = denoiseMetadata,
+                        tuningGain = tuningGain,
+                        pass = MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT,
+                        lumaStrengthScale = 1f,
+                        chromaStrengthScale = 1f,
+                    )
+                ) { "MGC Spatial default luma/chroma denoise failed" }
+            } else {
+                PLog.i(
+                    TAG,
+                    "MGC Spatial diagnostic materialization: default luma/chroma denoise bypassed",
                 )
-            ) { "MGC Spatial default luma/chroma denoise failed" }
+            }
             val nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
 
             val output = LargeDirectBuffer.allocate(
@@ -1128,8 +1145,14 @@ class RawDemosaicProcessor {
             completed = true
             PLog.i(
                 TAG,
-                "MGC Spatial default denoise materialized: source=$sourceLabel " +
-                    "size=${width}x$height pass=SPATIAL_DEFAULT luma=1.0 chroma=1.0 " +
+                "MGC Spatial LinearRaw materialized: source=$sourceLabel " +
+                    "size=${width}x$height pass=${if (applyDefaultDenoise) {
+                        "SPATIAL_DEFAULT"
+                    } else {
+                        "DIAGNOSTIC_BYPASS_DENOISE"
+                    }} " +
+                    "luma=${if (applyDefaultDenoise) 1.0 else 0.0} " +
+                    "chroma=${if (applyDefaultDenoise) 1.0 else 0.0} " +
                     "frames=${metadata.frameCount} noiseScale=${metadata.mgcDenoiseNoiseScale} " +
                     "lscIn=$sourcePixelsIncludeLensShadingCorrection " +
                     "lscAppliedToBayer=$applyLensShadingToBayer " +

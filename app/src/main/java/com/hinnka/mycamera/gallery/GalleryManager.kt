@@ -45,6 +45,7 @@ import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
+import com.hinnka.mycamera.raw.MgcSpatialMaterializationMode
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
@@ -3062,7 +3063,7 @@ object GalleryManager {
                 mgcDenoiseCorrelation = finalStackResult.mgcDenoiseCorrelation,
                 mgcDenoiseNoiseScale = finalStackResult.mgcDenoiseNoiseScale,
             )
-            val defaultDenoised = processor.materializeMgcSpatialDefaultDenoisedLinearRgb(
+            val defaultDenoised = processor.materializeMgcSpatialLinearRgb(
                 context = context,
                 rawData = finalStackResult.fusedBayerBuffer,
                 width = finalStackResult.width,
@@ -3074,6 +3075,11 @@ object GalleryManager {
                 sourcePixelsIncludeLensShadingCorrection =
                     finalStackResult.lensShadingCorrectionApplied,
                 applyLensShadingCorrection = applyRawLensShading,
+                mode = if (finalStackResult.mgcSpatialReferenceOnlyDiagnostic) {
+                    MgcSpatialMaterializationMode.DIAGNOSTIC_BYPASS_DENOISE
+                } else {
+                    MgcSpatialMaterializationMode.DEFAULT_DENOISE
+                },
             )
             if (defaultDenoised == null) {
                 PLog.e(

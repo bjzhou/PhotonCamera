@@ -2,10 +2,46 @@ package com.hinnka.mycamera.processor
 
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.SystemPropertiesUtil
+
+internal enum class MgcSpatialDiagnosticMode {
+    NONE,
+    REFERENCE_ONLY,
+    IDENTITY_TEMPORAL_WEIGHTS,
+    MAIN_REJECTION_ONLY,
+    DISABLE_UNBLOCKER,
+    DISABLE_LINEAR_KERNEL,
+    FORCE_LINEAR_KERNEL,
+}
 
 internal object RawStackRuntimeDebug {
     val enabled: Boolean
         get() = BuildConfig.DEBUG
+
+    /**
+     * Process-local MGC Spatial isolation selected through
+     * debug.photon.mgc_spatial.mode. It is unavailable in release builds and is never persisted.
+     */
+    val mgcSpatialDiagnosticMode: MgcSpatialDiagnosticMode
+        get() {
+            if (!enabled) return MgcSpatialDiagnosticMode.NONE
+            return when (
+                SystemPropertiesUtil.get("debug.photon.mgc_spatial.mode")?.uppercase()
+            ) {
+                "REFERENCE_ONLY" -> MgcSpatialDiagnosticMode.REFERENCE_ONLY
+                "IDENTITY_TEMPORAL_WEIGHTS" ->
+                    MgcSpatialDiagnosticMode.IDENTITY_TEMPORAL_WEIGHTS
+                "MAIN_REJECTION_ONLY" ->
+                    MgcSpatialDiagnosticMode.MAIN_REJECTION_ONLY
+                "DISABLE_UNBLOCKER" ->
+                    MgcSpatialDiagnosticMode.DISABLE_UNBLOCKER
+                "DISABLE_LINEAR_KERNEL" ->
+                    MgcSpatialDiagnosticMode.DISABLE_LINEAR_KERNEL
+                "FORCE_LINEAR_KERNEL" ->
+                    MgcSpatialDiagnosticMode.FORCE_LINEAR_KERNEL
+                else -> MgcSpatialDiagnosticMode.NONE
+            }
+        }
 
     val debugConfig: RawStackDebugConfig
         get() = RawStackDebugConfig.forCurrentBuild()

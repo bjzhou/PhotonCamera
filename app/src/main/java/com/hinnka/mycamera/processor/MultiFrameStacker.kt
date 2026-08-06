@@ -66,6 +66,11 @@ data class RawStackResult(
      * Spatial merge. Null has the same unsupported meaning as [mgcDenoiseCorrelation].
      */
     val mgcDenoiseNoiseScale: Float? = null,
+    /**
+     * True only for the debug reference-only isolation path. This state is process-local and is
+     * never persisted into RAW/DNG metadata.
+     */
+    val mgcSpatialReferenceOnlyDiagnostic: Boolean = false,
 )
 
 enum class YuvHdrStackFrameRole {
