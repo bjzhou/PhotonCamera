@@ -106,6 +106,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform sampler2D uUnblocker;
         uniform sampler2D uNoiseEstimates;
         uniform ivec2 uGuideSize;
+        uniform ivec2 uRejectionSize;
         uniform vec4 uFlowScaleOffset;
         uniform vec2 uUnblockerScale;
         uniform vec4 uNoiseTextureScaleBias;
@@ -139,7 +140,9 @@ internal object GlesMgcRawSpatialShaders {
         }
 
         void main() {
-            vec2 uv = gl_FragCoord.xy / vec2(uGuideSize);
+            // GenerateRejectionTexture runs once per Bayer quad (RAW/2). The guide is
+            // independently decimated to RAW/4 and is sampled in normalized coordinates.
+            vec2 uv = gl_FragCoord.xy / vec2(uRejectionSize);
             vec2 flowUv = uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw;
             vec4 flow = texture(uFlow, flowUv);
             vec2 warpedUv = mirrorUv(uv + flow.xy);
@@ -467,24 +470,28 @@ internal object GlesMgcRawSpatialShaders {
         precision highp float;
         precision highp int;
         uniform sampler2D uRejection;
-        uniform ivec2 uSize;
+        uniform ivec2 uInputSize;
         out float oWeight;
-        float rejectionAt(ivec2 p) {
-            return texelFetch(
-                uRejection,
-                clamp(p, ivec2(0), uSize - ivec2(1)),
-                0
-            ).r;
+        float rejectionAt(vec2 p) {
+            return texture(uRejection, p / vec2(uInputSize)).r;
         }
         void main() {
-            ivec2 p = ivec2(gl_FragCoord.xy);
-            float rejection = 0.0;
-            for (int y = -2; y <= 2; ++y) {
-                for (int x = -2; x <= 2; ++x) {
-                    rejection += rejectionAt(p + ivec2(x, y));
-                }
-            }
-            rejection = (rejection - 0.2) / 2.0;
+            // Exact DilateMask mapping from the full Bayer-quad rejection domain to
+            // MergeBayer's half-sized rejection texture. The nine bilinear reads and
+            // coefficients are the factored form of a 5x5 box sum.
+            vec2 texCoord =
+                2.0 * floor(gl_FragCoord.xy - vec2(0.5)) + vec2(1.5);
+            float rejection =
+                4.0 * rejectionAt(texCoord + vec2(-1.5, -1.5)) +
+                4.0 * rejectionAt(texCoord + vec2( 0.5, -1.5)) +
+                2.0 * rejectionAt(texCoord + vec2( 2.0, -1.5)) +
+                4.0 * rejectionAt(texCoord + vec2(-1.5,  0.5)) +
+                4.0 * rejectionAt(texCoord + vec2( 0.5,  0.5)) +
+                2.0 * rejectionAt(texCoord + vec2( 2.0,  0.5)) +
+                2.0 * rejectionAt(texCoord + vec2(-1.5,  2.0)) +
+                2.0 * rejectionAt(texCoord + vec2( 0.5,  2.0)) +
+                      rejectionAt(texCoord + vec2( 2.0,  2.0));
+            rejection = (rejection - 0.2) * 0.5;
             oWeight = 1.0 - rejection;
         }
     """.trimIndent()
@@ -668,10 +675,10 @@ internal object GlesMgcRawSpatialShaders {
         uniform sampler2D uFrameWeight;
         uniform sampler2D uLinearKernelMask;
         uniform ivec2 uRawSize;
-        uniform ivec2 uRejectionSize;
         uniform vec4 uGains;
         uniform vec4 uBlackLevelsTimesGains;
         uniform float uKernelSigma;
+        uniform float uInterpolationFlowTolerance;
         uniform int uCfaPattern;
         uniform int uUseFrameWeight;
         out vec4 oBayerAndWeight;
@@ -704,6 +711,65 @@ internal object GlesMgcRawSpatialShaders {
             return max(1.0 - length(pixelOffset) * 0.4, 0.0);
         }
 
+        vec4 alignmentAt(ivec2 tile, ivec2 alignmentSize) {
+            return texelFetch(
+                uAlignment,
+                clamp(tile, ivec2(0), alignmentSize - ivec2(1)),
+                0
+            );
+        }
+
+        /**
+         * Exact GLES translation of MGC's interpolate_flow.cl/GetInterpolatedFlow.
+         *
+         * Flow samples live at 8x8 Bayer-quad tile centres. Interpolation is cancelled for
+         * the whole pixel when any of the four candidates differs from the current tile by
+         * at least the configured per-axis threshold, so motion boundaries stay discontinuous.
+         */
+        vec4 interpolatedAlignment(
+            ivec2 tileId,
+            ivec2 offsetWithinTile,
+            ivec2 alignmentSize
+        ) {
+            vec4 baseFlow = alignmentAt(tileId, alignmentSize);
+            if (uInterpolationFlowTolerance <= 0.0) {
+                return baseFlow;
+            }
+
+            bool leftHalf = offsetWithinTile.x <= 4;
+            bool topHalf = offsetWithinTile.y <= 4;
+            int tx0 = leftHalf ? tileId.x - 1 : tileId.x;
+            int ty0 = topHalf ? tileId.y - 1 : tileId.y;
+            ivec2 tile00 = ivec2(tx0, ty0);
+            ivec2 tile10 = tile00 + ivec2(1, 0);
+            ivec2 tile01 = tile00 + ivec2(0, 1);
+            ivec2 tile11 = tile00 + ivec2(1, 1);
+            vec2 flow00 = alignmentAt(tile00, alignmentSize).xy;
+            vec2 flow10 = alignmentAt(tile10, alignmentSize).xy;
+            vec2 flow01 = alignmentAt(tile01, alignmentSize).xy;
+            vec2 flow11 = alignmentAt(tile11, alignmentSize).xy;
+
+            float threshold = 8.0 * uInterpolationFlowTolerance;
+            bool cancelInterpolation =
+                any(greaterThanEqual(abs(flow00 - baseFlow.xy), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow10 - baseFlow.xy), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow01 - baseFlow.xy), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow11 - baseFlow.xy), vec2(threshold)));
+            if (cancelInterpolation) {
+                return baseFlow;
+            }
+
+            ivec2 pixelPosition = tileId * 8 + offsetWithinTile;
+            float ux = float(pixelPosition.x) / 8.0 - (float(tx0) + 0.5);
+            float uy = float(pixelPosition.y) / 8.0 - (float(ty0) + 0.5);
+            vec2 flow = mix(
+                mix(flow00, flow10, ux),
+                mix(flow01, flow11, ux),
+                uy
+            );
+            return vec4(flow, baseFlow.zw);
+        }
+
         void main() {
             ivec2 outputPixel = ivec2(gl_FragCoord.xy);
             ivec2 phase = outputPixel & ivec2(1);
@@ -715,10 +781,10 @@ internal object GlesMgcRawSpatialShaders {
             ivec2 tileId = outputQuad / 8;
             ivec2 offsetWithinTile = outputQuad - tileId * 8;
             ivec2 alignmentSize = max(textureSize(uAlignment, 0), ivec2(1));
-            vec2 alignmentQuadOffset = texelFetch(
-                uAlignment,
-                clamp(tileId, ivec2(0), alignmentSize - ivec2(1)),
-                0
+            vec2 alignmentQuadOffset = interpolatedAlignment(
+                tileId,
+                offsetWithinTile,
+                alignmentSize
             ).xy;
             vec2 tilePosition =
                 vec2(tileId * 8) + alignmentQuadOffset;
@@ -726,36 +792,21 @@ internal object GlesMgcRawSpatialShaders {
             vec2 subquadPixelOffset =
                 2.0 * (vec2(alignedTileQuad) - tilePosition);
             ivec2 anchor = alignedTileQuad + offsetWithinTile;
-            // MergeBayerRaw consumes one byte/float from the quarter-resolution rejection
-            // domain. The recovered AOT performs integer loads here; interpolating adjacent
-            // rejection cells changes the temporal support around rejection boundaries.
-            ivec2 rejectionPixel = clamp(
-                outputPixel / 4,
-                ivec2(0),
-                uRejectionSize - ivec2(1)
-            );
-            ivec2 frameWeightSize = max(textureSize(uFrameWeight, 0), ivec2(1));
-            ivec2 frameWeightPixel = clamp(
-                rejectionPixel,
-                ivec2(0),
-                frameWeightSize - ivec2(1)
-            );
+            // MGC samples the quarter-resolution rejection image separately for all four
+            // Bayer phases. In normalized GLES coordinates this is exactly the RAW-pixel
+            // center, so adjacent phases retain their own linearly interpolated confidence
+            // instead of sharing one nearest 4x4 RAW block.
+            vec2 rawPixelUv =
+                (vec2(outputPixel) + vec2(0.5)) / vec2(uRawSize);
             float frameWeight = uUseFrameWeight != 0
-                ? texelFetch(uFrameWeight, frameWeightPixel, 0).r
+                ? texture(uFrameWeight, rawPixelUv).r
                 : 1.0;
-            ivec2 linearKernelSize = max(
-                textureSize(uLinearKernelMask, 0),
-                ivec2(1)
-            );
-            ivec2 linearKernelPixel = clamp(
-                rejectionPixel,
-                ivec2(0),
-                linearKernelSize - ivec2(1)
-            );
-            float linearKernelMix = texelFetch(
+            // UpdateLinearKernelMask is sampled once at the center of each Bayer quad.
+            vec2 quadCenterUv =
+                (2.0 * vec2(outputQuad) + vec2(1.0)) / vec2(uRawSize);
+            float linearKernelMix = texture(
                 uLinearKernelMask,
-                linearKernelPixel,
-                0
+                quadCenterUv
             ).r;
             ivec2 quadExtent = max(uRawSize / 2, ivec2(1));
             float kernelSigmaSquared = uKernelSigma * uKernelSigma;
@@ -801,8 +852,10 @@ internal object GlesMgcRawSpatialShaders {
                     bool cornerGreenPair =
                         (uCfaPattern == 1 || uCfaPattern == 2) &&
                         (phaseChannel == 0 || phaseChannel == 3);
+                    // SampleNeighborhoodDualKernel always merges the two green lattices.
+                    // The linear-kernel mask only selects the kernel shape; it does not enable
+                    // or disable this cross-phase green support.
                     if (
-                        linearKernelMix > 0.0 &&
                         (diagonalGreenPair || cornerGreenPair)
                     ) {
                         int otherPhase = phaseChannel;
@@ -1049,9 +1102,10 @@ internal object GlesMgcRawSpatialShaders {
 
     /**
      * UpsampleAlignmentI16Halide (0x3be8da0, three-candidate worker 0x3be8048).
-     * The nearest coarse flow and the next-nearest flow on each axis are evaluated
-     * against the target-level S16 images. Keeping the best whole candidate avoids
-     * synthesizing a false motion vector across an alignment discontinuity.
+     * Tile centers, rather than tile origins, determine the nearest coarse flow and
+     * the next-nearest flow on each axis. The three whole candidates are evaluated
+     * against the target-level S16 images, avoiding a synthesized motion vector
+     * across an alignment discontinuity.
      */
     val upsampleAlignment = """
         #version 300 es
@@ -1113,10 +1167,16 @@ internal object GlesMgcRawSpatialShaders {
             ivec2 targetTile = ivec2(gl_FragCoord.xy);
             ivec2 targetLogicalTile =
                 targetTile + ivec2(uTargetGridMin);
+            // Express the target tile center in the initial alignment grid. Using
+            // the tile origin here changes the nearest coarse tile at a regular
+            // half-grid cadence and produces block-shaped alignment discontinuities.
+            vec2 targetCenter =
+                (vec2(targetLogicalTile) + vec2(0.5)) *
+                float(uTargetTileStride);
             vec2 initialGrid =
-                vec2(targetLogicalTile * uTargetTileStride) /
+                targetCenter /
                 (uInitialScale * float(uInitialTileStride)) -
-                vec2(float(uInitialGridMin));
+                vec2(float(uInitialGridMin) + 0.5);
 
             vec2 nearestPosition = roundEven(initialGrid);
             ivec2 nearest = ivec2(nearestPosition);
@@ -1431,8 +1491,9 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * ConvertAlignment (0x35cf3ec): interpolate tile flow, convert pixels to
-     * normalized UV displacement and store the truncated 3x3 min/max range in B.
+     * ConvertAlignment (0x35cf3ec): evaluate the same edge-aware tile-centre interpolation as
+     * MergeBayerRaw, convert it to normalized UV displacement, and store the pre-interpolation
+     * local 3x3 range in B.
      */
     val convertAlignment = """
         #version 300 es
@@ -1445,6 +1506,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform float uAlignmentScale;
         uniform float uOutputToAlignmentScale;
         uniform float uGridMin;
+        uniform float uInterpolationFlowTolerance;
         uniform vec2 uFlowNormalizationSize;
         out vec4 oFlow;
         vec2 flowAt(ivec2 p) {
@@ -1454,22 +1516,75 @@ internal object GlesMgcRawSpatialShaders {
                 0
             ).xy * uAlignmentScale;
         }
+        vec2 interpolatedFlow(
+            ivec2 tile,
+            ivec2 offsetWithinTile,
+            vec2 baseFlow
+        ) {
+            if (uInterpolationFlowTolerance <= 0.0) {
+                return baseFlow;
+            }
+            bool leftHalf =
+                offsetWithinTile.x <= int(0.5 * uTileStride);
+            bool topHalf =
+                offsetWithinTile.y <= int(0.5 * uTileStride);
+            int tx0 = leftHalf ? tile.x - 1 : tile.x;
+            int ty0 = topHalf ? tile.y - 1 : tile.y;
+            vec2 flow00 = flowAt(ivec2(tx0, ty0));
+            vec2 flow10 = flowAt(ivec2(tx0 + 1, ty0));
+            vec2 flow01 = flowAt(ivec2(tx0, ty0 + 1));
+            vec2 flow11 = flowAt(ivec2(tx0 + 1, ty0 + 1));
+            float threshold =
+                uTileStride * uAlignmentScale *
+                uInterpolationFlowTolerance;
+            bool cancelInterpolation =
+                any(greaterThanEqual(abs(flow00 - baseFlow), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow10 - baseFlow), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow01 - baseFlow), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow11 - baseFlow), vec2(threshold)));
+            if (cancelInterpolation) {
+                return baseFlow;
+            }
+            vec2 logicalTile = vec2(tile) + vec2(uGridMin);
+            vec2 pixelPosition =
+                logicalTile * uTileStride + vec2(offsetWithinTile);
+            float tx0Logical = float(tx0) + uGridMin;
+            float ty0Logical = float(ty0) + uGridMin;
+            float ux =
+                pixelPosition.x / uTileStride -
+                (tx0Logical + 0.5);
+            float uy =
+                pixelPosition.y / uTileStride -
+                (ty0Logical + 0.5);
+            return mix(
+                mix(flow00, flow10, ux),
+                mix(flow01, flow11, ux),
+                uy
+            );
+        }
         void main() {
             vec2 pixel = gl_FragCoord.xy - vec2(0.5);
-            vec2 grid =
-                pixel * uOutputToAlignmentScale / uTileStride -
+            vec2 alignmentPixel =
+                pixel * uOutputToAlignmentScale;
+            vec2 logicalGrid = alignmentPixel / uTileStride;
+            vec2 grid = logicalGrid -
                 vec2(uGridMin);
-            ivec2 p0 = ivec2(floor(grid));
-            vec2 f = fract(grid);
-            vec2 a = mix(flowAt(p0), flowAt(p0 + ivec2(1, 0)), f.x);
-            vec2 b = mix(flowAt(p0 + ivec2(0, 1)), flowAt(p0 + ivec2(1)), f.x);
-            vec2 flowPixels = mix(a, b, f.y);
+            ivec2 tile = ivec2(floor(grid));
+            ivec2 offsetWithinTile = ivec2(floor(
+                alignmentPixel -
+                floor(logicalGrid) * uTileStride
+            ));
+            vec2 baseFlowPixels = flowAt(tile);
+            vec2 flowPixels = interpolatedFlow(
+                tile,
+                offsetWithinTile,
+                baseFlowPixels
+            );
             vec2 minimumFlow = vec2(1.0e20);
             vec2 maximumFlow = vec2(-1.0e20);
-            ivec2 center = ivec2(round(grid));
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    vec2 v = flowAt(center + ivec2(x, y));
+                    vec2 v = flowAt(tile + ivec2(x, y));
                     minimumFlow = min(minimumFlow, v);
                     maximumFlow = max(maximumFlow, v);
                 }

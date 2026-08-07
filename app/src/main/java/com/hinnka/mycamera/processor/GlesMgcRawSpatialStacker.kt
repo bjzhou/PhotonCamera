@@ -15,13 +15,15 @@ import java.nio.ByteOrder
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.max
+import kotlin.math.sqrt
 
 /**
  * Independent GLES Spatial Bayer merge pipeline.
  *
- * The stage order, constants and shader equations come from this APK's libgcastartup.so. Public
- * HDR+ descriptions are deliberately not used to fill tuning values. MergeBayerRaw preserves the
- * CFA lattice and leaves lens shading and demosaic to the downstream RAW pipeline.
+ * The stage order, constants and shader equations come from this APK's libgcastartup.so. The
+ * recovered MGC parameter-generation equations are cross-checked against Google's published
+ * kernel units and SNR tuning range. MergeBayerRaw preserves the CFA lattice and leaves lens
+ * shading and demosaic to the downstream RAW pipeline.
  */
 internal class GlesMgcRawSpatialStacker(
     private val width: Int,
@@ -78,6 +80,13 @@ internal class GlesMgcRawSpatialStacker(
         val unblockerReadNoise: FloatArray,
     )
 
+    private data class BayerKernelTuning(
+        val referenceSignal: Float,
+        val referenceNoiseVariance: Float,
+        val referenceSnr: Float,
+        val baseSpatialScale: Float,
+    )
+
     private data class BentoAssessment(
         val accepted: Boolean,
         val reason: String,
@@ -86,16 +95,18 @@ internal class GlesMgcRawSpatialStacker(
         val ultrashortClippingOverlap: Float,
     )
 
-    // Runtime Halide buffer inspection in MGC 9.6.080 V24 gives 1020x766 for the guide,
-    // rejection and pixel-difference domains with a 4080x3064 RAW input.
+    // GuideImage is quarter-resolution, but GenerateRejectionTexture runs once per Bayer quad.
+    // MergeBayer consumes the half-sized result of DilateMask.
     private val guideWidth = max(1, width / 4)
     private val guideHeight = max(1, height / 4)
     // MergeBayerRaw16's queried AOT contract requests one alignment sample per 8x8
     // Bayer-quad tile, i.e. one sample per 16x16 sensor pixels.
     private val bayerAlignmentWidth = ceilDiv(width, MERGE_BAYER_RAW_TILE_SIZE)
     private val bayerAlignmentHeight = ceilDiv(height, MERGE_BAYER_RAW_TILE_SIZE)
-    private val rejectionWidth = guideWidth
-    private val rejectionHeight = guideHeight
+    private val rejectionWidth = ceilDiv(width, 2)
+    private val rejectionHeight = ceilDiv(height, 2)
+    private val mergeWeightWidth = ceilDiv(rejectionWidth, 2)
+    private val mergeWeightHeight = ceilDiv(rejectionHeight, 2)
     private val rejectionFilterWidth = ceilDiv(rejectionWidth, REJECTION_FILTER_DOWNSAMPLE)
     private val rejectionFilterHeight = ceilDiv(rejectionHeight, REJECTION_FILTER_DOWNSAMPLE)
     private val outputWidth = width
@@ -205,7 +216,8 @@ internal class GlesMgcRawSpatialStacker(
             applyRawRenderState()
             PLog.i(
                 TAG,
-                "MGC rejection filter domain=${rejectionWidth}x$rejectionHeight " +
+                "MGC rejection domain=${rejectionWidth}x$rejectionHeight " +
+                    "mergeWeight=${mergeWeightWidth}x$mergeWeightHeight " +
                     "pixelDiff=ClippedGaussian${PIXEL_DIFFERENCE_KERNEL_SIZE}" +
                     "(sigma=$PIXEL_DIFFERENCE_SMOOTH_SIGMA) " +
                     "downsample=${REJECTION_FILTER_DOWNSAMPLE}x " +
@@ -257,9 +269,20 @@ internal class GlesMgcRawSpatialStacker(
                 GLES30.GL_NEAREST,
             )
             val referenceExposure = validExposureProduct(frames.first().exposureProduct)
+            val bayerKernelTuning = createBayerKernelTuning(
+                frame = frames.first(),
+                image = images.first(),
+            )
             val referenceCalibration = calibrationForFrame(
                 frame = frames.first(),
                 exposureScale = 1f,
+                kernelTuning = bayerKernelTuning,
+            )
+            PLog.i(
+                TAG,
+                "MGC Spatial Bayer kernel referenceSnr=${bayerKernelTuning.referenceSnr} " +
+                    "baseSpatialScale=${bayerKernelTuning.baseSpatialScale} " +
+                    "referenceSigma=${referenceCalibration.kernelSigma}",
             )
             uploadRaw(images.first(), referenceRaw, "reference")
             // MGC's GenerateBaseFrameLuma and GuideImage::Create prepare this noise-aware guide,
@@ -349,6 +372,7 @@ internal class GlesMgcRawSpatialStacker(
                     val normalizedCalibration = calibrationForFrame(
                         ultrashortFrame,
                         exposureRatio,
+                        bayerKernelTuning,
                     )
                     uploadRaw(images[ultrashortIndex], currentRaw, "ultrashort")
                     val normalizedNoiseLut = createNoiseLut(
@@ -371,8 +395,8 @@ internal class GlesMgcRawSpatialStacker(
                         current = ultrashortGrayPyramid,
                     )
                     val flow = createTexture(
-                        guideWidth,
-                        guideHeight,
+                        rejectionWidth,
+                        rejectionHeight,
                         GLES30.GL_RGBA16F,
                         GLES30.GL_LINEAR,
                     )
@@ -380,7 +404,7 @@ internal class GlesMgcRawSpatialStacker(
                     val bayerAlignment = createTexture(
                         bayerAlignmentWidth,
                         bayerAlignmentHeight,
-                        GLES30.GL_RGBA16F,
+                        GLES30.GL_RGBA32F,
                         GLES30.GL_NEAREST,
                     )
                     renderBayerAlignment(alignment, bayerAlignment)
@@ -388,6 +412,7 @@ internal class GlesMgcRawSpatialStacker(
                     val unscaledCalibration = calibrationForFrame(
                         ultrashortFrame,
                         1f,
+                        bayerKernelTuning,
                     )
                     val unscaledGuide = createTexture(
                         guideWidth,
@@ -514,10 +539,10 @@ internal class GlesMgcRawSpatialStacker(
                         "Accepted Bento merge has no selected ultrashort frame"
                     }
                     val selectedLinearKernelMask = createTexture(
-                        rejectionWidth,
-                        rejectionHeight,
+                        mergeWeightWidth,
+                        mergeWeightHeight,
                         GLES30.GL_R8,
-                        GLES30.GL_NEAREST,
+                        GLES30.GL_LINEAR,
                     )
                     // MGC slices its 3-D rejection buffer once at the accepted Bento ultrashort
                     // index, then calls UpdateLinearKernelMask once. Bento's adjusted mask is the
@@ -546,8 +571,8 @@ internal class GlesMgcRawSpatialStacker(
             clearAccumulator(accumulatorColor)
             if (bentoAccepted) {
                 val baseWeight = createTexture(
-                    rejectionWidth,
-                    rejectionHeight,
+                    mergeWeightWidth,
+                    mergeWeightHeight,
                     GLES30.GL_R8,
                     GLES30.GL_LINEAR,
                 )
@@ -602,14 +627,15 @@ internal class GlesMgcRawSpatialStacker(
                     referenceGrayPyramid = referenceGrayPyramid,
                     currentRaw = currentRaw,
                     currentGuide = currentGuide,
+                    kernelTuning = bayerKernelTuning,
                 )
                 val transientTextureStart = prepared.transientTextureStart
                 try {
                     val mergeWeight = when {
                         identityTemporalWeights -> identityWeight
                         bentoAccepted -> createTexture(
-                            rejectionWidth,
-                            rejectionHeight,
+                            mergeWeightWidth,
+                            mergeWeightHeight,
                             GLES30.GL_R8,
                             GLES30.GL_LINEAR,
                         ).also { maskedWeight ->
@@ -768,6 +794,7 @@ internal class GlesMgcRawSpatialStacker(
     private fun calibrationForFrame(
         frame: RawStackFrame,
         exposureScale: Float,
+        kernelTuning: BayerKernelTuning,
     ): FrameCalibration {
         val gains = FloatArray(4)
         val blackTerms = FloatArray(4)
@@ -787,10 +814,7 @@ internal class GlesMgcRawSpatialStacker(
                 -canonicalBlackLevel[canonicalChannel] * bayerPhaseGains[phase]
         }
 
-        val frameNoiseModel = frame.channelNoiseProfile
-            ?.let(RawNoiseModel::fromCamera2NoiseProfile)
-            ?.takeIf { it.hasValidCamera2Profile }
-            ?: rawNoiseModel
+        val frameNoiseModel = noiseModelForFrame(frame)
         val sourceShot = frameNoiseModel.normalizedShotNoiseForShader(cfaPattern)
         val sourceRead = frameNoiseModel.normalizedReadNoiseForShader(cfaPattern)
         val shot = FloatArray(4)
@@ -812,12 +836,30 @@ internal class GlesMgcRawSpatialStacker(
             (sensorWhiteLevel * gains[1] + blackTerms[1]) +
                 (sensorWhiteLevel * gains[2] + blackTerms[2])
             )
+        val frameNoiseVariance = noiseVarianceAtSignal(
+            signal = kernelTuning.referenceSignal,
+            shotNoise = shot,
+            readNoise = read,
+        )
+        val globalFrameWeight = if (
+            kernelTuning.referenceNoiseVariance > MIN_NOISE_VARIANCE &&
+            frameNoiseVariance > MIN_NOISE_VARIANCE
+        ) {
+            (kernelTuning.referenceNoiseVariance / frameNoiseVariance)
+                .coerceIn(0f, SPATIAL_FRAME_WEIGHT_CAP)
+        } else {
+            1f
+        }
+        val frameKernelScale = spatialFrameWeightKernelScale(globalFrameWeight)
+        val kernelSigma = 1f / (
+            kernelTuning.baseSpatialScale * frameKernelScale
+            ).coerceAtLeast(MIN_BAYER_KERNEL_SCALE)
         return FrameCalibration(
             gains = gains,
             blackTerms = blackTerms,
             bayerPhaseGains = bayerPhaseGains,
             bayerPhaseBlackTerms = bayerPhaseBlackTerms,
-            kernelSigma = SPATIAL_BAYER_KERNEL_SIGMA,
+            kernelSigma = kernelSigma,
             shotNoise = shot,
             readNoise = read,
             greenClippingPoint = greenClip.takeIf { it.isFinite() && it > 0f } ?: Float.MAX_VALUE,
@@ -825,6 +867,125 @@ internal class GlesMgcRawSpatialStacker(
             unblockerShotNoise = unblockerShot,
             unblockerReadNoise = unblockerRead,
         )
+    }
+
+    private fun createBayerKernelTuning(
+        frame: RawStackFrame,
+        image: SafeImage,
+    ): BayerKernelTuning {
+        val referenceSignal = estimateReferenceGreenSignal(image)
+        val noiseModel = noiseModelForFrame(frame)
+        val shotNoise = noiseModel.normalizedShotNoiseForShader(cfaPattern)
+        val readNoise = noiseModel.normalizedReadNoiseForShader(cfaPattern)
+        val referenceNoiseVariance = noiseVarianceAtSignal(
+            signal = referenceSignal,
+            shotNoise = shotNoise,
+            readNoise = readNoise,
+        )
+        val referenceSnr = if (referenceNoiseVariance > MIN_NOISE_VARIANCE) {
+            referenceSignal / sqrt(referenceNoiseVariance)
+        } else {
+            SPATIAL_KERNEL_SNR_HIGH
+        }.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: SPATIAL_KERNEL_SNR_HIGH
+        val snrPosition = (
+            (referenceSnr - SPATIAL_KERNEL_SNR_LOW) /
+                (SPATIAL_KERNEL_SNR_HIGH - SPATIAL_KERNEL_SNR_LOW)
+            ).coerceIn(0f, 1f)
+        val baseSpatialScale =
+            SPATIAL_KERNEL_SCALE_LOW_SNR +
+                snrPosition * (
+                    SPATIAL_KERNEL_SCALE_HIGH_SNR -
+                        SPATIAL_KERNEL_SCALE_LOW_SNR
+                    )
+        return BayerKernelTuning(
+            referenceSignal = referenceSignal,
+            referenceNoiseVariance = referenceNoiseVariance,
+            referenceSnr = referenceSnr,
+            baseSpatialScale = baseSpatialScale,
+        )
+    }
+
+    private fun estimateReferenceGreenSignal(image: SafeImage): Float {
+        val plane = image.planes.firstOrNull() ?: return 0f
+        if (
+            plane.pixelStride < RAW_BYTES_PER_PIXEL ||
+            plane.rowStride < width * plane.pixelStride
+        ) {
+            return 0f
+        }
+        val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
+        val bufferStart = buffer.position()
+        val quadWidth = max(width / 2, 1)
+        val quadHeight = max(height / 2, 1)
+        val quadStepX = max(quadWidth / SPATIAL_KERNEL_SIGNAL_GRID_SIZE, 1)
+        val quadStepY = max(quadHeight / SPATIAL_KERNEL_SIGNAL_GRID_SIZE, 1)
+        val firstQuadX = minOf(quadStepX / 2, quadWidth - 1)
+        val firstQuadY = minOf(quadStepY / 2, quadHeight - 1)
+        var signalSum = 0.0
+        var sampleCount = 0
+        var quadY = firstQuadY
+        while (quadY < quadHeight) {
+            var quadX = firstQuadX
+            while (quadX < quadWidth) {
+                for (phase in 0 until 4) {
+                    val channel = canonicalChannelAtPhase(phase)
+                    if (channel != 1 && channel != 2) continue
+                    val x = quadX * 2 + (phase and 1)
+                    val y = quadY * 2 + (phase shr 1)
+                    if (x >= width || y >= height) continue
+                    val byteOffset =
+                        bufferStart + y * plane.rowStride + x * plane.pixelStride
+                    if (byteOffset < bufferStart || byteOffset + 1 >= buffer.limit()) continue
+                    val rawValue = buffer.getShort(byteOffset).toInt() and 0xffff
+                    val black = canonicalBlackLevel[channel]
+                    val range = max(sensorWhiteLevel - black, 1f)
+                    signalSum += ((rawValue - black) / range).coerceIn(0f, 1f)
+                    sampleCount += 1
+                }
+                quadX += quadStepX
+            }
+            quadY += quadStepY
+        }
+        return if (sampleCount > 0) {
+            (signalSum / sampleCount).toFloat()
+        } else {
+            0f
+        }
+    }
+
+    private fun noiseModelForFrame(frame: RawStackFrame): RawNoiseModel =
+        frame.channelNoiseProfile
+            ?.let(RawNoiseModel::fromCamera2NoiseProfile)
+            ?.takeIf { it.hasValidCamera2Profile }
+            ?: rawNoiseModel
+
+    private fun noiseVarianceAtSignal(
+        signal: Float,
+        shotNoise: FloatArray,
+        readNoise: FloatArray,
+    ): Float {
+        val greenShot = 0.5f * (
+            shotNoise.getOrElse(1) { 0f } +
+                shotNoise.getOrElse(2) { shotNoise.getOrElse(1) { 0f } }
+            )
+        val greenRead = 0.5f * (
+            readNoise.getOrElse(1) { 0f } +
+                readNoise.getOrElse(2) { readNoise.getOrElse(1) { 0f } }
+            )
+        return (greenShot * signal.coerceAtLeast(0f) + greenRead)
+            .takeIf { it.isFinite() && it >= 0f } ?: 0f
+    }
+
+    private fun spatialFrameWeightKernelScale(frameWeight: Float): Float {
+        if (frameWeight <= SPATIAL_FRAME_WEIGHT_CURVE_START) return 1f
+        if (frameWeight >= SPATIAL_FRAME_WEIGHT_CURVE_END) {
+            return SPATIAL_FRAME_WEIGHT_KERNEL_SCALE_END
+        }
+        val position = (
+            (frameWeight - SPATIAL_FRAME_WEIGHT_CURVE_START) /
+                (SPATIAL_FRAME_WEIGHT_CURVE_END - SPATIAL_FRAME_WEIGHT_CURVE_START)
+            ).coerceIn(0f, 1f)
+        return 1f + position * (SPATIAL_FRAME_WEIGHT_KERNEL_SCALE_END - 1f)
     }
 
     private fun buildGrayPyramid(
@@ -1016,8 +1177,8 @@ internal class GlesMgcRawSpatialStacker(
      *
      * The original runtime has both three- and four-candidate workers. The fourth input is an
      * external geometric candidate; this pipeline has no geometric alignment source, so it uses
-     * the original three-candidate contract: nearest coarse tile plus the next-nearest tile on
-     * each axis, selected by target-level block L1 residual.
+     * the original three-candidate contract: the nearest coarse tile by tile-center distance plus
+     * the next-nearest tile on each axis, selected by target-level block L1 residual.
      */
     private fun renderUpsampledAlignment(
         reference: TextureLevel,
@@ -1268,7 +1429,12 @@ internal class GlesMgcRawSpatialStacker(
             alignment.gridWidth,
             alignment.gridHeight,
         )
-        uniform2i(convertAlignmentProgram, "uOutputSize", guideWidth, guideHeight)
+        uniform2i(
+            convertAlignmentProgram,
+            "uOutputSize",
+            rejectionWidth,
+            rejectionHeight,
+        )
         uniform1f(
             convertAlignmentProgram,
             "uTileStride",
@@ -1279,8 +1445,13 @@ internal class GlesMgcRawSpatialStacker(
             "uAlignmentScale",
             alignment.scaleToBayerQuads,
         )
-        uniform1f(convertAlignmentProgram, "uOutputToAlignmentScale", 2f)
+        uniform1f(convertAlignmentProgram, "uOutputToAlignmentScale", 1f)
         uniform1f(convertAlignmentProgram, "uGridMin", alignment.gridMin.toFloat())
+        uniform1f(
+            convertAlignmentProgram,
+            "uInterpolationFlowTolerance",
+            SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
+        )
         uniform2f(
             convertAlignmentProgram,
             "uFlowNormalizationSize",
@@ -1289,8 +1460,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             convertAlignmentProgram,
-            guideWidth,
-            guideHeight,
+            rejectionWidth,
+            rejectionHeight,
             intArrayOf(output),
         )
     }
@@ -1417,6 +1588,12 @@ internal class GlesMgcRawSpatialStacker(
         bindTexture(rejectionProgram, "uUnblocker", 3, unblockerTexture)
         bindTexture(rejectionProgram, "uNoiseEstimates", 4, noiseTexture)
         uniform2i(rejectionProgram, "uGuideSize", guideWidth, guideHeight)
+        uniform2i(
+            rejectionProgram,
+            "uRejectionSize",
+            rejectionWidth,
+            rejectionHeight,
+        )
         uniform4f(rejectionProgram, "uFlowScaleOffset", 1f, 1f, 0f, 0f)
         uniform2f(rejectionProgram, "uUnblockerScale", 1f, 1f)
         uniform4f(
@@ -1462,8 +1639,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             rejectionProgram,
-            guideWidth,
-            guideHeight,
+            rejectionWidth,
+            rejectionHeight,
             intArrayOf(reverseWeightTexture, pixelDifferenceTexture),
         )
     }
@@ -1630,14 +1807,14 @@ internal class GlesMgcRawSpatialStacker(
         bindTexture(dilationProgram, "uRejection", 0, reverseWeight)
         uniform2i(
             dilationProgram,
-            "uSize",
+            "uInputSize",
             rejectionWidth,
             rejectionHeight,
         )
         draw(
             dilationProgram,
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             intArrayOf(outputWeight),
         )
     }
@@ -1654,13 +1831,13 @@ internal class GlesMgcRawSpatialStacker(
         uniform2i(
             linearKernelMaskProgram,
             "uSize",
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
         )
         draw(
             linearKernelMaskProgram,
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             intArrayOf(output),
         )
     }
@@ -1675,6 +1852,7 @@ internal class GlesMgcRawSpatialStacker(
         referenceGrayPyramid: List<TextureLevel>,
         currentRaw: Int,
         currentGuide: Int,
+        kernelTuning: BayerKernelTuning,
     ): PreparedTemporalFrame {
         val transientTextureStart = textures.size
         val exposureScale = (
@@ -1686,7 +1864,11 @@ internal class GlesMgcRawSpatialStacker(
                     "be < 1.0, got $exposureScale"
             }
         }
-        val calibration = calibrationForFrame(frame, exposureScale)
+        val calibration = calibrationForFrame(
+            frame = frame,
+            exposureScale = exposureScale,
+            kernelTuning = kernelTuning,
+        )
         uploadRaw(image, currentRaw, "frame $index")
         val currentNoiseLut = createNoiseLut(referenceCalibration, calibration)
         renderGuide(
@@ -1705,8 +1887,8 @@ internal class GlesMgcRawSpatialStacker(
             current = currentGrayPyramid,
         )
         val flow = createTexture(
-            guideWidth,
-            guideHeight,
+            rejectionWidth,
+            rejectionHeight,
             GLES30.GL_RGBA16F,
             GLES30.GL_LINEAR,
         )
@@ -1714,7 +1896,7 @@ internal class GlesMgcRawSpatialStacker(
         val bayerAlignment = createTexture(
             bayerAlignmentWidth,
             bayerAlignmentHeight,
-            GLES30.GL_RGBA16F,
+            GLES30.GL_RGBA32F,
             GLES30.GL_NEAREST,
         )
         renderBayerAlignment(alignment, bayerAlignment)
@@ -1779,11 +1961,11 @@ internal class GlesMgcRawSpatialStacker(
             rejectionWidth,
             rejectionHeight,
             GLES30.GL_R8,
-            GLES30.GL_NEAREST,
+            GLES30.GL_LINEAR,
         )
         val frameWeight = createTexture(
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             GLES30.GL_R8,
             GLES30.GL_LINEAR,
         )
@@ -1901,7 +2083,12 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glUseProgram(bentoRewriteWeightProgram)
         bindTexture(bentoRewriteWeightProgram, "uExistingWeight", 0, existingWeight)
         bindTexture(bentoRewriteWeightProgram, "uBentoMask", 1, bentoMask)
-        uniform2i(bentoRewriteWeightProgram, "uSize", rejectionWidth, rejectionHeight)
+        uniform2i(
+            bentoRewriteWeightProgram,
+            "uSize",
+            mergeWeightWidth,
+            mergeWeightHeight,
+        )
         uniform1i(
             bentoRewriteWeightProgram,
             "uHasExistingWeight",
@@ -1909,8 +2096,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             bentoRewriteWeightProgram,
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             intArrayOf(outputWeight),
         )
     }
@@ -1948,13 +2135,13 @@ internal class GlesMgcRawSpatialStacker(
         val binaryMask = readR8Mask(
             texture = texture,
             label = "MGC Bento linear kernel mask",
-            maskWidth = rejectionWidth,
-            maskHeight = rejectionHeight,
+            maskWidth = mergeWeightWidth,
+            maskHeight = mergeWeightHeight,
         )
         val activePixels = binaryMask.count { (it.toInt() and 0xff) != 0 }
         PLog.i(
             TAG,
-            "MGC linear kernel mask size=${rejectionWidth}x$rejectionHeight " +
+            "MGC linear kernel mask size=${mergeWeightWidth}x$mergeWeightHeight " +
                 "mode=bento-selected-slice selectedFrame=$selectedFrameIndex " +
                 "rule=binary-3x3-nonuniform " +
                 "active=$activePixels/${binaryMask.size}",
@@ -2098,12 +2285,6 @@ internal class GlesMgcRawSpatialStacker(
             bindTexture(mergeBayerProgram, "uFrameWeight", 2, weightTexture)
             bindTexture(mergeBayerProgram, "uLinearKernelMask", 3, linearKernelMaskTexture)
             uniform2i(mergeBayerProgram, "uRawSize", width, height)
-            uniform2i(
-                mergeBayerProgram,
-                "uRejectionSize",
-                rejectionWidth,
-                rejectionHeight,
-            )
             uniform1i(mergeBayerProgram, "uCfaPattern", cfaPattern)
             uniform4fv(mergeBayerProgram, "uGains", calibration.bayerPhaseGains)
             uniform4fv(
@@ -2115,6 +2296,11 @@ internal class GlesMgcRawSpatialStacker(
                 mergeBayerProgram,
                 "uKernelSigma",
                 calibration.kernelSigma,
+            )
+            uniform1f(
+                mergeBayerProgram,
+                "uInterpolationFlowTolerance",
+                SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
             )
             uniform1i(
                 mergeBayerProgram,
@@ -2251,6 +2437,10 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     private fun uploadRaw(image: SafeImage, texture: Int, label: String) {
+        mergePassWindow.awaitResources(
+            label = "overwrite RAW texture for $label",
+            resources = longArrayOf(GlesGpuScheduler.textureResource(texture)),
+        )
         val plane = image.planes.firstOrNull()
             ?: throw IllegalArgumentException("$label has no RAW plane")
         require(plane.pixelStride == RAW_BYTES_PER_PIXEL) {
@@ -2779,6 +2969,11 @@ internal class GlesMgcRawSpatialStacker(
         const val ALIGN_LK_GRID_MIN = 1
         const val MERGE_ALIGNMENT_GRID_MIN = 0
         const val MERGE_BAYER_RAW_TILE_SIZE = 16
+        // MGC defines the tolerance as a fraction of its 8 Bayer-quad tile. Keep
+        // interpolation only where every neighboring flow is within one raw pixel
+        // (half a Bayer quad) of the current tile; larger discontinuities retain the
+        // piecewise-constant flow and are handled by rejection.
+        const val SPATIAL_INTERPOLATION_FLOW_TOLERANCE = 1f / 16f
         val ALIGN_PYRAMID_DOWNSAMPLE_STEPS = intArrayOf(2, 4, 4)
         // Indexed from the finest one-sample-per-Bayer-quad level to the coarsest.
         val ALIGN_LEVEL_TILE_STRIDES = intArrayOf(32, 32, 16, 8)
@@ -2790,10 +2985,22 @@ internal class GlesMgcRawSpatialStacker(
         const val MAX_EXPOSURE_SCALE = 64f
         const val MIN_WHITE_BALANCE_GAIN = 1e-3f
         const val MAX_WHITE_BALANCE_GAIN = 64f
-        // kernel_sigmas is a per-frame scalar in MGC's MergeBayerRaw contract.
-        // The non-bracketed Spatial schedule supplies the default value used by
-        // the extracted merge and strength-map paths.
-        const val SPATIAL_BAYER_KERNEL_SIGMA = 1f
+        // MGC generates kernel_sigmas per frame as:
+        //   1 / (base spatial scale * frame-weight scale * selected-frame scale).
+        // Its static frame-weight curve is {10 -> 1, 30 -> sqrt(2)}. Google's published
+        // tuning uses a detail-kernel standard deviation of 0.33..0.25 raw pixels as the
+        // reference SNR rises from 6 to 30. MergeBayerRaw consumes the inverse scale.
+        const val SPATIAL_KERNEL_SNR_LOW = 6f
+        const val SPATIAL_KERNEL_SNR_HIGH = 30f
+        const val SPATIAL_KERNEL_SCALE_LOW_SNR = 0.33f
+        const val SPATIAL_KERNEL_SCALE_HIGH_SNR = 0.25f
+        const val SPATIAL_FRAME_WEIGHT_CURVE_START = 10f
+        const val SPATIAL_FRAME_WEIGHT_CURVE_END = 30f
+        const val SPATIAL_FRAME_WEIGHT_KERNEL_SCALE_END = 1.41421356f
+        const val SPATIAL_FRAME_WEIGHT_CAP = 50f
+        const val SPATIAL_KERNEL_SIGNAL_GRID_SIZE = 64
+        const val MIN_NOISE_VARIANCE = 1e-12f
+        const val MIN_BAYER_KERNEL_SCALE = 1e-3f
         // Captured from the original MGC rejection program on the same full-resolution path.
         const val FLOW_VARIATION_THRESHOLD = 9.88235261e-5f
 

@@ -196,7 +196,7 @@ data class RawMetadata(
             val whiteLevel = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)?.toFloat()
                 ?: 1023f // 默认 10-bit
 
-            // 3. 获取黑电平（优先使用动态黑电平）
+            // 3. 获取黑电平
             // 注意：动态黑电平和静态黑电平模式都是按 2x2 Bayer 位置存储的
             // 需要根据 CFA 模式重新排列为 [R, Gr, Gb, B] 通道顺序
             val dynamicBlackLevel = captureResult.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
