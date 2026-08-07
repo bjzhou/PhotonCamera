@@ -8,7 +8,6 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
-import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.utils.BitmapUtils
 
@@ -54,24 +53,6 @@ data class RawStackResult(
     /** True only when lens-shading gain has already been multiplied into the fused pixels. */
     val lensShadingCorrectionApplied: Boolean = false,
     val mergedFrameCount: Int = 1,
-    /**
-     * MGC's normalized 128-bin spatial-merge correlation spectrum.
-     *
-     * This is produced from the actual quantized R8 merge masks. It is null when the stack
-     * contains exposure-bracketed inputs whose output noise-model combination has not been
-     * recovered.
-     */
-    val mgcDenoiseCorrelation: FloatArray? = null,
-    /**
-     * Multiplicative scale for the reference shot/read coefficients after an equal-exposure
-     * Spatial merge. Null has the same unsupported meaning as [mgcDenoiseCorrelation].
-     */
-    val mgcDenoiseNoiseScale: Float? = null,
-    /**
-     * Exact Q8 variance multiplier emitted by MGC's Spatial noise-model kernel.
-     * It is process-local and consumed before DNG write.
-     */
-    val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
     /**
      * True only for the debug reference-only isolation path. This state is process-local and is
      * never persisted into RAW/DNG metadata.

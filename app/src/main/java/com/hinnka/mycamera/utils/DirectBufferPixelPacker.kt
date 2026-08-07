@@ -27,9 +27,9 @@ object DirectBufferPixelPacker {
     /**
      * Converts normalized RGBA16F camera RGB into packed unsigned RGB16.
      *
-     * MGC's full-resolution denoise boundary is RGBA16F while a standard LinearRaw DNG stores
-     * unsigned RGB16 samples. Keeping this bulk conversion native avoids millions of direct-buffer
-     * accesses from Kotlin.
+     * The Spatial GPU output is RGBA16F while a standard LinearRaw DNG stores unsigned RGB16
+     * samples. Keeping this bulk conversion native avoids millions of direct-buffer accesses from
+     * Kotlin.
      */
     external fun packRgba16fToRgb16(
         source: ByteBuffer,

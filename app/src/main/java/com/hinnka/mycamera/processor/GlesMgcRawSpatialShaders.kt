@@ -882,24 +882,6 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    val normalizeBayerF16 = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        uniform sampler2D uBayerAndWeight;
-        uniform ivec2 uOutputSize;
-        layout(location = 0) out highp float oBayer;
-        void main() {
-            ivec2 p = clamp(
-                ivec2(gl_FragCoord.xy),
-                ivec2(0),
-                uOutputSize - ivec2(1)
-            );
-            vec2 valueAndWeight = texelFetch(uBayerAndWeight, p, 0).rg;
-            oBayer = max(valueAndWeight.x / max(valueAndWeight.y, 1.0e-8), 0.0);
-        }
-    """.trimIndent()
-
     /**
      * Raw16ToGrayHalide (0x3bbaf98): one value per Bayer quad, phase black
      * subtraction, scalar gain, equal RGGB average and separable 1:2:1 filtering.
@@ -1528,19 +1510,6 @@ internal object GlesMgcRawSpatialShaders {
                 0
             ).xy * uAlignmentToBayerQuads;
             oAlignment = vec4(flowInBayerQuads, 0.0, 0.0);
-        }
-    """.trimIndent()
-
-    val strengthAlignment = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        uniform sampler2D uFlow;
-        uniform ivec2 uOutputSize;
-        out vec4 oAlignment;
-        void main() {
-            vec2 uv = gl_FragCoord.xy / vec2(uOutputSize);
-            oAlignment = vec4(texture(uFlow, uv).xy, 0.0, 0.0);
         }
     """.trimIndent()
 

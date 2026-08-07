@@ -1,46 +1,10 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("native-tool")
-enable_language(ASM)
 
 set(ADOBE_DNG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/dng_sdk/source)
 set(ADOBE_XMP_STUB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/XMPStub/include)
 set(ULTRAHDR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr)
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
-
-set(
-    MGC_DENOISE_CAPSULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_full_resolution_denoise_capsule.bin"
-)
-set(
-    MGC_DENOISE_CAPSULE_SHA256
-    "312c3b2e5ccee00604034fb1e8161dba65ace86197eb6c9fe75556d700505432"
-)
-if(NOT EXISTS "${MGC_DENOISE_CAPSULE}")
-    message(
-        FATAL_ERROR
-        "MGC denoise capsule is missing; regenerate it with "
-        "scripts/research/generate_mgc_denoise_static_asm.py"
-    )
-endif()
-file(SHA256 "${MGC_DENOISE_CAPSULE}" MGC_DENOISE_CAPSULE_ACTUAL_SHA256)
-if(NOT MGC_DENOISE_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_DENOISE_CAPSULE_SHA256)
-    message(FATAL_ERROR "MGC denoise capsule hash mismatch")
-endif()
-set(
-    MGC_DENOISE_ASM
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
-)
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_full_resolution_denoise_static.S.in"
-    "${MGC_DENOISE_ASM}"
-    @ONLY
-)
-set_source_files_properties(
-    "${MGC_DENOISE_ASM}"
-    PROPERTIES
-    GENERATED TRUE
-    OBJECT_DEPENDS "${MGC_DENOISE_CAPSULE}"
-)
 
 # 4. 添加头文件路径
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/LibRaw)
@@ -125,10 +89,6 @@ add_library(my-native-lib SHARED
     yuv_utils.cpp
     lut_processor.cpp
     dcp_parser.cpp
-    mgc_denoise_static/mgc_denoise_static.cpp
-    mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
-    mgc_denoise_static/mgc_spatial_strength_jni.cpp
-    "${MGC_DENOISE_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
 )
