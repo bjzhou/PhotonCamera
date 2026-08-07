@@ -62,48 +62,92 @@ class RawNoiseModel private constructor(
             )
         }
 
+        /**
+         * Imports CaptureResult.SENSOR_NOISE_PROFILE using MGC's default semantics.
+         *
+         * MGC reads exactly four Camera2 pairs in CFA phase order and passes every pair's first
+         * component to NoiseModel_FromShotReadNoiseVector as shot noise (S), and every second
+         * component as read noise (O). No ISO/profile evaluation is performed on this path.
+         */
         fun fromCamera2NoiseProfile(channelPairs: FloatArray): RawNoiseModel {
-            if (channelPairs.size < 2) return EMPTY
-            if (channelPairs.size == 2) return fromLegacyNoiseModel(channelPairs)
+            if (channelPairs.size < CHANNEL_COUNT * 2) return EMPTY
 
-            val pairCount = channelPairs.size / 2
             fun coefficient(pair: Int, component: Int): Float =
                 sanitizeCoefficient(channelPairs.getOrElse(pair * 2 + component) { 0f })
-
-            // Camera2 supplies four CFA-position pairs. A DNG normally supplies canonical
-            // R/G/B pairs and native parsing may append an empty fourth pair.
-            val hasFourthPair = pairCount >= CHANNEL_COUNT &&
-                (coefficient(3, 0) > 0f || coefficient(3, 1) > 0f)
-            val cfaPhaseOrdered = hasFourthPair
-            val shotNoise = if (hasFourthPair) {
-                FloatArray(CHANNEL_COUNT) { coefficient(it, 0) }
-            } else if (pairCount >= 3) {
-                floatArrayOf(
-                    coefficient(0, 0),
-                    coefficient(1, 0),
-                    coefficient(1, 0),
-                    coefficient(2, 0),
-                )
-            } else {
-                FloatArray(CHANNEL_COUNT) { coefficient(it.coerceAtMost(pairCount - 1), 0) }
-            }
-            val readNoise = if (hasFourthPair) {
-                FloatArray(CHANNEL_COUNT) { coefficient(it, 1) }
-            } else if (pairCount >= 3) {
-                floatArrayOf(
-                    coefficient(0, 1),
-                    coefficient(1, 1),
-                    coefficient(1, 1),
-                    coefficient(2, 1),
-                )
-            } else {
-                FloatArray(CHANNEL_COUNT) { coefficient(it.coerceAtMost(pairCount - 1), 1) }
-            }
+            val shotNoise = FloatArray(CHANNEL_COUNT) { coefficient(it, 0) }
+            val readNoise = FloatArray(CHANNEL_COUNT) { coefficient(it, 1) }
             return RawNoiseModel(
                 shotNoise = shotNoise,
                 readNoise = readNoise,
                 hasValidCamera2Profile = shotNoise.any { it > 0f } || readNoise.any { it > 0f },
-                cfaPhaseOrdered = cfaPhaseOrdered,
+                cfaPhaseOrdered = true,
+            )
+        }
+
+        /** Imports a canonical DNG NoiseProfile ordered as R, G, B. */
+        fun fromDngNoiseProfile(channelPairs: FloatArray): RawNoiseModel {
+            if (channelPairs.size < 6) return EMPTY
+            fun coefficient(pair: Int, component: Int): Float =
+                sanitizeCoefficient(channelPairs.getOrElse(pair * 2 + component) { 0f })
+            val shotNoise = floatArrayOf(
+                coefficient(0, 0),
+                coefficient(1, 0),
+                coefficient(1, 0),
+                coefficient(2, 0),
+            )
+            val readNoise = floatArrayOf(
+                coefficient(0, 1),
+                coefficient(1, 1),
+                coefficient(1, 1),
+                coefficient(2, 1),
+            )
+            return RawNoiseModel(
+                shotNoise = shotNoise,
+                readNoise = readNoise,
+                hasValidCamera2Profile = false,
+                cfaPhaseOrdered = false,
+            )
+        }
+
+        /** Imports an evaluated GCam A/B/C/D model in canonical R, Gr, Gb, B order. */
+        fun fromCanonicalBayerChannels(
+            shotNoise: FloatArray,
+            readNoise: FloatArray,
+        ): RawNoiseModel {
+            if (shotNoise.size != CHANNEL_COUNT || readNoise.size != CHANNEL_COUNT) return EMPTY
+            val sanitizedShot = FloatArray(CHANNEL_COUNT) {
+                sanitizeCoefficient(shotNoise[it])
+            }
+            val sanitizedRead = FloatArray(CHANNEL_COUNT) {
+                sanitizeCoefficient(readNoise[it])
+            }
+            if (sanitizedShot.none { it > 0f } && sanitizedRead.none { it > 0f }) return EMPTY
+            return RawNoiseModel(
+                shotNoise = sanitizedShot,
+                readNoise = sanitizedRead,
+                hasValidCamera2Profile = false,
+                cfaPhaseOrdered = false,
+            )
+        }
+
+        /**
+         * Reproduces MGC's default Bayer NoiseModel -> RGB NoiseModel channel remap.
+         *
+         * The wrapper at 0x36357DC calls the transform at 0x5E9698C with its optional
+         * post-scale disabled. RemapChannels maps [R, Gr, Gb, B] to [R, G, B] with unit
+         * weights, then divides every destination NoiseModel coefficient by its accumulated
+         * weight. Therefore G is the coefficient mean of Gr and Gb, not the variance of an
+         * independently averaged pair of pixels.
+         */
+        fun bayerNoiseModelToRgb(channels: FloatArray): FloatArray {
+            val red = channels.getOrElse(0) { 0f }
+            val green1 = channels.getOrElse(1) { 0f }
+            val green2 = channels.getOrElse(2) { green1 }
+            val blue = channels.getOrElse(3) { 0f }
+            return floatArrayOf(
+                red,
+                0.5f * (green1 + green2),
+                blue,
             )
         }
 
@@ -122,5 +166,46 @@ class RawNoiseModel private constructor(
             if (values.isEmpty()) return 0f
             return values.sum() / values.size.toFloat()
         }
+    }
+}
+
+internal enum class RawNoiseModelSource {
+    GCAM_CALIBRATED,
+    CAMERA2_PER_FRAME,
+    CAMERA2_BASE_FRAME,
+    UNAVAILABLE,
+}
+
+internal data class ResolvedRawNoiseModel(
+    val model: RawNoiseModel,
+    val source: RawNoiseModelSource,
+)
+
+/** Selection order after the caller has resolved its default calibrated profile policy. */
+internal object RawNoiseModelResolver {
+    fun resolve(
+        calibratedProfile: CalibratedRawNoiseProfile?,
+        sensitivity: Int,
+        perFrameCamera2Profile: FloatArray?,
+        baseFrameCamera2Model: RawNoiseModel,
+    ): ResolvedRawNoiseModel {
+        calibratedProfile
+            ?.evaluate(sensitivity)
+            ?.let { model ->
+                return ResolvedRawNoiseModel(model, RawNoiseModelSource.GCAM_CALIBRATED)
+            }
+        perFrameCamera2Profile
+            ?.let(RawNoiseModel::fromCamera2NoiseProfile)
+            ?.takeIf { it.hasValidCamera2Profile }
+            ?.let { model ->
+                return ResolvedRawNoiseModel(model, RawNoiseModelSource.CAMERA2_PER_FRAME)
+            }
+        if (baseFrameCamera2Model.hasValidCamera2Profile) {
+            return ResolvedRawNoiseModel(
+                baseFrameCamera2Model,
+                RawNoiseModelSource.CAMERA2_BASE_FRAME,
+            )
+        }
+        return ResolvedRawNoiseModel(RawNoiseModel.EMPTY, RawNoiseModelSource.UNAVAILABLE)
     }
 }

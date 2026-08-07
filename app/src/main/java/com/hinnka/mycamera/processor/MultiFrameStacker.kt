@@ -8,6 +8,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
+import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.utils.BitmapUtils
 
@@ -34,6 +35,18 @@ data class GpuLinearRgbSource(
     val stackCompletionTimeline: GpuStackCompletionTimeline? = null,
 )
 
+/**
+ * Opaque normalized Bayer texture exported by a stacker into the persistent RAW renderer context.
+ * Storage is full-resolution R16UI CFA. It may only be consumed or released on that context's GL
+ * dispatcher.
+ */
+data class GpuBayerSource(
+    val textureId: Int,
+    val width: Int,
+    val height: Int,
+    val stackCompletionTimeline: GpuStackCompletionTimeline? = null,
+)
+
 data class RawStackResult(
     /** Null when a GPU source is exported and CPU/DNG materialization has been deferred. */
     var fusedBayerBuffer: ByteBuffer?,
@@ -50,9 +63,30 @@ data class RawStackResult(
     val inputColStepSamples: Int? = null,
     val baselineExposureEv: Float? = null,
     val gpuLinearRgbSource: GpuLinearRgbSource? = null,
+    val gpuBayerSource: GpuBayerSource? = null,
     /** True only when lens-shading gain has already been multiplied into the fused pixels. */
     val lensShadingCorrectionApplied: Boolean = false,
     val mergedFrameCount: Int = 1,
+    /**
+     * MGC's normalized 128-bin spatial-merge correlation spectrum.
+     *
+     * Null means that the exact propagated model is unavailable and the default Spatial denoise
+     * pass must be bypassed.
+     */
+    val mgcDenoiseCorrelation: FloatArray? = null,
+    /**
+     * Exact normalized camera-RGB read variance emitted by MGC Spatial.
+     */
+    val mgcDenoiseReadNoise: FloatArray? = null,
+    /**
+     * Exact normalized camera-RGB shot coefficient emitted by MGC Spatial.
+     */
+    val mgcDenoiseShotNoise: FloatArray? = null,
+    /**
+     * Exact process-local Q8 variance multiplier emitted by MGC Spatial and consumed before
+     * DNG write.
+     */
+    val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
     /**
      * True only for the debug reference-only isolation path. This state is process-local and is
      * never persisted into RAW/DNG metadata.
@@ -193,8 +227,8 @@ object MultiFrameStacker {
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
         whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
-        noiseModel: FloatArray = floatArrayOf(0f, 0f),
-        rawNoiseModel: RawNoiseModel = RawNoiseModel.fromLegacyNoiseModel(noiseModel),
+        rawNoiseModel: RawNoiseModel = RawNoiseModel.EMPTY,
+        calibratedNoiseProfile: CalibratedRawNoiseProfile? = null,
         lensShading: FloatArray? = null,
         lensShadingWidth: Int = 0,
         lensShadingHeight: Int = 0,
@@ -207,6 +241,8 @@ object MultiFrameStacker {
         val images = frames.map { it.image }
         val width = images[0].width
         val height = images[0].height
+        val effectiveCalibratedNoiseProfile = calibratedNoiseProfile
+            ?: CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
 
         val effectiveOutputScale = if (outputMode == MgcSpatialOutputMode.BAYER) {
             1f
@@ -217,6 +253,8 @@ object MultiFrameStacker {
             "Starting MGC Spatial ${outputMode.name} fusion for ${images.size} frames. " +
                 "Pattern=$cfaPattern outputScale=$effectiveOutputScale " +
                 "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel " +
+                "noiseProfile=${effectiveCalibratedNoiseProfile.id}" +
+                "${if (calibratedNoiseProfile == null) "(default)" else ""} " +
                 "legacyHdrFlag=$enableHdrFusion"
         }
         val stackLensShading = validLensShadingOrNull(
@@ -232,8 +270,8 @@ object MultiFrameStacker {
             blackLevel = masterBlackLevel,
             whiteLevel = whiteLevel,
             whiteBalanceGains = whiteBalanceGains,
-            noiseModel = noiseModel,
             rawNoiseModel = rawNoiseModel,
+            calibratedNoiseProfile = effectiveCalibratedNoiseProfile,
             lensShading = stackLensShading,
             lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,

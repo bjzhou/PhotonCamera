@@ -86,12 +86,11 @@ class RawNoiseModelTest {
 
     @Test
     fun threePlaneDngNoiseExpandsGreenWithoutCfaReordering() {
-        val model = RawNoiseModel.fromCamera2NoiseProfile(
+        val model = RawNoiseModel.fromDngNoiseProfile(
             floatArrayOf(
                 1f, 10f,
                 2f, 20f,
                 3f, 30f,
-                0f, 0f,
             ),
         )
 
@@ -100,6 +99,103 @@ class RawNoiseModelTest {
             model.normalizedShotNoiseForShader(cfaPattern = 3),
             0f,
         )
+    }
+
+    @Test
+    fun camera2ImporterRejectsAThreePlaneDngProfile() {
+        val model = RawNoiseModel.fromCamera2NoiseProfile(
+            floatArrayOf(
+                1f, 10f,
+                2f, 20f,
+                3f, 30f,
+            ),
+        )
+
+        assertFalse(model.hasValidCamera2Profile)
+        assertArrayEquals(FloatArray(4), model.shotNoise, 0f)
+        assertArrayEquals(FloatArray(4), model.readNoise, 0f)
+    }
+
+    @Test
+    fun defaultResolverUsesExactPerFrameCamera2PairsWithoutCalibrationOrAveraging() {
+        val perFrame = floatArrayOf(
+            1f, 10f,
+            2f, 20f,
+            3f, 30f,
+            4f, 40f,
+        )
+        val base = RawNoiseModel.fromCamera2NoiseProfile(
+            floatArrayOf(
+                11f, 110f,
+                12f, 120f,
+                13f, 130f,
+                14f, 140f,
+            ),
+        )
+
+        val resolved = RawNoiseModelResolver.resolve(
+            calibratedProfile = null,
+            sensitivity = 8000,
+            perFrameCamera2Profile = perFrame,
+            baseFrameCamera2Model = base,
+        )
+
+        assertEquals(RawNoiseModelSource.CAMERA2_PER_FRAME, resolved.source)
+        assertArrayEquals(floatArrayOf(1f, 2f, 3f, 4f), resolved.model.shotNoise, 0f)
+        assertArrayEquals(floatArrayOf(10f, 20f, 30f, 40f), resolved.model.readNoise, 0f)
+    }
+
+    @Test
+    fun defaultResolverFallsBackOnlyToExactBaseCamera2Model() {
+        val base = RawNoiseModel.fromCamera2NoiseProfile(
+            floatArrayOf(
+                1f, 10f,
+                2f, 20f,
+                3f, 30f,
+                4f, 40f,
+            ),
+        )
+
+        val resolved = RawNoiseModelResolver.resolve(
+            calibratedProfile = null,
+            sensitivity = 8000,
+            perFrameCamera2Profile = null,
+            baseFrameCamera2Model = base,
+        )
+
+        assertEquals(RawNoiseModelSource.CAMERA2_BASE_FRAME, resolved.source)
+        assertArrayEquals(base.shotNoise, resolved.model.shotNoise, 0f)
+        assertArrayEquals(base.readNoise, resolved.model.readNoise, 0f)
+    }
+
+    @Test
+    fun defaultResolverDoesNotInventNoiseWhenCamera2ProfilesAreUnavailable() {
+        val resolved = RawNoiseModelResolver.resolve(
+            calibratedProfile = null,
+            sensitivity = 8000,
+            perFrameCamera2Profile = null,
+            baseFrameCamera2Model = RawNoiseModel.EMPTY,
+        )
+
+        assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)
+        assertArrayEquals(FloatArray(4), resolved.model.shotNoise, 0f)
+        assertArrayEquals(FloatArray(4), resolved.model.readNoise, 0f)
+    }
+
+    @Test
+    fun bayerNoiseModelRemapAveragesGreenCoefficients() {
+        val rgb = RawNoiseModel.bayerNoiseModelToRgb(
+            floatArrayOf(4f, 6f, 10f, 12f),
+        )
+
+        assertArrayEquals(floatArrayOf(4f, 8f, 12f), rgb, 0f)
+    }
+
+    @Test
+    fun equalBayerNoiseCoefficientsRemainEqualAfterMgcRgbRemap() {
+        val rgb = RawNoiseModel.bayerNoiseModelToRgb(FloatArray(4) { 0.003f })
+
+        assertArrayEquals(FloatArray(3) { 0.003f }, rgb, 0f)
     }
 
     @Test

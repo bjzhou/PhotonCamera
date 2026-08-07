@@ -936,6 +936,44 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
+     * Packs the full-resolution normalized Bayer mosaic into MGC Fixed16.
+     *
+     * DownsampleRawF16ToFloatTileSize16 does not consume IEEE FP16. Its F16
+     * input is signed Q14 and has Halide dimensions [quadX, quadY, phase].
+     * The four phase planes are stacked vertically so the readback has the
+     * same conventional planar strides requested by the Halide bounds query:
+     *
+     *   address = quadX + quadY * quadWidth
+     *       + phase * quadWidth * quadHeight
+     */
+    val packBayerFixed16 = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uBayerAndWeight;
+        uniform ivec2 uSourceSize;
+        uniform ivec2 uQuadSize;
+        layout(location = 0) out highp int oBayerFixed16;
+        void main() {
+            ivec2 packed = clamp(
+                ivec2(gl_FragCoord.xy),
+                ivec2(0),
+                ivec2(uQuadSize.x - 1, uQuadSize.y * 4 - 1)
+            );
+            int phase = packed.y / uQuadSize.y;
+            ivec2 quad = ivec2(packed.x, packed.y - phase * uQuadSize.y);
+            ivec2 phaseOffset = ivec2(phase & 1, phase >> 1);
+            ivec2 source = min(quad * 2 + phaseOffset, uSourceSize - ivec2(1));
+            vec2 valueAndWeight = texelFetch(uBayerAndWeight, source, 0).rg;
+            float normalized = max(
+                valueAndWeight.x / max(valueAndWeight.y, 1.0e-8),
+                0.0
+            );
+            oBayerFixed16 = int(round(clamp(normalized * 16384.0, 0.0, 32767.0)));
+        }
+    """.trimIndent()
+
+    /**
      * Raw16ToGrayHalide (0x3bbaf98): one value per Bayer quad, phase black
      * subtraction, scalar gain, equal RGGB average and separable 1:2:1 filtering.
      */
@@ -1625,6 +1663,19 @@ internal object GlesMgcRawSpatialShaders {
                 0
             ).xy * uAlignmentToBayerQuads;
             oAlignment = vec4(flowInBayerQuads, 0.0, 0.0);
+        }
+    """.trimIndent()
+
+    val strengthAlignment = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uFlow;
+        uniform ivec2 uOutputSize;
+        out vec4 oAlignment;
+        void main() {
+            vec2 uv = gl_FragCoord.xy / vec2(uOutputSize);
+            oAlignment = vec4(texture(uFlow, uv).xy, 0.0, 0.0);
         }
     """.trimIndent()
 

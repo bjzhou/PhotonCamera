@@ -21,12 +21,20 @@ class RawNoiseProfileSelectionTest {
 
         assertArrayEquals(
             floatArrayOf(3f, 30f),
-            RawMetadata.greenNoiseProfile(profile, RawMetadata.CFA_RGGB),
+            RawMetadata.greenNoiseProfile(
+                profile,
+                RawMetadata.CFA_RGGB,
+                RawNoiseProfileLayout.CAMERA2_CFA,
+            ),
             0f
         )
         assertArrayEquals(
             floatArrayOf(4.5f, 45f),
-            RawMetadata.greenNoiseProfile(profile, RawMetadata.CFA_GRBG),
+            RawMetadata.greenNoiseProfile(
+                profile,
+                RawMetadata.CFA_GRBG,
+                RawNoiseProfileLayout.CAMERA2_CFA,
+            ),
             0f
         )
     }
@@ -42,10 +50,13 @@ class RawNoiseProfileSelectionTest {
 
         assertArrayEquals(
             floatArrayOf(2f, 20f),
-            RawMetadata.greenNoiseProfile(profile, RawMetadata.CFA_RGGB),
+            RawMetadata.greenNoiseProfile(
+                profile,
+                RawMetadata.CFA_RGGB,
+                RawNoiseProfileLayout.DNG_RGB,
+            ),
             0f
         )
-        assertArrayEquals(floatArrayOf(11f / 3f, 110f / 3f), RawMetadata.averageNoiseProfile(profile), 1e-6f)
     }
 
     @Test
@@ -59,22 +70,38 @@ class RawNoiseProfileSelectionTest {
 
         assertArrayEquals(
             floatArrayOf(1f, 10f, 8f, 80f),
-            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_RGGB),
+            RawMetadata.redBlueNoiseProfile(
+                profile,
+                RawMetadata.CFA_RGGB,
+                RawNoiseProfileLayout.CAMERA2_CFA,
+            ),
             0f
         )
         assertArrayEquals(
             floatArrayOf(2f, 20f, 4f, 40f),
-            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_GRBG),
+            RawMetadata.redBlueNoiseProfile(
+                profile,
+                RawMetadata.CFA_GRBG,
+                RawNoiseProfileLayout.CAMERA2_CFA,
+            ),
             0f
         )
         assertArrayEquals(
             floatArrayOf(4f, 40f, 2f, 20f),
-            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_GBRG),
+            RawMetadata.redBlueNoiseProfile(
+                profile,
+                RawMetadata.CFA_GBRG,
+                RawNoiseProfileLayout.CAMERA2_CFA,
+            ),
             0f
         )
         assertArrayEquals(
             floatArrayOf(8f, 80f, 1f, 10f),
-            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_BGGR),
+            RawMetadata.redBlueNoiseProfile(
+                profile,
+                RawMetadata.CFA_BGGR,
+                RawNoiseProfileLayout.CAMERA2_CFA,
+            ),
             0f
         )
     }
@@ -90,7 +117,11 @@ class RawNoiseProfileSelectionTest {
 
         assertArrayEquals(
             floatArrayOf(1f, 10f, 8f, 80f),
-            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_BGGR),
+            RawMetadata.redBlueNoiseProfile(
+                profile,
+                RawMetadata.CFA_BGGR,
+                RawNoiseProfileLayout.DNG_RGB,
+            ),
             0f
         )
     }

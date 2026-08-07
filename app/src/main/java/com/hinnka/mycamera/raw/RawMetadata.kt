@@ -12,6 +12,14 @@ import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import kotlin.collections.contentToString
 
+enum class RawNoiseProfileLayout {
+    NONE,
+    /** Four (S, O) pairs in the sensor CFA's 2x2 reading order. */
+    CAMERA2_CFA,
+    /** Three (S, O) pairs in canonical R, G, B order; native readers may append a zero pair. */
+    DNG_RGB,
+}
+
 /**
  * RAW 图像处理所需的元数据
  *
@@ -95,10 +103,9 @@ data class RawMetadata(
     val postRawSensitivityBoost: Float = 1.0f,
     val baselineExposure: Float = 0.0f,
     val shadowScale: Float = 1.0f,
-    /** 所有有效颜色通道噪声模型的平均值，顺序为 [slope, offset]。 */
-    val noiseProfile: FloatArray = floatArrayOf(0f, 0f),
     /** 每通道噪声模型，顺序为 [S0, O0, S1, O1, ...]。 */
-    val channelNoiseProfile: FloatArray = floatArrayOf(0f, 0f),
+    val channelNoiseProfile: FloatArray = FloatArray(0),
+    val noiseProfileLayout: RawNoiseProfileLayout = RawNoiseProfileLayout.NONE,
     val afRegions: Array<MeteringRectangle>? = null,
     val activeArray: android.graphics.Rect? = null,
     val defaultCrop: android.graphics.Rect? = null,
@@ -106,9 +113,24 @@ data class RawMetadata(
     val exposureCompensation: Float = 0f,
     val exposureBias: Float = 0f,
     val iso: Int = 100,
+    /** CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY for GCam noise-model digital gain. */
+    val maxAnalogSensitivity: Int = 0,
     val shutterSpeed: Long = 0L,
     val aperture: Float = 0f,
     val frameCount: Int = 1,
+    /**
+     * MGC's normalized 128-bin power-correlation spectrum after spatial merge.
+     * Null means either a single uncorrelated source or an unsupported propagated model.
+     */
+    val mgcDenoiseCorrelation: FloatArray? = null,
+    /** Exact process-local normalized camera-RGB read variance emitted by MGC Spatial. */
+    val mgcDenoiseReadNoise: FloatArray? = null,
+    /** Exact process-local normalized camera-RGB shot coefficient emitted by MGC Spatial. */
+    val mgcDenoiseShotNoise: FloatArray? = null,
+    /** Exact process-local Q8 Spatial variance multiplier; never serialized into DNG. */
+    val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
+    /** Gain coordinate used by luma_denoise_default.binarypb. */
+    val mgcDenoiseTuningGain: Float? = null,
     val rotation: Int? = null,
     val profileGainTableMap: DngProfileGainTableMap? = null
 ) {
@@ -303,7 +325,6 @@ data class RawMetadata(
 
             // 8. 获取噪声模型
             val channelNoiseProfile = extractChannelNoiseProfile(captureResult)
-            val noiseProfile = averageNoiseProfile(channelNoiseProfile)
 
             // 9. 获取 AE 模式和曝光补偿
             val aeMode = captureResult.get(CaptureResult.CONTROL_AE_MODE) ?: CaptureResult.CONTROL_AE_MODE_ON
@@ -313,6 +334,9 @@ data class RawMetadata(
 
             // 10. 获取 ISO 和快门
             val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
+            val maxAnalogSensitivity = characteristics.get(
+                CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY,
+            ) ?: 0
             val shutterSpeed = captureResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
             val aperture = captureResult.get(CaptureResult.LENS_APERTURE) ?: 0f
 
@@ -333,14 +357,19 @@ data class RawMetadata(
                 lensShadingMapHeight = shadingHeight,
                 postRawSensitivityBoost = postRawSensitivityBoost,
                 baselineExposure = 0f,
-                noiseProfile = noiseProfile,
                 channelNoiseProfile = channelNoiseProfile,
+                noiseProfileLayout = if (channelNoiseProfile.size >= 8) {
+                    RawNoiseProfileLayout.CAMERA2_CFA
+                } else {
+                    RawNoiseProfileLayout.NONE
+                },
                 afRegions = captureResult.get(CaptureResult.CONTROL_AF_REGIONS),
                 activeArray = activeArray,
                 aeMode = aeMode,
                 exposureCompensation = exposureCompensation,
                 exposureBias = userExposureCompensation ?: exposureCompensation,
                 iso = iso,
+                maxAnalogSensitivity = maxAnalogSensitivity,
                 shutterSpeed = shutterSpeed,
                 aperture = aperture
             )
@@ -358,41 +387,20 @@ data class RawMetadata(
                     }
                 }
             } else {
-                floatArrayOf(0.0f, 0.0f)
+                FloatArray(0)
             }
-        }
-
-        internal fun averageNoiseProfile(channelNoiseProfile: FloatArray): FloatArray {
-            if (channelNoiseProfile.size < 2) return floatArrayOf(0f, 0f)
-            var sumS = 0.0
-            var sumO = 0.0
-            var count = 0
-            var index = 0
-            while (index + 1 < channelNoiseProfile.size) {
-                val slope = sanitizeNoiseCoefficient(channelNoiseProfile[index])
-                val offset = sanitizeNoiseCoefficient(channelNoiseProfile[index + 1])
-                // Native DNG parsing pads the fixed-size array with zero pairs.
-                if (slope > 0f || offset > 0f) {
-                    sumS += slope
-                    sumO += offset
-                    count++
-                }
-                index += 2
-            }
-            if (count == 0) return floatArrayOf(0f, 0f)
-            return floatArrayOf((sumS / count).toFloat(), (sumO / count).toFloat())
         }
 
         /**
          * Returns the green-channel noise model used by darktable denoiseprofile.
          *
-         * Camera2 exposes four pairs in CFA position order, while a DNG NoiseProfile
-         * normally exposes [R, G, B]. DNG native parsing pads that three-plane array
-         * to four pairs, so a non-empty fourth pair distinguishes the four-plane form.
+         * [layout] explicitly distinguishes Camera2's four CFA-position pairs from DNG's
+         * canonical [R, G, B] pairs. Coefficient contents are never used to guess the layout.
          */
         internal fun greenNoiseProfile(
             channelNoiseProfile: FloatArray,
-            cfaPattern: Int
+            cfaPattern: Int,
+            layout: RawNoiseProfileLayout,
         ): FloatArray {
             fun pairAt(pairIndex: Int): FloatArray? {
                 val offset = pairIndex * 2
@@ -403,10 +411,10 @@ data class RawMetadata(
                 return floatArrayOf(slope, intercept)
             }
 
-            val hasFourChannels = pairAt(3) != null
-            if (!hasFourChannels) {
+            if (layout == RawNoiseProfileLayout.DNG_RGB) {
                 return pairAt(1) ?: floatArrayOf(0f, 0f)
             }
+            if (layout != RawNoiseProfileLayout.CAMERA2_CFA) return floatArrayOf(0f, 0f)
 
             val basePattern = cfaPattern.mod(4)
             val greenIndices = when (basePattern) {
@@ -428,12 +436,13 @@ data class RawMetadata(
         /**
          * Returns red and blue noise models as [redSlope, redOffset, blueSlope, blueOffset].
          *
-         * Camera2 profiles follow CFA position order; DNG profiles use [R, G, B]
-         * and may contain a zero-padded fourth pair after native parsing.
+         * Camera2 profiles follow CFA position order; DNG profiles use [R, G, B].
+         * [layout] selects the interpretation without inspecting coefficient values.
          */
         internal fun redBlueNoiseProfile(
             channelNoiseProfile: FloatArray,
-            cfaPattern: Int
+            cfaPattern: Int,
+            layout: RawNoiseProfileLayout,
         ): FloatArray {
             fun pairAt(pairIndex: Int): FloatArray? {
                 val offset = pairIndex * 2
@@ -444,10 +453,9 @@ data class RawMetadata(
                 return floatArrayOf(slope, intercept)
             }
 
-            val hasFourChannels = pairAt(3) != null
-            val (red, blue) = if (!hasFourChannels) {
+            val (red, blue) = if (layout == RawNoiseProfileLayout.DNG_RGB) {
                 pairAt(0) to pairAt(2)
-            } else {
+            } else if (layout == RawNoiseProfileLayout.CAMERA2_CFA) {
                 val indices = when (cfaPattern.mod(4)) {
                     CFA_GRBG -> 1 to 2
                     CFA_GBRG -> 2 to 1
@@ -455,6 +463,8 @@ data class RawMetadata(
                     else -> 0 to 3
                 }
                 pairAt(indices.first) to pairAt(indices.second)
+            } else {
+                null to null
             }
 
             return floatArrayOf(
@@ -985,8 +995,24 @@ data class RawMetadata(
         if (baselineExposure != other.baselineExposure) return false
         if (shadowScale != other.shadowScale) return false
         if (iso != other.iso) return false
+        if (maxAnalogSensitivity != other.maxAnalogSensitivity) return false
         if (shutterSpeed != other.shutterSpeed) return false
         if (frameCount != other.frameCount) return false
+        if (noiseProfileLayout != other.noiseProfileLayout) return false
+        if (mgcDenoiseCorrelation != null) {
+            if (other.mgcDenoiseCorrelation == null) return false
+            if (!mgcDenoiseCorrelation.contentEquals(other.mgcDenoiseCorrelation)) return false
+        } else if (other.mgcDenoiseCorrelation != null) return false
+        if (mgcDenoiseReadNoise != null) {
+            if (other.mgcDenoiseReadNoise == null) return false
+            if (!mgcDenoiseReadNoise.contentEquals(other.mgcDenoiseReadNoise)) return false
+        } else if (other.mgcDenoiseReadNoise != null) return false
+        if (mgcDenoiseShotNoise != null) {
+            if (other.mgcDenoiseShotNoise == null) return false
+            if (!mgcDenoiseShotNoise.contentEquals(other.mgcDenoiseShotNoise)) return false
+        } else if (other.mgcDenoiseShotNoise != null) return false
+        if (mgcSpatialStrengthMap != other.mgcSpatialStrengthMap) return false
+        if (mgcDenoiseTuningGain != other.mgcDenoiseTuningGain) return false
         if (rotation != other.rotation) return false
 
         return true
@@ -1009,8 +1035,15 @@ data class RawMetadata(
         result = 31 * result + baselineExposure.hashCode()
         result = 31 * result + shadowScale.hashCode()
         result = 31 * result + iso
+        result = 31 * result + maxAnalogSensitivity
         result = 31 * result + shutterSpeed.hashCode()
         result = 31 * result + frameCount
+        result = 31 * result + noiseProfileLayout.hashCode()
+        result = 31 * result + (mgcDenoiseCorrelation?.contentHashCode() ?: 0)
+        result = 31 * result + (mgcDenoiseReadNoise?.contentHashCode() ?: 0)
+        result = 31 * result + (mgcDenoiseShotNoise?.contentHashCode() ?: 0)
+        result = 31 * result + (mgcSpatialStrengthMap?.hashCode() ?: 0)
+        result = 31 * result + (mgcDenoiseTuningGain?.hashCode() ?: 0)
         result = 31 * result + (rotation ?: 0)
         return result
     }

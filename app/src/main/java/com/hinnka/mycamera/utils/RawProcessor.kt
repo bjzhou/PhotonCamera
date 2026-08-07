@@ -19,6 +19,7 @@ import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawNoiseProfileLayout
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -133,8 +134,8 @@ object RawProcessor {
             postRawSensitivityBoost = 1f,
             baselineExposure = DngBaselineExposure.sanitize(profilePreparation.baselineExposureEv),
             shadowScale = 1f,
-            noiseProfile = RawMetadata.averageNoiseProfile(dngChannelNoise),
             channelNoiseProfile = dngChannelNoise,
+            noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB,
             afRegions = null,
             activeArray = Rect(0, 0, width, height),
             defaultCrop = Rect(defaultCrop),
