@@ -22,7 +22,8 @@ object RawBurstGyroSelector {
     private const val MIN_GYRO_COVERAGE = 0.80f
     private const val MIN_RETAINED_FRAMES = 3
     private const val MAX_REJECTION_FRACTION = 0.25f
-    private const val ABSOLUTE_OUTLIER_FLOOR_RAD = 0.0015f
+    private const val REFERENCE_CANDIDATE_COUNT = 5
+    private const val LARGE_MOTION_RISK_RAD = 0.0015f
 
     fun select(frames: List<RawStackFrame>): RawBurstGyroSelection {
         return selectMetadata(
@@ -43,8 +44,24 @@ object RawBurstGyroSelector {
 
         val risks = FloatArray(frames.size) { index -> blurRisk(frames[index]) }
         val reliableIndices = frames.indices.filter { risks[it].isFinite() }
+        val referenceCandidates = frames.indices
+            .take(REFERENCE_CANDIDATE_COUNT)
+        val allReferenceCandidatesHaveLargeMotion =
+            referenceCandidates.isNotEmpty() &&
+                referenceCandidates.all { index ->
+                    risks[index].isFinite() &&
+                        risks[index] >= LARGE_MOTION_RISK_RAD
+                }
+        val reference = if (allReferenceCandidatesHaveLargeMotion) {
+            referenceCandidates.first()
+        } else {
+            referenceCandidates
+                .asSequence()
+                .filter { risks[it].isFinite() }
+                .minByOrNull { risks[it] }
+                ?: referenceCandidates.first()
+        }
         if (reliableIndices.size < 2 || frames.size <= MIN_RETAINED_FRAMES) {
-            val reference = reliableIndices.minByOrNull { risks[it] } ?: 0
             return RawBurstGyroSelection(
                 orderedAcceptedIndices = orderAccepted(frames, frames.indices.toList(), risks, reference),
                 rejectedIndices = IntArray(0),
@@ -58,7 +75,7 @@ object RawBurstGyroSelector {
         val deviations = reliableRisks.map { kotlin.math.abs(it - median) }.sorted()
         val mad = median(deviations)
         val threshold = max(
-            ABSOLUTE_OUTLIER_FLOOR_RAD,
+            LARGE_MOTION_RISK_RAD,
             max(median * 2.5f, median + 3.0f * 1.4826f * mad),
         )
         val maxRejected = minOf(
@@ -67,16 +84,11 @@ object RawBurstGyroSelector {
         ).coerceAtLeast(0)
         val rejected = reliableIndices
             .asSequence()
-            .filter { risks[it] > threshold }
+            .filter { it != reference && risks[it] > threshold }
             .sortedByDescending { risks[it] }
             .take(maxRejected)
             .toSet()
         val accepted = frames.indices.filterNot(rejected::contains)
-        val reference = accepted
-            .asSequence()
-            .filter { risks[it].isFinite() }
-            .minByOrNull { risks[it] }
-            ?: accepted.first()
 
         return RawBurstGyroSelection(
             orderedAcceptedIndices = orderAccepted(frames, accepted, risks, reference),

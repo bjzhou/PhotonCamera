@@ -54,6 +54,42 @@ class RawBurstGyroSelectorTest {
         assertEquals(1, selection.rejectedIndices.size)
     }
 
+    @Test
+    fun referenceIsSelectedOnlyFromFirstFiveFrames() {
+        val frames = listOf(
+            frame(0L, 0.0040f),
+            frame(1L, 0.0030f),
+            frame(2L, 0.0020f),
+            frame(3L, 0.0012f),
+            frame(4L, 0.0010f),
+            frame(5L, 0.0001f),
+            frame(6L, 0.0002f),
+        )
+
+        val selection = RawBurstGyroSelector.selectMetadata(frames)
+
+        assertEquals(4, selection.referenceOriginalIndex)
+        assertEquals(4, selection.orderedAcceptedIndices.first())
+    }
+
+    @Test
+    fun firstFrameIsReferenceWhenEveryCandidateHasLargeMotion() {
+        val frames = listOf(
+            frame(0L, 0.020f),
+            frame(1L, 0.002f),
+            frame(2L, 0.003f),
+            frame(3L, 0.004f),
+            frame(4L, 0.005f),
+            frame(5L, 0.0001f),
+        )
+
+        val selection = RawBurstGyroSelector.selectMetadata(frames)
+
+        assertEquals(0, selection.referenceOriginalIndex)
+        assertEquals(0, selection.orderedAcceptedIndices.first())
+        assertEquals(false, selection.rejectedIndices.contains(0))
+    }
+
     private fun frame(timestamp: Long, rotationRadians: Float?): RawBurstGyroFrameSample {
         val exposureNs = 10_000_000L
         return RawBurstGyroFrameSample(

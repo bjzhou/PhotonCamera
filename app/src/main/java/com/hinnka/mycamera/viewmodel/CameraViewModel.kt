@@ -1532,9 +1532,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             enableHdrFusion = rawMaxHdrFusionEnabled,
                         )
                         val normalFrames = exposurePlan.normalIndices.map(chronologicalFrames::get)
-                        val auxiliaryFrames = chronologicalFrames.indices
-                            .filterNot(exposurePlan.normalIndices.toSet()::contains)
-                            .map(chronologicalFrames::get)
+                        val auxiliaryIndices = buildList {
+                            exposurePlan.shortIndex?.let(::add)
+                            addAll(exposurePlan.longIndices.toList())
+                        }
+                        val auxiliaryFrames = auxiliaryIndices.map(chronologicalFrames::get)
+                        exposurePlan.excludedIndices.forEach { excludedIndex ->
+                            chronologicalFrames[excludedIndex].frame.image.close()
+                        }
                         val gyroSelection = withContext(Dispatchers.Default) {
                             RawBurstGyroSelector.select(normalFrames.map { it.frame })
                         }
@@ -1557,7 +1562,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                 "normal=${orderedNormalFrames.size}, " +
                                 "short=${if (exposurePlan.shortIndex != null) 1 else 0}, " +
                                 "long=${exposurePlan.longIndices.size}, " +
-                                "rejected=${gyroSelection.rejectedIndices.joinToString()}, " +
+                                "exposureRejected=${exposurePlan.excludedIndices.joinToString()}, " +
+                                "gyroRejected=${gyroSelection.rejectedIndices.joinToString()}, " +
                                 "geometry=GLES_TEMPORAL_GRAPH, " +
                                 "costMs=${SystemClock.elapsedRealtime() - burstPlanningStartedAtMs}",
                         )
