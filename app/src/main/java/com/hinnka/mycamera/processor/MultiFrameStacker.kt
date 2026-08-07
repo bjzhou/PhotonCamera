@@ -8,6 +8,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
+import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.utils.BitmapUtils
 
@@ -66,6 +67,11 @@ data class RawStackResult(
      * Spatial merge. Null has the same unsupported meaning as [mgcDenoiseCorrelation].
      */
     val mgcDenoiseNoiseScale: Float? = null,
+    /**
+     * Exact Q8 variance multiplier emitted by MGC's Spatial noise-model kernel.
+     * It is process-local and consumed before DNG write.
+     */
+    val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
     /**
      * True only for the debug reference-only isolation path. This state is process-local and is
      * never persisted into RAW/DNG metadata.

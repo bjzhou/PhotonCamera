@@ -39,6 +39,36 @@ class CodeRange:
 
 
 CODE_RANGES = (
+    CodeRange(
+        "ComputeBayerNoiseModelF32TileSize16",
+        0x037A6E14,
+        0x037AAB68,
+        0x037B9AF4,
+    ),
+    CodeRange(
+        "ComputeRGBNoiseModelF32TileSize16",
+        0x037B9AF4,
+        0x037B9AF4,
+        0x037BECDC,
+    ),
+    CodeRange(
+        "DownsampleRawF16ToFloatTileSize16",
+        0x037BECDC,
+        0x037BECDC,
+        0x037C1A8C,
+    ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16",
+        0x037C1A8C,
+        0x037C1A8C,
+        0x037DB248,
+    ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16CopyHelper",
+        0x038561A4,
+        0x03856414,
+        0x0385642C,
+    ),
     CodeRange("BayerRawToYuv1xS16", 0x049C3484, 0x049C7B64, 0x049CAA54),
     CodeRange("RgbRawToYuv1xS16", 0x04A17EA8, 0x04A198B8, 0x04A1C3E8),
     CodeRange(
@@ -67,6 +97,18 @@ CODE_RANGES = (
         0x054DCD34,
         0x054DE730,
     ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16Mode0",
+        0x05DACC58,
+        0x05DACC58,
+        0x05DAD588,
+    ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16Mode1",
+        0x05DAD588,
+        0x05DAD588,
+        0x05DAE16C,
+    ),
 )
 
 # Successful oracle runs reached only malloc/free/trace/par-for.  memset is
@@ -78,6 +120,7 @@ HOST_TARGETS = {
     0x05EF54BC: "halide_trace",
     0x05A7FEF0: "halide_do_par_for",
     0x05FB8540: "memset",
+    0x05DAE16C: "downsample_rgb_dispatch",
 }
 
 

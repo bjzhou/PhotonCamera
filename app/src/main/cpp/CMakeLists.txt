@@ -13,7 +13,7 @@ set(
 )
 set(
     MGC_DENOISE_CAPSULE_SHA256
-    "ab17d95f5f07abec50a21af8534a3866777bcd043e29324e36f367d21c288879"
+    "312c3b2e5ccee00604034fb1e8161dba65ace86197eb6c9fe75556d700505432"
 )
 if(NOT EXISTS "${MGC_DENOISE_CAPSULE}")
     message(
@@ -127,6 +127,7 @@ add_library(my-native-lib SHARED
     dcp_parser.cpp
     mgc_denoise_static/mgc_denoise_static.cpp
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
+    mgc_denoise_static/mgc_spatial_strength_jni.cpp
     "${MGC_DENOISE_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}

@@ -23,6 +23,18 @@ struct ChromaDenoiseNoiseBuffers {
     uint8_t outlier_threshold[8] = {};
 };
 
+enum class SpatialStrengthInputLayout {
+    Bayer = 0,
+    Rgba = 1,
+};
+
+struct SpatialStrengthResult {
+    float output_noise_model_0[3] = {};
+    float output_noise_model_1[3] = {};
+    float output_weights_sum_total_diag_0[3] = {};
+    float output_weights_sum_total_diag_1[3] = {};
+};
+
 /**
  * Reproduces CreateLumaDenoiseNoiseBuffers for one luma noise channel.
  * correlation is MGC's 128-bin normalized power correlation spectrum.  A
@@ -68,6 +80,35 @@ int ComputeStrengthMap(
     float sample_rate_x,
     float sample_rate_y,
     uint16_t* output);
+
+/**
+ * Runs MGC's exact Spatial Compute*NoiseModelF32TileSize16 pipeline.
+ *
+ * fused_f16 is either one F16 Bayer plane or interleaved RGBA F16. Alignment
+ * is planar [x,y,frame,xy], rejection is [x,y,frame], and per-frame RGB noise
+ * coefficients are planar [frame,rgb]. Equal-exposure Spatial uses
+ * frame_weights=kernel_sigmas=1 and rejected_denoise_multiplier=-1.
+ */
+int ComputeSpatialStrengthMap(
+    SpatialStrengthInputLayout layout,
+    const uint16_t* fused_f16,
+    int width,
+    int height,
+    int cfa_pattern,
+    const float* alignment,
+    int alignment_width,
+    int alignment_height,
+    const uint8_t* rejection,
+    int rejection_width,
+    int rejection_height,
+    int frame_count,
+    const float* input_read_noise,
+    const float* input_shot_noise,
+    const float* frame_weights,
+    const float* kernel_sigmas,
+    float rejected_denoise_multiplier,
+    uint16_t* output_strength_q8,
+    SpatialStrengthResult* diagnostics);
 
 /** Runs the statically linked RgbRawToYuv1xS16 with neutral corrections. */
 int RunRgbRawToYuv(

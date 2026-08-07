@@ -3062,6 +3062,7 @@ object GalleryManager {
                 frameCount = finalStackResult.mergedFrameCount,
                 mgcDenoiseCorrelation = finalStackResult.mgcDenoiseCorrelation,
                 mgcDenoiseNoiseScale = finalStackResult.mgcDenoiseNoiseScale,
+                mgcSpatialStrengthMap = finalStackResult.mgcSpatialStrengthMap,
             )
             val defaultDenoised = processor.materializeMgcSpatialLinearRgb(
                 context = context,
@@ -3075,16 +3076,19 @@ object GalleryManager {
                 sourcePixelsIncludeLensShadingCorrection =
                     finalStackResult.lensShadingCorrectionApplied,
                 applyLensShadingCorrection = applyRawLensShading,
-                mode = if (finalStackResult.mgcSpatialReferenceOnlyDiagnostic) {
-                    MgcSpatialMaterializationMode.DIAGNOSTIC_BYPASS_DENOISE
-                } else {
+                mode = if (
+                    MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE &&
+                    !finalStackResult.mgcSpatialReferenceOnlyDiagnostic
+                ) {
                     MgcSpatialMaterializationMode.DEFAULT_DENOISE
+                } else {
+                    MgcSpatialMaterializationMode.BYPASS_DEFAULT_DENOISE
                 },
             )
             if (defaultDenoised == null) {
                 PLog.e(
                     TAG,
-                    "RAW stack aborted: MGC Spatial default denoise did not produce " +
+                    "RAW stack aborted: MGC Spatial materialization did not produce " +
                         "persistable LinearRaw pixels",
                 )
                 return@withContext
@@ -3101,6 +3105,7 @@ object GalleryManager {
                 frameCount = 1,
                 mgcDenoiseCorrelation = null,
                 mgcDenoiseNoiseScale = null,
+                mgcSpatialStrengthMap = null,
             )
 
             val outputRawBlackBorderCrop =

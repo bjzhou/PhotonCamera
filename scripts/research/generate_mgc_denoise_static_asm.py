@@ -37,6 +37,40 @@ class CodeRange:
 
 
 CODE_RANGES = (
+    CodeRange(
+        "ComputeBayerNoiseModelF32TileSize16",
+        0x037A6E14,
+        0x037AAB68,
+        0x037B9AF4,
+        "photon_mgc_compute_bayer_noise_model_f32_tile_size_16",
+    ),
+    CodeRange(
+        "ComputeRGBNoiseModelF32TileSize16",
+        0x037B9AF4,
+        0x037B9AF4,
+        0x037BECDC,
+        "photon_mgc_compute_rgb_noise_model_f32_tile_size_16",
+    ),
+    CodeRange(
+        "DownsampleRawF16ToFloatTileSize16",
+        0x037BECDC,
+        0x037BECDC,
+        0x037C1A8C,
+        "photon_mgc_downsample_raw_f16_to_float_tile_size_16",
+    ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16",
+        0x037C1A8C,
+        0x037C1A8C,
+        0x037DB248,
+        "photon_mgc_downsample_rgb_f16_to_float_tile_size_16",
+    ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16CopyHelper",
+        0x038561A4,
+        0x03856414,
+        0x0385642C,
+    ),
     CodeRange("BayerRawToYuv1xS16", 0x049C3484, 0x049C7B64, 0x049CAA54),
     CodeRange(
         "RgbRawToYuv1xS16",
@@ -85,6 +119,20 @@ CODE_RANGES = (
         0x054DE730,
         "photon_mgc_compute_denoise_strength_maps_u16",
     ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16Mode0",
+        0x05DACC58,
+        0x05DACC58,
+        0x05DAD588,
+        "photon_mgc_downsample_rgb_mode_0",
+    ),
+    CodeRange(
+        "DownsampleRgbF16ToFloatTileSize16Mode1",
+        0x05DAD588,
+        0x05DAD588,
+        0x05DAE16C,
+        "photon_mgc_downsample_rgb_mode_1",
+    ),
 )
 
 HOST_TARGETS = {
@@ -93,6 +141,7 @@ HOST_TARGETS = {
     0x05EF54BC: "photon_mgc_halide_trace",
     0x05A7FEF0: "photon_mgc_halide_do_par_for",
     0x05FB8540: "memset",
+    0x05DAE16C: "photon_mgc_downsample_rgb_dispatch",
 }
 
 
@@ -312,26 +361,41 @@ def generate(
         lines.append(f"    .hidden {symbol}")
     lines.append("")
 
-    for code_range in CODE_RANGES:
+    code_groups: list[list[CodeRange]] = []
+    for code_range in sorted(CODE_RANGES, key=lambda value: value.start):
         section_start = page_floor(code_range.start)
-        section_end = page_ceil(code_range.end)
+        if (
+            not code_groups
+            or section_start >= max(
+                page_ceil(value.end) for value in code_groups[-1]
+            )
+        ):
+            code_groups.append([code_range])
+        else:
+            code_groups[-1].append(code_range)
+
+    for code_group in code_groups:
+        section_start = min(page_floor(value.start) for value in code_group)
+        section_end = max(page_ceil(value.end) for value in code_group)
+        section_name = "__".join(value.name for value in code_group)
         lines.extend(
             [
                 (
-                    f'.section .text.photon_mgc.{code_range.name},'
+                    f'.section .text.photon_mgc.{section_name},'
                     '"ax",@progbits'
                 ),
                 "    .p2align 12",
             ]
         )
-        if code_range.symbol is not None:
-            lines.extend(
-                [
-                    f"    .global {code_range.symbol}",
-                    f"    .hidden {code_range.symbol}",
-                    f"    .type {code_range.symbol}, %function",
-                ]
-            )
+        for code_range in code_group:
+            if code_range.symbol is not None:
+                lines.extend(
+                    [
+                        f"    .global {code_range.symbol}",
+                        f"    .hidden {code_range.symbol}",
+                        f"    .type {code_range.symbol}, %function",
+                    ]
+                )
 
         events = set(range(section_start, section_end, PAGE_SIZE))
         events.update(

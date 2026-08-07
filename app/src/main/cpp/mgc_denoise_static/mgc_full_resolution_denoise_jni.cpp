@@ -46,30 +46,6 @@ uint16_t FloatToHalf(float value) {
     return bits;
 }
 
-float BilinearGain(
-    const float* gain_map,
-    int gain_width,
-    int gain_height,
-    int channel,
-    float x,
-    float y) {
-    x = std::clamp(x, 0.0f, static_cast<float>(gain_width - 1));
-    y = std::clamp(y, 0.0f, static_cast<float>(gain_height - 1));
-    const int x0 = static_cast<int>(std::floor(x));
-    const int y0 = static_cast<int>(std::floor(y));
-    const int x1 = std::min(x0 + 1, gain_width - 1);
-    const int y1 = std::min(y0 + 1, gain_height - 1);
-    const float fx = x - static_cast<float>(x0);
-    const float fy = y - static_cast<float>(y0);
-    const auto value = [&](int px, int py) {
-        return gain_map[(py * gain_width + px) * 4 + channel];
-    };
-    const float top = value(x0, y0) + (value(x1, y0) - value(x0, y0)) * fx;
-    const float bottom =
-        value(x0, y1) + (value(x1, y1) - value(x0, y1)) * fx;
-    return std::max(top + (bottom - top) * fy, 0.0f);
-}
-
 bool CopyFive(JNIEnv* env, jfloatArray source, float output[5]) {
     if (source == nullptr || env->GetArrayLength(source) != 5) return false;
     env->GetFloatArrayRegion(source, 0, 5, output);
@@ -287,7 +263,11 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     jint lens_height,
     jfloatArray normalized_rgb_shot_array,
     jfloatArray normalized_rgb_read_array,
+    jfloatArray normalized_rgb_white_balance_array,
     jfloatArray correlation_array,
+    jshortArray spatial_strength_q8_array,
+    jint spatial_strength_width,
+    jint spatial_strength_height,
     jboolean luma_enabled,
     jboolean chroma_enabled,
     jfloatArray luma_strength_array,
@@ -311,6 +291,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
 
     float normalized_rgb_shot[3] = {};
     float normalized_rgb_read[3] = {};
+    float normalized_rgb_white_balance[3] = {};
     float luma_strength[5] = {};
     float luma_outlier[5] = {};
     float luma_revert[5] = {};
@@ -318,12 +299,22 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     float chroma_outlier[5] = {};
     if (!CopyThree(env, normalized_rgb_shot_array, normalized_rgb_shot) ||
         !CopyThree(env, normalized_rgb_read_array, normalized_rgb_read) ||
+        !CopyThree(
+            env,
+            normalized_rgb_white_balance_array,
+            normalized_rgb_white_balance) ||
         !CopyFive(env, luma_strength_array, luma_strength) ||
         !CopyFive(env, luma_outlier_array, luma_outlier) ||
         !CopyFive(env, luma_revert_array, luma_revert) ||
         !CopyFive(env, chroma_strength_array, chroma_strength) ||
         !CopyFive(env, chroma_outlier_array, chroma_outlier)) {
         return -1;
+    }
+    for (int channel = 0; channel < 3; ++channel) {
+        if (!std::isfinite(normalized_rgb_white_balance[channel]) ||
+            normalized_rgb_white_balance[channel] <= 0.0f) {
+            return -1;
+        }
     }
 
     float correlation[128];
@@ -360,7 +351,10 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                     static_cast<size_t>(y) * padded_width + x;
                 for (int channel = 0; channel < 3; ++channel) {
                     const float normalized = std::clamp(
-                        HalfToFloat(rgba[source_index + channel]),
+                        std::max(
+                            HalfToFloat(rgba[source_index + channel]),
+                            0.0f) *
+                            normalized_rgb_white_balance[channel],
                         0.0f,
                         1.0f);
                     rgb_input[
@@ -374,6 +368,76 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
 
         std::vector<uint16_t> base_strength(strength_count, 256);
         std::vector<uint16_t> strength(strength_count * 3, 256);
+        if (spatial_strength_q8_array != nullptr) {
+            const int expected_full_strength_width =
+                (full_width + 3) / 4;
+            const int expected_full_strength_height =
+                (full_height + 3) / 4;
+            if (spatial_strength_width != expected_full_strength_width ||
+                spatial_strength_height != expected_full_strength_height ||
+                env->GetArrayLength(spatial_strength_q8_array) !=
+                    spatial_strength_width * spatial_strength_height) {
+                return -1;
+            }
+            std::vector<uint16_t> spatial_strength(
+                static_cast<size_t>(spatial_strength_width) *
+                spatial_strength_height);
+            env->GetShortArrayRegion(
+                spatial_strength_q8_array,
+                0,
+                static_cast<jsize>(spatial_strength.size()),
+                reinterpret_cast<jshort*>(spatial_strength.data()));
+            if (env->ExceptionCheck()) return -1;
+            for (int y = 0; y < strength_height; ++y) {
+                const int local_pixel_y = std::min(y * 4, height - 1);
+                const int source_y = std::clamp(
+                    (global_origin_y + local_pixel_y) / 4,
+                    0,
+                    spatial_strength_height - 1);
+                for (int x = 0; x < strength_width; ++x) {
+                    const int local_pixel_x = std::min(x * 4, width - 1);
+                    const int source_x = std::clamp(
+                        (global_origin_x + local_pixel_x) / 4,
+                        0,
+                        spatial_strength_width - 1);
+                    base_strength[
+                        static_cast<size_t>(y) * strength_width + x] =
+                        spatial_strength[
+                            static_cast<size_t>(source_y) *
+                                spatial_strength_width +
+                            source_x];
+                }
+            }
+        } else if (spatial_strength_width != 0 ||
+                   spatial_strength_height != 0) {
+            return -1;
+        }
+        uint16_t base_strength_min = std::numeric_limits<uint16_t>::max();
+        uint16_t base_strength_max = 0;
+        uint64_t base_strength_sum = 0;
+        for (const uint16_t value : base_strength) {
+            base_strength_min = std::min(base_strength_min, value);
+            base_strength_max = std::max(base_strength_max, value);
+            base_strength_sum += value;
+        }
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            kLogTag,
+            "MGC denoise base Spatial strengthQ8=%u..%u/%.3f "
+            "source=%s logical=%dx%d padded=%dx%d origin=(%d,%d)",
+            base_strength_min,
+            base_strength_max,
+            base_strength.empty()
+                ? 0.0
+                : static_cast<double>(base_strength_sum) /
+                    static_cast<double>(base_strength.size()),
+            spatial_strength_q8_array == nullptr ? "identity" : "spatial-aot",
+            spatial_strength_width,
+            spatial_strength_height,
+            strength_width,
+            strength_height,
+            global_origin_x,
+            global_origin_y);
         if (lens_shading != nullptr && lens_width > 0 && lens_height > 0) {
             const jsize lens_count = env->GetArrayLength(lens_shading);
             if (lens_count != lens_width * lens_height * 4) return -1;
@@ -385,65 +449,35 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 lens_count,
                 lens.data());
             if (env->ExceptionCheck()) return -1;
-            std::vector<float> local_gain(strength_count * 4);
-            const int valid_strength_width = std::max(1, (width + 3) / 4);
-            const int valid_strength_height = std::max(1, (height + 3) / 4);
-            for (int y = 0; y < strength_height; ++y) {
-                const int valid_y = std::min(y, valid_strength_height - 1);
-                const float local_y = valid_strength_height > 1
-                    ? static_cast<float>(valid_y) *
-                        static_cast<float>(height - 1) /
-                        static_cast<float>(valid_strength_height - 1)
-                    : 0.0f;
-                const float global_y = std::clamp(
-                    static_cast<float>(global_origin_y) + local_y,
-                    0.0f,
-                    static_cast<float>(full_height - 1));
-                const float gain_y = full_height > 1
-                    ? global_y * static_cast<float>(lens_height - 1) /
-                        static_cast<float>(full_height - 1)
-                    : 0.0f;
-                for (int x = 0; x < strength_width; ++x) {
-                    const int valid_x = std::min(x, valid_strength_width - 1);
-                    const float local_x = valid_strength_width > 1
-                        ? static_cast<float>(valid_x) *
-                            static_cast<float>(width - 1) /
-                            static_cast<float>(valid_strength_width - 1)
-                        : 0.0f;
-                    const float global_x = std::clamp(
-                        static_cast<float>(global_origin_x) + local_x,
-                        0.0f,
-                        static_cast<float>(full_width - 1));
-                    const float gain_x = full_width > 1
-                        ? global_x * static_cast<float>(lens_width - 1) /
-                            static_cast<float>(full_width - 1)
-                        : 0.0f;
-                    const size_t index =
-                        (static_cast<size_t>(y) * strength_width + x) * 4;
-                    for (int channel = 0; channel < 4; ++channel) {
-                        local_gain[index + channel] = BilinearGain(
-                            lens.data(),
-                            lens_width,
-                            lens_height,
-                            channel,
-                            gain_x,
-                            gain_y);
-                    }
-                }
-            }
+            const float sample_rate_x = strength_width > 1
+                ? static_cast<float>(lens_width - 1) /
+                    static_cast<float>(strength_width - 1)
+                : 1.0f;
+            const float sample_rate_y = strength_height > 1
+                ? static_cast<float>(lens_height - 1) /
+                    static_cast<float>(strength_height - 1)
+                : 1.0f;
             const int strength_result =
                 photon::mgc_denoise::ComputeStrengthMap(
                     base_strength.data(),
                     strength_width,
                     strength_height,
-                    local_gain.data(),
-                    strength_width,
-                    strength_height,
-                    1.0f,
-                    1.0f,
+                    lens.data(),
+                    lens_width,
+                    lens_height,
+                    sample_rate_x,
+                    sample_rate_y,
                     strength.data());
             if (strength_result != 0) {
                 return LogStageFailure("strength_map", strength_result);
+            }
+        } else {
+            for (int channel = 0; channel < 3; ++channel) {
+                std::copy_n(
+                    base_strength.data(),
+                    strength_count,
+                    strength.data() +
+                        static_cast<size_t>(channel) * strength_count);
             }
         }
 
@@ -470,13 +504,17 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 const float matrix_value =
                     rgb_to_yuv[output_channel * 3 + input_channel];
                 const float matrix_squared = matrix_value * matrix_value;
+                const float channel_gain =
+                    normalized_rgb_white_balance[input_channel];
                 yuv_read[output_channel] +=
                     matrix_squared *
                     std::max(normalized_rgb_read[input_channel], 0.0f) *
+                    channel_gain * channel_gain *
                     white * white;
                 yuv_shot[output_channel] +=
                     matrix_squared *
                     std::max(normalized_rgb_shot[input_channel], 0.0f) *
+                    channel_gain *
                     white;
             }
         }
@@ -591,7 +629,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                             planar_b[
                                 static_cast<size_t>(channel) * pixel_count +
                                 source_index]) /
-                        static_cast<float>(kWhiteLevel);
+                        static_cast<float>(kWhiteLevel) /
+                        normalized_rgb_white_balance[channel];
                     rgba[destination_index + channel] =
                         FloatToHalf(normalized);
                 }

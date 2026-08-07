@@ -126,7 +126,11 @@ internal object MgcFullResolutionDenoise {
             null
         }
         if (useSpatialModel && metadata.frameCount > 1 &&
-            (correlation == null || metadata.mgcDenoiseNoiseScale == null)
+            (
+                correlation == null ||
+                    metadata.mgcDenoiseNoiseScale == null ||
+                    metadata.mgcSpatialStrengthMap == null
+                )
         ) {
             PLog.w(
                 TAG,
@@ -151,6 +155,24 @@ internal object MgcFullResolutionDenoise {
             PLog.e(TAG, "MGC denoise rejected noise scale=$noiseScale")
             return false
         }
+        val spatialStrengthMap = metadata.mgcSpatialStrengthMap.takeIf {
+            useSpatialModel
+        }
+        if (useSpatialModel && spatialStrengthMap?.let {
+                it.width == (fullWidth + 3) / 4 &&
+                    it.height == (fullHeight + 3) / 4 &&
+                    it.q8.size == it.width * it.height
+            } != true
+        ) {
+            PLog.e(
+                TAG,
+                "MGC denoise rejected Spatial strength map: " +
+                    "full=${fullWidth}x$fullHeight map=${spatialStrengthMap?.let {
+                        "${it.width}x${it.height}/${it.q8.size}"
+                    } ?: "none"}",
+            )
+            return false
+        }
 
         val rawNoise = RawNoiseModel.fromCamera2NoiseProfile(
             metadata.channelNoiseProfile.takeIf { it.size >= 2 }
@@ -164,6 +186,7 @@ internal object MgcFullResolutionDenoise {
         }
         val rgbShot = bayerNoiseToRgb(shot, noiseScale)
         val rgbRead = bayerNoiseToRgb(read, noiseScale)
+        val rgbWhiteBalance = normalizedRgbWhiteBalance(metadata.whiteBalanceGains)
         val lumaTuning = interpolateTuning(tuningGain, lumaTuningPoints)
             .withStrengthScale(finiteLumaScale)
         val chromaTuning = interpolateTuning(tuningGain, chromaTuningPoints)
@@ -182,7 +205,11 @@ internal object MgcFullResolutionDenoise {
             lensHeight = if (useSpatialModel) metadata.lensShadingMapHeight else 0,
             normalizedRgbShot = rgbShot,
             normalizedRgbRead = rgbRead,
+            normalizedRgbWhiteBalance = rgbWhiteBalance,
             correlation = correlation,
+            spatialStrengthQ8 = spatialStrengthMap?.q8,
+            spatialStrengthWidth = spatialStrengthMap?.width ?: 0,
+            spatialStrengthHeight = spatialStrengthMap?.height ?: 0,
             lumaEnabled = lumaEnabled,
             chromaEnabled = chromaEnabled,
             lumaStrength = lumaTuning.strength,
@@ -209,7 +236,11 @@ internal object MgcFullResolutionDenoise {
                 "luma=$lumaEnabled($finiteLumaScale) " +
                 "chroma=$chromaEnabled($finiteChromaScale) " +
                 "rgbShot=${rgbShot.contentToString()} " +
-                "rgbRead=${rgbRead.contentToString()} noiseScale=$noiseScale " +
+                "rgbRead=${rgbRead.contentToString()} " +
+                "rgbWb=${rgbWhiteBalance.contentToString()} noiseScale=$noiseScale " +
+                "strengthMap=${spatialStrengthMap?.let {
+                    "${it.width}x${it.height}"
+                } ?: "identity"} " +
                 "lsc=${if (useSpatialModel) {
                     "${metadata.lensShadingMapWidth}x${metadata.lensShadingMapHeight}"
                 } else {
@@ -239,6 +270,29 @@ internal object MgcFullResolutionDenoise {
         return floatArrayOf(red * scale, green * scale, blue * scale)
     }
 
+    /**
+     * MGC's BayerRawToYuv/RgbRawToYuv boundary applies channel gains before
+     * denoising. Spatial/VGN exports un-white-balanced camera RGB for Linear
+     * DNG, so the native bridge enters that same working domain and removes
+     * the gains again after YUV -> RGB.
+     */
+    private fun normalizedRgbWhiteBalance(gains: FloatArray): FloatArray {
+        fun safeGain(index: Int, fallback: Float): Float {
+            val value = gains.getOrElse(index) { fallback }
+            return value.takeIf { it.isFinite() && it > 0f } ?: fallback
+        }
+        val greenEven = safeGain(1, 1f)
+        val greenOdd = safeGain(2, greenEven)
+        val green = (0.5f * (greenEven + greenOdd))
+            .takeIf { it.isFinite() && it > 0f }
+            ?: 1f
+        return floatArrayOf(
+            (safeGain(0, green) / green).coerceIn(1e-3f, 64f),
+            1f,
+            (safeGain(3, green) / green).coerceIn(1e-3f, 64f),
+        )
+    }
+
     private fun interpolateTuning(
         gain: Float,
         points: List<TuningPoint>,
@@ -246,8 +300,8 @@ internal object MgcFullResolutionDenoise {
         val finiteGain = gain.takeIf { it.isFinite() && it > 0f }
             ?: points.first().gain
         val upperIndex = points.indexOfFirst { it.gain >= finiteGain }
-        if (upperIndex <= 0) return points.first().tuning.copyArrays()
         if (upperIndex < 0) return points.last().tuning.copyArrays()
+        if (upperIndex == 0) return points.first().tuning.copyArrays()
         val lower = points[upperIndex - 1]
         val upper = points[upperIndex]
         val logLower = ln(lower.gain)
@@ -421,7 +475,11 @@ internal object MgcFullResolutionDenoise {
         lensHeight: Int,
         normalizedRgbShot: FloatArray,
         normalizedRgbRead: FloatArray,
+        normalizedRgbWhiteBalance: FloatArray,
         correlation: FloatArray?,
+        spatialStrengthQ8: ShortArray?,
+        spatialStrengthWidth: Int,
+        spatialStrengthHeight: Int,
         lumaEnabled: Boolean,
         chromaEnabled: Boolean,
         lumaStrength: FloatArray,

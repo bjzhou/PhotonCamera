@@ -1,6 +1,36 @@
 {
   "code_ranges": [
     {
+      "end": "0x37b9af4",
+      "entry": "0x37aab68",
+      "name": "ComputeBayerNoiseModelF32TileSize16",
+      "start": "0x37a6e14"
+    },
+    {
+      "end": "0x37becdc",
+      "entry": "0x37b9af4",
+      "name": "ComputeRGBNoiseModelF32TileSize16",
+      "start": "0x37b9af4"
+    },
+    {
+      "end": "0x37c1a8c",
+      "entry": "0x37becdc",
+      "name": "DownsampleRawF16ToFloatTileSize16",
+      "start": "0x37becdc"
+    },
+    {
+      "end": "0x37db248",
+      "entry": "0x37c1a8c",
+      "name": "DownsampleRgbF16ToFloatTileSize16",
+      "start": "0x37c1a8c"
+    },
+    {
+      "end": "0x385642c",
+      "entry": "0x3856414",
+      "name": "DownsampleRgbF16ToFloatTileSize16CopyHelper",
+      "start": "0x38561a4"
+    },
+    {
       "end": "0x49caa54",
       "entry": "0x49c7b64",
       "name": "BayerRawToYuv1xS16",
@@ -47,6 +77,18 @@
       "entry": "0x54dcd34",
       "name": "ComputeDenoiseStrengthMapsU16",
       "start": "0x54dbe04"
+    },
+    {
+      "end": "0x5dad588",
+      "entry": "0x5dacc58",
+      "name": "DownsampleRgbF16ToFloatTileSize16Mode0",
+      "start": "0x5dacc58"
+    },
+    {
+      "end": "0x5dae16c",
+      "entry": "0x5dad588",
+      "name": "DownsampleRgbF16ToFloatTileSize16Mode1",
+      "start": "0x5dad588"
     }
   ],
   "direct_external_targets": {
@@ -326,6 +368,76 @@
         "target": "0x5ef6bd8"
       }
     ],
+    "ComputeBayerNoiseModelF32TileSize16": [
+      {
+        "host": "halide_do_par_for",
+        "target": "0x5a7fef0"
+      },
+      {
+        "host": "halide_malloc",
+        "target": "0x5ef2634"
+      },
+      {
+        "host": "halide_free",
+        "target": "0x5ef2650"
+      },
+      {
+        "host": "halide_trace",
+        "target": "0x5ef54bc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef61ac"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6294"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef636c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef63f8"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef64dc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6568"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6600"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6794"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6a74"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6a94"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6b6c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6bd8"
+      },
+      {
+        "host": "memset",
+        "target": "0x5fb8540"
+      }
+    ],
     "ComputeDenoiseStrengthMapsU16": [
       {
         "host": "halide_do_par_for",
@@ -390,6 +502,286 @@
       {
         "host": "halide_error_path",
         "target": "0x5ef6bd8"
+      },
+      {
+        "host": "memset",
+        "target": "0x5fb8540"
+      }
+    ],
+    "ComputeRGBNoiseModelF32TileSize16": [
+      {
+        "host": "halide_do_par_for",
+        "target": "0x5a7fef0"
+      },
+      {
+        "host": "halide_malloc",
+        "target": "0x5ef2634"
+      },
+      {
+        "host": "halide_free",
+        "target": "0x5ef2650"
+      },
+      {
+        "host": "halide_trace",
+        "target": "0x5ef54bc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef61ac"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6294"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef636c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef63f8"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef64dc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6568"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6600"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6794"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6a74"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6a94"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6b6c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6bd8"
+      }
+    ],
+    "DownsampleRawF16ToFloatTileSize16": [
+      {
+        "host": "halide_do_par_for",
+        "target": "0x5a7fef0"
+      },
+      {
+        "host": "halide_trace",
+        "target": "0x5ef54bc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef61ac"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6294"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef636c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef63f8"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef64dc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6568"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6600"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6794"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6a94"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6b6c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6bd8"
+      },
+      {
+        "host": "memset",
+        "target": "0x5fb8540"
+      }
+    ],
+    "DownsampleRgbF16ToFloatTileSize16": [
+      {
+        "host": "halide_do_par_for",
+        "target": "0x5a7fef0"
+      },
+      {
+        "host": "halide_malloc",
+        "target": "0x5ef2634"
+      },
+      {
+        "host": "halide_free",
+        "target": "0x5ef2650"
+      },
+      {
+        "host": "halide_trace",
+        "target": "0x5ef54bc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef604c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6140"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef61ac"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6294"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef636c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef63f8"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef64dc"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6568"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6600"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6794"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6a94"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6b6c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5ef6bd8"
+      }
+    ],
+    "DownsampleRgbF16ToFloatTileSize16CopyHelper": [
+      {
+        "host": "downsample_rgb_dispatch",
+        "target": "0x5dae16c"
+      }
+    ],
+    "DownsampleRgbF16ToFloatTileSize16Mode0": [
+      {
+        "host": "halide_error_path",
+        "target": "0x20239a0"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x256406c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5dac60c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5daca0c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5dae204"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5dae37c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5f57538"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5f59544"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5f595a0"
+      },
+      {
+        "host": "memset",
+        "target": "0x5fb8540"
+      }
+    ],
+    "DownsampleRgbF16ToFloatTileSize16Mode1": [
+      {
+        "host": "halide_error_path",
+        "target": "0x20239a0"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x256406c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5dac85c"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5dae540"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5dae6b8"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5f57538"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5f59544"
+      },
+      {
+        "host": "halide_error_path",
+        "target": "0x5f595a0"
       },
       {
         "host": "memset",
@@ -607,11 +999,22 @@
       }
     ]
   },
-  "do_par_for_call_count": 12,
+  "do_par_for_call_count": 23,
   "format": "mgc-full-resolution-denoise-static-lift-v1",
-  "page_count": 181,
+  "page_count": 257,
   "page_size": 4096,
   "pages": [
+    "0x4fd000",
+    "0x50f000",
+    "0x53e000",
+    "0x54e000",
+    "0x56e000",
+    "0x5bf000",
+    "0x5e3000",
+    "0x614000",
+    "0x634000",
+    "0x687000",
+    "0x6a7000",
     "0x6a8000",
     "0x6a9000",
     "0x6aa000",
@@ -627,10 +1030,16 @@
     "0x6b5000",
     "0x6b6000",
     "0x6b7000",
+    "0x6b8000",
     "0x6b9000",
     "0x6ba000",
+    "0x6bb000",
     "0x6bc000",
     "0x6bd000",
+    "0xbc0000",
+    "0xbc1000",
+    "0xbc2000",
+    "0xbc3000",
     "0xd4d000",
     "0xd51000",
     "0xd5f000",
@@ -644,6 +1053,61 @@
     "0xf39000",
     "0xf3a000",
     "0x10a9000",
+    "0x37a6000",
+    "0x37a7000",
+    "0x37a8000",
+    "0x37a9000",
+    "0x37aa000",
+    "0x37ab000",
+    "0x37ac000",
+    "0x37ad000",
+    "0x37ae000",
+    "0x37af000",
+    "0x37b0000",
+    "0x37b1000",
+    "0x37b2000",
+    "0x37b3000",
+    "0x37b4000",
+    "0x37b5000",
+    "0x37b6000",
+    "0x37b7000",
+    "0x37b8000",
+    "0x37b9000",
+    "0x37ba000",
+    "0x37bb000",
+    "0x37bc000",
+    "0x37bd000",
+    "0x37be000",
+    "0x37bf000",
+    "0x37c0000",
+    "0x37c1000",
+    "0x37c2000",
+    "0x37c3000",
+    "0x37c4000",
+    "0x37c5000",
+    "0x37c6000",
+    "0x37c7000",
+    "0x37c8000",
+    "0x37c9000",
+    "0x37ca000",
+    "0x37cb000",
+    "0x37cc000",
+    "0x37cd000",
+    "0x37ce000",
+    "0x37cf000",
+    "0x37d0000",
+    "0x37d1000",
+    "0x37d2000",
+    "0x37d3000",
+    "0x37d4000",
+    "0x37d5000",
+    "0x37d6000",
+    "0x37d7000",
+    "0x37d8000",
+    "0x37d9000",
+    "0x37da000",
+    "0x37db000",
+    "0x3856000",
     "0x49c3000",
     "0x49c4000",
     "0x49c5000",
@@ -790,6 +1254,10 @@
     "0x54dc000",
     "0x54dd000",
     "0x54de000",
+    "0x5dac000",
+    "0x5dad000",
+    "0x5dae000",
+    "0x6146000",
     "0x614f000",
     "0x6150000",
     "0x6152000"
@@ -871,6 +1339,17 @@
   "source": "MGC/MGC_9.6.080_V24_MGC/lib/arm64-v8a/libgcastartup.so",
   "source_sha256": "2103c54ebba1627733b79e3646105595ed1ccefa2b1629f63fb7e1785a48d6a0",
   "task_relocations": {
+    "0x6146550": "0x37a6e14",
+    "0x6146558": "0x37a99bc",
+    "0x6146560": "0x37ae9a8",
+    "0x6146568": "0x37b1150",
+    "0x6146570": "0x37b61a0",
+    "0x6146578": "0x37b8948",
+    "0x6146580": "0x37bd934",
+    "0x6146588": "0x37bea94",
+    "0x6146590": "0x37bfc00",
+    "0x6146598": "0x37c1348",
+    "0x61465a0": "0x37c298c",
     "0x614fd58": "0x49c3484",
     "0x614fda8": "0x4a17ea8",
     "0x614ffb0": "0x4bee520",

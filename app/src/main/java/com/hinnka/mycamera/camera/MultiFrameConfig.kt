@@ -3,6 +3,12 @@ package com.hinnka.mycamera.camera
 import kotlin.math.roundToInt
 
 object MultiFrameConfig {
+    /**
+     * Controls the post-Spatial MGC luma/chroma pass as one closed stage.
+     * Spatial fusion and Bayer/RGB materialization remain active when disabled.
+     */
+    const val ENABLE_MGC_SPATIAL_DEFAULT_DENOISE = false
+
     const val MIN_FRAME_COUNT = 3
     const val MAX_FRAME_COUNT = 20
     const val DEFAULT_FRAME_COUNT = 7

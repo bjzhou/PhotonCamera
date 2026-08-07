@@ -1,15 +1,11 @@
 package com.hinnka.mycamera.processor
 
 /**
- * GLES transport of the Spatial Bayer shaders embedded in MGC 9.6.080 V24
- * libgcastartup.so.
+ * GLES stages for the MGC-compatible Spatial Bayer pipeline.
  *
  * The guide, rejection, dilation and merge equations below retain the embedded GLSL equations and
  * constants. The original program first extracts RAW16 into a half-resolution Bayer texture.
  * Photon reads R16UI directly instead; [rawQuad] and [gainedRaw] are the only transport adaptation.
- *
- * Alignment and unblocker are compiled Halide in MGC. Their ports below follow the generated
- * AArch64 kernels and the stage graph recovered from the same build.
  */
 internal object GlesMgcRawSpatialShaders {
     val guide = """
@@ -26,13 +22,8 @@ internal object GlesMgcRawSpatialShaders {
         uniform sampler2D uNoiseEstimates;
         uniform vec4 uNoiseTextureScaleBias;
         uniform float uGreenClippingPoint;
-        uniform vec4 uCovarianceParameters1;
-        uniform vec4 uCovarianceParameters2;
-        uniform vec4 uCovRangeRgFactors;
-        uniform vec2 uCovRangeBFactor;
         uniform float uForceReferenceColorRgb;
-        layout(location = 0) out vec4 oGuide;
-        layout(location = 1) out vec4 oCovariance;
+        out vec4 oGuide;
 
         vec4 rawQuad(ivec2 quad) {
             ivec2 p = clamp(quad * 2, ivec2(0), uRawSize - ivec2(2));
@@ -46,132 +37,6 @@ internal object GlesMgcRawSpatialShaders {
             else if (uCfaPattern == 2) raw = vec4(p01, p11, p00, p10);
             else raw = vec4(p11, p01, p10, p00);
             return raw * uGains + uBlackLevelsTimesGains;
-        }
-
-        vec4 rotateStructureTensor(vec4 s) {
-            float c0 = 0.5 * (s.x + s.y);
-            float c1 = 0.5 * (s.y - s.x);
-            return vec4(c0 + s.z, c0 - s.z, c1, s.w);
-        }
-
-        void analyzeStructureTensor(
-            vec4 s,
-            float greenVariance,
-            out vec2 eigenvector1,
-            out vec2 eigenvector2,
-            out float strength,
-            out float coherence
-        ) {
-            float trace = s.x + s.y;
-            float diff = s.x - s.y;
-            float sqrtD = sqrt(max(diff * diff + 4.0 * s.z * s.z, 0.0));
-            float eigenvalue1 = (trace + sqrtD) * 0.5;
-            float eigenvalue2 = (trace - sqrtD) * 0.5;
-            eigenvector1 = vec2(1.0, 0.0);
-            eigenvector2 = vec2(0.0, 1.0);
-            if (abs(s.z) > 0.0001) {
-                eigenvector1 =
-                    normalize(vec2(s.z, eigenvalue1 - s.x)) * -sign(s.z);
-                eigenvector2 = vec2(-eigenvector1.y, eigenvector1.x);
-            } else if (s.x < s.y) {
-                eigenvector1 = vec2(0.0, 1.0);
-                eigenvector2 = vec2(1.0, 0.0);
-            }
-            float singularValue1 = sqrt(eigenvalue1);
-            float singularValue2 = sqrt(max(eigenvalue2, 0.0));
-            float correction = s.w * greenVariance;
-            eigenvalue1 *= eigenvalue1 / (eigenvalue1 + correction);
-            strength = sqrt(eigenvalue1);
-            coherence = (singularValue1 - singularValue2) /
-                (singularValue1 + singularValue2 + 1.0e-6);
-        }
-
-        float gradientBlurring(float strength, float greenStdDev) {
-            float dominantFeature = max(strength, greenStdDev) -
-                uCovarianceParameters1.z;
-            return clamp(
-                1.0 - dominantFeature * uCovarianceParameters2.y,
-                0.0,
-                1.0
-            );
-        }
-
-        vec3 constructCovariance(
-            vec2 eigenvector1,
-            vec2 eigenvector2,
-            float strength,
-            float coherence,
-            float greenStdDev
-        ) {
-            float blur = gradientBlurring(strength, greenStdDev);
-            float baseSigma = uCovarianceParameters1.w;
-            float shrinkedSigma = uCovarianceParameters1.x;
-            float stretchedSigma = uCovarianceParameters1.y;
-            float blurredSigma = uCovarianceParameters2.x;
-            float anisotropicShrinking = mix(
-                baseSigma,
-                shrinkedSigma,
-                min(coherence, strength * 5.0)
-            );
-            float singularValue1 = mix(anisotropicShrinking, blurredSigma, blur);
-            float singularValue2 = mix(
-                mix(baseSigma, stretchedSigma, coherence),
-                blurredSigma,
-                blur
-            );
-            mat2 rotation = mat2(eigenvector1, eigenvector2);
-            mat2 covariance = transpose(rotation) *
-                mat2(
-                    singularValue1 * singularValue1, 0.0,
-                    0.0, singularValue2 * singularValue2
-                ) * rotation;
-            return vec3(covariance[0].x, covariance[1].y, covariance[0].y);
-        }
-
-        void accumulateGradient(float dx, float dy, inout vec4 s) {
-            s += vec4(dx * dx, dy * dy, dx * dy, 0.0);
-        }
-
-        vec4 structureTensor(float green0[9], float green1[9]) {
-            vec4 s = vec4(0.0);
-            for (int y = 0; y < 2; ++y) {
-                for (int x = 0; x < 2; ++x) {
-                    float g00 = green0[y * 3 + x];
-                    float g01 = green0[y * 3 + x + 1];
-                    float g10 = green1[y * 3 + x];
-                    float g11 = green1[y * 3 + x + 1];
-                    float g20 = green0[(y + 1) * 3 + x];
-                    float g21 = green0[(y + 1) * 3 + x + 1];
-                    float g30 = green1[(y + 1) * 3 + x];
-                    float g31 = green1[(y + 1) * 3 + x + 1];
-                    float bdx;
-                    float bdy;
-                    float rdx;
-                    float rdy;
-                    if (uCfaPattern == 1 || uCfaPattern == 2) {
-                        bdx = 0.5 * ((g11 - g01) + (g21 - g10));
-                        bdy = 0.5 * ((g01 - g10) + (g11 - g21));
-                        rdx = 0.5 * ((g21 - g10) + (g30 - g20));
-                        rdy = 0.5 * ((g21 - g30) + (g10 - g20));
-                    } else {
-                        bdx = 0.5 * ((g11 - g00) + (g20 - g10));
-                        bdy = 0.5 * ((g00 - g10) + (g11 - g20));
-                        rdx = 0.5 * ((g21 - g11) + (g31 - g20));
-                        rdy = 0.5 * ((g21 - g31) + (g11 - g20));
-                    }
-                    float g1dx = 0.5 * (g21 - g00);
-                    float g1dy = 0.5 * (g01 - g20);
-                    float g2dx = 0.5 * (g31 - g10);
-                    float g2dy = 0.5 * (g11 - g30);
-                    accumulateGradient(bdx, bdy, s);
-                    accumulateGradient(rdx, rdy, s);
-                    accumulateGradient(g1dx, g1dy, s);
-                    accumulateGradient(g2dx, g2dy, s);
-                }
-            }
-            s /= 16.0;
-            s.w = 3.0 / 4.0;
-            return s;
         }
 
         float luma(vec3 rgb) {
@@ -189,21 +54,11 @@ internal object GlesMgcRawSpatialShaders {
             float m0Green = 0.0;
             float m1Green = 0.0;
             vec3 averageRgb = vec3(0.0);
-            float green0[9];
-            float green1[9];
             float centerGreen = 0.0;
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
                     vec4 rggb = rawQuad(center * 2 + ivec2(x, y));
                     vec3 rgb = vec3(rggb.x, 0.5 * (rggb.y + rggb.z), rggb.w);
-                    int index = (y + 1) * 3 + x + 1;
-                    if (uCfaPattern == 2 || uCfaPattern == 3) {
-                        green0[index] = rggb.z;
-                        green1[index] = rggb.y;
-                    } else {
-                        green0[index] = rggb.y;
-                        green1[index] = rggb.z;
-                    }
                     averageRgb += rgb * kernelWeight(x) * kernelWeight(y);
                     if (x == 0 && y == 0) centerGreen = rgb.y;
                     m0Rgb += rgb;
@@ -237,43 +92,7 @@ internal object GlesMgcRawSpatialShaders {
             if (centerGreen >= uGreenClippingPoint) {
                 referenceColor = vec3(10000.0);
             }
-            vec4 tensor = rotateStructureTensor(structureTensor(green0, green1));
-            vec2 eigenvector1;
-            vec2 eigenvector2;
-            float strength;
-            float coherence;
-            analyzeStructureTensor(
-                tensor,
-                greenVarianceNoise,
-                eigenvector1,
-                eigenvector2,
-                strength,
-                coherence
-            );
-            float correctedGreenStdDev = sqrt(
-                greenVariance * greenVariance /
-                    (greenVariance + greenVarianceNoise)
-            );
             oGuide = vec4(referenceColor, referenceVariance * 1024.0);
-            vec3 covariance = constructCovariance(
-                eigenvector1,
-                eigenvector2,
-                strength,
-                coherence,
-                correctedGreenStdDev
-            );
-            vec2 packedRg = clamp(
-                covariance.xy * uCovRangeRgFactors.yw +
-                    uCovRangeRgFactors.xz,
-                0.0,
-                1.0
-            );
-            float packedB = clamp(
-                covariance.z * uCovRangeBFactor.y + uCovRangeBFactor.x,
-                0.0,
-                1.0
-            );
-            oCovariance = vec4(packedRg, packedB, 0.0);
         }
     """.trimIndent()
 
@@ -360,7 +179,13 @@ internal object GlesMgcRawSpatialShaders {
                 robustnessBoost = uExtraMotionRobustnessBoost;
             }
             pixelVariance *= 2.0;
-            vec3 combinedNoise = referenceNoise + currentNoise;
+            // Noise estimates are transported through RGBA16F and can quantize to zero at the
+            // dark end. Keep the recovered equations defined without changing any positive
+            // estimate.
+            vec3 combinedNoise = max(
+                referenceNoise + currentNoise,
+                vec3(1.0e-8)
+            );
             vec3 difference = current.rgb - reference.rgb;
             vec3 differenceSquared = max(
                 difference * difference - combinedNoise,
@@ -593,7 +418,9 @@ internal object GlesMgcRawSpatialShaders {
                     weightSum += weight;
                 }
             }
-            oFilteredRejection = weightedRejection / weightSum;
+            oFilteredRejection = weightSum > 0.0
+                ? weightedRejection / weightSum
+                : centerRejection;
         }
     """.trimIndent()
 
@@ -662,6 +489,11 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
+    /**
+     * Bento UpdateLinearKernelMaskHalide. MGC invokes this once on the rejection-buffer slice
+     * selected by the accepted ultrashort index. It is not a temporal union of normal-frame
+     * rejection maps.
+     */
     val updateLinearKernelMask = """
         #version 300 es
         precision highp float;
@@ -820,116 +652,11 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    val merge = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        precision highp usampler2D;
-        uniform highp usampler2D uRaw;
-        uniform sampler2D uFlow;
-        uniform sampler2D uFrameWeight;
-        uniform sampler2D uCovariance;
-        uniform ivec2 uRawSize;
-        uniform ivec2 uOutputSize;
-        uniform vec4 uFlowScaleOffset;
-        uniform vec4 uCovRangeRg;
-        uniform vec2 uCovRangeB;
-        uniform int uCfaPattern;
-        uniform vec4 uGains;
-        uniform vec4 uBlackLevelsTimesGains;
-        uniform int uUseFrameWeight;
-        layout(location = 0) out vec4 oColorAndRWeight;
-        layout(location = 1) out vec4 oGbWeights;
-
-        vec2 mirrorUv(vec2 uv) {
-            uv = mod(uv, 2.0);
-            return mix(uv, 2.0 - uv, greaterThan(uv, vec2(1.0)));
-        }
-
-        int canonicalChannel(ivec2 p) {
-            int phase = ((p.y & 1) << 1) + (p.x & 1);
-            if (uCfaPattern == 0) {
-                if (phase == 0) return 0;
-                if (phase == 1) return 1;
-                if (phase == 2) return 2;
-                return 3;
-            }
-            if (uCfaPattern == 1) {
-                if (phase == 0) return 1;
-                if (phase == 1) return 0;
-                if (phase == 2) return 3;
-                return 2;
-            }
-            if (uCfaPattern == 2) {
-                if (phase == 0) return 2;
-                if (phase == 1) return 3;
-                if (phase == 2) return 0;
-                return 1;
-            }
-            if (phase == 0) return 3;
-            if (phase == 1) return 2;
-            if (phase == 2) return 1;
-            return 0;
-        }
-
-        float gainedRaw(ivec2 p, int channel) {
-            p = clamp(p, ivec2(0), uRawSize - ivec2(1));
-            return float(texelFetch(uRaw, p, 0).r) * uGains[channel] +
-                uBlackLevelsTimesGains[channel];
-        }
-
-        float kernelWeight(vec2 pixelOffset, vec3 covariance) {
-            float distance =
-                pixelOffset.x * pixelOffset.x * covariance.x +
-                pixelOffset.y * pixelOffset.y * covariance.y +
-                pixelOffset.x * pixelOffset.y * covariance.z * 2.0;
-            return exp2(-0.5 * distance) + 0.00005;
-        }
-
-        void main() {
-            vec2 uv = gl_FragCoord.xy / vec2(uOutputSize);
-            vec2 flowUv = uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw;
-            vec4 flow = texture(uFlow, flowUv);
-            float frameWeight = uUseFrameWeight != 0
-                ? texture(uFrameWeight, uv).r
-                : 1.0;
-            vec2 sampleUv = mirrorUv(uv + flow.xy);
-            vec3 packedCovariance = texture(uCovariance, sampleUv).xyz;
-            vec3 covariance = vec3(
-                packedCovariance.xy * uCovRangeRg.yw + uCovRangeRg.xz,
-                packedCovariance.z * uCovRangeB.y + uCovRangeB.x
-            );
-            vec2 scaled = sampleUv * vec2(uRawSize);
-            ivec2 anchor = ivec2(scaled);
-            vec2 subpixelOffset = floor(scaled) + 0.5 - scaled;
-            vec3 intensities = vec3(0.0);
-            vec3 weights = vec3(0.0);
-            for (int y = -1; y <= 1; ++y) {
-                for (int x = -1; x <= 1; ++x) {
-                    ivec2 p = anchor + ivec2(x, y);
-                    int channel = canonicalChannel(p);
-                    int rgbChannel = channel == 3 ? 2 : min(channel, 1);
-                    float weight = kernelWeight(
-                        subpixelOffset + vec2(x, y),
-                        covariance
-                    );
-                    intensities[rgbChannel] += gainedRaw(p, channel) * weight;
-                    weights[rgbChannel] += weight;
-                }
-            }
-            intensities *= frameWeight;
-            weights *= frameWeight;
-            oColorAndRWeight = vec4(intensities, weights.r);
-            oGbWeights = vec4(weights.gb, 0.0, 0.0);
-        }
-    """.trimIndent()
-
     /**
      * MergeBayerRaw transport recovered from the Halide AOT contract.
      *
-     * Unlike MergeRgbRaw, this branch never demosaics or applies white balance. Alignment and the
-     * covariance kernel operate on Bayer quads, and every output sample is reconstructed only from
-     * the same CFA phase in neighboring quads. This preserves the original Bayer lattice exactly.
+     * Alignment and the spatial kernel operate on Bayer quads, and every output sample is
+     * reconstructed only from the same CFA phase in neighboring quads.
      */
     val mergeBayer = """
         #version 300 es
@@ -937,35 +664,40 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
-        uniform sampler2D uFlow;
+        uniform sampler2D uAlignment;
         uniform sampler2D uFrameWeight;
-        uniform sampler2D uCovariance;
         uniform sampler2D uLinearKernelMask;
         uniform ivec2 uRawSize;
         uniform ivec2 uRejectionSize;
-        uniform vec4 uCovRangeRg;
-        uniform vec2 uCovRangeB;
         uniform vec4 uGains;
         uniform vec4 uBlackLevelsTimesGains;
+        uniform float uKernelSigma;
         uniform int uCfaPattern;
         uniform int uUseFrameWeight;
         out vec4 oBayerAndWeight;
-
-        vec2 mirrorUv(vec2 uv) {
-            uv = mod(uv, 2.0);
-            return mix(uv, 2.0 - uv, greaterThan(uv, vec2(1.0)));
-        }
 
         int phaseIndex(ivec2 phase) {
             return (phase.y << 1) + phase.x;
         }
 
-        float kernelWeight(vec2 quadOffset, vec3 covariance) {
-            float distance =
-                quadOffset.x * quadOffset.x * covariance.x +
-                quadOffset.y * quadOffset.y * covariance.y +
-                quadOffset.x * quadOffset.y * covariance.z * 2.0;
-            return exp2(-0.5 * distance) + 0.00005;
+        int mirrorCoordinate(int coordinate, int extent) {
+            if (extent <= 1) return 0;
+            if (coordinate < 0) coordinate = -coordinate - 1;
+            if (coordinate >= extent) coordinate = 2 * extent - coordinate - 1;
+            return clamp(coordinate, 0, extent - 1);
+        }
+
+        ivec2 mirrorQuad(ivec2 quad, ivec2 extent) {
+            return ivec2(
+                mirrorCoordinate(quad.x, extent.x),
+                mirrorCoordinate(quad.y, extent.y)
+            );
+        }
+
+        float kernelWeight(vec2 pixelOffset, float kernelSigmaSquared) {
+            return exp(
+                -0.5 * dot(pixelOffset * pixelOffset, vec2(kernelSigmaSquared))
+            );
         }
 
         float linearKernelWeight(vec2 pixelOffset) {
@@ -977,8 +709,23 @@ internal object GlesMgcRawSpatialShaders {
             ivec2 phase = outputPixel & ivec2(1);
             int phaseChannel = phaseIndex(phase);
             ivec2 outputQuad = outputPixel / 2;
-            vec2 uv = gl_FragCoord.xy / vec2(uRawSize);
-            vec4 flow = texture(uFlow, uv);
+            // MergeBayerRaw16 addresses the converted alignment as one texel per
+            // 8x8 Bayer-quad tile. X/Y are displacements in Bayer-quad units.
+            // There is no normalized-UV conversion or filtering at this stage.
+            ivec2 tileId = outputQuad / 8;
+            ivec2 offsetWithinTile = outputQuad - tileId * 8;
+            ivec2 alignmentSize = max(textureSize(uAlignment, 0), ivec2(1));
+            vec2 alignmentQuadOffset = texelFetch(
+                uAlignment,
+                clamp(tileId, ivec2(0), alignmentSize - ivec2(1)),
+                0
+            ).xy;
+            vec2 tilePosition =
+                vec2(tileId * 8) + alignmentQuadOffset;
+            ivec2 alignedTileQuad = ivec2(roundEven(tilePosition));
+            vec2 subquadPixelOffset =
+                2.0 * (vec2(alignedTileQuad) - tilePosition);
+            ivec2 anchor = alignedTileQuad + offsetWithinTile;
             // MergeBayerRaw consumes one byte/float from the quarter-resolution rejection
             // domain. The recovered AOT performs integer loads here; interpolating adjacent
             // rejection cells changes the temporal support around rejection boundaries.
@@ -987,49 +734,66 @@ internal object GlesMgcRawSpatialShaders {
                 ivec2(0),
                 uRejectionSize - ivec2(1)
             );
+            ivec2 frameWeightSize = max(textureSize(uFrameWeight, 0), ivec2(1));
+            ivec2 frameWeightPixel = clamp(
+                rejectionPixel,
+                ivec2(0),
+                frameWeightSize - ivec2(1)
+            );
             float frameWeight = uUseFrameWeight != 0
-                ? texelFetch(uFrameWeight, rejectionPixel, 0).r
+                ? texelFetch(uFrameWeight, frameWeightPixel, 0).r
                 : 1.0;
-            float linearKernelMix =
-                texelFetch(uLinearKernelMask, rejectionPixel, 0).r;
-            vec2 sampleUv = mirrorUv(uv + flow.xy);
-            vec3 packedCovariance = texture(uCovariance, sampleUv).xyz;
-            vec3 covariance = vec3(
-                packedCovariance.xy * uCovRangeRg.yw + uCovRangeRg.xz,
-                packedCovariance.z * uCovRangeB.y + uCovRangeB.x
+            ivec2 linearKernelSize = max(
+                textureSize(uLinearKernelMask, 0),
+                ivec2(1)
             );
-
-            // Pixel-center coordinates are converted to the same-phase Bayer-quad lattice.
-            vec2 samplePixel = sampleUv * vec2(uRawSize) - vec2(0.5);
-            vec2 quadPosition = (samplePixel - vec2(phase)) * 0.5;
-            ivec2 anchor = ivec2(floor(quadPosition));
-            ivec2 maximumQuad = max(
-                (uRawSize - ivec2(1) - phase) / 2,
-                ivec2(0)
+            ivec2 linearKernelPixel = clamp(
+                rejectionPixel,
+                ivec2(0),
+                linearKernelSize - ivec2(1)
             );
+            float linearKernelMix = texelFetch(
+                uLinearKernelMask,
+                linearKernelPixel,
+                0
+            ).r;
+            ivec2 quadExtent = max(uRawSize / 2, ivec2(1));
+            float kernelSigmaSquared = uKernelSigma * uKernelSigma;
             float intensity = 0.0;
             float accumulatedWeight = 0.0;
             for (int y = -1; y <= 1; ++y) {
+                float sampleOffsetY =
+                    subquadPixelOffset.y + 2.0 * float(y);
+                if (abs(sampleOffsetY) > 2.5) continue;
                 for (int x = -1; x <= 1; ++x) {
-                    ivec2 quad = clamp(
+                    vec2 sampleOffset =
+                        subquadPixelOffset + 2.0 * vec2(x, y);
+                    ivec2 quad = mirrorQuad(
                         anchor + ivec2(x, y),
-                        ivec2(0),
-                        maximumQuad
+                        quadExtent
                     );
                     ivec2 rawPixel = quad * 2 + phase;
-                    float rawValue = float(texelFetch(uRaw, rawPixel, 0).r);
-                    float normalized =
-                        rawValue * uGains[phaseChannel] +
-                        uBlackLevelsTimesGains[phaseChannel];
-                    vec2 quadOffset =
-                        vec2(anchor + ivec2(x, y)) - quadPosition;
-                    float weight = mix(
-                        kernelWeight(quadOffset, covariance),
-                        linearKernelWeight(2.0 * quadOffset),
-                        linearKernelMix
-                    );
-                    intensity += normalized * weight;
-                    accumulatedWeight += weight;
+                    if (
+                        abs(sampleOffset.x) <= 1.5 &&
+                        abs(sampleOffset.y) <= 1.5
+                    ) {
+                        float rawValue = float(
+                            texelFetch(uRaw, rawPixel, 0).r
+                        );
+                        float normalized =
+                            rawValue * uGains[phaseChannel] +
+                            uBlackLevelsTimesGains[phaseChannel];
+                        float weight = mix(
+                            kernelWeight(
+                                sampleOffset,
+                                kernelSigmaSquared
+                            ),
+                            linearKernelWeight(sampleOffset),
+                            linearKernelMix
+                        );
+                        intensity += normalized * weight;
+                        accumulatedWeight += weight;
+                    }
 
                     bool diagonalGreenPair =
                         (uCfaPattern == 0 || uCfaPattern == 3) &&
@@ -1037,7 +801,10 @@ internal object GlesMgcRawSpatialShaders {
                     bool cornerGreenPair =
                         (uCfaPattern == 1 || uCfaPattern == 2) &&
                         (phaseChannel == 0 || phaseChannel == 3);
-                    if (linearKernelMix > 0.0 && (diagonalGreenPair || cornerGreenPair)) {
+                    if (
+                        linearKernelMix > 0.0 &&
+                        (diagonalGreenPair || cornerGreenPair)
+                    ) {
                         int otherPhase = phaseChannel;
                         vec2 diagonalOffset = vec2(0.0);
                         if (diagonalGreenPair) {
@@ -1056,7 +823,7 @@ internal object GlesMgcRawSpatialShaders {
                             diagonalOffset = vec2(-1.0);
                         }
                         vec2 otherPixelOffset =
-                            2.0 * quadOffset + diagonalOffset;
+                            sampleOffset + diagonalOffset;
                         if (
                             abs(otherPixelOffset.x) <= 1.5 &&
                             abs(otherPixelOffset.y) <= 1.5
@@ -1073,9 +840,14 @@ internal object GlesMgcRawSpatialShaders {
                             float otherNormalized =
                                 otherRawValue * uGains[otherPhase] +
                                 uBlackLevelsTimesGains[otherPhase];
-                            float otherWeight =
-                                linearKernelWeight(otherPixelOffset) *
-                                linearKernelMix;
+                            float otherWeight = mix(
+                                kernelWeight(
+                                    otherPixelOffset,
+                                    kernelSigmaSquared
+                                ),
+                                linearKernelWeight(otherPixelOffset),
+                                linearKernelMix
+                            );
                             intensity += otherNormalized * otherWeight;
                             accumulatedWeight += otherWeight;
                         }
@@ -1107,6 +879,24 @@ internal object GlesMgcRawSpatialShaders {
             vec2 valueAndWeight = texelFetch(uBayerAndWeight, p, 0).rg;
             float normalized = valueAndWeight.x / max(valueAndWeight.y, 1.0e-8);
             oBayer16 = uint(round(clamp(normalized, 0.0, 1.0) * 65535.0));
+        }
+    """.trimIndent()
+
+    val normalizeBayerF16 = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uBayerAndWeight;
+        uniform ivec2 uOutputSize;
+        layout(location = 0) out highp float oBayer;
+        void main() {
+            ivec2 p = clamp(
+                ivec2(gl_FragCoord.xy),
+                ivec2(0),
+                uOutputSize - ivec2(1)
+            );
+            vec2 valueAndWeight = texelFetch(uBayerAndWeight, p, 0).rg;
+            oBayer = max(valueAndWeight.x / max(valueAndWeight.y, 1.0e-8), 0.0);
         }
     """.trimIndent()
 
@@ -1152,7 +942,7 @@ internal object GlesMgcRawSpatialShaders {
                 float wy = y == 0 ? 0.5 : 0.25;
                 for (int x = -1; x <= 1; ++x) {
                     float wx = x == 0 ? 0.5 : 0.25;
-                    value += grayAt(q * 2 + ivec2(x, y)) * wx * wy;
+                    value += grayAt(q + ivec2(x, y)) * wx * wy;
                 }
             }
             // DownsampleRawToGrayHalide hands AlignPyramid an S16 buffer.
@@ -1229,13 +1019,15 @@ internal object GlesMgcRawSpatialShaders {
         }
         void main() {
             ivec2 tile = ivec2(gl_FragCoord.xy);
-            ivec2 origin = tile * uTileStride;
+            // Halide's LK buffers have min=(1,1); the texture stores only that
+            // interior extent, so local texel zero is logical tile (1,1).
+            ivec2 origin = (tile + ivec2(1)) * uTileStride;
             float count = float(uTileSize * uTileSize);
             float meanBase = 0.0;
             if (uNormalize != 0) {
-                for (int y = 0; y < 16; ++y) {
+                for (int y = 0; y < 64; ++y) {
                     if (y >= uTileSize) break;
-                    for (int x = 0; x < 16; ++x) {
+                    for (int x = 0; x < 64; ++x) {
                         if (x >= uTileSize) break;
                         meanBase += valueAt(origin + ivec2(x, y));
                     }
@@ -1248,9 +1040,9 @@ internal object GlesMgcRawSpatialShaders {
             float xy = 0.0;
             float baseX = 0.0;
             float baseY = 0.0;
-            for (int y = 0; y < 16; ++y) {
+            for (int y = 0; y < 64; ++y) {
                 if (y >= uTileSize) break;
-                for (int x = 0; x < 16; ++x) {
+                for (int x = 0; x < 64; ++x) {
                     if (x >= uTileSize) break;
                     ivec2 p = origin + ivec2(x, y);
                     vec2 gradient = gradientAt(p);
@@ -1274,9 +1066,119 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
+     * UpsampleAlignmentI16Halide (0x3be8da0, three-candidate worker 0x3be8048).
+     * The nearest coarse flow and the next-nearest flow on each axis are evaluated
+     * against the target-level S16 images. Keeping the best whole candidate avoids
+     * synthesizing a false motion vector across an alignment discontinuity.
+     */
+    val upsampleAlignment = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        precision highp usampler2D;
+        uniform highp usampler2D uReference;
+        uniform highp usampler2D uCurrent;
+        uniform sampler2D uInitialAlignment;
+        uniform ivec2 uImageSize;
+        uniform ivec2 uInitialGridSize;
+        uniform int uInitialGridMin;
+        uniform int uTargetGridMin;
+        uniform int uInitialTileStride;
+        uniform int uTargetTileStride;
+        uniform int uTargetTileSize;
+        uniform float uInitialScale;
+        out vec4 oAlignment;
+
+        float valueAt(highp usampler2D image, ivec2 p) {
+            return min(
+                float(texelFetch(
+                    image,
+                    clamp(p, ivec2(0), uImageSize - ivec2(1)),
+                    0
+                ).r),
+                32767.0
+            );
+        }
+        ivec2 boundedInitialTile(ivec2 p) {
+            return clamp(p, ivec2(0), uInitialGridSize - ivec2(1));
+        }
+        vec2 candidateFlow(ivec2 p) {
+            return texelFetch(
+                uInitialAlignment,
+                boundedInitialTile(p),
+                0
+            ).xy * uInitialScale;
+        }
+        float candidateCost(ivec2 origin, vec2 flow) {
+            // The AArch64 worker rounds each candidate to an integer S16-image
+            // displacement for the block L1 comparison.
+            ivec2 displacement = ivec2(roundEven(flow));
+            float cost = 0.0;
+            for (int y = 0; y < 64; ++y) {
+                if (y >= uTargetTileSize) break;
+                for (int x = 0; x < 64; ++x) {
+                    if (x >= uTargetTileSize) break;
+                    ivec2 p = origin + ivec2(x, y);
+                    cost += abs(
+                        valueAt(uReference, p) -
+                        valueAt(uCurrent, p + displacement)
+                    );
+                }
+            }
+            return cost / float(uTargetTileSize * uTargetTileSize);
+        }
+        void main() {
+            ivec2 targetTile = ivec2(gl_FragCoord.xy);
+            ivec2 targetLogicalTile =
+                targetTile + ivec2(uTargetGridMin);
+            vec2 initialGrid =
+                vec2(targetLogicalTile * uTargetTileStride) /
+                (uInitialScale * float(uInitialTileStride)) -
+                vec2(float(uInitialGridMin));
+
+            vec2 nearestPosition = roundEven(initialGrid);
+            ivec2 nearest = ivec2(nearestPosition);
+            ivec2 nextX = nearest + ivec2(
+                initialGrid.x < nearestPosition.x ? -1 : 1,
+                0
+            );
+            ivec2 nextY = nearest + ivec2(
+                0,
+                initialGrid.y < nearestPosition.y ? -1 : 1
+            );
+            nearest = boundedInitialTile(nearest);
+            nextX = boundedInitialTile(nextX);
+            nextY = boundedInitialTile(nextY);
+
+            ivec2 origin = targetLogicalTile * uTargetTileStride;
+            vec2 bestFlow = candidateFlow(nearest);
+            float bestCost = candidateCost(origin, bestFlow);
+            float candidateIndex = 0.0;
+
+            vec2 flowX = candidateFlow(nextX);
+            float costX = candidateCost(origin, flowX);
+            if (costX < bestCost) {
+                bestFlow = flowX;
+                bestCost = costX;
+                candidateIndex = 1.0;
+            }
+
+            vec2 flowY = candidateFlow(nextY);
+            float costY = candidateCost(origin, flowY);
+            if (costY < bestCost) {
+                bestFlow = flowY;
+                bestCost = costY;
+                candidateIndex = 2.0;
+            }
+            oAlignment = vec4(bestFlow, bestCost, candidateIndex);
+        }
+    """.trimIndent()
+
+    /**
      * BlockLucasKanadeHalide (0x3b9be68, workers 0x3b9cb5c/0x3b9e72c). One draw is
-     * one generated-kernel iteration. Bilinear weights retain the S16 Q15 conversion and
-     * saturating rounded shift used by the AArch64 worker.
+     * one generated-kernel iteration. Its input has already been expanded onto this LK
+     * grid by UpsampleAlignment. Bilinear weights below are the image-warp S16 Q15
+     * conversion and saturating rounded shift used by the AArch64 worker.
      */
     val blockLucasKanade = """
         #version 300 es
@@ -1290,11 +1192,9 @@ internal object GlesMgcRawSpatialShaders {
         uniform sampler2D uInitialAlignment;
         uniform ivec2 uImageSize;
         uniform ivec2 uGridSize;
-        uniform ivec2 uInitialGridSize;
         uniform int uTileStride;
         uniform int uTileSize;
         uniform int uNormalize;
-        uniform float uInitialScale;
         uniform int uHasInitialAlignment;
         out vec4 oAlignment;
 
@@ -1358,26 +1258,20 @@ internal object GlesMgcRawSpatialShaders {
         }
         void main() {
             ivec2 tile = ivec2(gl_FragCoord.xy);
-            ivec2 initialTile = clamp(
-                ivec2(
-                    floor(
-                        (vec2(tile) + 0.5) *
-                        vec2(uInitialGridSize) / vec2(uGridSize)
-                    )
-                ),
-                ivec2(0),
-                uInitialGridSize - ivec2(1)
-            );
             vec2 flow = uHasInitialAlignment != 0
-                ? texelFetch(uInitialAlignment, initialTile, 0).xy * uInitialScale
+                ? texelFetch(
+                    uInitialAlignment,
+                    clamp(tile, ivec2(0), uGridSize - ivec2(1)),
+                    0
+                ).xy
                 : vec2(0.0);
-            ivec2 origin = tile * uTileStride;
+            ivec2 origin = (tile + ivec2(1)) * uTileStride;
             float count = float(uTileSize * uTileSize);
             float meanCurrent = 0.0;
             if (uNormalize != 0) {
-                for (int y = 0; y < 16; ++y) {
+                for (int y = 0; y < 64; ++y) {
                     if (y >= uTileSize) break;
-                    for (int x = 0; x < 16; ++x) {
+                    for (int x = 0; x < 64; ++x) {
                         if (x >= uTileSize) break;
                         meanCurrent += warpedCurrentAt(
                             vec2(origin + ivec2(x, y)) + flow
@@ -1389,9 +1283,9 @@ internal object GlesMgcRawSpatialShaders {
 
             float targetX = 0.0;
             float targetY = 0.0;
-            for (int y = 0; y < 16; ++y) {
+            for (int y = 0; y < 64; ++y) {
                 if (y >= uTileSize) break;
-                for (int x = 0; x < 16; ++x) {
+                for (int x = 0; x < 64; ++x) {
                     if (x >= uTileSize) break;
                     ivec2 p = origin + ivec2(x, y);
                     float current = warpedCurrentAt(vec2(p) + flow) - meanCurrent;
@@ -1567,6 +1461,9 @@ internal object GlesMgcRawSpatialShaders {
         uniform ivec2 uOutputSize;
         uniform float uTileStride;
         uniform float uAlignmentScale;
+        uniform float uOutputToAlignmentScale;
+        uniform float uGridMin;
+        uniform vec2 uFlowNormalizationSize;
         out vec4 oFlow;
         vec2 flowAt(ivec2 p) {
             return texelFetch(
@@ -1577,7 +1474,9 @@ internal object GlesMgcRawSpatialShaders {
         }
         void main() {
             vec2 pixel = gl_FragCoord.xy - vec2(0.5);
-            vec2 grid = pixel / uTileStride;
+            vec2 grid =
+                pixel * uOutputToAlignmentScale / uTileStride -
+                vec2(uGridMin);
             ivec2 p0 = ivec2(floor(grid));
             vec2 f = fract(grid);
             vec2 a = mix(flowAt(p0), flowAt(p0 + ivec2(1, 0)), f.x);
@@ -1593,13 +1492,55 @@ internal object GlesMgcRawSpatialShaders {
                     maximumFlow = max(maximumFlow, v);
                 }
             }
-            vec2 uvFlow = flowPixels / vec2(uOutputSize);
+            vec2 uvFlow = flowPixels / uFlowNormalizationSize;
             vec2 normalizedRange =
-                (maximumFlow - minimumFlow) / max(vec2(uOutputSize), vec2(1.0));
+                (maximumFlow - minimumFlow) /
+                max(uFlowNormalizationSize, vec2(1.0));
             // ConvertAlignmentHalide stores the Euclidean length of the normalized
             // min/max flow extent. X and Y use their own output dimensions.
             float localFlowVariation = length(normalizedRange);
             oFlow = vec4(uvFlow, localFlowVariation, 0.0);
+        }
+    """.trimIndent()
+
+    /**
+     * Transport from the internal LK grid to MergeBayerRaw16's alignment contract.
+     *
+     * Runtime buffer inspection gives a 255x192 Float32x3 alignment and a 255x192
+     * Float16x4 ConvertAlignment output for a 4080x3064 RAW. X/Y remain Bayer-quad
+     * displacements; they are not normalized UV coordinates. MergeBayer consumes one
+     * alignment texel per 8x8 Bayer-quad tile with nearest integer addressing.
+     */
+    val convertBayerAlignment = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uAlignment;
+        uniform ivec2 uGridSize;
+        uniform float uAlignmentToBayerQuads;
+        out vec4 oAlignment;
+
+        void main() {
+            ivec2 outputTile = ivec2(gl_FragCoord.xy);
+            vec2 flowInBayerQuads = texelFetch(
+                uAlignment,
+                clamp(outputTile, ivec2(0), uGridSize - ivec2(1)),
+                0
+            ).xy * uAlignmentToBayerQuads;
+            oAlignment = vec4(flowInBayerQuads, 0.0, 0.0);
+        }
+    """.trimIndent()
+
+    val strengthAlignment = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uFlow;
+        uniform ivec2 uOutputSize;
+        out vec4 oAlignment;
+        void main() {
+            vec2 uv = gl_FragCoord.xy / vec2(uOutputSize);
+            oAlignment = vec4(texture(uFlow, uv).xy, 0.0, 0.0);
         }
     """.trimIndent()
 
@@ -1710,54 +1651,4 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    val normalize = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        uniform sampler2D uColorAndRWeight;
-        uniform sampler2D uGbWeights;
-        uniform sampler2D uLensShading;
-        uniform int uUseLensShading;
-        uniform ivec2 uOutputSize;
-        uniform vec3 uCameraDomainScale;
-        out vec4 oLinearRgb;
-        void main() {
-            ivec2 p = clamp(
-                ivec2(gl_FragCoord.xy),
-                ivec2(0),
-                uOutputSize - ivec2(1)
-            );
-            vec4 colorAndR = texelFetch(uColorAndRWeight, p, 0);
-            vec2 gb = texelFetch(uGbWeights, p, 0).rg;
-            vec3 rgb = colorAndR.rgb /
-                max(vec3(colorAndR.a, gb.x, gb.y), vec3(1.0e-8));
-            if (uUseLensShading != 0) {
-                vec2 uv = (vec2(p) + 0.5) / vec2(uOutputSize);
-                vec4 shading = texture(uLensShading, uv);
-                rgb *= vec3(shading.r, 0.5 * (shading.g + shading.b), shading.a);
-            }
-            // Spatial merge is calculated with WB gains, while Photon LINEAR_RGB is camera RGB.
-            // This is the same output-domain conversion used by RCD WRITE_OUTPUT.
-            rgb *= uCameraDomainScale;
-            oLinearRgb = vec4(max(rgb, vec3(0.0)), 1.0);
-        }
-    """.trimIndent()
-
-    val transferToRgb16 = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        uniform sampler2D uLinearRgb;
-        uniform ivec2 uOutputSize;
-        layout(location = 0) out highp uvec4 oRgb16;
-        void main() {
-            ivec2 p = clamp(
-                ivec2(gl_FragCoord.xy),
-                ivec2(0),
-                uOutputSize - ivec2(1)
-            );
-            vec3 rgb = clamp(texelFetch(uLinearRgb, p, 0).rgb, 0.0, 1.0);
-            oRgb16 = uvec4(round(rgb * 65535.0), 65535.0);
-        }
-    """.trimIndent()
 }
