@@ -7,6 +7,7 @@ import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.SystemPropertiesUtil
 import java.io.File
 import kotlin.math.max
 
@@ -26,6 +27,11 @@ internal data class RawExposurePreviewFrame(
 internal object RawViewfinderExposureMatcher {
     private const val TAG = "RawViewfinderExposureMatcher"
     private const val PREVIEW_LONG_EDGE = 256
+
+    private val diagnosticsEnabled: Boolean
+        get() = BuildConfig.DEBUG &&
+            SystemPropertiesUtil.get("debug.photon.raw_exposure.diagnostics")
+                ?.toBooleanStrictOrNull() == true
 
     private data class ViewfinderReference(
         val analysis: RawViewfinderExposureMath.Reference,
@@ -181,6 +187,15 @@ internal object RawViewfinderExposureMatcher {
         ) {
             return null
         }
+        if (!diagnosticsEnabled) {
+            return RawViewfinderExposureMath.evaluateMeteringLog2Error(
+                reference = reference,
+                pixels = frame.argbPixels,
+                width = frame.width,
+                height = frame.height,
+                meteringSelection = meteringSelection,
+            )
+        }
         val match = RawViewfinderExposureMath.evaluate(
             reference = reference,
             pixels = frame.argbPixels,
@@ -324,7 +339,7 @@ internal object RawViewfinderExposureMatcher {
             private const val CANDIDATE_FILE_PREFIX = "candidate_"
 
             fun create(context: Context): ExposureMatchTestImageCache? {
-                if (!BuildConfig.DEBUG) return null
+                if (!diagnosticsEnabled) return null
                 val directory = File(context.cacheDir, CACHE_DIRECTORY_NAME)
                 if (!directory.exists() && !directory.mkdirs()) {
                     PLog.w(

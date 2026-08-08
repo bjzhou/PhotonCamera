@@ -113,6 +113,25 @@ SSBO binding 点是单次 program 执行时的绑定槽，不是跨 program 全�
 - shader 的 `layout(std430, binding = N)` 必须与 CPU 侧 binding 完全一致。
 - SSBO、image 和 UBO 属于不同绑定命名空间，相同编号不会互相占用。
 
+## 热路径纹理回读优先 compute 打包到 SSBO
+
+### 问题
+
+部分 Adreno 驱动会在向 PBO 提交 `glReadPixels` 时同步清空此前的图形队列，即使稍后映射 PBO
+本身不再等待。此时提交耗时包含前序 GPU 工作，不能解释为纯像素传输时间。
+
+### 正确做法
+
+- GLES 3.1 路径用小型 compute pass 将纹理按目标 ABI 打包进 SSBO，再在 CPU 消费点映射。
+- PBO/SSBO 可以复用同一个 buffer object，但 dispatch 后必须包含
+  `GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT`。
+- `R8` 打包为 byte 或 `R16I` 打包为 short 时，以 32-bit word 写 SSBO；buffer 分配长度向上
+  对齐到 4 字节，映射给消费者的逻辑长度保持不变。
+- dispatch 前查询 `GL_MAX_SHADER_STORAGE_BLOCK_SIZE`；单个回读超限时必须回退 framebuffer
+  readback，不能把整图 buffer 绑定到超限 SSBO。
+- Android capsule ABI 使用 native little-endian byte/short；pack shader 的 lane 位移必须与该布局一致。
+- GLES 3.0 或 compute program 编译失败时保留原 framebuffer readback 路径，不能静默改变数据。
+
 ## `readonly` SSBO 元素作为用户函数实参
 
 已确认设备：OPPO PLW110，Mali-G720-Immortalis MC12，驱动
@@ -429,6 +448,15 @@ RAW texture 或 UBO。只限制队列长度、只加 barrier 或逐 pass 等待�
   不再为 GPU handoff 分配第四张同尺寸纹理。
 - CPU/DNG Buffer 不是 GPU 交接结果的必填字段。DNG 消费者应在前台显影完成后单独请求
   materialization，并保持 texture 存活到该消费者结束。
+- 不可替换的 CPU/AOT 处理是显式的唯一 GPU 边界：GPU 结果读入 PBO，map 后就地执行
+  CPU 处理，再由同一 PBO 直接上传 texture。不应在边界前后另外 pack 成 Java/Kotlin
+  RGB 数组，后续显影继续消费 GPU texture。
+- 已知尺寸的 PBO 应在 capture/pipeline 创建阶段分配，不要在首个读回同步点内调用
+  `glBufferData`。但不能假定 PBO 会使 `glReadPixels` 在所有驱动上立即返回；必须分别记录
+  framebuffer/attachment 绑定、`glReadPixels` 提交和 `glMapBufferRange` 等待。
+- CPU/AOT 生成的 strength 图及其算法保持在原有边界内。只有 AOT 输出后、与输出分辨率相关的
+  Q8 坐标缩放可作为独立 host 后处理优化；需保持原 Float 双线性和舍入语义，不得改动
+  AOT/capsule 输入、输出或计算。
 - 已完成且后续只读的 flow、robustness 和 tile mask 应直接转移 texture 所有权，立即为下一帧
   分配工作纹理；不要为了形成 cache 再执行三次全表面 copy。诊断采样必须发生在所有权转移前。
 - 普通对齐帧只需要 flow bounds 时，在 GPU 上将每帧 grid 归约成一个
@@ -454,7 +482,8 @@ RAW texture 或 UBO。只限制队列长度、只加 barrier 或逐 pass 等待�
 
 ### 验证
 
-- 日志必须明确区分 CPU 命令提交、`gpuQueueWait`、`pixelTransfer`、`cpuPack` 和 allocation。
+- 日志必须明确区分 CPU 命令提交、attachment 绑定、`glReadPixels` 提交、PBO map 等待、
+  `gpuQueueWait`、`pixelTransfer`、`cpuPack`、AOT 计算和 allocation。
 - 真机确认 stacker 返回 GPU texture 时没有发生全尺寸 `glReadPixels`。
 - 真机确认 RAW 显影完成后才开始 DNG materialization，并验证取消、写入失败和显影失败路径
   不泄漏 texture、sync、framebuffer 或 native buffer。

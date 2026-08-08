@@ -120,6 +120,7 @@ target_link_libraries(
 )
 add_library(my-native-lib SHARED 
     native-lib.cpp
+    mgc_strength_map_scaler.cpp
     jpeg_export_jni.cpp
     jpeg_r_encoder.cpp
     yuv_utils.cpp
@@ -131,6 +132,14 @@ add_library(my-native-lib SHARED
     "${MGC_DENOISE_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
+)
+
+# Match the former Kotlin Float bilinear path exactly at Q8 rounding boundaries.
+# This host-side scaler is deliberately independent of the MGC AOT/capsule sources.
+set_source_files_properties(
+    mgc_strength_map_scaler.cpp
+    PROPERTIES
+    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
 
 # 启用优化和 OpenMP

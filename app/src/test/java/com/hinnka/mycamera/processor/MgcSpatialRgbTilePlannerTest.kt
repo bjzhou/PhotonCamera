@@ -36,7 +36,7 @@ class MgcSpatialRgbTilePlannerTest {
             flowBounds = MgcSpatialRgbFlowBounds.Zero,
         )
 
-        assertEquals(MgcSpatialRgbRect(1021, 509, 1539, 1027), source)
+        assertEquals(MgcSpatialRgbRect(1023, 511, 1537, 1025), source)
     }
 
     @Test
@@ -55,7 +55,7 @@ class MgcSpatialRgbTilePlannerTest {
             flowBounds = MgcSpatialRgbFlowBounds(-2.25f, -1.5f, 3.5f, 4.25f),
         )
 
-        assertEquals(MgcSpatialRgbRect(504, 506, 1034, 1036), source)
+        assertEquals(MgcSpatialRgbRect(506, 508, 1032, 1034), source)
         assertTrue(source.width > tile.outputCore.width / 2)
         assertTrue(source.height > tile.outputCore.height / 2)
     }

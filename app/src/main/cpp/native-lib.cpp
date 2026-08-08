@@ -5,6 +5,7 @@
  */
 #include <algorithm>
 #include <android/bitmap.h>
+#include <GLES3/gl31.h>
 #include <array>
 #include <arm_neon.h>
 #include <cctype>
@@ -3955,6 +3956,32 @@ Java_com_hinnka_mycamera_utils_DirectBufferPixelPacker_packRgba16fToRgb16(
       destination[pixel * 3 + channel] = static_cast<uint16_t>(
           std::lround(normalized * 65535.0f));
     }
+  }
+  return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_GlesPixelBufferTransfer_uploadRgba16fPboToTexture(
+    JNIEnv *, jobject, jint pixelBufferObject, jint textureId, jint width,
+    jint height) {
+  if (pixelBufferObject <= 0 || textureId <= 0 || width <= 0 || height <= 0) {
+    LOGE("uploadRgba16fPboToTexture: invalid pbo=%d texture=%d size=%dx%d",
+         pixelBufferObject, textureId, width, height);
+    return JNI_FALSE;
+  }
+
+  glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(textureId));
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(pixelBufferObject));
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 8);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA,
+                  GL_HALF_FLOAT, nullptr);
+  const GLenum error = glGetError();
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  if (error != GL_NO_ERROR) {
+    LOGE("uploadRgba16fPboToTexture: GL error=0x%x", error);
+    return JNI_FALSE;
   }
   return JNI_TRUE;
 }

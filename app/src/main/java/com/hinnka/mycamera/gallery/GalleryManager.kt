@@ -36,6 +36,7 @@ import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.GpuBayerSource
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
+import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.processor.RawNoiseModel
@@ -47,7 +48,7 @@ import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
-import com.hinnka.mycamera.raw.MgcSpatialMaterializationMode
+import com.hinnka.mycamera.raw.MgcSpatialGpuDenoiseMode
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
@@ -2931,7 +2932,6 @@ object GalleryManager {
         var gpuBayerSourceToRelease: GpuBayerSource? = null
         var pendingDngWrite: Deferred<Boolean>? = null
         var releaseStackCpuBuffer: (() -> Unit)? = null
-        var defaultDenoisedBufferToRelease: ByteBuffer? = null
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -3034,6 +3034,7 @@ object GalleryManager {
                     applyLensShadingCorrection = applyRawLensShading,
                     useCurrentGlContext = true,
                     exportGpuLinearRgbSource = true,
+                    gpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16F,
                     enableHdrFusion = rawMaxHdrFusionEnabled,
                 )
             }
@@ -3074,7 +3075,7 @@ object GalleryManager {
                 mgcDenoiseShotNoise = finalStackResult.mgcDenoiseShotNoise,
                 mgcSpatialStrengthMap = finalStackResult.mgcSpatialStrengthMap,
             )
-            val defaultDenoised = processor.materializeMgcSpatialLinearRgb(
+            val defaultDenoised = processor.processMgcSpatialGpuLinearRgb(
                 context = context,
                 rawData = finalStackResult.fusedBayerBuffer,
                 width = finalStackResult.width,
@@ -3094,27 +3095,31 @@ object GalleryManager {
                     finalStackResult.mgcDenoiseReadNoise?.size == 3 &&
                     finalStackResult.mgcDenoiseShotNoise?.size == 3
                 ) {
-                    MgcSpatialMaterializationMode.DEFAULT_DENOISE
+                    MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE
                 } else {
-                    MgcSpatialMaterializationMode.BYPASS_DEFAULT_DENOISE
+                    MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE
                 },
             )
             if (defaultDenoised == null) {
                 PLog.e(
                     TAG,
-                    "RAW stack aborted: MGC Spatial materialization did not produce " +
-                        "persistable LinearRaw pixels",
+                    "RAW stack aborted: MGC Spatial processing did not produce a GPU " +
+                        "LinearRaw source",
                 )
                 return@withContext
             }
-            defaultDenoisedBufferToRelease = defaultDenoised.linearRgb16
+            val defaultDenoisedGpuSource = defaultDenoised.gpuLinearRgbSource
             // Spatial CFA/RGBA storage and its process-local denoise model have both been
-            // consumed. Downstream consumers see standard default-denoised LinearRaw pixels.
+            // consumed. Downstream consumers keep the normalized default-denoised result on GPU.
             releaseInitialFusedBuffer()
-            processor.releaseGpuLinearRgbSource(finalStackResult.gpuLinearRgbSource)
-            processor.releaseGpuBayerSource(finalStackResult.gpuBayerSource)
-            gpuSourceToRelease = null
+            gpuSourceToRelease = defaultDenoisedGpuSource
             gpuBayerSourceToRelease = null
+            if (finalStackResult.gpuLinearRgbSource?.textureId !=
+                defaultDenoisedGpuSource.textureId
+            ) {
+                processor.releaseGpuLinearRgbSource(finalStackResult.gpuLinearRgbSource)
+            }
+            processor.releaseGpuBayerSource(finalStackResult.gpuBayerSource)
             val stackedRawMetadata = spatialMergeMetadata.copy(
                 blackLevel = FloatArray(4),
                 whiteLevel = 65535f,
@@ -3167,8 +3172,8 @@ object GalleryManager {
                 )
                 val profileStartMs = System.currentTimeMillis()
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
-                    rawBuffer = defaultDenoised.linearRgb16,
-                    gpuLinearRgbSource = null,
+                    rawBuffer = null,
+                    gpuLinearRgbSource = defaultDenoisedGpuSource,
                     width = finalStackResult.width,
                     height = finalStackResult.height,
                     characteristics = characteristics,
@@ -3193,40 +3198,45 @@ object GalleryManager {
                 }
                 val profileElapsedMs = System.currentTimeMillis() - profileStartMs
 
-                suspend fun persistDng(fusedBayerBuffer: ByteBuffer): Boolean =
-                    trySaveStackedRawDng(
-                        context = context,
-                        photoId = photoId,
-                        dngFile = dngFile,
-                        fusedBayerBuffer = fusedBayerBuffer,
-                        width = finalStackResult.width,
-                        height = finalStackResult.height,
-                        rawMetadata = stackedRawMetadata,
-                        stackBlackLevel = FloatArray(4),
-                        stackWhiteLevel = 65535,
-                        isNormalizedSensorData = true,
-                        characteristics = characteristics,
-                        captureResult = captureResult,
-                        rotation = rotation,
-                        aspectRatio = aspectRatio,
-                        capturePreviewThumbnail = capturePreviewThumbnail,
-                        thumbnail = null,
-                        metadata = stackedMetadata,
-                        shouldAutoSave = shouldAutoSave,
-                        exportDngWithRawExport = exportDngWithRawExport,
-                        imageLayout = imageLayout,
-                        compression = SuperResolutionDngWriter.Compression.JPEG_LOSSLESS,
-                        inputRowStepSamples = inputRowStepSamples,
-                        inputColStepSamples = inputSamplesPerPixel,
-                        pixelsIncludeLensShadingCorrection =
-                            defaultDenoised.pixelsIncludeLensShadingCorrection,
-                        baselineExposureEv = finalStackResult.baselineExposureEv,
-                        preparedDngProfile = dngProfilePreparation,
-                        preparedProfileOptions = profileOptions,
-                    )
-
-                suspend fun materializeAndPersistDng(): Boolean =
-                    persistDng(defaultDenoised.linearRgb16)
+                suspend fun materializeAndPersistDng(): Boolean {
+                    val dngBuffer = processor.materializeGpuLinearRgbSource(
+                        defaultDenoisedGpuSource,
+                    ) ?: return false
+                    return try {
+                        trySaveStackedRawDng(
+                            context = context,
+                            photoId = photoId,
+                            dngFile = dngFile,
+                            fusedBayerBuffer = dngBuffer,
+                            width = finalStackResult.width,
+                            height = finalStackResult.height,
+                            rawMetadata = stackedRawMetadata,
+                            stackBlackLevel = FloatArray(4),
+                            stackWhiteLevel = 65535,
+                            isNormalizedSensorData = true,
+                            characteristics = characteristics,
+                            captureResult = captureResult,
+                            rotation = rotation,
+                            aspectRatio = aspectRatio,
+                            capturePreviewThumbnail = capturePreviewThumbnail,
+                            thumbnail = null,
+                            metadata = stackedMetadata,
+                            shouldAutoSave = shouldAutoSave,
+                            exportDngWithRawExport = exportDngWithRawExport,
+                            imageLayout = imageLayout,
+                            compression = SuperResolutionDngWriter.Compression.JPEG_LOSSLESS,
+                            inputRowStepSamples = inputRowStepSamples,
+                            inputColStepSamples = inputSamplesPerPixel,
+                            pixelsIncludeLensShadingCorrection =
+                                defaultDenoised.pixelsIncludeLensShadingCorrection,
+                            baselineExposureEv = finalStackResult.baselineExposureEv,
+                            preparedDngProfile = dngProfilePreparation,
+                            preparedProfileOptions = profileOptions,
+                        )
+                    } finally {
+                        LargeDirectBuffer.free(dngBuffer)
+                    }
+                }
 
                 suspend fun renderPersistedDng() = processor.processForHdrSources(
                     context,
@@ -3305,12 +3315,12 @@ object GalleryManager {
                     val renderStartMs = System.currentTimeMillis()
                     val inMemoryResult = processor.processLinearDngBufferForHdrSources(
                         context = context,
-                        rawData = defaultDenoised.linearRgb16,
+                        rawData = null,
                         width = finalStackResult.width,
                         height = finalStackResult.height,
                         rowStride = inputRowStepSamples * Short.SIZE_BYTES,
                         samplesPerPixel = inputSamplesPerPixel,
-                        gpuLinearRgbSource = null,
+                        gpuLinearRgbSource = defaultDenoisedGpuSource,
                         metadata = checkNotNull(renderMetadata),
                         aspectRatio = aspectRatio,
                         cropRegion = updatedMetadata.cropRegion,
@@ -3516,11 +3526,6 @@ object GalleryManager {
                         }
                 }
                 releaseStackCpuBuffer?.invoke()
-                defaultDenoisedBufferToRelease?.let { buffer ->
-                    LargeDirectBuffer.free(buffer)
-                    defaultDenoisedBufferToRelease = null
-                    PLog.d(TAG, "Released MGC default-denoised LinearRaw buffer")
-                }
                 stackProcessor?.releaseGpuLinearRgbSource(gpuSourceToRelease)
                 stackProcessor?.releaseGpuBayerSource(gpuBayerSourceToRelease)
             }

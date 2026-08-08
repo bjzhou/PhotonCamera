@@ -28,8 +28,10 @@ import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.GlesMgcRawSpatialStacker
+import com.hinnka.mycamera.processor.GlesPixelBufferTransfer
 import com.hinnka.mycamera.processor.GpuBayerSource
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
+import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.RawNoiseModel
@@ -77,12 +79,12 @@ private data class ShadowsHighlightsParams(
     }
 }
 
-internal data class MgcSpatialDefaultDenoiseResult(
-    val linearRgb16: ByteBuffer,
+internal data class MgcSpatialGpuDenoiseResult(
+    val gpuLinearRgbSource: GpuLinearRgbSource,
     val pixelsIncludeLensShadingCorrection: Boolean,
 )
 
-internal enum class MgcSpatialMaterializationMode {
+internal enum class MgcSpatialGpuDenoiseMode {
     DEFAULT_DENOISE,
     BYPASS_DEFAULT_DENOISE,
 }
@@ -102,6 +104,11 @@ private data class VgnNoiseSample(
     val workingLumaMean: Float,
     val normalizedYuvVariance: FloatArray,
     val correlation: FloatArray,
+)
+
+private data class GpuPhotonGainCurves(
+    val gains: FloatArray,
+    val textureId: Int,
 )
 
 private enum class VgnNoiseComponent {
@@ -420,6 +427,7 @@ class RawDemosaicProcessor {
                         outputScale = 1f,
                         useCurrentGlContext = true,
                         exportGpuLinearRgbSource = true,
+                        gpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16F,
                     ).prewarmCapturePipeline(
                         frameCount = rawMaxFrameCount,
                         includeBento = rawMaxHdrCompositionEnabled,
@@ -571,6 +579,11 @@ class RawDemosaicProcessor {
                 RawProfileToneMapMode.Photon -> warmedProfileMap != null
 
                 else -> true
+            }
+            // Prewarm forces program execution only. Never let its synthetic scene table replace
+            // the next capture's GPU-resident PGTM resource.
+            if (warmedProfileMap != null) {
+                releaseProfileGainTableTexture()
             }
 
             // Execute only a small viewport to force deferred driver compilation. PGTM output is
@@ -767,6 +780,7 @@ class RawDemosaicProcessor {
         val valid = source.textureId != 0 &&
             source.width > 0 && source.height > 0 &&
             source.samplesPerPixel == 4 &&
+            source.storage == GpuLinearRgbStorage.RGBA16UI &&
             exportedStackTextureIds.contains(source.textureId)
         if (!valid) {
             PLog.e(
@@ -914,13 +928,13 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Materializes Spatial output as standard LinearRaw RGB16. Bayer input is converted to
-     * un-white-balanced camera RGB first; Spatial RGB input stays in the same camera domain.
-     * DEFAULT_DENOISE consumes the merge noise model exactly once and runs MGC luma/chroma
-     * defaults. BYPASS_DEFAULT_DENOISE preserves the same conversion while omitting only that
-     * post-merge denoise stage.
+     * Produces normalized RGBA16UI LinearRaw while keeping the Spatial pipeline GPU-resident.
+     * Bayer input is converted to un-white-balanced camera RGB first; Spatial RGB input stays in
+     * the same camera domain. DEFAULT_DENOISE crosses the GPU boundary only through one mapped PBO
+     * while the retained CPU AOT black box runs in place, then immediately returns its RGBA16F
+     * result to GPU. BYPASS_DEFAULT_DENOISE never leaves GPU.
      */
-    internal suspend fun materializeMgcSpatialLinearRgb(
+    internal suspend fun processMgcSpatialGpuLinearRgb(
         context: Context,
         rawData: ByteBuffer?,
         width: Int,
@@ -932,9 +946,9 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         sourcePixelsIncludeLensShadingCorrection: Boolean,
         applyLensShadingCorrection: Boolean,
-        mode: MgcSpatialMaterializationMode = MgcSpatialMaterializationMode.DEFAULT_DENOISE,
-    ): MgcSpatialDefaultDenoiseResult? = withContext(glDispatcher) {
-        val applyDefaultDenoise = mode == MgcSpatialMaterializationMode.DEFAULT_DENOISE
+        mode: MgcSpatialGpuDenoiseMode = MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE,
+    ): MgcSpatialGpuDenoiseResult? = withContext(glDispatcher) {
+        val applyDefaultDenoise = mode == MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE
         val rgbaBytes = width.toLong() * height.toLong() * 4L * Short.SIZE_BYTES
         val rgbBytes = width.toLong() * height.toLong() * 3L * Short.SIZE_BYTES
         val validGeometry = width > 0 && height > 0 &&
@@ -946,7 +960,7 @@ class RawDemosaicProcessor {
         if (!validGeometry || !validLayout || !validSource || rowStride <= 0) {
             PLog.e(
                 TAG,
-                "MGC Spatial materialization rejected input: size=${width}x$height " +
+                "MGC Spatial GPU denoise rejected input: size=${width}x$height " +
                     "rowStride=$rowStride samples=$samplesPerPixel source=${when {
                         gpuLinearRgbSource != null -> "GPU"
                         gpuBayerSource != null -> "GPU_BAYER"
@@ -957,9 +971,10 @@ class RawDemosaicProcessor {
             return@withContext null
         }
         if (gpuLinearRgbSource != null) {
-            // The stacker's exported texture is RGBA16UI, while samplesPerPixel describes the
-            // logical/persisted LinearRaw layout (normally packed RGB16). Keep those layouts
-            // separate: the alpha storage channel must not leak into the LinearRaw/DNG contract.
+            // The stacker exports either transient RGBA16F for the CPU black-box handoff or
+            // persistent RGBA16UI. samplesPerPixel still describes the logical/persisted
+            // LinearRaw layout (normally packed RGB16), so the storage alpha channel must not
+            // leak into the LinearRaw/DNG contract.
             val validGpuSource = samplesPerPixel in 3..4 &&
                 gpuLinearRgbSource.textureId != 0 &&
                 gpuLinearRgbSource.width == width &&
@@ -988,7 +1003,7 @@ class RawDemosaicProcessor {
             if (!validGpuSource) {
                 PLog.e(
                     TAG,
-                    "MGC Spatial materialization rejected GPU Bayer source " +
+                    "MGC Spatial GPU denoise rejected GPU Bayer source " +
                         "texture=${gpuBayerSource.textureId} " +
                         "source=${gpuBayerSource.width}x${gpuBayerSource.height} " +
                         "expected=${width}x$height logicalSamples=$samplesPerPixel",
@@ -1049,17 +1064,23 @@ class RawDemosaicProcessor {
                 lensShadingMapGrid = null,
             )
         }
-        val rgbaReadback = LargeDirectBuffer.allocate(
-            rgbaBytes,
-            "MGC Spatial materialization RGBA16F",
-        )?.order(ByteOrder.nativeOrder()) ?: return@withContext null
-        var packedOutput: ByteBuffer? = null
+        val rgbaByteCount = rgbaBytes.toInt()
+        var transferBuffer = 0
+        var transferBufferMapped = false
+        var blackBoxFramebuffer = 0
+        var exportedTexture = 0
+        var createdExportedTexture = false
         var completed = false
         var borrowedTexture = false
+        var workingFloatTexture = 0
         var vgnNoiseTransfer: VgnNoiseTransfer? = null
         val totalStartNs = System.nanoTime()
         try {
-            setupFullResFramebuffer(width, height)
+            val hasDirectFloatSource =
+                gpuLinearRgbSource?.storage == GpuLinearRgbStorage.RGBA16F
+            if (!hasDirectFloatSource) {
+                setupFullResFramebuffer(width, height)
+            }
             val preparationStartNs = System.nanoTime()
             val sourceLabel = when {
                 gpuLinearRgbSource != null -> {
@@ -1068,31 +1089,30 @@ class RawDemosaicProcessor {
                             GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
                             GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
                     )
-                    val queueTiming = gpuLinearRgbSource.stackCompletionTimeline?.awaitPending(
-                        syncPoint = "SPATIAL_MATERIALIZATION",
-                        checkGlError = ::checkGlError,
-                    )
-                    if (queueTiming == null) {
-                        GlesGpuCompletion.awaitSubmittedWork(
-                            label = "Spatial RGB before materialization",
-                            checkGlError = ::checkGlError,
+                    // Producer and consumer share this GL context. Command ordering carries the
+                    // texture dependency; the PBO map at the CPU black-box boundary is the wait.
+                    gpuLinearRgbSource.stackCompletionTimeline?.releasePending()
+                    if (gpuLinearRgbSource.storage == GpuLinearRgbStorage.RGBA16F) {
+                        workingFloatTexture = gpuLinearRgbSource.textureId
+                        "SPATIAL_RGB16F_GPU"
+                    } else {
+                        if (rawTextureId != 0 &&
+                            rawTextureId != gpuLinearRgbSource.textureId
+                        ) {
+                            GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
+                        }
+                        rawTextureId = gpuLinearRgbSource.textureId
+                        borrowedTexture = true
+                        renderLinearRawRgbToTexture(
+                            sourceTextureId = rawTextureId,
+                            sourceSamplesPerPixel = gpuLinearRgbSource.samplesPerPixel,
+                            targetTextureId = demosaicTextureId,
+                            width = width,
+                            height = height,
                         )
+                        workingFloatTexture = demosaicTextureId
+                        "SPATIAL_RGB16UI_GPU"
                     }
-                    if (rawTextureId != 0 &&
-                        rawTextureId != gpuLinearRgbSource.textureId
-                    ) {
-                        GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
-                    }
-                    rawTextureId = gpuLinearRgbSource.textureId
-                    borrowedTexture = true
-                    renderLinearRawRgbToTexture(
-                        sourceTextureId = rawTextureId,
-                        sourceSamplesPerPixel = gpuLinearRgbSource.samplesPerPixel,
-                        targetTextureId = demosaicTextureId,
-                        width = width,
-                        height = height,
-                    )
-                    "SPATIAL_RGB_GPU"
                 }
 
                 gpuBayerSource != null -> {
@@ -1100,16 +1120,7 @@ class RawDemosaicProcessor {
                         GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
                             GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
                     )
-                    val queueTiming = gpuBayerSource.stackCompletionTimeline?.awaitPending(
-                        syncPoint = "SPATIAL_BAYER_MATERIALIZATION",
-                        checkGlError = ::checkGlError,
-                    )
-                    if (queueTiming == null) {
-                        GlesGpuCompletion.awaitSubmittedWork(
-                            label = "Spatial Bayer before materialization",
-                            checkGlError = ::checkGlError,
-                        )
-                    }
+                    gpuBayerSource.stackCompletionTimeline?.releasePending()
                     if (rawTextureId != 0 && rawTextureId != gpuBayerSource.textureId) {
                         GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
                     }
@@ -1117,7 +1128,7 @@ class RawDemosaicProcessor {
                     borrowedTexture = true
                     if (RawMetadata.isQuadBayer(metadata.cfaPattern)) {
                         check(ensureQuadBayerPrograms()) {
-                            "Unable to initialize Quad Bayer programs for Spatial materialization"
+                            "Unable to initialize Quad Bayer programs for Spatial GPU denoise"
                         }
                         runQuadBayerDemosaic(
                             metadata = pixelPreparationMetadata,
@@ -1131,7 +1142,7 @@ class RawDemosaicProcessor {
                             "Unsupported Spatial Bayer CFA=${metadata.cfaPattern}"
                         }
                         check(ensureVgnPrograms()) {
-                            "Unable to initialize Standard Bayer VGN programs for Spatial materialization"
+                            "Unable to initialize Standard Bayer VGN programs for Spatial GPU denoise"
                         }
                         val vgnMetadata = if (applyDefaultDenoise) {
                             spatialOutputNoiseMetadata(pixelPreparationMetadata)
@@ -1208,7 +1219,7 @@ class RawDemosaicProcessor {
                         rowStride = rowStride,
                     )
                     check(ensureVgnPrograms()) {
-                        "Unable to initialize Standard Bayer VGN programs for Spatial materialization"
+                        "Unable to initialize Standard Bayer VGN programs for Spatial GPU denoise"
                     }
                     val vgnMetadata = if (applyDefaultDenoise) {
                         spatialOutputNoiseMetadata(pixelPreparationMetadata)
@@ -1233,33 +1244,68 @@ class RawDemosaicProcessor {
                     }
                 }
             }
+            if (workingFloatTexture == 0) {
+                workingFloatTexture = demosaicTextureId
+            }
             val preparationMs = (System.nanoTime() - preparationStartNs) / 1_000_000L
-
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
-            check(
-                GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
-                    GLES30.GL_FRAMEBUFFER_COMPLETE
-            ) { "MGC Spatial materialization readback framebuffer is incomplete" }
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
-            rgbaReadback.clear()
-            rgbaReadback.limit(rgbaBytes.toInt())
-            val readbackStartNs = System.nanoTime()
-            GLES30.glReadPixels(
-                0,
-                0,
-                width,
-                height,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                rgbaReadback,
-            )
-            checkGlError("MGC Spatial materialization camera RGB readback")
-            rgbaReadback.position(0)
-            val readbackMs = (System.nanoTime() - readbackStartNs) / 1_000_000L
-
-            val nativeStartNs = System.nanoTime()
+            var blackBoxReadSubmitMs = 0L
+            var blackBoxParameterMs = 0L
+            var blackBoxMapWaitMs = 0L
+            var blackBoxUploadSubmitMs = 0L
+            var nativeMs = 0L
             if (applyDefaultDenoise) {
+                val bufferIds = IntArray(1)
+                GLES30.glGenBuffers(1, bufferIds, 0)
+                transferBuffer = bufferIds[0]
+                check(transferBuffer != 0) {
+                    "Unable to allocate MGC Spatial black-box transfer buffer"
+                }
+                val transferFramebuffer = if (workingFloatTexture == demosaicTextureId) {
+                    demosaicFramebufferId
+                } else {
+                    val framebufferIds = IntArray(1)
+                    GLES30.glGenFramebuffers(1, framebufferIds, 0)
+                    blackBoxFramebuffer = framebufferIds[0]
+                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, blackBoxFramebuffer)
+                    GLES30.glFramebufferTexture2D(
+                        GLES30.GL_FRAMEBUFFER,
+                        GLES30.GL_COLOR_ATTACHMENT0,
+                        GLES30.GL_TEXTURE_2D,
+                        workingFloatTexture,
+                        0,
+                    )
+                    blackBoxFramebuffer
+                }
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, transferFramebuffer)
+                check(
+                    GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
+                        GLES30.GL_FRAMEBUFFER_COMPLETE
+                ) { "MGC Spatial black-box framebuffer is incomplete" }
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, transferBuffer)
+                GLES30.glBufferData(
+                    GLES30.GL_PIXEL_PACK_BUFFER,
+                    rgbaByteCount,
+                    null,
+                    GLES30.GL_STREAM_COPY,
+                )
+                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
+                val transferStartNs = System.nanoTime()
+                GLES30.glReadPixels(
+                    0,
+                    0,
+                    width,
+                    height,
+                    GLES30.GL_RGBA,
+                    GLES30.GL_HALF_FLOAT,
+                    0,
+                )
+                checkGlError("MGC Spatial black-box PBO readback")
+                blackBoxReadSubmitMs =
+                    (System.nanoTime() - transferStartNs) / 1_000_000L
+
+                // Do all CPU-only setup after queuing the readback and before mapping. This lets
+                // parameter preparation overlap the GPU transfer without creating another wait.
+                val parameterStartNs = System.nanoTime()
                 val spatialDenoiseMetadata = spatialOutputNoiseMetadata(denoiseMetadata)
                 val nativeDenoiseMetadata = vgnNoiseTransfer?.let { transfer ->
                     spatialDenoiseMetadata.copy(
@@ -1269,11 +1315,30 @@ class RawDemosaicProcessor {
                 val tuningGain = metadata.mgcDenoiseTuningGain
                     ?: (
                         metadata.iso.toFloat() / 100f *
-                            metadata.postRawSensitivityBoost
+                        metadata.postRawSensitivityBoost
                         ).coerceAtLeast(0.001f)
+                blackBoxParameterMs =
+                    (System.nanoTime() - parameterStartNs) / 1_000_000L
+
+                val mapStartNs = System.nanoTime()
+                val mapped = GLES30.glMapBufferRange(
+                    GLES30.GL_PIXEL_PACK_BUFFER,
+                    0,
+                    rgbaByteCount,
+                    GLES30.GL_MAP_READ_BIT or GLES30.GL_MAP_WRITE_BIT,
+                ) as? ByteBuffer ?: error("Unable to map MGC Spatial black-box PBO")
+                transferBufferMapped = true
+                mapped.order(ByteOrder.nativeOrder()).apply {
+                    position(0)
+                    limit(rgbaByteCount)
+                }
+                blackBoxMapWaitMs =
+                    (System.nanoTime() - mapStartNs) / 1_000_000L
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+                val nativeStartNs = System.nanoTime()
                 check(
                     MgcFullResolutionDenoise.denoise(
-                        rgba16f = rgbaReadback,
+                        rgba16f = mapped,
                         width = width,
                         height = height,
                         globalOriginX = 0,
@@ -1291,37 +1356,63 @@ class RawDemosaicProcessor {
                         chromaStrengthScale = 1f,
                     )
                 ) { "MGC Spatial default luma/chroma denoise failed" }
+                nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
+
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, transferBuffer)
+                check(GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)) {
+                    "MGC Spatial black-box transfer contents became invalid"
+                }
+                transferBufferMapped = false
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+
+                val returnStartNs = System.nanoTime()
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                check(
+                    GlesPixelBufferTransfer.uploadRgba16fPboToTexture(
+                        pixelBufferObject = transferBuffer,
+                        textureId = workingFloatTexture,
+                        width = width,
+                        height = height,
+                    )
+                ) { "Unable to return MGC black-box output to GPU" }
+                GLES31.glMemoryBarrier(
+                    GLES31.GL_TEXTURE_UPDATE_BARRIER_BIT or
+                        GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT,
+                )
+                checkGlError("MGC Spatial black-box PBO return")
+                blackBoxUploadSubmitMs =
+                    (System.nanoTime() - returnStartNs) / 1_000_000L
+                // Deleting a referenced GL buffer is deferred by the driver until the queued
+                // texture upload completes, while releasing application ownership immediately.
+                GLES30.glDeleteBuffers(1, intArrayOf(transferBuffer), 0)
+                transferBuffer = 0
             } else {
                 PLog.i(
                     TAG,
-                    "MGC Spatial materialization: default luma/chroma denoise bypassed",
+                    "MGC Spatial GPU handoff: default luma/chroma denoise bypassed",
                 )
             }
-            val nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
 
-            val output = LargeDirectBuffer.allocate(
-                rgbBytes,
-                "MGC Spatial materialized LinearRaw RGB16",
-            )?.order(ByteOrder.nativeOrder())
-                ?: error("Unable to allocate MGC Spatial LinearRaw buffer")
-            packedOutput = output
-            rgbaReadback.position(0)
-            output.clear()
-            val packStartNs = System.nanoTime()
-            check(
-                DirectBufferPixelPacker.packRgba16fToRgb16(
-                    source = rgbaReadback,
-                    width = width,
-                    height = height,
-                    destination = output,
-                )
-            ) { "Unable to quantize MGC default-denoised LinearRaw pixels" }
-            output.rewind()
-            val packMs = (System.nanoTime() - packStartNs) / 1_000_000L
+            val gpuReturnStartNs = System.nanoTime()
+            exportedTexture = gpuLinearRgbSource
+                ?.takeIf { it.storage == GpuLinearRgbStorage.RGBA16UI }
+                ?.textureId
+                ?: createNormalizedLinearRawTexture(width, height).also {
+                    createdExportedTexture = true
+                }
+            renderLinearRawFloatToUint(
+                sourceTextureId = workingFloatTexture,
+                targetTextureId = exportedTexture,
+                width = width,
+                height = height,
+            )
+            exportedStackTextureIds += exportedTexture
+            val gpuReturnSubmitMs =
+                (System.nanoTime() - gpuReturnStartNs) / 1_000_000L
             completed = true
             PLog.i(
                 TAG,
-                "MGC Spatial LinearRaw materialized: source=$sourceLabel " +
+                "MGC Spatial GPU LinearRaw ready: source=$sourceLabel " +
                     "size=${width}x$height pass=${if (applyDefaultDenoise) {
                         "SPATIAL_DEFAULT"
                     } else {
@@ -1342,19 +1433,46 @@ class RawDemosaicProcessor {
                         "yuvRead=${it.normalizedYuvRead.contentToString()}," +
                             "yuvShot=${it.normalizedYuvShot.contentToString()}"
                     } ?: "not-applicable"} " +
-                    "prepareMs=$preparationMs readbackMs=$readbackMs " +
-                    "nativeMs=$nativeMs packMs=$packMs " +
+                    "prepareSubmitMs=$preparationMs " +
+                    "blackBoxReadSubmitMs=$blackBoxReadSubmitMs " +
+                    "blackBoxParameterMs=$blackBoxParameterMs " +
+                    "blackBoxMapWaitMs=$blackBoxMapWaitMs " +
+                    "blackBoxUploadSubmitMs=$blackBoxUploadSubmitMs " +
+                    "nativeMs=$nativeMs gpuReturnSubmitMs=$gpuReturnSubmitMs " +
+                    "cpuPackMs=0 textureReuse=${!createdExportedTexture} " +
+                    "result=RGBA16UI_GPU " +
                     "totalMs=${(System.nanoTime() - totalStartNs) / 1_000_000L}",
             )
-            MgcSpatialDefaultDenoiseResult(
-                linearRgb16 = output,
+            MgcSpatialGpuDenoiseResult(
+                gpuLinearRgbSource = GpuLinearRgbSource(
+                    textureId = exportedTexture,
+                    width = width,
+                    height = height,
+                    samplesPerPixel = 4,
+                    stackCompletionTimeline = null,
+                    storage = GpuLinearRgbStorage.RGBA16UI,
+                ),
                 pixelsIncludeLensShadingCorrection = outputIncludesLensShading,
             )
         } catch (error: Exception) {
-            PLog.e(TAG, "Failed to materialize MGC Spatial output", error)
+            PLog.e(TAG, "Failed to process MGC Spatial GPU output", error)
             null
         } finally {
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+            if (transferBufferMapped) {
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, transferBuffer)
+                GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+                transferBufferMapped = false
+            }
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+            if (transferBuffer != 0) {
+                GLES30.glDeleteBuffers(1, intArrayOf(transferBuffer), 0)
+            }
+            if (blackBoxFramebuffer != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(blackBoxFramebuffer), 0)
+            }
             if (demosaicFramebufferId != 0 && demosaicTextureId != 0) {
                 GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
                 GLES30.glFramebufferTexture2D(
@@ -1370,9 +1488,9 @@ class RawDemosaicProcessor {
             if (borrowedTexture) {
                 rawTextureId = 0
             }
-            LargeDirectBuffer.free(rgbaReadback)
-            if (!completed) {
-                LargeDirectBuffer.free(packedOutput)
+            if (!completed && createdExportedTexture && exportedTexture != 0) {
+                exportedStackTextureIds.remove(exportedTexture)
+                GLES30.glDeleteTextures(1, intArrayOf(exportedTexture), 0)
             }
         }
     }
@@ -1418,6 +1536,7 @@ class RawDemosaicProcessor {
     private var linearRcdProgram = 0
     private var warpRectilinearProgram = 0
     private var linearRawRgbProgram = 0
+    private var linearRawFloatToUintProgram = 0
     private var linearRawRgbExpandProgram = 0
     private var filmicHrMaskProgram = 0
     private var filmicHrInpaintNoiseProgram = 0
@@ -2242,6 +2361,7 @@ class RawDemosaicProcessor {
             val valid = source.textureId != 0 &&
                 source.width == width && source.height == height &&
                 source.samplesPerPixel in 3..4 &&
+                source.storage == GpuLinearRgbStorage.RGBA16UI &&
                 exportedStackTextureIds.contains(source.textureId)
             if (!valid) {
                 PLog.w(
@@ -3160,7 +3280,7 @@ class RawDemosaicProcessor {
                 null
             }
 
-            val mgcDenoiseComplete = renderMgcUserAdjustmentDenoise(
+            val denoiseProfileTextureId = renderMgcUserAdjustmentDenoise(
                 context = context.applicationContext,
                 sourceTextureId = demosaicTextureId,
                 width = actualWidth,
@@ -3172,8 +3292,7 @@ class RawDemosaicProcessor {
                 globalOriginY = 0,
                 fullImageWidth = actualWidth,
                 fullImageHeight = actualHeight,
-            )
-            if (!mgcDenoiseComplete) {
+            ) ?: run {
                 val fallbackChromaTextureId = renderDefaultChromaDenoise(
                     sourceTextureId = demosaicTextureId,
                     width = actualWidth,
@@ -3189,7 +3308,6 @@ class RawDemosaicProcessor {
                     denoiseValue = denoiseValue,
                 )
             }
-            val denoiseProfileTextureId = gfTexId[1]
             // AdobeCurve keeps BaselineExposure for the DNG SDK exposure ramp. HNCS consumes
             // it through ColorCorrectAll's camera-domain inputEV; other linear engines retain
             // the exact post-matrix 2^EV gain.
@@ -3579,7 +3697,7 @@ class RawDemosaicProcessor {
                     }
                 }
 
-                val mgcDenoiseComplete = renderMgcUserAdjustmentDenoise(
+                val denoisedTextureId = renderMgcUserAdjustmentDenoise(
                     context = config.context,
                     sourceTextureId = demosaicTextureId,
                     width = workWidth,
@@ -3591,8 +3709,7 @@ class RawDemosaicProcessor {
                     globalOriginY = working.top,
                     fullImageWidth = config.fullWidth,
                     fullImageHeight = config.fullHeight,
-                )
-                if (!mgcDenoiseComplete) {
+                ) ?: run {
                     val fallbackChromaTextureId = renderDefaultChromaDenoise(
                         sourceTextureId = demosaicTextureId,
                         width = workWidth,
@@ -3610,7 +3727,7 @@ class RawDemosaicProcessor {
                 }
                 renderLinearRcdPass(
                     metadata = config.metadata,
-                    sourceTextureId = gfTexId[1],
+                    sourceTextureId = denoisedTextureId,
                     targetFramebufferId = linearOutputFramebufferId,
                     viewportWidth = workWidth,
                     viewportHeight = workHeight,
@@ -4158,13 +4275,18 @@ class RawDemosaicProcessor {
             }
 
             val localToneMapGpuStartNs = System.nanoTime()
-            val gains = generatePhotonProfileGainCurvesOnGpu(
+            val generated = generatePhotonProfileGainCurvesOnGpu(
                 plan = plan,
                 sampleBufferId = sampleBufferId,
             ) ?: return null
             val localToneMapGpuReadyNs = System.nanoTime()
             val map =
-                DngPhotonProfileGainTableGenerator.mapFromGpuGains(plan, gains) ?: return null
+                DngPhotonProfileGainTableGenerator.mapFromGpuGains(plan, generated.gains)
+                    ?: run {
+                        GLES30.glDeleteTextures(1, intArrayOf(generated.textureId), 0)
+                        return null
+                    }
+            installProfileGainTableTexture(map, generated.textureId)
             val photonPlan = plan.photonPlan
             val photonPreToneMapGain = photonPlan.exposureGain *
                 2.0f.pow(photonPlan.parameters.preToneMapExposureBoostEv)
@@ -4211,7 +4333,7 @@ class RawDemosaicProcessor {
     private fun generatePhotonProfileGainCurvesOnGpu(
         plan: PhotonProfileGainTablePlan,
         sampleBufferId: Int,
-    ): FloatArray? {
+    ): GpuPhotonGainCurves? {
         val photonPlan = plan.photonPlan
         val parameters = photonPlan.parameters
         val preToneMapExposureGain = photonPlan.exposureGain *
@@ -4260,6 +4382,7 @@ class RawDemosaicProcessor {
         val bguBufferB = 10
         val buffers = IntArray(11)
         val uniformLocations = HashMap<Int, MutableMap<String, Int>>()
+        var generatedTextureId = 0
 
         fun program(pass: DngPhotonLocalToneMapGpuShaders.Pass): Int =
             pgtmPhotonPrograms[pass.ordinal]
@@ -4757,6 +4880,46 @@ class RawDemosaicProcessor {
                 gainFloatCount * Float.SIZE_BYTES,
                 GLES31.GL_DYNAMIC_READ,
             )
+            val gainTextures = IntArray(1)
+            GLES30.glGenTextures(1, gainTextures, 0)
+            generatedTextureId = gainTextures[0]
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, generatedTextureId)
+            GLES30.glTexStorage2D(
+                GLES30.GL_TEXTURE_2D,
+                1,
+                GLES30.GL_R32F,
+                plan.pointCount,
+                plan.cellCount,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_MIN_FILTER,
+                GLES30.GL_NEAREST,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_MAG_FILTER,
+                GLES30.GL_NEAREST,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_WRAP_S,
+                GLES30.GL_CLAMP_TO_EDGE,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_WRAP_T,
+                GLES30.GL_CLAMP_TO_EDGE,
+            )
+            GLES31.glBindImageTexture(
+                0,
+                generatedTextureId,
+                0,
+                false,
+                0,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_R32F,
+            )
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.GAIN_CURVES)
             GLES31.glUseProgram(activeProgram)
             bindStorage(0, buffers[bguBufferA])
@@ -4794,7 +4957,12 @@ class RawDemosaicProcessor {
                 plan.diagnosticBand?.feather ?: 0f,
             )
             dispatch1d(gainFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
+                    GLES31.GL_BUFFER_UPDATE_BARRIER_BIT or
+                    GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                    GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+            )
 
             checkGlError("generatePhotonProfileGainCurvesOnGpu")
             val gains = readFloatStorageBuffer(
@@ -4802,15 +4970,27 @@ class RawDemosaicProcessor {
                 floatCount = gainFloatCount,
                 label = "Photon PGTM gain curves",
             ) ?: return null
-            PLog.d(TAG, summarizePhotonGainCurves(plan, gains))
-            return gains
+            if (plan.diagnosticBand != null) {
+                PLog.d(TAG, summarizePhotonGainCurves(plan, gains))
+            }
+            val result = GpuPhotonGainCurves(
+                gains = gains,
+                textureId = generatedTextureId,
+            )
+            generatedTextureId = 0
+            return result
         } finally {
             GLES31.glUseProgram(0)
+            GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_R32F)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
             repeat(4) { binding ->
                 GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, binding, 0)
             }
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
             GLES31.glDeleteBuffers(buffers.size, buffers, 0)
+            if (generatedTextureId != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(generatedTextureId), 0)
+            }
         }
     }
 
@@ -5220,7 +5400,7 @@ class RawDemosaicProcessor {
                 chromaDenoiseGuideProgram == 0 || chromaDenoiseProgram == 0 ||
                 meteringHalfResolutionProgram == 0 ||
                 linearRcdProgram == 0 || linearRawRgbProgram == 0 ||
-                linearRawRgbExpandProgram == 0
+                linearRawFloatToUintProgram == 0 || linearRawRgbExpandProgram == 0
             ) {
                 PLog.e(
                     TAG, "Critical shader programs failed to compile or link. " +
@@ -5229,6 +5409,7 @@ class RawDemosaicProcessor {
                             "chromaDenoise=$chromaDenoiseProgram " +
                             "meteringHalf=$meteringHalfResolutionProgram " +
                             "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram " +
+                            "linearRawFloatToUint=$linearRawFloatToUintProgram " +
                             "linearRawRgbExpand=$linearRawRgbExpandProgram"
                 )
                 return false
@@ -5622,6 +5803,35 @@ class RawDemosaicProcessor {
     """.trimIndent()
 
     /**
+     * Returns the CPU AOT denoiser's RGBA16F output to the normalized LinearRaw texture
+     * contract without another CPU packing pass. floor(x + 0.5) matches the positive-domain
+     * lround() used by DirectBufferPixelPacker.
+     */
+    private val COMPUTE_SHADER_LINEAR_RAW_FLOAT_TO_UINT = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        precision highp image2D;
+        precision highp uimage2D;
+
+        layout(local_size_x = 8, local_size_y = 8) in;
+        layout(rgba16f, binding = 0) readonly uniform highp image2D uLinearRawInput;
+        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uLinearRawOutput;
+
+        void main() {
+            ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 size = imageSize(uLinearRawInput);
+            if (any(greaterThanEqual(position, size))) return;
+            vec4 normalized = clamp(imageLoad(uLinearRawInput, position), 0.0, 1.0);
+            imageStore(
+                uLinearRawOutput,
+                position,
+                uvec4(floor(normalized * 65535.0 + 0.5))
+            );
+        }
+    """.trimIndent()
+
+    /**
      * RGB16UI cannot be bound to a GLSL image because ES exposes no rgb16ui image qualifier.
      * Expand a bounded strip into RGBA16UI using integer-only texture fetches, then let the
      * Phocus image-load shader perform the only integer-to-float conversion.
@@ -5747,6 +5957,10 @@ class RawDemosaicProcessor {
         linearRawRgbProgram = compileComputeProgram(
             COMPUTE_SHADER_LINEAR_RAW_RGB,
             "LinearRawRgbToFloat"
+        )
+        linearRawFloatToUintProgram = compileComputeProgram(
+            COMPUTE_SHADER_LINEAR_RAW_FLOAT_TO_UINT,
+            "LinearRawFloatToUint"
         )
         linearRawRgbExpandProgram = compileComputeProgram(
             COMPUTE_SHADER_LINEAR_RAW_RGB_EXPAND,
@@ -6439,31 +6653,22 @@ class RawDemosaicProcessor {
         globalOriginY: Int,
         fullImageWidth: Int,
         fullImageHeight: Int,
-    ): Boolean {
+    ): Int? {
         val lumaEnabled = (denoiseValue ?: 0f) > 0f
         val chromaEnabled = (chromaDenoiseValue ?: 0f) > 0f
         val enabled = lumaEnabled || chromaEnabled
+        if (!enabled || width * height < 2) {
+            return sourceTextureId
+        }
+        if (!MgcFullResolutionDenoise.ensureInitialized(context)) {
+            PLog.w(TAG, "MGC RunFullResolutionDenoise is not initialized")
+            return null
+        }
         setupNLMFramebuffers(
             width,
             height,
             setupLegacyAccumulator = false,
         )
-        if (width * height < 2) {
-            renderPassthroughToTexture(
-                sourceTextureId,
-                width,
-                height,
-                gfFboId[1],
-            )
-            return true
-        }
-        if (!enabled) {
-            return false
-        }
-        if (!MgcFullResolutionDenoise.ensureInitialized(context)) {
-            PLog.w(TAG, "MGC RunFullResolutionDenoise is not initialized")
-            return false
-        }
 
         renderPassthroughToTexture(
             sourceTextureId,
@@ -6478,7 +6683,7 @@ class RawDemosaicProcessor {
             width.toLong() * height.toLong() * 4L * Short.SIZE_BYTES
         if (byteCountLong <= 0L || byteCountLong > Int.MAX_VALUE) {
             PLog.e(TAG, "MGC denoise readback size is invalid: $byteCountLong")
-            return false
+            return null
         }
         val byteCount = byteCountLong.toInt()
         val readback = try {
@@ -6489,7 +6694,7 @@ class RawDemosaicProcessor {
                 "Unable to allocate MGC denoise readback ${width}x$height",
                 error,
             )
-            return false
+            return null
         }
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
@@ -6530,7 +6735,7 @@ class RawDemosaicProcessor {
                     chromaDenoiseValue?.coerceIn(0f, 1f) ?: 0f,
             )
         ) {
-            return false
+            return null
         }
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])
@@ -6569,7 +6774,7 @@ class RawDemosaicProcessor {
                 "readbackMs=${(nativeStartNs - readbackStartNs) / 1_000_000L} " +
                 "nativeMs=${(System.nanoTime() - nativeStartNs) / 1_000_000L}",
         )
-        return true
+        return gfTexId[1]
     }
 
     /**
@@ -6584,19 +6789,18 @@ class RawDemosaicProcessor {
         height: Int,
         metadata: RawMetadata,
         denoiseValue: Float?,
-    ) {
+    ): Int {
+        val strength = denoiseValue ?: 0f
+        if (strength <= 0f || width * height < 2) {
+            return sourceTextureId
+        }
+        val params = buildDenoiseProfileParams(metadata, strength)
+
         setupNLMFramebuffers(width, height)
 
         if (!ensureLegacyDenoiseProfilePrograms()) {
-            PLog.w(TAG, "DenoiseProfile programs not initialized, falling back to passthrough")
-            renderPassthroughToTexture(sourceTextureId, width, height, gfFboId[1])
-            return
-        }
-
-        val params = buildDenoiseProfileParams(metadata, denoiseValue ?: 0f)
-        if (params.strength <= 0f || width * height < 2) {
-            renderPassthroughToTexture(sourceTextureId, width, height, gfFboId[1])
-            return
+            PLog.w(TAG, "DenoiseProfile programs not initialized, falling back to source")
+            return sourceTextureId
         }
 
         PLog.d(
@@ -6613,6 +6817,7 @@ class RawDemosaicProcessor {
         dispatchDenoisePreconditionV2(sourceTextureId, gfTexId[0], width, height, params)
         dispatchDenoiseNlm(sourceTextureId, gfTexId[0], gfTexId[1], width, height, params)
         checkGlError("renderDenoiseProfile")
+        return gfTexId[1]
     }
 
     private data class DenoiseProfileParams(
@@ -7502,6 +7707,99 @@ class RawDemosaicProcessor {
         if (!waitForCpuReuse) return
         val startNs = System.nanoTime()
         GlesGpuScheduler.waitForGpuCheckpoint(TAG, label)
+    }
+
+    private fun createNormalizedLinearRawTexture(width: Int, height: Int): Int {
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        val texture = textures[0]
+        check(texture != 0) { "Unable to allocate normalized LinearRaw output texture" }
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_MIN_FILTER,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_MAG_FILTER,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_WRAP_S,
+            GLES30.GL_CLAMP_TO_EDGE,
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_WRAP_T,
+            GLES30.GL_CLAMP_TO_EDGE,
+        )
+        GLES30.glTexStorage2D(
+            GLES30.GL_TEXTURE_2D,
+            1,
+            GLES30.GL_RGBA16UI,
+            width,
+            height,
+        )
+        checkGlError("allocate normalized LinearRaw ${width}x$height")
+        return texture
+    }
+
+    private fun renderLinearRawFloatToUint(
+        sourceTextureId: Int,
+        targetTextureId: Int,
+        width: Int,
+        height: Int,
+    ) {
+        GLES31.glUseProgram(linearRawFloatToUintProgram)
+        GLES31.glBindImageTexture(
+            0,
+            sourceTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_READ_ONLY,
+            GLES31.GL_RGBA16F,
+        )
+        GLES31.glBindImageTexture(
+            1,
+            targetTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES31.GL_RGBA16UI,
+        )
+        GLES31.glDispatchCompute(
+            GlesComputeWorkGroup.imageGroupCount(width),
+            GlesComputeWorkGroup.imageGroupCount(height),
+            1,
+        )
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
+        )
+        GLES31.glBindImageTexture(
+            0,
+            0,
+            0,
+            false,
+            0,
+            GLES31.GL_READ_ONLY,
+            GLES31.GL_RGBA16F,
+        )
+        GLES31.glBindImageTexture(
+            1,
+            0,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES31.GL_RGBA16UI,
+        )
+        checkGlError("LinearRaw RGBA16F to RGBA16UI ${width}x$height")
     }
 
     internal fun createFramebufferForTexture(textureId: Int, label: String): Int {
@@ -12429,14 +12727,13 @@ class RawDemosaicProcessor {
     }
 
     private fun ensureProfileGainTableTexture(profileGainTableMap: DngProfileGainTableMap): Int {
-        if (profileGainTableTextureId != 0 && profileGainTableTextureSource == profileGainTableMap) {
+        if (profileGainTableTextureId != 0 &&
+            (profileGainTableTextureSource === profileGainTableMap ||
+                profileGainTableTextureSource == profileGainTableMap)
+        ) {
             return profileGainTableTextureId
         }
-        if (profileGainTableTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(profileGainTableTextureId), 0)
-            profileGainTableTextureId = 0
-            profileGainTableTextureSource = null
-        }
+        releaseProfileGainTableTexture()
         val textureWidth = profileGainTableMap.mapPointsN
         val textureHeight = profileGainTableMap.mapPointsH * profileGainTableMap.mapPointsV
         if (textureWidth <= 0 || textureHeight <= 0 ||
@@ -12496,6 +12793,30 @@ class RawDemosaicProcessor {
                 "gainMin=$gainMin gainMax=$gainMax tag=${profileGainTableMap.sourceTag}"
         )
         return textureId
+    }
+
+    private fun installProfileGainTableTexture(
+        profileGainTableMap: DngProfileGainTableMap,
+        textureId: Int,
+    ) {
+        require(textureId != 0) { "GPU-authored ProfileGainTableMap texture is unavailable" }
+        releaseProfileGainTableTexture()
+        profileGainTableTextureId = textureId
+        profileGainTableTextureSource = profileGainTableMap
+        PLog.d(
+            TAG,
+            "ProfileGainTableMap texture retained from GPU: " +
+                "${profileGainTableMap.mapPointsH}x${profileGainTableMap.mapPointsV}x" +
+                "${profileGainTableMap.mapPointsN} texture=$textureId",
+        )
+    }
+
+    private fun releaseProfileGainTableTexture() {
+        if (profileGainTableTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(profileGainTableTextureId), 0)
+        }
+        profileGainTableTextureId = 0
+        profileGainTableTextureSource = null
     }
 
     private fun renderExposurePreviewRequest(
@@ -13270,6 +13591,9 @@ class RawDemosaicProcessor {
         if (linearRcdProgram != 0) GLES31.glDeleteProgram(linearRcdProgram)
         if (warpRectilinearProgram != 0) GLES31.glDeleteProgram(warpRectilinearProgram)
         if (linearRawRgbProgram != 0) GLES31.glDeleteProgram(linearRawRgbProgram)
+        if (linearRawFloatToUintProgram != 0) {
+            GLES31.glDeleteProgram(linearRawFloatToUintProgram)
+        }
         if (linearRawRgbExpandProgram != 0) GLES31.glDeleteProgram(linearRawRgbExpandProgram)
         // darktable denoiseprofile compute programs
         if (denoisePreconditionV2Program != 0) GLES31.glDeleteProgram(denoisePreconditionV2Program)
@@ -13294,11 +13618,7 @@ class RawDemosaicProcessor {
             exportedStackTextureIds.clear()
         }
         if (rawTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
-        if (profileGainTableTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(profileGainTableTextureId), 0)
-            profileGainTableTextureId = 0
-            profileGainTableTextureSource = null
-        }
+        releaseProfileGainTableTexture()
         if (demosaicTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(demosaicTextureId), 0)
         if (linearOutputTextureId != 0) GLES30.glDeleteTextures(
             1,

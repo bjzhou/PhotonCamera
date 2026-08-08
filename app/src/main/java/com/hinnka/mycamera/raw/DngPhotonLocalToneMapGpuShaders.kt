@@ -728,6 +728,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
         layout(std430, binding = 1) writeonly buffer GainCurves {
             float gainCurves[];
         };
+        layout(r32f, binding = 0) writeonly uniform highp image2D uGainTexture;
         uniform int uCellCount;
         uniform int uPointCount;
         uniform int uRangeBinCount;
@@ -808,11 +809,13 @@ internal object DngPhotonLocalToneMapGpuShaders {
                     ? mix(1.0, trueGain, mask)
                     : mix(trueGain, 1.0, mask);
             }
-            gainCurves[outputIndex] = clamp(
+            float outputGain = clamp(
                 finalGain,
                 uMinTableGain,
                 uMaxTableGain
             );
+            gainCurves[outputIndex] = outputGain;
+            imageStore(uGainTexture, ivec2(point, cell), vec4(outputGain, 0.0, 0.0, 1.0));
         }
     """.trimIndent()
 

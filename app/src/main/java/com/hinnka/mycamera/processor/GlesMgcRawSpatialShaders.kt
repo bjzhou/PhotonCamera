@@ -97,6 +97,114 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
+     * Precomputes the edge-directed green value at native R/B sites for one RAW tile region.
+     * MergeRgb consumes this compact guide instead of repeating eight neighboring RAW fetches
+     * for every chroma observation at every super-resolution output sample.
+     */
+    val rgbChromaGuide = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        precision highp usampler2D;
+        uniform highp usampler2D uRaw;
+        uniform ivec2 uRawSize;
+        uniform ivec2 uRegionOrigin;
+        uniform ivec2 uRegionSize;
+        uniform vec4 uGains;
+        uniform vec4 uBlackLevelsTimesGains;
+        uniform int uCfaPattern;
+        out float oGreen;
+
+        int canonicalChannel(ivec2 p) {
+            int phase = ((p.y & 1) << 1) + (p.x & 1);
+            if (uCfaPattern == 0) return phase;
+            if (uCfaPattern == 1) {
+                if (phase == 0) return 1;
+                if (phase == 1) return 0;
+                if (phase == 2) return 3;
+                return 2;
+            }
+            if (uCfaPattern == 2) {
+                if (phase == 0) return 2;
+                if (phase == 1) return 3;
+                if (phase == 2) return 0;
+                return 1;
+            }
+            if (phase == 0) return 3;
+            if (phase == 1) return 2;
+            if (phase == 2) return 1;
+            return 0;
+        }
+
+        int clampRawCoordinateToPhase(int coordinate, int extent) {
+            int phase = coordinate & 1;
+            if (phase >= extent) return extent - 1;
+            int last = phase + 2 * ((extent - 1 - phase) / 2);
+            return clamp(coordinate, phase, last);
+        }
+
+        ivec2 clampRawPixelToPhase(ivec2 p) {
+            return ivec2(
+                clampRawCoordinateToPhase(p.x, uRawSize.x),
+                clampRawCoordinateToPhase(p.y, uRawSize.y)
+            );
+        }
+
+        float gainedRaw(ivec2 globalPixel) {
+            int channel = canonicalChannel(globalPixel);
+            globalPixel = clampRawPixelToPhase(globalPixel);
+            return float(texelFetch(uRaw, globalPixel, 0).r) * uGains[channel] +
+                uBlackLevelsTimesGains[channel];
+        }
+
+        float greenAtNonGreen(ivec2 p, float center) {
+            float gL = gainedRaw(p + ivec2(-1, 0));
+            float gR = gainedRaw(p + ivec2(1, 0));
+            float gU = gainedRaw(p + ivec2(0, -1));
+            float gD = gainedRaw(p + ivec2(0, 1));
+            float cL2 = gainedRaw(p + ivec2(-2, 0));
+            float cR2 = gainedRaw(p + ivec2(2, 0));
+            float cU2 = gainedRaw(p + ivec2(0, -2));
+            float cD2 = gainedRaw(p + ivec2(0, 2));
+            float horizontalLinear = 0.5 * (gL + gR);
+            float verticalLinear = 0.5 * (gU + gD);
+            float horizontalCorrection = clamp(
+                0.25 * (2.0 * center - cL2 - cR2),
+                -0.5 * abs(gL - gR),
+                0.5 * abs(gL - gR)
+            );
+            float verticalCorrection = clamp(
+                0.25 * (2.0 * center - cU2 - cD2),
+                -0.5 * abs(gU - gD),
+                0.5 * abs(gU - gD)
+            );
+            float horizontal = horizontalLinear + horizontalCorrection;
+            float vertical = verticalLinear + verticalCorrection;
+            float gradientH = abs(gL - gR) + abs(2.0 * center - cL2 - cR2);
+            float gradientV = abs(gU - gD) + abs(2.0 * center - cU2 - cD2);
+            float blendH = gradientV / max(gradientH + gradientV, 1.0e-7);
+            float green = mix(vertical, horizontal, blendH);
+            float nativeMinimum = min(min(gL, gR), min(gU, gD));
+            float nativeMaximum = max(max(gL, gR), max(gU, gD));
+            return clamp(green, nativeMinimum, nativeMaximum);
+        }
+
+        void main() {
+            ivec2 local = ivec2(gl_FragCoord.xy);
+            if (any(greaterThanEqual(local, uRegionSize))) {
+                oGreen = 0.0;
+                return;
+            }
+            ivec2 globalPixel = local + uRegionOrigin;
+            float center = gainedRaw(globalPixel);
+            int channel = canonicalChannel(globalPixel);
+            oGreen = channel == 1 || channel == 2
+                ? center
+                : greenAtNonGreen(globalPixel, center);
+        }
+    """.trimIndent()
+
+    /**
      * Structure-adaptive Spatial RGB precision matrix recovered with MergeRgbRaw.
      *
      * MGC originally emitted this beside the guide. It is kept as an independent draw here so the
@@ -862,7 +970,8 @@ internal object GlesMgcRawSpatialShaders {
         precision highp float;
         precision highp int;
         precision highp usampler2D;
-        uniform highp usampler2D uRawRegion;
+        uniform highp usampler2D uRaw;
+        uniform sampler2D uChromaGuideRegion;
         uniform sampler2D uAlignment;
         uniform sampler2D uFrameWeight;
         uniform sampler2D uCovariance;
@@ -922,45 +1031,17 @@ internal object GlesMgcRawSpatialShaders {
         float gainedRaw(ivec2 globalPixel) {
             int channel = canonicalChannel(globalPixel);
             globalPixel = clampRawPixelToPhase(globalPixel);
+            return float(texelFetch(uRaw, globalPixel, 0).r) * uGains[channel] +
+                uBlackLevelsTimesGains[channel];
+        }
+
+        float chromaGuideAt(ivec2 globalPixel) {
             ivec2 local = clamp(
                 globalPixel - uRawRegionOrigin,
                 ivec2(0),
                 uRawRegionSize - ivec2(1)
             );
-            return float(texelFetch(uRawRegion, local, 0).r) * uGains[channel] +
-                uBlackLevelsTimesGains[channel];
-        }
-
-        float greenAtNonGreen(ivec2 p, float center) {
-            float gL = gainedRaw(p + ivec2(-1, 0));
-            float gR = gainedRaw(p + ivec2(1, 0));
-            float gU = gainedRaw(p + ivec2(0, -1));
-            float gD = gainedRaw(p + ivec2(0, 1));
-            float cL2 = gainedRaw(p + ivec2(-2, 0));
-            float cR2 = gainedRaw(p + ivec2(2, 0));
-            float cU2 = gainedRaw(p + ivec2(0, -2));
-            float cD2 = gainedRaw(p + ivec2(0, 2));
-            float horizontalLinear = 0.5 * (gL + gR);
-            float verticalLinear = 0.5 * (gU + gD);
-            float horizontalCorrection = clamp(
-                0.25 * (2.0 * center - cL2 - cR2),
-                -0.5 * abs(gL - gR),
-                0.5 * abs(gL - gR)
-            );
-            float verticalCorrection = clamp(
-                0.25 * (2.0 * center - cU2 - cD2),
-                -0.5 * abs(gU - gD),
-                0.5 * abs(gU - gD)
-            );
-            float horizontal = horizontalLinear + horizontalCorrection;
-            float vertical = verticalLinear + verticalCorrection;
-            float gradientH = abs(gL - gR) + abs(2.0 * center - cL2 - cR2);
-            float gradientV = abs(gU - gD) + abs(2.0 * center - cU2 - cD2);
-            float blendH = gradientV / max(gradientH + gradientV, 1.0e-7);
-            float green = mix(vertical, horizontal, blendH);
-            float nativeMinimum = min(min(gL, gR), min(gU, gD));
-            float nativeMaximum = max(max(gL, gR), max(gU, gD));
-            return clamp(green, nativeMinimum, nativeMaximum);
+            return texelFetch(uChromaGuideRegion, local, 0).r;
         }
 
         vec2 alignmentAt(ivec2 tile) {
@@ -1060,7 +1141,7 @@ internal object GlesMgcRawSpatialShaders {
                         covariance
                     );
                     float nativeValue = gainedRaw(p);
-                    float localGreen = greenAtNonGreen(p, nativeValue);
+                    float localGreen = chromaGuideAt(p);
                     float jointWeight = spatialWeight *
                         chromaGuideWeight(localGreen, targetGreen);
                     int opponent = channel == 0 ? 1 : 2;
@@ -1120,6 +1201,52 @@ internal object GlesMgcRawSpatialShaders {
                 uvec3(round(clamp(rgb, vec3(0.0), vec3(1.0)) * 65535.0)),
                 65535u
             );
+        }
+    """.trimIndent()
+
+    /** Float variant used only for the direct CPU black-box boundary. */
+    val normalizeRgbFloat = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uColorAndRWeight;
+        uniform sampler2D uGbWeights;
+        uniform sampler2D uLensShading;
+        uniform ivec2 uAccumulatorSize;
+        uniform ivec2 uTargetOrigin;
+        uniform ivec2 uOutputOrigin;
+        uniform ivec2 uOutputSize;
+        uniform vec3 uCameraDomainScale;
+        uniform int uUseLensShading;
+        layout(location = 0) out highp vec4 oRgb16f;
+
+        void main() {
+            ivec2 local = ivec2(gl_FragCoord.xy) - uTargetOrigin;
+            if (any(lessThan(local, ivec2(0))) || any(greaterThanEqual(local, uAccumulatorSize))) {
+                oRgb16f = vec4(0.0, 0.0, 0.0, 1.0);
+                return;
+            }
+            vec4 colorAndR = texelFetch(uColorAndRWeight, local, 0);
+            vec2 gbWeights = texelFetch(uGbWeights, local, 0).rg;
+            vec3 semantic = colorAndR.rgb / max(
+                vec3(colorAndR.a, gbWeights.x, gbWeights.y),
+                vec3(1.0e-8)
+            );
+            vec3 rgb = vec3(
+                semantic.r + semantic.g,
+                semantic.r,
+                semantic.r + semantic.b
+            );
+            ivec2 outputPixel = local + uOutputOrigin;
+            if (uUseLensShading != 0) {
+                vec2 uv = (vec2(outputPixel) + vec2(0.5)) / vec2(uOutputSize);
+                vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
+                rgb *= vec3(shading.r, 0.5 * (shading.g + shading.b), shading.a);
+            }
+            vec3 normalized = clamp(rgb * uCameraDomainScale, vec3(0.0), vec3(1.0));
+            // Preserve the former RGBA16UI contract before storing the transient half-float.
+            normalized = round(normalized * 65535.0) / 65535.0;
+            oRgb16f = vec4(normalized, 1.0);
         }
     """.trimIndent()
 
@@ -2136,10 +2263,29 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         uniform sampler2D uFlow;
         uniform ivec2 uOutputSize;
-        out vec4 oAlignment;
+        uniform ivec2 uOutputOrigin;
+        uniform int uComponent;
+        out float oAlignment;
         void main() {
-            vec2 uv = gl_FragCoord.xy / vec2(uOutputSize);
-            oAlignment = vec4(texture(uFlow, uv).xy, 0.0, 0.0);
+            vec2 local = gl_FragCoord.xy - vec2(uOutputOrigin);
+            vec2 uv = local / vec2(uOutputSize);
+            oAlignment = texture(uFlow, uv)[uComponent];
+        }
+    """.trimIndent()
+
+    val strengthRejection = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uWeight;
+        uniform ivec2 uOutputSize;
+        uniform ivec2 uOutputOrigin;
+        uniform int uIdentityWeight;
+        out float oRejection;
+        void main() {
+            vec2 local = gl_FragCoord.xy - vec2(uOutputOrigin);
+            vec2 uv = local / vec2(uOutputSize);
+            oRejection = uIdentityWeight != 0 ? 1.0 : texture(uWeight, uv).r;
         }
     """.trimIndent()
 

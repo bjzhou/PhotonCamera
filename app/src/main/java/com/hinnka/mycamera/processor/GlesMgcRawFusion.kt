@@ -29,6 +29,7 @@ internal class GlesMgcRawFusion(
     outputScale: Float,
     private val useCurrentGlContext: Boolean,
     private val exportGpuLinearRgbSource: Boolean,
+    private val gpuLinearRgbStorage: GpuLinearRgbStorage,
 ) {
     private val outputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
 
@@ -127,6 +128,7 @@ internal class GlesMgcRawFusion(
             outputScale = outputScale,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
+            gpuLinearRgbStorage = gpuLinearRgbStorage,
         ).processFrames(scheduledFrames)
     }
 

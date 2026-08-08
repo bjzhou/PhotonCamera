@@ -23,16 +23,22 @@ enum class MgcSpatialOutputMode {
 }
 
 /**
- * Opaque LinearRaw texture exported by the stacker into the persistent RAW renderer context.
- * Storage is normalized RGBA16UI: RGB contains [0, 65535] linear camera values and A is 65535.
- * It may only be consumed or released on that context's GL dispatcher.
+ * Physical storage of an opaque LinearRaw texture. RGBA16F is used only for the direct Spatial
+ * default-denoise handoff; persistent render/DNG sources use RGBA16UI.
  */
+enum class GpuLinearRgbStorage {
+    RGBA16UI,
+    RGBA16F,
+}
+
+/** Opaque LinearRaw texture owned by the persistent RAW renderer context. */
 data class GpuLinearRgbSource(
     val textureId: Int,
     val width: Int,
     val height: Int,
     val samplesPerPixel: Int = 4,
     val stackCompletionTimeline: GpuStackCompletionTimeline? = null,
+    val storage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
 )
 
 /**
@@ -235,6 +241,7 @@ object MultiFrameStacker {
         applyLensShadingCorrection: Boolean = true,
         useCurrentGlContext: Boolean = false,
         exportGpuLinearRgbSource: Boolean = false,
+        gpuLinearRgbStorage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
         enableHdrFusion: Boolean = true,
     ): RawStackResult? {
         if (frames.isEmpty()) return null
@@ -279,6 +286,7 @@ object MultiFrameStacker {
             outputScale = effectiveOutputScale,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
+            gpuLinearRgbStorage = gpuLinearRgbStorage,
         ).processFrames(frames)
     }
 

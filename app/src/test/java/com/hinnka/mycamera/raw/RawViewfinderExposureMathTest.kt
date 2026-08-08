@@ -113,6 +113,13 @@ class RawViewfinderExposureMathTest {
             height = height,
             meteringSelection = selection,
         )
+        val fastMeteringError = RawViewfinderExposureMath.evaluateMeteringLog2Error(
+            reference = reference,
+            pixels = nextCandidatePixels,
+            width = width,
+            height = height,
+            meteringSelection = selection,
+        )
         val reselectedMatch = RawViewfinderExposureMath.evaluate(
             reference = reference,
             pixels = nextCandidatePixels,
@@ -123,6 +130,7 @@ class RawViewfinderExposureMathTest {
         assertNotNull(fixedSelectionMatch)
         assertEquals(selection.sampleCount, fixedSelectionMatch!!.meteringSampleCount)
         assertEquals(0f, fixedSelectionMatch.meteringLog2Error!!, 0.001f)
+        assertEquals(fixedSelectionMatch.meteringLog2Error, fastMeteringError)
         assertNotNull(reselectedMatch)
         assertTrue(reselectedMatch!!.meteringLog2Error!! < -1f)
     }

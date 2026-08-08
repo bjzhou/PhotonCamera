@@ -42,14 +42,14 @@ internal data class MgcSpatialRgbFlowBounds(
 /**
  * Output tiling and exact RAW upload bounds for MGC Spatial RGB normalized convolution.
  *
- * The RGB shader evaluates a 3x3 RAW neighborhood around each continuously warped output sample.
- * R/B observations also inspect same-color samples two pixels away while constructing their local
- * green opponent, so the complete RAW dependency radius is three pixels. Flow is stored in
+ * The RGB merge evaluates a 3x3 RAW neighborhood around each continuously warped output sample.
+ * Edge-directed green is produced by a preceding pass that reads the resident full RAW texture,
+ * so its two-pixel support does not enlarge this tile-local guide region. Flow is stored in
  * Bayer-quad units, hence the factor of two when mapping it into sensor pixels.
  */
 internal object MgcSpatialRgbTilePlanner {
     const val DEFAULT_OUTPUT_TILE_SIZE = 1024
-    private const val RAW_KERNEL_RADIUS = 3
+    private const val RAW_KERNEL_RADIUS = 1
 
     fun plan(
         outputWidth: Int,

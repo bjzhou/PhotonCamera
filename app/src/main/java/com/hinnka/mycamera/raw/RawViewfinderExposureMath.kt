@@ -241,6 +241,31 @@ internal object RawViewfinderExposureMath {
         )
     }
 
+    /**
+     * Evaluates only the fixed metering selection used by the iterative exposure solver. The
+     * full distribution/quantile result remains available through [evaluate] for diagnostics and
+     * tests, but rebuilding it for every solver candidate does not influence the selected EV.
+     */
+    fun evaluateMeteringLog2Error(
+        reference: Reference,
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        meteringSelection: MeteringSelection,
+    ): Float? {
+        if (width != reference.width ||
+            height != reference.height ||
+            pixels.size < width * height ||
+            reference.sampleCount < MIN_SAMPLE_COUNT
+        ) {
+            return null
+        }
+        return evaluateMetering(
+            pixels = pixels,
+            selection = meteringSelection,
+        )?.log2Error
+    }
+
     fun evaluate(
         reference: Reference,
         pixels: IntArray,
