@@ -369,6 +369,7 @@ class RawDemosaicProcessor {
         captureHeight: Int,
         rawMaxFrameCount: Int,
         rawMaxEnabled: Boolean,
+        rawMaxSpatialOutputMode: MgcSpatialOutputMode,
         rawMaxHdrCompositionEnabled: Boolean,
     ): Boolean =
         withContext(glDispatcher) {
@@ -415,7 +416,7 @@ class RawDemosaicProcessor {
                         lensShading = null,
                         lensShadingWidth = 0,
                         lensShadingHeight = 0,
-                        outputMode = MgcSpatialOutputMode.BAYER,
+                        outputMode = rawMaxSpatialOutputMode,
                         outputScale = 1f,
                         useCurrentGlContext = true,
                         exportGpuLinearRgbSource = true,
@@ -437,6 +438,7 @@ class RawDemosaicProcessor {
                 "RAW capture pipeline prewarmed ready=$ready engine=$colorEngine " +
                     "profileToneMap=$profileToneMapMode " +
                     "capture=${warmupWidth}x$warmupHeight rawMax=$rawMaxEnabled " +
+                    "rawMaxLayout=${rawMaxSpatialOutputMode.name} " +
                     "rawMaxHdr=$rawMaxHdrCompositionEnabled frames=$rawMaxFrameCount " +
                     "took=${System.currentTimeMillis() - start}ms",
             )

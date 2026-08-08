@@ -4,12 +4,14 @@ import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.utils.PLog
 
 /**
- * Entry point for the non-AI Spatial Bayer pipeline recovered from
+ * Entry point for the non-AI MGC Spatial RAW pipeline recovered from
  * MGC 9.6.080 V24's libgcastartup.
  *
  * MGC selects a non-ultrashort base frame before SpatialMergeProcessor::Run. Photon preserves that
  * contract using the capture roles: normal frames and valid long bracketed frames enter regular
  * SpatialMerge, while the single lowest-TET ultrashort frame enters Bento's clipped-highlight path.
+ * Output selection only changes the final RAW-domain reconstruction; frame admission, alignment,
+ * rejection and Bento remain shared MGC stages.
  */
 internal class GlesMgcRawFusion(
     private val width: Int,

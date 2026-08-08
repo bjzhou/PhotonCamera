@@ -2287,6 +2287,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             captureHeight = captureSize.height,
                             rawMaxFrameCount = rawMaxFrameCount,
                             rawMaxEnabled = rawMaxEnabled,
+                            rawMaxSpatialOutputMode = if (prefs.useRawMaxSpatialRgb) {
+                                MgcSpatialOutputMode.RGB
+                            } else {
+                                MgcSpatialOutputMode.BAYER
+                            },
                             rawMaxHdrCompositionEnabled = rawMaxHdrCompositionEnabled,
                         )
                     }.onFailure { error ->
