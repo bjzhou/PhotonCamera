@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.camera
 
 import kotlin.math.ln
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -12,8 +13,10 @@ internal data class MultiFrameLongExposurePlan(
     val targetExposureProduct: Double,
     val plannedExposureProduct: Double,
     val plannedDeltaEv: Double,
+    val exposureTimeUpperLimitNs: Long,
     val isoUpperLimited: Boolean,
     val shutterUpperLimited: Boolean,
+    val upperLimitsProduceLowerExposureThanBase: Boolean,
 )
 
 internal object MultiFrameExposurePlanner {
@@ -35,7 +38,10 @@ internal object MultiFrameExposurePlanner {
 
         val maximumLongExposureTimeNs = min(
             exposureTimeUpperNs,
-            MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS,
+            max(
+                MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS,
+                baseExposureTimeNs,
+            ),
         )
         require(maximumLongExposureTimeNs >= exposureTimeLowerNs) {
             "Sensor minimum exposure time exceeds the long-frame shutter limit"
@@ -62,9 +68,13 @@ internal object MultiFrameExposurePlanner {
             targetExposureProduct = targetExposureProduct,
             plannedExposureProduct = plannedExposureProduct,
             plannedDeltaEv = ln(plannedExposureProduct / baseExposureProduct) / LN_2,
+            exposureTimeUpperLimitNs = maximumLongExposureTimeNs,
             isoUpperLimited = sensitivityIso == isoUpper &&
                 plannedExposureProduct < targetExposureProduct,
             shutterUpperLimited = unboundedExposureTimeNs > maximumLongExposureTimeNs.toDouble(),
+            upperLimitsProduceLowerExposureThanBase = sensitivityIso == isoUpper &&
+                exposureTimeNs == maximumLongExposureTimeNs &&
+                plannedExposureProduct < baseExposureProduct,
         )
     }
 }

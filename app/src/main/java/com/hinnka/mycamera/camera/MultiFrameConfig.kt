@@ -21,6 +21,7 @@ object MultiFrameConfig {
     const val MIN_LONG_FRAME_COUNT = 1
     const val LONG_FRAME_EXPOSURE_EV = 2.5
     const val LONG_FRAME_MAX_EXPOSURE_TIME_NS = 10_000_000L
+    const val LONG_FRAME_FALLBACK_MAX_ANALOG_SENSITIVITY = 800
 
     fun normalizeFrameCount(frameCount: Int): Int {
         return frameCount.coerceIn(MIN_FRAME_COUNT, MAX_FRAME_COUNT)

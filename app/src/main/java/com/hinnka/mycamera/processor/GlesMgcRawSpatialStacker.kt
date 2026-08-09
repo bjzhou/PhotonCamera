@@ -208,6 +208,7 @@ internal class GlesMgcRawSpatialStacker(
         val reason: String,
         val clippedPixelRatio: Float,
         val largestInpaintingArea: Int,
+        val largestTilingArea: Int,
         val ultrashortClippingOverlap: Float,
     )
 
@@ -308,9 +309,13 @@ internal class GlesMgcRawSpatialStacker(
     private var rejectionPostprocessProgram = 0
     private var dilationProgram = 0
     private var linearKernelMaskProgram = 0
+    private var findBlockTilesGatherEdgesProgram = 0
+    private var findBlockTilesFilterIntermediateProgram = 0
+    private var findBlockTilesOutputProgram = 0
     private var bentoHighlightProgram = 0
     private var bentoAdjustProgram = 0
     private var bentoRewriteWeightProgram = 0
+    private var alignedRawClippingMaskProgram = 0
     private var mergeBayerProgram = 0
     private var mergeRgbProgram = 0
     private var normalizeBayerProgram = 0
@@ -412,8 +417,14 @@ internal class GlesMgcRawSpatialStacker(
             val hasBentoCandidate = frames.any { frame ->
                 frame.role == RawBurstFrameRole.HIGHLIGHT_SHORT
             }
+            val hasShadowLongFrame = frames.any { frame ->
+                frame.role == RawBurstFrameRole.SHADOW_LONG
+            }
             val programInitStartNs = System.nanoTime()
-            initPrograms(includeBentoAssessment = hasBentoCandidate)
+            initPrograms(
+                includeBentoAssessment = hasBentoCandidate,
+                includeReferenceHighlightMask = hasBentoCandidate || hasShadowLongFrame,
+            )
             val programInitMs = (System.nanoTime() - programInitStartNs) / 1_000_000L
             renderFbo = createFramebuffer()
             applyRawRenderState()
@@ -642,6 +653,7 @@ internal class GlesMgcRawSpatialStacker(
             var bentoFlowTexture = 0
             var bentoBayerAlignmentTexture = 0
             var bentoRgbCovarianceTexture = 0
+            var acceptedBentoExposureRatio: Float? = null
             val ultrashortIndex = if (referenceOnly) {
                 -1
             } else {
@@ -656,6 +668,23 @@ internal class GlesMgcRawSpatialStacker(
                     GLES30.GL_R8,
                     GLES30.GL_LINEAR,
                 )
+            }
+            val referenceHighlightMask = if (
+                !referenceOnly && (ultrashortIndex >= 0 || hasShadowLongFrame)
+            ) {
+                createTexture(
+                    guideWidth,
+                    guideHeight,
+                    GLES30.GL_R8,
+                    GLES30.GL_NEAREST,
+                ).also { output ->
+                    renderBentoHighlightMask(
+                        baseFrame = referenceGuide,
+                        outputMask = output,
+                    )
+                }
+            } else {
+                0
             }
             val bentoRaw = residentRgbRawTextures.getOrNull(ultrashortIndex)
                 ?: currentRaw
@@ -728,6 +757,13 @@ internal class GlesMgcRawSpatialStacker(
                         GLES30.GL_NEAREST,
                     )
                     renderBayerAlignment(alignment, bayerAlignment)
+                    val tilingMask = renderFindBlockTiles(
+                        baseRaw = referenceRaw,
+                        ultrashortRaw = bentoRaw,
+                        flowTexture = flow,
+                        baseCalibration = referenceCalibration,
+                        ultrashortCalibration = normalizedCalibration,
+                    )
 
                     val unscaledCalibration = calibrationForFrame(
                         ultrashortFrame,
@@ -751,12 +787,6 @@ internal class GlesMgcRawSpatialStacker(
                         guideTexture = unscaledGuide,
                         forceReferenceColorRgb = 0f,
                     )
-                    val baseHighlightMask = createTexture(
-                        guideWidth,
-                        guideHeight,
-                        GLES30.GL_R8,
-                        GLES30.GL_NEAREST,
-                    )
                     val inpaintingMask = createTexture(
                         guideWidth,
                         guideHeight,
@@ -769,14 +799,11 @@ internal class GlesMgcRawSpatialStacker(
                         GLES30.GL_R8,
                         GLES30.GL_NEAREST,
                     )
-                    renderBentoHighlightMask(
-                        baseFrame = referenceGuide,
-                        outputMask = baseHighlightMask,
-                    )
+                    check(referenceHighlightMask != 0)
                     renderBentoAdjustedMask(
                         baseFrame = referenceGuide,
                         ultrashortFrame = unscaledGuide,
-                        highlightMask = baseHighlightMask,
+                        highlightMask = referenceHighlightMask,
                         flowTexture = flow,
                         exposureRatio = exposureRatio,
                         adjustedMask = checkNotNull(bentoMask),
@@ -785,7 +812,7 @@ internal class GlesMgcRawSpatialStacker(
                     )
                     val assessment = assessBentoMasks(
                         baseHighlightMask = readR8Mask(
-                            baseHighlightMask,
+                            referenceHighlightMask,
                             "Bento base highlight mask",
                         ),
                         inpaintingMask = readR8Mask(
@@ -796,6 +823,12 @@ internal class GlesMgcRawSpatialStacker(
                             ultrashortClippingMask,
                             "Bento ultrashort clipping mask",
                         ),
+                        tilingMask = readR8Mask(
+                            texture = tilingMask,
+                            label = "Bento FindBlockTiles mask",
+                            maskWidth = bayerAlignmentWidth,
+                            maskHeight = bayerAlignmentHeight,
+                        ),
                     )
                     PLog.i(
                         TAG,
@@ -803,12 +836,13 @@ internal class GlesMgcRawSpatialStacker(
                             "reason=${assessment.reason} " +
                             "clippedRatio=${assessment.clippedPixelRatio} " +
                             "largestInpaintingArea=${assessment.largestInpaintingArea} " +
+                            "largestTilingArea=${assessment.largestTilingArea} " +
                             "ultrashortOverlap=${assessment.ultrashortClippingOverlap} " +
-                            "exposureRatio=$exposureRatio " +
-                            "tilingFallback=notEvaluated",
+                            "exposureRatio=$exposureRatio",
                     )
                     if (assessment.accepted) {
                         bentoAccepted = true
+                        acceptedBentoExposureRatio = exposureRatio
                         bentoCalibration = normalizedCalibration
                         bentoFlowTexture = flow
                         bentoBayerAlignmentTexture = bayerAlignment
@@ -837,6 +871,17 @@ internal class GlesMgcRawSpatialStacker(
                     }
                 }
             }
+
+            val outputExposure = MgcSpatialOutputExposure.forAcceptedUltrashort(
+                acceptedBentoExposureRatio,
+            )
+            PLog.i(
+                TAG,
+                "MGC Spatial output exposure normalizationScale=" +
+                    "${outputExposure.normalizationScale} " +
+                    "baselineExposureEv=${outputExposure.baselineExposureEv} " +
+                    "domain=${if (bentoAccepted) "ultrashort" else "reference"}",
+            )
 
             val temporalFrameRange = if (referenceOnly) {
                 IntRange.EMPTY
@@ -893,7 +938,7 @@ internal class GlesMgcRawSpatialStacker(
                 }
             }
 
-            if (bentoAccepted) initBentoMergePrograms()
+            if (bentoAccepted || hasShadowLongFrame) initBentoMergePrograms()
             val bentoBaseWeight = if (bentoAccepted) {
                 createTexture(
                     mergeWeightWidth,
@@ -1064,22 +1109,50 @@ internal class GlesMgcRawSpatialStacker(
                         currentCovariance = currentCovariance,
                         kernelTuning = bayerKernelTuning,
                     )
-                    val mergeWeight = when {
-                        identityTemporalWeights -> identityWeight
-                        bentoAccepted -> createTexture(
-                            mergeWeightWidth,
-                            mergeWeightHeight,
-                            GLES30.GL_R8,
-                            GLES30.GL_LINEAR,
-                        ).also { maskedWeight ->
+                    val mergeWeight = if (identityTemporalWeights) {
+                        identityWeight
+                    } else {
+                        val exclusionMasks = when (frame.role) {
+                            RawBurstFrameRole.SHADOW_LONG -> {
+                                check(referenceHighlightMask != 0) {
+                                    "Long-frame merge requires the reference highlight mask"
+                                }
+                                val alignedLongClippingMask =
+                                    renderAlignedLongFrameClippingMask(
+                                        rawTexture = temporalRaw,
+                                        flowTexture = prepared.flowTexture,
+                                    )
+                                PLog.d(
+                                    TAG,
+                                    "MGC long-frame highlight guard frame=$index " +
+                                        "referenceClipping=true sourceRawClipping=true " +
+                                        "threshold=$LONG_FRAME_RAW_CLIPPING_THRESHOLD",
+                                )
+                                intArrayOf(referenceHighlightMask, alignedLongClippingMask)
+                            }
+                            else -> if (bentoAccepted) {
+                                intArrayOf(checkNotNull(bentoMask))
+                            } else {
+                                IntArray(0)
+                            }
+                        }
+                        var maskedWeight = prepared.weightTexture
+                        exclusionMasks.forEach { exclusionMask ->
+                            val outputWeight = createTexture(
+                                mergeWeightWidth,
+                                mergeWeightHeight,
+                                GLES30.GL_R8,
+                                GLES30.GL_LINEAR,
+                            )
                             renderBentoRewrittenWeight(
-                                existingWeight = prepared.weightTexture,
-                                bentoMask = checkNotNull(bentoMask),
-                                outputWeight = maskedWeight,
+                                existingWeight = maskedWeight,
+                                bentoMask = exclusionMask,
+                                outputWeight = outputWeight,
                                 hasExistingWeight = true,
                             )
+                            maskedWeight = outputWeight
                         }
-                        else -> prepared.weightTexture
+                        maskedWeight
                     }
                     renderMerge(
                         rawTexture = temporalRaw,
@@ -1178,7 +1251,10 @@ internal class GlesMgcRawSpatialStacker(
                         "but Bayer/noise merge admitted $mergedFrames"
                 }
                 val rgbMergeStartNs = System.nanoTime()
-                val rgbOutput = renderRgbMerge(rgbMergeFrames)
+                val rgbOutput = renderRgbMerge(
+                    frames = rgbMergeFrames,
+                    outputExposureScale = outputExposure.normalizationScale,
+                )
                 cpuOutput = rgbOutput.cpuBuffer
                 exportedRgbTexture = rgbOutput.gpuTexture
                 lensShadingCorrectionApplied = hasLensShading()
@@ -1189,7 +1265,10 @@ internal class GlesMgcRawSpatialStacker(
                         "rawUploadsDuringTiles=0 flush=end-only",
                 )
             } else {
-                val bayer16 = renderBayer16(accumulatorColor)
+                val bayer16 = renderBayer16(
+                    accumulator = accumulatorColor,
+                    outputExposureScale = outputExposure.normalizationScale,
+                )
                 if (useCurrentGlContext && exportGpuLinearRgbSource) {
                     exportedBayerTexture = bayer16
                     check(textures.remove(bayer16)) {
@@ -1228,6 +1307,16 @@ internal class GlesMgcRawSpatialStacker(
             } else {
                 null
             }
+            val outputShotNoise = spatialNoiseModel?.outputShotNoise?.let { values ->
+                FloatArray(values.size) { channel ->
+                    values[channel] * outputExposure.shotNoiseScale
+                }
+            }
+            val outputReadNoise = spatialNoiseModel?.outputReadNoise?.let { values ->
+                FloatArray(values.size) { channel ->
+                    values[channel] * outputExposure.readNoiseVarianceScale
+                }
+            }
             if (MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE &&
                 !referenceOnly &&
                 mergedFrames > 1
@@ -1248,8 +1337,9 @@ internal class GlesMgcRawSpatialStacker(
                         "savannahRatio=${denoiseModel.diagnosticRatio} " +
                         "savannahTaps=[${denoiseModel.outerTap}," +
                         "${denoiseModel.centerTap},${denoiseModel.outerTap}] " +
-                        "read=${spatialNoiseModel.outputReadNoise.contentToString()} " +
-                        "shot=${spatialNoiseModel.outputShotNoise.contentToString()} " +
+                        "read=${outputReadNoise?.contentToString()} " +
+                        "shot=${outputShotNoise?.contentToString()} " +
+                        "outputExposureScale=${outputExposure.normalizationScale} " +
                         "strength=spatial-aot readback=atlas-pbo-deferred",
                 )
             }
@@ -1289,6 +1379,7 @@ internal class GlesMgcRawSpatialStacker(
                 },
                 inputRowStepSamples = outputWidth * if (rgbOutput) 3 else 1,
                 inputColStepSamples = if (rgbOutput) 3 else 1,
+                baselineExposureEv = outputExposure.baselineExposureEv,
                 gpuLinearRgbSource = exportedRgbTexture.takeIf { it != 0 }?.let { textureId ->
                     GpuLinearRgbSource(
                         textureId = textureId,
@@ -1310,8 +1401,8 @@ internal class GlesMgcRawSpatialStacker(
                 lensShadingCorrectionApplied = lensShadingCorrectionApplied,
                 mergedFrameCount = mergedFrames,
                 mgcDenoiseCorrelation = denoiseModel?.correlation,
-                mgcDenoiseReadNoise = spatialNoiseModel?.outputReadNoise,
-                mgcDenoiseShotNoise = spatialNoiseModel?.outputShotNoise,
+                mgcDenoiseReadNoise = outputReadNoise,
+                mgcDenoiseShotNoise = outputShotNoise,
                 mgcSpatialStrengthMap = spatialNoiseModel?.strengthMap?.let(
                     ::mapSpatialStrengthToOutputCoordinates,
                 ),
@@ -1336,7 +1427,10 @@ internal class GlesMgcRawSpatialStacker(
         }
     }
 
-    private fun initPrograms(includeBentoAssessment: Boolean) {
+    private fun initPrograms(
+        includeBentoAssessment: Boolean,
+        includeReferenceHighlightMask: Boolean = includeBentoAssessment,
+    ) {
         guideProgram = linkProgram(GlesMgcRawSpatialShaders.guide, "mgc_spatial_guide")
         if (outputMode == MgcSpatialOutputMode.RGB) {
             covarianceProgram = linkProgram(
@@ -1412,13 +1506,31 @@ internal class GlesMgcRawSpatialStacker(
             "mgc_rejection_dilation",
         )
         if (includeBentoAssessment) {
-            bentoHighlightProgram = linkProgram(
-                GlesMgcRawSpatialShaders.bentoGenerateHighlightMask,
-                "mgc_bento_highlight_mask",
+            findBlockTilesGatherEdgesProgram = linkProgram(
+                GlesMgcRawSpatialShaders.findBlockTilesGatherEdges,
+                "mgc_find_block_tiles_gather_edges",
+            )
+            findBlockTilesFilterIntermediateProgram = linkProgram(
+                GlesMgcRawSpatialShaders.findBlockTilesFilterIntermediate,
+                "mgc_find_block_tiles_filter_intermediate",
+            )
+            findBlockTilesOutputProgram = linkProgram(
+                GlesMgcRawSpatialShaders.findBlockTilesOutput,
+                "mgc_find_block_tiles_output",
             )
             bentoAdjustProgram = linkProgram(
                 GlesMgcRawSpatialShaders.bentoAdjustHighlightMask,
                 "mgc_bento_adjust_mask",
+            )
+        }
+        if (includeReferenceHighlightMask) {
+            bentoHighlightProgram = linkProgram(
+                GlesMgcRawSpatialShaders.bentoGenerateHighlightMask,
+                "mgc_bento_highlight_mask",
+            )
+            alignedRawClippingMaskProgram = linkProgram(
+                GlesMgcRawSpatialShaders.alignedRawClippingMask,
+                "mgc_aligned_raw_clipping_mask",
             )
         }
         mergeBayerProgram = linkProgram(
@@ -2800,6 +2912,118 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
+    /**
+     * GLES translation of FindBlockTiles' recovered three-stage contract:
+     * GatherEdges (RGBA16) -> FilterIntermediate (R8) -> Output (R8).
+     * The mask remains in the 16x16-RAW tile domain used by Bento's component-area gate.
+     */
+    private fun renderFindBlockTiles(
+        baseRaw: Int,
+        ultrashortRaw: Int,
+        flowTexture: Int,
+        baseCalibration: FrameCalibration,
+        ultrashortCalibration: FrameCalibration,
+    ): Int {
+        val gatheredEdges = createTexture(
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glUseProgram(findBlockTilesGatherEdgesProgram)
+        bindTexture(findBlockTilesGatherEdgesProgram, "uBaseRaw", 0, baseRaw)
+        bindTexture(findBlockTilesGatherEdgesProgram, "uAltRaw", 1, ultrashortRaw)
+        bindTexture(findBlockTilesGatherEdgesProgram, "uFlow", 2, flowTexture)
+        uniform2i(findBlockTilesGatherEdgesProgram, "uRawSize", width, height)
+        uniform2i(
+            findBlockTilesGatherEdgesProgram,
+            "uBayerSize",
+            rejectionWidth,
+            rejectionHeight,
+        )
+        uniform2i(
+            findBlockTilesGatherEdgesProgram,
+            "uTileGridSize",
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+        )
+        uniform1i(findBlockTilesGatherEdgesProgram, "uCfaPattern", cfaPattern)
+        uniform4fv(
+            findBlockTilesGatherEdgesProgram,
+            "uBasePhaseGains",
+            baseCalibration.bayerPhaseGains,
+        )
+        uniform4fv(
+            findBlockTilesGatherEdgesProgram,
+            "uBasePhaseBlackTerms",
+            baseCalibration.bayerPhaseBlackTerms,
+        )
+        uniform4fv(
+            findBlockTilesGatherEdgesProgram,
+            "uAltPhaseGains",
+            ultrashortCalibration.bayerPhaseGains,
+        )
+        uniform4fv(
+            findBlockTilesGatherEdgesProgram,
+            "uAltPhaseBlackTerms",
+            ultrashortCalibration.bayerPhaseBlackTerms,
+        )
+        draw(
+            findBlockTilesGatherEdgesProgram,
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+            intArrayOf(gatheredEdges),
+        )
+
+        val filtered = createTexture(
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+            GLES30.GL_R8,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glUseProgram(findBlockTilesFilterIntermediateProgram)
+        bindTexture(
+            findBlockTilesFilterIntermediateProgram,
+            "uGatheredEdges",
+            0,
+            gatheredEdges,
+        )
+        uniform2i(
+            findBlockTilesFilterIntermediateProgram,
+            "uSize",
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+        )
+        draw(
+            findBlockTilesFilterIntermediateProgram,
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+            intArrayOf(filtered),
+        )
+
+        val output = createTexture(
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+            GLES30.GL_R8,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glUseProgram(findBlockTilesOutputProgram)
+        bindTexture(findBlockTilesOutputProgram, "uFiltered", 0, filtered)
+        uniform2i(
+            findBlockTilesOutputProgram,
+            "uSize",
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+        )
+        draw(
+            findBlockTilesOutputProgram,
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+            intArrayOf(output),
+        )
+        return output
+    }
+
     private fun renderBentoHighlightMask(
         baseFrame: Int,
         outputMask: Int,
@@ -2818,6 +3042,54 @@ internal class GlesMgcRawSpatialStacker(
             guideHeight,
             intArrayOf(outputMask),
         )
+    }
+
+    private fun renderAlignedLongFrameClippingMask(
+        rawTexture: Int,
+        flowTexture: Int,
+    ): Int {
+        check(alignedRawClippingMaskProgram != 0) {
+            "Aligned RAW clipping-mask program is not initialized"
+        }
+        val output = createTexture(
+            mergeWeightWidth,
+            mergeWeightHeight,
+            GLES30.GL_R8,
+            GLES30.GL_NEAREST,
+        )
+        val phaseClippingLevels = FloatArray(4) { phase ->
+            val blackLevel = canonicalBlackLevel[canonicalChannelAtPhase(phase)]
+            blackLevel +
+                (sensorWhiteLevel - blackLevel) * LONG_FRAME_RAW_CLIPPING_THRESHOLD
+        }
+        GLES30.glUseProgram(alignedRawClippingMaskProgram)
+        bindTexture(alignedRawClippingMaskProgram, "uRaw", 0, rawTexture)
+        bindTexture(alignedRawClippingMaskProgram, "uFlow", 1, flowTexture)
+        uniform2i(alignedRawClippingMaskProgram, "uRawSize", width, height)
+        uniform2i(
+            alignedRawClippingMaskProgram,
+            "uBayerSize",
+            rejectionWidth,
+            rejectionHeight,
+        )
+        uniform2i(
+            alignedRawClippingMaskProgram,
+            "uOutputSize",
+            mergeWeightWidth,
+            mergeWeightHeight,
+        )
+        uniform4fv(
+            alignedRawClippingMaskProgram,
+            "uPhaseClippingLevels",
+            phaseClippingLevels,
+        )
+        draw(
+            alignedRawClippingMaskProgram,
+            mergeWeightWidth,
+            mergeWeightHeight,
+            intArrayOf(output),
+        )
+        return output
     }
 
     private fun renderBentoAdjustedMask(
@@ -3456,33 +3728,40 @@ internal class GlesMgcRawSpatialStacker(
         baseHighlightMask: ByteArray,
         inpaintingMask: ByteArray,
         ultrashortClippingMask: ByteArray,
+        tilingMask: ByteArray,
     ): BentoAssessment {
-        // This closes the three fallback predicates whose masks/equations are present as
-        // recoverable OpenCL in this APK. FindBlockTiles is a fourth, independent predicate; its
-        // three OpenCL program bodies are supplied as an opaque runtime payload, so it must not be
-        // replaced here with an invented edge detector.
-        val expectedSize = guideWidth * guideHeight
+        val guideMaskSize = guideWidth * guideHeight
         require(
-            baseHighlightMask.size == expectedSize &&
-                inpaintingMask.size == expectedSize &&
-                ultrashortClippingMask.size == expectedSize,
+            baseHighlightMask.size == guideMaskSize &&
+                inpaintingMask.size == guideMaskSize &&
+                ultrashortClippingMask.size == guideMaskSize,
         )
+        require(tilingMask.size == bayerAlignmentWidth * bayerAlignmentHeight)
         var clippedPixels = 0
         var clippedByUltrashortPixels = 0
-        for (index in 0 until expectedSize) {
+        for (index in 0 until guideMaskSize) {
             if ((baseHighlightMask[index].toInt() and 0xff) == 0) continue
             clippedPixels += 1
             if ((ultrashortClippingMask[index].toInt() and 0xff) != 0) {
                 clippedByUltrashortPixels += 1
             }
         }
-        val clippedRatio = clippedPixels.toFloat() / expectedSize.toFloat()
+        val clippedRatio = clippedPixels.toFloat() / guideMaskSize.toFloat()
         val ultrashortOverlap = if (clippedPixels > 0) {
             clippedByUltrashortPixels.toFloat() / clippedPixels.toFloat()
         } else {
             0f
         }
-        val largestInpaintingArea = largestEightConnectedComponentArea(inpaintingMask)
+        val largestInpaintingArea = BentoFallbackTopology.largestEightConnectedComponentArea(
+            inpaintingMask,
+            guideWidth,
+            guideHeight,
+        )
+        val largestTilingArea = BentoFallbackTopology.largestEightConnectedComponentArea(
+            tilingMask,
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+        )
         val reason = when {
             clippedRatio <= BENTO_MIN_CLIPPED_PIXEL_RATIO ->
                 "insufficient_clipped_pixels"
@@ -3490,6 +3769,8 @@ internal class GlesMgcRawSpatialStacker(
                 "large_hole_needing_inpainting"
             ultrashortOverlap > BENTO_MAX_ULTRASHORT_CLIPPING_OVERLAP ->
                 "high_ultrashort_clipping_overlap"
+            largestTilingArea > BENTO_MAX_TILING_COMPONENT_AREA ->
+                "tiling_artifacts"
             else -> "none"
         }
         return BentoAssessment(
@@ -3497,50 +3778,9 @@ internal class GlesMgcRawSpatialStacker(
             reason = reason,
             clippedPixelRatio = clippedRatio,
             largestInpaintingArea = largestInpaintingArea,
+            largestTilingArea = largestTilingArea,
             ultrashortClippingOverlap = ultrashortOverlap,
         )
-    }
-
-    /**
-     * Bento's two topology predicates call OpenCV connectedComponentsWithStats with
-     * connectivity=8 and CV_32S, then scan the AREA stat while excluding the background label.
-     */
-    private fun largestEightConnectedComponentArea(mask: ByteArray): Int {
-        val visited = ByteArray(mask.size)
-        val queue = IntArray(mask.size)
-        var largest = 0
-        for (start in mask.indices) {
-            if (visited[start].toInt() != 0 || (mask[start].toInt() and 0xff) == 0) continue
-            var head = 0
-            var tail = 0
-            queue[tail++] = start
-            visited[start] = 1
-            var area = 0
-            while (head < tail) {
-                val index = queue[head++]
-                area += 1
-                val x = index % guideWidth
-                val y = index / guideWidth
-                val minX = max(0, x - 1)
-                val maxX = kotlin.math.min(guideWidth - 1, x + 1)
-                val minY = max(0, y - 1)
-                val maxY = kotlin.math.min(guideHeight - 1, y + 1)
-                for (neighborY in minY..maxY) {
-                    for (neighborX in minX..maxX) {
-                        val neighbor = neighborY * guideWidth + neighborX
-                        if (
-                            visited[neighbor].toInt() == 0 &&
-                            (mask[neighbor].toInt() and 0xff) != 0
-                        ) {
-                            visited[neighbor] = 1
-                            queue[tail++] = neighbor
-                        }
-                    }
-                }
-            }
-            largest = max(largest, area)
-        }
-        return largest
     }
 
     private fun renderMerge(
@@ -3628,10 +3868,14 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun renderRgbMerge(frames: List<RgbMergeFrame>): RgbMergeOutput {
+    private fun renderRgbMerge(
+        frames: List<RgbMergeFrame>,
+        outputExposureScale: Float,
+    ): RgbMergeOutput {
         check(outputMode == MgcSpatialOutputMode.RGB)
         check(mergeRgbProgram != 0 && normalizeRgbProgram != 0)
         require(frames.isNotEmpty())
+        require(outputExposureScale.isFinite() && outputExposureScale > 0f)
         val tiles = MgcSpatialRgbTilePlanner.plan(outputWidth, outputHeight)
         val work = tiles.map { tile ->
             tile to frames.map { frame ->
@@ -3759,6 +4003,7 @@ internal class GlesMgcRawSpatialStacker(
                     outputCore = tile.outputCore,
                     target = target,
                     targetIsFullOutput = gpuOutput != 0,
+                    outputExposureScale = outputExposureScale,
                 )
                 if (cpuOutput != null) {
                     readRgbTile(
@@ -3948,6 +4193,7 @@ internal class GlesMgcRawSpatialStacker(
         outputCore: MgcSpatialRgbRect,
         target: Int,
         targetIsFullOutput: Boolean,
+        outputExposureScale: Float,
     ) {
         val targetLeft = if (targetIsFullOutput) outputCore.left else 0
         val targetTop = if (targetIsFullOutput) outputCore.top else 0
@@ -3978,6 +4224,11 @@ internal class GlesMgcRawSpatialStacker(
             cameraDomainScale[0],
             cameraDomainScale[1],
             cameraDomainScale[2],
+        )
+        uniform1f(
+            normalizeRgbProgram,
+            "uOutputExposureScale",
+            outputExposureScale,
         )
         uniform1i(normalizeRgbProgram, "uUseLensShading", if (hasLensShading()) 1 else 0)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
@@ -4131,7 +4382,11 @@ internal class GlesMgcRawSpatialStacker(
         filter = GLES30.GL_NEAREST,
     )
 
-    private fun renderBayer16(accumulator: Int): Int {
+    private fun renderBayer16(
+        accumulator: Int,
+        outputExposureScale: Float,
+    ): Int {
+        require(outputExposureScale.isFinite() && outputExposureScale > 0f)
         val bayer16 = createTexture(
             width,
             height,
@@ -4141,6 +4396,11 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glUseProgram(normalizeBayerProgram)
         bindTexture(normalizeBayerProgram, "uBayerAndWeight", 0, accumulator)
         uniform2i(normalizeBayerProgram, "uOutputSize", width, height)
+        uniform1f(
+            normalizeBayerProgram,
+            "uOutputExposureScale",
+            outputExposureScale,
+        )
         draw(normalizeBayerProgram, width, height, intArrayOf(bayer16))
         return bayer16
     }
@@ -4937,7 +5197,9 @@ internal class GlesMgcRawSpatialStacker(
         const val BENTO_MIN_RGB_FOR_INPAINTING = 128f
         const val BENTO_MIN_CLIPPED_PIXEL_RATIO = 0.00039f
         const val BENTO_MAX_INPAINTING_COMPONENT_AREA = 80
+        const val BENTO_MAX_TILING_COMPONENT_AREA = 5
         const val BENTO_MAX_ULTRASHORT_CLIPPING_OVERLAP = 0.62f
+        const val LONG_FRAME_RAW_CLIPPING_THRESHOLD = 250f / 255f
 
         // State block written by 0x3882c20 and consumed by guide/merge uniform helpers.
     }

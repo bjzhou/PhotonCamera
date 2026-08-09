@@ -43,4 +43,17 @@ class GlesMgcRawSpatialShadersTest {
         assertFalse(merge.contains("usampler2D uRawRegion"))
         assertFalse(merge.contains("canonicalChannel(mirrorRawPixel"))
     }
+
+    @Test
+    fun longFrameClippingGuardUsesAlignedUnnormalizedRawPhases() {
+        val clippingMask = GlesMgcRawSpatialShaders.alignedRawClippingMask
+
+        assertTrue(clippingMask.contains("uniform highp usampler2D uRaw;"))
+        assertTrue(clippingMask.contains("uniform sampler2D uFlow;"))
+        assertTrue(clippingMask.contains("for (int phase = 0; phase < 4; ++phase)"))
+        assertTrue(clippingMask.contains("rawValue >= uPhaseClippingLevels[phase]"))
+        assertTrue(clippingMask.contains("vec2 sourceFlow = texture(uFlow, flowUv).xy"))
+        assertFalse(clippingMask.contains("uGains"))
+        assertFalse(clippingMask.contains("uExposureRatio"))
+    }
 }

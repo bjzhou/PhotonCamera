@@ -830,6 +830,192 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
+    /**
+     * First FindBlockTiles pass. Each output texel represents one 16x16 RAW tile
+     * (8x8 Bayer quads); RGBA stores the phase-preserving alignment residual on
+     * the left, right, top, and bottom tile edges.
+     */
+    val findBlockTilesGatherEdges = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        precision highp usampler2D;
+
+        uniform usampler2D uBaseRaw;
+        uniform usampler2D uAltRaw;
+        uniform sampler2D uFlow;
+        uniform ivec2 uRawSize;
+        uniform ivec2 uBayerSize;
+        uniform ivec2 uTileGridSize;
+        uniform int uCfaPattern;
+        uniform vec4 uBasePhaseGains;
+        uniform vec4 uBasePhaseBlackTerms;
+        uniform vec4 uAltPhaseGains;
+        uniform vec4 uAltPhaseBlackTerms;
+
+        layout(location = 0) out vec4 oEdges;
+
+        const int TILE_SIZE = 8;
+        const float SIGNAL_FLOOR = 0.015625;
+        const float INTERIOR_REJECTION = 0.82;
+
+        float normalizedPhase(
+            usampler2D rawTexture,
+            ivec2 bayer,
+            int phase,
+            vec4 gains,
+            vec4 blackTerms
+        ) {
+            ivec2 raw = bayer * 2 + ivec2(phase & 1, phase >> 1);
+            raw = clamp(raw, ivec2(0), uRawSize - ivec2(1));
+            return clamp(float(texelFetch(rawTexture, raw, 0).r) * gains[phase] + blackTerms[phase], 0.0, 1.0);
+        }
+
+        float greenAt(
+            usampler2D rawTexture,
+            ivec2 bayer,
+            vec4 gains,
+            vec4 blackTerms
+        ) {
+            // RGGB/BGGR have their greens at phases 1/2; GRBG/GBRG at 0/3.
+            int phase0 = (uCfaPattern == 0 || uCfaPattern == 3) ? 1 : 0;
+            int phase1 = (uCfaPattern == 0 || uCfaPattern == 3) ? 2 : 3;
+            return 0.5 * (
+                normalizedPhase(rawTexture, bayer, phase0, gains, blackTerms) +
+                normalizedPhase(rawTexture, bayer, phase1, gains, blackTerms)
+            );
+        }
+
+        float alignedAltGreen(vec2 bayer) {
+            vec2 clamped = clamp(bayer, vec2(0.0), vec2(uBayerSize - ivec2(1)));
+            ivec2 p0 = ivec2(floor(clamped));
+            ivec2 p1 = min(p0 + ivec2(1), uBayerSize - ivec2(1));
+            vec2 f = fract(clamped);
+            float v00 = greenAt(uAltRaw, p0, uAltPhaseGains, uAltPhaseBlackTerms);
+            float v10 = greenAt(uAltRaw, ivec2(p1.x, p0.y), uAltPhaseGains, uAltPhaseBlackTerms);
+            float v01 = greenAt(uAltRaw, ivec2(p0.x, p1.y), uAltPhaseGains, uAltPhaseBlackTerms);
+            float v11 = greenAt(uAltRaw, p1, uAltPhaseGains, uAltPhaseBlackTerms);
+            return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+        }
+
+        void main() {
+            ivec2 tile = ivec2(gl_FragCoord.xy);
+            if (any(greaterThanEqual(tile, uTileGridSize))) {
+                oEdges = vec4(0.0);
+                return;
+            }
+
+            ivec2 tileOrigin = tile * TILE_SIZE;
+            vec4 edgeSum = vec4(0.0);
+            vec4 edgeCount = vec4(0.0);
+            float tileSum = 0.0;
+            float tileCount = 0.0;
+
+            for (int y = 0; y < TILE_SIZE; ++y) {
+                for (int x = 0; x < TILE_SIZE; ++x) {
+                    ivec2 bayer = tileOrigin + ivec2(x, y);
+                    if (any(greaterThanEqual(bayer, uBayerSize))) {
+                        continue;
+                    }
+
+                    vec2 flowUv = (vec2(bayer) + vec2(0.5)) / vec2(uBayerSize);
+                    vec2 flow = texture(uFlow, flowUv).xy * vec2(uBayerSize);
+                    float baseGreen = greenAt(uBaseRaw, bayer, uBasePhaseGains, uBasePhaseBlackTerms);
+                    float altGreen = alignedAltGreen(vec2(bayer) + flow);
+                    float signal = max(0.5 * (baseGreen + altGreen), SIGNAL_FLOOR);
+                    float residual = abs(baseGreen - altGreen) / sqrt(signal);
+
+                    tileSum += residual;
+                    tileCount += 1.0;
+                    if (x < 2) {
+                        edgeSum.x += residual;
+                        edgeCount.x += 1.0;
+                    }
+                    if (x >= TILE_SIZE - 2) {
+                        edgeSum.y += residual;
+                        edgeCount.y += 1.0;
+                    }
+                    if (y < 2) {
+                        edgeSum.z += residual;
+                        edgeCount.z += 1.0;
+                    }
+                    if (y >= TILE_SIZE - 2) {
+                        edgeSum.w += residual;
+                        edgeCount.w += 1.0;
+                    }
+                }
+            }
+
+            vec4 edgeMean = edgeSum / max(edgeCount, vec4(1.0));
+            float interiorMean = tileSum / max(tileCount, 1.0);
+            oEdges = clamp(edgeMean - vec4(INTERIOR_REJECTION * interiorMean), 0.0, 1.0);
+        }
+    """.trimIndent()
+
+    /** Pair the two observations of every shared tile edge and convert them to a soft mask. */
+    val findBlockTilesFilterIntermediate = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+
+        uniform sampler2D uGatheredEdges;
+        uniform ivec2 uSize;
+
+        layout(location = 0) out float oFiltered;
+
+        vec4 edgesAt(ivec2 p) {
+            return texelFetch(uGatheredEdges, clamp(p, ivec2(0), uSize - ivec2(1)), 0);
+        }
+
+        void main() {
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            if (any(greaterThanEqual(p, uSize))) {
+                oFiltered = 0.0;
+                return;
+            }
+
+            vec4 center = edgesAt(p);
+            float left = p.x > 0 ? min(center.x, edgesAt(p + ivec2(-1, 0)).y) : 0.0;
+            float right = p.x + 1 < uSize.x ? min(center.y, edgesAt(p + ivec2(1, 0)).x) : 0.0;
+            float top = p.y > 0 ? min(center.z, edgesAt(p + ivec2(0, -1)).w) : 0.0;
+            float bottom = p.y + 1 < uSize.y ? min(center.w, edgesAt(p + ivec2(0, 1)).z) : 0.0;
+            float pairedEdge = max(max(left, right), max(top, bottom));
+            oFiltered = smoothstep(0.020, 0.080, pairedEdge);
+        }
+    """.trimIndent()
+
+    /** Final binary tile mask. Isolated responses are removed before CPU component analysis. */
+    val findBlockTilesOutput = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+
+        uniform sampler2D uFiltered;
+        uniform ivec2 uSize;
+
+        layout(location = 0) out float oMask;
+
+        float valueAt(ivec2 p) {
+            if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, uSize))) {
+                return 0.0;
+            }
+            return texelFetch(uFiltered, p, 0).r;
+        }
+
+        void main() {
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            if (any(greaterThanEqual(p, uSize)) || p.x == 0 || p.y == 0 || p.x == uSize.x - 1 || p.y == uSize.y - 1) {
+                oMask = 0.0;
+                return;
+            }
+
+            float center = valueAt(p);
+            float axialSupport = valueAt(p + ivec2(-1, 0)) + valueAt(p + ivec2(1, 0)) +
+                valueAt(p + ivec2(0, -1)) + valueAt(p + ivec2(0, 1));
+            oMask = center >= 0.5 && center + axialSupport >= 1.5 ? 1.0 : 0.0;
+        }
+    """.trimIndent()
+
     // Embedded OpenCL source: Mask_GenerateHighlightMask.
     val bentoGenerateHighlightMask = """
         #version 300 es
@@ -1170,6 +1356,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform ivec2 uOutputOrigin;
         uniform ivec2 uOutputSize;
         uniform vec3 uCameraDomainScale;
+        uniform float uOutputExposureScale;
         uniform int uUseLensShading;
         layout(location = 0) out highp uvec4 oRgb16;
 
@@ -1196,7 +1383,7 @@ internal object GlesMgcRawSpatialShaders {
                 vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
                 rgb *= vec3(shading.r, 0.5 * (shading.g + shading.b), shading.a);
             }
-            rgb = max(rgb * uCameraDomainScale, vec3(0.0));
+            rgb = max(rgb * uCameraDomainScale * uOutputExposureScale, vec3(0.0));
             oRgb16 = uvec4(
                 uvec3(round(clamp(rgb, vec3(0.0), vec3(1.0)) * 65535.0)),
                 65535u
@@ -1217,6 +1404,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform ivec2 uOutputOrigin;
         uniform ivec2 uOutputSize;
         uniform vec3 uCameraDomainScale;
+        uniform float uOutputExposureScale;
         uniform int uUseLensShading;
         layout(location = 0) out highp vec4 oRgb16f;
 
@@ -1243,10 +1431,72 @@ internal object GlesMgcRawSpatialShaders {
                 vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
                 rgb *= vec3(shading.r, 0.5 * (shading.g + shading.b), shading.a);
             }
-            vec3 normalized = clamp(rgb * uCameraDomainScale, vec3(0.0), vec3(1.0));
+            vec3 normalized = clamp(
+                rgb * uCameraDomainScale * uOutputExposureScale,
+                vec3(0.0),
+                vec3(1.0)
+            );
             // Preserve the former RGBA16UI contract before storing the transient half-float.
             normalized = round(normalized * 65535.0) / 65535.0;
             oRgb16f = vec4(normalized, 1.0);
+        }
+    """.trimIndent()
+
+    /**
+     * Detect source-frame sensor clipping after transporting the long-frame RAW into reference
+     * coordinates. Detection stays in the unnormalized sensor domain so exposure scaling cannot
+     * make a clipped long-frame sample appear valid.
+     */
+    val alignedRawClippingMask = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        precision highp usampler2D;
+
+        uniform highp usampler2D uRaw;
+        uniform sampler2D uFlow;
+        uniform ivec2 uRawSize;
+        uniform ivec2 uBayerSize;
+        uniform ivec2 uOutputSize;
+        uniform vec4 uPhaseClippingLevels;
+
+        out float oClippingMask;
+
+        bool quadIsNearClipping(ivec2 quad) {
+            quad = clamp(quad, ivec2(0), uBayerSize - ivec2(1));
+            ivec2 rawOrigin = quad * 2;
+            for (int phase = 0; phase < 4; ++phase) {
+                ivec2 phaseOffset = ivec2(phase & 1, phase >> 1);
+                ivec2 rawPixel = min(rawOrigin + phaseOffset, uRawSize - ivec2(1));
+                float rawValue = float(texelFetch(uRaw, rawPixel, 0).r);
+                if (rawValue >= uPhaseClippingLevels[phase]) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void main() {
+            ivec2 outputPixel = ivec2(gl_FragCoord.xy);
+            if (any(greaterThanEqual(outputPixel, uOutputSize))) {
+                oClippingMask = 1.0;
+                return;
+            }
+
+            // One merge-weight texel covers 2x2 Bayer quads. Use its center in reference
+            // coordinates, then inspect the 3x3 source neighborhood consumed by MergeBayer.
+            ivec2 referenceQuad = min(outputPixel * 2 + ivec2(1), uBayerSize - ivec2(1));
+            vec2 flowUv = (vec2(referenceQuad) + vec2(0.5)) / vec2(uBayerSize);
+            vec2 sourceFlow = texture(uFlow, flowUv).xy * vec2(uBayerSize);
+            ivec2 sourceAnchor = ivec2(roundEven(vec2(referenceQuad) + sourceFlow));
+
+            bool clipped = false;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    clipped = clipped || quadIsNearClipping(sourceAnchor + ivec2(x, y));
+                }
+            }
+            oClippingMask = clipped ? 1.0 : 0.0;
         }
     """.trimIndent()
 
@@ -1513,6 +1763,7 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         uniform sampler2D uBayerAndWeight;
         uniform ivec2 uOutputSize;
+        uniform float uOutputExposureScale;
         layout(location = 0) out highp uint oBayer16;
         void main() {
             ivec2 p = clamp(
@@ -1521,7 +1772,9 @@ internal object GlesMgcRawSpatialShaders {
                 uOutputSize - ivec2(1)
             );
             vec2 valueAndWeight = texelFetch(uBayerAndWeight, p, 0).rg;
-            float normalized = valueAndWeight.x / max(valueAndWeight.y, 1.0e-8);
+            float normalized =
+                valueAndWeight.x / max(valueAndWeight.y, 1.0e-8) *
+                uOutputExposureScale;
             oBayer16 = uint(round(clamp(normalized, 0.0, 1.0) * 65535.0));
         }
     """.trimIndent()

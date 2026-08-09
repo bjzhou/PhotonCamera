@@ -6677,12 +6677,31 @@ class Camera2Controller(private val context: Context) {
             val manualBaseShutter = checkNotNull(baseShutter)
             val isoRange = state.getIsoRange()
             val shutterRange = state.getShutterSpeedRange()
+            val sensorCharacteristics = activeOutputPhysicalCameraId?.let { cameraId ->
+                getCameraCharacteristicsOrNull(cameraId, "multi-frame long exposure")
+            } ?: getActiveOpenCameraCharacteristics()
+            val reportedMaxAnalogIso = sensorCharacteristics
+                ?.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY)
+                ?.takeIf { it > 0 }
+            val longFrameIsoUpper = minOf(
+                isoRange.upper,
+                reportedMaxAnalogIso
+                    ?: MultiFrameConfig.LONG_FRAME_FALLBACK_MAX_ANALOG_SENSITIVITY,
+            )
+            if (longFrameIsoUpper < isoRange.lower) {
+                PLog.w(
+                    TAG,
+                    "Multi-frame long ISO limit ISO$longFrameIsoUpper is below the sensor " +
+                        "minimum ISO${isoRange.lower}; long slots will remain normal",
+                )
+                return false
+            }
             val plan = runCatching {
                 MultiFrameExposurePlanner.planLongExposure(
                     baseIso = manualBaseIso,
                     baseExposureTimeNs = manualBaseShutter,
                     isoLower = isoRange.lower,
-                    isoUpper = isoRange.upper,
+                    isoUpper = longFrameIsoUpper,
                     exposureTimeLowerNs = shutterRange.lower,
                     exposureTimeUpperNs = shutterRange.upper,
                 )
@@ -6690,6 +6709,16 @@ class Camera2Controller(private val context: Context) {
                 PLog.e(TAG, "Unable to plan bounded multi-frame long exposure", error)
             }.getOrNull()
             if (plan != null) {
+                if (plan.upperLimitsProduceLowerExposureThanBase) {
+                    PLog.w(
+                        TAG,
+                        "Multi-frame long exposure cannot reach the normal frame after both " +
+                            "limits: base=ISO$manualBaseIso/${manualBaseShutter}ns " +
+                            "bounded=ISO${plan.sensitivityIso}/${plan.exposureTimeNs}ns " +
+                            "maxAnalogIso=$longFrameIsoUpper; long slots will remain normal",
+                    )
+                    return false
+                }
                 builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                 builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
                 builder.set(CaptureRequest.SENSOR_SENSITIVITY, plan.sensitivityIso)
@@ -6700,7 +6729,9 @@ class Camera2Controller(private val context: Context) {
                         "long=ISO${plan.sensitivityIso}/${plan.exposureTimeNs}ns " +
                         "targetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
                         "plannedEv=${plan.plannedDeltaEv} isoUpperLimited=${plan.isoUpperLimited} " +
-                        "shutterUpperLimited=${plan.shutterUpperLimited}",
+                        "shutterUpperLimited=${plan.shutterUpperLimited} " +
+                        "maxAnalogIso=$longFrameIsoUpper " +
+                        "shutterUpperLimitNs=${plan.exposureTimeUpperLimitNs}",
                 )
                 return true
             }
@@ -6708,7 +6739,7 @@ class Camera2Controller(private val context: Context) {
         PLog.w(
             TAG,
             "Manual sensor exposure unavailable for bounded multi-frame long request; " +
-                "long slots will remain normal so the 10ms shutter contract is not violated",
+                "long slots will remain normal",
         )
         return false
     }
@@ -6905,7 +6936,8 @@ class Camera2Controller(private val context: Context) {
                             "longFrames=$scheduledLongFrameCount " +
                             "fallbackNormalFrames=${longFrameCount - scheduledLongFrameCount} " +
                             "longTargetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
-                            "longMaxShutterNs=${MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS} " +
+                            "longNominalMaxShutterNs=" +
+                            "${MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS} " +
                             "total=${radianceRequests.size}",
                     )
                     radianceRequests

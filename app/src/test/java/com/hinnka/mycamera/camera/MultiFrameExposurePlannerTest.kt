@@ -41,4 +41,42 @@ class MultiFrameExposurePlannerTest {
         assertTrue(plan.isoUpperLimited)
         assertTrue(plan.shutterUpperLimited)
     }
+
+    @Test
+    fun normalFrameSlowerThanOneHundredthBecomesTheShutterLimit() {
+        val plan = MultiFrameExposurePlanner.planLongExposure(
+            baseIso = 400,
+            baseExposureTimeNs = 20_000_000L,
+            isoLower = 50,
+            isoUpper = 800,
+            exposureTimeLowerNs = 100_000L,
+            exposureTimeUpperNs = 1_000_000_000L,
+        )
+
+        assertEquals(20_000_000L, plan.exposureTimeUpperLimitNs)
+        assertEquals(20_000_000L, plan.exposureTimeNs)
+        assertEquals(800, plan.sensitivityIso)
+        assertEquals(1.0, plan.plannedDeltaEv, 1e-6)
+        assertFalse(plan.upperLimitsProduceLowerExposureThanBase)
+    }
+
+    @Test
+    fun exhaustedAnalogIsoAndShutterLimitsCanFallBelowTheNormalFrame() {
+        val plan = MultiFrameExposurePlanner.planLongExposure(
+            baseIso = 1600,
+            baseExposureTimeNs = 20_000_000L,
+            isoLower = 50,
+            isoUpper = 800,
+            exposureTimeLowerNs = 100_000L,
+            exposureTimeUpperNs = 1_000_000_000L,
+        )
+
+        val baseExposureProduct = 1600.0 * 20_000_000.0
+        assertEquals(plan.exposureTimeUpperLimitNs, plan.exposureTimeNs)
+        assertEquals(800, plan.sensitivityIso)
+        assertTrue(plan.plannedExposureProduct < baseExposureProduct)
+        assertTrue(plan.isoUpperLimited)
+        assertTrue(plan.shutterUpperLimited)
+        assertTrue(plan.upperLimitsProduceLowerExposureThanBase)
+    }
 }
