@@ -797,7 +797,6 @@
     <string name="import_to_category">匯入至分類</string>
     <string name="import_success">成功匯入 %d 個項目</string>
     <string name="settings_default_focal_length">預設焦段</string>
-    <string name="settings_raw_nlm_noise_factor">降噪</string>
     <string name="settings_raw_exposure_compensation">曝光補償</string>
     <string name="settings_raw_highlights_adjustment">高光</string>
     <string name="settings_raw_shadows_adjustment">陰影</string>

@@ -134,7 +134,7 @@ class RawNoiseModelTest {
         )
 
         val resolved = RawNoiseModelResolver.resolve(
-            calibratedProfile = null,
+            selection = RawNoiseProfileSelection.Camera2,
             sensitivity = 8000,
             perFrameCamera2Profile = perFrame,
             baseFrameCamera2Model = base,
@@ -157,7 +157,7 @@ class RawNoiseModelTest {
         )
 
         val resolved = RawNoiseModelResolver.resolve(
-            calibratedProfile = null,
+            selection = RawNoiseProfileSelection.Camera2,
             sensitivity = 8000,
             perFrameCamera2Profile = null,
             baseFrameCamera2Model = base,
@@ -171,7 +171,7 @@ class RawNoiseModelTest {
     @Test
     fun defaultResolverDoesNotInventNoiseWhenCamera2ProfilesAreUnavailable() {
         val resolved = RawNoiseModelResolver.resolve(
-            calibratedProfile = null,
+            selection = RawNoiseProfileSelection.Camera2,
             sensitivity = 8000,
             perFrameCamera2Profile = null,
             baseFrameCamera2Model = RawNoiseModel.EMPTY,
@@ -180,6 +180,26 @@ class RawNoiseModelTest {
         assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)
         assertArrayEquals(FloatArray(4), resolved.model.shotNoise, 0f)
         assertArrayEquals(FloatArray(4), resolved.model.readNoise, 0f)
+    }
+
+    @Test
+    fun calibratedSelectionNeverFallsBackToCamera2() {
+        val camera2 = floatArrayOf(
+            1f, 10f,
+            2f, 20f,
+            3f, 30f,
+            4f, 40f,
+        )
+        val resolved = RawNoiseModelResolver.resolve(
+            selection = RawNoiseProfileSelection.Calibrated(
+                CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
+            ),
+            sensitivity = 0,
+            perFrameCamera2Profile = camera2,
+            baseFrameCamera2Model = RawNoiseModel.fromCamera2NoiseProfile(camera2),
+        )
+
+        assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)
     }
 
     @Test

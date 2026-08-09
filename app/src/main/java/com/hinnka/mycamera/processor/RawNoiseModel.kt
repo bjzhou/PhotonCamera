@@ -26,6 +26,15 @@ class RawNoiseModel private constructor(
     fun normalizedReadNoiseForShader(cfaPattern: Int = 0): FloatArray =
         canonicalChannels(readNoise, cfaPattern)
 
+    fun canonicalChannelPairs(cfaPattern: Int = 0): FloatArray {
+        val shot = normalizedShotNoiseForShader(cfaPattern)
+        val read = normalizedReadNoiseForShader(cfaPattern)
+        return FloatArray(CHANNEL_COUNT * 2) { index ->
+            val channel = index / 2
+            if (index % 2 == 0) shot[channel] else read[channel]
+        }
+    }
+
     private fun canonicalChannels(values: FloatArray, cfaPattern: Int): FloatArray {
         if (!cfaPhaseOrdered) return values.copyOf()
         val phaseToCanonical = when (cfaPattern.mod(4)) {
@@ -184,16 +193,22 @@ internal data class ResolvedRawNoiseModel(
 /** Selection order after the caller has resolved its default calibrated profile policy. */
 internal object RawNoiseModelResolver {
     fun resolve(
-        calibratedProfile: CalibratedRawNoiseProfile?,
+        selection: RawNoiseProfileSelection,
         sensitivity: Int,
         perFrameCamera2Profile: FloatArray?,
         baseFrameCamera2Model: RawNoiseModel,
     ): ResolvedRawNoiseModel {
-        calibratedProfile
-            ?.evaluate(sensitivity)
-            ?.let { model ->
+        when (selection) {
+            is RawNoiseProfileSelection.Calibrated -> {
+                val model = selection.profile.evaluate(sensitivity)
+                    ?: return ResolvedRawNoiseModel(
+                        RawNoiseModel.EMPTY,
+                        RawNoiseModelSource.UNAVAILABLE,
+                    )
                 return ResolvedRawNoiseModel(model, RawNoiseModelSource.GCAM_CALIBRATED)
             }
+            RawNoiseProfileSelection.Camera2 -> Unit
+        }
         perFrameCamera2Profile
             ?.let(RawNoiseModel::fromCamera2NoiseProfile)
             ?.takeIf { it.hasValidCamera2Profile }

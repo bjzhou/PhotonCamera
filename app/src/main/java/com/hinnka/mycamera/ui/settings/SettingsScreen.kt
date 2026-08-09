@@ -344,6 +344,8 @@ fun SettingsScreen(
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
+    val rawNoiseProfileId by viewModel.rawNoiseProfileId.collectAsState()
+    val rawNoiseProfileIdsByLens by viewModel.rawNoiseProfileIdsByLens.collectAsState()
     val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
@@ -368,6 +370,7 @@ fun SettingsScreen(
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
     val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val availableDcps = viewModel.availableDcps
+    val availableRawNoiseProfiles = viewModel.availableRawNoiseProfiles
     val availableLuts = viewModel.availableLutList
     val availableFrames = viewModel.availableFrameList
     val previewThumbnail = viewModel.previewThumbnail
@@ -597,6 +600,49 @@ fun SettingsScreen(
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                     }
+                }
+            }
+        }
+    }
+
+    val importRawNoiseProfileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.importRawNoiseProfiles(uris) { importedProfiles, failedCount ->
+                fun profileName(profile: com.hinnka.mycamera.raw.RawNoiseProfileInfo): String =
+                    profile.nameResId?.let(context::getString) ?: profile.getName()
+                when {
+                    importedProfiles.size == 1 && failedCount == 0 -> android.widget.Toast.makeText(
+                        context,
+                        context.getString(
+                            R.string.raw_noise_profile_import_success,
+                            profileName(importedProfiles.first()),
+                        ),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                    importedProfiles.isNotEmpty() && failedCount == 0 -> android.widget.Toast.makeText(
+                        context,
+                        context.getString(
+                            R.string.raw_noise_profile_import_success_count,
+                            importedProfiles.size,
+                        ),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                    importedProfiles.isNotEmpty() -> android.widget.Toast.makeText(
+                        context,
+                        context.getString(
+                            R.string.raw_noise_profile_import_partial,
+                            importedProfiles.size,
+                            failedCount,
+                        ),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                    else -> android.widget.Toast.makeText(
+                        context,
+                        R.string.raw_noise_profile_import_failed,
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
                 }
             }
         }
@@ -1851,6 +1897,27 @@ fun SettingsScreen(
                         onSelectHncsProfile = viewModel::setRawHncsProfileId,
                         hncsFilmCurveMode = rawHncsFilmCurveMode,
                         onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
+                        selectedRawNoiseProfileId = rawNoiseProfileId,
+                        rawNoiseProfileIdsByLens = rawNoiseProfileIdsByLens,
+                        availableRawNoiseProfiles = availableRawNoiseProfiles,
+                        onSelectRawNoiseProfile = viewModel::setRawNoiseProfileId,
+                        onRawNoiseProfileIdsByLensChange = viewModel::setRawNoiseProfileIdsByLens,
+                        onImportRawNoiseProfile = {
+                            importRawNoiseProfileLauncher.launch("*/*")
+                        },
+                        onDeleteRawNoiseProfile = { profile ->
+                            viewModel.deleteRawNoiseProfile(profile.id) { success ->
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (success) {
+                                        R.string.raw_noise_profile_delete_success
+                                    } else {
+                                        R.string.raw_noise_profile_delete_failed
+                                    },
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
                         contentMode = RawEditPanelContentMode.FULL
                     )
 

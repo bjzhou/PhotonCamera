@@ -39,8 +39,7 @@ import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MultiFrameStacker
-import com.hinnka.mycamera.processor.RawNoiseModel
-import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
+import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.processor.RawStackBufferLayout
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrame
@@ -199,6 +198,18 @@ object GalleryManager {
             }
     }
 
+    private suspend fun resolveRawNoiseProfileId(
+        context: Context,
+        metadata: MediaMetadata?,
+    ): String {
+        val preferences = ContentRepository.getInstance(context)
+            .userPreferencesRepository
+            .userPreferences
+            .firstOrNull()
+        return preferences?.rawNoiseProfileIdForLens(metadata?.cameraId)
+            ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID
+    }
+
     private suspend fun resolveRawAutoExposure(
         context: Context,
         metadata: MediaMetadata?
@@ -246,7 +257,7 @@ object GalleryManager {
         val dngFile = File(photoDir, DNG_FILE)
         val tempDngFile = File(photoDir, "temp_mgc.dng")
         val rawSharpening = RawSharpeningDefaults.CAPTURE_DEFAULT
-        val rawNoiseReduction = preferences?.rawNlmNoiseFactor ?: 0f
+        val rawNoiseReduction = preferences?.noiseReduction ?: 0f
         val rawChromaNoiseReduction = 0f
 
         try {
@@ -2227,6 +2238,7 @@ object GalleryManager {
                 denoiseValue = rawNoiseReduction,
                 chromaDenoiseValue = rawChromaNoiseReduction,
                 rawDcpId = updatedMetadata.rawDcpId,
+                rawNoiseProfileId = resolveRawNoiseProfileId(context, updatedMetadata),
                 rawHncsProfileId = updatedMetadata.rawHncsProfileId,
                 rawHncsRenderIntent = updatedMetadata.rawHncsRenderIntent,
                 rawHncsFilmCurveMode = updatedMetadata.rawHncsFilmCurveMode,
@@ -2925,7 +2937,6 @@ object GalleryManager {
         rawStackFrames: List<RawStackFrame> = emptyList(),
         rawMaxHdrFusionEnabled: Boolean = true,
         rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
-        calibratedNoiseProfile: CalibratedRawNoiseProfile? = null,
     ) = withContext(Dispatchers.IO) {
         var stackProcessor: RawDemosaicProcessor? = null
         var gpuSourceToRelease: GpuLinearRgbSource? = null
@@ -2948,6 +2959,9 @@ object GalleryManager {
             val firstImageWidth = images[0].width
             val firstImageHeight = images[0].height
 
+            val noiseProfileSelection = ContentRepository.getInstance(context)
+                .rawNoiseProfileManager
+                .resolveSelection(resolveRawNoiseProfileId(context, metadata))
             val rawMetadata = RawMetadata.create(
                 firstImageWidth,
                 firstImageHeight,
@@ -2955,7 +2969,7 @@ object GalleryManager {
                 captureResult,
                 exposureBias,
                 RawDemosaicProcessor.getInstance().getRawColorSpace()
-            )
+            ).withNoiseProfileSelection(noiseProfileSelection)
             val stackBlackLevel = RawProcessor.resolveBlackLevelForMode(
                 defaultBlackLevel = rawMetadata.blackLevel,
                 blackLevelMode = metadata.rawBlackLevelMode,
@@ -3026,8 +3040,7 @@ object GalleryManager {
                     masterBlackLevel = stackBlackLevel,
                     whiteLevel = stackWhiteLevel,
                     whiteBalanceGains = rawMetadata.whiteBalanceGains,
-                    rawNoiseModel = RawNoiseModel.fromCamera2NoiseProfile(rawMetadata.channelNoiseProfile),
-                    calibratedNoiseProfile = calibratedNoiseProfile,
+                    noiseProfileSelection = noiseProfileSelection,
                     lensShading = rawMetadata.lensShadingMap,
                     lensShadingWidth = rawMetadata.lensShadingMapWidth,
                     lensShadingHeight = rawMetadata.lensShadingMapHeight,
@@ -3260,6 +3273,7 @@ object GalleryManager {
                     denoiseValue = rawNoiseReduction,
                     chromaDenoiseValue = rawChromaNoiseReduction,
                     rawDcpId = updatedMetadata.rawDcpId,
+                    rawNoiseProfileId = resolveRawNoiseProfileId(context, updatedMetadata),
                     rawHncsProfileId = updatedMetadata.rawHncsProfileId,
                     rawHncsRenderIntent = updatedMetadata.rawHncsRenderIntent,
                     rawHncsFilmCurveMode = updatedMetadata.rawHncsFilmCurveMode,
@@ -3341,6 +3355,7 @@ object GalleryManager {
                         denoiseValue = rawNoiseReduction,
                         chromaDenoiseValue = rawChromaNoiseReduction,
                         rawDcpId = updatedMetadata.rawDcpId,
+                        rawNoiseProfileId = resolveRawNoiseProfileId(context, updatedMetadata),
                         rawHncsProfileId = updatedMetadata.rawHncsProfileId,
                         rawHncsRenderIntent = updatedMetadata.rawHncsRenderIntent,
                         rawHncsFilmCurveMode = updatedMetadata.rawHncsFilmCurveMode,
@@ -3598,6 +3613,7 @@ object GalleryManager {
             denoiseValue = rawNoiseReduction,
             chromaDenoiseValue = rawChromaNoiseReduction,
             rawDcpId = updatedMetadata.rawDcpId,
+            rawNoiseProfileId = resolveRawNoiseProfileId(context, updatedMetadata),
             rawHncsProfileId = updatedMetadata.rawHncsProfileId,
             rawHncsRenderIntent = updatedMetadata.rawHncsRenderIntent,
             rawHncsFilmCurveMode = updatedMetadata.rawHncsFilmCurveMode,
@@ -3915,7 +3931,6 @@ object GalleryManager {
         rawStackFrames: List<RawStackFrame> = emptyList(),
         rawMaxHdrFusionEnabled: Boolean = true,
         rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
-        calibratedNoiseProfile: CalibratedRawNoiseProfile? = null,
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -3961,7 +3976,6 @@ object GalleryManager {
                     rawStackFrames,
                     rawMaxHdrFusionEnabled,
                     rawMaxSpatialOutputMode,
-                    calibratedNoiseProfile,
                 )
             }
 
@@ -4034,6 +4048,7 @@ object GalleryManager {
                         metadata,
                     ),
                     rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+                    rawNoiseProfileId = resolveRawNoiseProfileId(context, metadata),
                 )
             }
         } else {
@@ -4982,6 +4997,7 @@ object GalleryManager {
                             denoiseValue = rawNoiseReduction,
                             chromaDenoiseValue = rawChromaNoiseReduction,
                             rawDcpId = updatedMetadata.rawDcpId,
+                            rawNoiseProfileId = resolveRawNoiseProfileId(context, updatedMetadata),
                             rawHncsProfileId = updatedMetadata.rawHncsProfileId,
                             rawHncsRenderIntent = updatedMetadata.rawHncsRenderIntent,
                             rawHncsFilmCurveMode = updatedMetadata.rawHncsFilmCurveMode,
@@ -5151,6 +5167,7 @@ object GalleryManager {
                     denoiseValue = rawNoiseReduction,
                     chromaDenoiseValue = rawChromaNoiseReduction,
                     rawDcpId = updatedMetadata?.rawDcpId,
+                    rawNoiseProfileId = resolveRawNoiseProfileId(context, updatedMetadata),
                     rawHncsProfileId = updatedMetadata?.rawHncsProfileId,
                     rawHncsRenderIntent = updatedMetadata?.rawHncsRenderIntent
                         ?: MediaMetadata().rawHncsRenderIntent,

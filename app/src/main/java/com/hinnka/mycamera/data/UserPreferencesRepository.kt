@@ -28,6 +28,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawProfile
@@ -124,12 +125,13 @@ data class UserPreferences(
     val phantomBaselineLutId: String? = null,
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
+    val rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
+    val rawNoiseProfileIdsByLens: Map<String, String> = emptyMap(),
     val rawHncsProfileId: String? = null,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
-    val rawNlmNoiseFactor: Float = 0f,
     val rawExposureCompensation: Float = 0f,
     val rawAutoExposure: Boolean = true,
     val rawHighlightsAdjustment: Float = 0f,
@@ -278,6 +280,12 @@ data class UserPreferences(
         val normalizedLensId = lensId?.takeIf { it.isNotBlank() } ?: return false
         return rawDcpIdsByLens.containsKey(normalizedLensId)
     }
+
+    fun rawNoiseProfileIdForLens(lensId: String?): String {
+        val normalizedLensId = lensId?.takeIf { it.isNotBlank() }
+            ?: return rawNoiseProfileId
+        return rawNoiseProfileIdsByLens[normalizedLensId] ?: rawNoiseProfileId
+    }
 }
 
 data class PreferenceUpdateValue<T>(val value: T)
@@ -327,6 +335,9 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_BASELINE_LUT_CONFIGURED_KEY = booleanPreferencesKey("raw_baseline_lut_configured")
         private val RAW_DCP_ID_KEY = stringPreferencesKey("raw_dcp_id")
         private val RAW_DCP_IDS_BY_LENS_KEY = stringPreferencesKey("raw_dcp_ids_by_lens")
+        private val RAW_NOISE_PROFILE_ID_KEY = stringPreferencesKey("raw_noise_profile_id")
+        private val RAW_NOISE_PROFILE_IDS_BY_LENS_KEY =
+            stringPreferencesKey("raw_noise_profile_ids_by_lens")
         private val RAW_HNCS_PROFILE_ID_KEY = stringPreferencesKey("raw_hncs_profile_id")
         private val RAW_HNCS_RENDER_INTENT_KEY = stringPreferencesKey("raw_hncs_render_intent")
         private val RAW_HNCS_FILM_CURVE_MODE_KEY = stringPreferencesKey("raw_hncs_film_curve_mode")
@@ -340,7 +351,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val LEGACY_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_google_pixel_tone_map")
         private val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
         private val RAW_PHOTON_PGTM_TONE_MAP_KEY = booleanPreferencesKey("raw_photon_pgtm_tone_map")
-        private val RAW_NLM_NOISE_FACTOR_KEY = floatPreferencesKey("raw_nlm_noise_factor")
         private val RAW_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_exposure_compensation")
         private val RAW_AUTO_EXPOSURE_KEY = booleanPreferencesKey("raw_auto_exposure")
         private val RAW_AUTO_EXPOSURE_MODE_KEY = stringPreferencesKey("raw_auto_exposure_mode")
@@ -538,6 +548,20 @@ class UserPreferencesRepository(private val context: Context) {
                 rawBaselineLutConfigured = rawBaselineLutConfigured,
                 rawDcpId = preferences[RAW_DCP_ID_KEY],
                 rawDcpIdsByLens = parseNullableStringMap(preferences[RAW_DCP_IDS_BY_LENS_KEY]),
+                rawNoiseProfileId = preferences[RAW_NOISE_PROFILE_ID_KEY]
+                    ?.takeIf { it.isNotBlank() }
+                    ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID,
+                rawNoiseProfileIdsByLens = parseNullableStringMap(
+                    preferences[RAW_NOISE_PROFILE_IDS_BY_LENS_KEY],
+                ).mapNotNull { (lensId, profileId) ->
+                    val normalizedLensId = lensId.takeIf { it.isNotBlank() }
+                    val normalizedProfileId = profileId?.takeIf { it.isNotBlank() }
+                    if (normalizedLensId != null && normalizedProfileId != null) {
+                        normalizedLensId to normalizedProfileId
+                    } else {
+                        null
+                    }
+                }.toMap(),
                 rawHncsProfileId = preferences[RAW_HNCS_PROFILE_ID_KEY],
                 rawHncsRenderIntent = HncsRenderIntent.Standard,
                 rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
@@ -560,7 +584,6 @@ class UserPreferencesRepository(private val context: Context) {
                         (preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] ?: false) ||
                             (preferences[LEGACY_PROFILE_TONE_MAP_KEY] ?: false)
                 ).normalized(),
-                rawNlmNoiseFactor = preferences[RAW_NLM_NOISE_FACTOR_KEY] ?: 0f,
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
                 rawAutoExposure = resolveStoredRawAutoExposure(
                     mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
@@ -1054,6 +1077,50 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveRawNoiseProfileId(profileId: String) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_NOISE_PROFILE_ID_KEY] = profileId.takeIf { it.isNotBlank() }
+                ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID
+        }
+    }
+
+    suspend fun saveRawNoiseProfileIdsByLens(profileIdsByLens: Map<String, String>) {
+        context.dataStore.edit { preferences ->
+            val normalized = profileIdsByLens.mapNotNull { (lensId, profileId) ->
+                val validLensId = lensId.takeIf { it.isNotBlank() }
+                val validProfileId = profileId.takeIf { it.isNotBlank() }
+                if (validLensId != null && validProfileId != null) {
+                    validLensId to validProfileId
+                } else {
+                    null
+                }
+            }.toMap(java.util.TreeMap())
+            if (normalized.isEmpty()) {
+                preferences.remove(RAW_NOISE_PROFILE_IDS_BY_LENS_KEY)
+            } else {
+                preferences[RAW_NOISE_PROFILE_IDS_BY_LENS_KEY] =
+                    serializeNullableStringMap(normalized)
+            }
+        }
+    }
+
+    suspend fun removeRawNoiseProfileReferences(profileId: String) {
+        context.dataStore.edit { preferences ->
+            if (preferences[RAW_NOISE_PROFILE_ID_KEY] == profileId) {
+                preferences[RAW_NOISE_PROFILE_ID_KEY] = RawNoiseProfileManager.DEFAULT_PROFILE_ID
+            }
+            val overrides = parseNullableStringMap(
+                preferences[RAW_NOISE_PROFILE_IDS_BY_LENS_KEY],
+            ).filterValues { it != profileId }
+            if (overrides.isEmpty()) {
+                preferences.remove(RAW_NOISE_PROFILE_IDS_BY_LENS_KEY)
+            } else {
+                preferences[RAW_NOISE_PROFILE_IDS_BY_LENS_KEY] =
+                    serializeNullableStringMap(overrides)
+            }
+        }
+    }
+
     suspend fun saveRawHncsProfileId(profileId: String?) {
         context.dataStore.edit { preferences ->
             if (profileId.isNullOrBlank()) {
@@ -1088,12 +1155,6 @@ class UserPreferencesRepository(private val context: Context) {
             } else {
                 preferences[RAW_DCP_IDS_BY_LENS_KEY] = serializeNullableStringMap(rawDcpIdsByLens)
             }
-        }
-    }
-
-    suspend fun saveRawNlmNoiseFactor(value: Float) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_NLM_NOISE_FACTOR_KEY] = value
         }
     }
 

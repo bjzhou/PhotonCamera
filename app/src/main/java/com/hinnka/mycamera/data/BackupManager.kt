@@ -29,10 +29,12 @@ object BackupManager {
         "custom_luts.json",
         "custom_frames.json",
         "custom_dcps.json",
+        "custom_raw_noise_profiles.json",
         "category_overrides.json",
         "custom_luts",
         "custom_frames",
         "custom_dcps",
+        "custom_raw_noise_profiles",
         "custom_fonts",
         "custom_logos"
     )

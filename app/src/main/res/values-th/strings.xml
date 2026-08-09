@@ -652,7 +652,6 @@
     <string name="import_to_category">นำเข้าสู่หมวดหมู่</string>
     <string name="import_success">นำเข้ารายการสำเร็จ %d รายการ</string>
     <string name="settings_default_focal_length">ระยะโฟกัสเริ่มต้น</string>
-    <string name="settings_raw_nlm_noise_factor">ลดเสียงรบกวน</string>
     <string name="settings_raw_exposure_compensation">การชดเชยแสง</string>
     <string name="settings_spectral_film">การจำลองฟิล์มสเปกตรัม</string>
     <string name="settings_spectral_film_description">จำลองการตอบสนองของสีและลักษณะทางกายภาพของฟิล์มและสื่อสิ่งพิมพ์คลาสสิก</string>

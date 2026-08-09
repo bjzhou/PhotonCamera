@@ -38,6 +38,8 @@ import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.raw.RawNoiseProfileInfo
+import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -134,6 +136,13 @@ fun RawEditPanel(
     onSelectHncsProfile: (String?) -> Unit = {},
     hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
+    selectedRawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
+    rawNoiseProfileIdsByLens: Map<String, String> = emptyMap(),
+    availableRawNoiseProfiles: List<RawNoiseProfileInfo> = emptyList(),
+    onSelectRawNoiseProfile: (String) -> Unit = {},
+    onRawNoiseProfileIdsByLensChange: ((Map<String, String>) -> Unit)? = null,
+    onImportRawNoiseProfile: (() -> Unit)? = null,
+    onDeleteRawNoiseProfile: ((RawNoiseProfileInfo) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var rawMaxOutputScaleDraft by remember {
@@ -247,6 +256,20 @@ fun RawEditPanel(
                 params = rawToneMappingParameters.normalized(),
                 onParamsChange = onRawToneMappingParametersChange,
                 onAdjustmentEnd = onAdjustmentEnd
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        if (contentMode == RawEditPanelContentMode.FULL && availableRawNoiseProfiles.isNotEmpty()) {
+            RawNoiseProfileSelector(
+                selectedProfileId = selectedRawNoiseProfileId,
+                profileIdsByLens = rawNoiseProfileIdsByLens,
+                lensOptions = dcpLensOptions,
+                availableProfiles = availableRawNoiseProfiles,
+                onSelectProfile = onSelectRawNoiseProfile,
+                onProfileIdsByLensChange = onRawNoiseProfileIdsByLensChange,
+                onImportProfile = onImportRawNoiseProfile,
+                onDeleteProfile = onDeleteRawNoiseProfile,
             )
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -1330,6 +1353,272 @@ fun RawDcpSelector(
             }
         )
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RawNoiseProfileSelector(
+    selectedProfileId: String,
+    profileIdsByLens: Map<String, String> = emptyMap(),
+    lensOptions: List<RawDcpLensOption> = emptyList(),
+    availableProfiles: List<RawNoiseProfileInfo>,
+    onSelectProfile: (String) -> Unit,
+    onProfileIdsByLensChange: ((Map<String, String>) -> Unit)? = null,
+    onImportProfile: (() -> Unit)? = null,
+    onDeleteProfile: ((RawNoiseProfileInfo) -> Unit)? = null,
+) {
+    var showSheet by remember { mutableStateOf(false) }
+    var pendingDeleteProfile by remember { mutableStateOf<RawNoiseProfileInfo?>(null) }
+    var selectingUnifiedProfile by remember { mutableStateOf(false) }
+    var selectingLensId by remember { mutableStateOf<String?>(null) }
+    val supportsLensConfiguration = lensOptions.isNotEmpty() && onProfileIdsByLensChange != null
+    val unifiedName = rawNoiseProfileDisplayName(selectedProfileId, availableProfiles)
+    val scopeName = when {
+        supportsLensConfiguration && profileIdsByLens.isNotEmpty() -> stringResource(
+            R.string.raw_noise_profile_summary_with_overrides,
+            profileIdsByLens.size,
+        )
+        supportsLensConfiguration -> stringResource(R.string.raw_dcp_scope_all_lenses)
+        else -> null
+    }
+
+    fun setLensProfile(lensId: String, profileId: String) {
+        onProfileIdsByLensChange?.invoke(
+            profileIdsByLens.toMutableMap().apply { put(lensId, profileId) }.toMap(),
+        )
+    }
+
+    fun clearLensProfile(lensId: String) {
+        onProfileIdsByLensChange?.invoke(
+            profileIdsByLens.toMutableMap().apply { remove(lensId) }.toMap(),
+        )
+    }
+
+    fun closePicker() {
+        selectingUnifiedProfile = false
+        selectingLensId = null
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showSheet = true }
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.raw_noise_profile_title),
+                color = Color.White,
+                fontSize = 16.sp,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = unifiedName,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            scopeName?.let { scope ->
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = scope,
+                    color = Color.White.copy(alpha = 0.45f),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Icon(
+            imageVector = AppIcons.ChevronRight,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.6f),
+        )
+    }
+
+    if (showSheet) {
+        val selectedLens = lensOptions.firstOrNull { it.id == selectingLensId }
+        val isSelectingTarget = selectingUnifiedProfile || selectedLens != null
+        ModalBottomSheet(
+            onDismissRequest = { showSheet = false },
+            containerColor = Color(0xFF1E1E1E),
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) },
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        if (isSelectingTarget) {
+                            IconButton(onClick = { closePicker() }, modifier = Modifier.size(40.dp)) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.back),
+                                    tint = Color.White.copy(alpha = 0.8f),
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                        Text(
+                            text = when {
+                                selectingUnifiedProfile -> stringResource(
+                                    R.string.raw_noise_profile_unified_title,
+                                )
+                                selectedLens != null -> selectedLens.label
+                                else -> stringResource(R.string.raw_noise_profile_title)
+                            },
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (!isSelectingTarget && onImportProfile != null) {
+                        TextButton(
+                            onClick = {
+                                showSheet = false
+                                onImportProfile()
+                            },
+                        ) {
+                            Text(
+                                text = stringResource(R.string.raw_noise_profile_import),
+                                color = Color(0xFFFF6B35),
+                                fontSize = 14.sp,
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                androidx.compose.foundation.lazy.LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (supportsLensConfiguration && !isSelectingTarget) {
+                        item {
+                            DcpTargetItem(
+                                name = stringResource(R.string.raw_noise_profile_unified_title),
+                                description = unifiedName,
+                                onClick = { selectingUnifiedProfile = true },
+                            )
+                        }
+                        items(lensOptions.size, key = { lensOptions[it].id }) { index ->
+                            val lens = lensOptions[index]
+                            val overrideId = profileIdsByLens[lens.id]
+                            DcpTargetItem(
+                                name = lens.label,
+                                description = if (overrideId != null) {
+                                    stringResource(
+                                        R.string.raw_noise_profile_lens_override_value,
+                                        rawNoiseProfileDisplayName(overrideId, availableProfiles),
+                                    )
+                                } else {
+                                    stringResource(
+                                        R.string.raw_noise_profile_lens_uses_unified,
+                                        unifiedName,
+                                    )
+                                },
+                                isSelected = overrideId != null,
+                                onClick = { selectingLensId = lens.id },
+                            )
+                        }
+                    } else {
+                        val targetLens = selectedLens
+                        if (targetLens != null) {
+                            item {
+                                DcpItem(
+                                    name = stringResource(
+                                        R.string.raw_noise_profile_use_unified,
+                                        unifiedName,
+                                    ),
+                                    isSelected = !profileIdsByLens.containsKey(targetLens.id),
+                                    onClick = {
+                                        clearLensProfile(targetLens.id)
+                                        closePicker()
+                                    },
+                                )
+                            }
+                        }
+                        val currentId = targetLens?.let { profileIdsByLens[it.id] }
+                            ?: selectedProfileId
+                        items(availableProfiles.size, key = { availableProfiles[it].id }) { index ->
+                            val profile = availableProfiles[index]
+                            DcpItem(
+                                name = rawNoiseProfileDisplayName(profile.id, availableProfiles),
+                                isSelected = currentId == profile.id,
+                                onClick = {
+                                    if (targetLens != null) {
+                                        setLensProfile(targetLens.id, profile.id)
+                                        closePicker()
+                                    } else {
+                                        onSelectProfile(profile.id)
+                                        if (supportsLensConfiguration) closePicker() else showSheet = false
+                                    }
+                                },
+                                isCustom = !profile.isBuiltIn && onDeleteProfile != null,
+                                onDelete = if (!profile.isBuiltIn && onDeleteProfile != null) {
+                                    { pendingDeleteProfile = profile }
+                                } else {
+                                    null
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pendingDeleteProfile?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteProfile = null },
+            title = { Text(stringResource(R.string.delete_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.delete_raw_noise_profile_confirm_message,
+                        rawNoiseProfileDisplayName(profile.id, availableProfiles),
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteProfile?.invoke(profile)
+                        pendingDeleteProfile = null
+                    },
+                ) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteProfile = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun rawNoiseProfileDisplayName(
+    profileId: String,
+    availableProfiles: List<RawNoiseProfileInfo>,
+): String {
+    val profile = availableProfiles.firstOrNull { it.id == profileId }
+    return profile?.nameResId?.let { stringResource(it) }
+        ?: profile?.getName()
+        ?: stringResource(R.string.raw_noise_profile_pixel3)
 }
 
 @Composable

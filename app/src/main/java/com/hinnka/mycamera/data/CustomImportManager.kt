@@ -12,6 +12,8 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.RawNoiseProfileInfo
+import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,11 +38,14 @@ class CustomImportManager(private val context: Context) {
         // 自定义边框目录
         private const val CUSTOM_FRAME_DIR = "custom_frames"
         private const val CUSTOM_DCP_DIR = "custom_dcps"
+        private const val CUSTOM_RAW_NOISE_PROFILE_DIR = "custom_raw_noise_profiles"
 
         // 配置文件
         private const val CUSTOM_LUT_CONFIG = "custom_luts.json"
         private const val CUSTOM_FRAME_CONFIG = "custom_frames.json"
         private const val CUSTOM_DCP_CONFIG = "custom_dcps.json"
+        private const val CUSTOM_RAW_NOISE_PROFILE_CONFIG = "custom_raw_noise_profiles.json"
+        private const val MAX_RAW_NOISE_PROFILE_CHARS = 1024 * 1024
         private const val CATEGORY_OVERRIDES_CONFIG = "category_overrides.json"
         private const val FAVORITE_OVERRIDES_CONFIG = "favorite_overrides.json"
         private const val BUILT_IN_LUT_CATEGORY_INITIALIZED_CONFIG = "built_in_lut_categories_initialized.json"
@@ -199,6 +204,9 @@ class CustomImportManager(private val context: Context) {
 
     private val customDcpDir: File
         get() = File(context.filesDir, CUSTOM_DCP_DIR).apply { mkdirs() }
+
+    private val customRawNoiseProfileDir: File
+        get() = File(context.filesDir, CUSTOM_RAW_NOISE_PROFILE_DIR).apply { mkdirs() }
 
     private val customFontDir: File
         get() = File(context.filesDir, CUSTOM_FONT_DIR).apply { mkdirs() }
@@ -454,6 +462,44 @@ class CustomImportManager(private val context: Context) {
             dcpId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import DCP", e)
+            null
+        }
+    }
+
+    fun importRawNoiseProfile(uri: Uri, displayName: String? = null): String? {
+        var profileFile: File? = null
+        return try {
+            val fileName = getFileName(uri) ?: return null
+            if (!fileName.endsWith(".c", ignoreCase = true)) return null
+            val source = openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+                val text = StringBuilder()
+                val chunk = CharArray(8192)
+                while (true) {
+                    val count = reader.read(chunk)
+                    if (count < 0) break
+                    require(text.length + count <= MAX_RAW_NOISE_PROFILE_CHARS) {
+                        "RAW noise profile exceeds the import size limit"
+                    }
+                    text.append(chunk, 0, count)
+                }
+                text.toString()
+            } ?: return null
+            val profileId = "custom_raw_noise_${UUID.randomUUID()}"
+            CalibratedRawNoiseProfile.parseGcamC(profileId, source)
+
+            val normalizedFileName = "$profileId.c"
+            val destination = File(customRawNoiseProfileDir, normalizedFileName)
+            profileFile = destination
+            FileOutputStream(destination).bufferedWriter(Charsets.UTF_8).use { writer ->
+                writer.write(source)
+            }
+            val name = displayName ?: fileName.substringBeforeLast('.')
+            saveRawNoiseProfileToConfig(profileId, name, normalizedFileName)
+            PLog.d(TAG, "RAW noise profile imported successfully: $profileId ($name)")
+            profileId
+        } catch (e: Exception) {
+            profileFile?.delete()
+            PLog.e(TAG, "Failed to import RAW noise profile", e)
             null
         }
     }
@@ -737,6 +783,40 @@ class CustomImportManager(private val context: Context) {
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to load custom DCPs", e)
+            emptyList()
+        }
+    }
+
+    fun getCustomRawNoiseProfiles(): List<RawNoiseProfileInfo> {
+        return try {
+            val configFile = File(context.filesDir, CUSTOM_RAW_NOISE_PROFILE_CONFIG)
+            if (!configFile.exists()) return emptyList()
+            val jsonArray = JSONArray(configFile.readText())
+            buildList {
+                for (index in 0 until jsonArray.length()) {
+                    val profileObject = jsonArray.getJSONObject(index)
+                    val id = profileObject.getString("id")
+                    val fileName = profileObject.getString("fileName")
+                    val file = File(customRawNoiseProfileDir, fileName)
+                    if (!file.exists()) continue
+                    val nameObject = profileObject.getJSONObject("name")
+                    val nameMap = buildMap {
+                        nameObject.keys().forEach { language ->
+                            put(language, nameObject.getString(language))
+                        }
+                    }
+                    add(
+                        RawNoiseProfileInfo(
+                            id = id,
+                            nameMap = nameMap,
+                            filePath = file.absolutePath,
+                            isBuiltIn = false,
+                        ),
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load custom RAW noise profiles", e)
             emptyList()
         }
     }
@@ -1037,6 +1117,31 @@ class CustomImportManager(private val context: Context) {
         }
     }
 
+    fun deleteCustomRawNoiseProfile(profileId: String): Boolean {
+        return try {
+            val configFile = File(context.filesDir, CUSTOM_RAW_NOISE_PROFILE_CONFIG)
+            if (!configFile.exists()) return false
+            val jsonArray = JSONArray(configFile.readText())
+            val updated = JSONArray()
+            var fileName: String? = null
+            for (index in 0 until jsonArray.length()) {
+                val item = jsonArray.getJSONObject(index)
+                if (item.getString("id") == profileId) {
+                    fileName = item.getString("fileName")
+                } else {
+                    updated.put(item)
+                }
+            }
+            val resolvedFileName = fileName ?: return false
+            configFile.writeText(updated.toString())
+            File(customRawNoiseProfileDir, resolvedFileName).delete()
+            true
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to delete custom RAW noise profile", e)
+            false
+        }
+    }
+
     /**
      * 保存 LUT 到配置文件
      */
@@ -1077,6 +1182,22 @@ class CustomImportManager(private val context: Context) {
                 })
                 put("fileName", fileName)
             }
+        )
+        configFile.writeText(jsonArray.toString())
+    }
+
+    private fun saveRawNoiseProfileToConfig(profileId: String, name: String, fileName: String) {
+        val configFile = File(context.filesDir, CUSTOM_RAW_NOISE_PROFILE_CONFIG)
+        val jsonArray = if (configFile.exists()) JSONArray(configFile.readText()) else JSONArray()
+        jsonArray.put(
+            JSONObject().apply {
+                put("id", profileId)
+                put("name", JSONObject().apply {
+                    put("en", name)
+                    put("zh", name)
+                })
+                put("fileName", fileName)
+            },
         )
         configFile.writeText(jsonArray.toString())
     }

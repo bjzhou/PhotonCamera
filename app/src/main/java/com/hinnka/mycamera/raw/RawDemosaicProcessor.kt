@@ -35,6 +35,8 @@ import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.RawNoiseModel
+import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
+import com.hinnka.mycamera.processor.RawNoiseProfileSelection
 import com.hinnka.mycamera.processor.RawStackResult
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
@@ -419,7 +421,9 @@ class RawDemosaicProcessor {
                         blackLevel = FloatArray(4),
                         whiteLevel = 1023,
                         whiteBalanceGains = FloatArray(4) { 1f },
-                        rawNoiseModel = RawNoiseModel.EMPTY,
+                        noiseProfileSelection = RawNoiseProfileSelection.Calibrated(
+                            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
+                        ),
                         lensShading = null,
                         lensShadingWidth = 0,
                         lensShadingHeight = 0,
@@ -1875,6 +1879,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
@@ -1916,6 +1921,7 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawNoiseProfileId = rawNoiseProfileId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
                 rawHncsFilmCurveMode = rawHncsFilmCurveMode,
@@ -1960,6 +1966,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
@@ -2000,6 +2007,7 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawNoiseProfileId = rawNoiseProfileId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
                 rawHncsFilmCurveMode = rawHncsFilmCurveMode,
@@ -2032,6 +2040,7 @@ class RawDemosaicProcessor {
         rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
     ): RawDngCaptureProfileResult? = withContext(glDispatcher) {
         var preparedResult: RawDngCaptureProfileResult? = null
         try {
@@ -2055,6 +2064,7 @@ class RawDemosaicProcessor {
                 rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawDcpId = null,
+                rawNoiseProfileId = rawNoiseProfileId,
                 dcpRenderPlan = input.meteringRenderPlan,
                 spectralFilmStock = null,
                 spectralFilmPrint = null,
@@ -2096,6 +2106,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
@@ -2137,6 +2148,7 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawNoiseProfileId = rawNoiseProfileId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
                 rawHncsFilmCurveMode = rawHncsFilmCurveMode,
@@ -2194,6 +2206,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
@@ -2279,6 +2292,7 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawNoiseProfileId = rawNoiseProfileId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
                 rawHncsFilmCurveMode = rawHncsFilmCurveMode,
@@ -2331,6 +2345,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
@@ -2474,6 +2489,12 @@ class RawDemosaicProcessor {
             }
             onMetadata?.invoke(actualMetadata)
         }
+
+        actualMetadata = actualMetadata?.withNoiseProfileSelection(
+            ContentRepository.getInstance(context.applicationContext)
+                .rawNoiseProfileManager
+                .resolveSelection(rawNoiseProfileId),
+        )
 
         if ((actualRawData == null && borrowedGpuSource == null) || actualMetadata == null) {
             PLog.e(TAG, "Missing source data or metadata")

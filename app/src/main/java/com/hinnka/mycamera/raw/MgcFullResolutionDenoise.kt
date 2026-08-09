@@ -220,6 +220,11 @@ internal object MgcFullResolutionDenoise {
                     RawNoiseModel.fromCamera2NoiseProfile(metadata.channelNoiseProfile)
                 RawNoiseProfileLayout.DNG_RGB ->
                     RawNoiseModel.fromDngNoiseProfile(metadata.channelNoiseProfile)
+                RawNoiseProfileLayout.CANONICAL_BAYER ->
+                    RawNoiseModel.fromCanonicalBayerChannels(
+                        shotNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2] },
+                        readNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2 + 1] },
+                    )
                 RawNoiseProfileLayout.NONE -> RawNoiseModel.EMPTY
             }
             val shot = rawNoise.normalizedShotNoiseForShader(metadata.cfaPattern)

@@ -52,6 +52,7 @@ internal object RawViewfinderExposureMatcher {
         rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
     ): RawDngCaptureProfileResult? {
         val testImageCache = ExposureMatchTestImageCache.create(context)
         val reference = capturePreviewThumbnail?.let { bitmap ->
@@ -90,6 +91,7 @@ internal object RawViewfinderExposureMatcher {
             rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
             applyLensShadingCorrection = applyLensShadingCorrection,
             rawBlackBorderCrop = rawBlackBorderCrop,
+            rawNoiseProfileId = rawNoiseProfileId,
         )
     }
 

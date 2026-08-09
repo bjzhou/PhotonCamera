@@ -10,6 +10,8 @@ import android.util.Log
 import android.util.Rational
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.processor.RawNoiseModel
+import com.hinnka.mycamera.processor.RawNoiseProfileSelection
 import kotlin.collections.contentToString
 
 enum class RawNoiseProfileLayout {
@@ -18,6 +20,8 @@ enum class RawNoiseProfileLayout {
     CAMERA2_CFA,
     /** Three (S, O) pairs in canonical R, G, B order; native readers may append a zero pair. */
     DNG_RGB,
+    /** Four (S, O) pairs in canonical R, Gr, Gb, B order. */
+    CANONICAL_BAYER,
 }
 
 /**
@@ -134,6 +138,23 @@ data class RawMetadata(
     val rotation: Int? = null,
     val profileGainTableMap: DngProfileGainTableMap? = null
 ) {
+    fun withNoiseProfileSelection(selection: RawNoiseProfileSelection): RawMetadata {
+        if (selection == RawNoiseProfileSelection.Camera2) return this
+        val calibrated = selection as RawNoiseProfileSelection.Calibrated
+        val model = calibrated.profile.evaluate(iso)
+        return if (model != null) {
+            copy(
+                channelNoiseProfile = model.canonicalChannelPairs(),
+                noiseProfileLayout = RawNoiseProfileLayout.CANONICAL_BAYER,
+            )
+        } else {
+            copy(
+                channelNoiseProfile = FloatArray(0),
+                noiseProfileLayout = RawNoiseProfileLayout.NONE,
+            )
+        }
+    }
+
     companion object {
         private const val TAG = "RawMetadata"
 
@@ -414,6 +435,18 @@ data class RawMetadata(
             if (layout == RawNoiseProfileLayout.DNG_RGB) {
                 return pairAt(1) ?: floatArrayOf(0f, 0f)
             }
+            if (layout == RawNoiseProfileLayout.CANONICAL_BAYER) {
+                val firstGreen = pairAt(1)
+                val secondGreen = pairAt(2)
+                return if (firstGreen != null && secondGreen != null) {
+                    floatArrayOf(
+                        (firstGreen[0] + secondGreen[0]) * 0.5f,
+                        (firstGreen[1] + secondGreen[1]) * 0.5f,
+                    )
+                } else {
+                    firstGreen ?: secondGreen ?: floatArrayOf(0f, 0f)
+                }
+            }
             if (layout != RawNoiseProfileLayout.CAMERA2_CFA) return floatArrayOf(0f, 0f)
 
             val basePattern = cfaPattern.mod(4)
@@ -455,6 +488,8 @@ data class RawMetadata(
 
             val (red, blue) = if (layout == RawNoiseProfileLayout.DNG_RGB) {
                 pairAt(0) to pairAt(2)
+            } else if (layout == RawNoiseProfileLayout.CANONICAL_BAYER) {
+                pairAt(0) to pairAt(3)
             } else if (layout == RawNoiseProfileLayout.CAMERA2_CFA) {
                 val indices = when (cfaPattern.mod(4)) {
                     CFA_GRBG -> 1 to 2
@@ -998,6 +1033,7 @@ data class RawMetadata(
         if (maxAnalogSensitivity != other.maxAnalogSensitivity) return false
         if (shutterSpeed != other.shutterSpeed) return false
         if (frameCount != other.frameCount) return false
+        if (!channelNoiseProfile.contentEquals(other.channelNoiseProfile)) return false
         if (noiseProfileLayout != other.noiseProfileLayout) return false
         if (mgcDenoiseCorrelation != null) {
             if (other.mgcDenoiseCorrelation == null) return false
@@ -1038,6 +1074,7 @@ data class RawMetadata(
         result = 31 * result + maxAnalogSensitivity
         result = 31 * result + shutterSpeed.hashCode()
         result = 31 * result + frameCount
+        result = 31 * result + channelNoiseProfile.contentHashCode()
         result = 31 * result + noiseProfileLayout.hashCode()
         result = 31 * result + (mgcDenoiseCorrelation?.contentHashCode() ?: 0)
         result = 31 * result + (mgcDenoiseReadNoise?.contentHashCode() ?: 0)

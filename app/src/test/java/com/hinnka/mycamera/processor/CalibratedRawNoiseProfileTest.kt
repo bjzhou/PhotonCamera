@@ -137,6 +137,31 @@ class CalibratedRawNoiseProfileTest {
     }
 
     @Test
+    fun pixel8ProCoefficientsUseTheAttachedProfileDivisor() {
+        val source = """
+            static double noise_model_A[] = { 8.4642446458204e-07, 7.885580710116388e-07, 7.913266061026989e-07, 8.050064129709212e-07 };
+            static double noise_model_B[] = { -3.3548195112894123e-06, -6.809009788763011e-07, -7.872168829134742e-07, -2.1650529662197835e-06 };
+            static double noise_model_C[] = { 1.869442572495001e-12, 1.450600972594844e-12, 1.5203739200556638e-12, 1.7126408145869544e-12 };
+            static double noise_model_D[] = { 9.084048689765456e-07, 8.720875192909893e-07, 8.823589207357054e-07, 8.763068694811695e-07 };
+            double digital_gain = (sens / 666.0) < 1.0 ? 1.0 : (sens / 666.0);
+        """.trimIndent()
+        val profile = CalibratedRawNoiseProfile.parseGcamC("pixel8pro", source)
+        val model = requireNotNull(profile.evaluate(666))
+
+        assertEquals(666, profile.maxAnalogSensitivity)
+        assertEquals(
+            (8.4642446458204e-07 * 666 - 3.3548195112894123e-06).toFloat(),
+            model.shotNoise[0],
+            1e-10f,
+        )
+        assertEquals(
+            (1.869442572495001e-12 * 666 * 666 + 9.084048689765456e-07).toFloat(),
+            model.readNoise[0],
+            1e-10f,
+        )
+    }
+
+    @Test
     fun tuningAnchorsAreExactlyAnAbcdNoiseModelInGainDomain() {
         val shotRed = fitLinear(fixture.gains, fixture.shotRed)
         val shotGreen = fitLinear(fixture.gains, fixture.shotGreen)

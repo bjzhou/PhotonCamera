@@ -233,8 +233,9 @@ object MultiFrameStacker {
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
         whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
-        rawNoiseModel: RawNoiseModel = RawNoiseModel.EMPTY,
-        calibratedNoiseProfile: CalibratedRawNoiseProfile? = null,
+        noiseProfileSelection: RawNoiseProfileSelection = RawNoiseProfileSelection.Calibrated(
+            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
+        ),
         lensShading: FloatArray? = null,
         lensShadingWidth: Int = 0,
         lensShadingHeight: Int = 0,
@@ -248,9 +249,6 @@ object MultiFrameStacker {
         val images = frames.map { it.image }
         val width = images[0].width
         val height = images[0].height
-        val effectiveCalibratedNoiseProfile = calibratedNoiseProfile
-            ?: CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
-
         val effectiveOutputScale = if (outputMode == MgcSpatialOutputMode.BAYER) {
             1f
         } else {
@@ -260,8 +258,7 @@ object MultiFrameStacker {
             "Starting MGC Spatial ${outputMode.name} fusion for ${images.size} frames. " +
                 "Pattern=$cfaPattern outputScale=$effectiveOutputScale " +
                 "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel " +
-                "noiseProfile=${effectiveCalibratedNoiseProfile.id}" +
-                "${if (calibratedNoiseProfile == null) "(default)" else ""} " +
+                "noiseProfile=${noiseProfileSelection.id} " +
                 "legacyHdrFlag=$enableHdrFusion"
         }
         val stackLensShading = validLensShadingOrNull(
@@ -277,8 +274,7 @@ object MultiFrameStacker {
             blackLevel = masterBlackLevel,
             whiteLevel = whiteLevel,
             whiteBalanceGains = whiteBalanceGains,
-            rawNoiseModel = rawNoiseModel,
-            calibratedNoiseProfile = effectiveCalibratedNoiseProfile,
+            noiseProfileSelection = noiseProfileSelection,
             lensShading = stackLensShading,
             lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,

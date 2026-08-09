@@ -69,6 +69,8 @@ import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.RawNoiseProfileInfo
+import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -1194,6 +1196,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawDcpIdsByLens: StateFlow<Map<String, String?>> = userPreferencesRepository.userPreferences
         .map { it.rawDcpIdsByLens }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+    val rawNoiseProfileId: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.rawNoiseProfileId }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            RawNoiseProfileManager.DEFAULT_PROFILE_ID,
+        )
+    val rawNoiseProfileIdsByLens: StateFlow<Map<String, String>> =
+        userPreferencesRepository.userPreferences
+            .map { it.rawNoiseProfileIdsByLens }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
     val rawHncsProfileId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.rawHncsProfileId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -1269,6 +1282,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.exportDngWithRawExport }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     var availableDcps: List<DcpInfo> by mutableStateOf(emptyList())
+        private set
+    var availableRawNoiseProfiles: List<RawNoiseProfileInfo> by mutableStateOf(emptyList())
         private set
     val useJpgMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useJpgMax }
@@ -1814,6 +1829,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
+            contentRepository.availableRawNoiseProfiles.collect { profiles ->
+                availableRawNoiseProfiles = profiles
+            }
+        }
+
+        viewModelScope.launch {
             contentRepository.availableFrames.combine(
                 userPreferencesRepository.userPreferences.map { it.frameOrder }
             ) { frames, order ->
@@ -2008,6 +2029,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setRawNoiseProfileId(profileId: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawNoiseProfileId(profileId)
+        }
+    }
+
+    fun setRawNoiseProfileIdsByLens(profileIdsByLens: Map<String, String>) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawNoiseProfileIdsByLens(profileIdsByLens)
+        }
+    }
+
     fun setRawHncsProfileId(profileId: String?) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
@@ -2179,6 +2212,40 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             if (success) {
                 userPreferencesRepository.removeRawDcpReferences(dcpId)
+                contentRepository.refreshCustomContent()
+            }
+            onComplete(success)
+        }
+    }
+
+    fun importRawNoiseProfiles(
+        uris: List<Uri>,
+        onComplete: (importedProfiles: List<RawNoiseProfileInfo>, failedCount: Int) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val importedIds = withContext(Dispatchers.IO) {
+                uris.mapNotNull { uri ->
+                    contentRepository.getCustomImportManager().importRawNoiseProfile(uri)
+                }
+            }
+            val importedProfiles = if (importedIds.isNotEmpty()) {
+                contentRepository.refreshCustomContent()
+                val profilesById = contentRepository.getAvailableRawNoiseProfiles().associateBy { it.id }
+                importedIds.mapNotNull(profilesById::get)
+            } else {
+                emptyList()
+            }
+            onComplete(importedProfiles, uris.size - importedProfiles.size)
+        }
+    }
+
+    fun deleteRawNoiseProfile(profileId: String, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.IO) {
+                contentRepository.getCustomImportManager().deleteCustomRawNoiseProfile(profileId)
+            }
+            if (success) {
+                userPreferencesRepository.removeRawNoiseProfileReferences(profileId)
                 contentRepository.refreshCustomContent()
             }
             onComplete(success)

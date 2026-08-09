@@ -28,6 +28,7 @@ import com.hinnka.mycamera.processor.DepthBokehProcessor
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawHdrRenderResult
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
@@ -598,6 +599,7 @@ class PhotoProcessor(
             denoiseValue = rawNoiseReduction,
             chromaDenoiseValue = rawChromaNoiseReduction,
             rawDcpId = metadata.rawDcpId,
+            rawNoiseProfileId = resolveRawNoiseProfileId(metadata),
             rawHncsProfileId = metadata.rawHncsProfileId,
             rawHncsRenderIntent = metadata.rawHncsRenderIntent,
             rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode,
@@ -680,6 +682,7 @@ class PhotoProcessor(
             denoiseValue = finalNoiseReduction,
             chromaDenoiseValue = finalChromaNoiseReduction,
             rawDcpId = metadata.rawDcpId,
+            rawNoiseProfileId = resolveRawNoiseProfileId(metadata),
             rawHncsProfileId = metadata.rawHncsProfileId,
             rawHncsRenderIntent = metadata.rawHncsRenderIntent,
             rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode,
@@ -859,6 +862,11 @@ class PhotoProcessor(
         }
         return applyCrop(transformed, metadata, label)
     }
+
+    private suspend fun resolveRawNoiseProfileId(metadata: MediaMetadata): String =
+        userPreferencesRepository.userPreferences.firstOrNull()
+            ?.rawNoiseProfileIdForLens(metadata.cameraId)
+            ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID
 
     private fun applyCrop(input: Bitmap, metadata: MediaMetadata, label: String = "bitmap"): Bitmap {
         val cropRegion = metadata.postCropRegion ?: return input

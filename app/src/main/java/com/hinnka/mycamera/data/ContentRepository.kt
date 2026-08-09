@@ -12,6 +12,8 @@ import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.processor.DepthBokehProcessor
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.DcpManager
+import com.hinnka.mycamera.raw.RawNoiseProfileInfo
+import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,6 +47,9 @@ class ContentRepository private constructor(context: Context) {
 
     val lutManager = startupInit("LutManager()") { LutManager(appContext) }
     val dcpManager = startupInit("DcpManager()") { DcpManager(appContext) }
+    val rawNoiseProfileManager = startupInit("RawNoiseProfileManager()") {
+        RawNoiseProfileManager(appContext)
+    }
     val frameManager = startupInit("FrameManager()") { FrameManager(appContext) }
     private val customImportManager = startupInit("CustomImportManager()") { CustomImportManager(appContext) }
 
@@ -59,6 +64,10 @@ class ContentRepository private constructor(context: Context) {
 
     private val _availableDcps = MutableStateFlow<List<DcpInfo>>(emptyList())
     val availableDcps: StateFlow<List<DcpInfo>> = _availableDcps.asStateFlow()
+
+    private val _availableRawNoiseProfiles = MutableStateFlow<List<RawNoiseProfileInfo>>(emptyList())
+    val availableRawNoiseProfiles: StateFlow<List<RawNoiseProfileInfo>> =
+        _availableRawNoiseProfiles.asStateFlow()
 
     // 边框渲染器
     val frameRenderer = startupInit("FrameRenderer()") { FrameRenderer(appContext, lutManager) }
@@ -102,6 +111,11 @@ class ContentRepository private constructor(context: Context) {
         _availableDcps.value = StartupTrace.measure("ContentRepository.getAvailableDcps") {
             dcpManager.getAvailableDcps()
         }
+        _availableRawNoiseProfiles.value = StartupTrace.measure(
+            "ContentRepository.getAvailableRawNoiseProfiles",
+        ) {
+            rawNoiseProfileManager.getAvailableProfiles()
+        }
         StartupTrace.mark(
             "ContentRepository.initialize populated",
             "luts=${_availableLuts.value.size}, frames=${_availableFrames.value.size}, dcps=${_availableDcps.value.size}"
@@ -120,6 +134,9 @@ class ContentRepository private constructor(context: Context) {
 
     fun getAvailableDcps(): List<DcpInfo> = _availableDcps.value
 
+    fun getAvailableRawNoiseProfiles(): List<RawNoiseProfileInfo> =
+        _availableRawNoiseProfiles.value
+
     /**
      * 获取自定义导入管理器
      */
@@ -135,5 +152,6 @@ class ContentRepository private constructor(context: Context) {
         _availableLuts.value = lutManager.getAvailableLuts()
         _availableFrames.value = frameManager.getAvailableFrames()
         _availableDcps.value = dcpManager.getAvailableDcps()
+        _availableRawNoiseProfiles.value = rawNoiseProfileManager.getAvailableProfiles()
     }
 }

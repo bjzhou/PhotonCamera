@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.data.UserPreferences
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,6 +11,18 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 class RawNoiseProfileSelectionTest {
+    @Test
+    fun userPreferencesResolveUnifiedAndPerLensNoiseProfiles() {
+        val preferences = UserPreferences(
+            rawNoiseProfileId = "unified",
+            rawNoiseProfileIdsByLens = mapOf("rear_tele" to "tele_override"),
+        )
+
+        assertEquals("unified", preferences.rawNoiseProfileIdForLens("rear_main"))
+        assertEquals("tele_override", preferences.rawNoiseProfileIdForLens("rear_tele"))
+        assertEquals("unified", preferences.rawNoiseProfileIdForLens(null))
+    }
+
     @Test
     fun camera2ProfileAveragesTheTwoGreenChannels() {
         val profile = floatArrayOf(
@@ -123,6 +136,35 @@ class RawNoiseProfileSelectionTest {
                 RawNoiseProfileLayout.DNG_RGB,
             ),
             0f
+        )
+    }
+
+    @Test
+    fun canonicalCalibratedProfileKeepsRGrGbBOrderForEveryCfaLayout() {
+        val profile = floatArrayOf(
+            1f, 10f,
+            2f, 20f,
+            4f, 40f,
+            8f, 80f,
+        )
+
+        assertArrayEquals(
+            floatArrayOf(3f, 30f),
+            RawMetadata.greenNoiseProfile(
+                profile,
+                RawMetadata.CFA_BGGR,
+                RawNoiseProfileLayout.CANONICAL_BAYER,
+            ),
+            0f,
+        )
+        assertArrayEquals(
+            floatArrayOf(1f, 10f, 8f, 80f),
+            RawMetadata.redBlueNoiseProfile(
+                profile,
+                RawMetadata.CFA_GBRG,
+                RawNoiseProfileLayout.CANONICAL_BAYER,
+            ),
+            0f,
         )
     }
 

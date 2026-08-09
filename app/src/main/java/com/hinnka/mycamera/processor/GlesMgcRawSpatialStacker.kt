@@ -36,8 +36,7 @@ internal class GlesMgcRawSpatialStacker(
     blackLevel: FloatArray,
     whiteLevel: Int,
     whiteBalanceGains: FloatArray,
-    private val rawNoiseModel: RawNoiseModel,
-    private val calibratedNoiseProfile: CalibratedRawNoiseProfile? = null,
+    private val noiseProfileSelection: RawNoiseProfileSelection,
     private val lensShading: FloatArray?,
     private val lensShadingWidth: Int,
     private val lensShadingHeight: Int,
@@ -322,6 +321,7 @@ internal class GlesMgcRawSpatialStacker(
     private var strengthSint16PackProgram = 0
     private var supportsComputeReadback = false
     private var maxShaderStorageBlockBytes = 0L
+    private var baseFrameCamera2Model: RawNoiseModel = RawNoiseModel.EMPTY
     private val pixelDifferenceKernel = gaussianKernel(
         size = PIXEL_DIFFERENCE_KERNEL_SIZE,
         sigma = PIXEL_DIFFERENCE_SMOOTH_SIGMA,
@@ -383,12 +383,17 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
+        baseFrameCamera2Model = frames.firstOrNull()
+            ?.channelNoiseProfile
+            ?.let(RawNoiseModel::fromCamera2NoiseProfile)
+            ?.takeIf { it.hasValidCamera2Profile }
+            ?: RawNoiseModel.EMPTY
         val resolvedNoiseModels = frames.map(::resolveNoiseModelForFrame)
         if (resolvedNoiseModels.any { it.source == RawNoiseModelSource.UNAVAILABLE }) {
             PLog.e(
                 TAG,
-                "MGC Spatial requires four exact SENSOR_NOISE_PROFILE S/O pairs; " +
-                    "neither the affected frame nor the base frame supplied them",
+                "MGC Spatial noise profile is unavailable for the selected source " +
+                    "(${noiseProfileSelection.id})",
             )
             images.forEach { it.close() }
             return null
@@ -520,7 +525,9 @@ internal class GlesMgcRawSpatialStacker(
             val calibratedProfiles = resolvedNoiseModels.count {
                 it.source == RawNoiseModelSource.GCAM_CALIBRATED
             }
-            val profileSource = calibratedNoiseProfile?.let { profile ->
+            val calibratedProfile = (noiseProfileSelection as? RawNoiseProfileSelection.Calibrated)
+                ?.profile
+            val profileSource = calibratedProfile?.let { profile ->
                 profile.maxAnalogSensitivity?.let { maxAnalog ->
                     "gcam-c:${profile.id} profileMaxAnalog=$maxAnalog"
                 } ?: "mgc-override:${profile.id} profileMaxAnalog=not-applicable"
@@ -532,7 +539,7 @@ internal class GlesMgcRawSpatialStacker(
                     "baseFallback=$baseFrameCamera2Profiles/${frames.size} " +
                     "calibrated=$calibratedProfiles/${frames.size}",
             )
-            calibratedNoiseProfile?.let { profile ->
+            calibratedProfile?.let { profile ->
                 PLog.i(
                     TAG,
                     "MGC Spatial calibrated per-frame gain " +
@@ -1666,10 +1673,10 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun resolveNoiseModelForFrame(frame: RawStackFrame): ResolvedRawNoiseModel =
         RawNoiseModelResolver.resolve(
-            calibratedProfile = calibratedNoiseProfile,
+            selection = noiseProfileSelection,
             sensitivity = frame.sensitivityIso,
             perFrameCamera2Profile = frame.channelNoiseProfile,
-            baseFrameCamera2Model = rawNoiseModel,
+            baseFrameCamera2Model = baseFrameCamera2Model,
         )
 
     private fun noiseModelForFrame(frame: RawStackFrame): RawNoiseModel =
