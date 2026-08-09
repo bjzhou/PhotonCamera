@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.content.Context
+import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
@@ -35,8 +36,9 @@ internal object MgcFullResolutionDenoise {
 
     /**
      * Spatial defaults consume the merge-propagated noise model exactly once before DNG write.
-     * User adjustment deliberately ignores every Spatial-only input and uses an identity
-     * correlation spectrum plus the slider-scaled protobuf strength.
+     * User adjustment deliberately ignores Spatial merge diagnostics. When the caller supplies
+     * a measured demosaic model it consumes the propagated spectrum/YUV coefficients and applies
+     * LSC through the identity base-strength map; otherwise it retains the identity fallback.
      */
     enum class Pass {
         SPATIAL_DEFAULT,
@@ -47,6 +49,11 @@ internal object MgcFullResolutionDenoise {
         CAMERA_RGBA16F,
         NORMALIZED_BAYER16,
     }
+
+    data class NormalizedCameraRgbNoise(
+        val read: FloatArray,
+        val shot: FloatArray,
+    )
 
     private data class TuningPoint(
         val gain: Float,
@@ -112,19 +119,15 @@ internal object MgcFullResolutionDenoise {
         preparedNormalizedYuvRead: FloatArray? = null,
         preparedNormalizedYuvShot: FloatArray? = null,
         preparedNormalizedYuvQuadratic: FloatArray? = null,
+        preparedCorrelation: FloatArray? = null,
+        applyLensShadingToDenoiseStrength: Boolean = false,
         tuningGain: Float,
         pass: Pass,
         lumaStrengthScale: Float,
         chromaStrengthScale: Float,
     ): Boolean {
-        val finiteLumaScale = lumaStrengthScale
-            .takeIf { it.isFinite() }
-            ?.coerceAtLeast(0f)
-            ?: 0f
-        val finiteChromaScale = chromaStrengthScale
-            .takeIf { it.isFinite() }
-            ?.coerceAtLeast(0f)
-            ?: 0f
+        val finiteLumaScale = DenoiseStrength.clamp(lumaStrengthScale)
+        val finiteChromaScale = DenoiseStrength.clamp(chromaStrengthScale)
         val lumaEnabled = finiteLumaScale > 0f
         val chromaEnabled = finiteChromaScale > 0f
         if (!initialized || !rgba16f.isDirect || width <= 0 || height <= 0 ||
@@ -137,7 +140,7 @@ internal object MgcFullResolutionDenoise {
             preparedNormalizedYuvRead != null || preparedNormalizedYuvShot != null ||
                 preparedNormalizedYuvQuadratic != null
         if (hasPreparedYuvNoise &&
-            (pass != Pass.SPATIAL_DEFAULT || inputLayout != InputLayout.CAMERA_RGBA16F ||
+            (inputLayout != InputLayout.CAMERA_RGBA16F ||
                 preparedNormalizedYuvRead == null || preparedNormalizedYuvShot == null ||
                 preparedNormalizedYuvQuadratic == null ||
                 !validRgbNoise(preparedNormalizedYuvRead) ||
@@ -156,15 +159,20 @@ internal object MgcFullResolutionDenoise {
             )
             return false
         }
-        val correlation = if (useSpatialModel) {
-            metadata.mgcDenoiseCorrelation
-        } else {
-            null
+        if (preparedCorrelation != null &&
+            (preparedCorrelation.size != 128 ||
+                preparedCorrelation.any { !it.isFinite() || it < 0f })
+        ) {
+            PLog.e(TAG, "MGC denoise rejected malformed prepared correlation spectrum")
+            return false
         }
-        if (useSpatialModel &&
+        val correlation = preparedCorrelation ?: if (useSpatialModel) {
+            metadata.mgcDenoiseCorrelation
+        } else null
+        if (useSpatialModel && preparedCorrelation == null &&
             (correlation == null ||
                 correlation.size != 128 ||
-                correlation.any { !it.isFinite() })
+                correlation.any { !it.isFinite() || it < 0f })
         ) {
             PLog.e(
                 TAG,
@@ -215,27 +223,17 @@ internal object MgcFullResolutionDenoise {
                 return false
             }
         } else {
-            val rawNoise = when (metadata.noiseProfileLayout) {
-                RawNoiseProfileLayout.CAMERA2_CFA ->
-                    RawNoiseModel.fromCamera2NoiseProfile(metadata.channelNoiseProfile)
-                RawNoiseProfileLayout.DNG_RGB ->
-                    RawNoiseModel.fromDngNoiseProfile(metadata.channelNoiseProfile)
-                RawNoiseProfileLayout.CANONICAL_BAYER ->
-                    RawNoiseModel.fromCanonicalBayerChannels(
-                        shotNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2] },
-                        readNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2 + 1] },
-                    )
-                RawNoiseProfileLayout.NONE -> RawNoiseModel.EMPTY
-            }
-            val shot = rawNoise.normalizedShotNoiseForShader(metadata.cfaPattern)
-            val read = rawNoise.normalizedReadNoiseForShader(metadata.cfaPattern)
-            if (shot.none { it > 0f } && read.none { it > 0f }) {
+            val resolvedNoise = resolveUserAdjustmentCameraRgbNoise(metadata)
+            if (resolvedNoise == null) {
                 PLog.w(TAG, "MGC denoise skipped: RAW noise profile is unavailable")
                 return false
             }
-            rgbShot = RawNoiseModel.bayerNoiseModelToRgb(shot)
-            rgbRead = RawNoiseModel.bayerNoiseModelToRgb(read)
+            rgbShot = resolvedNoise.shot
+            rgbRead = resolvedNoise.read
         }
+        val useLensShadingForStrength =
+            (useSpatialModel || applyLensShadingToDenoiseStrength) &&
+                hasValidLensShadingMap(metadata)
         val rgbWhiteBalance = normalizedRgbWhiteBalance(metadata.whiteBalanceGains)
         val lumaTuning = interpolateTuning(tuningGain, lumaTuningPoints)
             .withStrengthScale(finiteLumaScale)
@@ -253,9 +251,9 @@ internal object MgcFullResolutionDenoise {
             inputIsBayer = inputLayout == InputLayout.NORMALIZED_BAYER16,
             cfaPattern = metadata.cfaPattern,
             applyLensShadingInBayerAot = applyLensShadingInBayerAot,
-            lensShading = metadata.lensShadingMap.takeIf { useSpatialModel },
-            lensWidth = if (useSpatialModel) metadata.lensShadingMapWidth else 0,
-            lensHeight = if (useSpatialModel) metadata.lensShadingMapHeight else 0,
+            lensShading = metadata.lensShadingMap.takeIf { useLensShadingForStrength },
+            lensWidth = if (useLensShadingForStrength) metadata.lensShadingMapWidth else 0,
+            lensHeight = if (useLensShadingForStrength) metadata.lensShadingMapHeight else 0,
             normalizedRgbShot = rgbShot,
             normalizedRgbRead = rgbRead,
             normalizedRgbWhiteBalance = rgbWhiteBalance,
@@ -303,14 +301,49 @@ internal object MgcFullResolutionDenoise {
                 "strengthMap=${spatialStrengthMap?.let {
                     "${it.width}x${it.height}"
                 } ?: "identity"} " +
-                "lsc=${if (useSpatialModel) {
+                "lsc=${if (useLensShadingForStrength) {
                     "${metadata.lensShadingMapWidth}x${metadata.lensShadingMapHeight}"
                 } else {
-                    "disabled-for-user-adjustment"
+                    "identity"
                 }} " +
-                "correlation=${if (correlation == null) "single-frame-identity" else "propagated"}",
+                "correlation=${if (correlation == null) "identity" else "propagated"}",
         )
         return true
+    }
+
+    internal fun resolveUserAdjustmentCameraRgbNoise(
+        metadata: RawMetadata,
+    ): NormalizedCameraRgbNoise? {
+        val rawNoise = when (metadata.noiseProfileLayout) {
+            RawNoiseProfileLayout.CAMERA2_CFA ->
+                RawNoiseModel.fromCamera2NoiseProfile(metadata.channelNoiseProfile)
+            RawNoiseProfileLayout.DNG_RGB ->
+                RawNoiseModel.fromDngNoiseProfile(metadata.channelNoiseProfile)
+            RawNoiseProfileLayout.CANONICAL_BAYER -> {
+                if (metadata.channelNoiseProfile.size < 8) return null
+                RawNoiseModel.fromCanonicalBayerChannels(
+                    shotNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2] },
+                    readNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2 + 1] },
+                )
+            }
+            RawNoiseProfileLayout.NONE -> RawNoiseModel.EMPTY
+        }
+        val bayerShot = rawNoise.normalizedShotNoiseForShader(metadata.cfaPattern)
+        val bayerRead = rawNoise.normalizedReadNoiseForShader(metadata.cfaPattern)
+        if (bayerShot.none { it > 0f } && bayerRead.none { it > 0f }) return null
+        return NormalizedCameraRgbNoise(
+            read = RawNoiseModel.bayerNoiseModelToRgb(bayerRead),
+            shot = RawNoiseModel.bayerNoiseModelToRgb(bayerShot),
+        )
+    }
+
+    private fun hasValidLensShadingMap(metadata: RawMetadata): Boolean {
+        val map = metadata.lensShadingMap ?: return false
+        val expectedSize = metadata.lensShadingMapWidth.toLong() *
+            metadata.lensShadingMapHeight.toLong() * 4L
+        return metadata.lensShadingMapWidth > 0 && metadata.lensShadingMapHeight > 0 &&
+            expectedSize in 1L..Int.MAX_VALUE.toLong() && map.size == expectedSize.toInt() &&
+            map.all { it.isFinite() && it > 0f }
     }
 
     private fun Tuning.withStrengthScale(scale: Float): Tuning = copy(

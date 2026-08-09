@@ -34,11 +34,15 @@ import com.hinnka.mycamera.ui.components.CurveChannel
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
+import com.hinnka.mycamera.raw.RawSharpeningDefaults
+import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.ui.components.FrameSelector
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
 import com.hinnka.mycamera.ui.components.RawDcpSelector
+import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.rawDcpLensOptions
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
@@ -109,6 +113,35 @@ fun PresetEditorScreen(
     var rawDcpId by remember { mutableStateOf(sourcePreset?.rawDcpId) }
     var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset?.rawDcpIdsByLens ?: emptyMap()) }
     var rawHncsProfileId by remember { mutableStateOf(sourcePreset?.rawHncsProfileId) }
+    var rawSharpening by remember {
+        mutableStateOf(
+            sourcePreset?.rawSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+        )
+    }
+    var rawMaxSharpening by remember {
+        mutableStateOf(
+            sourcePreset?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+        )
+    }
+    var rawNoiseReduction by remember {
+        mutableStateOf(sourcePreset?.rawNoiseReduction ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH)
+    }
+    var rawChromaNoiseReduction by remember {
+        mutableStateOf(
+            sourcePreset?.rawChromaNoiseReduction ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
+        )
+    }
+    var rawMaxNoiseReduction by remember {
+        mutableStateOf(
+            sourcePreset?.rawMaxNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
+        )
+    }
+    var rawMaxChromaNoiseReduction by remember {
+        mutableStateOf(
+            sourcePreset?.rawMaxChromaNoiseReduction
+                ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
+        )
+    }
     val rawHncsFilmCurveMode =
         sourcePreset?.rawHncsFilmCurveMode ?: HncsFilmCurveMode.Standard.persistedValue
     var rawRenderingEngine by remember {
@@ -154,6 +187,12 @@ fun PresetEditorScreen(
             rawHncsProfileId = rawHncsProfileId,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode,
             rawRenderingEngine = rawRenderingEngine.name,
+            rawSharpening = rawSharpening,
+            rawMaxSharpening = rawMaxSharpening,
+            rawNoiseReduction = rawNoiseReduction,
+            rawChromaNoiseReduction = rawChromaNoiseReduction,
+            rawMaxNoiseReduction = rawMaxNoiseReduction,
+            rawMaxChromaNoiseReduction = rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = rawOppoMasterToneMap,
             rawPhotonPgtmToneMap = rawPhotonPgtmToneMap,
             rawSpectralFilmStock = rawSpectralFilmStock,
@@ -423,6 +462,84 @@ fun PresetEditorScreen(
                             useRawMax = false
                         }
                     }
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_default_sharpening),
+                    description = stringResource(
+                        R.string.settings_raw_default_sharpening_description
+                    ),
+                    value = rawSharpening,
+                    valueRange = 0f..1f,
+                    resetValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
+                    onValueChange = { rawSharpening = it },
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_default_luma_denoise),
+                    description = stringResource(
+                        R.string.settings_raw_default_luma_denoise_description
+                    ),
+                    value = rawNoiseReduction,
+                    valueRange = DenoiseStrength.valueRange,
+                    resetValue = RawDenoiseDefaults.RAW_LUMA_STRENGTH,
+                    onValueChange = { rawNoiseReduction = it },
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_default_chroma_denoise),
+                    description = stringResource(
+                        R.string.settings_raw_default_chroma_denoise_description
+                    ),
+                    value = rawChromaNoiseReduction,
+                    valueRange = DenoiseStrength.valueRange,
+                    resetValue = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
+                    onValueChange = { rawChromaNoiseReduction = it },
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_max_default_sharpening),
+                    description = stringResource(
+                        R.string.settings_raw_max_default_sharpening_description
+                    ),
+                    value = rawMaxSharpening,
+                    valueRange = 0f..1f,
+                    resetValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
+                    onValueChange = { rawMaxSharpening = it },
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_max_default_luma_denoise),
+                    description = stringResource(
+                        R.string.settings_raw_max_default_luma_denoise_description
+                    ),
+                    value = rawMaxNoiseReduction,
+                    valueRange = DenoiseStrength.valueRange,
+                    resetValue = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
+                    onValueChange = { rawMaxNoiseReduction = it },
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_max_default_chroma_denoise),
+                    description = stringResource(
+                        R.string.settings_raw_max_default_chroma_denoise_description
+                    ),
+                    value = rawMaxChromaNoiseReduction,
+                    valueRange = DenoiseStrength.valueRange,
+                    resetValue = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+                    onValueChange = { rawMaxChromaNoiseReduction = it },
                 )
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))

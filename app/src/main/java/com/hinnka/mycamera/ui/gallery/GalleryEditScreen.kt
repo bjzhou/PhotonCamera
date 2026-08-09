@@ -65,6 +65,7 @@ import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.HncsProfileManager
+import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.components.*
@@ -1469,7 +1470,7 @@ fun GalleryEditScreen(
                                     SliderSettingItem(
                                         title = stringResource(R.string.settings_noise_reduction),
                                         value = editNoiseReduction,
-                                        valueRange = 0f..1f,
+                                        valueRange = DenoiseStrength.valueRange,
                                         resetValue = 0f,
                                         onValueChange = { viewModel.setNoiseReduction(it) },
                                         onValueChangeFinished = {
@@ -1483,7 +1484,7 @@ fun GalleryEditScreen(
                                     SliderSettingItem(
                                         title = stringResource(R.string.settings_chroma_noise_reduction),
                                         value = editChromaNoiseReduction,
-                                        valueRange = 0f..1f,
+                                        valueRange = DenoiseStrength.valueRange,
                                         resetValue = 0f,
                                         onValueChange = { viewModel.setChromaNoiseReduction(it) },
                                         onValueChangeFinished = {

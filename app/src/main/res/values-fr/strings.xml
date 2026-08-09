@@ -262,4 +262,9 @@
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution : un système de gestion des couleurs développé indépendamment par Hasselblad</string>
     <string name="settings_raw_max_hdr_composition">Fusion HDR RAWmax</string>
     <string name="settings_raw_max_hdr_composition_description">Utilise le bracketing d’exposition pour la fusion HDR dans RAWmax. Désactivez cette option pour accélérer le traitement.</string>
+    <string name="settings_raw_default_sharpening_section">Netteté par défaut</string>
+    <string name="settings_raw_default_sharpening">Netteté RAW par défaut</string>
+    <string name="settings_raw_default_sharpening_description">Netteté appliquée par défaut lors du développement des captures RAW.</string>
+    <string name="settings_raw_max_default_sharpening">Netteté RAWmax par défaut</string>
+    <string name="settings_raw_max_default_sharpening_description">Netteté appliquée par défaut lors du développement des captures RAWmax.</string>
 </resources>

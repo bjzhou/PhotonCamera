@@ -59,7 +59,6 @@ import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.color.TransferCurve
-import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawProfile
@@ -67,6 +66,7 @@ import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawNoiseProfileInfo
@@ -162,6 +162,52 @@ private fun resolveEffectiveRawAutoExposure(
     return userPrefs?.rawAutoExposure ?: true
 }
 
+private fun resolveCaptureSharpening(
+    isRawCapture: Boolean,
+    isRawMaxCapture: Boolean,
+    userPrefs: UserPreferences?,
+): Float = when {
+    !isRawCapture -> 0f
+    isRawMaxCapture -> userPrefs?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+    else -> userPrefs?.rawSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+}.let(RawSharpeningDefaults::normalize)
+
+internal data class CaptureDenoiseStrengths(
+    val editableLuma: Float,
+    val editableChroma: Float,
+    val bakedLuma: Float?,
+    val bakedChroma: Float?,
+)
+
+internal fun resolveCaptureDenoiseStrengths(
+    isRawCapture: Boolean,
+    isRawMaxCapture: Boolean,
+    userPrefs: UserPreferences?,
+): CaptureDenoiseStrengths = when {
+    !isRawCapture -> CaptureDenoiseStrengths(0f, 0f, null, null)
+    isRawMaxCapture -> CaptureDenoiseStrengths(
+        editableLuma = 0f,
+        editableChroma = 0f,
+        bakedLuma = RawDenoiseDefaults.normalize(
+            userPrefs?.rawMaxNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
+        ),
+        bakedChroma = RawDenoiseDefaults.normalize(
+            userPrefs?.rawMaxChromaNoiseReduction
+                ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
+        ),
+    )
+    else -> CaptureDenoiseStrengths(
+        editableLuma = RawDenoiseDefaults.normalize(
+            userPrefs?.rawNoiseReduction ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
+        ),
+        editableChroma = RawDenoiseDefaults.normalize(
+            userPrefs?.rawChromaNoiseReduction ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
+        ),
+        bakedLuma = null,
+        bakedChroma = null,
+    )
+}
+
 private fun ColorRecipeParams.withoutIndependentEffects(): ColorRecipeParams {
     return EffectParams.DEFAULT.applyTo(this)
 }
@@ -182,6 +228,12 @@ private data class PresetMatchSnapshot(
     val rawHncsRenderIntent: HncsRenderIntent,
     val rawHncsFilmCurveMode: HncsFilmCurveMode,
     val rawRenderingEngine: RawRenderingEngine,
+    val rawSharpening: Float,
+    val rawMaxSharpening: Float,
+    val rawNoiseReduction: Float,
+    val rawChromaNoiseReduction: Float,
+    val rawMaxNoiseReduction: Float,
+    val rawMaxChromaNoiseReduction: Float,
     val rawOppoMasterToneMap: Boolean,
     val rawPhotonPgtmToneMap: Boolean,
     val rawSpectralFilmStock: String?,
@@ -215,6 +267,12 @@ private data class PresetMatchSnapshot(
                 preset.rawHncsFilmCurveMode
             ) &&
             rawRenderingEngine == RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine) &&
+            rawSharpening == preset.rawSharpening &&
+            rawMaxSharpening == preset.rawMaxSharpening &&
+            rawNoiseReduction == preset.rawNoiseReduction &&
+            rawChromaNoiseReduction == preset.rawChromaNoiseReduction &&
+            rawMaxNoiseReduction == preset.rawMaxNoiseReduction &&
+            rawMaxChromaNoiseReduction == preset.rawMaxChromaNoiseReduction &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawPhotonPgtmToneMap == preset.rawPhotonPgtmToneMap &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
@@ -275,6 +333,33 @@ private data class PresetMatchSnapshot(
             }
             if (rawRenderingEngine != presetRawRenderingEngine) {
                 add("rawRenderingEngine current=$rawRenderingEngine preset=$presetRawRenderingEngine")
+            }
+            if (rawSharpening != preset.rawSharpening) {
+                add("rawSharpening current=$rawSharpening preset=${preset.rawSharpening}")
+            }
+            if (rawMaxSharpening != preset.rawMaxSharpening) {
+                add("rawMaxSharpening current=$rawMaxSharpening preset=${preset.rawMaxSharpening}")
+            }
+            if (rawNoiseReduction != preset.rawNoiseReduction) {
+                add("rawNoiseReduction current=$rawNoiseReduction preset=${preset.rawNoiseReduction}")
+            }
+            if (rawChromaNoiseReduction != preset.rawChromaNoiseReduction) {
+                add(
+                    "rawChromaNoiseReduction current=$rawChromaNoiseReduction " +
+                        "preset=${preset.rawChromaNoiseReduction}"
+                )
+            }
+            if (rawMaxNoiseReduction != preset.rawMaxNoiseReduction) {
+                add(
+                    "rawMaxNoiseReduction current=$rawMaxNoiseReduction " +
+                        "preset=${preset.rawMaxNoiseReduction}"
+                )
+            }
+            if (rawMaxChromaNoiseReduction != preset.rawMaxChromaNoiseReduction) {
+                add(
+                    "rawMaxChromaNoiseReduction current=$rawMaxChromaNoiseReduction " +
+                        "preset=${preset.rawMaxChromaNoiseReduction}"
+                )
             }
             if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
                 add(
@@ -349,6 +434,12 @@ private data class CameraFeatureUpdate(
     val rawHncsRenderIntent: SettingValue<HncsRenderIntent>? = null,
     val rawHncsFilmCurveMode: SettingValue<HncsFilmCurveMode>? = null,
     val rawRenderingEngine: SettingValue<RawRenderingEngine>? = null,
+    val rawSharpening: SettingValue<Float>? = null,
+    val rawMaxSharpening: SettingValue<Float>? = null,
+    val rawNoiseReduction: SettingValue<Float>? = null,
+    val rawChromaNoiseReduction: SettingValue<Float>? = null,
+    val rawMaxNoiseReduction: SettingValue<Float>? = null,
+    val rawMaxChromaNoiseReduction: SettingValue<Float>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
     val rawPhotonPgtmToneMap: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
@@ -475,6 +566,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawHncsRenderIntent = saved.rawHncsRenderIntent,
                             rawHncsFilmCurveMode = saved.rawHncsFilmCurveMode,
                             rawRenderingEngine = saved.rawRenderingEngine,
+                            rawSharpening = saved.rawSharpening,
+                            rawMaxSharpening = saved.rawMaxSharpening,
+                            rawNoiseReduction = saved.rawNoiseReduction,
+                            rawChromaNoiseReduction = saved.rawChromaNoiseReduction,
+                            rawMaxNoiseReduction = saved.rawMaxNoiseReduction,
+                            rawMaxChromaNoiseReduction = saved.rawMaxChromaNoiseReduction,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
                             rawPhotonPgtmToneMap = saved.rawPhotonPgtmToneMap,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
@@ -541,6 +638,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = rawHncsRenderIntent.value.assetValue,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode.value.persistedValue,
             rawRenderingEngine = rawRenderingEngine.value.name,
+            rawSharpening = userPreferences.value.rawSharpening,
+            rawMaxSharpening = userPreferences.value.rawMaxSharpening,
+            rawNoiseReduction = userPreferences.value.rawNoiseReduction,
+            rawChromaNoiseReduction = userPreferences.value.rawChromaNoiseReduction,
+            rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
+            rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawPhotonPgtmToneMap = rawToneMappingParameters.value.usePhotonPgtmToneMap,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
@@ -614,6 +717,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 HncsFilmCurveMode.fromPersistedValue(this?.rawHncsFilmCurveMode)
             ),
             rawRenderingEngine = SettingValue(RawRenderingEngine.fromPersistedName(this?.rawRenderingEngine)),
+            rawSharpening = SettingValue(
+                this?.rawSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+            ),
+            rawMaxSharpening = SettingValue(
+                this?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+            ),
+            rawNoiseReduction = SettingValue(
+                this?.rawNoiseReduction ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
+            ),
+            rawChromaNoiseReduction = SettingValue(
+                this?.rawChromaNoiseReduction ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
+            ),
+            rawMaxNoiseReduction = SettingValue(
+                this?.rawMaxNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
+            ),
+            rawMaxChromaNoiseReduction = SettingValue(
+                this?.rawMaxChromaNoiseReduction
+                    ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
+            ),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
             rawPhotonPgtmToneMap = SettingValue(this?.rawPhotonPgtmToneMap ?: false),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
@@ -799,6 +921,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     null
                 },
                 rawToneMappingParameters = rawToneMappingUpdate,
+                rawSharpening = update.rawSharpening?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawMaxSharpening = update.rawMaxSharpening?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawNoiseReduction = update.rawNoiseReduction?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawChromaNoiseReduction = update.rawChromaNoiseReduction?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawMaxNoiseReduction = update.rawMaxNoiseReduction?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawMaxChromaNoiseReduction = update.rawMaxChromaNoiseReduction?.let {
+                    PreferenceUpdateValue(it.value)
+                },
                 rawSpectralFilmStock = update.rawSpectralFilmStock?.let { PreferenceUpdateValue(it.value) },
                 rawSpectralFilmPrint = update.rawSpectralFilmPrint?.let { PreferenceUpdateValue(it.value) },
                 droMode = update.droMode?.let {
@@ -995,6 +1135,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = rawHncsRenderIntent.value,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode.value,
             rawRenderingEngine = rawRenderingEngine.value,
+            rawSharpening = userPreferences.value.rawSharpening,
+            rawMaxSharpening = userPreferences.value.rawMaxSharpening,
+            rawNoiseReduction = userPreferences.value.rawNoiseReduction,
+            rawChromaNoiseReduction = userPreferences.value.rawChromaNoiseReduction,
+            rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
+            rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawPhotonPgtmToneMap = rawToneMappingParameters.value.usePhotonPgtmToneMap,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
@@ -1023,6 +1169,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = prefs.rawHncsRenderIntent,
             rawHncsFilmCurveMode = prefs.rawHncsFilmCurveMode,
             rawRenderingEngine = prefs.rawRenderingEngine,
+            rawSharpening = prefs.rawSharpening,
+            rawMaxSharpening = prefs.rawMaxSharpening,
+            rawNoiseReduction = prefs.rawNoiseReduction,
+            rawChromaNoiseReduction = prefs.rawChromaNoiseReduction,
+            rawMaxNoiseReduction = prefs.rawMaxNoiseReduction,
+            rawMaxChromaNoiseReduction = prefs.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
             rawPhotonPgtmToneMap = prefs.rawToneMappingParameters.usePhotonPgtmToneMap,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
@@ -1141,6 +1293,40 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawToneMappingParameters: StateFlow<RawToneMappingParameters> = userPreferencesRepository.userPreferences
         .map { it.rawToneMappingParameters }
         .stateIn(viewModelScope, SharingStarted.Eagerly, RawToneMappingParameters.DEFAULT)
+    val rawSharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawSharpening }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            RawSharpeningDefaults.DEFAULT_STRENGTH,
+        )
+    val rawMaxSharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawMaxSharpening }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            RawSharpeningDefaults.DEFAULT_STRENGTH,
+        )
+    val rawNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawNoiseReduction }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawDenoiseDefaults.RAW_LUMA_STRENGTH)
+    val rawChromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawChromaNoiseReduction }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawDenoiseDefaults.RAW_CHROMA_STRENGTH)
+    val rawMaxNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawMaxNoiseReduction }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
+        )
+    val rawMaxChromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawMaxChromaNoiseReduction }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+        )
     val rawSpectralFilmStock: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.rawSpectralFilmStock }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -1456,11 +1642,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _isFetchingAIModels = MutableStateFlow(false)
     val isFetchingAIModels = _isFetchingAIModels.asStateFlow()
-
-    // 软件处理参数 Flow
-    val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
-    val noiseReduction: Flow<Float> = userPreferencesRepository.userPreferences.map { it.noiseReduction }
-    val chromaNoiseReduction: Flow<Float> = userPreferencesRepository.userPreferences.map { it.chromaNoiseReduction }
 
     private var isShutterSoundEnabled = true
     private var isVibrationEnabled = true
@@ -2134,6 +2315,31 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawShadowsAdjustment(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawShadowsAdjustment(value) }
     }
+
+    fun setRawSharpening(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawSharpening(value) }
+    }
+
+    fun setRawMaxSharpening(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawMaxSharpening(value) }
+    }
+
+    fun setRawNoiseReduction(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawNoiseReduction(value) }
+    }
+
+    fun setRawChromaNoiseReduction(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawChromaNoiseReduction(value) }
+    }
+
+    fun setRawMaxNoiseReduction(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawMaxNoiseReduction(value) }
+    }
+
+    fun setRawMaxChromaNoiseReduction(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveRawMaxChromaNoiseReduction(value) }
+    }
+
     fun setRawMinShutterSpeedNs(value: Long) {
         viewModelScope.launch { userPreferencesRepository.saveRawMinShutterSpeedNs(value) }
     }
@@ -2669,9 +2875,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
                 val photoQualityValue = photoQuality.firstOrNull() ?: 95
-                val sharpeningValue = sharpening.firstOrNull() ?: 0f
-                val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-                val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+                val sharpeningValue = 0f
+                val noiseReductionValue = 0f
+                val chromaNoiseReductionValue = 0f
 
                 val photoId = GalleryManager.preparePhoto(
                     context,
@@ -4683,33 +4889,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置锐化强度
-     */
-    fun setSharpening(value: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveSharpening(value)
-        }
-    }
-
-    /**
-     * 设置降噪强度
-     */
-    fun setNoiseReduction(value: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveNoiseReduction(value)
-        }
-    }
-
-    /**
-     * 设置减少杂色强度
-     */
-    fun setChromaNoiseReduction(value: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveChromaNoiseReduction(value)
-        }
-    }
-
-    /**
      * 设置摄像头方向偏移
      * @param cameraId 摄像头 ID
      * @param offset 旋转偏移角度 (0, 90, 180, 270)
@@ -4907,19 +5086,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val aspectRatio = state.value.aspectRatio
             val frameIdToSave = currentFrameId
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val requestedSharpeningValue = sharpening.firstOrNull() ?: 0f
-            val sharpeningValue = if (isRawCaptureFormat(image.format)) {
-                RawSharpeningDefaults.forCapture(requestedSharpeningValue)
-            } else {
-                requestedSharpeningValue
-            }
-            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val requestedChromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = if (isRawCaptureFormat(image.format)) {
-                ChromaDenoiseDefaults.forRawCapture(requestedChromaNoiseReductionValue)
-            } else {
-                requestedChromaNoiseReductionValue
-            }
+            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+            val isRawCapture = isRawCaptureFormat(image.format)
+            val sharpeningValue = resolveCaptureSharpening(
+                isRawCapture = isRawCapture,
+                isRawMaxCapture = state.value.isRawMaxEnabled,
+                userPrefs = userPrefs,
+            )
+            val denoiseStrengths = resolveCaptureDenoiseStrengths(
+                isRawCapture = isRawCapture,
+                isRawMaxCapture = state.value.isRawMaxEnabled,
+                userPrefs = userPrefs,
+            )
+            val noiseReductionValue = denoiseStrengths.editableLuma
+            val chromaNoiseReductionValue = denoiseStrengths.editableChroma
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
             val droModeForProcessing =
@@ -4939,7 +5119,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             // 获取用户配置的摄像头方向偏移
-            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
 
             // 应用方向偏移
@@ -4983,6 +5162,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
+                rawDenoiseValue = denoiseStrengths.bakedLuma,
+                rawChromaDenoiseValue = denoiseStrengths.bakedChroma,
                 captureNoiseReductionLevel = state.value.nrLevel,
                 rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
                 rawHncsProfileId = userPrefs?.rawHncsProfileId,
@@ -5118,9 +5299,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val context = getApplication<Application>()
             val currentState = state.value
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = sharpening.firstOrNull() ?: 0f
-            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val sharpeningValue = 0f
+            val noiseReductionValue = 0f
+            val chromaNoiseReductionValue = 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
@@ -5273,9 +5454,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             bitmapToSave = captureBitmap
             val currentState = state.value
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = sharpening.firstOrNull() ?: 0f
-            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val sharpeningValue = 0f
+            val noiseReductionValue = 0f
+            val chromaNoiseReductionValue = 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
@@ -5464,19 +5645,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val frameIdToSave = currentFrameId
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
             val isRawStack = images.firstOrNull()?.format?.let(::isRawCaptureFormat) == true
-            val requestedSharpeningValue = sharpening.firstOrNull() ?: 0f
-            val sharpeningValue = if (isRawStack) {
-                RawSharpeningDefaults.forCapture(requestedSharpeningValue)
-            } else {
-                requestedSharpeningValue
-            }
-            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val requestedChromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = if (isRawStack) {
-                ChromaDenoiseDefaults.forRawCapture(requestedChromaNoiseReductionValue)
-            } else {
-                requestedChromaNoiseReductionValue
-            }
+            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+            val sharpeningValue = resolveCaptureSharpening(
+                isRawCapture = isRawStack,
+                isRawMaxCapture = isRawStack,
+                userPrefs = userPrefs,
+            )
+            val denoiseStrengths = resolveCaptureDenoiseStrengths(
+                isRawCapture = isRawStack,
+                isRawMaxCapture = isRawStack,
+                userPrefs = userPrefs,
+            )
+            val noiseReductionValue = denoiseStrengths.editableLuma
+            val chromaNoiseReductionValue = denoiseStrengths.editableChroma
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
             val currentCameraId = cameraController.getCurrentCameraId()
@@ -5497,7 +5678,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
 
             // 获取用户配置的摄像头方向偏移
-            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
 
             // 应用方向偏移
@@ -5563,6 +5743,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
+                rawDenoiseValue = denoiseStrengths.bakedLuma,
+                rawChromaDenoiseValue = denoiseStrengths.bakedChroma,
                 captureNoiseReductionLevel = state.value.nrLevel,
                 rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
                 rawHncsProfileId = userPrefs?.rawHncsProfileId,
@@ -5750,9 +5932,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (orderedImages.size != expectedFrameCount) return
             val context = getApplication<Application>()
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = sharpening.firstOrNull() ?: 0f
-            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val sharpeningValue = 0f
+            val noiseReductionValue = 0f
+            val chromaNoiseReductionValue = 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val baseImage = orderedImages[HDR_BRACKET_ZERO_INDEX]
             val useSuperRes = false
@@ -5926,19 +6108,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val lutIdToSave = currentLutId.value
         val aspectRatio = state.value.aspectRatio
         val frameIdToSave = currentFrameId
-        val requestedSharpeningValue = sharpening.firstOrNull() ?: 0f
-        val sharpeningValue = if (isRawCaptureFormat(image.format)) {
-            RawSharpeningDefaults.forCapture(requestedSharpeningValue)
-        } else {
-            requestedSharpeningValue
-        }
-        val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-        val requestedChromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
-        val chromaNoiseReductionValue = if (isRawCaptureFormat(image.format)) {
-            ChromaDenoiseDefaults.forRawCapture(requestedChromaNoiseReductionValue)
-        } else {
-            requestedChromaNoiseReductionValue
-        }
+        val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+        val isRawCapture = isRawCaptureFormat(image.format)
+        val sharpeningValue = resolveCaptureSharpening(
+            isRawCapture = isRawCapture,
+            isRawMaxCapture = state.value.isRawMaxEnabled,
+            userPrefs = userPrefs,
+        )
+        val denoiseStrengths = resolveCaptureDenoiseStrengths(
+            isRawCapture = isRawCapture,
+            isRawMaxCapture = state.value.isRawMaxEnabled,
+            userPrefs = userPrefs,
+        )
+        val noiseReductionValue = denoiseStrengths.editableLuma
+        val chromaNoiseReductionValue = denoiseStrengths.editableChroma
         val currentCameraId = cameraController.getCurrentCameraId()
 
         // 计算旋转角度
@@ -5954,7 +6137,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         // 获取用户配置的摄像头方向偏移
-        val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
         val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
 
         // 应用方向偏移
@@ -5998,6 +6180,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             sharpening = sharpeningValue,
             noiseReduction = noiseReductionValue,
             chromaNoiseReduction = chromaNoiseReductionValue,
+            rawDenoiseValue = denoiseStrengths.bakedLuma,
+            rawChromaDenoiseValue = denoiseStrengths.bakedChroma,
             captureNoiseReductionLevel = state.value.nrLevel,
             rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
             rawHncsProfileId = userPrefs?.rawHncsProfileId,

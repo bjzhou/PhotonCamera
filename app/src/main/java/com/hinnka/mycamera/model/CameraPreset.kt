@@ -6,6 +6,8 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
+import com.hinnka.mycamera.raw.RawSharpeningDefaults
 
 /**
  * 拍摄预设组合（用户自定义档位配置）
@@ -30,6 +32,12 @@ data class CameraPreset(
     val rawHncsRenderIntent: String = HncsRenderIntent.Standard.assetValue,
     val rawHncsFilmCurveMode: String = HncsFilmCurveMode.Standard.persistedValue,
     val rawRenderingEngine: String = RawRenderingEngine.AdobeCurve.name,
+    val rawSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
+    val rawMaxSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
+    val rawNoiseReduction: Float = RawDenoiseDefaults.RAW_LUMA_STRENGTH,
+    val rawChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
+    val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
+    val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
     val rawOppoMasterToneMap: Boolean = false,
     val rawPhotonPgtmToneMap: Boolean = false,
     val rawSpectralFilmStock: String? = null,
@@ -98,6 +106,13 @@ data class CameraPreset(
                 rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     rawHncsFilmCurveMode
                 ).persistedValue,
+                rawSharpening = RawSharpeningDefaults.normalize(rawSharpening),
+                rawMaxSharpening = RawSharpeningDefaults.normalize(rawMaxSharpening),
+                rawNoiseReduction = RawDenoiseDefaults.normalize(rawNoiseReduction),
+                rawChromaNoiseReduction = RawDenoiseDefaults.normalize(rawChromaNoiseReduction),
+                rawMaxNoiseReduction = RawDenoiseDefaults.normalize(rawMaxNoiseReduction),
+                rawMaxChromaNoiseReduction =
+                    RawDenoiseDefaults.normalize(rawMaxChromaNoiseReduction),
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
                 rawPhotonPgtmToneMap = rawPhotonPgtmToneMap && !rawOppoMasterToneMap
             )

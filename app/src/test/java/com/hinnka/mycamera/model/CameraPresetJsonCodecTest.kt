@@ -2,6 +2,7 @@ package com.hinnka.mycamera.model
 
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -20,6 +21,12 @@ class CameraPresetJsonCodecTest {
             useRaw = true,
             ultraHdrGainMapEnabled = false,
             rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
+            rawSharpening = 0.2f,
+            rawMaxSharpening = 0.7f,
+            rawNoiseReduction = 0.35f,
+            rawChromaNoiseReduction = 0.9f,
+            rawMaxNoiseReduction = 1.2f,
+            rawMaxChromaNoiseReduction = 1.5f,
             rawSpectralFilmStock = "kodak_gold_200",
             rawSpectralFilmPrint = "kodak_2383",
             rawDROMode = "DR400"
@@ -29,6 +36,12 @@ class CameraPresetJsonCodecTest {
 
         requireNotNull(preset)
         assertEquals(RawRenderingEngine.Spektrafilm.name, preset.rawRenderingEngine)
+        assertEquals(0.2f, preset.rawSharpening, 0.0001f)
+        assertEquals(0.7f, preset.rawMaxSharpening, 0.0001f)
+        assertEquals(0.35f, preset.rawNoiseReduction, 0.0001f)
+        assertEquals(0.9f, preset.rawChromaNoiseReduction, 0.0001f)
+        assertEquals(1.2f, preset.rawMaxNoiseReduction, 0.0001f)
+        assertEquals(1.5f, preset.rawMaxChromaNoiseReduction, 0.0001f)
         assertEquals("kodak_gold_200", preset.rawSpectralFilmStock)
         assertEquals("kodak_2383", preset.rawSpectralFilmPrint)
         assertEquals("DR400", preset.rawDROMode)
@@ -193,6 +206,24 @@ class CameraPresetJsonCodecTest {
         assertFalse(preset.useJpgMax)
         assertFalse(preset.useRawMax)
         assertTrue(preset.ultraHdrGainMapEnabled)
+        assertEquals(0.4f, preset.rawSharpening, 0.0001f)
+        assertEquals(0.4f, preset.rawMaxSharpening, 0.0001f)
+        assertEquals(RawDenoiseDefaults.RAW_LUMA_STRENGTH, preset.rawNoiseReduction, 0f)
+        assertEquals(
+            RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
+            preset.rawChromaNoiseReduction,
+            0f,
+        )
+        assertEquals(
+            RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
+            preset.rawMaxNoiseReduction,
+            0f,
+        )
+        assertEquals(
+            RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+            preset.rawMaxChromaNoiseReduction,
+            0f,
+        )
         assertEquals(0.25f, preset.colorRecipe.exposure, 0.0001f)
         assertEquals(1f, preset.colorRecipe.contrast, 0.0001f)
         assertEquals(1f, preset.colorRecipe.saturation, 0.0001f)

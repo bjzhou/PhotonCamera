@@ -818,6 +818,8 @@ int ComputeStrengthMap(
     const uint16_t* input,
     int width,
     int height,
+    int origin_x,
+    int origin_y,
     const float* gain_map,
     int gain_width,
     int gain_height,
@@ -826,12 +828,13 @@ int ComputeStrengthMap(
     uint16_t* output) {
     if (input == nullptr || gain_map == nullptr ||
         output == nullptr || width <= 0 || height <= 0 ||
+        origin_x < 0 || origin_y < 0 ||
         gain_width <= 0 || gain_height <= 0) {
         return -1;
     }
     const HalideDimension input_dimensions[] = {
-        {0, width, 1, 0},
-        {0, height, width, 0},
+        {origin_x, width, 1, 0},
+        {origin_y, height, width, 0},
     };
     const HalideDimension gain_dimensions[] = {
         {0, gain_width, 4, 0},
@@ -839,8 +842,8 @@ int ComputeStrengthMap(
         {0, 4, 1, 0},
     };
     const HalideDimension output_dimensions[] = {
-        {0, width, 1, 0},
-        {0, height, width, 0},
+        {origin_x, width, 1, 0},
+        {origin_y, height, width, 0},
         {0, 3, width * height, 0},
     };
     HalideBuffer input_buffer = MakeBuffer(

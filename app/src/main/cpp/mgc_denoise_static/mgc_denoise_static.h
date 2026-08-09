@@ -71,12 +71,16 @@ bool BuildChromaNoiseBuffers(
  *
  * gain_map is [height][width][4] interleaved Camera2 R/Ge/Go/B gain data.
  * output is three planar U16 channels: strength, strength*lumaGain and
- * strength*lumaGain^2.
+ * strength*lumaGain^2. origin_x/origin_y place a local tile in the full
+ * quarter-resolution strength coordinate system so gain-map sampling remains
+ * identical to a full-frame dispatch.
  */
 int ComputeStrengthMap(
     const uint16_t* input,
     int width,
     int height,
+    int origin_x,
+    int origin_y,
     const float* gain_map,
     int gain_width,
     int gain_height,

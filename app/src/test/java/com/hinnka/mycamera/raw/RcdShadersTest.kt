@@ -8,6 +8,32 @@ import org.junit.Test
 
 class RcdShadersTest {
     @Test
+    fun vgnRuntimeProgramSetExcludesOptionalInternalDenoise() {
+        val labels = VgnShaders.PROGRAM_SOURCES.map { it.first }
+
+        assertEquals(
+            listOf(
+                "prepare_packed_raw",
+                "neutral",
+                "pass_0a1",
+                "pass_0a2",
+                "pass_0b",
+                "pass_0c",
+                "pass_1",
+                "pass_2",
+                "pass_3",
+                "color_noise_1",
+                "color_noise_2",
+                "color_noise_3",
+                "composite_camera_rgb",
+            ),
+            labels,
+        )
+        assertFalse(labels.any { it.contains("iir") })
+        assertFalse(labels.any { it.contains("noise_filter") })
+    }
+
+    @Test
     fun sharedGradientTileFitsTheBaselineAndKeepsItsFourPixelHalo() {
         val shader = RcdShaders.STEP_1
 

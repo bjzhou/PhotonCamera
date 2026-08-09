@@ -57,6 +57,7 @@ import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawViewfinderExposureMatcher
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -256,9 +257,12 @@ object GalleryManager {
         val photoDir = getPhotoDir(context, photoId, true)
         val dngFile = File(photoDir, DNG_FILE)
         val tempDngFile = File(photoDir, "temp_mgc.dng")
-        val rawSharpening = RawSharpeningDefaults.CAPTURE_DEFAULT
-        val rawNoiseReduction = preferences?.noiseReduction ?: 0f
-        val rawChromaNoiseReduction = 0f
+        val rawSharpening = preferences?.rawSharpening
+            ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+        val rawNoiseReduction = preferences?.rawNoiseReduction
+            ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
+        val rawChromaNoiseReduction = preferences?.rawChromaNoiseReduction
+            ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
 
         try {
             sourceDngFile.copyTo(tempDngFile, overwrite = true)
@@ -2212,7 +2216,8 @@ object GalleryManager {
             }
 
             var updatedMetadata: MediaMetadata = metadata
-            val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
+            val rawSharpening = updatedMetadata.sharpening
+                ?: RawSharpeningDefaults.normalize(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
             val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
                 ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
@@ -3088,6 +3093,29 @@ object GalleryManager {
                 mgcDenoiseShotNoise = finalStackResult.mgcDenoiseShotNoise,
                 mgcSpatialStrengthMap = finalStackResult.mgcSpatialStrengthMap,
             )
+            val spatialLumaStrength = RawDenoiseDefaults.normalize(
+                metadata.rawDenoiseValue ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
+            )
+            val spatialChromaStrength = RawDenoiseDefaults.normalize(
+                metadata.rawChromaDenoiseValue
+                    ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
+            )
+            val spatialDenoiseRequested =
+                spatialLumaStrength > 0f || spatialChromaStrength > 0f
+            val spatialDenoiseModelAvailable =
+                MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE &&
+                    !finalStackResult.mgcSpatialReferenceOnlyDiagnostic &&
+                    finalStackResult.mgcDenoiseCorrelation?.size == 128 &&
+                    finalStackResult.mgcDenoiseReadNoise?.size == 3 &&
+                    finalStackResult.mgcDenoiseShotNoise?.size == 3
+            if (spatialDenoiseRequested && !spatialDenoiseModelAvailable) {
+                PLog.e(
+                    TAG,
+                    "RAW stack aborted: configured RAWmax base denoise cannot be baked " +
+                        "without a complete Spatial noise model",
+                )
+                return@withContext
+            }
             val defaultDenoised = processor.processMgcSpatialGpuLinearRgb(
                 context = context,
                 rawData = finalStackResult.fusedBayerBuffer,
@@ -3101,17 +3129,13 @@ object GalleryManager {
                 sourcePixelsIncludeLensShadingCorrection =
                     finalStackResult.lensShadingCorrectionApplied,
                 applyLensShadingCorrection = applyRawLensShading,
-                mode = if (
-                    MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE &&
-                    !finalStackResult.mgcSpatialReferenceOnlyDiagnostic &&
-                    finalStackResult.mgcDenoiseCorrelation?.size == 128 &&
-                    finalStackResult.mgcDenoiseReadNoise?.size == 3 &&
-                    finalStackResult.mgcDenoiseShotNoise?.size == 3
-                ) {
+                mode = if (spatialDenoiseRequested) {
                     MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE
                 } else {
                     MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE
                 },
+                lumaStrengthScale = spatialLumaStrength,
+                chromaStrengthScale = spatialChromaStrength,
             )
             if (defaultDenoised == null) {
                 PLog.e(
@@ -3158,7 +3182,8 @@ object GalleryManager {
             }
 
             var updatedMetadata: MediaMetadata = stackedMetadata
-            val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
+            val rawSharpening = updatedMetadata.sharpening
+                ?: RawSharpeningDefaults.normalize(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
             val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
                 ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
@@ -3587,7 +3612,8 @@ object GalleryManager {
         val photoFile = File(photoDir, PHOTO_FILE)
         val tempFile = File(photoDir, "temp.jpg")
         var updatedMetadata: MediaMetadata = metadata.withEmbeddedDngToneMapDefaults(dngFile)
-        val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
+        val rawSharpening = updatedMetadata.sharpening
+            ?: RawSharpeningDefaults.normalize(sharpeningValue)
         val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
         val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
             ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
@@ -4993,7 +5019,7 @@ object GalleryManager {
                             rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
                             rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                             rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
-                            sharpeningValue = RawSharpeningDefaults.CAPTURE_DEFAULT,
+                            sharpeningValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
                             denoiseValue = rawNoiseReduction,
                             chromaDenoiseValue = rawChromaNoiseReduction,
                             rawDcpId = updatedMetadata.rawDcpId,
@@ -5163,7 +5189,8 @@ object GalleryManager {
                     rawCustomBlackLevel = updatedMetadata?.rawCustomBlackLevel,
                     rawWhiteLevelMode = updatedMetadata?.rawWhiteLevelMode,
                     rawCustomWhiteLevel = updatedMetadata?.rawCustomWhiteLevel,
-                    sharpeningValue = updatedMetadata?.sharpening ?: RawSharpeningDefaults.CAPTURE_DEFAULT,
+                    sharpeningValue = updatedMetadata?.sharpening
+                        ?: RawSharpeningDefaults.DEFAULT_STRENGTH,
                     denoiseValue = rawNoiseReduction,
                     chromaDenoiseValue = rawChromaNoiseReduction,
                     rawDcpId = updatedMetadata?.rawDcpId,

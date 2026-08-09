@@ -88,6 +88,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.processor.DenoiseStrength
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -125,6 +126,8 @@ import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.ml.DepthModelDownloadState
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawSharpeningDefaults
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -158,7 +161,6 @@ private enum class SettingsPage {
     QUALITY_PERFORMANCE,
     COLOR_HDR,
     MULTIFRAME_EXPOSURE,
-    SOFTWARE_PROCESSING,
     RAW,
     PHANTOM,
     INTERFACE,
@@ -286,10 +288,6 @@ fun SettingsScreen(
     val customVendorKeySettings by viewModel.customVendorKeySettings.collectAsState()
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
     val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = true)
-    // 软件处理参数
-    val sharpening by viewModel.sharpening.collectAsState(initial = 0f)
-    val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
-    val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0f)
     val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
     val customLensIds by viewModel.customLensIds.collectAsState(initial = emptyList())
     val lensIdBlacklist by viewModel.lensIdBlacklist.collectAsState(initial = emptyList())
@@ -365,6 +363,12 @@ fun SettingsScreen(
     val rawCfaCorrectionMode by viewModel.rawCfaCorrectionMode.collectAsState()
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
+    val rawSharpening by viewModel.rawSharpening.collectAsState()
+    val rawMaxSharpening by viewModel.rawMaxSharpening.collectAsState()
+    val rawNoiseReduction by viewModel.rawNoiseReduction.collectAsState()
+    val rawChromaNoiseReduction by viewModel.rawChromaNoiseReduction.collectAsState()
+    val rawMaxNoiseReduction by viewModel.rawMaxNoiseReduction.collectAsState()
+    val rawMaxChromaNoiseReduction by viewModel.rawMaxChromaNoiseReduction.collectAsState()
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
@@ -377,7 +381,6 @@ fun SettingsScreen(
 
     var selectedPage by remember { mutableStateOf<SettingsPage?>(null) }
     var isRawSliderAdjusting by remember { mutableStateOf(false) }
-    var isSoftwareProcessingSliderAdjusting by remember { mutableStateOf(false) }
     var mainCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
     var macroCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
     var rawExposureCompensationUi by remember { mutableStateOf(rawExposureCompensation) }
@@ -386,9 +389,12 @@ fun SettingsScreen(
     var rawBlackPointCorrectionUi by remember { mutableStateOf(rawBlackPointCorrection) }
     var rawWhitePointCorrectionUi by remember { mutableStateOf(rawWhitePointCorrection) }
     var rawToneMappingParametersUi by remember { mutableStateOf(rawToneMappingParameters) }
-    var sharpeningUi by remember { mutableStateOf(sharpening) }
-    var noiseReductionUi by remember { mutableStateOf(noiseReduction) }
-    var chromaNoiseReductionUi by remember { mutableStateOf(chromaNoiseReduction) }
+    var rawSharpeningUi by remember { mutableStateOf(rawSharpening) }
+    var rawMaxSharpeningUi by remember { mutableStateOf(rawMaxSharpening) }
+    var rawNoiseReductionUi by remember { mutableStateOf(rawNoiseReduction) }
+    var rawChromaNoiseReductionUi by remember { mutableStateOf(rawChromaNoiseReduction) }
+    var rawMaxNoiseReductionUi by remember { mutableStateOf(rawMaxNoiseReduction) }
+    var rawMaxChromaNoiseReductionUi by remember { mutableStateOf(rawMaxChromaNoiseReduction) }
     var aiFocusScoreThresholdUi by remember(aiFocusScoreThreshold) { mutableStateOf(aiFocusScoreThreshold) }
     var windowScreenBrightnessUi by remember { mutableStateOf(windowScreenBrightness ?: 1f) }
     var windowScreenBrightnessEnabled by remember { mutableStateOf(windowScreenBrightness != null) }
@@ -403,7 +409,13 @@ fun SettingsScreen(
         rawShadowsAdjustment,
         rawBlackPointCorrection,
         rawWhitePointCorrection,
-        rawToneMappingParameters
+        rawToneMappingParameters,
+        rawSharpening,
+        rawMaxSharpening,
+        rawNoiseReduction,
+        rawChromaNoiseReduction,
+        rawMaxNoiseReduction,
+        rawMaxChromaNoiseReduction,
     ) {
         if (!isRawSliderAdjusting) {
             rawExposureCompensationUi = rawExposureCompensation
@@ -412,14 +424,12 @@ fun SettingsScreen(
             rawBlackPointCorrectionUi = rawBlackPointCorrection
             rawWhitePointCorrectionUi = rawWhitePointCorrection
             rawToneMappingParametersUi = rawToneMappingParameters
-        }
-    }
-
-    LaunchedEffect(sharpening, noiseReduction, chromaNoiseReduction) {
-        if (!isSoftwareProcessingSliderAdjusting) {
-            sharpeningUi = sharpening
-            noiseReductionUi = noiseReduction
-            chromaNoiseReductionUi = chromaNoiseReduction
+            rawSharpeningUi = rawSharpening
+            rawMaxSharpeningUi = rawMaxSharpening
+            rawNoiseReductionUi = rawNoiseReduction
+            rawChromaNoiseReductionUi = rawChromaNoiseReduction
+            rawMaxNoiseReductionUi = rawMaxNoiseReduction
+            rawMaxChromaNoiseReductionUi = rawMaxChromaNoiseReduction
         }
     }
 
@@ -467,13 +477,12 @@ fun SettingsScreen(
         viewModel.setRawBlackPointCorrection(rawBlackPointCorrectionUi)
         viewModel.setRawWhitePointCorrection(rawWhitePointCorrectionUi)
         viewModel.setRawToneMappingParameters(rawToneMappingParametersUi)
-    }
-
-    fun commitSoftwareProcessingSliderValues() {
-        isSoftwareProcessingSliderAdjusting = false
-        viewModel.setSharpening(sharpeningUi)
-        viewModel.setNoiseReduction(noiseReductionUi)
-        viewModel.setChromaNoiseReduction(chromaNoiseReductionUi)
+        viewModel.setRawSharpening(rawSharpeningUi)
+        viewModel.setRawMaxSharpening(rawMaxSharpeningUi)
+        viewModel.setRawNoiseReduction(rawNoiseReductionUi)
+        viewModel.setRawChromaNoiseReduction(rawChromaNoiseReductionUi)
+        viewModel.setRawMaxNoiseReduction(rawMaxNoiseReductionUi)
+        viewModel.setRawMaxChromaNoiseReduction(rawMaxChromaNoiseReductionUi)
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -701,7 +710,6 @@ fun SettingsScreen(
     var showLogViewerDialog by remember { mutableStateOf(false) }
     var showCustomAIModelDialog by remember { mutableStateOf(false) }
     var customAIModelValue by remember { mutableStateOf("") }
-    var softwareProcessingExpanded by remember { mutableStateOf(false) }
     var calibrationExpanded by remember { mutableStateOf(false) }
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
@@ -908,7 +916,6 @@ fun SettingsScreen(
         SettingsPage.QUALITY_PERFORMANCE -> stringResource(R.string.settings_section_quality_perf)
         SettingsPage.COLOR_HDR -> stringResource(R.string.settings_section_color_hdr)
         SettingsPage.MULTIFRAME_EXPOSURE -> stringResource(R.string.settings_section_multiframe_exposure)
-        SettingsPage.SOFTWARE_PROCESSING -> stringResource(R.string.settings_section_software_processing)
         SettingsPage.RAW -> stringResource(R.string.baseline_target_raw)
         SettingsPage.PHANTOM -> stringResource(R.string.phantom)
         SettingsPage.INTERFACE -> stringResource(R.string.settings_section_interface)
@@ -1771,60 +1778,6 @@ fun SettingsScreen(
                     }
                 }
 
-                SettingsPage.SOFTWARE_PROCESSING -> {
-                    // 细节微调
-                    SettingsSection(
-                        title = stringResource(R.string.settings_section_software_processing),
-                        description = stringResource(R.string.settings_detail_enhancement_description),
-                        isExpandable = true,
-                        isExpanded = softwareProcessingExpanded,
-                        onToggleExpand = { softwareProcessingExpanded = !softwareProcessingExpanded }
-                    ) {
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_sharpening),
-                            description = stringResource(R.string.settings_sharpening_description),
-                            value = sharpeningUi,
-                            valueRange = 0f..1f,
-                            resetValue = 0f,
-                            onValueChange = {
-                                isSoftwareProcessingSliderAdjusting = true
-                                sharpeningUi = it
-                            },
-                            onValueChangeFinished = ::commitSoftwareProcessingSliderValues
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_noise_reduction),
-                            description = stringResource(R.string.settings_noise_reduction_description),
-                            value = noiseReductionUi,
-                            valueRange = 0f..1f,
-                            resetValue = 0f,
-                            onValueChange = {
-                                isSoftwareProcessingSliderAdjusting = true
-                                noiseReductionUi = it
-                            },
-                            onValueChangeFinished = ::commitSoftwareProcessingSliderValues
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_chroma_noise_reduction),
-                            description = stringResource(R.string.settings_chroma_noise_reduction_description),
-                            value = chromaNoiseReductionUi,
-                            valueRange = 0f..1f,
-                            resetValue = 0f,
-                            onValueChange = {
-                                isSoftwareProcessingSliderAdjusting = true
-                                chromaNoiseReductionUi = it
-                            },
-                            onValueChangeFinished = ::commitSoftwareProcessingSliderValues
-                        )
-                    }
-                }
-
                 SettingsPage.RAW -> {
                     RawEditPanel(
                         selectedDcpId = rawDcpId,
@@ -1920,6 +1873,111 @@ fun SettingsScreen(
                         },
                         contentMode = RawEditPanelContentMode.FULL
                     )
+
+                    SettingsSection(
+                        title = stringResource(R.string.settings_raw_default_processing_section),
+                        isExpandable = false,
+                    ) {
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_raw_default_sharpening),
+                            description = stringResource(
+                                R.string.settings_raw_default_sharpening_description
+                            ),
+                            value = rawSharpeningUi,
+                            valueRange = 0f..1f,
+                            resetValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
+                            onValueChange = {
+                                isRawSliderAdjusting = true
+                                rawSharpeningUi = it
+                            },
+                            onValueChangeFinished = ::commitRawSliderValues,
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_raw_default_luma_denoise),
+                            description = stringResource(
+                                R.string.settings_raw_default_luma_denoise_description
+                            ),
+                            value = rawNoiseReductionUi,
+                            valueRange = DenoiseStrength.valueRange,
+                            resetValue = RawDenoiseDefaults.RAW_LUMA_STRENGTH,
+                            onValueChange = {
+                                isRawSliderAdjusting = true
+                                rawNoiseReductionUi = it
+                            },
+                            onValueChangeFinished = ::commitRawSliderValues,
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_raw_default_chroma_denoise),
+                            description = stringResource(
+                                R.string.settings_raw_default_chroma_denoise_description
+                            ),
+                            value = rawChromaNoiseReductionUi,
+                            valueRange = DenoiseStrength.valueRange,
+                            resetValue = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
+                            onValueChange = {
+                                isRawSliderAdjusting = true
+                                rawChromaNoiseReductionUi = it
+                            },
+                            onValueChangeFinished = ::commitRawSliderValues,
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_raw_max_default_sharpening),
+                            description = stringResource(
+                                R.string.settings_raw_max_default_sharpening_description
+                            ),
+                            value = rawMaxSharpeningUi,
+                            valueRange = 0f..1f,
+                            resetValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
+                            onValueChange = {
+                                isRawSliderAdjusting = true
+                                rawMaxSharpeningUi = it
+                            },
+                            onValueChangeFinished = ::commitRawSliderValues,
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_raw_max_default_luma_denoise),
+                            description = stringResource(
+                                R.string.settings_raw_max_default_luma_denoise_description
+                            ),
+                            value = rawMaxNoiseReductionUi,
+                            valueRange = DenoiseStrength.valueRange,
+                            resetValue = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
+                            onValueChange = {
+                                isRawSliderAdjusting = true
+                                rawMaxNoiseReductionUi = it
+                            },
+                            onValueChangeFinished = ::commitRawSliderValues,
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_raw_max_default_chroma_denoise),
+                            description = stringResource(
+                                R.string.settings_raw_max_default_chroma_denoise_description
+                            ),
+                            value = rawMaxChromaNoiseReductionUi,
+                            valueRange = DenoiseStrength.valueRange,
+                            resetValue = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+                            onValueChange = {
+                                isRawSliderAdjusting = true
+                                rawMaxChromaNoiseReductionUi = it
+                            },
+                            onValueChangeFinished = ::commitRawSliderValues,
+                        )
+                    }
 
                     HorizontalDivider(
                         modifier = Modifier.padding(vertical = 8.dp),
@@ -2861,14 +2919,6 @@ private fun SettingsCategoryOverview(
                 stringResource(R.string.settings_multiple_exposure_count)
             ).joinToString(" · "),
             onClick = { onPageSelected(SettingsPage.MULTIFRAME_EXPOSURE) }
-        )
-
-        SettingsCategoryDivider()
-
-        NavigationSettingItem(
-            title = stringResource(R.string.settings_section_software_processing),
-            description = stringResource(R.string.settings_detail_enhancement_description),
-            onClick = { onPageSelected(SettingsPage.SOFTWARE_PROCESSING) }
         )
 
         SettingsCategoryDivider()

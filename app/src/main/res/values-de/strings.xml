@@ -262,4 +262,9 @@
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: ein von Hasselblad unabhängig entwickeltes Farbmanagementsystem</string>
     <string name="settings_raw_max_hdr_composition">RAWmax-HDR-Zusammenführung</string>
     <string name="settings_raw_max_hdr_composition_description">Verwendet Belichtungsreihen für die HDR-Zusammenführung in RAWmax. Das Deaktivieren verbessert die Verarbeitungsgeschwindigkeit.</string>
+    <string name="settings_raw_default_sharpening_section">Standardschärfung</string>
+    <string name="settings_raw_default_sharpening">RAW-Standardschärfung</string>
+    <string name="settings_raw_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von RAW-Aufnahmen angewendet wird.</string>
+    <string name="settings_raw_max_default_sharpening">RAWmax-Standardschärfung</string>
+    <string name="settings_raw_max_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von RAWmax-Aufnahmen angewendet wird.</string>
 </resources>

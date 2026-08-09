@@ -7,6 +7,8 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
+import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 
 /**
@@ -73,6 +75,27 @@ internal object CameraPresetJsonCodec {
             ).persistedValue,
             rawRenderingEngine = parseRawRenderingEngine(
                 obj.stringOrNull("rawRenderingEngine") ?: obj.stringOrNull("rawColorEngine")
+            ),
+            rawSharpening = RawSharpeningDefaults.normalize(
+                obj.float("rawSharpening", RawSharpeningDefaults.DEFAULT_STRENGTH)
+            ),
+            rawMaxSharpening = RawSharpeningDefaults.normalize(
+                obj.float("rawMaxSharpening", RawSharpeningDefaults.DEFAULT_STRENGTH)
+            ),
+            rawNoiseReduction = RawDenoiseDefaults.normalize(
+                obj.float("rawNoiseReduction", RawDenoiseDefaults.RAW_LUMA_STRENGTH)
+            ),
+            rawChromaNoiseReduction = RawDenoiseDefaults.normalize(
+                obj.float("rawChromaNoiseReduction", RawDenoiseDefaults.RAW_CHROMA_STRENGTH)
+            ),
+            rawMaxNoiseReduction = RawDenoiseDefaults.normalize(
+                obj.float("rawMaxNoiseReduction", RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH)
+            ),
+            rawMaxChromaNoiseReduction = RawDenoiseDefaults.normalize(
+                obj.float(
+                    "rawMaxChromaNoiseReduction",
+                    RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+                )
             ),
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
             rawPhotonPgtmToneMap =

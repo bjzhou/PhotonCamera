@@ -901,4 +901,9 @@
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: ระบบจัดการสีที่ Hasselblad พัฒนาขึ้นอย่างอิสระ</string>
     <string name="settings_raw_max_hdr_composition">การรวม HDR ของ RAWmax</string>
     <string name="settings_raw_max_hdr_composition_description">ใช้การถ่ายคร่อมแสงสำหรับการรวม HDR ใน RAWmax ปิดเพื่อเพิ่มความเร็วในการประมวลผล</string>
+    <string name="settings_raw_default_sharpening_section">ความคมชัดเริ่มต้น</string>
+    <string name="settings_raw_default_sharpening">ความคมชัดเริ่มต้นของ RAW</string>
+    <string name="settings_raw_default_sharpening_description">ความคมชัดที่ใช้เป็นค่าเริ่มต้นเมื่อประมวลผลภาพ RAW</string>
+    <string name="settings_raw_max_default_sharpening">ความคมชัดเริ่มต้นของ RAWmax</string>
+    <string name="settings_raw_max_default_sharpening_description">ความคมชัดที่ใช้เป็นค่าเริ่มต้นเมื่อประมวลผลภาพ RAWmax</string>
 </resources>

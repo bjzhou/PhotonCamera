@@ -263,4 +263,9 @@
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: 핫셀블라드가 독자적으로 개발한 컬러 매니지먼트 시스템</string>
     <string name="settings_raw_max_hdr_composition">RAWmax HDR 합성</string>
     <string name="settings_raw_max_hdr_composition_description">RAWmax에서 브래킷 노출을 사용해 HDR을 합성합니다. 끄면 처리 속도가 향상됩니다.</string>
+    <string name="settings_raw_default_sharpening_section">기본 선명도</string>
+    <string name="settings_raw_default_sharpening">RAW 기본 선명도</string>
+    <string name="settings_raw_default_sharpening_description">RAW 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
+    <string name="settings_raw_max_default_sharpening">RAWmax 기본 선명도</string>
+    <string name="settings_raw_max_default_sharpening_description">RAWmax 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
 </resources>

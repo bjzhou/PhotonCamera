@@ -42,6 +42,7 @@ private fun MediaMetadata.thumbnailTransformCacheKey(): Int {
         noiseReduction = null,
         chromaNoiseReduction = null,
         rawDenoiseValue = null,
+        rawChromaDenoiseValue = null,
         rawExposureCompensation = null,
         rawAutoExposure = null,
         rawHighlightsAdjustment = null,

@@ -317,6 +317,9 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         apply_lens_shading_in_bayer_aot == JNI_TRUE;
     if (rgba_buffer == nullptr || width <= 0 || height <= 0 ||
         full_width <= 0 || full_height <= 0 ||
+        global_origin_x < 0 || global_origin_y < 0 ||
+        global_origin_x + width > full_width ||
+        global_origin_y + height > full_height ||
         (bayer_input && (cfa_pattern < 0 || cfa_pattern > 3)) ||
         (apply_bayer_lens_shading && !bayer_input) ||
         (!run_luma && !run_chroma)) {
@@ -560,19 +563,25 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 lens_count,
                 lens.data());
             if (env->ExceptionCheck()) return -1;
-            const float sample_rate_x = strength_width > 1
+            const int full_strength_width = RoundUp(full_width, 128) / 4;
+            const int full_strength_height = RoundUp(full_height, 16) / 4;
+            const int strength_origin_x = global_origin_x / 4;
+            const int strength_origin_y = global_origin_y / 4;
+            const float sample_rate_x = full_strength_width > 1
                 ? static_cast<float>(lens_width - 1) /
-                    static_cast<float>(strength_width - 1)
+                    static_cast<float>(full_strength_width - 1)
                 : 1.0f;
-            const float sample_rate_y = strength_height > 1
+            const float sample_rate_y = full_strength_height > 1
                 ? static_cast<float>(lens_height - 1) /
-                    static_cast<float>(strength_height - 1)
+                    static_cast<float>(full_strength_height - 1)
                 : 1.0f;
             const int strength_result =
                 photon::mgc_denoise::ComputeStrengthMap(
                     base_strength.data(),
                     strength_width,
                     strength_height,
+                    strength_origin_x,
+                    strength_origin_y,
                     lens.data(),
                     lens_width,
                     lens_height,

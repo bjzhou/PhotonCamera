@@ -262,4 +262,9 @@
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: sistem manajemen warna yang dikembangkan secara independen oleh Hasselblad</string>
     <string name="settings_raw_max_hdr_composition">Penggabungan HDR RAWmax</string>
     <string name="settings_raw_max_hdr_composition_description">Gunakan pencahayaan bertingkat untuk penggabungan HDR di RAWmax. Nonaktifkan untuk meningkatkan kecepatan pemrosesan.</string>
+    <string name="settings_raw_default_sharpening_section">Penajaman default</string>
+    <string name="settings_raw_default_sharpening">Penajaman RAW default</string>
+    <string name="settings_raw_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan RAW.</string>
+    <string name="settings_raw_max_default_sharpening">Penajaman RAWmax default</string>
+    <string name="settings_raw_max_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan RAWmax.</string>
 </resources>

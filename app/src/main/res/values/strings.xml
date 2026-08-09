@@ -1127,4 +1127,18 @@
     <string name="preset_custom_badge">Custom</string>
     <string name="preset_builtin_badge">Built-in</string>
     <string name="gallery">Gallery</string>
+    <string name="settings_raw_default_sharpening_section">Default sharpening</string>
+    <string name="settings_raw_default_sharpening">RAW default sharpening</string>
+    <string name="settings_raw_default_sharpening_description">Sharpening applied by default when developing RAW captures.</string>
+    <string name="settings_raw_max_default_sharpening">RAWmax default sharpening</string>
+    <string name="settings_raw_max_default_sharpening_description">Sharpening applied by default when developing RAWmax captures.</string>
+    <string name="settings_raw_default_processing_section">RAW defaults</string>
+    <string name="settings_raw_default_luma_denoise">RAW default luma denoise</string>
+    <string name="settings_raw_default_luma_denoise_description">Adjusts luminance noise reduction for RAW photos.</string>
+    <string name="settings_raw_default_chroma_denoise">RAW default chroma denoise</string>
+    <string name="settings_raw_default_chroma_denoise_description">Adjusts color noise reduction for RAW photos.</string>
+    <string name="settings_raw_max_default_luma_denoise">RAWmax baked luma denoise</string>
+    <string name="settings_raw_max_default_luma_denoise_description">Adjusts luminance noise reduction for RAWmax photos.</string>
+    <string name="settings_raw_max_default_chroma_denoise">RAWmax baked chroma denoise</string>
+    <string name="settings_raw_max_default_chroma_denoise_description">Adjusts color noise reduction for RAWmax photos.</string>
 </resources>

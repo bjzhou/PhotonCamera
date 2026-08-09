@@ -32,6 +32,8 @@ import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawProfile
+import com.hinnka.mycamera.raw.RawDenoiseDefaults
+import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -48,6 +50,7 @@ import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.mgc.PhotonLookContract
+import com.hinnka.mycamera.processor.DenoiseStrength
 import org.json.JSONObject
 
 /**
@@ -147,6 +150,12 @@ data class UserPreferences(
     val rawWhiteLevelModes: Map<String, String> = emptyMap(),
     val rawCustomWhiteLevels: Map<String, Float> = emptyMap(),
     val rawCfaCorrectionModes: Map<String, String> = emptyMap(),
+    val rawSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
+    val rawMaxSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
+    val rawNoiseReduction: Float = RawDenoiseDefaults.RAW_LUMA_STRENGTH,
+    val rawChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
+    val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
+    val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
     val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
     val phantomFrameId: String? = null,
@@ -170,9 +179,6 @@ data class UserPreferences(
     val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
     val useRaw: Boolean = false,                // 使用 RAW 格式拍摄
     val meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT, // 测光模式
-    val sharpening: Float = 0f,              // 0.0 ~ 1.0 锐化强度
-    val noiseReduction: Float = 0f,         // 0.0 ~ 1.0 降噪强度
-    val chromaNoiseReduction: Float = 0f,   // 0.0 ~ 1.0 减少杂色强度
     // 摄像头方向校正：Map<CameraId, 旋转偏移角度(0/90/180/270)>
     val cameraOrientationOffsets: Map<String, Int> = emptyMap(),
     // 排序顺序
@@ -307,6 +313,12 @@ data class CameraFeaturePreferencesUpdate(
     val rawHncsFilmCurveMode: PreferenceUpdateValue<HncsFilmCurveMode>? = null,
     val rawRenderingEngine: PreferenceUpdateValue<RawRenderingEngine>? = null,
     val rawToneMappingParameters: PreferenceUpdateValue<RawToneMappingParameters>? = null,
+    val rawSharpening: PreferenceUpdateValue<Float>? = null,
+    val rawMaxSharpening: PreferenceUpdateValue<Float>? = null,
+    val rawNoiseReduction: PreferenceUpdateValue<Float>? = null,
+    val rawChromaNoiseReduction: PreferenceUpdateValue<Float>? = null,
+    val rawMaxNoiseReduction: PreferenceUpdateValue<Float>? = null,
+    val rawMaxChromaNoiseReduction: PreferenceUpdateValue<Float>? = null,
     val rawSpectralFilmStock: PreferenceUpdateValue<String?>? = null,
     val rawSpectralFilmPrint: PreferenceUpdateValue<String?>? = null,
     val droMode: PreferenceUpdateValue<String>? = null,
@@ -367,6 +379,14 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_WHITE_LEVEL_MODES_KEY = stringPreferencesKey("raw_white_level_modes")
         private val RAW_CUSTOM_WHITE_LEVELS_KEY = stringPreferencesKey("raw_custom_white_levels")
         private val RAW_CFA_CORRECTION_MODES_KEY = stringPreferencesKey("raw_cfa_correction_modes")
+        private val RAW_SHARPENING_KEY = floatPreferencesKey("raw_sharpening")
+        private val RAW_MAX_SHARPENING_KEY = floatPreferencesKey("raw_max_sharpening")
+        private val RAW_NOISE_REDUCTION_KEY = floatPreferencesKey("raw_noise_reduction")
+        private val RAW_CHROMA_NOISE_REDUCTION_KEY =
+            floatPreferencesKey("raw_chroma_noise_reduction")
+        private val RAW_MAX_NOISE_REDUCTION_KEY = floatPreferencesKey("raw_max_noise_reduction")
+        private val RAW_MAX_CHROMA_NOISE_REDUCTION_KEY =
+            floatPreferencesKey("raw_max_chroma_noise_reduction")
         private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
         private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
@@ -392,11 +412,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_RAW = booleanPreferencesKey("use_raw")
         private val RAW_LENS_SHADING_CORRECTION_ENABLED = booleanPreferencesKey("raw_lens_shading_correction_enabled")
         private val METERING_MODE = stringPreferencesKey("metering_mode")
-
-        // 软件处理参数 Keys
-        private val SHARPENING = floatPreferencesKey("sharpening")
-        private val NOISE_REDUCTION = floatPreferencesKey("noise_reduction")
-        private val CHROMA_NOISE_REDUCTION = floatPreferencesKey("chroma_noise_reduction")
 
         // 排序 Keys
         private val FILTER_ORDER = stringPreferencesKey("filter_order")
@@ -602,6 +617,28 @@ class UserPreferencesRepository(private val context: Context) {
                 rawWhiteLevelModes = parseMapString(preferences[RAW_WHITE_LEVEL_MODES_KEY]),
                 rawCustomWhiteLevels = parseMapFloat(preferences[RAW_CUSTOM_WHITE_LEVELS_KEY]),
                 rawCfaCorrectionModes = parseMapString(preferences[RAW_CFA_CORRECTION_MODES_KEY]),
+                rawSharpening = RawSharpeningDefaults.normalize(
+                    preferences[RAW_SHARPENING_KEY] ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+                ),
+                rawMaxSharpening = RawSharpeningDefaults.normalize(
+                    preferences[RAW_MAX_SHARPENING_KEY] ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+                ),
+                rawNoiseReduction = RawDenoiseDefaults.normalize(
+                    preferences[RAW_NOISE_REDUCTION_KEY]
+                        ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
+                ),
+                rawChromaNoiseReduction = RawDenoiseDefaults.normalize(
+                    preferences[RAW_CHROMA_NOISE_REDUCTION_KEY]
+                        ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
+                ),
+                rawMaxNoiseReduction = RawDenoiseDefaults.normalize(
+                    preferences[RAW_MAX_NOISE_REDUCTION_KEY]
+                        ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
+                ),
+                rawMaxChromaNoiseReduction = RawDenoiseDefaults.normalize(
+                    preferences[RAW_MAX_CHROMA_NOISE_REDUCTION_KEY]
+                        ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
+                ),
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
@@ -640,10 +677,6 @@ class UserPreferencesRepository(private val context: Context) {
                 meteringMode = MeteringMode.valueOf(
                     preferences[METERING_MODE] ?: MeteringMode.SYSTEM_DEFAULT.name
                 ),
-                // 软件处理参数
-                sharpening = preferences[SHARPENING] ?: 0f,
-                noiseReduction = preferences[NOISE_REDUCTION] ?: 0f,
-                chromaNoiseReduction = preferences[CHROMA_NOISE_REDUCTION] ?: 0f,
                 // 摄像头方向偏移
                 cameraOrientationOffsets = parseCameraOrientationOffsets(preferences[CAMERA_ORIENTATION_OFFSETS]),
                 // 排序
@@ -1607,30 +1640,39 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 保存锐化强度
-     */
-    suspend fun saveSharpening(value: Float) {
+    suspend fun saveRawSharpening(value: Float) {
         context.dataStore.edit { preferences ->
-            preferences[SHARPENING] = value.coerceIn(0f, 1f)
+            preferences[RAW_SHARPENING_KEY] = RawSharpeningDefaults.normalize(value)
         }
     }
 
-    /**
-     * 保存降噪强度
-     */
-    suspend fun saveNoiseReduction(value: Float) {
+    suspend fun saveRawMaxSharpening(value: Float) {
         context.dataStore.edit { preferences ->
-            preferences[NOISE_REDUCTION] = value.coerceIn(0f, 1f)
+            preferences[RAW_MAX_SHARPENING_KEY] = RawSharpeningDefaults.normalize(value)
         }
     }
 
-    /**
-     * 保存减少杂色强度
-     */
-    suspend fun saveChromaNoiseReduction(value: Float) {
+    suspend fun saveRawNoiseReduction(value: Float) {
         context.dataStore.edit { preferences ->
-            preferences[CHROMA_NOISE_REDUCTION] = value.coerceIn(0f, 1f)
+            preferences[RAW_NOISE_REDUCTION_KEY] = DenoiseStrength.clamp(value)
+        }
+    }
+
+    suspend fun saveRawChromaNoiseReduction(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_CHROMA_NOISE_REDUCTION_KEY] = DenoiseStrength.clamp(value)
+        }
+    }
+
+    suspend fun saveRawMaxNoiseReduction(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_MAX_NOISE_REDUCTION_KEY] = DenoiseStrength.clamp(value)
+        }
+    }
+
+    suspend fun saveRawMaxChromaNoiseReduction(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_MAX_CHROMA_NOISE_REDUCTION_KEY] = DenoiseStrength.clamp(value)
         }
     }
 
@@ -2368,6 +2410,25 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
                 preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
                 preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] = normalized.usePhotonPgtmToneMap
+            }
+            update.rawSharpening?.let {
+                preferences[RAW_SHARPENING_KEY] = RawSharpeningDefaults.normalize(it.value)
+            }
+            update.rawMaxSharpening?.let {
+                preferences[RAW_MAX_SHARPENING_KEY] = RawSharpeningDefaults.normalize(it.value)
+            }
+            update.rawNoiseReduction?.let {
+                preferences[RAW_NOISE_REDUCTION_KEY] = RawDenoiseDefaults.normalize(it.value)
+            }
+            update.rawChromaNoiseReduction?.let {
+                preferences[RAW_CHROMA_NOISE_REDUCTION_KEY] = RawDenoiseDefaults.normalize(it.value)
+            }
+            update.rawMaxNoiseReduction?.let {
+                preferences[RAW_MAX_NOISE_REDUCTION_KEY] = RawDenoiseDefaults.normalize(it.value)
+            }
+            update.rawMaxChromaNoiseReduction?.let {
+                preferences[RAW_MAX_CHROMA_NOISE_REDUCTION_KEY] =
+                    RawDenoiseDefaults.normalize(it.value)
             }
             update.rawSpectralFilmStock?.let {
                 if (it.value != null) {

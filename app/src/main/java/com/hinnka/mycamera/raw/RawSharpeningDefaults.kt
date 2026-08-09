@@ -1,7 +1,11 @@
 package com.hinnka.mycamera.raw
 
 object RawSharpeningDefaults {
-    const val CAPTURE_DEFAULT = 0.4f
+    const val DEFAULT_STRENGTH = 0.4f
 
-    fun forCapture(requested: Float): Float = maxOf(requested, CAPTURE_DEFAULT)
+    fun normalize(value: Float): Float = if (value.isFinite()) {
+        value.coerceIn(0f, 1f)
+    } else {
+        DEFAULT_STRENGTH
+    }
 }

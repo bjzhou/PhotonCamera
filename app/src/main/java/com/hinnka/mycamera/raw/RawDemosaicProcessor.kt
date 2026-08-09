@@ -27,6 +27,7 @@ import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.GlesMgcRawSpatialStacker
 import com.hinnka.mycamera.processor.GlesPixelBufferTransfer
 import com.hinnka.mycamera.processor.GpuBayerSource
@@ -91,21 +92,28 @@ internal enum class MgcSpatialGpuDenoiseMode {
     BYPASS_DEFAULT_DENOISE,
 }
 
-private data class VgnNoiseTransfer(
-    /** Normalized Y/Cb/Cr variance intercept after VGN and MGC NoiseModel.Scale(2). */
+private data class DemosaicNoiseTransfer(
+    /** Normalized Y/Cb/Cr variance intercept after demosaic and MGC NoiseModel.Scale(2). */
     val normalizedYuvRead: FloatArray,
-    /** Normalized Y/Cb/Cr variance slope after VGN and MGC NoiseModel.Scale(2). */
+    /** Normalized Y/Cb/Cr variance slope after demosaic and MGC NoiseModel.Scale(2). */
     val normalizedYuvShot: FloatArray,
-    /** Normalized Y/Cb/Cr quadratic variance term after VGN and MGC NoiseModel.Scale(2). */
+    /** Normalized Y/Cb/Cr quadratic variance term after demosaic and MGC NoiseModel.Scale(2). */
     val normalizedYuvQuadratic: FloatArray,
     val correlation: FloatArray,
 )
 
-private data class VgnNoiseSample(
+private data class DemosaicNoiseSample(
     val referenceSignal: Float,
     val workingLumaMean: Float,
     val normalizedYuvVariance: FloatArray,
     val correlation: FloatArray,
+)
+
+private data class DemosaicNoiseTransferCacheKey(
+    val cfaPattern: Int,
+    val normalizedRgbReadBits: List<Int>,
+    val normalizedRgbShotBits: List<Int>,
+    val calculationWbBits: List<Int>,
 )
 
 private data class GpuPhotonGainCurves(
@@ -113,7 +121,7 @@ private data class GpuPhotonGainCurves(
     val textureId: Int,
 )
 
-private enum class VgnNoiseComponent {
+private enum class DemosaicNoiseComponent {
     TOTAL,
     READ_ONLY,
 }
@@ -285,15 +293,10 @@ class RawDemosaicProcessor {
         // three one-pixel neighborhoods before the final ROI crop. Keep the offset a
         // multiple of four so the packed RGBA Bayer layout remains aligned.
         private const val VGN_WORK_HALO = 20
-        // Phocus' color-noise control is an integer level. Level 50 selects 4LP table entry
-        // min(level, 40) + 4 = 44 for pass 1 and entry min(level, 74) - 30 = 20 for pass 3.
-        // It is also above the native level-35 gate, so the complete IIR2 pass 1/2/3 chain runs.
-        private const val VGN_COLOR_NOISE_LEVEL = 50
-        private const val VGN_ADVANCED_COLOR_NOISE_ENABLED = true
         private const val VGN_DISPATCH_UBO_SLOT_COUNT = 2
         private const val VGN_PASS_WINDOW_SIZE = 2
         // The calibration field contains a 128x128 analysis core plus enough support for
-        // VGN's 20-pixel halo and the complete color-noise IIR chain on every side.
+        // VGN's 20-pixel demosaic halo on every side.
         private const val VGN_NOISE_CALIBRATION_SIZE = 256
         private const val VGN_NOISE_ANALYSIS_SIZE = 128
         private const val VGN_NOISE_ANALYSIS_ORIGIN =
@@ -951,8 +954,23 @@ class RawDemosaicProcessor {
         sourcePixelsIncludeLensShadingCorrection: Boolean,
         applyLensShadingCorrection: Boolean,
         mode: MgcSpatialGpuDenoiseMode = MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE,
+        lumaStrengthScale: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
+        chromaStrengthScale: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
     ): MgcSpatialGpuDenoiseResult? = withContext(glDispatcher) {
-        val applyDefaultDenoise = mode == MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE
+        val requestedLumaStrength = DenoiseStrength.clamp(lumaStrengthScale)
+        val requestedChromaStrength = DenoiseStrength.clamp(chromaStrengthScale)
+        val applyDefaultDenoise = mode == MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE &&
+            (requestedLumaStrength > 0f || requestedChromaStrength > 0f)
+        val resolvedLumaStrength = if (applyDefaultDenoise) {
+            requestedLumaStrength
+        } else {
+            0f
+        }
+        val resolvedChromaStrength = if (applyDefaultDenoise) {
+            requestedChromaStrength
+        } else {
+            0f
+        }
         val rgbaBytes = width.toLong() * height.toLong() * 4L * Short.SIZE_BYTES
         val rgbBytes = width.toLong() * height.toLong() * 3L * Short.SIZE_BYTES
         val validGeometry = width > 0 && height > 0 &&
@@ -1077,7 +1095,7 @@ class RawDemosaicProcessor {
         var completed = false
         var borrowedTexture = false
         var workingFloatTexture = 0
-        var vgnNoiseTransfer: VgnNoiseTransfer? = null
+        var demosaicNoiseTransfer: DemosaicNoiseTransfer? = null
         val totalStartNs = System.nanoTime()
         try {
             val hasDirectFloatSource =
@@ -1154,8 +1172,8 @@ class RawDemosaicProcessor {
                             pixelPreparationMetadata
                         }
                         if (applyDefaultDenoise) {
-                            vgnNoiseTransfer = checkNotNull(
-                                measureVgnNoiseTransfer(vgnMetadata),
+                            demosaicNoiseTransfer = checkNotNull(
+                                measureDemosaicNoiseTransfer(vgnMetadata),
                             ) { "Unable to propagate Spatial noise through VGN" }
                         }
                         runStandardBayerVgnDemosaic(
@@ -1231,8 +1249,8 @@ class RawDemosaicProcessor {
                         pixelPreparationMetadata
                     }
                     if (applyDefaultDenoise) {
-                        vgnNoiseTransfer = checkNotNull(
-                            measureVgnNoiseTransfer(vgnMetadata),
+                        demosaicNoiseTransfer = checkNotNull(
+                            measureDemosaicNoiseTransfer(vgnMetadata),
                         ) { "Unable to propagate Spatial noise through VGN" }
                     }
                     runStandardBayerVgnDemosaic(
@@ -1311,7 +1329,7 @@ class RawDemosaicProcessor {
                 // parameter preparation overlap the GPU transfer without creating another wait.
                 val parameterStartNs = System.nanoTime()
                 val spatialDenoiseMetadata = spatialOutputNoiseMetadata(denoiseMetadata)
-                val nativeDenoiseMetadata = vgnNoiseTransfer?.let { transfer ->
+                val nativeDenoiseMetadata = demosaicNoiseTransfer?.let { transfer ->
                     spatialDenoiseMetadata.copy(
                         mgcDenoiseCorrelation = transfer.correlation,
                     )
@@ -1350,14 +1368,15 @@ class RawDemosaicProcessor {
                         fullWidth = width,
                         fullHeight = height,
                         metadata = nativeDenoiseMetadata,
-                        preparedNormalizedYuvRead = vgnNoiseTransfer?.normalizedYuvRead,
-                        preparedNormalizedYuvShot = vgnNoiseTransfer?.normalizedYuvShot,
+                        preparedNormalizedYuvRead = demosaicNoiseTransfer?.normalizedYuvRead,
+                        preparedNormalizedYuvShot = demosaicNoiseTransfer?.normalizedYuvShot,
                         preparedNormalizedYuvQuadratic =
-                            vgnNoiseTransfer?.normalizedYuvQuadratic,
+                            demosaicNoiseTransfer?.normalizedYuvQuadratic,
+                        preparedCorrelation = demosaicNoiseTransfer?.correlation,
                         tuningGain = tuningGain,
                         pass = MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT,
-                        lumaStrengthScale = 1f,
-                        chromaStrengthScale = 1f,
+                        lumaStrengthScale = resolvedLumaStrength,
+                        chromaStrengthScale = resolvedChromaStrength,
                     )
                 ) { "MGC Spatial default luma/chroma denoise failed" }
                 nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
@@ -1422,8 +1441,8 @@ class RawDemosaicProcessor {
                     } else {
                         "BYPASS_DEFAULT_DENOISE"
                     }} " +
-                    "luma=${if (applyDefaultDenoise) 1.0 else 0.0} " +
-                    "chroma=${if (applyDefaultDenoise) 1.0 else 0.0} " +
+                    "luma=$resolvedLumaStrength " +
+                    "chroma=$resolvedChromaStrength " +
                     "frames=${metadata.frameCount} " +
                     "readNoise=${metadata.mgcDenoiseReadNoise?.contentToString()} " +
                     "shotNoise=${metadata.mgcDenoiseShotNoise?.contentToString()} " +
@@ -1433,7 +1452,7 @@ class RawDemosaicProcessor {
                     "lscIn=$sourcePixelsIncludeLensShadingCorrection " +
                     "lscAppliedToBayer=$applyLensShadingToBayer " +
                     "lscOut=$outputIncludesLensShading " +
-                    "vgnNoiseTransfer=${vgnNoiseTransfer?.let {
+                    "demosaicNoiseTransfer=${demosaicNoiseTransfer?.let {
                         "yuvRead=${it.normalizedYuvRead.contentToString()}," +
                             "yuvShot=${it.normalizedYuvShot.contentToString()}"
                     } ?: "not-applicable"} " +
@@ -1601,6 +1620,8 @@ class RawDemosaicProcessor {
     private var readbackPboSize = 0
     private var readbackBuffer: ByteBuffer? = null
     private var readbackBufferSize = 0
+    private var userAdjustmentNoiseTransferCacheKey: DemosaicNoiseTransferCacheKey? = null
+    private var userAdjustmentNoiseTransferCacheValue: DemosaicNoiseTransfer? = null
 
     private var curveTextureId = 0
     private var dcpToneCurveTextureId = 0
@@ -2705,6 +2726,9 @@ class RawDemosaicProcessor {
                 )
                 return@withContext null
             }
+            var userAdjustmentNoiseTransfer: DemosaicNoiseTransfer? = null
+            val userAdjustmentDenoiseEnabled =
+                (denoiseValue ?: 0f) > 0f || (chromaDenoiseValue ?: 0f) > 0f
             if (rawRenderTiles.isEmpty()) {
                 when {
                     useHalfResolutionMeteringDemosaic -> setupFullResFramebuffer(
@@ -3029,6 +3053,10 @@ class RawDemosaicProcessor {
                     // darktable feeds Filmic after the raw highlight reconstruction module;
                     // keep the raw-domain repair enabled before Filmic HR.
                     val rawDomainHighlightReconstructionEnabled = true
+                    if (!captureProfilePreparationRequested && userAdjustmentDenoiseEnabled) {
+                        userAdjustmentNoiseTransfer =
+                            prepareUserAdjustmentNoiseTransfer(actualMetadata)
+                    }
                     PLog.i(
                         TAG,
                         "RAW fused input layout=CFA frameCount=${actualMetadata.frameCount} " +
@@ -3307,6 +3335,7 @@ class RawDemosaicProcessor {
                 width = actualWidth,
                 height = actualHeight,
                 metadata = actualMetadata,
+                demosaicNoiseTransfer = userAdjustmentNoiseTransfer,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 globalOriginX = 0,
@@ -3608,6 +3637,10 @@ class RawDemosaicProcessor {
         )
 
         var completed = false
+        var userAdjustmentNoiseTransfer: DemosaicNoiseTransfer? = null
+        var userAdjustmentNoiseTransferPrepared = false
+        val userAdjustmentDenoiseEnabled =
+            (config.denoiseValue ?: 0f) > 0f || (config.chromaDenoiseValue ?: 0f) > 0f
         try {
             vgnTileTexturePoolingEnabled = true
             setupOutputFramebuffer(maximumOutputWidth, maximumOutputHeight)
@@ -3625,6 +3658,13 @@ class RawDemosaicProcessor {
                     samplesPerPixel = config.samplesPerPixel,
                 )
                 setupFullResFramebuffer(workWidth, workHeight)
+                if (!userAdjustmentNoiseTransferPrepared &&
+                    userAdjustmentDenoiseEnabled && config.samplesPerPixel == 1
+                ) {
+                    userAdjustmentNoiseTransfer =
+                        prepareUserAdjustmentNoiseTransfer(config.metadata)
+                    userAdjustmentNoiseTransferPrepared = true
+                }
 
                 when {
                     config.samplesPerPixel in 3..4 -> {
@@ -3724,6 +3764,7 @@ class RawDemosaicProcessor {
                     width = workWidth,
                     height = workHeight,
                     metadata = config.metadata,
+                    demosaicNoiseTransfer = userAdjustmentNoiseTransfer,
                     denoiseValue = config.denoiseValue,
                     chromaDenoiseValue = config.chromaDenoiseValue,
                     globalOriginX = working.left,
@@ -6523,7 +6564,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         chromaDenoiseValue: Float?,
     ): Int {
-        val strength = chromaDenoiseValue?.coerceIn(0f, 1f) ?: 0f
+        val strength = DenoiseStrength.clamp(chromaDenoiseValue)
         if (strength <= 0f || width * height < 2) {
             return sourceTextureId
         }
@@ -6668,6 +6709,7 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         metadata: RawMetadata,
+        demosaicNoiseTransfer: DemosaicNoiseTransfer?,
         denoiseValue: Float?,
         chromaDenoiseValue: Float?,
         globalOriginX: Int,
@@ -6675,8 +6717,10 @@ class RawDemosaicProcessor {
         fullImageWidth: Int,
         fullImageHeight: Int,
     ): Int? {
-        val lumaEnabled = (denoiseValue ?: 0f) > 0f
-        val chromaEnabled = (chromaDenoiseValue ?: 0f) > 0f
+        val lumaStrength = DenoiseStrength.clamp(denoiseValue)
+        val chromaStrength = DenoiseStrength.clamp(chromaDenoiseValue)
+        val lumaEnabled = lumaStrength > 0f
+        val chromaEnabled = chromaStrength > 0f
         val enabled = lumaEnabled || chromaEnabled
         if (!enabled || width * height < 2) {
             return sourceTextureId
@@ -6749,11 +6793,16 @@ class RawDemosaicProcessor {
                 fullWidth = fullImageWidth,
                 fullHeight = fullImageHeight,
                 metadata = metadata,
+                preparedNormalizedYuvRead = demosaicNoiseTransfer?.normalizedYuvRead,
+                preparedNormalizedYuvShot = demosaicNoiseTransfer?.normalizedYuvShot,
+                preparedNormalizedYuvQuadratic =
+                    demosaicNoiseTransfer?.normalizedYuvQuadratic,
+                preparedCorrelation = demosaicNoiseTransfer?.correlation,
+                applyLensShadingToDenoiseStrength = hasValidLensShadingMap(metadata),
                 tuningGain = tuningGain,
                 pass = MgcFullResolutionDenoise.Pass.USER_ADJUSTMENT,
-                lumaStrengthScale = denoiseValue?.coerceIn(0f, 1f) ?: 0f,
-                chromaStrengthScale =
-                    chromaDenoiseValue?.coerceIn(0f, 1f) ?: 0f,
+                lumaStrengthScale = lumaStrength,
+                chromaStrengthScale = chromaStrength,
             )
         ) {
             return null
@@ -6789,9 +6838,12 @@ class RawDemosaicProcessor {
             TAG,
             "MGC static denoise timing size=${width}x$height " +
                 "pass=USER_ADJUSTMENT " +
-                "luma=$lumaEnabled(${denoiseValue?.coerceIn(0f, 1f) ?: 0f}) " +
-                "chroma=$chromaEnabled(" +
-                "${chromaDenoiseValue?.coerceIn(0f, 1f) ?: 0f}) " +
+                "luma=$lumaEnabled($lumaStrength) " +
+                "chroma=$chromaEnabled($chromaStrength) " +
+                "noiseTransfer=${demosaicNoiseTransfer?.let {
+                    demosaicNoisePipelineLabel(metadata.cfaPattern)
+                } ?: "identity"} " +
+                "lscStrength=${lensShadingLogString(metadata)} " +
                 "readbackMs=${(nativeStartNs - readbackStartNs) / 1_000_000L} " +
                 "nativeMs=${(System.nanoTime() - nativeStartNs) / 1_000_000L}",
         )
@@ -6811,7 +6863,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         denoiseValue: Float?,
     ): Int {
-        val strength = denoiseValue ?: 0f
+        val strength = DenoiseStrength.clamp(denoiseValue)
         if (strength <= 0f || width * height < 2) {
             return sourceTextureId
         }
@@ -6878,9 +6930,10 @@ class RawDemosaicProcessor {
         val profileGain =
             (metadata.iso / 100.0f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
         val (noiseA, noiseB) = resolveDenoiseProfileNoiseModel(metadata, profileGain)
-        val a = noiseA.coerceAtLeast(1e-10f)
-        val b = noiseB.coerceAtLeast(1e-10f)
-        val strength = strengthValue.coerceAtLeast(0f)
+        val strength = DenoiseStrength.clamp(strengthValue)
+        val varianceScale = DenoiseStrength.noiseVarianceScale(strength)
+        val a = (noiseA * varianceScale).coerceAtLeast(1e-10f)
+        val b = (noiseB * varianceScale).coerceAtLeast(1e-10f)
         val scale = 1.0f
         val shadows = inferDenoiseProfileShadows(a)
         val bias = DenoiseProfileShaders.BLACK_PRESERVING_BIAS
@@ -7087,7 +7140,7 @@ class RawDemosaicProcessor {
         )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(program, "uDenoiseMix"),
-            params.strength.coerceIn(0f, 1f)
+            DenoiseStrength.outputMix(params.strength)
         )
         dispatchDenoiseImage(
             width,
@@ -8076,57 +8129,6 @@ class RawDemosaicProcessor {
         putInt(0)
     }
 
-    private data class VgnIirCoefficients(
-        val a10: FloatArray,
-        val b10: FloatArray,
-        val aDyn1: FloatArray,
-        val bDyn1: FloatArray,
-        val aDyn2: FloatArray,
-        val bDyn2: FloatArray,
-    )
-
-    // Exact coefficient rows selected by CDemosaicFilter::FilterResultGpu for color-noise
-    // level 50. a10/b10 is GetIIRFilter2LPCoefFloat(14); the two dynamic sections are the
-    // cascaded biquads returned by GetIIRFilter4LPCoefFloat(44) and (20), respectively.
-    private val vgnIirPass1Coefficients = VgnIirCoefficients(
-        a10 = floatArrayOf(0.0674552768f, 0.134910554f, 0.0674552768f, 0f),
-        b10 = floatArrayOf(1f, -1.14298046f, 0.412801594f, 0f),
-        aDyn1 = floatArrayOf(0.00580812711f, 0.0116162542f, 0.00580812711f, 0f),
-        bDyn1 = floatArrayOf(1f, -1.86380053f, 0.887032986f, 0f),
-        aDyn2 = floatArrayOf(0.00537849404f, 0.0107569881f, 0.00537849404f, 0f),
-        bDyn2 = floatArrayOf(1f, -1.72593343f, 0.747447371f, 0f),
-    )
-
-    private val vgnIirPass3Coefficients = VgnIirCoefficients(
-        a10 = vgnIirPass1Coefficients.a10,
-        b10 = vgnIirPass1Coefficients.b10,
-        aDyn1 = floatArrayOf(0.0331984349f, 0.0663968697f, 0.0331984349f, 0f),
-        bDyn1 = floatArrayOf(1f, -1.61172712f, 0.744520843f, 0f),
-        aDyn2 = floatArrayOf(0.0281187538f, 0.0562375076f, 0.0281187538f, 0f),
-        bDyn2 = floatArrayOf(1f, -1.36511719f, 0.47759226f, 0f),
-    )
-
-    private fun vgnIirUbo(
-        width: Int,
-        height: Int,
-        direction: Int,
-        axis: Int,
-        coefficients: VgnIirCoefficients,
-    ): ByteBuffer {
-        return vgnUbo(112) {
-            for (value in coefficients.a10) putFloat(value)
-            for (value in coefficients.b10) putFloat(value)
-            for (value in coefficients.aDyn1) putFloat(value)
-            for (value in coefficients.bDyn1) putFloat(value)
-            for (value in coefficients.aDyn2) putFloat(value)
-            for (value in coefficients.bDyn2) putFloat(value)
-            putInt(width)
-            putInt(height)
-            putInt(direction)
-            putInt(axis)
-        }
-    }
-
     private fun dispatchVgnPass(
         programIndex: Int,
         groupCountX: Int,
@@ -8203,33 +8205,6 @@ class RawDemosaicProcessor {
                 GLES30.GL_RGBA16F,
             )
         }
-    }
-
-    private fun runVgnIirPass(
-        programIndex: Int,
-        source: Int,
-        destination: Int,
-        uboId: Int,
-        width: Int,
-        height: Int,
-        direction: Int,
-        axis: Int,
-        coefficients: VgnIirCoefficients,
-        label: String,
-    ) {
-        val groupsX = if (axis == 0) 1 else width
-        val groupsY = if (axis == 0) height else 1
-        dispatchVgnPass(
-            programIndex = programIndex,
-            groupCountX = groupsX,
-            groupCountY = groupsY,
-            label = label,
-            uboId = uboId,
-            uboBinding = 2,
-            ubo = vgnIirUbo(width, height, direction, axis, coefficients),
-            VgnImageBinding(0, source, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-            VgnImageBinding(1, destination, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-        )
     }
 
     /**
@@ -8566,7 +8541,7 @@ class RawDemosaicProcessor {
                 VgnShaders.PROGRAM_COLOR_NOISE_1,
                 groupsWorkX,
                 groupsWorkY,
-                "color noise 1",
+                "color reconstruction 1",
                 nextVgnUboId(),
                 2,
                 vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
@@ -8578,7 +8553,7 @@ class RawDemosaicProcessor {
                 VgnShaders.PROGRAM_COLOR_NOISE_2,
                 groupsWorkX,
                 groupsWorkY,
-                "color noise 2",
+                "color reconstruction 2",
                 nextVgnUboId(),
                 2,
                 vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
@@ -8586,161 +8561,24 @@ class RawDemosaicProcessor {
                 VgnImageBinding(1, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
             )
 
-            if (VGN_ADVANCED_COLOR_NOISE_ENABLED) {
-                val full3 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 3")
-
-                dispatchVgnPass(
-                    VgnShaders.PROGRAM_COLOR_NOISE_3_YCCD,
-                    groupsWorkX,
-                    groupsWorkY,
-                    "color noise 3 YCCD",
-                    nextVgnUboId(),
-                    4,
-                    vgnBoundsUbo(12, 12, workWidth - 12, workHeight - 12),
-                    VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(2, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(3, full3, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                )
-
-                dispatchVgnPass(
-                    VgnShaders.PROGRAM_IIR2_1_INIT,
-                    1,
-                    workHeight,
-                    "IIR2 pass 1 init",
-                    nextVgnUboId(),
-                    3,
-                    vgnIirUbo(workWidth, workHeight, 0, 0, vgnIirPass1Coefficients),
-                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                )
-                runVgnIirPass(
-                    VgnShaders.PROGRAM_IIR2_1,
-                    full2,
-                    full3,
-                    nextVgnUboId(),
-                    workWidth,
-                    workHeight,
-                    1,
-                    0,
-                    vgnIirPass1Coefficients,
-                    "IIR2 pass 1 horizontal reverse",
-                )
-                runVgnIirPass(
-                    VgnShaders.PROGRAM_IIR2_1,
-                    full3,
-                    full2,
-                    nextVgnUboId(),
-                    workWidth,
-                    workHeight,
-                    0,
-                    1,
-                    vgnIirPass1Coefficients,
-                    "IIR2 pass 1 vertical forward",
-                )
-                runVgnIirPass(
-                    VgnShaders.PROGRAM_IIR2_1,
-                    full2,
-                    full3,
-                    nextVgnUboId(),
-                    workWidth,
-                    workHeight,
-                    1,
-                    1,
-                    vgnIirPass1Coefficients,
-                    "IIR2 pass 1 vertical reverse",
-                )
-
-                dispatchVgnPass(
-                    VgnShaders.PROGRAM_CALCULATE_COLOR_NOISE_ERROR,
-                    groupsWorkX,
-                    groupsWorkY,
-                    "calculate color noise error",
-                    nextVgnUboId(),
-                    images = arrayOf(
-                        VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                        VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                        VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                    ),
-                )
-
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, nextVgnUboId(), workWidth,
-                    workHeight, 0, 0, vgnIirPass1Coefficients,
-                    "IIR2 pass 2 horizontal forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, nextVgnUboId(), workWidth,
-                    workHeight, 1, 0, vgnIirPass1Coefficients,
-                    "IIR2 pass 2 horizontal reverse")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, nextVgnUboId(), workWidth,
-                    workHeight, 0, 1, vgnIirPass1Coefficients,
-                    "IIR2 pass 2 vertical forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, nextVgnUboId(), workWidth,
-                    workHeight, 1, 1, vgnIirPass1Coefficients,
-                    "IIR2 pass 2 vertical reverse")
-
-                dispatchVgnPass(
-                    VgnShaders.PROGRAM_COLOR_NOISE_FILTER,
-                    groupsWorkX,
-                    groupsWorkY,
-                    "color noise filter",
-                    nextVgnUboId(),
-                    images = arrayOf(
-                        VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                        VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                        VgnImageBinding(2, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    ),
-                )
-
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, nextVgnUboId(), workWidth,
-                    workHeight, 0, 0, vgnIirPass3Coefficients,
-                    "IIR2 pass 3 horizontal forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, nextVgnUboId(), workWidth,
-                    workHeight, 1, 0, vgnIirPass3Coefficients,
-                    "IIR2 pass 3 horizontal reverse")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, nextVgnUboId(), workWidth,
-                    workHeight, 0, 1, vgnIirPass3Coefficients,
-                    "IIR2 pass 3 vertical forward")
-                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, nextVgnUboId(), workWidth,
-                    workHeight, 1, 1, vgnIirPass3Coefficients,
-                    "IIR2 pass 3 vertical reverse")
-
-                dispatchVgnPass(
-                    VgnShaders.PROGRAM_YUV_TO_RGB,
-                    groupsOutputX,
-                    groupsOutputY,
-                    "YUV to RGB",
-                    nextVgnUboId(),
-                    2,
-                    vgnUbo(32) {
-                        putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
-                        putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
-                    },
-                    VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(1, linearOutputTextureId, GLES31.GL_WRITE_ONLY,
-                        GLES30.GL_RGBA16F),
-                )
-            } else {
-                // PASS_3 is YCCD with a direction mask, not a displayable final image.
-                // The reference COLOR_NOISE_PASS_3 performs the required four-phase chroma
-                // fusion and writes RGB while cropping the padded work domain to the photo ROI.
-                dispatchVgnPass(
-                    VgnShaders.PROGRAM_COLOR_NOISE_3,
-                    groupsOutputX,
-                    groupsOutputY,
-                    "color noise 3 RGB",
-                    nextVgnUboId(),
-                    3,
-                    vgnUbo(32) {
-                        putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
-                        putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
-                    },
-                    VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(2, linearOutputTextureId, GLES31.GL_WRITE_ONLY,
-                        GLES30.GL_RGBA16F),
-                )
-                PLog.d(TAG, "Single-frame VGN color-noise IIR chain disabled")
-            }
+            // These three color-noise passes are VGN's required four-phase chroma
+            // reconstruction, not the optional IIR denoise formerly applied afterwards.
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_3,
+                groupsOutputX,
+                groupsOutputY,
+                "color reconstruction 3 RGB",
+                nextVgnUboId(),
+                3,
+                vgnUbo(32) {
+                    putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
+                    putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
+                },
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(2, linearOutputTextureId, GLES31.GL_WRITE_ONLY,
+                    GLES30.GL_RGBA16F),
+            )
 
             passWindow.beginPass(
                 "composite camera RGB",
@@ -8780,7 +8618,7 @@ class RawDemosaicProcessor {
                 "Standard Bayer VGN complete: size=${width}x$height work=${workWidth}x$workHeight " +
                     "roi=$roiLeft,$roiTop,$roiRight,$roiBottom cfa=${metadata.cfaPattern} " +
                     "stdDev=$standardDeviation edgeThreshold=$edgeThreshold " +
-                    "vngThreshold=$vngThreshold colorNoiseLevel=$VGN_COLOR_NOISE_LEVEL " +
+                    "vngThreshold=$vngThreshold internalDenoise=disabled " +
                     "gpuSliced=true tookMs=${(System.nanoTime() - demosaicStartNs) / 1_000_000} " +
                     "calculationWb=${calculationGains.contentToString()} " +
                     "lsc=${lensShadingLogString(metadata)}",
@@ -8837,22 +8675,67 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Measures the small-signal noise transfer of the exact VGN pipeline used for this capture.
+     * Builds the physical single-frame model consumed by USER_ADJUSTMENT after demosaic.
+     * Sensor samples start with an identity power spectrum; the measured demosaic transfer
+     * supplies the Y/Cb/Cr coefficients and correlation seen by the full-resolution denoiser.
+     */
+    private fun prepareUserAdjustmentNoiseTransfer(
+        metadata: RawMetadata,
+    ): DemosaicNoiseTransfer? {
+        val rgbNoise = MgcFullResolutionDenoise.resolveUserAdjustmentCameraRgbNoise(metadata)
+            ?: return null
+        val calculationWb = demosaicCalculationWbGains(metadata)
+        val cacheKey = DemosaicNoiseTransferCacheKey(
+            cfaPattern = metadata.cfaPattern,
+            normalizedRgbReadBits = rgbNoise.read.map { it.toBits() },
+            normalizedRgbShotBits = rgbNoise.shot.map { it.toBits() },
+            calculationWbBits = calculationWb.map { it.toBits() },
+        )
+        if (cacheKey == userAdjustmentNoiseTransferCacheKey) {
+            return userAdjustmentNoiseTransferCacheValue
+        }
+        val propagationMetadata = metadata.copy(
+            frameCount = 1,
+            mgcDenoiseReadNoise = rgbNoise.read,
+            mgcDenoiseShotNoise = rgbNoise.shot,
+            mgcDenoiseCorrelation = FloatArray(VGN_NOISE_SPECTRUM_BINS) { 1f },
+            mgcSpatialStrengthMap = null,
+        )
+        val transfer = measureDemosaicNoiseTransfer(propagationMetadata)
+        if (transfer != null) {
+            userAdjustmentNoiseTransferCacheKey = cacheKey
+            userAdjustmentNoiseTransferCacheValue = transfer
+            PLog.i(
+                TAG,
+                "MGC USER_ADJUSTMENT noise propagation ready " +
+                    "pipeline=${demosaicNoisePipelineLabel(metadata.cfaPattern)} " +
+                    "correlation=${transfer.correlation.minOrNull()}.." +
+                    "${transfer.correlation.maxOrNull()}/${transfer.correlation.average()}",
+            )
+        }
+        return transfer
+    }
+
+    /**
+     * Measures the small-signal noise transfer of the exact demosaic pipeline used for this
+     * capture. Standard Bayer runs VGN; expanded Bayer runs the Quad Bayer compute chain.
      *
      * Neutral flat fields at several signal levels are populated with independent Bayer noise
-     * using Spatial's output model and the current calculation WB. Their exact VGN outputs are
+     * using the input noise model and the current calculation WB. Their exact demosaic outputs are
      * transformed to MGC YUV before fitting
      * variance = read + shot * luma + quadratic * luma^2. The quadratic term is required because
      * VGN's content-adaptive interpolation makes chroma variance visibly convex with signal.
      * The reference field also supplies the one-dimensional power-correlation spectrum composed
-     * with Spatial's spectrum.
+     * with the input spectrum.
      */
-    private fun measureVgnNoiseTransfer(metadata: RawMetadata): VgnNoiseTransfer? {
+    private fun measureDemosaicNoiseTransfer(
+        metadata: RawMetadata,
+    ): DemosaicNoiseTransfer? {
         val samples = VGN_NOISE_MODEL_SIGNALS.map { referenceSignal ->
-            measureVgnNoiseSample(
+            measureDemosaicNoiseSample(
                 metadata,
                 referenceSignal,
-                VgnNoiseComponent.TOTAL,
+                DemosaicNoiseComponent.TOTAL,
             ) ?: return null
         }
         val referenceSample = samples.minBy { sample ->
@@ -8861,10 +8744,10 @@ class RawDemosaicProcessor {
         // ChromaDenoisePyramidComplete consumes one shared Y shot/quadratic table but retains
         // separate Y/Cb/Cr read tables. Measure those constant terms directly instead of
         // extrapolating an intercept from total noise, which is dominated by shot noise.
-        val readSample = measureVgnNoiseSample(
+        val readSample = measureDemosaicNoiseSample(
             metadata,
             VGN_NOISE_REFERENCE_SIGNAL,
-            VgnNoiseComponent.READ_ONLY,
+            DemosaicNoiseComponent.READ_ONLY,
         ) ?: return null
         val fittedRead = readSample.normalizedYuvVariance.copyOf()
         val fittedShot = FloatArray(3)
@@ -8916,8 +8799,9 @@ class RawDemosaicProcessor {
         }
         PLog.i(
             TAG,
-            "VGN YUV noise model complete " +
-                "signals=${samples.map(VgnNoiseSample::workingLumaMean)} " +
+            "Demosaic YUV noise model complete " +
+                "pipeline=${demosaicNoisePipelineLabel(metadata.cfaPattern)} " +
+                "signals=${samples.map(DemosaicNoiseSample::workingLumaMean)} " +
                 "variance=${samples.map { it.normalizedYuvVariance.contentToString() }} " +
                 "readOnlySignal=${readSample.workingLumaMean} " +
                 "readOnlyVariance=${readSample.normalizedYuvVariance.contentToString()} " +
@@ -8930,7 +8814,7 @@ class RawDemosaicProcessor {
                 "scale2Shot=${normalizedYuvShot.contentToString()} " +
                 "scale2Quadratic=${normalizedYuvQuadratic.contentToString()}",
         )
-        return VgnNoiseTransfer(
+        return DemosaicNoiseTransfer(
             normalizedYuvRead = normalizedYuvRead,
             normalizedYuvShot = normalizedYuvShot,
             normalizedYuvQuadratic = normalizedYuvQuadratic,
@@ -8938,11 +8822,11 @@ class RawDemosaicProcessor {
         )
     }
 
-    private fun measureVgnNoiseSample(
+    private fun measureDemosaicNoiseSample(
         metadata: RawMetadata,
         referenceSignal: Float,
-        component: VgnNoiseComponent,
-    ): VgnNoiseSample? {
+        component: DemosaicNoiseComponent,
+    ): DemosaicNoiseSample? {
         val inputRead = metadata.mgcDenoiseReadNoise
         val inputShot = metadata.mgcDenoiseShotNoise
         val inputCorrelation = metadata.mgcDenoiseCorrelation
@@ -8956,20 +8840,16 @@ class RawDemosaicProcessor {
         }
         val calculationWb4 = demosaicCalculationWbGains(metadata)
         val calculationWb = floatArrayOf(calculationWb4[0], 1f, calculationWb4[3])
-        val phaseToCanonical = when (metadata.cfaPattern) {
-            RawMetadata.CFA_GRBG -> intArrayOf(1, 0, 3, 2)
-            RawMetadata.CFA_GBRG -> intArrayOf(2, 3, 0, 1)
-            RawMetadata.CFA_BGGR -> intArrayOf(3, 2, 1, 0)
-            else -> intArrayOf(0, 1, 2, 3)
-        }
+        val savedDemosaicWidth = demosaicWidth
+        val savedDemosaicHeight = demosaicHeight
         val calibrationPixels = VGN_NOISE_CALIBRATION_SIZE * VGN_NOISE_CALIBRATION_SIZE
         val syntheticRaw = LargeDirectBuffer.allocate(
             calibrationPixels.toLong() * Short.SIZE_BYTES,
-            "VGN noise propagation Bayer field",
+            "Demosaic noise propagation Bayer field",
         )?.order(ByteOrder.nativeOrder()) ?: return null
         val rgba = LargeDirectBuffer.allocate(
             calibrationPixels.toLong() * 4 * Short.SIZE_BYTES,
-            "VGN noise propagation RGBA16F",
+            "Demosaic noise propagation RGBA16F",
         )?.order(ByteOrder.nativeOrder()) ?: run {
             LargeDirectBuffer.free(syntheticRaw)
             return null
@@ -9006,8 +8886,11 @@ class RawDemosaicProcessor {
             syntheticRaw.clear()
             for (y in 0 until VGN_NOISE_CALIBRATION_SIZE) {
                 for (x in 0 until VGN_NOISE_CALIBRATION_SIZE) {
-                    val phase = ((y and 1) shl 1) or (x and 1)
-                    val canonical = phaseToCanonical[phase]
+                    val canonical = RawCfaCorrection.channelIndexForPixel(
+                        metadata.cfaPattern,
+                        x,
+                        y,
+                    )
                     val rgbChannel = when (canonical) {
                         0 -> 0
                         3 -> 2
@@ -9016,9 +8899,9 @@ class RawDemosaicProcessor {
                     val gain = calculationWb[rgbChannel].coerceAtLeast(1e-6f)
                     val rawSignal = referenceSignal / gain
                     val variance = when (component) {
-                        VgnNoiseComponent.TOTAL ->
+                        DemosaicNoiseComponent.TOTAL ->
                             inputRead[rgbChannel] + inputShot[rgbChannel] * rawSignal
-                        VgnNoiseComponent.READ_ONLY -> inputRead[rgbChannel]
+                        DemosaicNoiseComponent.READ_ONLY -> inputRead[rgbChannel]
                     }.coerceAtLeast(0f)
                     val noisy = (
                         rawSignal + sqrt(variance.toDouble()) * nextGaussian()
@@ -9064,12 +8947,31 @@ class RawDemosaicProcessor {
             )
             syntheticTextureId = rawTextureId
             setupFullResFramebuffer(VGN_NOISE_CALIBRATION_SIZE, VGN_NOISE_CALIBRATION_SIZE)
-            runStandardBayerVgnDemosaic(
-                metadata = calibrationMetadata,
-                width = VGN_NOISE_CALIBRATION_SIZE,
-                height = VGN_NOISE_CALIBRATION_SIZE,
-                highlightReconstructionEnabled = false,
-            )
+            when {
+                RawMetadata.isQuadBayer(calibrationMetadata.cfaPattern) -> {
+                    check(ensureQuadBayerPrograms()) {
+                        "Unable to initialize Quad Bayer noise propagation programs"
+                    }
+                    runQuadBayerDemosaic(
+                        metadata = calibrationMetadata,
+                        width = VGN_NOISE_CALIBRATION_SIZE,
+                        height = VGN_NOISE_CALIBRATION_SIZE,
+                        highlightReconstructionEnabled = false,
+                    )
+                }
+
+                else -> {
+                    check(ensureVgnPrograms()) {
+                        "Unable to initialize VGN noise propagation programs"
+                    }
+                    runStandardBayerVgnDemosaic(
+                        metadata = calibrationMetadata,
+                        width = VGN_NOISE_CALIBRATION_SIZE,
+                        height = VGN_NOISE_CALIBRATION_SIZE,
+                        highlightReconstructionEnabled = false,
+                    )
+                }
+            }
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
@@ -9083,7 +8985,7 @@ class RawDemosaicProcessor {
                 GLES30.GL_HALF_FLOAT,
                 rgba,
             )
-            checkGlError("VGN noise propagation readback")
+            checkGlError("Demosaic noise propagation readback")
 
             val analysisSamples = VGN_NOISE_ANALYSIS_SIZE * VGN_NOISE_ANALYSIS_SIZE
             val workingRgb = Array(3) { FloatArray(analysisSamples) }
@@ -9221,7 +9123,8 @@ class RawDemosaicProcessor {
             val correlationMax = combinedCorrelation.maxOrNull() ?: 0f
             PLog.i(
                 TAG,
-                "VGN noise propagation complete " +
+                "Demosaic noise propagation complete " +
+                    "pipeline=${demosaicNoisePipelineLabel(metadata.cfaPattern)} " +
                     "component=$component " +
                     "size=${VGN_NOISE_CALIBRATION_SIZE}x$VGN_NOISE_CALIBRATION_SIZE " +
                     "reference=$referenceSignal " +
@@ -9231,14 +9134,18 @@ class RawDemosaicProcessor {
                     "correlation=$correlationMin..$correlationMax/" +
                     combinedCorrelation.average(),
             )
-            return VgnNoiseSample(
+            return DemosaicNoiseSample(
                 referenceSignal = referenceSignal,
                 workingLumaMean = workingYuvMean[0].toFloat(),
                 normalizedYuvVariance = normalizedYuvVariance,
                 correlation = combinedCorrelation,
             )
         } catch (error: Exception) {
-            PLog.e(TAG, "VGN noise propagation failed", error)
+            PLog.e(
+                TAG,
+                "${demosaicNoisePipelineLabel(metadata.cfaPattern)} noise propagation failed",
+                error,
+            )
             return null
         } finally {
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
@@ -9246,13 +9153,18 @@ class RawDemosaicProcessor {
                 GLES30.glDeleteTextures(1, intArrayOf(syntheticTextureId), 0)
             }
             rawTextureId = savedRawTextureId
-            setupFullResFramebuffer(metadata.width, metadata.height)
+            if (savedDemosaicWidth > 0 && savedDemosaicHeight > 0) {
+                setupFullResFramebuffer(savedDemosaicWidth, savedDemosaicHeight)
+            }
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
             LargeDirectBuffer.free(syntheticRaw)
             LargeDirectBuffer.free(rgba)
         }
     }
+
+    private fun demosaicNoisePipelineLabel(cfaPattern: Int): String =
+        if (RawMetadata.isQuadBayer(cfaPattern)) "QUAD_BAYER" else "STANDARD_BAYER_VGN"
 
     /**
      * Collapses each standard Bayer 2x2 cell to one camera-RGB texel for capture-side exposure

@@ -1106,4 +1106,18 @@
     <string name="preset_custom_badge">自訂</string>
     <string name="preset_builtin_badge">內置</string>
     <string name="gallery">相簿</string>
+    <string name="settings_raw_default_sharpening_section">預設銳度</string>
+    <string name="settings_raw_default_sharpening">RAW 預設銳度</string>
+    <string name="settings_raw_default_sharpening_description">套用於 RAW 照片顯影的預設銳化強度。</string>
+    <string name="settings_raw_max_default_sharpening">RAWmax 預設銳度</string>
+    <string name="settings_raw_max_default_sharpening_description">套用於 RAWmax 照片顯影的預設銳化強度。</string>
+    <string name="settings_raw_default_processing_section">RAW 預設處理</string>
+    <string name="settings_raw_default_luma_denoise">RAW 預設亮度降噪</string>
+    <string name="settings_raw_default_luma_denoise_description">調整 RAW 相片的亮度雜訊抑制強度。</string>
+    <string name="settings_raw_default_chroma_denoise">RAW 預設色度降噪</string>
+    <string name="settings_raw_default_chroma_denoise_description">調整 RAW 相片的彩色雜訊抑制強度。</string>
+    <string name="settings_raw_max_default_luma_denoise">RAWmax 寫入亮度降噪</string>
+    <string name="settings_raw_max_default_luma_denoise_description">調整 RAWmax 相片的亮度雜訊抑制強度。</string>
+    <string name="settings_raw_max_default_chroma_denoise">RAWmax 寫入色度降噪</string>
+    <string name="settings_raw_max_default_chroma_denoise_description">調整 RAWmax 相片的彩色雜訊抑制強度。</string>
 </resources>

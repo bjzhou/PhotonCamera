@@ -42,7 +42,7 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 29,
+    val version: Int = 30,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -57,7 +57,10 @@ data class MediaMetadata(
     val noiseReduction: Float? = null,
     val chromaNoiseReduction: Float? = null,
     val captureNoiseReductionLevel: Int? = null,
+    /** RAWmax luma denoise already baked into its LinearRaw DNG. */
     val rawDenoiseValue: Float? = null,
+    /** RAWmax chroma denoise already baked into its LinearRaw DNG. */
+    val rawChromaDenoiseValue: Float? = null,
     val rawExposureCompensation: Float? = null,
     val rawAutoExposure: Boolean? = null,
     val rawHighlightsAdjustment: Float? = null,
@@ -320,6 +323,11 @@ data class MediaMetadata(
                         .toFloat(),
                     captureNoiseReductionLevel = if (obj.isNull("captureNoiseReductionLevel")) null else obj.optInt("captureNoiseReductionLevel"),
                     rawDenoiseValue = if (obj.isNull("denoiseValue")) null else obj.optDouble("denoiseValue").toFloat(),
+                    rawChromaDenoiseValue = if (obj.isNull("rawChromaDenoiseValue")) {
+                        null
+                    } else {
+                        obj.optDouble("rawChromaDenoiseValue").toFloat()
+                    },
                     rawExposureCompensation = if (obj.isNull("rawExposureCompensation")) null else obj.optDouble("rawExposureCompensation").toFloat(),
                     rawAutoExposure = obj.optCompatibleRawAutoExposure(),
                     rawHighlightsAdjustment = if (obj.isNull("rawHighlightsAdjustment")) null else obj.optDouble("rawHighlightsAdjustment").toFloat(),

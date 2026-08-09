@@ -34,6 +34,7 @@ import com.hinnka.mycamera.lut.exportVideoWithEffects
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
@@ -100,19 +101,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 用户偏好设置仓库
     private val userPreferencesRepository = contentRepository.userPreferencesRepository
-
-    // 软件处理参数
-    val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.sharpening }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-
-    val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.noiseReduction }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-
-    val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.chromaNoiseReduction }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
 
     val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawLensShadingCorrectionEnabled }
@@ -1344,8 +1332,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editLutId.value = m.lutId
             editFrameId.value = m.frameId
             editSharpening.value = m.sharpening ?: 0f
-            editNoiseReduction.value = m.noiseReduction ?: 0f
-            editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
+            editNoiseReduction.value = DenoiseStrength.clamp(m.noiseReduction)
+            editChromaNoiseReduction.value = DenoiseStrength.clamp(m.chromaNoiseReduction)
             editRawExposureCompensation.value = m.rawExposureCompensation ?: 0f
             editRawAutoExposure.value = m.rawAutoExposure ?: true
             editRawHighlightsAdjustment.value = m.rawHighlightsAdjustment ?: 0f
@@ -1978,14 +1966,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     PostEditGeometry.normalizeRotation(metadata.postRotationDegrees)
                 editMirrorHorizontal.value = metadata.postMirrorHorizontal
                 restoreCropEditState(targetPhoto, metadata)
-                // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
-                editSharpening.value =
-                    metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
-                editNoiseReduction.value =
-                    metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
-                editChromaNoiseReduction.value =
+                editSharpening.value = metadata.sharpening ?: 0f
+                editNoiseReduction.value = DenoiseStrength.clamp(
+                    metadata.noiseReduction
+                )
+                editChromaNoiseReduction.value = DenoiseStrength.clamp(
                     metadata.chromaNoiseReduction
-                        ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+                )
                 editRawExposureCompensation.value = metadata.rawExposureCompensation ?: 0f
                 editRawAutoExposure.value = metadata.rawAutoExposure ?: true
                 editRawHighlightsAdjustment.value = metadata.rawHighlightsAdjustment ?: 0f
@@ -2009,10 +1996,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editApplyEffectsToVideo.value = false
             
             if (!targetPhoto.isVideo) {
-                // 这里一般是本 App 预览或拍摄进入，保持跟随全局
-                editSharpening.value = sharpening.value
-                editNoiseReduction.value = noiseReduction.value
-                editChromaNoiseReduction.value = chromaNoiseReduction.value
+                editSharpening.value = 0f
+                editNoiseReduction.value = 0f
+                editChromaNoiseReduction.value = 0f
                 editRawExposureCompensation.value = 0f
                 editRawAutoExposure.value = true
                 editRawHighlightsAdjustment.value = 0f
@@ -2384,9 +2370,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val targetIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
         if (!targetIsRaw) {
             settings.sharpening?.let { editSharpening.value = it }
-            settings.noiseReduction?.let { editNoiseReduction.value = it }
+            settings.noiseReduction?.let {
+                editNoiseReduction.value = DenoiseStrength.clamp(it)
+            }
             settings.chromaNoiseReduction?.let {
-                editChromaNoiseReduction.value = it
+                editChromaNoiseReduction.value = DenoiseStrength.clamp(it)
             }
         }
         editComputationalAperture.value = settings.computationalAperture
@@ -2437,14 +2425,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置降噪强度
      */
     fun setNoiseReduction(value: Float) {
-        editNoiseReduction.value = value
+        editNoiseReduction.value = DenoiseStrength.clamp(value)
     }
 
     /**
      * 设置减少杂色强度
      */
     fun setChromaNoiseReduction(value: Float) {
-        editChromaNoiseReduction.value = value
+        editChromaNoiseReduction.value = DenoiseStrength.clamp(value)
     }
 
     private suspend fun loadRawBaselineRecipeParams(lutId: String?): ColorRecipeParams? {
@@ -3060,13 +3048,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     finalMetadata = metadata
 
                     if (!ignoreDenoise) {
-                        finalS = finalMetadata.sharpening
-                            ?: (if (finalMetadata.isImported) 0f else sharpening.value)
-                        finalNR =
-                            finalMetadata.noiseReduction
-                                ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
-                        finalCNR = finalMetadata.chromaNoiseReduction
-                            ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
+                        finalS = finalMetadata.sharpening ?: 0f
+                        finalNR = finalMetadata.noiseReduction ?: 0f
+                        finalCNR = finalMetadata.chromaNoiseReduction ?: 0f
                     }
                         
                     if (ignoreCrop) {
@@ -3513,8 +3497,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val context = getApplication<Application>()
             val success = GalleryManager.exportPhoto(
                 context, photoId, bitmap, contentRepository.photoProcessor, metadata,
-                sharpening.value, noiseReduction.value,
-                chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95, suffix
+                0f, 0f, 0f, photoQuality.firstOrNull() ?: 95, suffix
             )
             if (success) {
                 exitEditMode()
@@ -3971,9 +3954,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                                     null,
                                     contentRepository.photoProcessor,
                                     metadata,
-                                    sharpening.value,
-                                    noiseReduction.value,
-                                    chromaNoiseReduction.value,
+                                    0f,
+                                    0f,
+                                    0f,
                                     quality
                                 )
                                 if (exported) {
@@ -4037,7 +4020,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             // 处理照片：跟随用户设置
             val processedBitmap = contentRepository.photoProcessor.process(
                 context, photo.id, metadata,
-                sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                0f, 0f, 0f
             ) ?: return@withContext null
 
             // 保存到缓存目录

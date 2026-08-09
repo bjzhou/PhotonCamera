@@ -15,6 +15,7 @@ import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.lut.ChromaDenoiseShaders
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.DenoiseProfileNlmConfig
 import com.hinnka.mycamera.raw.DenoiseProfileShaders
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
@@ -2104,7 +2105,7 @@ class LutImageProcessor(context: Context? = null) {
     ) {
         setupBitmapDenoiseFramebuffers(width, height)
 
-        val strength = noiseReduction.coerceIn(0f, 1f)
+        val strength = DenoiseStrength.clamp(noiseReduction)
         if (strength <= 0f || width * height < 2) {
             renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[1], width, height)
             return
@@ -2134,7 +2135,7 @@ class LutImageProcessor(context: Context? = null) {
     ) {
         setupBitmapDenoiseFramebuffers(width, height)
 
-        val strength = chromaNoiseReduction.coerceIn(0f, 1f)
+        val strength = DenoiseStrength.clamp(chromaNoiseReduction)
         val target = targetIndex.coerceIn(0, bitmapDenoiseTexId.lastIndex)
         val edgeGuidanceRelaxation =
             ChromaDenoiseDefaults.edgeGuidanceRelaxation(strength)
@@ -2257,7 +2258,7 @@ class LutImageProcessor(context: Context? = null) {
         return if (applyNaturalLightDefault) {
             ChromaDenoiseDefaults.forRawCapture(userStrength)
         } else {
-            userStrength.coerceIn(0f, 1f)
+            DenoiseStrength.clamp(userStrength)
         }
     }
 
@@ -2480,18 +2481,19 @@ class LutImageProcessor(context: Context? = null) {
     }
 
     private fun buildBitmapDenoiseParams(strengthValue: Float): BitmapDenoiseParams {
-        val a = BITMAP_DENOISE_A
-        val b = BITMAP_DENOISE_B
+        val strength = DenoiseStrength.clamp(strengthValue)
+        val varianceScale = DenoiseStrength.noiseVarianceScale(strength)
+        val a = BITMAP_DENOISE_A * varianceScale
+        val b = BITMAP_DENOISE_B * varianceScale
         val scale = 1.0f
         val shadows = max(0.1f - 0.1f * ln(a), 0.7f).coerceAtMost(1.8f)
         val bias = -max(5f + 0.5f * ln(a), 0.0f)
         val compensateP = 0.05f / 0.05f.pow(shadows)
-        val strength = strengthValue.coerceIn(0f, 1f)
         val patchRadius = DenoiseProfileShaders.PATCH_RADIUS
         val weightTuning = DenoiseProfileNlmConfig.weightTuning(patchRadius)
         val centralPixelWeight = 0.1f * scale
         return BitmapDenoiseParams(
-            strength = strength,
+            strength = DenoiseStrength.outputMix(strength),
             patchRadius = patchRadius,
             expectedFineDistance = weightTuning.expectedFineDistance,
             expectedGuideDistance = weightTuning.expectedGuideDistance,
