@@ -6,11 +6,11 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Recovered MGC Bayer Spatial correlation specialization.
+ * Recovered MGC Spatial correlation specialization.
  *
- * The Bayer branch in MGC 9.6.080 V24 does not infer correlation from the
- * quantized R8 merge masks. At 0x3632688..0x36327dc it uses the green entries
- * of the two ComputeBayerNoiseModel diagnostics to fit a symmetric Savannah
+ * MGC does not infer correlation from the quantized R8 merge masks. At
+ * 0x3632688..0x36327dc it uses the green entries of the two layout-specific
+ * Compute{Bayer,Rgb}NoiseModel diagnostics to fit a symmetric Savannah
  * three-tap filter [outer, center, outer]. The filter is converted to a
  * half-bin-centered 128-bin power spectrum by 0x5e9ca0c/0x5e9ce94 and then
  * normalized to unit mean at 0x3632e8c..0x3632eb4.
@@ -30,6 +30,22 @@ internal object MgcSpatialDenoiseModel {
     )
 
     fun fromBayerDiagnostics(
+        outputWeightsSumTotalDiag0: FloatArray,
+        outputWeightsSumTotalDiag1: FloatArray,
+    ): Result? = fromGreenDiagnostics(
+        outputWeightsSumTotalDiag0,
+        outputWeightsSumTotalDiag1,
+    )
+
+    fun fromRgbDiagnostics(
+        outputWeightsSumTotalDiag0: FloatArray,
+        outputWeightsSumTotalDiag1: FloatArray,
+    ): Result? = fromGreenDiagnostics(
+        outputWeightsSumTotalDiag0,
+        outputWeightsSumTotalDiag1,
+    )
+
+    private fun fromGreenDiagnostics(
         outputWeightsSumTotalDiag0: FloatArray,
         outputWeightsSumTotalDiag1: FloatArray,
     ): Result? {

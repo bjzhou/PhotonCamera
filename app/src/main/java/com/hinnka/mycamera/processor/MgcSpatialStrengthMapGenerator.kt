@@ -28,7 +28,7 @@ internal object MgcSpatialStrengthMapGenerator {
     /**
      * Exact Spatial noise-model output.
      *
-     * MGC's Bayer Halide tuple order is `.0 = read variance`,
+     * MGC's Bayer and RGB Halide tuple order is `.0 = read variance`,
      * `.1 = shot coefficient`. The NoiseModel convenience wrapper at
      * 0x5e959c8 inserts a zero quadratic span before forwarding the original
      * two spans to the full constructor at 0x5e95688; accounting for that
@@ -63,19 +63,21 @@ internal object MgcSpatialStrengthMapGenerator {
         frameWeights: FloatArray,
         kernelSigmas: FloatArray,
     ): Result? {
-        val expectedFusedSamples = if (outputMode == MgcSpatialOutputMode.BAYER) {
-            ((width.toLong() + 15L) / 16L * 8L) *
-                ((height.toLong() + 15L) / 16L * 8L) * 4L
-        } else {
-            width.toLong() * height.toLong() * 3L
-        }
+        val geometry = runCatching {
+            mgcSpatialDiagnosticGeometry(outputMode, width, height)
+        }.getOrNull() ?: return null
         val expectedAlignmentValues =
             alignmentWidth.toLong() * alignmentHeight.toLong() * frameCount * 2L
         val expectedRejectionValues =
             rejectionWidth.toLong() * rejectionHeight.toLong() * frameCount
         val valid = fusedFixed16.isDirect && alignment.isDirect && rejection.isDirect &&
             width > 0 && height > 0 && cfaPattern in 0..3 && frameCount > 1 &&
-            fusedFixed16.capacity().toLong() >= expectedFusedSamples * Short.SIZE_BYTES &&
+            fusedFixed16.capacity().toLong() >=
+                geometry.fixed16SampleCount * Short.SIZE_BYTES &&
+            alignmentWidth == geometry.alignmentWidth &&
+            alignmentHeight == geometry.alignmentHeight &&
+            rejectionWidth == geometry.rejectionWidth &&
+            rejectionHeight == geometry.rejectionHeight &&
             alignment.capacity().toLong() >= expectedAlignmentValues * Float.SIZE_BYTES &&
             rejection.capacity().toLong() >= expectedRejectionValues &&
             inputReadNoise.size == frameCount * 3 &&

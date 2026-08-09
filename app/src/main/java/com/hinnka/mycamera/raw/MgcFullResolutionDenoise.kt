@@ -55,6 +55,23 @@ internal object MgcFullResolutionDenoise {
         val shot: FloatArray,
     )
 
+    /**
+     * Noise model at MGC's white-balanced Y/Cb/Cr boundary after NoiseModel.Scale(2).
+     *
+     * ChromaDenoisePyramidComplete keeps per-channel read variance, but its generated ABI
+     * accepts only one shared shot/quadratic curve for Cb and Cr. Keeping that dimensionality
+     * explicit prevents the luma curve from being selected accidentally by a sliced buffer.
+     */
+    data class PreparedYuvNoiseModel(
+        val normalizedRead: FloatArray,
+        val normalizedLumaShot: Float,
+        val normalizedLumaQuadratic: Float,
+        val normalizedChromaShot: Float,
+        val normalizedChromaQuadratic: Float,
+        val lumaCorrelation: FloatArray,
+        val chromaCorrelation: FloatArray,
+    )
+
     private data class TuningPoint(
         val gain: Float,
         val tuning: Tuning,
@@ -116,10 +133,7 @@ internal object MgcFullResolutionDenoise {
         inputLayout: InputLayout = InputLayout.CAMERA_RGBA16F,
         applyLensShadingInBayerAot: Boolean = false,
         metadata: RawMetadata,
-        preparedNormalizedYuvRead: FloatArray? = null,
-        preparedNormalizedYuvShot: FloatArray? = null,
-        preparedNormalizedYuvQuadratic: FloatArray? = null,
-        preparedCorrelation: FloatArray? = null,
+        preparedYuvNoiseModel: PreparedYuvNoiseModel? = null,
         applyLensShadingToDenoiseStrength: Boolean = false,
         tuningGain: Float,
         pass: Pass,
@@ -136,47 +150,32 @@ internal object MgcFullResolutionDenoise {
             return false
         }
         val useSpatialModel = pass == Pass.SPATIAL_DEFAULT
-        val hasPreparedYuvNoise =
-            preparedNormalizedYuvRead != null || preparedNormalizedYuvShot != null ||
-                preparedNormalizedYuvQuadratic != null
-        if (hasPreparedYuvNoise &&
+        if (preparedYuvNoiseModel != null &&
             (inputLayout != InputLayout.CAMERA_RGBA16F ||
-                preparedNormalizedYuvRead == null || preparedNormalizedYuvShot == null ||
-                preparedNormalizedYuvQuadratic == null ||
-                !validRgbNoise(preparedNormalizedYuvRead) ||
-                !validRgbNoise(preparedNormalizedYuvShot) ||
-                !validRgbNoise(preparedNormalizedYuvQuadratic) ||
-                (preparedNormalizedYuvRead.none { it > 0f } &&
-                    preparedNormalizedYuvShot.none { it > 0f } &&
-                    preparedNormalizedYuvQuadratic.none { it > 0f }))
+                !validPreparedYuvNoise(preparedYuvNoiseModel))
         ) {
             PLog.e(
                 TAG,
                 "MGC denoise rejected malformed prepared VGN YUV model: " +
-                    "read=${preparedNormalizedYuvRead?.contentToString()} " +
-                    "shot=${preparedNormalizedYuvShot?.contentToString()} " +
-                    "quadratic=${preparedNormalizedYuvQuadratic?.contentToString()}",
+                    "read=${preparedYuvNoiseModel?.normalizedRead?.contentToString()} " +
+                    "lumaShot=${preparedYuvNoiseModel?.normalizedLumaShot} " +
+                    "lumaQuadratic=${preparedYuvNoiseModel?.normalizedLumaQuadratic} " +
+                    "chromaShot=${preparedYuvNoiseModel?.normalizedChromaShot} " +
+                    "chromaQuadratic=${preparedYuvNoiseModel?.normalizedChromaQuadratic}",
             )
             return false
         }
-        if (preparedCorrelation != null &&
-            (preparedCorrelation.size != 128 ||
-                preparedCorrelation.any { !it.isFinite() || it < 0f })
-        ) {
-            PLog.e(TAG, "MGC denoise rejected malformed prepared correlation spectrum")
-            return false
-        }
-        val correlation = preparedCorrelation ?: if (useSpatialModel) {
+        val spatialCorrelation = if (useSpatialModel) {
             metadata.mgcDenoiseCorrelation
         } else null
-        if (useSpatialModel && preparedCorrelation == null &&
-            (correlation == null ||
-                correlation.size != 128 ||
-                correlation.any { !it.isFinite() || it < 0f })
+        val lumaCorrelation = preparedYuvNoiseModel?.lumaCorrelation ?: spatialCorrelation
+        val chromaCorrelation = preparedYuvNoiseModel?.chromaCorrelation ?: spatialCorrelation
+        if (useSpatialModel &&
+            (!validCorrelation(lumaCorrelation) || !validCorrelation(chromaCorrelation))
         ) {
             PLog.e(
                 TAG,
-                "MGC denoise rejected missing/malformed Spatial correlation spectrum",
+                "MGC denoise rejected missing/malformed Spatial Y/C correlation spectrum",
             )
             return false
         }
@@ -257,10 +256,15 @@ internal object MgcFullResolutionDenoise {
             normalizedRgbShot = rgbShot,
             normalizedRgbRead = rgbRead,
             normalizedRgbWhiteBalance = rgbWhiteBalance,
-            preparedNormalizedYuvShot = preparedNormalizedYuvShot,
-            preparedNormalizedYuvRead = preparedNormalizedYuvRead,
-            preparedNormalizedYuvQuadratic = preparedNormalizedYuvQuadratic,
-            correlation = correlation,
+            preparedNormalizedYuvRead = preparedYuvNoiseModel?.normalizedRead,
+            preparedNormalizedLumaShot = preparedYuvNoiseModel?.normalizedLumaShot ?: 0f,
+            preparedNormalizedLumaQuadratic =
+                preparedYuvNoiseModel?.normalizedLumaQuadratic ?: 0f,
+            preparedNormalizedChromaShot = preparedYuvNoiseModel?.normalizedChromaShot ?: 0f,
+            preparedNormalizedChromaQuadratic =
+                preparedYuvNoiseModel?.normalizedChromaQuadratic ?: 0f,
+            lumaCorrelation = lumaCorrelation,
+            chromaCorrelation = chromaCorrelation,
             spatialStrengthQ8 = spatialStrengthMap?.q8,
             spatialStrengthWidth = spatialStrengthMap?.width ?: 0,
             spatialStrengthHeight = spatialStrengthMap?.height ?: 0,
@@ -294,10 +298,11 @@ internal object MgcFullResolutionDenoise {
                 "rgbShot=${rgbShot.contentToString()} " +
                 "rgbRead=${rgbRead.contentToString()} " +
                 "rgbWb=${rgbWhiteBalance.contentToString()} " +
-                "preparedYuvShot=${preparedNormalizedYuvShot?.contentToString()} " +
-                "preparedYuvRead=${preparedNormalizedYuvRead?.contentToString()} " +
-                "preparedYuvQuadratic=" +
-                    "${preparedNormalizedYuvQuadratic?.contentToString()} " +
+                "preparedYuvRead=${preparedYuvNoiseModel?.normalizedRead?.contentToString()} " +
+                "preparedLumaShot=${preparedYuvNoiseModel?.normalizedLumaShot} " +
+                "preparedLumaQuadratic=${preparedYuvNoiseModel?.normalizedLumaQuadratic} " +
+                "preparedChromaShot=${preparedYuvNoiseModel?.normalizedChromaShot} " +
+                "preparedChromaQuadratic=${preparedYuvNoiseModel?.normalizedChromaQuadratic} " +
                 "strengthMap=${spatialStrengthMap?.let {
                     "${it.width}x${it.height}"
                 } ?: "identity"} " +
@@ -306,10 +311,34 @@ internal object MgcFullResolutionDenoise {
                 } else {
                     "identity"
                 }} " +
-                "correlation=${if (correlation == null) "identity" else "propagated"}",
+                "lumaCorrelation=${if (lumaCorrelation == null) "identity" else "propagated"} " +
+                "chromaCorrelation=${if (chromaCorrelation == null) {
+                    "identity"
+                } else {
+                    "propagated"
+                }}",
         )
         return true
     }
+
+    private fun validPreparedYuvNoise(model: PreparedYuvNoiseModel): Boolean =
+        validRgbNoise(model.normalizedRead) &&
+            model.normalizedLumaShot.isFinite() && model.normalizedLumaShot >= 0f &&
+            model.normalizedLumaQuadratic.isFinite() &&
+            model.normalizedLumaQuadratic >= 0f &&
+            model.normalizedChromaShot.isFinite() && model.normalizedChromaShot >= 0f &&
+            model.normalizedChromaQuadratic.isFinite() &&
+            model.normalizedChromaQuadratic >= 0f &&
+            validCorrelation(model.lumaCorrelation) &&
+            validCorrelation(model.chromaCorrelation) &&
+            (model.normalizedRead.any { it > 0f } ||
+                model.normalizedLumaShot > 0f || model.normalizedLumaQuadratic > 0f ||
+                model.normalizedChromaShot > 0f || model.normalizedChromaQuadratic > 0f)
+
+    private fun validCorrelation(correlation: FloatArray?): Boolean =
+        correlation?.let { values ->
+            values.size == 128 && values.all { it.isFinite() && it >= 0f }
+        } == true
 
     internal fun resolveUserAdjustmentCameraRgbNoise(
         metadata: RawMetadata,
@@ -564,10 +593,13 @@ internal object MgcFullResolutionDenoise {
         normalizedRgbShot: FloatArray,
         normalizedRgbRead: FloatArray,
         normalizedRgbWhiteBalance: FloatArray,
-        preparedNormalizedYuvShot: FloatArray?,
         preparedNormalizedYuvRead: FloatArray?,
-        preparedNormalizedYuvQuadratic: FloatArray?,
-        correlation: FloatArray?,
+        preparedNormalizedLumaShot: Float,
+        preparedNormalizedLumaQuadratic: Float,
+        preparedNormalizedChromaShot: Float,
+        preparedNormalizedChromaQuadratic: Float,
+        lumaCorrelation: FloatArray?,
+        chromaCorrelation: FloatArray?,
         spatialStrengthQ8: ShortArray?,
         spatialStrengthWidth: Int,
         spatialStrengthHeight: Int,

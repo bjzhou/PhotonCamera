@@ -13,10 +13,9 @@ struct DenoiseNoiseBuffers {
 };
 
 struct ChromaDenoiseNoiseBuffers {
-    // The MGC wrapper first creates [level=4, channel=3, branch=2] tables.
-    // CompleteS16 then slices channel zero from quadratic/shot while retaining
-    // all three channels for read variance. Keeping the original 24-value
-    // backing layout preserves the exact sliced strides (1, 12).
+    // CompleteS16 consumes one scalar [level=4, branch=2] quadratic/shot table with branch
+    // stride 12, while retaining [level=4, channel=3, branch=2] read variance. Keeping the
+    // original 24-value backing layout preserves those exact sliced strides (1, 12).
     float quadratic[24] = {};
     float shot[24] = {};
     float read[24] = {};
@@ -59,8 +58,8 @@ bool BuildNoiseBuffers(
  */
 bool BuildChromaNoiseBuffers(
     const float read_noise[3],
-    const float shot_noise[3],
-    const float quadratic_noise[3],
+    float shot_noise,
+    float quadratic_noise,
     const float correlation[128],
     const float strength[5],
     const float outlier_threshold[5],

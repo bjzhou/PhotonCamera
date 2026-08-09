@@ -296,10 +296,13 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     jfloatArray normalized_rgb_shot_array,
     jfloatArray normalized_rgb_read_array,
     jfloatArray normalized_rgb_white_balance_array,
-    jfloatArray prepared_normalized_yuv_shot_array,
     jfloatArray prepared_normalized_yuv_read_array,
-    jfloatArray prepared_normalized_yuv_quadratic_array,
-    jfloatArray correlation_array,
+    jfloat prepared_normalized_luma_shot,
+    jfloat prepared_normalized_luma_quadratic,
+    jfloat prepared_normalized_chroma_shot,
+    jfloat prepared_normalized_chroma_quadratic,
+    jfloatArray luma_correlation_array,
+    jfloatArray chroma_correlation_array,
     jshortArray spatial_strength_q8_array,
     jint spatial_strength_width,
     jint spatial_strength_height,
@@ -335,9 +338,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     float normalized_rgb_shot[3] = {};
     float normalized_rgb_read[3] = {};
     float normalized_rgb_white_balance[3] = {};
-    float prepared_normalized_yuv_shot[3] = {};
     float prepared_normalized_yuv_read[3] = {};
-    float prepared_normalized_yuv_quadratic[3] = {};
     float luma_strength[5] = {};
     float luma_outlier[5] = {};
     float luma_revert[5] = {};
@@ -357,25 +358,24 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         return -1;
     }
     const bool has_prepared_yuv_noise =
-        prepared_normalized_yuv_shot_array != nullptr ||
-        prepared_normalized_yuv_read_array != nullptr ||
-        prepared_normalized_yuv_quadratic_array != nullptr;
+        prepared_normalized_yuv_read_array != nullptr;
     if (has_prepared_yuv_noise &&
-        (bayer_input || prepared_normalized_yuv_shot_array == nullptr ||
-         prepared_normalized_yuv_read_array == nullptr ||
-         prepared_normalized_yuv_quadratic_array == nullptr ||
-         !CopyThree(
-             env,
-             prepared_normalized_yuv_shot_array,
-             prepared_normalized_yuv_shot) ||
+        (bayer_input ||
          !CopyThree(
              env,
              prepared_normalized_yuv_read_array,
-             prepared_normalized_yuv_read) ||
-         !CopyThree(
-             env,
-             prepared_normalized_yuv_quadratic_array,
-             prepared_normalized_yuv_quadratic))) {
+             prepared_normalized_yuv_read))) {
+        return -1;
+    }
+    if (has_prepared_yuv_noise &&
+        (!std::isfinite(prepared_normalized_luma_shot) ||
+         prepared_normalized_luma_shot < 0.0f ||
+         !std::isfinite(prepared_normalized_luma_quadratic) ||
+         prepared_normalized_luma_quadratic < 0.0f ||
+         !std::isfinite(prepared_normalized_chroma_shot) ||
+         prepared_normalized_chroma_shot < 0.0f ||
+         !std::isfinite(prepared_normalized_chroma_quadratic) ||
+         prepared_normalized_chroma_quadratic < 0.0f)) {
         return -1;
     }
     for (int channel = 0; channel < 3; ++channel) {
@@ -385,21 +385,33 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         }
         if (has_prepared_yuv_noise &&
             (!std::isfinite(prepared_normalized_yuv_read[channel]) ||
-             prepared_normalized_yuv_read[channel] < 0.0f ||
-             !std::isfinite(prepared_normalized_yuv_shot[channel]) ||
-             prepared_normalized_yuv_shot[channel] < 0.0f ||
-             !std::isfinite(prepared_normalized_yuv_quadratic[channel]) ||
-             prepared_normalized_yuv_quadratic[channel] < 0.0f)) {
+             prepared_normalized_yuv_read[channel] < 0.0f)) {
             return -1;
         }
     }
 
-    float correlation[128];
-    std::fill_n(correlation, 128, 1.0f);
-    if (correlation_array != nullptr) {
-        if (env->GetArrayLength(correlation_array) != 128) return -1;
-        env->GetFloatArrayRegion(correlation_array, 0, 128, correlation);
-        if (env->ExceptionCheck()) return -1;
+    float luma_correlation[128];
+    float chroma_correlation[128];
+    std::fill_n(luma_correlation, 128, 1.0f);
+    std::fill_n(chroma_correlation, 128, 1.0f);
+    const auto copy_correlation = [env](
+                                      jfloatArray source,
+                                      float destination[128]) {
+        if (source == nullptr) return true;
+        if (env->GetArrayLength(source) != 128) return false;
+        env->GetFloatArrayRegion(source, 0, 128, destination);
+        if (env->ExceptionCheck()) return false;
+        for (int index = 0; index < 128; ++index) {
+            if (!std::isfinite(destination[index]) ||
+                destination[index] < 0.0f) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!copy_correlation(luma_correlation_array, luma_correlation) ||
+        !copy_correlation(chroma_correlation_array, chroma_correlation)) {
+        return -1;
     }
 
     const int padded_width = RoundUp(width, 128);
@@ -620,7 +632,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         float prepared_rgb_read[3] = {};
         float prepared_rgb_shot[3] = {};
         float prepared_rgb_quadratic[3] = {};
-        float prepared_correlation[128] = {};
+        float prepared_luma_correlation[128] = {};
+        float prepared_chroma_correlation[128] = {};
         // The input NoiseModel is expressed in normalized, un-white-balanced
         // camera RGB: variance(x) = read + shot * x + quadratic * x^2.
         // The full-resolution denoiser operates on the Scale(2) noise model.
@@ -676,14 +689,20 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                     scaled_rgb_read,
                     scaled_rgb_shot,
                     scaled_rgb_quadratic,
-                    correlation,
+                    luma_correlation,
                     prepared_rgb_read,
                     prepared_rgb_shot,
                     prepared_rgb_quadratic,
-                    prepared_correlation,
+                    prepared_luma_correlation,
                     &correlation_mean)) {
                 return LogStageFailure("bayer_noise_model", -1);
             }
+            // The default Bayer path receives one upstream Spatial spectrum. Its fixed demosaic
+            // remap is channel-independent, so the chroma spectrum has the same propagated shape.
+            std::copy_n(
+                prepared_luma_correlation,
+                128,
+                prepared_chroma_correlation);
             __android_log_print(
                 ANDROID_LOG_INFO,
                 kLogTag,
@@ -702,33 +721,32 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             std::copy_n(scaled_rgb_read, 3, prepared_rgb_read);
             std::copy_n(scaled_rgb_shot, 3, prepared_rgb_shot);
             std::copy_n(scaled_rgb_quadratic, 3, prepared_rgb_quadratic);
-            std::copy_n(correlation, 128, prepared_correlation);
+            std::copy_n(luma_correlation, 128, prepared_luma_correlation);
+            std::copy_n(chroma_correlation, 128, prepared_chroma_correlation);
         }
         float yuv_read[3] = {};
         float yuv_shot[3] = {};
         float yuv_quadratic[3] = {};
         if (has_prepared_yuv_noise) {
             std::copy_n(prepared_normalized_yuv_read, 3, yuv_read);
-            std::copy_n(prepared_normalized_yuv_shot, 3, yuv_shot);
-            std::copy_n(
-                prepared_normalized_yuv_quadratic,
-                3,
-                yuv_quadratic);
+            yuv_shot[0] = prepared_normalized_luma_shot;
+            yuv_quadratic[0] = prepared_normalized_luma_quadratic;
+            yuv_shot[1] = yuv_shot[2] = prepared_normalized_chroma_shot;
+            yuv_quadratic[1] = yuv_quadratic[2] =
+                prepared_normalized_chroma_quadratic;
             __android_log_print(
                 ANDROID_LOG_INFO,
                 kLogTag,
                 "MGC VGN prepared YUV noise "
-                "read=[%.6g,%.6g,%.6g] shot=[%.6g,%.6g,%.6g] "
-                "quadratic=[%.6g,%.6g,%.6g]",
+                "read=[%.6g,%.6g,%.6g] lumaShot=%.6g lumaQuadratic=%.6g "
+                "chromaShot=%.6g chromaQuadratic=%.6g",
                 yuv_read[0],
                 yuv_read[1],
                 yuv_read[2],
                 yuv_shot[0],
-                yuv_shot[1],
-                yuv_shot[2],
                 yuv_quadratic[0],
-                yuv_quadratic[1],
-                yuv_quadratic[2]);
+                yuv_shot[1],
+                yuv_quadratic[1]);
         } else {
             for (int output_channel = 0; output_channel < 3; ++output_channel) {
                 for (int input_channel = 0; input_channel < 3; ++input_channel) {
@@ -743,6 +761,24 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                         matrix_squared * prepared_rgb_quadratic[input_channel];
                 }
             }
+            // CompleteS16's shot/quadratic ABI is scalar for chroma. A component-wise maximum
+            // is the conservative representable envelope of the analytic Cb and Cr curves.
+            yuv_shot[1] = yuv_shot[2] = std::max(yuv_shot[1], yuv_shot[2]);
+            yuv_quadratic[1] = yuv_quadratic[2] =
+                std::max(yuv_quadratic[1], yuv_quadratic[2]);
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                kLogTag,
+                "MGC analytic YUV noise read=[%.6g,%.6g,%.6g] "
+                "lumaShot=%.6g lumaQuadratic=%.6g "
+                "chromaEnvelopeShot=%.6g chromaEnvelopeQuadratic=%.6g",
+                yuv_read[0],
+                yuv_read[1],
+                yuv_read[2],
+                yuv_shot[0],
+                yuv_quadratic[0],
+                yuv_shot[1],
+                yuv_quadratic[1]);
         }
         // RgbRawToYuv emits Q14 S16 samples.  Pecan's generated arithmetic
         // consumes variance = read + shot * sample + quadratic * sample^2 in
@@ -803,9 +839,9 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             photon::mgc_denoise::ChromaDenoiseNoiseBuffers chroma_noise;
             if (!photon::mgc_denoise::BuildChromaNoiseBuffers(
                     q14_yuv_read,
-                    q14_yuv_shot,
-                    yuv_quadratic,
-                    prepared_correlation,
+                    q14_yuv_shot[1],
+                    yuv_quadratic[1],
+                    prepared_chroma_correlation,
                     chroma_strength,
                     chroma_outlier,
                     &chroma_noise)) {
@@ -832,7 +868,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                     q14_yuv_read[0],
                     q14_yuv_shot[0],
                     yuv_quadratic[0],
-                    prepared_correlation,
+                    prepared_luma_correlation,
                     luma_strength,
                     luma_outlier,
                     luma_revert,
@@ -845,7 +881,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 yuv_quadratic,
                 q14_yuv_read,
                 q14_yuv_shot,
-                prepared_correlation,
+                prepared_luma_correlation,
                 luma_strength,
                 luma_noise);
             if (!run_chroma) {

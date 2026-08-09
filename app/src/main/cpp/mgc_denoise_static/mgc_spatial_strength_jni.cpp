@@ -63,7 +63,8 @@ Java_com_hinnka_mycamera_processor_MgcSpatialStrengthMapGenerator_nativeCompute(
         output_weights_sum_total_diag_1_array == nullptr ||
         width <= 0 || height <= 0 || alignment_width <= 0 ||
         alignment_height <= 0 || rejection_width <= 0 ||
-        rejection_height <= 0 || frame_count <= 1) {
+        rejection_height <= 0 || frame_count <= 1 ||
+        (layout != 0 && layout != 1)) {
         return -1;
     }
     auto* fused_fixed16 = static_cast<int16_t*>(
@@ -79,7 +80,8 @@ Java_com_hinnka_mycamera_processor_MgcSpatialStrengthMapGenerator_nativeCompute(
     const int64_t fused_samples = layout == 0
         ? ((static_cast<int64_t>(width) + 15) / 16 * 8) *
             ((static_cast<int64_t>(height) + 15) / 16 * 8) * 4
-        : static_cast<int64_t>(width) * height * 3;
+        : ((static_cast<int64_t>(width) + 15) / 16 * 16) *
+            ((static_cast<int64_t>(height) + 15) / 16 * 16) * 3;
     const int64_t alignment_values =
         static_cast<int64_t>(alignment_width) * alignment_height *
         frame_count * 2;

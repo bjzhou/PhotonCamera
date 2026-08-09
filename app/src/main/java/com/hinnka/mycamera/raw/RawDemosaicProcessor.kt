@@ -92,21 +92,14 @@ internal enum class MgcSpatialGpuDenoiseMode {
     BYPASS_DEFAULT_DENOISE,
 }
 
-private data class DemosaicNoiseTransfer(
-    /** Normalized Y/Cb/Cr variance intercept after demosaic and MGC NoiseModel.Scale(2). */
-    val normalizedYuvRead: FloatArray,
-    /** Normalized Y/Cb/Cr variance slope after demosaic and MGC NoiseModel.Scale(2). */
-    val normalizedYuvShot: FloatArray,
-    /** Normalized Y/Cb/Cr quadratic variance term after demosaic and MGC NoiseModel.Scale(2). */
-    val normalizedYuvQuadratic: FloatArray,
-    val correlation: FloatArray,
-)
+private typealias DemosaicNoiseTransfer = MgcFullResolutionDenoise.PreparedYuvNoiseModel
 
 private data class DemosaicNoiseSample(
     val referenceSignal: Float,
     val workingLumaMean: Float,
     val normalizedYuvVariance: FloatArray,
-    val correlation: FloatArray,
+    val lumaCorrelation: FloatArray,
+    val chromaCorrelation: FloatArray,
 )
 
 private data class DemosaicNoiseTransferCacheKey(
@@ -1152,8 +1145,18 @@ class RawDemosaicProcessor {
                         check(ensureQuadBayerPrograms()) {
                             "Unable to initialize Quad Bayer programs for Spatial GPU denoise"
                         }
+                        val quadMetadata = if (applyDefaultDenoise) {
+                            spatialOutputNoiseMetadata(pixelPreparationMetadata)
+                        } else {
+                            pixelPreparationMetadata
+                        }
+                        if (applyDefaultDenoise) {
+                            demosaicNoiseTransfer = checkNotNull(
+                                measureDemosaicNoiseTransfer(quadMetadata),
+                            ) { "Unable to propagate Spatial noise through Quad Bayer demosaic" }
+                        }
                         runQuadBayerDemosaic(
-                            metadata = pixelPreparationMetadata,
+                            metadata = quadMetadata,
                             width = width,
                             height = height,
                             highlightReconstructionEnabled = true,
@@ -1220,8 +1223,18 @@ class RawDemosaicProcessor {
                     check(ensureQuadBayerPrograms()) {
                         "Unable to initialize Quad Bayer programs for Spatial default denoise"
                     }
+                    val quadMetadata = if (applyDefaultDenoise) {
+                        spatialOutputNoiseMetadata(pixelPreparationMetadata)
+                    } else {
+                        pixelPreparationMetadata
+                    }
+                    if (applyDefaultDenoise) {
+                        demosaicNoiseTransfer = checkNotNull(
+                            measureDemosaicNoiseTransfer(quadMetadata),
+                        ) { "Unable to propagate Spatial noise through Quad Bayer demosaic" }
+                    }
                     runQuadBayerDemosaic(
-                        metadata = pixelPreparationMetadata,
+                        metadata = quadMetadata,
                         width = width,
                         height = height,
                         highlightReconstructionEnabled = true,
@@ -1329,11 +1342,6 @@ class RawDemosaicProcessor {
                 // parameter preparation overlap the GPU transfer without creating another wait.
                 val parameterStartNs = System.nanoTime()
                 val spatialDenoiseMetadata = spatialOutputNoiseMetadata(denoiseMetadata)
-                val nativeDenoiseMetadata = demosaicNoiseTransfer?.let { transfer ->
-                    spatialDenoiseMetadata.copy(
-                        mgcDenoiseCorrelation = transfer.correlation,
-                    )
-                } ?: spatialDenoiseMetadata
                 val tuningGain = metadata.mgcDenoiseTuningGain
                     ?: (
                         metadata.iso.toFloat() / 100f *
@@ -1367,12 +1375,8 @@ class RawDemosaicProcessor {
                         globalOriginY = 0,
                         fullWidth = width,
                         fullHeight = height,
-                        metadata = nativeDenoiseMetadata,
-                        preparedNormalizedYuvRead = demosaicNoiseTransfer?.normalizedYuvRead,
-                        preparedNormalizedYuvShot = demosaicNoiseTransfer?.normalizedYuvShot,
-                        preparedNormalizedYuvQuadratic =
-                            demosaicNoiseTransfer?.normalizedYuvQuadratic,
-                        preparedCorrelation = demosaicNoiseTransfer?.correlation,
+                        metadata = spatialDenoiseMetadata,
+                        preparedYuvNoiseModel = demosaicNoiseTransfer,
                         tuningGain = tuningGain,
                         pass = MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT,
                         lumaStrengthScale = resolvedLumaStrength,
@@ -1453,9 +1457,14 @@ class RawDemosaicProcessor {
                     "lscAppliedToBayer=$applyLensShadingToBayer " +
                     "lscOut=$outputIncludesLensShading " +
                     "demosaicNoiseTransfer=${demosaicNoiseTransfer?.let {
-                        "yuvRead=${it.normalizedYuvRead.contentToString()}," +
-                            "yuvShot=${it.normalizedYuvShot.contentToString()}"
-                    } ?: "not-applicable"} " +
+                        "yuvRead=${it.normalizedRead.contentToString()}," +
+                            "lumaShot=${it.normalizedLumaShot}," +
+                            "chromaShot=${it.normalizedChromaShot}"
+                    } ?: if (applyDefaultDenoise) {
+                        "analytic-rgb-to-yuv-chroma-envelope"
+                    } else {
+                        "not-applied"
+                    }} " +
                     "prepareSubmitMs=$preparationMs " +
                     "blackBoxReadSubmitMs=$blackBoxReadSubmitMs " +
                     "blackBoxParameterMs=$blackBoxParameterMs " +
@@ -6793,11 +6802,7 @@ class RawDemosaicProcessor {
                 fullWidth = fullImageWidth,
                 fullHeight = fullImageHeight,
                 metadata = metadata,
-                preparedNormalizedYuvRead = demosaicNoiseTransfer?.normalizedYuvRead,
-                preparedNormalizedYuvShot = demosaicNoiseTransfer?.normalizedYuvShot,
-                preparedNormalizedYuvQuadratic =
-                    demosaicNoiseTransfer?.normalizedYuvQuadratic,
-                preparedCorrelation = demosaicNoiseTransfer?.correlation,
+                preparedYuvNoiseModel = demosaicNoiseTransfer,
                 applyLensShadingToDenoiseStrength = hasValidLensShadingMap(metadata),
                 tuningGain = tuningGain,
                 pass = MgcFullResolutionDenoise.Pass.USER_ADJUSTMENT,
@@ -8677,7 +8682,8 @@ class RawDemosaicProcessor {
     /**
      * Builds the physical single-frame model consumed by USER_ADJUSTMENT after demosaic.
      * Sensor samples start with an identity power spectrum; the measured demosaic transfer
-     * supplies the Y/Cb/Cr coefficients and correlation seen by the full-resolution denoiser.
+     * supplies the Y/Cb/Cr coefficients and separate luma/chroma correlations seen by the
+     * full-resolution denoiser.
      */
     private fun prepareUserAdjustmentNoiseTransfer(
         metadata: RawMetadata,
@@ -8709,8 +8715,12 @@ class RawDemosaicProcessor {
                 TAG,
                 "MGC USER_ADJUSTMENT noise propagation ready " +
                     "pipeline=${demosaicNoisePipelineLabel(metadata.cfaPattern)} " +
-                    "correlation=${transfer.correlation.minOrNull()}.." +
-                    "${transfer.correlation.maxOrNull()}/${transfer.correlation.average()}",
+                    "lumaCorrelation=${transfer.lumaCorrelation.minOrNull()}.." +
+                    "${transfer.lumaCorrelation.maxOrNull()}/" +
+                    "${transfer.lumaCorrelation.average()} " +
+                    "chromaCorrelation=${transfer.chromaCorrelation.minOrNull()}.." +
+                    "${transfer.chromaCorrelation.maxOrNull()}/" +
+                    transfer.chromaCorrelation.average(),
             )
         }
         return transfer
@@ -8725,8 +8735,8 @@ class RawDemosaicProcessor {
      * transformed to MGC YUV before fitting
      * variance = read + shot * luma + quadratic * luma^2. The quadratic term is required because
      * VGN's content-adaptive interpolation makes chroma variance visibly convex with signal.
-     * The reference field also supplies the one-dimensional power-correlation spectrum composed
-     * with the input spectrum.
+     * The reference field also supplies separate luma and combined-chroma one-dimensional power
+     * correlation spectra composed with the input spectrum.
      */
     private fun measureDemosaicNoiseTransfer(
         metadata: RawMetadata,
@@ -8741,9 +8751,10 @@ class RawDemosaicProcessor {
         val referenceSample = samples.minBy { sample ->
             abs(sample.referenceSignal - VGN_NOISE_REFERENCE_SIGNAL)
         }
-        // ChromaDenoisePyramidComplete consumes one shared Y shot/quadratic table but retains
-        // separate Y/Cb/Cr read tables. Measure those constant terms directly instead of
-        // extrapolating an intercept from total noise, which is dominated by shot noise.
+        // ChromaDenoisePyramidComplete retains separate Y/Cb/Cr read tables, but its generated
+        // ABI accepts one shared shot/quadratic curve for Cb and Cr. Measure the constant terms
+        // directly, then fit the tightest shared chroma curve that never underestimates either
+        // chroma channel at a calibration signal.
         val readSample = measureDemosaicNoiseSample(
             metadata,
             VGN_NOISE_REFERENCE_SIGNAL,
@@ -8780,20 +8791,37 @@ class RawDemosaicProcessor {
             }
         }
 
+        val chromaEnvelopeSignals = DoubleArray(samples.size * 2) { index ->
+            signals[index / 2]
+        }
+        val chromaRequiredSignalVariance = DoubleArray(samples.size * 2) { index ->
+            val sampleIndex = index / 2
+            val channel = 1 + index % 2
+            (
+                samples[sampleIndex].normalizedYuvVariance[channel] - fittedRead[channel]
+                ).toDouble().coerceAtLeast(0.0)
+        }
+        val sharedChromaFit = fitNonUnderestimatingSignalNoisePolynomial(
+            chromaEnvelopeSignals,
+            chromaRequiredSignalVariance,
+        ) ?: return null
+
         // The fitted coefficients are in VGN's white-balanced camera-RGB/YUV signal domain.
         // MGC's full-resolution model applies x' = 2x, hence read' = 4*read and
         // shot' = 2*shot, while the dimensionless quadratic term is unchanged. Correlation is a
         // unit-mean shape input and does not rescale these independently measured coefficients.
-        val normalizedYuvRead = FloatArray(3) { channel ->
+        val normalizedRead = FloatArray(3) { channel ->
             fittedRead[channel] * 4f
         }
-        val normalizedYuvShot = FloatArray(3) { channel ->
-            fittedShot[channel] * 2f
-        }
-        val normalizedYuvQuadratic = fittedQuadratic.copyOf()
-        if (normalizedYuvRead.any { !it.isFinite() || it < 0f } ||
-            normalizedYuvShot.any { !it.isFinite() || it < 0f } ||
-            normalizedYuvQuadratic.any { !it.isFinite() || it < 0f }
+        val normalizedLumaShot = fittedShot[0] * 2f
+        val normalizedLumaQuadratic = fittedQuadratic[0]
+        val normalizedChromaShot = (sharedChromaFit.shot * 2.0).toFloat()
+        val normalizedChromaQuadratic = sharedChromaFit.quadratic.toFloat()
+        if (normalizedRead.any { !it.isFinite() || it < 0f } ||
+            !normalizedLumaShot.isFinite() || normalizedLumaShot < 0f ||
+            !normalizedLumaQuadratic.isFinite() || normalizedLumaQuadratic < 0f ||
+            !normalizedChromaShot.isFinite() || normalizedChromaShot < 0f ||
+            !normalizedChromaQuadratic.isFinite() || normalizedChromaQuadratic < 0f
         ) {
             return null
         }
@@ -8810,15 +8838,22 @@ class RawDemosaicProcessor {
                 "fitShot=${fittedShot.contentToString()} " +
                 "fitQuadratic=${fittedQuadratic.contentToString()} " +
                 "fitMaxRelativeError=${relativeFitError.contentToString()} " +
-                "scale2Read=${normalizedYuvRead.contentToString()} " +
-                "scale2Shot=${normalizedYuvShot.contentToString()} " +
-                "scale2Quadratic=${normalizedYuvQuadratic.contentToString()}",
+                "sharedChromaShot=${sharedChromaFit.shot} " +
+                "sharedChromaQuadratic=${sharedChromaFit.quadratic} " +
+                "scale2Read=${normalizedRead.contentToString()} " +
+                "scale2LumaShot=$normalizedLumaShot " +
+                "scale2LumaQuadratic=$normalizedLumaQuadratic " +
+                "scale2ChromaShot=$normalizedChromaShot " +
+                "scale2ChromaQuadratic=$normalizedChromaQuadratic",
         )
-        return DemosaicNoiseTransfer(
-            normalizedYuvRead = normalizedYuvRead,
-            normalizedYuvShot = normalizedYuvShot,
-            normalizedYuvQuadratic = normalizedYuvQuadratic,
-            correlation = referenceSample.correlation,
+        return MgcFullResolutionDenoise.PreparedYuvNoiseModel(
+            normalizedRead = normalizedRead,
+            normalizedLumaShot = normalizedLumaShot,
+            normalizedLumaQuadratic = normalizedLumaQuadratic,
+            normalizedChromaShot = normalizedChromaShot,
+            normalizedChromaQuadratic = normalizedChromaQuadratic,
+            lumaCorrelation = referenceSample.lumaCorrelation,
+            chromaCorrelation = referenceSample.chromaCorrelation,
         )
     }
 
@@ -9020,7 +9055,7 @@ class RawDemosaicProcessor {
 
             val outputVariance = DoubleArray(3)
             val yuvVariance = DoubleArray(3)
-            val lumaResidual = FloatArray(analysisSamples)
+            val yuvResidual = Array(3) { FloatArray(analysisSamples) }
             for (index in 0 until analysisSamples) {
                 val red = workingRgb[0][index] - mean[0].toFloat()
                 val green = workingRgb[1][index] - mean[1].toFloat()
@@ -9035,7 +9070,7 @@ class RawDemosaicProcessor {
                             MGC_DENOISE_RGB_TO_YUV[offset + 1] * green +
                             MGC_DENOISE_RGB_TO_YUV[offset + 2] * blue
                     yuvVariance[outputChannel] += residual * residual
-                    if (outputChannel == 0) lumaResidual[index] = residual
+                    yuvResidual[outputChannel][index] = residual
                 }
             }
             val rgbVarianceScale = FloatArray(3)
@@ -9075,52 +9110,64 @@ class RawDemosaicProcessor {
                     sine[bin][position] = sin(omega * position).toFloat()
                 }
             }
-            val vgnPower = DoubleArray(VGN_NOISE_SPECTRUM_BINS)
-            for (bin in 0 until VGN_NOISE_SPECTRUM_BINS) {
-                var accumulatedPower = 0.0
-                for (line in 0 until VGN_NOISE_ANALYSIS_SIZE) {
-                    var horizontalReal = 0.0
-                    var horizontalImaginary = 0.0
-                    var verticalReal = 0.0
-                    var verticalImaginary = 0.0
-                    for (position in 0 until VGN_NOISE_ANALYSIS_SIZE) {
-                        val horizontal = lumaResidual[
-                            line * VGN_NOISE_ANALYSIS_SIZE + position
-                        ]
-                        val vertical = lumaResidual[
-                            position * VGN_NOISE_ANALYSIS_SIZE + line
-                        ]
-                        val real = cosine[bin][position]
-                        val imaginary = sine[bin][position]
-                        horizontalReal += horizontal * real
-                        horizontalImaginary -= horizontal * imaginary
-                        verticalReal += vertical * real
-                        verticalImaginary -= vertical * imaginary
+            fun propagatedCorrelation(channels: IntArray): FloatArray? {
+                val demosaicPower = DoubleArray(VGN_NOISE_SPECTRUM_BINS)
+                for (bin in 0 until VGN_NOISE_SPECTRUM_BINS) {
+                    var accumulatedPower = 0.0
+                    for (channel in channels) {
+                        val residual = yuvResidual[channel]
+                        for (line in 0 until VGN_NOISE_ANALYSIS_SIZE) {
+                            var horizontalReal = 0.0
+                            var horizontalImaginary = 0.0
+                            var verticalReal = 0.0
+                            var verticalImaginary = 0.0
+                            for (position in 0 until VGN_NOISE_ANALYSIS_SIZE) {
+                                val horizontal = residual[
+                                    line * VGN_NOISE_ANALYSIS_SIZE + position
+                                ]
+                                val vertical = residual[
+                                    position * VGN_NOISE_ANALYSIS_SIZE + line
+                                ]
+                                val real = cosine[bin][position]
+                                val imaginary = sine[bin][position]
+                                horizontalReal += horizontal * real
+                                horizontalImaginary -= horizontal * imaginary
+                                verticalReal += vertical * real
+                                verticalImaginary -= vertical * imaginary
+                            }
+                            accumulatedPower +=
+                                horizontalReal * horizontalReal +
+                                    horizontalImaginary * horizontalImaginary +
+                                    verticalReal * verticalReal +
+                                    verticalImaginary * verticalImaginary
+                        }
                     }
-                    accumulatedPower +=
-                        horizontalReal * horizontalReal +
-                            horizontalImaginary * horizontalImaginary +
-                            verticalReal * verticalReal +
-                            verticalImaginary * verticalImaginary
+                    demosaicPower[bin] = accumulatedPower /
+                        (2.0 * VGN_NOISE_ANALYSIS_SIZE * VGN_NOISE_ANALYSIS_SIZE)
                 }
-                vgnPower[bin] = accumulatedPower /
-                    (2.0 * VGN_NOISE_ANALYSIS_SIZE * VGN_NOISE_ANALYSIS_SIZE)
+                val demosaicPowerMean = demosaicPower.average()
+                if (!demosaicPowerMean.isFinite() || demosaicPowerMean <= 0.0) return null
+                val composed = DoubleArray(VGN_NOISE_SPECTRUM_BINS) { index ->
+                    inputCorrelation[index].toDouble() *
+                        (demosaicPower[index] / demosaicPowerMean)
+                }
+                val compositionMean = composed.average()
+                if (!compositionMean.isFinite() || compositionMean <= 0.0) return null
+                return FloatArray(VGN_NOISE_SPECTRUM_BINS) { index ->
+                    (composed[index] / compositionMean).toFloat()
+                }.takeIf { spectrum ->
+                    spectrum.all { it.isFinite() && it >= 0f }
+                }
             }
-            val vgnPowerMean = vgnPower.average()
-            if (!vgnPowerMean.isFinite() || vgnPowerMean <= 0.0) return null
-            val composed = DoubleArray(VGN_NOISE_SPECTRUM_BINS) { index ->
-                inputCorrelation[index].toDouble() * (vgnPower[index] / vgnPowerMean)
-            }
-            val compositionMean = composed.average()
-            if (!compositionMean.isFinite() || compositionMean <= 0.0) return null
-            val combinedCorrelation = FloatArray(VGN_NOISE_SPECTRUM_BINS) { index ->
-                (composed[index] / compositionMean).toFloat()
-            }
-            if (combinedCorrelation.any { !it.isFinite() || it < 0f }) {
-                return null
-            }
-            val correlationMin = combinedCorrelation.minOrNull() ?: 0f
-            val correlationMax = combinedCorrelation.maxOrNull() ?: 0f
+
+            val lumaCorrelation = propagatedCorrelation(intArrayOf(0)) ?: return null
+            // The native chroma ABI uses one shared shot/quadratic curve and one spectrum.
+            // Summed Cb+Cr power gives that spectrum the same variance weighting as the curve.
+            val chromaCorrelation = propagatedCorrelation(intArrayOf(1, 2)) ?: return null
+            val lumaCorrelationMin = lumaCorrelation.minOrNull() ?: 0f
+            val lumaCorrelationMax = lumaCorrelation.maxOrNull() ?: 0f
+            val chromaCorrelationMin = chromaCorrelation.minOrNull() ?: 0f
+            val chromaCorrelationMax = chromaCorrelation.maxOrNull() ?: 0f
             PLog.i(
                 TAG,
                 "Demosaic noise propagation complete " +
@@ -9131,14 +9178,17 @@ class RawDemosaicProcessor {
                     "workingLumaMean=${workingYuvMean[0]} " +
                     "normalizedYuvVariance=${normalizedYuvVariance.contentToString()} " +
                     "measuredPointVarianceRatio=${rgbVarianceScale.contentToString()} " +
-                    "correlation=$correlationMin..$correlationMax/" +
-                    combinedCorrelation.average(),
+                    "lumaCorrelation=$lumaCorrelationMin..$lumaCorrelationMax/" +
+                    "${lumaCorrelation.average()} " +
+                    "chromaCorrelation=$chromaCorrelationMin..$chromaCorrelationMax/" +
+                    chromaCorrelation.average(),
             )
             return DemosaicNoiseSample(
                 referenceSignal = referenceSignal,
                 workingLumaMean = workingYuvMean[0].toFloat(),
                 normalizedYuvVariance = normalizedYuvVariance,
-                correlation = combinedCorrelation,
+                lumaCorrelation = lumaCorrelation,
+                chromaCorrelation = chromaCorrelation,
             )
         } catch (error: Exception) {
             PLog.e(

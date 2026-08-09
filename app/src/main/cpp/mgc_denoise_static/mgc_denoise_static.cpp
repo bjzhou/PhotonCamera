@@ -622,8 +622,6 @@ photon_mgc_downsample_rgb_dispatch(
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef604c)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef6140)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef61ac)
-PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef636c)
-PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef63f8)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef64dc)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef6568)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ef6600)
@@ -650,6 +648,54 @@ PHOTON_MGC_DEFINE_HALIDE_ERROR(5f59544)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5f595a0)
 
 #undef PHOTON_MGC_DEFINE_HALIDE_ERROR
+
+extern "C" __attribute__((visibility("hidden"))) uintptr_t
+photon_mgc_halide_error_5ef63f8(
+    uintptr_t user_context,
+    uintptr_t buffer_name,
+    uintptr_t dimension,
+    uintptr_t minimum_touched,
+    uintptr_t maximum_touched,
+    uintptr_t minimum_valid,
+    uintptr_t maximum_valid,
+    uintptr_t) {
+    const char* name = reinterpret_cast<const char*>(buffer_name);
+    __android_log_print(
+        ANDROID_LOG_ERROR,
+        kTag,
+        "MGC Halide access out of bounds name=%s dimension=%zu "
+        "touched=[%zd,%zd] valid=[%zd,%zd] userContext=%p",
+        name != nullptr ? name : "<null>",
+        static_cast<size_t>(dimension),
+        static_cast<ssize_t>(minimum_touched),
+        static_cast<ssize_t>(maximum_touched),
+        static_cast<ssize_t>(minimum_valid),
+        static_cast<ssize_t>(maximum_valid),
+        reinterpret_cast<void*>(user_context));
+    return static_cast<uintptr_t>(0x5ef63f8);
+}
+
+extern "C" __attribute__((visibility("hidden"))) uintptr_t
+photon_mgc_halide_error_5ef636c(
+    uintptr_t user_context,
+    uintptr_t buffer_name,
+    uintptr_t actual_dimensions,
+    uintptr_t expected_dimensions,
+    uintptr_t,
+    uintptr_t,
+    uintptr_t,
+    uintptr_t) {
+    const char* name = reinterpret_cast<const char*>(buffer_name);
+    __android_log_print(
+        ANDROID_LOG_ERROR,
+        kTag,
+        "MGC Halide buffer dimension mismatch name=%s actual=%zu expected=%zu userContext=%p",
+        name != nullptr ? name : "<null>",
+        static_cast<size_t>(actual_dimensions),
+        static_cast<size_t>(expected_dimensions),
+        reinterpret_cast<void*>(user_context));
+    return static_cast<uintptr_t>(0x5ef636c);
+}
 
 extern "C" __attribute__((visibility("hidden"))) uintptr_t
 photon_mgc_halide_error_5ef6294(
@@ -741,16 +787,18 @@ bool BuildNoiseBuffers(
 
 bool BuildChromaNoiseBuffers(
     const float read_noise[3],
-    const float shot_noise[3],
-    const float quadratic_noise[3],
+    float shot_noise,
+    float quadratic_noise,
     const float correlation[128],
     const float strength[5],
     const float outlier_threshold[5],
     ChromaDenoiseNoiseBuffers* output) {
-    if (read_noise == nullptr || shot_noise == nullptr ||
-        quadratic_noise == nullptr || correlation == nullptr ||
+    if (read_noise == nullptr || correlation == nullptr ||
         strength == nullptr || outlier_threshold == nullptr ||
         output == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(shot_noise) || !std::isfinite(quadratic_noise)) {
         return false;
     }
     float current_correlation[128] = {};
@@ -759,19 +807,16 @@ bool BuildChromaNoiseBuffers(
         current_correlation[index] = correlation[index];
     }
     float current_read[3] = {};
-    float current_shot[3] = {};
-    float current_quadratic[3] = {};
+    float current_shot = std::max(shot_noise, 0.0f);
+    float current_quadratic = std::max(quadratic_noise, 0.0f);
     for (int channel = 0; channel < 3; ++channel) {
-        if (!std::isfinite(read_noise[channel]) ||
-            !std::isfinite(shot_noise[channel]) ||
-            !std::isfinite(quadratic_noise[channel])) {
+        if (!std::isfinite(read_noise[channel])) {
             return false;
         }
         current_read[channel] = std::max(read_noise[channel], 0.0f);
-        current_shot[channel] = std::max(shot_noise[channel], 0.0f);
-        current_quadratic[channel] =
-            std::max(quadratic_noise[channel], 0.0f);
     }
+    std::fill_n(output->shot, 24, 0.0f);
+    std::fill_n(output->quadratic, 24, 0.0f);
 
     for (int level = 0; level < 4; ++level) {
         for (int branch = 0; branch < 2; ++branch) {
@@ -787,13 +832,13 @@ bool BuildChromaNoiseBuffers(
                     current_correlation,
                     downsample_factor,
                     0);
+            const int scalar_index = level + branch * 12;
+            output->shot[scalar_index] = current_shot * scale;
+            output->quadratic[scalar_index] = current_quadratic * scale;
             for (int channel = 0; channel < 3; ++channel) {
                 const int index =
                     level + channel * 4 + branch * 12;
                 output->read[index] = current_read[channel] * scale;
-                output->shot[index] = current_shot[channel] * scale;
-                output->quadratic[index] =
-                    current_quadratic[channel] * scale;
             }
             output->outlier_threshold[level + branch * 4] =
                 static_cast<uint8_t>(
@@ -807,9 +852,9 @@ bool BuildChromaNoiseBuffers(
         }
         for (int channel = 0; channel < 3; ++channel) {
             current_read[channel] *= coefficient_scale;
-            current_shot[channel] *= coefficient_scale;
-            current_quadratic[channel] *= coefficient_scale;
         }
+        current_shot *= coefficient_scale;
+        current_quadratic *= coefficient_scale;
     }
     return true;
 }
@@ -927,9 +972,11 @@ int ComputeSpatialStrengthMap(
     const int bayer_quad_width = signal_width * 8;
     const int bayer_quad_height = signal_height * 8;
     const int signal_count = signal_width * signal_height;
-    const int64_t pixel_count =
-        static_cast<int64_t>(width) * static_cast<int64_t>(height);
-    if (pixel_count > std::numeric_limits<int32_t>::max() ||
+    const int rgb_input_width = signal_width * 16;
+    const int rgb_input_height = signal_height * 16;
+    const int64_t rgb_input_pixel_count =
+        static_cast<int64_t>(rgb_input_width) * rgb_input_height;
+    if (rgb_input_pixel_count > std::numeric_limits<int32_t>::max() ||
         signal_count <= 0) {
         return -1;
     }
@@ -941,9 +988,9 @@ int ComputeSpatialStrengthMap(
         {0, 4, bayer_quad_width * bayer_quad_height, 0},
     };
     const HalideDimension input_dimensions_rgb[] = {
-        {0, width, 1, 0},
-        {0, height, width, 0},
-        {0, 3, static_cast<int32_t>(pixel_count), 0},
+        {0, rgb_input_width, 1, 0},
+        {0, rgb_input_height, rgb_input_width, 0},
+        {0, 3, static_cast<int32_t>(rgb_input_pixel_count), 0},
     };
     const HalideDimension black_dimensions[] = {
         {0, is_bayer ? 4 : 3, 1, 0},

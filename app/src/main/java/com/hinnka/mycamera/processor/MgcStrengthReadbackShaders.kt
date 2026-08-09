@@ -1,7 +1,38 @@
 package com.hinnka.mycamera.processor
 
-/** Small GLES 3.1 pack passes used to avoid driver-synchronous framebuffer readback submission. */
+/** Pack passes used for asynchronous diagnostic readback. */
 internal object MgcStrengthReadbackShaders {
+    /** Exact RGB camera-domain signed-Q14 signal, packed after the isolated RGB merge pass. */
+    val RGB_FIXED16_FRAGMENT = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform highp sampler2D uColorAndRWeight;
+        uniform highp sampler2D uGbWeights;
+        uniform int uChannel;
+        uniform vec3 uCameraDomainScale;
+        uniform ivec2 uSourceSize;
+        layout(location = 0) out highp int oFixed16;
+
+        void main() {
+            ivec2 position = min(ivec2(gl_FragCoord.xy), uSourceSize - ivec2(1));
+            vec4 colorAndR = texelFetch(uColorAndRWeight, position, 0);
+            vec2 gbWeights = texelFetch(uGbWeights, position, 0).rg;
+            vec3 semantic = colorAndR.rgb / max(
+                vec3(colorAndR.a, gbWeights.x, gbWeights.y),
+                vec3(1.0e-8)
+            );
+            vec3 rgb = vec3(
+                semantic.r + semantic.g,
+                semantic.r,
+                semantic.r + semantic.b
+            ) * uCameraDomainScale;
+            oFixed16 = int(round(
+                clamp(max(rgb[uChannel], 0.0) * 16384.0, 0.0, 32767.0)
+            ));
+        }
+    """.trimIndent()
+
     val FLOAT32 = """
         #version 310 es
         layout(local_size_x = 128) in;

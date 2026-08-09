@@ -97,4 +97,35 @@ class NoisePolynomialFitTest {
             ) == null,
         )
     }
+
+    @Test
+    fun sharedChromaEnvelopeDoesNotUnderestimateEitherOpponentChannel() {
+        val signals = doubleArrayOf(0.04, 0.18, 0.5)
+        val cb = doubleArrayOf(2.1e-7, 1.7e-6, 1.45e-5)
+        val cr = doubleArrayOf(3.2e-7, 3.4e-6, 2.42e-5)
+        val required = DoubleArray(signals.size) { index -> maxOf(cb[index], cr[index]) }
+
+        val actual = requireNotNull(
+            fitNonUnderestimatingSignalNoisePolynomial(signals, required),
+        )
+
+        for (index in signals.indices) {
+            val signal = signals[index]
+            val predicted = actual.shot * signal + actual.quadratic * signal * signal
+            assertTrue(predicted + 1e-15 >= cb[index])
+            assertTrue(predicted + 1e-15 >= cr[index])
+        }
+        assertTrue(actual.shot >= 0.0)
+        assertTrue(actual.quadratic >= 0.0)
+    }
+
+    @Test
+    fun sharedChromaEnvelopeRejectsZeroSignalCoordinates() {
+        assertTrue(
+            fitNonUnderestimatingSignalNoisePolynomial(
+                signals = doubleArrayOf(0.0, 0.2),
+                requiredVariances = doubleArrayOf(1e-6, 2e-6),
+            ) == null,
+        )
+    }
 }

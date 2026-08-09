@@ -74,6 +74,108 @@ internal fun fitNonNegativeNoisePolynomial(
     return best
 }
 
+/**
+ * Fits the tightest non-negative signal-noise envelope
+ *
+ *     variance(signal) = shot * signal + quadratic * signal^2
+ *
+ * that does not underestimate any supplied sample. The chroma pyramid ABI has one shared
+ * shot/quadratic pair for both opponent channels, so projecting their independently measured
+ * residual variances onto this envelope preserves the physical upper bound without changing the
+ * independently retained Cb/Cr read floors.
+ */
+internal fun fitNonUnderestimatingSignalNoisePolynomial(
+    signals: DoubleArray,
+    requiredVariances: DoubleArray,
+): NonNegativeNoisePolynomial? {
+    if (signals.size != requiredVariances.size || signals.isEmpty() ||
+        signals.any { !it.isFinite() || it <= 0.0 } ||
+        requiredVariances.any { !it.isFinite() || it < 0.0 }
+    ) {
+        return null
+    }
+    if (requiredVariances.all { it == 0.0 }) {
+        return NonNegativeNoisePolynomial(
+            read = 0.0,
+            shot = 0.0,
+            quadratic = 0.0,
+            squaredError = 0.0,
+        )
+    }
+
+    data class Candidate(
+        val shot: Double,
+        val quadratic: Double,
+    )
+
+    val candidates = ArrayList<Candidate>()
+    candidates += Candidate(
+        shot = requiredVariances.indices.maxOf { index ->
+            requiredVariances[index] / signals[index]
+        },
+        quadratic = 0.0,
+    )
+    candidates += Candidate(
+        shot = 0.0,
+        quadratic = requiredVariances.indices.maxOf { index ->
+            requiredVariances[index] / (signals[index] * signals[index])
+        },
+    )
+    for (first in signals.indices) {
+        for (second in first + 1 until signals.size) {
+            val x0 = signals[first]
+            val x1 = signals[second]
+            val determinant = x0 * x1 * (x1 - x0)
+            if (!determinant.isFinite() || kotlin.math.abs(determinant) <= PIVOT_EPSILON) continue
+            val y0 = requiredVariances[first]
+            val y1 = requiredVariances[second]
+            val shot = (y0 * x1 * x1 - y1 * x0 * x0) / determinant
+            val quadratic = (x0 * y1 - x1 * y0) / determinant
+            if (shot >= -COEFFICIENT_EPSILON && quadratic >= -COEFFICIENT_EPSILON) {
+                candidates += Candidate(
+                    shot = shot.coerceAtLeast(0.0),
+                    quadratic = quadratic.coerceAtLeast(0.0),
+                )
+            }
+        }
+    }
+
+    val maximumSignal = signals.maxOrNull() ?: return null
+    var best: NonNegativeNoisePolynomial? = null
+    var bestIntegratedVariance = Double.POSITIVE_INFINITY
+    for (candidate in candidates) {
+        if (!candidate.shot.isFinite() || !candidate.quadratic.isFinite()) continue
+        val predicted = DoubleArray(signals.size) { index ->
+            candidate.shot * signals[index] +
+                candidate.quadratic * signals[index] * signals[index]
+        }
+        val feasible = predicted.indices.all { index ->
+            val tolerance = maxOf(
+                ENVELOPE_ABSOLUTE_TOLERANCE,
+                requiredVariances[index] * ENVELOPE_RELATIVE_TOLERANCE,
+            )
+            predicted[index] + tolerance >= requiredVariances[index]
+        }
+        if (!feasible) continue
+        val integratedVariance =
+            candidate.shot * maximumSignal * maximumSignal * 0.5 +
+                candidate.quadratic * maximumSignal * maximumSignal * maximumSignal / 3.0
+        if (!integratedVariance.isFinite() || integratedVariance >= bestIntegratedVariance) continue
+        bestIntegratedVariance = integratedVariance
+        val squaredError = predicted.indices.sumOf { index ->
+            val residual = predicted[index] - requiredVariances[index]
+            residual * residual
+        }
+        best = NonNegativeNoisePolynomial(
+            read = 0.0,
+            shot = candidate.shot,
+            quadratic = candidate.quadratic,
+            squaredError = squaredError,
+        )
+    }
+    return best
+}
+
 private fun solveLinearSystem(
     matrix: Array<DoubleArray>,
     rightHandSide: DoubleArray,
@@ -125,3 +227,5 @@ private const val QUADRATIC = 2
 private const val TERM_COUNT = 3
 private const val COEFFICIENT_EPSILON = 1e-12
 private const val PIVOT_EPSILON = 1e-20
+private const val ENVELOPE_RELATIVE_TOLERANCE = 1e-9
+private const val ENVELOPE_ABSOLUTE_TOLERANCE = 1e-18
