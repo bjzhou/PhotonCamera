@@ -51,7 +51,7 @@ import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.RawBurstGyroSelector
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
-import com.hinnka.mycamera.processor.RawRadianceExposurePlanner
+import com.hinnka.mycamera.processor.RawmaxExposurePlanner
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
@@ -64,7 +64,6 @@ import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
-import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -1722,7 +1721,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     pendingRawStackFrames.clear()
                     val rawMaxHdrFusionEnabled = state.value.isRawMaxHdrEnabled
                     viewModelScope.launch {
-                        val exposurePlan = RawRadianceExposurePlanner.plan(
+                        val exposurePlan = RawmaxExposurePlanner.plan(
                             exposureProducts = chronologicalFrames.map { it.frame.exposureProduct },
                             frameRoles = chronologicalFrames.map { it.frame.role },
                             enableHdrFusion = rawMaxHdrFusionEnabled,

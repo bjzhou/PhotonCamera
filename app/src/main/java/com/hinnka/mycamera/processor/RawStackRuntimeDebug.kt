@@ -53,9 +53,6 @@ internal object RawStackRuntimeDebug {
             SystemPropertiesUtil.get("debug.photon.mgc_spatial.input_diagnostics")
                 ?.toBooleanStrictOrNull() == true
 
-    val debugConfig: RawStackDebugConfig
-        get() = RawStackDebugConfig.forCurrentBuild()
-
     inline fun d(tag: String, message: () -> String) {
         if (enabled) {
             PLog.d(tag, message())
