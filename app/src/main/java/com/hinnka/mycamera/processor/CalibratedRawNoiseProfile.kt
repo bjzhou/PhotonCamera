@@ -161,7 +161,9 @@ data class CalibratedRawNoiseProfile(
 
         private fun parseArray(source: String, name: String): DoubleArray {
             val initializer = Regex(
-                """noise_model_$name\s*\[\s*(?:4)?\s*]\s*=\s*\{([^}]*)}""",
+                // Android's ICU regex engine requires unmatched closing delimiters to be
+                // escaped, while the desktop JVM tolerates them as literals.
+                """noise_model_$name\s*\[\s*(?:4)?\s*\]\s*=\s*\{([^}]*)\}""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
             ).find(source)?.groupValues?.get(1)
             val looseList = if (initializer == null) {
