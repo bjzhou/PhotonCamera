@@ -3319,7 +3319,7 @@ void main() {
 }
     """.trimIndent()
 
-    /** Adapts PhotonCamera's R16UI RAW domain to the reference's packed RGBA16F Bayer input. */
+    /** Adapts the hot-pixel-corrected packed RGBA16UI RAW to VGN's packed RGBA16F domain. */
     val PREPARE_PACKED_RAW = """
         #version 310 es
         precision highp float;
@@ -3418,7 +3418,8 @@ void main() {
 
         float sensorAt(ivec2 p, int channel) {
             ivec2 q = safeCoord(p);
-            float raw = float(texelFetch(uRawTexture, q, 0).r);
+            uvec4 packedRaw = texelFetch(uRawTexture, ivec2(q.x / 4, q.y), 0);
+            float raw = float(packedRaw[q.x & 3]);
             float black = uBlackLevel[channel];
             return max(raw - black, 0.0) / max(uWhiteLevel - black, 1.0);
         }

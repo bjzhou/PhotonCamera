@@ -1555,6 +1555,8 @@ class RawDemosaicProcessor {
     private var rcdStep43Program = 0
     private var rcdWriteOutputProgram = 0
     private val vgnPrograms = IntArray(VgnShaders.PROGRAM_SOURCES.size)
+    private var rawHotPixelDetectProgram = 0
+    private var rawHotPixelRepairProgram = 0
     private var activeVgnPassWindow: GlesGpuScheduler.PassWindow? = null
     private var quadPopulateProgram = 0
     private var quadGreenProgram = 0
@@ -6087,7 +6089,11 @@ class RawDemosaicProcessor {
     }
 
     private fun ensureVgnPrograms(): Boolean {
-        if (vgnPrograms.all { it != 0 }) return true
+        if (vgnPrograms.all { it != 0 } &&
+            rawHotPixelDetectProgram != 0 && rawHotPixelRepairProgram != 0
+        ) {
+            return true
+        }
         val start = System.currentTimeMillis()
         VgnShaders.PROGRAM_SOURCES.forEachIndexed { index, (label, source) ->
             if (vgnPrograms[index] == 0) {
@@ -6097,8 +6103,25 @@ class RawDemosaicProcessor {
                 )
             }
         }
-        val ready = vgnPrograms.all { it != 0 }
-        PLog.d(TAG, "Single-frame VGN programs ready=$ready, took=${System.currentTimeMillis() - start}ms")
+        if (rawHotPixelDetectProgram == 0) {
+            rawHotPixelDetectProgram = compileComputeProgram(
+                RawHotPixelShaders.DETECT,
+                "RAW_HOT_PIXEL_DETECT",
+            )
+        }
+        if (rawHotPixelRepairProgram == 0) {
+            rawHotPixelRepairProgram = compileComputeProgram(
+                RawHotPixelShaders.REPAIR,
+                "RAW_HOT_PIXEL_REPAIR",
+            )
+        }
+        val ready = vgnPrograms.all { it != 0 } &&
+            rawHotPixelDetectProgram != 0 && rawHotPixelRepairProgram != 0
+        PLog.d(
+            TAG,
+            "VGN and RAW hot-pixel programs ready=$ready, " +
+                "took=${System.currentTimeMillis() - start}ms",
+        )
         return ready
     }
 
@@ -8213,6 +8236,152 @@ class RawDemosaicProcessor {
     }
 
     /**
+     * Detects and repairs sparse positive RAW impulses before any normalization, lens shading,
+     * white balance, or demosaic operation. The input texture remains untouched because the
+     * repair needs a stable same-CFA neighborhood for every invocation.
+     */
+    private fun dispatchRawHotPixelCorrection(
+        metadata: RawMetadata,
+        width: Int,
+        height: Int,
+        globalOriginX: Int,
+        globalOriginY: Int,
+        sourceTexture: Int,
+        maskTexture: Int,
+        repairedTexture: Int,
+        passWindow: GlesGpuScheduler.PassWindow,
+    ) {
+        check(rawHotPixelDetectProgram != 0 && rawHotPixelRepairProgram != 0) {
+            "RAW hot-pixel programs are unavailable"
+        }
+        val blackLevel4 = FloatArray(4) { index ->
+            metadata.blackLevel.getOrElse(index) {
+                metadata.blackLevel.firstOrNull() ?: 0f
+            }.coerceAtLeast(0f)
+        }
+        val noise = resolveChromaDenoiseNoiseModel(metadata, 1f)
+        val noiseSlope = floatArrayOf(noise.redSlope, noise.greenSlope, noise.blueSlope)
+        val noiseOffset = floatArrayOf(noise.redOffset, noise.greenOffset, noise.blueOffset)
+        val packedRawWidth = (width + 3) / 4
+        val groupCountX = GlesComputeWorkGroup.imageGroupCount(packedRawWidth)
+        val groupCountY = GlesComputeWorkGroup.imageGroupCount(height)
+
+        fun bindCommonUniforms(program: Int) {
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(program, "uImageSize"),
+                width,
+                height,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(program, "uGlobalOrigin"),
+                globalOriginX,
+                globalOriginY,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(program, "uCfaPattern"),
+                metadata.cfaPattern,
+            )
+            GLES31.glUniform4fv(
+                GLES31.glGetUniformLocation(program, "uBlackLevel"),
+                1,
+                blackLevel4,
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(program, "uWhiteLevel"),
+                metadata.whiteLevel,
+            )
+            GLES31.glUniform3fv(
+                GLES31.glGetUniformLocation(program, "uNoiseSlope"),
+                1,
+                noiseSlope,
+                0,
+            )
+            GLES31.glUniform3fv(
+                GLES31.glGetUniformLocation(program, "uNoiseOffset"),
+                1,
+                noiseOffset,
+                0,
+            )
+        }
+
+        fun bindRawSampler(program: Int) {
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, sourceTexture)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(program, "uRawTexture"),
+                RCD_RAW_TEXTURE_UNIT,
+            )
+        }
+
+        passWindow.beginPass(
+            "RAW hot-pixel detection",
+            reads = longArrayOf(GlesGpuScheduler.textureResource(sourceTexture)),
+            writes = longArrayOf(GlesGpuScheduler.textureResource(maskTexture)),
+        )
+        GLES31.glUseProgram(rawHotPixelDetectProgram)
+        bindCommonUniforms(rawHotPixelDetectProgram)
+        bindRawSampler(rawHotPixelDetectProgram)
+        GLES31.glBindImageTexture(
+            0,
+            maskTexture,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA8UI,
+        )
+        GLES31.glDispatchCompute(groupCountX, groupCountY, 1)
+        GlesGpuScheduler.memoryBarrier()
+        checkGlError("RAW hot-pixel detection")
+        unbindVgnImages()
+        passWindow.endPass()
+
+        passWindow.beginPass(
+            "RAW hot-pixel repair",
+            reads = longArrayOf(
+                GlesGpuScheduler.textureResource(sourceTexture),
+                GlesGpuScheduler.textureResource(maskTexture),
+            ),
+            writes = longArrayOf(GlesGpuScheduler.textureResource(repairedTexture)),
+        )
+        GLES31.glUseProgram(rawHotPixelRepairProgram)
+        bindCommonUniforms(rawHotPixelRepairProgram)
+        bindRawSampler(rawHotPixelRepairProgram)
+        GLES31.glBindImageTexture(
+            0,
+            maskTexture,
+            0,
+            false,
+            0,
+            GLES31.GL_READ_ONLY,
+            GLES30.GL_RGBA8UI,
+        )
+        GLES31.glBindImageTexture(
+            1,
+            repairedTexture,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA16UI,
+        )
+        GLES31.glDispatchCompute(groupCountX, groupCountY, 1)
+        GlesGpuScheduler.memoryBarrier()
+        checkGlError("RAW hot-pixel repair")
+        unbindVgnImages()
+        passWindow.endPass()
+
+        PLog.d(
+            TAG,
+            "RAW hot-pixel correction submitted: size=${width}x$height " +
+                "origin=$globalOriginX,$globalOriginY cfa=${metadata.cfaPattern} " +
+                "frameCount=${metadata.frameCount} slope=${noiseSlope.contentToString()} " +
+                "offset=${noiseOffset.contentToString()}",
+        )
+    }
+
+    /**
      * Packed standard-Bayer VGN demosaic shared by single-frame RAW and Spatial Bayer.
      *
      * PREPARE_PACKED_RAW applies black normalization, CFA-aware LSC and calculation WB exactly
@@ -8296,6 +8465,40 @@ class RawDemosaicProcessor {
         activeVgnPassWindow = passWindow
 
         try {
+            val sourcePackedWidth = (width + 3) / 4
+            val hotPixelMask = allocate(
+                GLES30.GL_RGBA8UI,
+                sourcePackedWidth,
+                height,
+                "hot-pixel mask",
+            )
+            val repairedRaw = allocate(
+                GLES30.GL_RGBA16UI,
+                sourcePackedWidth,
+                height,
+                "hot-pixel repaired RAW",
+            )
+            unbindVgnImages()
+            for (binding in 2..5) {
+                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
+            }
+            dispatchRawHotPixelCorrection(
+                metadata = metadata,
+                width = width,
+                height = height,
+                globalOriginX = globalOriginX,
+                globalOriginY = globalOriginY,
+                sourceTexture = rawTextureId,
+                maskTexture = hotPixelMask,
+                repairedTexture = repairedRaw,
+                passWindow = passWindow,
+            )
+            passWindow.awaitResources(
+                "release RAW hot-pixel mask",
+                longArrayOf(GlesGpuScheduler.textureResource(hotPixelMask)),
+            )
+            releaseTexture(hotPixelMask)
+
             val packedFloat = allocate(GLES30.GL_RGBA16F, packedWidth, workHeight, "packed float")
             val packedBayer = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed Bayer")
             val packedSmooth = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed smooth")
@@ -8305,14 +8508,10 @@ class RawDemosaicProcessor {
             val full0 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 0")
             val full1 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 1")
 
-            unbindVgnImages()
-            for (binding in 2..5) {
-                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
-            }
             passWindow.beginPass(
                 "prepare packed RAW",
                 reads = longArrayOf(
-                    GlesGpuScheduler.textureResource(rawTextureId),
+                    GlesGpuScheduler.textureResource(repairedRaw),
                     GlesGpuScheduler.textureResource(lensShadingTextureId),
                 ),
                 writes = longArrayOf(GlesGpuScheduler.textureResource(packedFloat)),
@@ -8320,7 +8519,7 @@ class RawDemosaicProcessor {
             val prepareProgram = vgnPrograms[VgnShaders.PROGRAM_PREPARE]
             GLES31.glUseProgram(prepareProgram)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, repairedRaw)
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(prepareProgram, "uRawTexture"),
                 RCD_RAW_TEXTURE_UNIT,
@@ -8398,6 +8597,13 @@ class RawDemosaicProcessor {
             checkGlError("VGN prepare packed RAW")
             unbindVgnImages()
             passWindow.endPass()
+            passWindow.awaitResources(
+                "release RAW hot-pixel intermediates",
+                longArrayOf(
+                    GlesGpuScheduler.textureResource(repairedRaw),
+                ),
+            )
+            releaseTexture(repairedRaw)
 
             dispatchVgnPass(
                 VgnShaders.PROGRAM_NEUTRAL,
@@ -13556,6 +13762,14 @@ class RawDemosaicProcessor {
         vgnPrograms.forEachIndexed { index, program ->
             if (program != 0) GLES31.glDeleteProgram(program)
             vgnPrograms[index] = 0
+        }
+        if (rawHotPixelDetectProgram != 0) {
+            GLES31.glDeleteProgram(rawHotPixelDetectProgram)
+            rawHotPixelDetectProgram = 0
+        }
+        if (rawHotPixelRepairProgram != 0) {
+            GLES31.glDeleteProgram(rawHotPixelRepairProgram)
+            rawHotPixelRepairProgram = 0
         }
         if (quadPopulateProgram != 0) GLES31.glDeleteProgram(quadPopulateProgram)
         if (quadGreenProgram != 0) GLES31.glDeleteProgram(quadGreenProgram)
