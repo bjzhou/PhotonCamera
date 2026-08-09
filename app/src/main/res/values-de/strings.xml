@@ -168,7 +168,7 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="edit_sync_lut_recipe">Aktuelle LUT ebenfalls aktualisieren</string>
+    <string name="edit_sync_lut_recipe">LUT synchronisieren</string>
     <string name="edit_sync_lut_recipe_description">Farbe, Effekte und LUT-Intensität werden auch in der ausgewählten LUT gespeichert.</string>
     <string name="edit_select_lut_hint">Wähle zuerst eine LUT aus, um Farbe und Effekte anzupassen.</string>
     <string name="edit_color_and_effects">Farbe und Effekte anpassen</string>
@@ -234,7 +234,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Kamerakalibrierung</string>
     <string name="settings_camera_orientation">Foto-Ausrichtung</string>
-    <string name="settings_camera_orientation_description">Anpassen, wenn Fotos dieser Kamera falsch gedreht sind. Änderungen gelten nur für diese spezifische Kamera.</string>
+    <string name="settings_camera_orientation_description">Die Rotationskorrektur kann für jedes Objektiv separat eingestellt werden.</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -263,7 +263,7 @@
     <string name="settings_raw_max_hdr_composition">RAWmax-HDR-Zusammenführung</string>
     <string name="settings_raw_max_hdr_composition_description">Verwendet Belichtungsreihen für die HDR-Zusammenführung in RAWmax. Das Deaktivieren verbessert die Verarbeitungsgeschwindigkeit.</string>
     <string name="settings_raw_default_sharpening_section">Standardschärfung</string>
-    <string name="settings_raw_default_sharpening">RAW-Standardschärfung</string>
+    <string name="settings_raw_default_sharpening">Schärfung</string>
     <string name="settings_raw_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von RAW-Aufnahmen angewendet wird.</string>
     <string name="settings_raw_max_default_sharpening">RAWmax-Standardschärfung</string>
     <string name="settings_raw_max_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von RAWmax-Aufnahmen angewendet wird.</string>

@@ -1433,6 +1433,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawLensShadingCorrectionEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val rawBlackLevelModes: StateFlow<Map<String, String>> = userPreferencesRepository.userPreferences
+        .map { it.rawBlackLevelModes }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+    val rawCustomBlackLevels: StateFlow<Map<String, Float>> = userPreferencesRepository.userPreferences
+        .map { it.rawCustomBlackLevels }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+    val rawWhiteLevelModes: StateFlow<Map<String, String>> = userPreferencesRepository.userPreferences
+        .map { it.rawWhiteLevelModes }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+    val rawCustomWhiteLevels: StateFlow<Map<String, Float>> = userPreferencesRepository.userPreferences
+        .map { it.rawCustomWhiteLevels }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+    val rawCfaCorrectionModes: StateFlow<Map<String, String>> = userPreferencesRepository.userPreferences
+        .map { it.rawCfaCorrectionModes }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
     val rawBlackLevelMode: StateFlow<String> = combine(
         state.map { it.currentCameraId }.distinctUntilChanged(),
         userPreferencesRepository.userPreferences
@@ -2356,6 +2376,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun setRawLensShadingCorrectionEnabled(enabled: Boolean) {
         viewModelScope.launch { userPreferencesRepository.saveRawLensShadingCorrectionEnabled(enabled) }
+    }
+    fun setRawDngMetadataCorrections(
+        cameraId: String,
+        corrections: IszRawDngMetadataCorrections
+    ) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawDngMetadataCorrections(cameraId, corrections)
+        }
     }
     fun setRawBlackLevelMode(mode: String) {
         viewModelScope.launch {

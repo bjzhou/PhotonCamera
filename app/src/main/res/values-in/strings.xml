@@ -168,7 +168,7 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="edit_sync_lut_recipe">Perbarui juga LUT saat ini</string>
+    <string name="edit_sync_lut_recipe">Sinkronkan LUT</string>
     <string name="edit_sync_lut_recipe_description">Warna, efek, dan intensitas LUT juga disimpan ke LUT yang dipilih.</string>
     <string name="edit_select_lut_hint">Pilih LUT sebelum menyesuaikan warna dan efek.</string>
     <string name="edit_color_and_effects">Sesuaikan warna dan efek</string>
@@ -234,7 +234,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Kalibrasi Kamera</string>
     <string name="settings_camera_orientation">Orientasi Foto</string>
-    <string name="settings_camera_orientation_description">Sesuaikan jika foto dari kamera ini diputar secara tidak benar. Perubahan hanya berlaku untuk kamera spesifik ini.</string>
+    <string name="settings_camera_orientation_description">Atur koreksi rotasi foto secara terpisah untuk setiap lensa.</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -263,7 +263,7 @@
     <string name="settings_raw_max_hdr_composition">Penggabungan HDR RAWmax</string>
     <string name="settings_raw_max_hdr_composition_description">Gunakan pencahayaan bertingkat untuk penggabungan HDR di RAWmax. Nonaktifkan untuk meningkatkan kecepatan pemrosesan.</string>
     <string name="settings_raw_default_sharpening_section">Penajaman default</string>
-    <string name="settings_raw_default_sharpening">Penajaman RAW default</string>
+    <string name="settings_raw_default_sharpening">Penajaman</string>
     <string name="settings_raw_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan RAW.</string>
     <string name="settings_raw_max_default_sharpening">Penajaman RAWmax default</string>
     <string name="settings_raw_max_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan RAWmax.</string>

@@ -166,10 +166,15 @@
     <!-- Settings Restructuring Sections -->
     <string name="settings_section_assist">Assistive Tools</string>
     <string name="settings_section_focus_lens">Focus &amp; Lens</string>
+    <string name="settings_focus_lens_group_ai_focus">AI Focus</string>
+    <string name="settings_focus_lens_group_lens_selection">Lens Selection</string>
+    <string name="settings_focus_lens_group_virtual_lens_depth">Virtual Lens &amp; Depth</string>
+    <string name="settings_focus_lens_group_lens_discovery">Lens Discovery</string>
+    <string name="settings_focus_lens_group_camera2_extensions">Camera2 Extensions</string>
     <string name="settings_section_capture_storage">Capture &amp; Storage</string>
     <string name="settings_section_quality_perf">Quality &amp; Performance</string>
-    <string name="settings_section_color_hdr">Color &amp; HDR</string>
-    <string name="settings_section_multiframe_exposure">Multi-frame &amp; Exposure</string>
+    <string name="settings_section_color_hdr">Imaging &amp; Color</string>
+    <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>
     <string name="settings_section_interface">Interface Styles</string>
     <string name="settings_section_system_control">System &amp; Controls</string>
     <string name="settings_section_data_maintenance">Data Maintenance</string>
@@ -434,7 +439,7 @@
     <string name="color_recipe">Color Recipe</string>
     <string name="effects_title">Effects</string>
     <string name="color_recipe_reset_all">Reset</string>
-    <string name="edit_sync_lut_recipe">Update current LUT too</string>
+    <string name="edit_sync_lut_recipe">Sync LUT</string>
     <string name="edit_sync_lut_recipe_description">Color, effects, and LUT intensity are also saved to the selected LUT.</string>
     <string name="edit_select_lut_hint">Select a LUT before adjusting color and effects.</string>
     <string name="edit_color_and_effects">Adjust color and effects</string>
@@ -750,7 +755,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Camera Calibration</string>
     <string name="settings_camera_orientation">Photo Orientation</string>
-    <string name="settings_camera_orientation_description">Adjust if photos from this camera are rotated incorrectly. Changes apply to this specific camera only.</string>
+    <string name="settings_camera_orientation_description">Configure photo rotation correction independently for each lens.</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -864,12 +869,10 @@
     <string name="settings_export_dng_with_raw_export">Export DNG with RAW photos</string>
     <string name="settings_export_dng_with_raw_export_description">When exporting a RAW photo, also export its original DNG file to the system gallery.</string>
     <string name="settings_raw_black_level_correction">Black Level Correction</string>
-    <string name="settings_raw_black_level_correction_with_lens">Black Level Correction (Lens %1$s · %2$dmm)</string>
     <string name="settings_raw_black_level_correction_description">Manually set the black level for RAW development to fix color cast issues. Applied per camera lens.</string>
     <string name="settings_black_level_default">Default</string>
     <string name="settings_black_level_custom">Custom</string>
     <string name="settings_raw_white_level_correction">White Level Correction</string>
-    <string name="settings_raw_white_level_correction_with_lens">White Level Correction (Lens %1$s · %2$dmm)</string>
     <string name="settings_raw_white_level_correction_description">Override the RAW sensor saturation level used for DNG metadata and RAW development. Applied per camera lens.</string>
     <string name="settings_white_level_default">Default</string>
     <string name="settings_white_level_raw10">RAW10</string>
@@ -878,8 +881,11 @@
     <string name="settings_white_level_raw_sensor">RAW Sensor(65535)</string>
     <string name="settings_white_level_custom">Custom</string>
     <string name="settings_raw_cfa_correction">CFA Channel Correction</string>
-    <string name="settings_raw_cfa_correction_with_lens">CFA Channel Correction (Lens %1$s · %2$dmm)</string>
     <string name="settings_raw_cfa_correction_description">Override the RAW CFA channel pattern written to DNG. Applied per camera lens.</string>
+    <string name="settings_raw_dng_metadata_corrections">CFA, Black &amp; White Level Correction</string>
+    <string name="settings_raw_dng_metadata_corrections_description">Configure the CFA pattern and black and white levels separately for each lens.</string>
+    <string name="settings_raw_dng_metadata_corrections_summary">CFA: %1$s · Black: %2$s · White: %3$s</string>
+    <string name="settings_raw_correction_custom_value">Custom (%1$s)</string>
     <string name="settings_cfa_correction_default">Default</string>
     <string name="settings_cfa_correction_2x2_rggb">2x2 RGGB</string>
     <string name="settings_cfa_correction_2x2_grbg">2x2 GRBG</string>
@@ -1128,14 +1134,17 @@
     <string name="preset_builtin_badge">Built-in</string>
     <string name="gallery">Gallery</string>
     <string name="settings_raw_default_sharpening_section">Default sharpening</string>
-    <string name="settings_raw_default_sharpening">RAW default sharpening</string>
+    <string name="settings_raw_default_sharpening">Sharpness</string>
     <string name="settings_raw_default_sharpening_description">Sharpening applied by default when developing RAW captures.</string>
     <string name="settings_raw_max_default_sharpening">RAWmax default sharpening</string>
     <string name="settings_raw_max_default_sharpening_description">Sharpening applied by default when developing RAWmax captures.</string>
-    <string name="settings_raw_default_processing_section">RAW defaults</string>
-    <string name="settings_raw_default_luma_denoise">RAW default luma denoise</string>
+    <string name="settings_raw_group_development">Development Engine &amp; Adjustments</string>
+    <string name="settings_raw_default_processing_section">RAW Defaults</string>
+    <string name="settings_raw_group_capture_output">Capture &amp; Output</string>
+    <string name="settings_raw_group_sensor_correction">Sensor Correction</string>
+    <string name="settings_raw_default_luma_denoise">Luma denoise</string>
     <string name="settings_raw_default_luma_denoise_description">Adjusts luminance noise reduction for RAW photos.</string>
-    <string name="settings_raw_default_chroma_denoise">RAW default chroma denoise</string>
+    <string name="settings_raw_default_chroma_denoise">Chroma denoise</string>
     <string name="settings_raw_default_chroma_denoise_description">Adjusts color noise reduction for RAW photos.</string>
     <string name="settings_raw_max_default_luma_denoise">RAWmax baked luma denoise</string>
     <string name="settings_raw_max_default_luma_denoise_description">Adjusts luminance noise reduction for RAWmax photos.</string>

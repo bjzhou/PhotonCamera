@@ -169,7 +169,7 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="edit_sync_lut_recipe">Atualizar também a LUT atual</string>
+    <string name="edit_sync_lut_recipe">Sincronizar LUT</string>
     <string name="edit_sync_lut_recipe_description">Cor, efeitos e intensidade da LUT também são salvos na LUT selecionada.</string>
     <string name="edit_select_lut_hint">Selecione uma LUT antes de ajustar cor e efeitos.</string>
     <string name="edit_color_and_effects">Ajustar cor e efeitos</string>
@@ -235,7 +235,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Calibração da Câmera</string>
     <string name="settings_camera_orientation">Orientação da Foto</string>
-    <string name="settings_camera_orientation_description">Ajuste se as fotos desta câmera estiverem giradas incorretamente. As alterações se aplicam apenas a esta câmera específica.</string>
+    <string name="settings_camera_orientation_description">Configure a correção de rotação das fotos separadamente para cada lente.</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -264,7 +264,7 @@
     <string name="settings_raw_max_hdr_composition">Fusão HDR RAWmax</string>
     <string name="settings_raw_max_hdr_composition_description">Usa exposições escalonadas para fusão HDR no RAWmax. Desative para melhorar a velocidade de processamento.</string>
     <string name="settings_raw_default_sharpening_section">Nitidez padrão</string>
-    <string name="settings_raw_default_sharpening">Nitidez RAW padrão</string>
+    <string name="settings_raw_default_sharpening">Nitidez</string>
     <string name="settings_raw_default_sharpening_description">Nitidez aplicada por padrão ao revelar capturas RAW.</string>
     <string name="settings_raw_max_default_sharpening">Nitidez RAWmax padrão</string>
     <string name="settings_raw_max_default_sharpening_description">Nitidez aplicada por padrão ao revelar capturas RAWmax.</string>

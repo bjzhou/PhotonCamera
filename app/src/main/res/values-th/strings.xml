@@ -152,8 +152,8 @@
     <string name="settings_section_focus_lens">โฟกัสและเลนส์</string>
     <string name="settings_section_capture_storage">การถ่ายภาพและการจัดเก็บ</string>
     <string name="settings_section_quality_perf">คุณภาพของภาพและประสิทธิภาพ</string>
-    <string name="settings_section_color_hdr">สีและ HDR</string>
-    <string name="settings_section_multiframe_exposure">หลายเฟรมและการเปิดรับแสง</string>
+    <string name="settings_section_color_hdr">การประมวลผลภาพและสี</string>
+    <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>
     <string name="settings_section_interface">รูปแบบอินเทอร์เฟซ</string>
     <string name="settings_section_system_control">ระบบและการควบคุม</string>
     <string name="settings_section_data_maintenance">การบำรุงรักษาข้อมูล</string>
@@ -349,7 +349,7 @@
     <string name="recipe_param_primary_blue_lightness">ความสว่างของสีหลักสีน้ำเงิน</string>
 
     <!-- Color Recipe Tabs -->
-    <string name="edit_sync_lut_recipe">อัปเดต LUT ปัจจุบันด้วย</string>
+    <string name="edit_sync_lut_recipe">ซิงค์ LUT</string>
     <string name="edit_sync_lut_recipe_description">สี เอฟเฟกต์ และความเข้ม LUT จะบันทึกไปยัง LUT ที่เลือกด้วย</string>
     <string name="edit_select_lut_hint">เลือก LUT ก่อนปรับสีและเอฟเฟกต์</string>
     <string name="edit_color_and_effects">ปรับสีและเอฟเฟกต์</string>
@@ -586,7 +586,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">การปรับเทียบกล้อง</string>
     <string name="settings_camera_orientation">ทิศทางของรูปภาพ</string>
-    <string name="settings_camera_orientation_description">ปรับหากรูปภาพจากกล้องนี้หมุนไม่ถูกต้อง การเปลี่ยนแปลงจะใช้กับกล้องนี้โดยเฉพาะเท่านั้น</string>
+    <string name="settings_camera_orientation_description">ตั้งค่าการแก้ไขการหมุนภาพแยกกันสำหรับเลนส์แต่ละตัว</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -673,12 +673,10 @@
     <string name="settings_export_dng_with_raw_export">ส่งออก DNG เมื่อส่งออก RAW</string>
     <string name="settings_export_dng_with_raw_export_description">เมื่อส่งออกภาพถ่าย RAW ไฟล์ DNG ต้นฉบับที่เกี่ยวข้องจะถูกส่งออกไปยังอัลบั้มระบบด้วย</string>
     <string name="settings_raw_black_level_correction">การแก้ไขระดับสีดำ</string>
-    <string name="settings_raw_black_level_correction_with_lens">การแก้ไขระดับสีดำ (เลนส์ %1$s · %2$d มม.)</string>
     <string name="settings_raw_black_level_correction_description">ตั้งค่าระดับสีดำด้วยตนเองในระหว่างการพัฒนา RAW เพื่อแก้ไขปัญหาสีเพี้ยน การตั้งค่าส่วนบุคคลสำหรับเลนส์</string>
     <string name="settings_black_level_default">ค่าเริ่มต้น</string>
     <string name="settings_black_level_custom">ปรับแต่ง</string>
     <string name="settings_raw_white_level_correction">การแก้ไขระดับสีขาว</string>
-    <string name="settings_raw_white_level_correction_with_lens">การแก้ไขระดับสีขาว (เลนส์ %1$s · %2$d มม.)</string>
     <string name="settings_raw_white_level_correction_description">แทนที่ระดับความอิ่มตัวของเซ็นเซอร์ RAW ที่ใช้สำหรับข้อมูลเมตา DNG และการพัฒนา RAW การตั้งค่าส่วนบุคคลสำหรับเลนส์</string>
     <string name="settings_white_level_default">ค่าเริ่มต้น</string>
     <string name="settings_white_level_raw10">RAW10</string>
@@ -687,7 +685,6 @@
     <string name="settings_white_level_raw_sensor">RAW Sensor(65535)</string>
     <string name="settings_white_level_custom">ปรับแต่ง</string>
     <string name="settings_raw_cfa_correction">การแก้ไขช่อง CFA</string>
-    <string name="settings_raw_cfa_correction_with_lens">การแก้ไขช่อง CFA (เลนส์ %1$s · %2$d มม.)</string>
     <string name="settings_raw_cfa_correction_description">แทนที่รูปแบบช่อง RAW CFA ที่เขียนลง DNG การตั้งค่าส่วนบุคคลสำหรับเลนส์</string>
     <string name="settings_cfa_correction_default">ค่าเริ่มต้น</string>
     <string name="settings_cfa_correction_2x2_rggb">2x2 RGGB</string>
@@ -902,7 +899,7 @@
     <string name="settings_raw_max_hdr_composition">การรวม HDR ของ RAWmax</string>
     <string name="settings_raw_max_hdr_composition_description">ใช้การถ่ายคร่อมแสงสำหรับการรวม HDR ใน RAWmax ปิดเพื่อเพิ่มความเร็วในการประมวลผล</string>
     <string name="settings_raw_default_sharpening_section">ความคมชัดเริ่มต้น</string>
-    <string name="settings_raw_default_sharpening">ความคมชัดเริ่มต้นของ RAW</string>
+    <string name="settings_raw_default_sharpening">ความคมชัด</string>
     <string name="settings_raw_default_sharpening_description">ความคมชัดที่ใช้เป็นค่าเริ่มต้นเมื่อประมวลผลภาพ RAW</string>
     <string name="settings_raw_max_default_sharpening">ความคมชัดเริ่มต้นของ RAWmax</string>
     <string name="settings_raw_max_default_sharpening_description">ความคมชัดที่ใช้เป็นค่าเริ่มต้นเมื่อประมวลผลภาพ RAWmax</string>

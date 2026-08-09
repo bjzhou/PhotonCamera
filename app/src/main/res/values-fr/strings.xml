@@ -168,7 +168,7 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="edit_sync_lut_recipe">Mettre aussi à jour la LUT actuelle</string>
+    <string name="edit_sync_lut_recipe">Synchroniser la LUT</string>
     <string name="edit_sync_lut_recipe_description">La couleur, les effets et l’intensité LUT sont aussi enregistrés dans la LUT sélectionnée.</string>
     <string name="edit_select_lut_hint">Sélectionnez d’abord une LUT pour régler la couleur et les effets.</string>
     <string name="edit_color_and_effects">Régler la couleur et les effets</string>
@@ -234,7 +234,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Calibrage de la caméra</string>
     <string name="settings_camera_orientation">Orientation des photos</string>
-    <string name="settings_camera_orientation_description">Ajustez si les photos de cette caméra sont mal pivotées. Les modifications s\'appliquent uniquement à cette caméra spécifique.</string>
+    <string name="settings_camera_orientation_description">Configurez séparément la correction de rotation pour chaque objectif.</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -263,7 +263,7 @@
     <string name="settings_raw_max_hdr_composition">Fusion HDR RAWmax</string>
     <string name="settings_raw_max_hdr_composition_description">Utilise le bracketing d’exposition pour la fusion HDR dans RAWmax. Désactivez cette option pour accélérer le traitement.</string>
     <string name="settings_raw_default_sharpening_section">Netteté par défaut</string>
-    <string name="settings_raw_default_sharpening">Netteté RAW par défaut</string>
+    <string name="settings_raw_default_sharpening">Netteté</string>
     <string name="settings_raw_default_sharpening_description">Netteté appliquée par défaut lors du développement des captures RAW.</string>
     <string name="settings_raw_max_default_sharpening">Netteté RAWmax par défaut</string>
     <string name="settings_raw_max_default_sharpening_description">Netteté appliquée par défaut lors du développement des captures RAWmax.</string>

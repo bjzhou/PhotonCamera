@@ -169,7 +169,7 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="edit_sync_lut_recipe">현재 LUT도 업데이트</string>
+    <string name="edit_sync_lut_recipe">LUT 동기화</string>
     <string name="edit_sync_lut_recipe_description">색상, 효과, LUT 강도도 선택한 LUT에 저장합니다.</string>
     <string name="edit_select_lut_hint">색상과 효과를 조정하기 전에 LUT를 선택하세요.</string>
     <string name="edit_color_and_effects">색상 및 효과 조정</string>
@@ -235,7 +235,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">카메라 보정</string>
     <string name="settings_camera_orientation">사진 방향</string>
-    <string name="settings_camera_orientation_description">이 카메라의 사진이 잘못 회전된 경우 조정하세요. 변경 사항은 이 특정 카메라에만 적용됩니다.</string>
+    <string name="settings_camera_orientation_description">렌즈별로 사진 회전 보정을 개별 설정합니다.</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -264,7 +264,7 @@
     <string name="settings_raw_max_hdr_composition">RAWmax HDR 합성</string>
     <string name="settings_raw_max_hdr_composition_description">RAWmax에서 브래킷 노출을 사용해 HDR을 합성합니다. 끄면 처리 속도가 향상됩니다.</string>
     <string name="settings_raw_default_sharpening_section">기본 선명도</string>
-    <string name="settings_raw_default_sharpening">RAW 기본 선명도</string>
+    <string name="settings_raw_default_sharpening">선명도</string>
     <string name="settings_raw_default_sharpening_description">RAW 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
     <string name="settings_raw_max_default_sharpening">RAWmax 기본 선명도</string>
     <string name="settings_raw_max_default_sharpening_description">RAWmax 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>

@@ -164,10 +164,15 @@
     <!-- Settings Restructuring Sections -->
     <string name="settings_section_assist">輔助工具</string>
     <string name="settings_section_focus_lens">對焦與鏡頭</string>
+    <string name="settings_focus_lens_group_ai_focus">AI 對焦</string>
+    <string name="settings_focus_lens_group_lens_selection">鏡頭選擇</string>
+    <string name="settings_focus_lens_group_virtual_lens_depth">虛擬鏡頭與景深</string>
+    <string name="settings_focus_lens_group_lens_discovery">鏡頭偵測</string>
+    <string name="settings_focus_lens_group_camera2_extensions">Camera2 擴充</string>
     <string name="settings_section_capture_storage">拍攝與存儲</string>
     <string name="settings_section_quality_perf">畫質與性能</string>
-    <string name="settings_section_color_hdr">色彩與 HDR</string>
-    <string name="settings_section_multiframe_exposure">多幀與曝光</string>
+    <string name="settings_section_color_hdr">成像與色彩</string>
+    <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>
     <string name="settings_section_interface">界面樣式</string>
     <string name="settings_section_system_control">系統與控制</string>
     <string name="settings_section_data_maintenance">資料維護</string>
@@ -404,7 +409,7 @@
     <string name="color_recipe">色彩配方</string>
     <string name="effects_title">效果</string>
     <string name="color_recipe_reset_all">重置</string>
-    <string name="edit_sync_lut_recipe">同時更新目前 LUT</string>
+    <string name="edit_sync_lut_recipe">同步 LUT</string>
     <string name="edit_sync_lut_recipe_description">色彩、效果與濾鏡強度都會同時寫入目前 LUT。</string>
     <string name="edit_select_lut_hint">請先選擇一個 LUT，再調整色彩與效果。</string>
     <string name="edit_color_and_effects">調整色彩與效果</string>
@@ -715,7 +720,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">相機校正</string>
     <string name="settings_camera_orientation">相片方向校正</string>
-    <string name="settings_camera_orientation_description">如果該攝像頭的相片旋轉方向不正確，可在此調整。此設定僅對當前攝像頭生效。</string>
+    <string name="settings_camera_orientation_description">可為每個鏡頭單獨設定相片旋轉校正。</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -861,12 +866,10 @@
     <string name="settings_export_dng_with_raw_export">匯出 RAW 時同時匯出 DNG</string>
     <string name="settings_export_dng_with_raw_export_description">匯出 RAW 相片時，同時將對應的原始 DNG 檔案匯出到系統相簿。</string>
     <string name="settings_raw_black_level_correction">黑電平校正</string>
-    <string name="settings_raw_black_level_correction_with_lens">黑電平校正（鏡頭 %1$s · %2$dmm）</string>
     <string name="settings_raw_black_level_correction_description">手動設定 RAW 顯影時的黑電平，用于修復偏色問題。針對鏡頭單獨設定。</string>
     <string name="settings_black_level_default">預設</string>
     <string name="settings_black_level_custom">自訂</string>
     <string name="settings_raw_white_level_correction">白電平校正</string>
-    <string name="settings_raw_white_level_correction_with_lens">白電平校正（鏡頭 %1$s · %2$dmm）</string>
     <string name="settings_raw_white_level_correction_description">覆蓋 RAW 顯影和 DNG 元資料使用的傳感器飽和值。針對鏡頭單獨設定。</string>
     <string name="settings_white_level_default">預設</string>
     <string name="settings_white_level_raw10">RAW10</string>
@@ -875,8 +878,11 @@
     <string name="settings_white_level_raw_sensor">RAW Sensor(65535)</string>
     <string name="settings_white_level_custom">自訂</string>
     <string name="settings_raw_cfa_correction">CFA 通道校正</string>
-    <string name="settings_raw_cfa_correction_with_lens">CFA 通道校正（鏡頭 %1$s · %2$dmm）</string>
     <string name="settings_raw_cfa_correction_description">覆蓋寫入 DNG 的 RAW CFA 通道排列。針對鏡頭單獨設定。</string>
+    <string name="settings_raw_dng_metadata_corrections">CFA、黑階與白階校正</string>
+    <string name="settings_raw_dng_metadata_corrections_description">為每個鏡頭單獨設定 CFA 排列、黑階與白階。</string>
+    <string name="settings_raw_dng_metadata_corrections_summary">CFA：%1$s · 黑階：%2$s · 白階：%3$s</string>
+    <string name="settings_raw_correction_custom_value">自訂（%1$s）</string>
     <string name="settings_cfa_correction_default">預設</string>
     <string name="settings_cfa_correction_2x2_rggb">2x2 RGGB</string>
     <string name="settings_cfa_correction_2x2_grbg">2x2 GRBG</string>
@@ -1107,14 +1113,17 @@
     <string name="preset_builtin_badge">內置</string>
     <string name="gallery">相簿</string>
     <string name="settings_raw_default_sharpening_section">預設銳度</string>
-    <string name="settings_raw_default_sharpening">RAW 預設銳度</string>
+    <string name="settings_raw_default_sharpening">銳度</string>
     <string name="settings_raw_default_sharpening_description">套用於 RAW 照片顯影的預設銳化強度。</string>
     <string name="settings_raw_max_default_sharpening">RAWmax 預設銳度</string>
     <string name="settings_raw_max_default_sharpening_description">套用於 RAWmax 照片顯影的預設銳化強度。</string>
+    <string name="settings_raw_group_development">顯影引擎與調整</string>
     <string name="settings_raw_default_processing_section">RAW 預設處理</string>
-    <string name="settings_raw_default_luma_denoise">RAW 預設亮度降噪</string>
+    <string name="settings_raw_group_capture_output">拍攝與輸出</string>
+    <string name="settings_raw_group_sensor_correction">感光元件校正</string>
+    <string name="settings_raw_default_luma_denoise">亮度降噪</string>
     <string name="settings_raw_default_luma_denoise_description">調整 RAW 相片的亮度雜訊抑制強度。</string>
-    <string name="settings_raw_default_chroma_denoise">RAW 預設色度降噪</string>
+    <string name="settings_raw_default_chroma_denoise">色度降噪</string>
     <string name="settings_raw_default_chroma_denoise_description">調整 RAW 相片的彩色雜訊抑制強度。</string>
     <string name="settings_raw_max_default_luma_denoise">RAWmax 寫入亮度降噪</string>
     <string name="settings_raw_max_default_luma_denoise_description">調整 RAWmax 相片的亮度雜訊抑制強度。</string>

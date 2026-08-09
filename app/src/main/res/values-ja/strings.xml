@@ -168,7 +168,7 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="edit_sync_lut_recipe">現在の LUT も更新</string>
+    <string name="edit_sync_lut_recipe">LUT を同期</string>
     <string name="edit_sync_lut_recipe_description">カラー、エフェクト、LUT 強度も選択中の LUT に保存します。</string>
     <string name="edit_select_lut_hint">カラーとエフェクトを調整する前に LUT を選択してください。</string>
     <string name="edit_color_and_effects">カラーとエフェクトを調整</string>
@@ -234,7 +234,7 @@
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">カメラキャリブレーション</string>
     <string name="settings_camera_orientation">写真の向き</string>
-    <string name="settings_camera_orientation_description">写真の向きが正しくない場合に調整します。このカメラのみに適用されます。</string>
+    <string name="settings_camera_orientation_description">レンズごとに写真の回転補正を個別に設定します。</string>
     <string name="settings_orientation_normal">0°</string>
     <string name="settings_orientation_90">90°</string>
     <string name="settings_orientation_180">180°</string>
@@ -263,7 +263,7 @@
     <string name="settings_raw_max_hdr_composition">RAWmax HDR 合成</string>
     <string name="settings_raw_max_hdr_composition_description">RAWmax でブラケット露出を使用して HDR 合成します。オフにすると処理速度が向上します。</string>
     <string name="settings_raw_default_sharpening_section">デフォルトのシャープネス</string>
-    <string name="settings_raw_default_sharpening">RAW のデフォルトシャープネス</string>
+    <string name="settings_raw_default_sharpening">シャープネス</string>
     <string name="settings_raw_default_sharpening_description">RAW 撮影の現像時に適用するデフォルトのシャープネスです。</string>
     <string name="settings_raw_max_default_sharpening">RAWmax のデフォルトシャープネス</string>
     <string name="settings_raw_max_default_sharpening_description">RAWmax 撮影の現像時に適用するデフォルトのシャープネスです。</string>
