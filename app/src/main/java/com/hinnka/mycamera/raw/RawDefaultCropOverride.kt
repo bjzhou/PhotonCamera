@@ -13,7 +13,6 @@ internal object RawDefaultCropOverride {
     fun resolveRawBlackBorderDefaultCrop(
         width: Int,
         height: Int,
-        rotation: Int,
         rawBlackBorderCrop: RawBlackBorderCrop,
         metadataDefaultCrop: Rect?
     ): Rect? {
@@ -28,8 +27,11 @@ internal object RawDefaultCropOverride {
                 )
             }
             ?: CropMargins(left = 0, top = 0, right = 0, bottom = 0)
-        val sourceMargins = rawBlackBorderCrop.toSourceMargins(
-            outputReferenceRotationForCrop(rotation)
+        val sourceMargins = CropMargins(
+            left = rawBlackBorderCrop.leftPx,
+            top = rawBlackBorderCrop.topPx,
+            right = rawBlackBorderCrop.rightPx,
+            bottom = rawBlackBorderCrop.bottomPx,
         )
         val maxHorizontalCrop = (width - 2).coerceAtLeast(0)
         val maxVerticalCrop = (height - 2).coerceAtLeast(0)
@@ -112,48 +114,6 @@ internal object RawDefaultCropOverride {
         val right: Int,
         val bottom: Int
     )
-
-    private fun RawBlackBorderCrop.toSourceMargins(rotation: Int): CropMargins {
-        val normalizedRotation = ((rotation % 360) + 360) % 360
-        return when (normalizedRotation) {
-            90 -> CropMargins(
-                left = topPx,
-                top = rightPx,
-                right = bottomPx,
-                bottom = leftPx
-            )
-
-            180 -> CropMargins(
-                left = rightPx,
-                top = bottomPx,
-                right = leftPx,
-                bottom = topPx
-            )
-
-            270 -> CropMargins(
-                left = bottomPx,
-                top = leftPx,
-                right = topPx,
-                bottom = rightPx
-            )
-
-            else -> CropMargins(
-                left = leftPx,
-                top = topPx,
-                right = rightPx,
-                bottom = bottomPx
-            )
-        }
-    }
-
-    private fun outputReferenceRotationForCrop(rotation: Int): Int {
-        // Lens crop values are configured in portrait output space; landscape output rotates that frame.
-        return when (((rotation % 360) + 360) % 360) {
-            0 -> 90
-            180 -> 270
-            else -> rotation
-        }
-    }
 
     private fun cropSourceBoundsToAspect(
         bounds: Rect,

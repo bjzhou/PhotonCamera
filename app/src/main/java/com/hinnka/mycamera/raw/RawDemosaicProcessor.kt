@@ -2619,7 +2619,6 @@ class RawDemosaicProcessor {
         val rawBlackBorderDefaultCrop = RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
             width = actualWidth,
             height = actualHeight,
-            rotation = actualRotation,
             rawBlackBorderCrop = rawBlackBorderCrop,
             metadataDefaultCrop = actualMetadata.defaultCrop
         )

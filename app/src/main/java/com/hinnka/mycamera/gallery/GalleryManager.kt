@@ -2163,6 +2163,12 @@ object GalleryManager {
                 characteristics = characteristics,
                 captureResult = resolvedCaptureResult,
             )
+            val writtenRawDngDefaultCrop = RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
+                width = image.width,
+                height = image.height,
+                rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+                metadataDefaultCrop = rawDngDefaultCrop,
+            ) ?: rawDngDefaultCrop
             FileOutputStream(tempDngFile).use { outputStream ->
                 image.use {
                     try {
@@ -2181,6 +2187,7 @@ object GalleryManager {
                             effectiveFocalLengthMm = captureInfo.focalLength,
                             effectiveFocalLength35mm = captureInfo.focalLength35mm,
                             captureInfo = captureInfo,
+                            defaultCropOverride = writtenRawDngDefaultCrop,
                             dngProfilePreparationOptions = rawDngProfilePreparationOptions(
                                 context = context,
                                 metadata = metadata,
@@ -3805,6 +3812,12 @@ object GalleryManager {
             characteristics = characteristics,
             captureResult = captureResult,
         )
+        val writtenRawDngDefaultCrop = RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
+            width = width,
+            height = height,
+            rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+            metadataDefaultCrop = rawDngDefaultCrop,
+        ) ?: rawDngDefaultCrop
         val dngWritten = try {
             FileOutputStream(tempDngFile).use { outputStream ->
                 RawProcessor.saveRawBufferToDng(
@@ -3855,9 +3868,8 @@ object GalleryManager {
                             capturePreviewThumbnail = capturePreviewThumbnail,
                             captureResult = captureResult,
                         ),
-                    // Carry the Camera2 field of view into the DNG itself. The renderer consumes
-                    // DefaultCrop after OpcodeList3, matching the DNG SDK processing order.
-                    defaultCrop = rawDngDefaultCrop,
+                    // Serialize the resolved Camera2/ISZ crop through the standard DNG tags.
+                    defaultCrop = writtenRawDngDefaultCrop,
                     preparedDngProfile = preparedDngProfile,
                 )
             }
@@ -4032,7 +4044,6 @@ object GalleryManager {
             RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
                 width = width,
                 height = height,
-                rotation = rotation,
                 rawBlackBorderCrop = metadata.rawBlackBorderCrop,
                 metadataDefaultCrop = defaultCrop,
             )

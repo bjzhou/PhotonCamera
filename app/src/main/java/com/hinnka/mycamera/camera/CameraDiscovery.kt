@@ -571,7 +571,27 @@ class CameraDiscovery(private val context: Context) {
         if (configs.isEmpty()) return emptyList()
 
         val baseCameraById = baseCameras.associateBy { it.info.cameraId }
-        return configs.mapNotNull { config ->
+        val migratedConfigs = configs.map { config ->
+            if (!config.rawBlackBorderCropUsesLegacyPortraitCoordinates) {
+                config
+            } else {
+                baseCameraById[config.baseCameraId]?.let { baseCamera ->
+                    config.migrateLegacyPortraitCrop(baseCamera.info.sensorOrientation)
+                } ?: config
+            }
+        }
+        val migratedCount = configs.zip(migratedConfigs).count { (original, migrated) ->
+            original.rawBlackBorderCropUsesLegacyPortraitCoordinates &&
+                !migrated.rawBlackBorderCropUsesLegacyPortraitCoordinates
+        }
+        if (migratedCount > 0) {
+            saveIszLensConfigs(migratedConfigs)
+            PLog.i(
+                TAG,
+                "Migrated $migratedCount ISZ crop config(s) from portrait to sensor coordinates"
+            )
+        }
+        return migratedConfigs.mapNotNull { config ->
             val baseCamera = baseCameraById[config.baseCameraId]
             if (baseCamera == null) {
                 PLog.w(TAG, "ISZ virtual lens skipped: base camera ${config.baseCameraId} is unavailable")
@@ -627,6 +647,16 @@ class CameraDiscovery(private val context: Context) {
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to load ISZ lens configs", e)
             emptyList()
+        }
+    }
+
+    private fun saveIszLensConfigs(configs: List<IszLensConfig>) {
+        try {
+            runBlocking {
+                userPreferencesRepository.saveIszLensConfigs(configs)
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to persist migrated ISZ lens crop coordinates", e)
         }
     }
 

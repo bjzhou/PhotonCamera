@@ -323,6 +323,7 @@ object RawProcessor {
         effectiveFocalLength35mm: Int? = null,
         captureInfo: CaptureInfo,
         dngProfilePreparationOptions: RawDngProfilePreparationOptions? = null,
+        defaultCropOverride: Rect? = null,
     ): Boolean {
         if (!isRawImage(image)) {
             throw IllegalArgumentException("Image is not RAW format: ${image.format}")
@@ -344,7 +345,7 @@ object RawProcessor {
             effectiveFocalLength35mm = effectiveFocalLength35mm,
             captureInfo = captureInfo,
             dngProfilePreparationOptions = dngProfilePreparationOptions,
-            defaultCrop = resolveCameraRawDefaultCrop(
+            defaultCrop = defaultCropOverride ?: resolveCameraRawDefaultCrop(
                 width = image.width,
                 height = image.height,
                 characteristics = characteristics,

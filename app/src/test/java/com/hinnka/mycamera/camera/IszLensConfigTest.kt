@@ -1,7 +1,9 @@
 package com.hinnka.mycamera.camera
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IszLensConfigTest {
@@ -51,6 +53,29 @@ class IszLensConfigTest {
 
         assertEquals(2, restored.size)
         assertEquals(2, restored.map { it.virtualCameraId }.distinct().size)
+    }
+
+    @Test
+    fun legacyPortraitCropMigratesOnceAndSerializesAsSensorCoordinates() {
+        val legacyJson =
+            """[{"base_camera_id":"0","isz_zoom_ratio":2,"raw_black_border_crop_left_px":10,"raw_black_border_crop_top_px":20,"raw_black_border_crop_right_px":30,"raw_black_border_crop_bottom_px":40}]"""
+        val legacy = IszLensConfig.deserializeList(legacyJson).single()
+
+        assertTrue(legacy.rawBlackBorderCropUsesLegacyPortraitCoordinates)
+        assertEquals(RawBlackBorderCrop(10, 20, 30, 40), legacy.rawBlackBorderCrop)
+
+        val migrated = legacy.migrateLegacyPortraitCrop(sensorRotation = 90)
+        assertFalse(migrated.rawBlackBorderCropUsesLegacyPortraitCoordinates)
+        assertEquals(RawBlackBorderCrop(20, 30, 40, 10), migrated.rawBlackBorderCrop)
+
+        val migratedJson = IszLensConfig.serializeList(listOf(migrated))
+        assertTrue(migratedJson.contains("raw_black_border_crop_sensor_left_px"))
+        assertFalse(migratedJson.contains("\"raw_black_border_crop_left_px\""))
+
+        val restored = IszLensConfig.deserializeList(migratedJson).single()
+        assertFalse(restored.rawBlackBorderCropUsesLegacyPortraitCoordinates)
+        assertEquals(migrated.rawBlackBorderCrop, restored.rawBlackBorderCrop)
+        assertEquals(migrated, restored.migrateLegacyPortraitCrop(sensorRotation = 90))
     }
 
     @Test

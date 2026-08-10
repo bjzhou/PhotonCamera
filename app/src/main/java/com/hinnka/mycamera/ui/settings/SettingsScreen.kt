@@ -4347,7 +4347,7 @@ private fun AddIszLensDialog(
             IszLensConfig.displayRatioLabel(it.displayIntrinsicZoomRatio * selectedIszZoomRatio)
         )
     } ?: virtualLensId
-    val rawBlackBorderCrop = IszLensConfig.sanitizeRawBlackBorderCrop(
+    val portraitRawBlackBorderCrop = IszLensConfig.sanitizeRawBlackBorderCrop(
         RawBlackBorderCrop(
             leftPx = rawBlackBorderCropLeftText.toIntOrNull() ?: 0,
             topPx = rawBlackBorderCropTopText.toIntOrNull() ?: 0,
@@ -4520,6 +4520,9 @@ private fun AddIszLensDialog(
 
                     iszLensConfigs.forEach { config ->
                         val baseCamera = availableCameras.firstOrNull { it.cameraId == config.baseCameraId }
+                        val portraitCrop = baseCamera?.let {
+                            config.rawBlackBorderCropForPortraitDisplay(it.sensorOrientation)
+                        } ?: config.rawBlackBorderCrop
                         val baseName = baseCamera?.let { iszBaseLensLabel(it) } ?: config.baseCameraId
                         val displayRatio = baseCamera?.let {
                             IszLensConfig.displayRatioLabel(it.displayIntrinsicZoomRatio * config.iszZoomRatio)
@@ -4547,10 +4550,10 @@ private fun AddIszLensDialog(
                                 vendorProfileSummary,
                                 stringResource(
                                     R.string.settings_isz_raw_black_border_crop_summary,
-                                    config.rawBlackBorderCrop.leftPx,
-                                    config.rawBlackBorderCrop.topPx,
-                                    config.rawBlackBorderCrop.rightPx,
-                                    config.rawBlackBorderCrop.bottomPx
+                                    portraitCrop.leftPx,
+                                    portraitCrop.topPx,
+                                    portraitCrop.rightPx,
+                                    portraitCrop.bottomPx
                                 )
                             ),
                             onRemove = { onRemoveLens(config) }
@@ -4566,7 +4569,7 @@ private fun AddIszLensDialog(
                         selectedBaseCameraId,
                         selectedIszZoomRatio,
                         isMacroLens,
-                        rawBlackBorderCrop,
+                        portraitRawBlackBorderCrop,
                         rawDngMetadataCorrections,
                         settings
                     )

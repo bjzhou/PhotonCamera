@@ -14,7 +14,8 @@ data class IszLensConfig(
     val iszZoomRatio: Float,
     val isMacro: Boolean = false,
     val rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
-    val vendorCaptureProfileId: String? = null
+    val vendorCaptureProfileId: String? = null,
+    val rawBlackBorderCropUsesLegacyPortraitCoordinates: Boolean = false,
 ) {
     val virtualCameraId: String
         get() = createVirtualCameraId(baseCameraId, iszZoomRatio, vendorCaptureProfileId)
@@ -28,10 +29,33 @@ data class IszLensConfig(
                 addProperty(KEY_VENDOR_CAPTURE_PROFILE_ID, it)
             }
             val sanitizedCrop = sanitizeRawBlackBorderCrop(rawBlackBorderCrop)
-            addProperty(KEY_RAW_BLACK_BORDER_CROP_LEFT_PX, sanitizedCrop.leftPx)
-            addProperty(KEY_RAW_BLACK_BORDER_CROP_TOP_PX, sanitizedCrop.topPx)
-            addProperty(KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX, sanitizedCrop.rightPx)
-            addProperty(KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX, sanitizedCrop.bottomPx)
+            if (rawBlackBorderCropUsesLegacyPortraitCoordinates) {
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_LEFT_PX, sanitizedCrop.leftPx)
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_TOP_PX, sanitizedCrop.topPx)
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX, sanitizedCrop.rightPx)
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX, sanitizedCrop.bottomPx)
+            } else {
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_SENSOR_LEFT_PX, sanitizedCrop.leftPx)
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_SENSOR_TOP_PX, sanitizedCrop.topPx)
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_SENSOR_RIGHT_PX, sanitizedCrop.rightPx)
+                addProperty(KEY_RAW_BLACK_BORDER_CROP_SENSOR_BOTTOM_PX, sanitizedCrop.bottomPx)
+            }
+        }
+    }
+
+    fun migrateLegacyPortraitCrop(sensorRotation: Int): IszLensConfig {
+        if (!rawBlackBorderCropUsesLegacyPortraitCoordinates) return this
+        return copy(
+            rawBlackBorderCrop = portraitCropToSensor(rawBlackBorderCrop, sensorRotation),
+            rawBlackBorderCropUsesLegacyPortraitCoordinates = false,
+        )
+    }
+
+    fun rawBlackBorderCropForPortraitDisplay(sensorRotation: Int): RawBlackBorderCrop {
+        return if (rawBlackBorderCropUsesLegacyPortraitCoordinates) {
+            rawBlackBorderCrop
+        } else {
+            sensorCropToPortrait(rawBlackBorderCrop, sensorRotation)
         }
     }
 
@@ -45,6 +69,14 @@ data class IszLensConfig(
         private const val KEY_RAW_BLACK_BORDER_CROP_TOP_PX = "raw_black_border_crop_top_px"
         private const val KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX = "raw_black_border_crop_right_px"
         private const val KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX = "raw_black_border_crop_bottom_px"
+        private const val KEY_RAW_BLACK_BORDER_CROP_SENSOR_LEFT_PX =
+            "raw_black_border_crop_sensor_left_px"
+        private const val KEY_RAW_BLACK_BORDER_CROP_SENSOR_TOP_PX =
+            "raw_black_border_crop_sensor_top_px"
+        private const val KEY_RAW_BLACK_BORDER_CROP_SENSOR_RIGHT_PX =
+            "raw_black_border_crop_sensor_right_px"
+        private const val KEY_RAW_BLACK_BORDER_CROP_SENSOR_BOTTOM_PX =
+            "raw_black_border_crop_sensor_bottom_px"
         private const val MAX_RAW_BLACK_BORDER_CROP_PX = 4096
         private const val VIRTUAL_CAMERA_ID_PREFIX = "isz"
 
@@ -74,16 +106,43 @@ data class IszLensConfig(
                     val vendorCaptureProfileId = sanitizeVendorCaptureProfileId(
                         obj.stringOrDefault(KEY_VENDOR_CAPTURE_PROFILE_ID)
                     )
+                    val hasSensorCropCoordinates =
+                        obj.has(KEY_RAW_BLACK_BORDER_CROP_SENSOR_LEFT_PX) ||
+                            obj.has(KEY_RAW_BLACK_BORDER_CROP_SENSOR_TOP_PX) ||
+                            obj.has(KEY_RAW_BLACK_BORDER_CROP_SENSOR_RIGHT_PX) ||
+                            obj.has(KEY_RAW_BLACK_BORDER_CROP_SENSOR_BOTTOM_PX)
                     val legacyLeftCropPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_PX, 0)
                     val rawBlackBorderCrop = sanitizeRawBlackBorderCrop(
                         RawBlackBorderCrop(
-                            leftPx = obj.intOrDefault(
-                                KEY_RAW_BLACK_BORDER_CROP_LEFT_PX,
-                                legacyLeftCropPx
+                            leftPx = if (hasSensorCropCoordinates) {
+                                obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_SENSOR_LEFT_PX, 0)
+                            } else {
+                                obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_LEFT_PX, legacyLeftCropPx)
+                            },
+                            topPx = obj.intOrDefault(
+                                if (hasSensorCropCoordinates) {
+                                    KEY_RAW_BLACK_BORDER_CROP_SENSOR_TOP_PX
+                                } else {
+                                    KEY_RAW_BLACK_BORDER_CROP_TOP_PX
+                                },
+                                0,
                             ),
-                            topPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_TOP_PX, 0),
-                            rightPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX, 0),
-                            bottomPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX, 0)
+                            rightPx = obj.intOrDefault(
+                                if (hasSensorCropCoordinates) {
+                                    KEY_RAW_BLACK_BORDER_CROP_SENSOR_RIGHT_PX
+                                } else {
+                                    KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX
+                                },
+                                0,
+                            ),
+                            bottomPx = obj.intOrDefault(
+                                if (hasSensorCropCoordinates) {
+                                    KEY_RAW_BLACK_BORDER_CROP_SENSOR_BOTTOM_PX
+                                } else {
+                                    KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX
+                                },
+                                0,
+                            ),
                         )
                     )
                     if (baseCameraId.isNotEmpty() && iszZoomRatio >= 1f) {
@@ -93,7 +152,9 @@ data class IszLensConfig(
                                 iszZoomRatio = iszZoomRatio,
                                 isMacro = isMacro,
                                 rawBlackBorderCrop = rawBlackBorderCrop,
-                                vendorCaptureProfileId = vendorCaptureProfileId
+                                vendorCaptureProfileId = vendorCaptureProfileId,
+                                rawBlackBorderCropUsesLegacyPortraitCoordinates =
+                                    !hasSensorCropCoordinates,
                             )
                         )
                     }
@@ -149,6 +210,44 @@ data class IszLensConfig(
                 rightPx = sanitizeRawBlackBorderCropPx(crop.rightPx),
                 bottomPx = sanitizeRawBlackBorderCropPx(crop.bottomPx)
             )
+        }
+
+        fun portraitCropToSensor(
+            portraitCrop: RawBlackBorderCrop,
+            sensorRotation: Int,
+        ): RawBlackBorderCrop = rotateCropEdges(portraitCrop, sensorRotation)
+
+        fun sensorCropToPortrait(
+            sensorCrop: RawBlackBorderCrop,
+            sensorRotation: Int,
+        ): RawBlackBorderCrop = rotateCropEdges(sensorCrop, -sensorRotation)
+
+        private fun rotateCropEdges(crop: RawBlackBorderCrop, rotation: Int): RawBlackBorderCrop {
+            val sanitized = sanitizeRawBlackBorderCrop(crop)
+            return when (Math.floorMod(rotation, 360)) {
+                90 -> RawBlackBorderCrop(
+                    leftPx = sanitized.topPx,
+                    topPx = sanitized.rightPx,
+                    rightPx = sanitized.bottomPx,
+                    bottomPx = sanitized.leftPx,
+                )
+
+                180 -> RawBlackBorderCrop(
+                    leftPx = sanitized.rightPx,
+                    topPx = sanitized.bottomPx,
+                    rightPx = sanitized.leftPx,
+                    bottomPx = sanitized.topPx,
+                )
+
+                270 -> RawBlackBorderCrop(
+                    leftPx = sanitized.bottomPx,
+                    topPx = sanitized.leftPx,
+                    rightPx = sanitized.topPx,
+                    bottomPx = sanitized.rightPx,
+                )
+
+                else -> sanitized
+            }
         }
 
         private fun JsonObject.stringOrDefault(key: String, defaultValue: String = ""): String {
