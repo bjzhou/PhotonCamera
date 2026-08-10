@@ -159,6 +159,8 @@ internal class GlesMgcRawSpatialStacker(
         val geometry: MgcSpatialDiagnosticGeometry,
         val outputMode: MgcSpatialOutputMode,
         val frameCount: Int,
+        val alignmentLayout: MgcSpatialStrengthAtlasLayout,
+        val rejectionLayout: MgcSpatialStrengthAtlasLayout,
         val alignmentAtlas: Int,
         val rejectionAtlas: Int,
         val inputReadNoise: FloatArray,
@@ -335,6 +337,8 @@ internal class GlesMgcRawSpatialStacker(
     private var strengthSint16PackProgram = 0
     private var supportsComputeReadback = false
     private var maxShaderStorageBlockBytes = 0L
+    private var maxComputePackGroupsX = 0
+    private var maxComputePackGroupsY = 0
     private var baseFrameCamera2Model: RawNoiseModel = RawNoiseModel.EMPTY
     private val pixelDifferenceKernel = gaussianKernel(
         size = PIXEL_DIFFERENCE_KERNEL_SIZE,
@@ -3244,36 +3248,45 @@ internal class GlesMgcRawSpatialStacker(
                 "MGC Spatial RGB diagnostic pack program is unavailable"
             }
         }
-        val alignmentWidth = geometry.alignmentWidth
-        val alignmentHeight = geometry.alignmentHeight
         require(frameCount > 1)
         val maximumTextureSize = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maximumTextureSize, 0)
-        val alignmentAtlasHeight = alignmentHeight * frameCount * 2
-        val rejectionAtlasHeight = geometry.rejectionHeight * frameCount
-        require(
-            alignmentWidth <= maximumTextureSize[0] &&
-                alignmentAtlasHeight <= maximumTextureSize[0] &&
-                geometry.rejectionWidth <= maximumTextureSize[0] &&
-                rejectionAtlasHeight <= maximumTextureSize[0]
-        ) {
-            "MGC Spatial strength atlases exceed GL_MAX_TEXTURE_SIZE=${maximumTextureSize[0]}: " +
-                "alignment=${alignmentWidth}x$alignmentAtlasHeight " +
-                "rejection=${geometry.rejectionWidth}x$rejectionAtlasHeight"
-        }
+        val alignmentLayout = createMgcSpatialStrengthAtlasLayout(
+            planeWidth = geometry.alignmentWidth,
+            planeHeight = geometry.alignmentHeight,
+            planeCount = frameCount * 2,
+            maximumTextureSize = maximumTextureSize[0],
+        )
+        val rejectionLayout = createMgcSpatialStrengthAtlasLayout(
+            planeWidth = geometry.rejectionWidth,
+            planeHeight = geometry.rejectionHeight,
+            planeCount = frameCount,
+            maximumTextureSize = maximumTextureSize[0],
+        )
+        PLog.i(
+            TAG,
+            "MGC Spatial strength atlas layout frames=$frameCount " +
+                "maxTexture=${maximumTextureSize[0]} " +
+                "alignment=${alignmentLayout.atlasWidth}x${alignmentLayout.atlasHeight} " +
+                "grid=${alignmentLayout.columns}x${alignmentLayout.rows} " +
+                "rejection=${rejectionLayout.atlasWidth}x${rejectionLayout.atlasHeight} " +
+                "grid=${rejectionLayout.columns}x${rejectionLayout.rows}",
+        )
         return StrengthCapture(
             geometry = geometry,
             outputMode = outputMode,
             frameCount = frameCount,
+            alignmentLayout = alignmentLayout,
+            rejectionLayout = rejectionLayout,
             alignmentAtlas = createTexture(
-                alignmentWidth,
-                alignmentAtlasHeight,
+                alignmentLayout.atlasWidth,
+                alignmentLayout.atlasHeight,
                 GLES30.GL_R32F,
                 GLES30.GL_NEAREST,
             ),
             rejectionAtlas = createTexture(
-                geometry.rejectionWidth,
-                rejectionAtlasHeight,
+                rejectionLayout.atlasWidth,
+                rejectionLayout.atlasHeight,
                 GLES30.GL_R8,
                 GLES30.GL_NEAREST,
             ),
@@ -3297,7 +3310,8 @@ internal class GlesMgcRawSpatialStacker(
         require(!capture.captured[frameIndex])
         for (component in 0 until 2) {
             val slot = component * capture.frameCount + frameIndex
-            val outputOriginY = slot * capture.alignmentHeight
+            val outputOriginX = capture.alignmentLayout.originX(slot)
+            val outputOriginY = capture.alignmentLayout.originY(slot)
             GLES30.glUseProgram(strengthAlignmentProgram)
             bindTexture(strengthAlignmentProgram, "uFlow", 0, flowTexture)
             uniform2i(
@@ -3306,18 +3320,24 @@ internal class GlesMgcRawSpatialStacker(
                 capture.alignmentWidth,
                 capture.alignmentHeight,
             )
-            uniform2i(strengthAlignmentProgram, "uOutputOrigin", 0, outputOriginY)
+            uniform2i(
+                strengthAlignmentProgram,
+                "uOutputOrigin",
+                outputOriginX,
+                outputOriginY,
+            )
             uniform1i(strengthAlignmentProgram, "uComponent", component)
             drawRegion(
                 program = strengthAlignmentProgram,
                 target = capture.alignmentAtlas,
-                viewportLeft = 0,
+                viewportLeft = outputOriginX,
                 viewportTop = outputOriginY,
                 viewportWidth = capture.alignmentWidth,
                 viewportHeight = capture.alignmentHeight,
             )
         }
-        val rejectionOriginY = frameIndex * capture.rejectionHeight
+        val rejectionOriginX = capture.rejectionLayout.originX(frameIndex)
+        val rejectionOriginY = capture.rejectionLayout.originY(frameIndex)
         GLES30.glUseProgram(strengthRejectionProgram)
         bindTexture(strengthRejectionProgram, "uWeight", 0, weightTexture)
         uniform2i(
@@ -3326,7 +3346,12 @@ internal class GlesMgcRawSpatialStacker(
             capture.rejectionWidth,
             capture.rejectionHeight,
         )
-        uniform2i(strengthRejectionProgram, "uOutputOrigin", 0, rejectionOriginY)
+        uniform2i(
+            strengthRejectionProgram,
+            "uOutputOrigin",
+            rejectionOriginX,
+            rejectionOriginY,
+        )
         uniform1i(
             strengthRejectionProgram,
             "uIdentityWeight",
@@ -3335,7 +3360,7 @@ internal class GlesMgcRawSpatialStacker(
         drawRegion(
             program = strengthRejectionProgram,
             target = capture.rejectionAtlas,
-            viewportLeft = 0,
+            viewportLeft = rejectionOriginX,
             viewportTop = rejectionOriginY,
             viewportWidth = capture.rejectionWidth,
             viewportHeight = capture.rejectionHeight,
@@ -3415,19 +3440,21 @@ internal class GlesMgcRawSpatialStacker(
         return QueuedStrengthReadback(
             alignment = queueTextureReadback(
                 texture = capture.alignmentAtlas,
-                textureWidth = capture.alignmentWidth,
-                textureHeight = capture.alignmentHeight * capture.frameCount * 2,
+                textureWidth = capture.alignmentLayout.atlasWidth,
+                textureHeight = capture.alignmentLayout.atlasHeight,
                 encoding = StrengthReadbackEncoding.FLOAT32,
                 storage = alignmentReadback,
                 label = "MGC Spatial strength alignment atlas",
+                atlasLayout = capture.alignmentLayout,
             ),
             rejection = queueTextureReadback(
                 texture = capture.rejectionAtlas,
-                textureWidth = capture.rejectionWidth,
-                textureHeight = capture.rejectionHeight * capture.frameCount,
+                textureWidth = capture.rejectionLayout.atlasWidth,
+                textureHeight = capture.rejectionLayout.atlasHeight,
                 encoding = StrengthReadbackEncoding.UNORM8,
                 storage = rejectionReadback,
                 label = "MGC Spatial strength rejection atlas",
+                atlasLayout = capture.rejectionLayout,
             ),
             fusedFixed16 = fusedFixed16,
             fusedFixed16PrepareSubmitMs = fusedFixed16PrepareSubmitMs,
@@ -3484,14 +3511,49 @@ internal class GlesMgcRawSpatialStacker(
         encoding: StrengthReadbackEncoding,
         storage: PixelPackBuffer,
         label: String,
+        atlasLayout: MgcSpatialStrengthAtlasLayout? = null,
     ): QueuedTextureReadback {
+        atlasLayout?.let { layout ->
+            require(layout.atlasWidth == textureWidth && layout.atlasHeight == textureHeight)
+        }
+        val bytesPerValue = when (encoding) {
+            StrengthReadbackEncoding.FLOAT32 -> Float.SIZE_BYTES
+            StrengthReadbackEncoding.UNORM8 -> Byte.SIZE_BYTES
+            StrengthReadbackEncoding.SINT16 -> Short.SIZE_BYTES
+        }
+        val logicalValueCount = atlasLayout?.logicalValueCount
+            ?: textureWidth.toLong() * textureHeight
+        require(logicalValueCount * bytesPerValue == storage.byteCount.toLong()) {
+            "$label logical readback size does not match storage: " +
+                "values=$logicalValueCount bytesPerValue=$bytesPerValue " +
+                "storage=${storage.byteCount}"
+        }
         val packProgram = when (encoding) {
             StrengthReadbackEncoding.FLOAT32 -> strengthFloatPackProgram
             StrengthReadbackEncoding.UNORM8 -> strengthUnorm8PackProgram
             StrengthReadbackEncoding.SINT16 -> strengthSint16PackProgram
         }
+        val invocationCount = when (encoding) {
+            StrengthReadbackEncoding.FLOAT32 -> logicalValueCount
+            StrengthReadbackEncoding.UNORM8 -> (logicalValueCount + 3L) / 4L
+            StrengthReadbackEncoding.SINT16 -> (logicalValueCount + 1L) / 2L
+        }
+        val requiredGroupCount =
+            (invocationCount + GlesComputeWorkGroup.LINEAR_SIZE - 1L) /
+                GlesComputeWorkGroup.LINEAR_SIZE
         val packedStorageBytes = (storage.byteCount.toLong() + 3L) and -4L
-        if (packProgram != 0 && packedStorageBytes <= maxShaderStorageBlockBytes) {
+        val hasComputeDispatchCapacity =
+            requiredGroupCount <= maxComputePackGroupsX.toLong() * maxComputePackGroupsY
+        if (packProgram != 0 &&
+            packedStorageBytes <= maxShaderStorageBlockBytes &&
+            hasComputeDispatchCapacity
+        ) {
+            val dispatch = createMgcSpatialStrengthPackDispatch(
+                invocationCount = invocationCount,
+                localSize = GlesComputeWorkGroup.LINEAR_SIZE,
+                maximumGroupsX = maxComputePackGroupsX,
+                maximumGroupsY = maxComputePackGroupsY,
+            )
             return queueTextureSsboPack(
                 texture = texture,
                 textureWidth = textureWidth,
@@ -3500,14 +3562,26 @@ internal class GlesMgcRawSpatialStacker(
                 storage = storage,
                 program = packProgram,
                 label = label,
+                atlasLayout = atlasLayout,
+                invocationCount = invocationCount,
+                dispatch = dispatch,
             )
         }
-        if (packProgram != 0) {
+        if (packProgram != 0 && packedStorageBytes > maxShaderStorageBlockBytes) {
             PLog.w(
                 TAG,
                 "MGC Spatial strength SSBO pack exceeds device block limit; " +
                     "label=$label bytes=$packedStorageBytes " +
                     "max=$maxShaderStorageBlockBytes, using framebuffer readback",
+            )
+        }
+        if (packProgram != 0 && !hasComputeDispatchCapacity) {
+            PLog.w(
+                TAG,
+                "MGC Spatial strength SSBO pack exceeds device dispatch grid; " +
+                    "label=$label groups=$requiredGroupCount " +
+                    "max=${maxComputePackGroupsX}x$maxComputePackGroupsY, " +
+                    "using framebuffer readback",
             )
         }
         val totalStartNs = System.nanoTime()
@@ -3516,31 +3590,55 @@ internal class GlesMgcRawSpatialStacker(
         val targetBindMs = (System.nanoTime() - targetBindStartNs) / 1_000_000L
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, storage.buffer)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+        GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
         val readSubmitStartNs = System.nanoTime()
-        GLES30.glReadPixels(
-            0,
-            0,
-            textureWidth,
-            textureHeight,
-            when (encoding) {
-                StrengthReadbackEncoding.FLOAT32,
-                StrengthReadbackEncoding.UNORM8 -> GLES30.GL_RED
-                StrengthReadbackEncoding.SINT16 -> GLES30.GL_RED_INTEGER
-            },
-            when (encoding) {
-                StrengthReadbackEncoding.FLOAT32 -> GLES30.GL_FLOAT
-                StrengthReadbackEncoding.UNORM8 -> GLES30.GL_UNSIGNED_BYTE
-                StrengthReadbackEncoding.SINT16 -> GLES30.GL_SHORT
-            },
-            0,
-        )
+        val readFormat = when (encoding) {
+            StrengthReadbackEncoding.FLOAT32,
+            StrengthReadbackEncoding.UNORM8 -> GLES30.GL_RED
+            StrengthReadbackEncoding.SINT16 -> GLES30.GL_RED_INTEGER
+        }
+        val readType = when (encoding) {
+            StrengthReadbackEncoding.FLOAT32 -> GLES30.GL_FLOAT
+            StrengthReadbackEncoding.UNORM8 -> GLES30.GL_UNSIGNED_BYTE
+            StrengthReadbackEncoding.SINT16 -> GLES30.GL_SHORT
+        }
+        if (atlasLayout == null || atlasLayout.columns == 1) {
+            GLES30.glReadPixels(
+                0,
+                0,
+                textureWidth,
+                textureHeight,
+                readFormat,
+                readType,
+                0,
+            )
+        } else {
+            for (plane in 0 until atlasLayout.planeCount) {
+                val byteOffset = (atlasLayout.planeValueCount * plane * bytesPerValue)
+                    .also { offset -> require(offset <= Int.MAX_VALUE) }
+                    .toInt()
+                GLES30.glReadPixels(
+                    atlasLayout.originX(plane),
+                    atlasLayout.originY(plane),
+                    atlasLayout.planeWidth,
+                    atlasLayout.planeHeight,
+                    readFormat,
+                    readType,
+                    byteOffset,
+                )
+            }
+        }
         val readSubmitMs = (System.nanoTime() - readSubmitStartNs) / 1_000_000L
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGlError("queue $label")
         return QueuedTextureReadback(
             storage = storage,
-            mode = "framebuffer-readpixels",
+            mode = if (atlasLayout == null || atlasLayout.columns == 1) {
+                "framebuffer-readpixels"
+            } else {
+                "framebuffer-readpixels-atlas"
+            },
             targetBindMs = targetBindMs,
             readSubmitMs = readSubmitMs,
             totalSubmitMs = (System.nanoTime() - totalStartNs) / 1_000_000L,
@@ -3563,6 +3661,9 @@ internal class GlesMgcRawSpatialStacker(
         storage: PixelPackBuffer,
         program: Int,
         label: String,
+        atlasLayout: MgcSpatialStrengthAtlasLayout?,
+        invocationCount: Long,
+        dispatch: MgcSpatialStrengthPackDispatch,
     ): QueuedTextureReadback {
         val totalStartNs = System.nanoTime()
         val setupStartNs = System.nanoTime()
@@ -3570,29 +3671,39 @@ internal class GlesMgcRawSpatialStacker(
         GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
         GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture)
         GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uSource"), 0)
+        val planeWidth = atlasLayout?.planeWidth ?: textureWidth
+        val planeHeight = atlasLayout?.planeHeight ?: textureHeight
+        val planeCount = atlasLayout?.planeCount ?: 1
+        val atlasColumns = atlasLayout?.columns ?: 1
         GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(program, "uSize"),
-            textureWidth,
-            textureHeight,
+            GLES31.glGetUniformLocation(program, "uPlaneSize"),
+            planeWidth,
+            planeHeight,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(program, "uPlaneCount"),
+            planeCount,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(program, "uAtlasColumns"),
+            atlasColumns,
         )
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, storage.buffer)
         val setupMs = (System.nanoTime() - setupStartNs) / 1_000_000L
-        val valueCount = textureWidth.toLong() * textureHeight
-        val invocationCount = when (encoding) {
+        val valueCount = planeWidth.toLong() * planeHeight * planeCount
+        val expectedInvocationCount = when (encoding) {
             StrengthReadbackEncoding.FLOAT32 -> valueCount
             StrengthReadbackEncoding.UNORM8 -> (valueCount + 3L) / 4L
             StrengthReadbackEncoding.SINT16 -> (valueCount + 1L) / 2L
         }
+        check(invocationCount == expectedInvocationCount)
         require(invocationCount in 1..Int.MAX_VALUE.toLong()) {
             "$label pack invocation count is invalid: $invocationCount"
         }
         val submitStartNs = System.nanoTime()
         GLES31.glDispatchCompute(
-            GlesComputeWorkGroup.groupCount(
-                invocationCount.toInt(),
-                GlesComputeWorkGroup.LINEAR_SIZE,
-            ),
-            1,
+            dispatch.groupsX,
+            dispatch.groupsY,
             1,
         )
         GLES31.glMemoryBarrier(
@@ -3605,7 +3716,7 @@ internal class GlesMgcRawSpatialStacker(
         checkGlError("queue $label SSBO pack")
         return QueuedTextureReadback(
             storage = storage,
-            mode = "compute-ssbo-pack",
+            mode = "compute-ssbo-pack-${dispatch.groupsX}x${dispatch.groupsY}",
             targetBindMs = setupMs,
             readSubmitMs = submitMs,
             totalSubmitMs = (System.nanoTime() - totalStartNs) / 1_000_000L,
@@ -5267,6 +5378,9 @@ internal class GlesMgcRawSpatialStacker(
         check(version.contains("OpenGL ES 3.")) {
             "MGC Spatial merge requires GLES3, got: $version"
         }
+        maxShaderStorageBlockBytes = 0L
+        maxComputePackGroupsX = 0
+        maxComputePackGroupsY = 0
         supportsComputeReadback = version.contains("OpenGL ES 3.1") ||
             version.contains("OpenGL ES 3.2")
         if (supportsComputeReadback) {
@@ -5279,6 +5393,36 @@ internal class GlesMgcRawSpatialStacker(
             val queryError = GLES30.glGetError()
             if (queryError == GLES30.GL_NO_ERROR && maximumBlockSize[0] > 0L) {
                 maxShaderStorageBlockBytes = maximumBlockSize[0]
+                val maximumGroupCount = IntArray(2)
+                GLES31.glGetIntegeri_v(
+                    GLES31.GL_MAX_COMPUTE_WORK_GROUP_COUNT,
+                    0,
+                    maximumGroupCount,
+                    0,
+                )
+                GLES31.glGetIntegeri_v(
+                    GLES31.GL_MAX_COMPUTE_WORK_GROUP_COUNT,
+                    1,
+                    maximumGroupCount,
+                    1,
+                )
+                val groupQueryError = GLES30.glGetError()
+                if (groupQueryError == GLES30.GL_NO_ERROR &&
+                    maximumGroupCount[0] > 0 &&
+                    maximumGroupCount[1] > 0
+                ) {
+                    maxComputePackGroupsX = maximumGroupCount[0]
+                    maxComputePackGroupsY = maximumGroupCount[1]
+                } else {
+                    supportsComputeReadback = false
+                    maxShaderStorageBlockBytes = 0L
+                    PLog.w(
+                        TAG,
+                        "MGC strength SSBO pack disabled: unable to query dispatch limits " +
+                            "value=${maximumGroupCount.contentToString()} " +
+                            "glError=$groupQueryError",
+                    )
+                }
             } else {
                 supportsComputeReadback = false
                 maxShaderStorageBlockBytes = 0L
@@ -5292,8 +5436,9 @@ internal class GlesMgcRawSpatialStacker(
         PLog.i(
             TAG,
             "MGC Spatial GL vendor=${GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()} " +
-                "renderer=${GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()} version=$version " +
-                "strengthSsboMax=$maxShaderStorageBlockBytes",
+            "renderer=${GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()} version=$version " +
+                "strengthSsboMax=$maxShaderStorageBlockBytes " +
+                "strengthPackGroups=${maxComputePackGroupsX}x$maxComputePackGroupsY",
         )
     }
 
