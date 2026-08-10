@@ -22,7 +22,8 @@ internal data class RawExposurePreviewFrame(
  *
  * Thumbnail analysis, error calculation and iterative exposure solving live here. The RAW
  * renderer supplies default-curve preview samples and prepares the GPU profile map in the same
- * capture-side GL pass.
+ * capture-side GL pass. This solver produces only the automatic viewfinder-match offset; the
+ * user's RAW exposure compensation remains an independent development control applied on top.
  */
 internal object RawViewfinderExposureMatcher {
     private const val TAG = "RawViewfinderExposureMatcher"

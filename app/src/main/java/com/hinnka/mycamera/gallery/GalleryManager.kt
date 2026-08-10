@@ -4061,8 +4061,7 @@ object GalleryManager {
         val mainFlashFired = didMainFlashFire(captureResult)
         val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
             !mainFlashFired &&
-            resolveRawAutoExposure(context, metadata) &&
-            kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f
+            resolveRawAutoExposure(context, metadata)
         val profileGainTableRequired = profileToneMapMode == RawProfileToneMapMode.Photon
         val captureProfilePreparer = if (viewfinderMatchEnabled || profileGainTableRequired) {
             RawDngCaptureProfilePreparer { input ->
@@ -4103,7 +4102,7 @@ object GalleryManager {
                 "mainFlashFired=$mainFlashFired " +
                 "flashState=${captureResult?.get(CaptureResult.FLASH_STATE)} " +
                 "sourceAutoExposure=${metadata.rawAutoExposure} " +
-                "manualExposureEv=${metadata.rawExposureCompensation ?: 0f}"
+                "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
         return RawDngProfilePreparationOptions(
             profileToneMapMode = profileToneMapMode,
