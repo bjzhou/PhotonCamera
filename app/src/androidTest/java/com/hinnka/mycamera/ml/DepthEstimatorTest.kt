@@ -33,6 +33,7 @@ class DepthEstimatorTest {
         assertNotNull(depthMap)
         assertEquals(518, depthMap?.width)
         assertEquals(518, depthMap?.height)
+        assertEquals(518 * 518, depthMap?.values?.size)
         
         estimator.close()
     }

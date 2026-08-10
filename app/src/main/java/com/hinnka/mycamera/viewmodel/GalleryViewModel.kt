@@ -706,7 +706,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (photo == null) return false
         if (selectedTab == GalleryTab.SYSTEM) return false
         val context = getApplication<Application>()
-        return GalleryManager.getDepthFile(context, photo.id).exists()
+        return GalleryManager.getFloatDepthFile(context, photo.id).exists() ||
+            GalleryManager.getDepthFile(context, photo.id).exists()
     }
 
     // 最新照片（用于相机界面显示入口）

@@ -117,6 +117,21 @@ class BokehShadersTest {
     }
 
     @Test
+    fun depthUpsamplingUsesARealBoundedSpatialRefinement() {
+        val upsample = Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER
+        val refine = Shaders.DEPTH_REFINE_FRAGMENT_SHADER
+
+        assertTrue(upsample.contains("for (int y = -1; y <= 2; y++)"))
+        assertTrue(upsample.contains("for (int x = -1; x <= 2; x++)"))
+        assertTrue(upsample.contains("textureGrad("))
+        assertTrue(refine.contains("float blurred"))
+        assertTrue(refine.contains("center - blurred"))
+        assertTrue(refine.contains("localMin"))
+        assertTrue(refine.contains("localMax"))
+        assertFalse(refine.contains("smoothstep(0.05, 0.95, center)"))
+    }
+
+    @Test
     fun offlineBokehPassesAvailableNdkShaderValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val validator = sdkRoot?.let(::File)
@@ -127,12 +142,15 @@ class BokehShadersTest {
             ?.mapNotNull { ndk ->
                 ndk.resolve("shader-tools")
                     .walkTopDown()
-                    .firstOrNull { it.name == "glslc" && it.canExecute() }
+                    .firstOrNull { it.isFile && it.nameWithoutExtension == "glslc" }
             }
             ?.firstOrNull()
         assumeTrue("Android NDK glslc is unavailable", validator != null)
 
         val shaders = listOf(
+            Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER,
+            Shaders.DEPTH_REFINE_FRAGMENT_SHADER,
+            Shaders.DEPTH_READBACK_FRAGMENT_SHADER,
             Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
             Shaders.PSF_SPLAT_FRAGMENT_SHADER,
             Shaders.BOKEH_COMPOSITE_FRAGMENT_SHADER,

@@ -98,9 +98,9 @@ class DepthEstimator(context: Context) {
     /**
      * Estimates depth for the given bitmap.
      * @param inputBitmap Original image bitmap.
-     * @return Depth map bitmap at the model output resolution, or null if failed.
+     * @return Floating-point relative depth at the model output resolution, or null if failed.
      */
-    fun estimateDepth(inputBitmap: Bitmap): Bitmap? {
+    fun estimateDepth(inputBitmap: Bitmap): RelativeDepthMap? {
         if (!isInitialized || interpreter == null) {
             PLog.e(TAG, "DepthEstimator is not initialized")
             return null
@@ -126,9 +126,9 @@ class DepthEstimator(context: Context) {
                 // 4. Run inference
                 interpreter?.run(inputBuffer, outputBuffer.buffer)
 
-                // 5. Post-process to Bitmap (Grayscale)
+                // 5. Normalize without quantizing the model output.
                 return if (outputDataType == DataType.FLOAT32) {
-                    convertOutputToBitmap(outputBuffer.floatArray, outputWidth, outputHeight)
+                    convertOutputToDepthMap(outputBuffer.floatArray, outputWidth, outputHeight)
                 } else {
                     // If quantized output, convert to float first or handle UINT8 directly
                     val floatArray = FloatArray(outputBuffer.flatSize)
@@ -145,7 +145,7 @@ class DepthEstimator(context: Context) {
                             }
                         }
                     }
-                    convertOutputToBitmap(floatArray, outputWidth, outputHeight)
+                    convertOutputToDepthMap(floatArray, outputWidth, outputHeight)
                 }
             } finally {
                 LargeDirectBuffer.free(inputBuffer)
@@ -233,10 +233,15 @@ class DepthEstimator(context: Context) {
     }
 
     /**
-     * Converts a float array output to a Grayscale Bitmap.
+     * Normalizes relative depth while preserving floating-point precision.
      */
-    private fun convertOutputToBitmap(outputArray: FloatArray, width: Int, height: Int): Bitmap {
-        if (outputArray.isEmpty()) return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    private fun convertOutputToDepthMap(
+        outputArray: FloatArray,
+        width: Int,
+        height: Int,
+    ): RelativeDepthMap {
+        val normalizedValues = FloatArray(width * height)
+        if (outputArray.isEmpty()) return RelativeDepthMap(width, height, normalizedValues)
 
         val validValues = FloatArray(outputArray.size)
         var validCount = 0
@@ -248,7 +253,7 @@ class DepthEstimator(context: Context) {
 
         if (validCount == 0) {
             PLog.e(TAG, "Depth output has no finite values")
-            return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            return RelativeDepthMap(width, height, normalizedValues)
         }
 
         validValues.sort(0, validCount)
@@ -268,19 +273,12 @@ class DepthEstimator(context: Context) {
         val finalRange = if (range <= 0f) 1f else range // avoid division by zero
 //        PLog.d(TAG, "Depth output range: min=$min max=$max range=$range valid=$validCount")
 
-        val pixels = IntArray(width * height)
-        val limit = minOf(outputArray.size, pixels.size)
+        val limit = minOf(outputArray.size, normalizedValues.size)
         for (i in 0 until limit) {
-            // Normalize to [0, 255]
             val value = if (outputArray[i].isFinite()) outputArray[i] else min
-            val normalized = ((value - min) / finalRange * 255f).toInt().coerceIn(0, 255)
-            // Create a grayscale color (ARGB)
-            pixels[i] = (0xFF shl 24) or (normalized shl 16) or (normalized shl 8) or normalized
+            normalizedValues[i] = ((value - min) / finalRange).coerceIn(0.0f, 1.0f)
         }
-
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-        return bitmap
+        return RelativeDepthMap(width, height, normalizedValues)
     }
 
     private fun updateTensorDimensions(interpreter: Interpreter) {

@@ -483,6 +483,10 @@ object GalleryManager {
         return File(getPhotoDir(context, photoId), "depthmap.png")
     }
 
+    fun getFloatDepthFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), "depthmap.phdp")
+    }
+
     fun getThumbnailFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), THUMBNAIL_FILE)
     }

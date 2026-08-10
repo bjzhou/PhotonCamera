@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.processor
 
-import android.graphics.Bitmap
+import com.hinnka.mycamera.ml.RelativeDepthMap
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.max
 import kotlin.math.pow
@@ -21,25 +21,20 @@ internal object DepthBokehDepthPreprocessor {
     private const val INVERT_SCORE_MARGIN = 1.18f
 
     data class Result(
-        val depthMap: Bitmap,
+        val depthMap: RelativeDepthMap,
         val focusDepth: Float,
         val inverted: Boolean,
         val normalScore: Float,
         val invertedScore: Float
     )
 
-    fun prepare(depthMap: Bitmap, focusX: Float, focusY: Float): Result {
+    fun prepare(depthMap: RelativeDepthMap, focusX: Float, focusY: Float): Result {
         val width = depthMap.width
         val height = depthMap.height
-        val pixels = IntArray(width * height)
-        depthMap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-        val values = FloatArray(pixels.size)
-        val invertedValues = FloatArray(pixels.size)
-        for (i in pixels.indices) {
-            val value = ((pixels[i] shr 16) and 0xFF) / 255.0f
-            values[i] = value
-            invertedValues[i] = 1.0f - value
+        val values = depthMap.values
+        val invertedValues = FloatArray(values.size)
+        for (i in values.indices) {
+            invertedValues[i] = 1.0f - values[i]
         }
 
         val normalFocus = estimateFocusDepth(values, width, height, focusX, focusY)
@@ -58,20 +53,12 @@ internal object DepthBokehDepthPreprocessor {
             )
         }
 
-        val invertedPixels = IntArray(pixels.size)
-        for (i in invertedPixels.indices) {
-            val gray = (invertedValues[i] * 255.0f).toInt().coerceIn(0, 255)
-            invertedPixels[i] = (0xFF shl 24) or (gray shl 16) or (gray shl 8) or gray
-        }
-        val invertedBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        invertedBitmap.setPixels(invertedPixels, 0, width, 0, 0, width, height)
-
         PLog.d(
             TAG,
             "Depth polarity inverted for background bokeh: normalScore=$normalScore invertedScore=$invertedScore"
         )
         return Result(
-            depthMap = invertedBitmap,
+            depthMap = RelativeDepthMap(width, height, invertedValues),
             focusDepth = invertedFocus,
             inverted = true,
             normalScore = normalScore,

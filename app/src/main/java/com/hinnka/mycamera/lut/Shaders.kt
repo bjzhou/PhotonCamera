@@ -529,8 +529,11 @@ object Shaders {
     )
 
     /**
-     * 无缝联合双边上采样 (Seamless JBU)
-     * 采用标准的 2x2 邻域双线性混合，配合颜色权重，彻底消除网格感。
+     * 4x4 联合双边上采样。
+     *
+     * 正值高斯空间核替代仅覆盖单个低分辨率 cell 的 2x2 双线性核，跨 cell
+     * 移动时权重保持连续。低分辨率引导样本使用与深度 texel 相同的面积足迹，
+     * 避免高频纹理在单点采样时错误主导深度边缘。
      */
     val JBU_UPSAMPLE_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
@@ -541,7 +544,8 @@ object Shaders {
         uniform sampler2D uHighResGuide; 
         uniform vec2 uLowResTexelSize;   
 
-        const float SIGMA_R = 0.12; 
+        const float SIGMA_S = 0.85;
+        const float SIGMA_R = 0.12;
 
         void main() {
             vec3 guideColor = texture(uHighResGuide, vTexCoord).rgb;
@@ -549,27 +553,35 @@ object Shaders {
             // 基础线性混合深度，作为极端情况下的保底
             float baseDepth = texture(uLowResDepth, vTexCoord).r;
             
-            // 计算在低分辨率纹理空间下的坐标
+            ivec2 lowResSize = textureSize(uLowResDepth, 0);
             vec2 pos = vTexCoord / uLowResTexelSize - 0.5;
-            vec2 p0 = floor(pos);
+            ivec2 p0 = ivec2(floor(pos));
             vec2 f = fract(pos);
             
             float totalWeight = 0.0;
             float totalDepth = 0.0;
 
-            // 采样相邻的 2x2 个低分中心点 (标准双线性权重范围)
-            for(int y = 0; y <= 1; y++) {
-                for(int x = 0; x <= 1; x++) {
-                    vec2 offset = vec2(float(x), float(y));
-                    vec2 sampleCoord = (p0 + offset + 0.5) * uLowResTexelSize;
-                    
-                    float d = texture(uLowResDepth, sampleCoord).r;
-                    vec3 c = texture(uHighResGuide, sampleCoord).rgb;
+            for (int y = -1; y <= 2; y++) {
+                for (int x = -1; x <= 2; x++) {
+                    ivec2 sampleIndex = p0 + ivec2(x, y);
+                    if (any(lessThan(sampleIndex, ivec2(0))) ||
+                        any(greaterThanEqual(sampleIndex, lowResSize))) {
+                        continue;
+                    }
 
-                    // 1. 标准双线性空间权重 (线性连续，无边界跳变)
-                    float wS = (x == 0 ? (1.0 - f.x) : f.x) * (y == 0 ? (1.0 - f.y) : f.y);
+                    vec2 sampleCoord = (vec2(sampleIndex) + 0.5) * uLowResTexelSize;
+                    float d = texelFetch(uLowResDepth, sampleIndex, 0).r;
+                    vec3 c = textureGrad(
+                        uHighResGuide,
+                        sampleCoord,
+                        vec2(uLowResTexelSize.x, 0.0),
+                        vec2(0.0, uLowResTexelSize.y)
+                    ).rgb;
 
-                    // 2. 颜色相似度权重
+                    vec2 delta = vec2(float(x), float(y)) - f;
+                    float wS = exp(
+                        -dot(delta, delta) / (2.0 * SIGMA_S * SIGMA_S)
+                    );
                     float dC = distance(guideColor, c);
                     float wC = exp(-(dC * dC) / (2.0 * SIGMA_R * SIGMA_R));
 
@@ -585,10 +597,12 @@ object Shaders {
     """.trimIndent()
 
     /**
-     * 软细节增强 (Soft Detail Refiner)
-     * 取代暴力的锐化，只做温和的边缘收缩
+     * 有界深度反锐化。
+     *
+     * 使用 3x3 高斯低通提取真实高频分量，只在存在局部深度对比时增强，并将
+     * 结果限制在邻域极值内，避免制造新的前后景层级或数值过冲。
      */
-    val DEPTH_SHARPEN_FRAGMENT_SHADER = """#version 300 es
+    val DEPTH_REFINE_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
@@ -598,19 +612,55 @@ object Shaders {
 
         void main() {
             float center = texture(uDepthTexture, vTexCoord).r;
-            
-            // 采用极小半径平滑
             float n = texture(uDepthTexture, vTexCoord + vec2(0, uTexelSize.y)).r;
             float s = texture(uDepthTexture, vTexCoord - vec2(0, uTexelSize.y)).r;
             float e = texture(uDepthTexture, vTexCoord + vec2(uTexelSize.x, 0)).r;
             float w = texture(uDepthTexture, vTexCoord - vec2(uTexelSize.x, 0)).r;
+            float ne = texture(uDepthTexture, vTexCoord + uTexelSize).r;
+            float nw = texture(
+                uDepthTexture,
+                vTexCoord + vec2(-uTexelSize.x, uTexelSize.y)
+            ).r;
+            float se = texture(
+                uDepthTexture,
+                vTexCoord + vec2(uTexelSize.x, -uTexelSize.y)
+            ).r;
+            float sw = texture(uDepthTexture, vTexCoord - uTexelSize).r;
 
-            float avg = (n + s + e + w + center) / 5.0;
-            
-            // 温和的对比度拉伸，不产生硬边缘
-            float refined = mix(center, smoothstep(0.05, 0.95, center), 0.3);
-            
+            float blurred = (
+                center * 4.0 +
+                (n + s + e + w) * 2.0 +
+                ne + nw + se + sw
+            ) * (1.0 / 16.0);
+            float localMin = min(
+                min(min(center, n), min(s, e)),
+                min(min(w, ne), min(min(nw, se), sw))
+            );
+            float localMax = max(
+                max(max(center, n), max(s, e)),
+                max(max(w, ne), max(max(nw, se), sw))
+            );
+            float edgeGate = smoothstep(0.004, 0.035, localMax - localMin);
+            float refined = clamp(
+                center + (center - blurred) * (0.65 * edgeGate),
+                localMin,
+                localMax
+            );
             fragColor = vec4(vec3(clamp(refined, 0.0, 1.0)), 1.0);
+        }
+    """.trimIndent()
+
+    /** 供 CPU 遮挡判定使用的有损副本；渲染深度始终保留在 R16F。 */
+    val DEPTH_READBACK_FRAGMENT_SHADER = """#version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uDepthTexture;
+
+        void main() {
+            float depth = texture(uDepthTexture, vTexCoord).r;
+            fragColor = vec4(vec3(clamp(depth, 0.0, 1.0)), 1.0);
         }
     """.trimIndent()
 
@@ -696,6 +746,7 @@ object Shaders {
             vec3 surroundLinear = vec3(0.0);
             float darkerDirectionCount = 0.0;
             float maxInnerLuma = 0.0;
+            float innerLumaSum = 0.0;
             vec2 innerBrightnessMoment = vec2(0.0);
             for (int i = 0; i < 12; i++) {
                 vec2 innerUV = clamp(
@@ -713,6 +764,7 @@ object Shaders {
                 float innerLuma = luminance(innerLinear);
                 float outerLuma = luminance(outerLinear);
                 maxInnerLuma = max(maxInnerLuma, innerLuma);
+                innerLumaSum += innerLuma;
                 innerBrightnessMoment += PROBE_DIRECTIONS[i] * innerLuma;
 
                 vec3 neighborLinear = innerLuma < outerLuma
@@ -733,26 +785,32 @@ object Shaders {
             float contrast = max(centerLuma - luminance(surroundLinear), 0.0);
             float relativeContrast = contrast / max(centerLuma, 0.06);
             float darkDirectionRatio = darkerDirectionCount / 12.0;
+            float meanInnerLuma = innerLumaSum / 12.0;
 
-            // Medium highlights must already be visibly bright and highly
-            // isolated. This rejects ordinary sunlit foliage, whose linear
-            // luminance was incorrectly admitted by the previous 0.07 floor.
+            // Brightness and local contrast decide whether a response can be a
+            // highlight. Isolation is confidence only: making it a hard gate
+            // deletes every source inside a dense cluster before CPU spacing can
+            // retain its strongest representative centers.
+            float isolationConfidence = mix(
+                0.55,
+                1.0,
+                smoothstep(0.28, 0.82, darkDirectionRatio)
+            );
             float mediumHighlightGate = smoothstep(0.18, 0.50, centerLuma)
                 * max(
                     smoothstep(0.06, 0.18, contrast),
                     smoothstep(0.18, 0.38, relativeContrast)
                 )
-                * smoothstep(0.68, 0.88, darkDirectionRatio);
+                * isolationConfidence;
 
             // Strong point lights use a higher absolute floor. Their local
-            // contrast may be slightly lower after sensor clipping, but they
-            // still need a mostly dark surround to enter the peak PSF path.
+            // contrast may be slightly lower after sensor clipping.
             float strongPointGate = smoothstep(0.65, 0.90, centerLuma)
                 * max(
                     smoothstep(0.04, 0.14, contrast),
                     smoothstep(0.12, 0.30, relativeContrast)
                 )
-                * smoothstep(0.62, 0.84, darkDirectionRatio);
+                * isolationConfidence;
 
             // Non-maximum suppression for an already-soft highlight disc.
             // Off-center pixels see a brighter inner-ring sample toward the
@@ -769,10 +827,31 @@ object Shaders {
                 normalizedMoment
             );
 
-            float compactHighlight = max(
+            float highlightGate = max(
                 mediumHighlightGate,
                 strongPointGate
-            ) * localMaximumGate * centerednessGate;
+            );
+
+            // An existing optical bokeh disc has a broad, symmetric bright
+            // interior instead of a sharp peak. Its inner ring remains bright
+            // while the outer probe reaches darker background. Admit this
+            // coherent shape without weakening point-source NMS; continuous
+            // bright regions still fail the dark-surround requirement.
+            float innerDiscRatio = meanInnerLuma / max(centerLuma, 0.06);
+            float existingDiscGate = smoothstep(0.35, 0.70, innerDiscRatio)
+                * smoothstep(0.60, 0.82, darkDirectionRatio);
+            // Asymmetry lowers point confidence but is not a veto: adjacent
+            // lights distort the moment precisely in the dense regions handled
+            // by brightness-priority spatial thinning. Existing discs retain the
+            // stricter symmetry requirement.
+            float pointShapeGate = localMaximumGate
+                * mix(0.35, 1.0, centerednessGate);
+            float centerShapeGate = max(
+                pointShapeGate,
+                existingDiscGate * centerednessGate
+            );
+            float compactHighlight = highlightGate
+                * centerShapeGate;
 
             vec3 residual = max(centerLinear - surroundLinear, vec3(0.0));
             // LDR point lights have already been clipped and blurred by the
@@ -786,8 +865,8 @@ object Shaders {
     /**
      * 后期处理专用的圆形 PSF gather。
      *
-     * 基础虚化严格按归一化权重累积，不对普通高亮施加亮度增益。被独立通道识别出的
-     * 紧凑高光才会进行有限的欠曝辐射重建，并通过同一圆形口径核扩散为弥散圆。
+     * Vogel 分布只负责普通景深模糊。已经被中心归并接受的紧凑高光会从基础卷积中
+     * 扣除，随后由 ANALYTIC_BOKEH_HIGHLIGHT_* 以单一圆心解析栅格化。
      */
     val PSF_SPLAT_FRAGMENT_SHADER = """
         #version 300 es
@@ -798,6 +877,7 @@ object Shaders {
 
         uniform sampler2D uInputTexture;
         uniform sampler2D uHighlightTexture;
+        uniform sampler2D uAcceptedHighlightMask;
         uniform sampler2D uDepthTexture;
 
         uniform mat4 uDepthMatrix;
@@ -881,17 +961,21 @@ object Shaders {
                 vTexCoord,
                 highlightIntegrationLod
             ).rgb;
-            vec3 centerLinear = toLinear(centerColor.rgb);
-            vec3 accColor = max(centerLinear - centerHighlight, vec3(0.0))
-                * centerWeight;
-            vec3 accCompactHighlight = centerHighlight;
-            vec3 peakCompactHighlight = centerHighlight;
-            float peakCompactLuma = dot(
-                centerHighlight,
-                vec3(0.2126, 0.7152, 0.0722)
+            float centerHighlightAccepted = step(
+                0.001,
+                textureLod(
+                    uAcceptedHighlightMask,
+                    vTexCoord,
+                    highlightIntegrationLod
+                ).r
             );
+            vec3 centerLinear = toLinear(centerColor.rgb);
+            vec3 accColor = max(
+                centerLinear - centerHighlight * centerHighlightAccepted,
+                vec3(0.0)
+            )
+                * centerWeight;
             float accWeight = centerWeight;
-            float accHighlightKernelWeight = 1.0;
 
             float softBase = max(2.5, uMaxBlurRadius * 0.08);
 
@@ -917,6 +1001,14 @@ object Shaders {
                     sampleUV,
                     highlightIntegrationLod
                 ).rgb;
+                float highlightAccepted = step(
+                    0.001,
+                    textureLod(
+                        uAcceptedHighlightMask,
+                        sampleUV,
+                        highlightIntegrationLod
+                    ).r
+                );
                 
                 vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
                 float sDepth = texture(uDepthTexture, sDepthUV).r;
@@ -948,70 +1040,18 @@ object Shaders {
 
                 if (weight > 0.0001) {
                     vec3 sLinear = toLinear(sColor);
-                    vec3 baseLinear = max(sLinear - compactHighlight, vec3(0.0));
+                    vec3 baseLinear = max(
+                        sLinear - compactHighlight * highlightAccepted,
+                        vec3(0.0)
+                    );
                     accColor += baseLinear * weight;
                     accWeight += weight;
-                }
-
-                // Highlight contribution follows the source CoC, not the
-                // destination CoC, so an isolated source expands into a
-                // bounded circular footprint. Its own kernel denominator keeps
-                // the light-source energy independent from depth-edge weights.
-                float highlightWeight = fW
-                    * apertureWeight(offsetPixels, sCoc)
-                    * sourceVisibility;
-                if (highlightWeight > 0.0001) {
-                    accCompactHighlight += compactHighlight * highlightWeight;
-                    accHighlightKernelWeight += highlightWeight;
-
-                    // A normalized convolution preserves total energy but a
-                    // tiny source occupies very little of a large aperture and
-                    // becomes invisible in an LDR image. Keep the strongest
-                    // source response so clipped point lights still form a
-                    // coherent disc; compact-highlight classification prevents
-                    // continuous bright regions from using this path.
-                    vec3 peakCandidate = compactHighlight * highlightWeight;
-                    float peakCandidateLuma = dot(
-                        peakCandidate,
-                        vec3(0.2126, 0.7152, 0.0722)
-                    );
-                    float peakWins = step(peakCompactLuma, peakCandidateLuma);
-                    peakCompactHighlight = mix(
-                        peakCompactHighlight,
-                        peakCandidate,
-                        peakWins
-                    );
-                    peakCompactLuma = max(peakCompactLuma, peakCandidateLuma);
                 }
             }
 
             vec3 finalLinear = accWeight > 0.001
                 ? accColor / accWeight
                 : toLinear(centerColor.rgb);
-            vec3 energyPreservingHighlight = accCompactHighlight
-                / max(accHighlightKernelWeight, 0.001);
-            if (uLinearInput != 0) {
-                // Linear HDR inputs already retain scene radiance.
-                finalLinear += energyPreservingHighlight;
-            } else {
-                // LDR point lights need a peak-preserving response to remain
-                // visible after their energy is spread over the aperture disc.
-                // Blend it with the normalized result to retain smooth overlap,
-                // then compress stronger sources so they receive only a gentle
-                // lift instead of abruptly turning white.
-                vec3 reconstructedHighlight = max(
-                    energyPreservingHighlight * 1.35,
-                    peakCompactHighlight * 0.72
-                );
-                vec3 compressedHighlight = reconstructedHighlight
-                    / (vec3(1.0) + reconstructedHighlight * 2.0);
-                vec3 highlightOpacity = min(
-                    vec3(0.52),
-                    vec3(1.0) - exp(-compressedHighlight * 2.8)
-                );
-                finalLinear = clamp(finalLinear, 0.0, 1.0);
-                finalLinear += (vec3(1.0) - finalLinear) * highlightOpacity;
-            }
 
             vec3 finalColor = toDisplay(finalLinear);
             if (uLinearInput == 0) {
@@ -1019,6 +1059,83 @@ object Shaders {
             }
 
             fragColor = vec4(finalColor, centerColor.a);
+        }
+    """.trimIndent()
+
+    /**
+     * 每个实例代表一个已经确定的高光中心。顶点阶段只建立该中心的 CoC 包围盒；
+     * 片元阶段使用输出像素到圆心的真实像素距离 / CoC 解析圆盘，不依赖 gather 命中。
+     */
+    val ANALYTIC_BOKEH_HIGHLIGHT_VERTEX_SHADER = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 aPosition;
+        in vec2 aCenterUv;
+        in float aCocPixels;
+        in vec3 aSignal;
+
+        uniform vec2 uImageSize;
+
+        out vec2 vOffsetPixels;
+        flat out float vCocPixels;
+        flat out vec3 vSignal;
+
+        void main() {
+            vec2 offsetPixels = aPosition * aCocPixels;
+            vec2 centerNdc = aCenterUv * 2.0 - 1.0;
+            vec2 offsetNdc = offsetPixels * 2.0 / uImageSize;
+            gl_Position = vec4(centerNdc + offsetNdc, 0.0, 1.0);
+            vOffsetPixels = offsetPixels;
+            vCocPixels = aCocPixels;
+            vSignal = aSignal;
+        }
+    """.trimIndent()
+
+    val ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vOffsetPixels;
+        flat in float vCocPixels;
+        flat in vec3 vSignal;
+        out vec4 fragColor;
+
+        uniform int uLinearInput;
+
+        float apertureTransmission(float normalizedDistance) {
+            float support = 1.0 - smoothstep(0.86, 1.0, normalizedDistance);
+            float radialTransmission = mix(
+                1.0,
+                0.90,
+                smoothstep(0.0, 0.86, normalizedDistance)
+            );
+            float rim = smoothstep(0.70, 0.82, normalizedDistance)
+                * (1.0 - smoothstep(0.88, 0.97, normalizedDistance));
+            return support * radialTransmission * (1.0 + rim * 0.10);
+        }
+
+        void main() {
+            float normalizedDistance = length(vOffsetPixels)
+                / max(vCocPixels, 0.001);
+            if (normalizedDistance >= 1.0) discard;
+
+            float transmission = apertureTransmission(normalizedDistance);
+            if (uLinearInput != 0) {
+                // HDR keeps linear scene radiance; overlapping discs add energy.
+                fragColor = vec4(vSignal * transmission, 0.0);
+            } else {
+                // LDR uses the same bounded highlight reconstruction as the
+                // previous path, but the opacity now comes from one analytic disc.
+                vec3 reconstructedHighlight = vSignal * (0.72 * transmission);
+                vec3 compressedHighlight = reconstructedHighlight
+                    / (vec3(1.0) + reconstructedHighlight * 2.0);
+                vec3 highlightOpacity = min(
+                    vec3(0.52),
+                    vec3(1.0) - exp(-compressedHighlight * 2.8)
+                );
+                fragColor = vec4(highlightOpacity, 0.0);
+            }
         }
     """.trimIndent()
 

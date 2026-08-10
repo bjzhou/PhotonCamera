@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.ml.RelativeDepthMap
+import com.hinnka.mycamera.ml.RelativeDepthMapFile
 import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.sync.Mutex
@@ -43,26 +45,52 @@ class DepthBokehProcessor(context: Context) {
             return originalImage
         }
 
-        var depthMap: Bitmap? = null
-        var depthFile: java.io.File? = null
+        var depthMap: RelativeDepthMap? = null
+        var floatDepthFile: java.io.File? = null
         if (photoId != null) {
-            depthFile = GalleryManager.getDepthFile(context, photoId)
-            if (depthFile.exists()) {
-                depthMap = BitmapFactory.decodeFile(depthFile.absolutePath)
+            floatDepthFile = GalleryManager.getFloatDepthFile(context, photoId)
+            if (floatDepthFile.exists()) {
+                depthMap = try {
+                    RelativeDepthMapFile.read(floatDepthFile)
+                } catch (error: Exception) {
+                    PLog.w(TAG, "Unable to read floating-point depth cache", error)
+                    null
+                }
+            }
+
+            // Existing photos may only have the former 8-bit PNG cache. Read it
+            // once and migrate it without changing its already-quantized values.
+            if (depthMap == null) {
+                val legacyDepthFile = GalleryManager.getDepthFile(context, photoId)
+                if (legacyDepthFile.exists()) {
+                    val legacyBitmap = BitmapFactory.decodeFile(legacyDepthFile.absolutePath)
+                    if (legacyBitmap != null) {
+                        try {
+                            depthMap = RelativeDepthMap.fromBitmap(legacyBitmap)
+                        } finally {
+                            legacyBitmap.recycle()
+                        }
+                    }
+                }
             }
         }
 
         if (depthMap == null) {
             depthMap = SharedDepthEstimator.estimateDepth(appContext, originalImage)
 
-            if (depthMap != null && depthFile != null) {
+            if (depthMap != null && floatDepthFile != null) {
                 try {
-                    java.io.FileOutputStream(depthFile).use { out ->
-                        depthMap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                    RelativeDepthMapFile.write(floatDepthFile, depthMap)
+                } catch (error: Exception) {
+                    PLog.w(TAG, "Unable to write floating-point depth cache", error)
                 }
+            }
+        } else if (floatDepthFile != null && !floatDepthFile.exists()) {
+            // Persist a successfully migrated legacy cache as the new versioned format.
+            try {
+                RelativeDepthMapFile.write(floatDepthFile, depthMap)
+            } catch (error: Exception) {
+                PLog.w(TAG, "Unable to migrate floating-point depth cache", error)
             }
         }
 
@@ -80,8 +108,7 @@ class DepthBokehProcessor(context: Context) {
             val bokehResult = processor.applyBokeh(
                 originalImage,
                 preparedDepth.depthMap,
-                focusX ?: 0.5f,
-                focusY ?: 0.5f,
+                preparedDepth.focusDepth,
                 aperture
             )
             result = bokehResult

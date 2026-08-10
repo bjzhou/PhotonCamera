@@ -31,7 +31,7 @@ object SharedDepthEstimator {
     suspend fun estimateDepth(
         context: Context,
         inputBitmap: Bitmap
-    ): Bitmap? {
+    ): RelativeDepthMap? {
         if (!DepthModelManager.isInstalled(context)) {
             return null
         }
