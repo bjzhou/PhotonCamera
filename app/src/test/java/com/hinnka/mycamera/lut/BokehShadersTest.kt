@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.lut
 
 import java.io.File
+import java.util.Properties
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,7 +14,6 @@ class BokehShadersTest {
         val shader = Shaders.PSF_SPLAT_FRAGMENT_SHADER
         val expectedUniforms = listOf(
             "uInputTexture",
-            "uHighlightTexture",
             "uDepthTexture",
             "uDepthMatrix",
             "uMaxBlurRadius",
@@ -42,6 +42,7 @@ class BokehShadersTest {
             "uAperture",
             "uFocusDepth",
             "uTexelSize",
+            "uMinNeighborhoodLumaDifference",
             "uLinearInput",
         )
 
@@ -54,9 +55,20 @@ class BokehShadersTest {
     }
 
     @Test
+    fun backgroundBokehNeverSubtractsAnalyticHighlightSignal() {
+        val bokehShader = Shaders.PSF_SPLAT_FRAGMENT_SHADER
+
+        assertTrue(bokehShader.contains("vec3 accColor = centerLinear * centerWeight"))
+        assertTrue(bokehShader.contains("accColor += sLinear * weight"))
+        assertFalse(bokehShader.contains("AcceptedHighlight"))
+        assertFalse(bokehShader.contains("acceptedHighlight"))
+    }
+
+    @Test
     fun bokehOnlyReconstructsCompactHighlightsWithDefinedApertureEdges() {
         val bokehShader = Shaders.PSF_SPLAT_FRAGMENT_SHADER
-        val highlightShader = Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER
+        val compactHighlightShader = Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER
+        val analyticHighlightShader = Shaders.ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER
 
         assertFalse(
             "ordinary bokeh samples must not receive a blanket HDR boost",
@@ -66,33 +78,35 @@ class BokehShadersTest {
             "reverse smoothstep has undefined GLSL results",
             bokehShader.contains("smoothstep(1.0, 0.88"),
         )
-        assertTrue(highlightShader.contains("darkDirectionRatio"))
-        assertTrue(highlightShader.contains("mediumHighlightGate"))
-        assertTrue(highlightShader.contains("strongPointGate"))
-        assertTrue(highlightShader.contains("smoothstep(0.27, 0.50, centerLuma)"))
-        assertTrue(highlightShader.contains("smoothstep(0.65, 0.90, centerLuma)"))
-        assertFalse(highlightShader.contains("smoothstep(0.07, 0.26, centerLuma)"))
-        assertTrue(highlightShader.contains("innerProbeRadius"))
-        assertTrue(highlightShader.contains("outerProbeRadius"))
-        assertTrue(highlightShader.contains("relativeContrast"))
-        assertTrue(highlightShader.contains("localMaximumGate"))
-        assertTrue(highlightShader.contains("centerednessGate"))
-        assertTrue(bokehShader.contains("accCompactHighlight"))
-        assertTrue(bokehShader.contains("accHighlightKernelWeight"))
-        assertTrue(bokehShader.contains("centerLinear - centerHighlight"))
-        assertTrue(bokehShader.contains("sLinear - compactHighlight"))
+        assertTrue(compactHighlightShader.contains("darkDirectionRatio"))
+        assertTrue(compactHighlightShader.contains("mediumHighlightGate"))
+        assertTrue(compactHighlightShader.contains("strongPointGate"))
+        assertTrue(compactHighlightShader.contains("smoothstep(0.18, 0.50, centerLuma)"))
+        assertTrue(compactHighlightShader.contains("smoothstep(0.65, 0.90, centerLuma)"))
+        assertFalse(compactHighlightShader.contains("smoothstep(0.07, 0.26, centerLuma)"))
+        assertTrue(compactHighlightShader.contains("innerProbeRadius"))
+        assertTrue(compactHighlightShader.contains("outerProbeRadius"))
+        assertTrue(compactHighlightShader.contains("relativeContrast"))
+        assertTrue(compactHighlightShader.contains("neighborhoodContrastGate"))
+        assertTrue(
+            compactHighlightShader.contains(
+                "uMinNeighborhoodLumaDifference + 0.04"
+            )
+        )
+        assertTrue(compactHighlightShader.contains("* neighborhoodContrastGate"))
+        assertTrue(compactHighlightShader.contains("localMaximumGate"))
+        assertTrue(compactHighlightShader.contains("centerednessGate"))
         assertTrue(bokehShader.contains("radialTransmission"))
-        assertTrue(bokehShader.contains("highlightOpacity"))
-        assertTrue(bokehShader.contains("compressedHighlight"))
-        assertTrue(bokehShader.contains("peakCompactHighlight"))
-        assertTrue(bokehShader.contains("energyPreservingHighlight"))
-        assertTrue(bokehShader.contains("vec3(0.52)"))
         assertTrue(bokehShader.contains("const float rotation = 0.0"))
         assertFalse(bokehShader.contains("float hash("))
         assertTrue(bokehShader.contains("centerOccludesSource"))
         assertTrue(bokehShader.contains("sourceVisibility"))
         assertFalse(bokehShader.contains("isSharpForeground"))
         assertFalse(bokehShader.contains("reconstructionGain"))
+        assertTrue(analyticHighlightShader.contains("normalizedDistance"))
+        assertTrue(analyticHighlightShader.contains("highlightOpacity"))
+        assertTrue(analyticHighlightShader.contains("compressedHighlight"))
+        assertTrue(analyticHighlightShader.contains("vec3(0.52)"))
     }
 
     @Test
@@ -101,11 +115,14 @@ class BokehShadersTest {
         val expectedUniforms = listOf(
             "uOriginalTexture",
             "uBokehTexture",
+            "uHighlightTexture",
             "uDepthTexture",
             "uDepthMatrix",
             "uMaxBlurRadius",
             "uAperture",
             "uFocusDepth",
+            "uDepthTexelSize",
+            "uLinearInput",
         )
 
         expectedUniforms.forEach { uniform ->
@@ -114,6 +131,27 @@ class BokehShadersTest {
                 Regex("""uniform\s+\w+\s+$uniform\s*;""").containsMatchIn(shader),
             )
         }
+    }
+
+    @Test
+    fun finalCompositeKeepsBackgroundHighlightsBehindTheProtectedForeground() {
+        val compactHighlightShader = Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER
+        val bokehShader = Shaders.PSF_SPLAT_FRAGMENT_SHADER
+        val compositeShader = Shaders.BOKEH_COMPOSITE_FRAGMENT_SHADER
+
+        listOf(compactHighlightShader, bokehShader, compositeShader).forEach { shader ->
+            assertTrue(shader.contains("uFocusDepth - depth - 0.015"))
+            assertFalse(shader.contains("abs(uFocusDepth - depth)"))
+        }
+        assertTrue(compositeShader.contains("protectedForegroundDepth"))
+        assertTrue(compositeShader.contains("foregroundOcclusion"))
+        assertTrue(compositeShader.contains("backgroundWithHighlights"))
+        assertTrue(compositeShader.contains("backgroundMix *= 1.0 - foregroundOcclusion"))
+        assertTrue(
+            compositeShader.contains(
+                "mix(originalColor.rgb, backgroundWithHighlights, backgroundMix)"
+            )
+        )
     }
 
     @Test
@@ -133,7 +171,15 @@ class BokehShadersTest {
 
     @Test
     fun offlineBokehPassesAvailableNdkShaderValidator() {
-        val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
+        val localPropertiesSdk = File("local.properties")
+            .takeIf(File::isFile)
+            ?.inputStream()
+            ?.use { input ->
+                Properties().apply { load(input) }.getProperty("sdk.dir")
+            }
+        val sdkRoot = System.getenv("ANDROID_SDK_ROOT")
+            ?: System.getenv("ANDROID_HOME")
+            ?: localPropertiesSdk
         val validator = sdkRoot?.let(::File)
             ?.resolve("ndk")
             ?.listFiles()

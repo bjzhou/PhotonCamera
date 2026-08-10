@@ -24,7 +24,15 @@ class OglBokehProcessor {
         private const val HIGHLIGHT_MASK_THRESHOLD = 0.02f
         private const val MIN_ANALYTIC_COC_PIXELS = 1.5f
         private const val FOCUS_DEPTH_DEAD_BAND = 0.015f
+        // Synthetic-highlight background gate. A depth sample is accepted when
+        // its gap behind the focused subject is >= X, OR its normalized depth is <= Y.
+        private const val MIN_HIGHLIGHT_SUBJECT_DEPTH_GAP = 0.4f // X
+        private const val MAX_HIGHLIGHT_BACKGROUND_DEPTH = 0.2f // Y
         private const val HIGHLIGHT_CLASSIFICATION_F_NUMBER = 2.8f
+        // Tunable highlight-quality gates. Radius is measured in original-image
+        // pixels; luminance difference is measured in linear RGB.
+        private const val MIN_HIGHLIGHT_COMPONENT_RADIUS_PIXELS = 12.0f
+        private const val MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE = 0.08f
         private const val HIGHLIGHT_MIN_CENTER_SPACING_SCALE = 0.9f
         private const val HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE = 0.5f
         private const val PREEXISTING_BOKEH_RADIUS_SCALE = 0.05f
@@ -46,8 +54,9 @@ class OglBokehProcessor {
 
     private data class AnalyticHighlightExtraction(
         val highlights: List<AnalyticHighlight>,
-        val acceptedMask: ByteArray,
         val eligibleCandidateCount: Int,
+        val depthGateRejectedCount: Int,
+        val undersizedComponentCount: Int,
         val preExistingBokehCount: Int,
         val densitySuppressedCount: Int,
     )
@@ -56,8 +65,6 @@ class OglBokehProcessor {
         val highlight: AnalyticHighlight,
         val centerXInOriginalPixels: Float,
         val centerYInOriginalPixels: Float,
-        val componentIndex: Int,
-        val sourceCellKey: Long?,
         val isPreExistingBokeh: Boolean,
         val selectionScore: Float,
     )
@@ -268,6 +275,13 @@ class OglBokehProcessor {
                 1.0f / originalImage.width,
                 1.0f / originalImage.height
             )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(
+                    compactHighlightProgramId,
+                    "uMinNeighborhoodLumaDifference",
+                ),
+                MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE,
+            )
             GLES30.glUniform1i(
                 GLES30.glGetUniformLocation(compactHighlightProgramId, "uLinearInput"),
                 if (linearInput) 1 else 0
@@ -289,23 +303,14 @@ class OglBokehProcessor {
                 maxBlurRadius = maxBlurRadius,
             )
 
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
-            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-            GLES30.glTexParameteri(
-                GLES30.GL_TEXTURE_2D,
-                GLES30.GL_TEXTURE_MIN_FILTER,
-                GLES30.GL_LINEAR_MIPMAP_LINEAR
-            )
-            val acceptedHighlightMaskTex = createR8Texture(
-                analyticHighlights.acceptedMask,
-                bokehWidth,
-                bokehHeight,
-                mipmap = true,
-            )
             PLog.d(
                 TAG,
                 "Analytic bokeh highlights: fNumber=$aperture, " +
+                    "minRadius=$MIN_HIGHLIGHT_COMPONENT_RADIUS_PIXELS, " +
+                    "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
                     "candidates=${analyticHighlights.eligibleCandidateCount}, " +
+                    "depthGateRejected=${analyticHighlights.depthGateRejectedCount}, " +
+                    "undersized=${analyticHighlights.undersizedComponentCount}, " +
                     "preExisting=${analyticHighlights.preExistingBokehCount}, " +
                     "densitySuppressed=${analyticHighlights.densitySuppressedCount}, " +
                     "accepted=${analyticHighlights.highlights.size}"
@@ -343,20 +348,6 @@ class OglBokehProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uDepthTexture"), 1)
 
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(bokehProgramId, "uHighlightTexture"),
-                2
-            )
-
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, acceptedHighlightMaskTex)
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(bokehProgramId, "uAcceptedHighlightMask"),
-                3
-            )
-
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uMaxBlurRadius"), maxBlurRadius)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uAperture"), aperture)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uFocusDepth"), focusDepth)
@@ -370,9 +361,53 @@ class OglBokehProcessor {
 
             drawQuad(bokehProgramId)
 
-            // The normal blur above still uses Vogel sampling, but accepted
-            // synthetic highlights do not. Each accepted center is now drawn as
-            // one analytic disc from true pixel distance / source CoC.
+            // Keep analytic bokeh on its own transparent layer. It is combined
+            // with the blurred background only in the final, foreground-aware
+            // composite, so neither pass can overwrite the other.
+            val highlightTex = IntArray(1)
+            GLES30.glGenTextures(1, highlightTex, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, highlightTex[0])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
+                bokehWidth,
+                bokehHeight,
+                0,
+                GLES30.GL_RGBA,
+                if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                null,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_MIN_FILTER,
+                GLES30.GL_LINEAR,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_MAG_FILTER,
+                GLES30.GL_LINEAR,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_WRAP_S,
+                GLES30.GL_CLAMP_TO_EDGE,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_WRAP_T,
+                GLES30.GL_CLAMP_TO_EDGE,
+            )
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                highlightTex[0],
+                0,
+            )
+            requireFramebufferComplete("analytic bokeh highlight layer")
+            GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             drawAnalyticHighlights(
                 highlights = analyticHighlights.highlights,
                 framebuffer = fbo[0],
@@ -420,8 +455,17 @@ class OglBokehProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bokehTex[0])
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehCompositeProgramId, "uBokehTexture"), 1)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, highlightTex[0])
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(bokehCompositeProgramId, "uHighlightTexture"),
+                2,
+            )
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehCompositeProgramId, "uDepthTexture"), 2)
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(bokehCompositeProgramId, "uDepthTexture"),
+                3,
+            )
             GLES30.glUniformMatrix4fv(
                 GLES30.glGetUniformLocation(bokehCompositeProgramId, "uDepthMatrix"),
                 1,
@@ -435,6 +479,15 @@ class OglBokehProcessor {
             )
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehCompositeProgramId, "uAperture"), aperture)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehCompositeProgramId, "uFocusDepth"), focusDepth)
+            GLES30.glUniform2f(
+                GLES30.glGetUniformLocation(bokehCompositeProgramId, "uDepthTexelSize"),
+                1.0f / bokehWidth,
+                1.0f / bokehHeight,
+            )
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(bokehCompositeProgramId, "uLinearInput"),
+                if (linearInput) 1 else 0,
+            )
 
             drawQuad(bokehCompositeProgramId)
             GLES30.glFinish()
@@ -471,8 +524,8 @@ class OglBokehProcessor {
             GLES30.glDeleteTextures(1, refinedDepthTex, 0)
             GLES30.glDeleteTextures(1, depthReadbackTex, 0)
             GLES30.glDeleteTextures(1, compactHighlightTex, 0)
-            GLES30.glDeleteTextures(1, intArrayOf(acceptedHighlightMaskTex), 0)
             GLES30.glDeleteTextures(1, bokehTex, 0)
+            GLES30.glDeleteTextures(1, highlightTex, 0)
             GLES30.glDeleteTextures(1, outputTex, 0)
             GLES30.glDeleteFramebuffers(1, fbo, 0)
 
@@ -612,8 +665,9 @@ class OglBokehProcessor {
                 minimumSpacing * HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE,
                 1.0f,
             )
-            val components = ArrayList<IntArray>()
             val candidates = ArrayList<AnalyticHighlightCandidate>()
+            var depthGateRejectedCount = 0
+            var undersizedComponentCount = 0
 
             fun cellKey(x: Int, y: Int): Long =
                 (x.toLong() shl 32) xor (y.toLong() and 0xffffffffL)
@@ -622,8 +676,6 @@ class OglBokehProcessor {
                 centerX: Float,
                 centerY: Float,
                 peak: ComponentPeak,
-                componentIndex: Int,
-                sourceCellKey: Long?,
                 isPreExistingBokeh: Boolean,
             ) {
                 val centerDepth = sampleWorkingDepth(
@@ -636,7 +688,10 @@ class OglBokehProcessor {
 
                 // Synthetic circles are a background-only path. A highlight on
                 // the focused subject remains part of the normalized base blur.
-                if (centerDepth >= focusDepth - FOCUS_DEPTH_DEAD_BAND) return
+                if (!isSyntheticHighlightBackgroundDepth(centerDepth, focusDepth)) {
+                    depthGateRejectedCount++
+                    return
+                }
                 val cocPixels = computeCocPixels(
                     depth = centerDepth,
                     focusDepth = focusDepth,
@@ -644,7 +699,7 @@ class OglBokehProcessor {
                     maxBlurRadius = maxBlurRadius,
                 )
                 if (cocPixels < MIN_ANALYTIC_COC_PIXELS) return
-                if (!hasSubjectClearance(
+                if (!hasEligibleBackgroundSupport(
                         refinedDepthPixels = refinedDepthPixels,
                         width = width,
                         height = height,
@@ -656,6 +711,7 @@ class OglBokehProcessor {
                         cocPixels = cocPixels,
                     )
                 ) {
+                    depthGateRejectedCount++
                     return
                 }
 
@@ -680,8 +736,6 @@ class OglBokehProcessor {
                     highlight = highlight,
                     centerXInOriginalPixels = highlight.centerU * originalWidth.toFloat(),
                     centerYInOriginalPixels = highlight.centerV * originalHeight.toFloat(),
-                    componentIndex = componentIndex,
-                    sourceCellKey = sourceCellKey,
                     isPreExistingBokeh = isPreExistingBokeh,
                     selectionScore = peak.score,
                 )
@@ -757,15 +811,16 @@ class OglBokehProcessor {
 
                 val strongestPeak = bestPeak ?: continue
                 if (totalWeight <= 0.0 || strongestPeak.score <= 0.0f) continue
-                val frozenComponentPixels = componentPixels.copyOf(tail)
-                val componentIndex = components.size
-                components += frozenComponentPixels
 
                 val componentAreaInOriginalPixels = tail.toFloat() *
                     originalPixelsPerWorkingX * originalPixelsPerWorkingY
                 val componentRadiusInOriginalPixels = sqrt(
                     componentAreaInOriginalPixels / Math.PI.toFloat()
                 )
+                if (componentRadiusInOriginalPixels < MIN_HIGHLIGHT_COMPONENT_RADIUS_PIXELS) {
+                    undersizedComponentCount++
+                    continue
+                }
                 val componentWidth = componentMaxX - componentMinX + 1
                 val componentHeight = componentMaxY - componentMinY + 1
                 val componentFillRatio = tail.toFloat() /
@@ -791,8 +846,6 @@ class OglBokehProcessor {
                         centerX = (weightedX / totalWeight).toFloat(),
                         centerY = (weightedY / totalWeight).toFloat(),
                         peak = strongestPeak,
-                        componentIndex = componentIndex,
-                        sourceCellKey = null,
                         isPreExistingBokeh = true,
                     )
                 } else {
@@ -800,15 +853,11 @@ class OglBokehProcessor {
                     // below sorts them by strength and applies the exact spacing,
                     // guaranteeing that every dense cluster keeps its strongest
                     // viable center before weaker neighbors are considered.
-                    for ((sourceCellKey, peak) in componentPeaks.entries
-                        .sortedBy { it.value.pixelIndex }
-                    ) {
+                    for (peak in componentPeaks.values.sortedBy { it.pixelIndex }) {
                         addCandidate(
                             centerX = (peak.pixelIndex % width).toFloat(),
                             centerY = (peak.pixelIndex / width).toFloat(),
                             peak = peak,
-                            componentIndex = componentIndex,
-                            sourceCellKey = sourceCellKey,
                             isPreExistingBokeh = false,
                         )
                     }
@@ -823,9 +872,6 @@ class OglBokehProcessor {
                 candidates,
                 maxBlurRadius,
             )
-            val acceptedMask = ByteArray(activeMask.size)
-            val acceptedWholeComponents = BooleanArray(components.size)
-            val acceptedSourceCells = arrayOfNulls<MutableSet<Long>>(components.size)
             val highlights = ArrayList<AnalyticHighlight>(candidates.size)
             var preExistingBokehCount = 0
             var densitySuppressedCount = 0
@@ -836,45 +882,14 @@ class OglBokehProcessor {
                     densitySuppressedCount++
                     continue
                 }
-                val sourceCellKey = candidate.sourceCellKey
-                if (sourceCellKey == null) {
-                    acceptedWholeComponents[candidate.componentIndex] = true
-                } else {
-                    val componentCells = acceptedSourceCells[candidate.componentIndex]
-                        ?: HashSet<Long>().also {
-                            acceptedSourceCells[candidate.componentIndex] = it
-                        }
-                    componentCells += sourceCellKey
-                }
                 highlights += candidate.highlight
-            }
-            for (componentIndex in components.indices) {
-                val acceptsWholeComponent = acceptedWholeComponents[componentIndex]
-                val componentCells = acceptedSourceCells[componentIndex]
-                if (!acceptsWholeComponent && componentCells == null) continue
-                for (componentPixel in components[componentIndex]) {
-                    if (acceptsWholeComponent) {
-                        acceptedMask[componentPixel] = 0xff.toByte()
-                        continue
-                    }
-                    val x = componentPixel % width
-                    val y = componentPixel / width
-                    val originalX = (x.toFloat() + 0.5f) * originalPixelsPerWorkingX
-                    val originalY = (y.toFloat() + 0.5f) * originalPixelsPerWorkingY
-                    val sourceCellKey = cellKey(
-                        floor(originalX / discoveryCellSize).toInt(),
-                        floor(originalY / discoveryCellSize).toInt(),
-                    )
-                    if (sourceCellKey in componentCells!!) {
-                        acceptedMask[componentPixel] = 0xff.toByte()
-                    }
-                }
             }
 
             AnalyticHighlightExtraction(
                 highlights = highlights,
-                acceptedMask = acceptedMask,
                 eligibleCandidateCount = candidates.size,
+                depthGateRejectedCount = depthGateRejectedCount,
+                undersizedComponentCount = undersizedComponentCount,
                 preExistingBokehCount = preExistingBokehCount,
                 densitySuppressedCount = densitySuppressedCount,
             )
@@ -985,14 +1000,21 @@ class OglBokehProcessor {
         aperture: Float,
         maxBlurRadius: Float,
     ): Float {
-        val gap = (kotlin.math.abs(focusDepth - depth) - FOCUS_DEPTH_DEAD_BAND)
+        val gap = (focusDepth - depth - FOCUS_DEPTH_DEAD_BAND)
             .coerceAtLeast(0.0f)
         val defocus = Math.pow(gap.toDouble(), 1.1).toFloat()
         return (defocus * maxBlurRadius * (1.0f / maxOf(aperture, 0.45f)))
             .coerceIn(0.0f, maxBlurRadius)
     }
 
-    private fun hasSubjectClearance(
+    private fun isSyntheticHighlightBackgroundDepth(
+        depth: Float,
+        focusDepth: Float,
+    ): Boolean =
+        focusDepth - depth >= MIN_HIGHLIGHT_SUBJECT_DEPTH_GAP ||
+            depth <= MAX_HIGHLIGHT_BACKGROUND_DEPTH
+
+    private fun hasEligibleBackgroundSupport(
         refinedDepthPixels: ByteArray,
         width: Int,
         height: Int,
@@ -1010,9 +1032,9 @@ class OglBokehProcessor {
                 originalPixelsPerWorkingY * originalPixelsPerWorkingY
         )
 
-        // Testing all working pixels whose cells intersect the aperture disc is
-        // conservative at the boundary: a subject cell touching the circle is
-        // enough to reject the entire synthetic highlight.
+        // Test every working pixel whose cell intersects the aperture disc. A
+        // single cell that fails the configurable background gate rejects the
+        // complete synthetic highlight.
         val clearanceRadius = cocPixels + halfWorkingPixelDiagonal
         val radiusX = ceil(clearanceRadius / originalPixelsPerWorkingX).toInt()
         val radiusY = ceil(clearanceRadius / originalPixelsPerWorkingY).toInt()
@@ -1021,16 +1043,17 @@ class OglBokehProcessor {
         val yStart = maxOf(floor(centerY).toInt() - radiusY, 0)
         val yEnd = minOf(ceil(centerY).toInt() + radiusY, height - 1)
         val clearanceRadiusSquared = clearanceRadius * clearanceRadius
-        val subjectDepthThreshold = focusDepth - FOCUS_DEPTH_DEAD_BAND
 
         for (sampleY in yStart..yEnd) {
             val deltaY = (sampleY.toFloat() - centerY) * originalPixelsPerWorkingY
             for (sampleX in xStart..xEnd) {
                 val deltaX = (sampleX.toFloat() - centerX) * originalPixelsPerWorkingX
                 if (deltaX * deltaX + deltaY * deltaY > clearanceRadiusSquared) continue
-                val depth = (refinedDepthPixels[sampleY * width + sampleX].toInt() and 0xff) /
-                    255.0f
-                if (depth >= subjectDepthThreshold) return false
+                val depthByte = refinedDepthPixels[sampleY * width + sampleX].toInt() and 0xff
+                val depth = depthByte / 255.0f
+                // Apply the same configurable background predicate to the whole
+                // aperture support. One ineligible cell rejects the full disc.
+                if (!isSyntheticHighlightBackgroundDepth(depth, focusDepth)) return false
             }
         }
         return true
@@ -1129,54 +1152,6 @@ class OglBokehProcessor {
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
         }
         return tex[0]
-    }
-
-    private fun createR8Texture(
-        pixels: ByteArray,
-        width: Int,
-        height: Int,
-        mipmap: Boolean,
-    ): Int {
-        require(pixels.size.toLong() == width.toLong() * height.toLong()) {
-            "R8 texture data size does not match dimensions"
-        }
-        val uploadBuffer = LargeDirectBuffer.allocate(pixels.size.toLong(), "OGL accepted-highlight mask")
-            ?: throw IllegalStateException("Unable to allocate accepted-highlight upload buffer")
-        val texture = IntArray(1)
-        try {
-            uploadBuffer.put(pixels)
-            uploadBuffer.position(0)
-            GLES30.glGenTextures(1, texture, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
-            GLES30.glTexParameteri(
-                GLES30.GL_TEXTURE_2D,
-                GLES30.GL_TEXTURE_MIN_FILTER,
-                if (mipmap) GLES30.GL_LINEAR_MIPMAP_LINEAR else GLES30.GL_LINEAR,
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_R8,
-                width,
-                height,
-                0,
-                GLES30.GL_RED,
-                GLES30.GL_UNSIGNED_BYTE,
-                uploadBuffer,
-            )
-            if (mipmap) GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-            return texture[0]
-        } catch (error: Throwable) {
-            if (texture[0] != 0) GLES30.glDeleteTextures(1, texture, 0)
-            throw error
-        } finally {
-            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
-            LargeDirectBuffer.free(uploadBuffer)
-        }
     }
 
     private fun drawAnalyticHighlights(

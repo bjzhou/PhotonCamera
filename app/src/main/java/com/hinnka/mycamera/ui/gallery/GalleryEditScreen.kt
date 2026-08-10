@@ -110,6 +110,7 @@ private const val EDIT_TAB_ADJUSTMENTS = 2
 private const val EDIT_TAB_DETAIL = 3
 private const val EDIT_TAB_RAW = 4
 private const val EDIT_TAB_CROP = 5
+private const val DEFAULT_COMPUTATIONAL_APERTURE = 1.8f
 
 private data class PreviewRenderSignature(
     val photoId: String,
@@ -1448,7 +1449,8 @@ fun GalleryEditScreen(
                                             description = stringResource(
                                                 R.string.gallery_large_aperture_blur_description
                                             ),
-                                            value = editComputationalAperture ?: 2.8f,
+                                            value = editComputationalAperture
+                                                ?: DEFAULT_COMPUTATIONAL_APERTURE,
                                             valueRange = 1.0f..16.0f,
                                             onValueChange = { viewModel.setComputationalAperture(it) },
                                             onValueChangeFinished = { },
@@ -1462,7 +1464,7 @@ fun GalleryEditScreen(
                                                 if (checked) {
                                                     val requestedAperture = aperture
                                                         ?.takeIf { it > 0f }
-                                                        ?: 2.8f
+                                                        ?: DEFAULT_COMPUTATIONAL_APERTURE
                                                     if (isDepthModelInstalled) {
                                                         viewModel.setComputationalAperture(requestedAperture)
                                                     } else {

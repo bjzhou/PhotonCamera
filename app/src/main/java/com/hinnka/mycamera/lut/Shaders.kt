@@ -685,6 +685,7 @@ object Shaders {
         uniform float uAperture;
         uniform float uFocusDepth;
         uniform vec2 uTexelSize;
+        uniform float uMinNeighborhoodLumaDifference;
         uniform int uLinearInput;
 
         const float LENS_GAMMA = 2.2;
@@ -713,7 +714,7 @@ object Shaders {
         }
 
         float computeCoc(float depth) {
-            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float gap = max(uFocusDepth - depth - 0.015, 0.0);
             float defocus = pow(gap, 1.1);
             return clamp(
                 defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)),
@@ -786,6 +787,11 @@ object Shaders {
             float relativeContrast = contrast / max(centerLuma, 0.06);
             float darkDirectionRatio = darkerDirectionCount / 12.0;
             float meanInnerLuma = innerLumaSum / 12.0;
+            float neighborhoodContrastGate = smoothstep(
+                uMinNeighborhoodLumaDifference,
+                uMinNeighborhoodLumaDifference + 0.04,
+                contrast
+            );
 
             // Brightness and local contrast decide whether a response can be a
             // highlight. Isolation is confidence only: making it a hard gate
@@ -851,7 +857,8 @@ object Shaders {
                 existingDiscGate * centerednessGate
             );
             float compactHighlight = highlightGate
-                * centerShapeGate;
+                * centerShapeGate
+                * neighborhoodContrastGate;
 
             vec3 residual = max(centerLinear - surroundLinear, vec3(0.0));
             // LDR point lights have already been clipped and blurred by the
@@ -865,8 +872,8 @@ object Shaders {
     /**
      * 后期处理专用的圆形 PSF gather。
      *
-     * Vogel 分布只负责普通景深模糊。已经被中心归并接受的紧凑高光会从基础卷积中
-     * 扣除，随后由 ANALYTIC_BOKEH_HIGHLIGHT_* 以单一圆心解析栅格化。
+     * Vogel 分布只负责普通景深模糊，并始终保留完整输入辐射。解析光斑由独立层
+     * 叠加，不能为了避免重复能量而从本层扣除信号，否则误分类会在图像中挖暗坑。
      */
     val PSF_SPLAT_FRAGMENT_SHADER = """
         #version 300 es
@@ -876,8 +883,6 @@ object Shaders {
         out vec4 fragColor;
 
         uniform sampler2D uInputTexture;
-        uniform sampler2D uHighlightTexture;
-        uniform sampler2D uAcceptedHighlightMask;
         uniform sampler2D uDepthTexture;
 
         uniform mat4 uDepthMatrix;
@@ -892,7 +897,7 @@ object Shaders {
         const float LENS_GAMMA = 2.2;
 
         float computeCoc(float depth) {
-            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float gap = max(uFocusDepth - depth - 0.015, 0.0);
             float defocus = pow(gap, 1.1);
             return clamp(defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)), 0.0, uMaxBlurRadius);
         }
@@ -951,30 +956,8 @@ object Shaders {
                 0.0,
                 log2(sampleFootprintUv * float(textureSize(uInputTexture, 0).x))
             );
-            float highlightIntegrationLod = max(
-                0.0,
-                log2(sampleFootprintUv * float(textureSize(uHighlightTexture, 0).x))
-            );
-
-            vec3 centerHighlight = textureLod(
-                uHighlightTexture,
-                vTexCoord,
-                highlightIntegrationLod
-            ).rgb;
-            float centerHighlightAccepted = step(
-                0.001,
-                textureLod(
-                    uAcceptedHighlightMask,
-                    vTexCoord,
-                    highlightIntegrationLod
-                ).r
-            );
             vec3 centerLinear = toLinear(centerColor.rgb);
-            vec3 accColor = max(
-                centerLinear - centerHighlight * centerHighlightAccepted,
-                vec3(0.0)
-            )
-                * centerWeight;
+            vec3 accColor = centerLinear * centerWeight;
             float accWeight = centerWeight;
 
             float softBase = max(2.5, uMaxBlurRadius * 0.08);
@@ -996,20 +979,6 @@ object Shaders {
                     sampleUV,
                     inputIntegrationLod
                 ).rgb;
-                vec3 compactHighlight = textureLod(
-                    uHighlightTexture,
-                    sampleUV,
-                    highlightIntegrationLod
-                ).rgb;
-                float highlightAccepted = step(
-                    0.001,
-                    textureLod(
-                        uAcceptedHighlightMask,
-                        sampleUV,
-                        highlightIntegrationLod
-                    ).r
-                );
-                
                 vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
                 float sDepth = texture(uDepthTexture, sDepthUV).r;
 
@@ -1040,11 +1009,7 @@ object Shaders {
 
                 if (weight > 0.0001) {
                     vec3 sLinear = toLinear(sColor);
-                    vec3 baseLinear = max(
-                        sLinear - compactHighlight * highlightAccepted,
-                        vec3(0.0)
-                    );
-                    accColor += baseLinear * weight;
+                    accColor += sLinear * weight;
                     accWeight += weight;
                 }
             }
@@ -1140,9 +1105,10 @@ object Shaders {
     """.trimIndent()
 
     /**
-     * Full-resolution resolve for the reduced-resolution PSF result. Focused pixels
-     * come directly from the original texture; only defocused regions consume the
-     * filtered bokeh texture.
+     * 三层最终合成：普通虚化背景、解析光斑、原图主体前景。
+     *
+     * 光斑只与背景层结合，随后由前景遮挡层统一覆盖。前景判定使用局部最大视差，
+     * 对深度边缘做保守遮挡，避免单个被误分到背景的主体像素暴露后方图层。
      */
     val BOKEH_COMPOSITE_FRAGMENT_SHADER = """
         #version 300 es
@@ -1153,14 +1119,17 @@ object Shaders {
 
         uniform sampler2D uOriginalTexture;
         uniform sampler2D uBokehTexture;
+        uniform sampler2D uHighlightTexture;
         uniform sampler2D uDepthTexture;
         uniform mat4 uDepthMatrix;
         uniform float uMaxBlurRadius;
         uniform float uAperture;
         uniform float uFocusDepth;
+        uniform vec2 uDepthTexelSize;
+        uniform int uLinearInput;
 
         float computeCoc(float depth) {
-            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float gap = max(uFocusDepth - depth - 0.015, 0.0);
             float defocus = pow(gap, 1.1);
             return clamp(
                 defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)),
@@ -1169,17 +1138,56 @@ object Shaders {
             );
         }
 
+        float protectedForegroundDepth(vec2 depthUV) {
+            float protectedDepth = 0.0;
+            for (int y = -1; y <= 1; y++) {
+                for (int x = -1; x <= 1; x++) {
+                    vec2 sampleUV = clamp(
+                        depthUV + vec2(float(x), float(y)) * uDepthTexelSize,
+                        0.0,
+                        1.0
+                    );
+                    protectedDepth = max(
+                        protectedDepth,
+                        texture(uDepthTexture, sampleUV).r
+                    );
+                }
+            }
+            return protectedDepth;
+        }
+
         void main() {
             vec4 originalColor = texture(uOriginalTexture, vTexCoord);
-            vec3 bokehColor = texture(uBokehTexture, vTexCoord).rgb;
+            vec3 backgroundColor = texture(uBokehTexture, vTexCoord).rgb;
+            vec3 highlightLayer = texture(uHighlightTexture, vTexCoord).rgb;
             vec2 depthUV = clamp(
                 (uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy,
                 0.0,
                 1.0
             );
-            float coc = computeCoc(texture(uDepthTexture, depthUV).r);
-            float bokehMix = smoothstep(0.2, 1.2, coc);
-            fragColor = vec4(mix(originalColor.rgb, bokehColor, bokehMix), originalColor.a);
+            float centerDepth = texture(uDepthTexture, depthUV).r;
+            float protectedDepth = protectedForegroundDepth(depthUV);
+            float coc = computeCoc(centerDepth);
+            float backgroundMix = smoothstep(0.2, 1.2, coc);
+            float foregroundOcclusion = smoothstep(
+                uFocusDepth - 0.035,
+                uFocusDepth - 0.015,
+                protectedDepth
+            );
+            backgroundMix *= 1.0 - foregroundOcclusion;
+
+            vec3 backgroundWithHighlights;
+            if (uLinearInput != 0) {
+                backgroundWithHighlights = backgroundColor + highlightLayer;
+            } else {
+                vec3 highlightOpacity = clamp(highlightLayer, 0.0, 1.0);
+                backgroundWithHighlights = backgroundColor
+                    + (vec3(1.0) - backgroundColor) * highlightOpacity;
+            }
+            fragColor = vec4(
+                mix(originalColor.rgb, backgroundWithHighlights, backgroundMix),
+                originalColor.a
+            );
         }
     """.trimIndent()
 }
