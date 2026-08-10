@@ -33,6 +33,7 @@ import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
@@ -293,6 +294,8 @@ class Camera2Controller(private val context: Context) {
     private var lastWhiteBalanceResult: WhiteBalanceResultSnapshot? = null
     private var manualWhiteBalanceAnchor: ManualWhiteBalanceAnchor? = null
     private var malformedColorCorrectionGainsReported = false
+    @Volatile
+    private var requestedRawCaptureEnabled = false
     private var isRawSupported = false
     private var isP010Supported = false
     private var isHlg10Supported = false
@@ -630,7 +633,7 @@ class Camera2Controller(private val context: Context) {
             super.onCaptureCompleted(session, request, result)
 
             val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-            if (timestamp != null && state.value.useRaw && isRawSupported) {
+            if (timestamp != null && isRawCaptureReader(imageReader)) {
                 val pendingImage = pendingImages.remove(timestamp)
                 if (pendingImage != null) {
                     // 找到了匹配的图像，触发回调
@@ -1768,26 +1771,31 @@ class Camera2Controller(private val context: Context) {
                 val minimumFocusDistance =
                     focusCharacteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
 
-                _state.value = _state.value.copy(
-                    isRawSupported = isRawSupported,
-                    isP010Supported = isP010Supported,
-                    isHlg10Supported = isHlg10Supported,
-                    availableNrModes = selectableNrModes,
-                    supportsCctWhiteBalance = supportsCctWhiteBalance(),
-                    canAdjustWhiteBalance = false,
-                    actualAwbTemperature = null,
-                    actualAwbTint = null,
-                    actualAwbGains = null,
-                    awbTemperatureMin = resolveAwbTemperatureRange().lower,
-                    awbTemperatureMax = resolveAwbTemperatureRange().upper,
-                    currentPreviewSize = previewSize,
-                    currentCaptureSize = if (captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.QUICK_SHOT) {
-                        previewSize
-                    } else {
-                        _state.value.currentCaptureSize
-                    },
-                    minimumFocusDistance = minimumFocusDistance
-                )
+                _state.update { currentState ->
+                    currentState.copy(
+                        useRaw = requestedRawCaptureEnabled,
+                        isRawSupported = isRawSupported,
+                        isP010Supported = isP010Supported,
+                        isHlg10Supported = isHlg10Supported,
+                        availableNrModes = selectableNrModes,
+                        supportsCctWhiteBalance = supportsCctWhiteBalance(),
+                        canAdjustWhiteBalance = false,
+                        actualAwbTemperature = null,
+                        actualAwbTint = null,
+                        actualAwbGains = null,
+                        awbTemperatureMin = resolveAwbTemperatureRange().lower,
+                        awbTemperatureMax = resolveAwbTemperatureRange().upper,
+                        currentPreviewSize = previewSize,
+                        currentCaptureSize = if (
+                            captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.QUICK_SHOT
+                        ) {
+                            previewSize
+                        } else {
+                            currentState.currentCaptureSize
+                        },
+                        minimumFocusDistance = minimumFocusDistance
+                    )
+                }
                 refreshHyperfocalFocusDistanceIfEnabled(updatePreview = false)
             } catch (e: Exception) {
                 handleCameraOpenFailure(
@@ -1806,7 +1814,7 @@ class Camera2Controller(private val context: Context) {
 
             if (captureMode == CaptureMode.PHOTO) {
                 val aspectRatio = state.value.aspectRatio
-                val effectivelyUseRaw = state.value.useRaw && isRawSupported
+                val effectivelyUseRaw = requestedRawCaptureEnabled && isRawSupported
                 val openCharacteristics = getCameraCharacteristicsCached(openCameraId)
                 var outputCameraIdForStreams = outputPhysicalCameraId ?: openCameraId
                 var outputCharacteristicsForStreams = if (outputCameraIdForStreams == openCameraId) {
@@ -2254,7 +2262,7 @@ class Camera2Controller(private val context: Context) {
             // Android 9+ 使用 SessionConfiguration
             val useHlgCapture = _state.value.useHlg10 &&
                     activeOutputPhysicalCameraId == null &&
-                    !_state.value.useRaw &&
+                    !isRawCaptureReader(reader) &&
                     !forceStandardSession
             val readerFormat = reader?.imageFormat ?: ImageFormat.YUV_420_888
             PLog.i(
@@ -2712,7 +2720,7 @@ class Camera2Controller(private val context: Context) {
         if (currentState.captureMode != CaptureMode.PHOTO) return false
 
         val currentReader = imageReader ?: return false
-        val expectsRawOutput = currentState.useRaw && isRawSupported
+        val expectsRawOutput = requestedRawCaptureEnabled && isRawSupported
         val hasRawOutput = isRawCaptureReader(currentReader)
         if (expectsRawOutput == hasRawOutput) return false
 
@@ -3353,8 +3361,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun shouldApplyRawMinShutterLimit(state: CameraState): Boolean {
-        return state.useRaw &&
-                state.captureMode == CaptureMode.PHOTO &&
+        return state.captureMode == CaptureMode.PHOTO &&
                 state.rawMinShutterSpeedNs > 0L &&
                 state.isIsoAuto &&
                 state.isShutterSpeedAuto &&
@@ -4163,7 +4170,8 @@ class Camera2Controller(private val context: Context) {
         enabled: Boolean,
         reconfigureCaptureOutputIfNeeded: Boolean = true
     ) {
-        _state.value = _state.value.copy(useRaw = enabled)
+        requestedRawCaptureEnabled = enabled
+        _state.update { it.copy(useRaw = enabled) }
         PLog.d(TAG, "RAW 格式拍照: $enabled")
 
         if (!reconfigureCaptureOutputIfNeeded) return
