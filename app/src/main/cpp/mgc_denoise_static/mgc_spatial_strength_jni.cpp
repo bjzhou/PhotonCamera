@@ -4,6 +4,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <new>
@@ -12,6 +13,10 @@
 namespace {
 
 constexpr char kTag[] = "PLog_MgcSpatialStrength";
+constexpr float kIdentityMultiplier = 1.0f;
+constexpr float kIdentityReadNoise = 0.0f;
+constexpr float kIdentityShotNoise = 1.0f;
+constexpr uint16_t kIdentityStrengthQ8 = 256;
 
 bool CopyFloatArray(
     JNIEnv* env,
@@ -25,6 +30,50 @@ bool CopyFloatArray(
     output->resize(static_cast<size_t>(expected));
     env->GetFloatArrayRegion(source, 0, expected, output->data());
     return !env->ExceptionCheck();
+}
+
+bool IsValidNoisePair(float read, float shot) {
+    return std::isfinite(read) && read >= 0.0f &&
+        std::isfinite(shot) && shot >= 0.0f &&
+        (read > 0.0f || shot > 0.0f);
+}
+
+int SanitizeNoiseParameters(
+    int frame_count,
+    std::vector<float>* read,
+    std::vector<float>* shot) {
+    int replacement_count = 0;
+    for (int channel = 0; channel < 3; ++channel) {
+        const int channel_offset = channel * frame_count;
+        float identity_read = kIdentityReadNoise;
+        float identity_shot = kIdentityShotNoise;
+        for (int frame = 0; frame < frame_count; ++frame) {
+            const int index = channel_offset + frame;
+            if (IsValidNoisePair((*read)[index], (*shot)[index])) {
+                identity_read = (*read)[index];
+                identity_shot = (*shot)[index];
+                break;
+            }
+        }
+        for (int frame = 0; frame < frame_count; ++frame) {
+            const int index = channel_offset + frame;
+            if (IsValidNoisePair((*read)[index], (*shot)[index])) continue;
+            (*read)[index] = identity_read;
+            (*shot)[index] = identity_shot;
+            ++replacement_count;
+        }
+    }
+    return replacement_count;
+}
+
+int SanitizePositiveMultipliers(std::vector<float>* values) {
+    int replacement_count = 0;
+    for (float& value : *values) {
+        if (std::isfinite(value) && value > 0.0f) continue;
+        value = kIdentityMultiplier;
+        ++replacement_count;
+    }
+    return replacement_count;
 }
 
 }  // namespace
@@ -130,6 +179,33 @@ Java_com_hinnka_mycamera_processor_MgcSpatialStrengthMapGenerator_nativeCompute(
                 &kernel_sigmas)) {
             return -1;
         }
+        const int noise_replacements = SanitizeNoiseParameters(
+            frame_count,
+            &input_read_noise,
+            &input_shot_noise);
+        const int frame_weight_replacements =
+            SanitizePositiveMultipliers(&frame_weights);
+        const int kernel_sigma_replacements =
+            SanitizePositiveMultipliers(&kernel_sigmas);
+        const bool rejected_multiplier_replaced =
+            !std::isfinite(rejected_denoise_multiplier) ||
+            rejected_denoise_multiplier <= 0.0f;
+        if (rejected_multiplier_replaced) {
+            rejected_denoise_multiplier = kIdentityMultiplier;
+        }
+        if (noise_replacements > 0 || frame_weight_replacements > 0 ||
+            kernel_sigma_replacements > 0 || rejected_multiplier_replaced) {
+            __android_log_print(
+                ANDROID_LOG_WARN,
+                kTag,
+                "MGC Spatial strength replaced invalid inputs with identity "
+                "noisePairs=%d frameWeights=%d kernelSigmas=%d "
+                "rejectedMultiplier=%d",
+                noise_replacements,
+                frame_weight_replacements,
+                kernel_sigma_replacements,
+                rejected_multiplier_replaced ? 1 : 0);
+        }
         std::vector<uint16_t> output(static_cast<size_t>(output_values));
         photon::mgc_denoise::SpatialStrengthResult diagnostics;
         const int result = photon::mgc_denoise::ComputeSpatialStrengthMap(
@@ -171,6 +247,21 @@ Java_com_hinnka_mycamera_processor_MgcSpatialStrengthMapGenerator_nativeCompute(
                 rejection_height,
                 frame_count);
             return result;
+        }
+        int identity_strength_replacements = 0;
+        for (uint16_t& value : output) {
+            if (value != 0) continue;
+            value = kIdentityStrengthQ8;
+            ++identity_strength_replacements;
+        }
+        if (identity_strength_replacements > 0) {
+            __android_log_print(
+                ANDROID_LOG_WARN,
+                kTag,
+                "MGC Spatial strength replaced zero Q8 outputs with identity "
+                "count=%d identityQ8=%u",
+                identity_strength_replacements,
+                static_cast<unsigned int>(kIdentityStrengthQ8));
         }
         uint16_t minimum = std::numeric_limits<uint16_t>::max();
         uint16_t maximum = 0;

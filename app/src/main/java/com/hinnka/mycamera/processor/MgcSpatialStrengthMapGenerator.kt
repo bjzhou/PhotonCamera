@@ -12,14 +12,13 @@ internal object MgcSpatialStrengthMapGenerator {
     private const val TAG = "MgcSpatialStrength"
 
     /**
-     * Exact SpatialBayer tuning value, not the MGC mod override sentinel.
+     * Identity multiplier for pixels rejected by the temporal merge.
      *
-     * SpatialMerge's options builder at libgcastartup 0x386b3cc initializes
-     * the field at +12 to 0.0f. The host at 0x3629bac uses that field whenever
-     * the separate global override is negative. Passing the override sentinel
-     * (-1.0f) directly to the Halide kernel changes the algorithm.
+     * Zero disables the downstream denoise for rejected pixels and -1 is the
+     * host-side override sentinel; neither is a valid multiplier at the lifted
+     * Halide boundary. One preserves the requested denoise strength.
      */
-    private const val REJECTED_DENOISE_MULTIPLIER = 0f
+    private const val REJECTED_DENOISE_MULTIPLIER = 1f
 
     init {
         System.loadLibrary("my-native-lib")
@@ -83,11 +82,7 @@ internal object MgcSpatialStrengthMapGenerator {
             inputReadNoise.size == frameCount * 3 &&
             inputShotNoise.size == frameCount * 3 &&
             frameWeights.size == frameCount &&
-            kernelSigmas.size == frameCount &&
-            inputReadNoise.all { it.isFinite() && it >= 0f } &&
-            inputShotNoise.all { it.isFinite() && it >= 0f } &&
-            frameWeights.all { it.isFinite() && it >= 0f } &&
-            kernelSigmas.all { it.isFinite() && it > 0f }
+            kernelSigmas.size == frameCount
         if (!valid) {
             PLog.e(
                 TAG,
@@ -143,6 +138,9 @@ internal object MgcSpatialStrengthMapGenerator {
         }
         if (outputReadNoise.any { !it.isFinite() || it < 0f } ||
             outputShotNoise.any { !it.isFinite() || it < 0f } ||
+            (0 until 3).any { channel ->
+                outputReadNoise[channel] <= 0f && outputShotNoise[channel] <= 0f
+            } ||
             outputWeightsSumTotalDiag0.any { !it.isFinite() || it < 0f } ||
             outputWeightsSumTotalDiag1.any { !it.isFinite() || it < 0f }
         ) {

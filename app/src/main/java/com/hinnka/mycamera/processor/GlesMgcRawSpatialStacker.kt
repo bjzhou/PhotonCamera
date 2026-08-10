@@ -156,6 +156,11 @@ internal class GlesMgcRawSpatialStacker(
         val cameraRgbReadNoise: FloatArray,
     )
 
+    private data class SpatialNoiseParameters(
+        val read: FloatArray,
+        val shot: FloatArray,
+    )
+
     private data class StrengthCapture(
         val geometry: MgcSpatialDiagnosticGeometry,
         val outputMode: MgcSpatialOutputMode,
@@ -977,7 +982,10 @@ internal class GlesMgcRawSpatialStacker(
                 !referenceOnly &&
                 spatialNoiseFrameCount > 1
             ) {
-                strengthCapture = createStrengthCapture(spatialNoiseFrameCount)
+                strengthCapture = createStrengthCapture(
+                    frameCount = spatialNoiseFrameCount,
+                    referenceCalibration = referenceCalibration,
+                )
             }
             var capturedFrameIndex = 0
 
@@ -1305,10 +1313,24 @@ internal class GlesMgcRawSpatialStacker(
             // exact merged camera-RGB signal during tiled reconstruction, then queues the two
             // matching RGB-resolution temporal atlases before resolving the RGB AOT.
             val strengthResolveStartNs = System.nanoTime()
-            val spatialNoiseModel = if (
+            val spatialDenoiseEnabled =
+                MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE && !referenceOnly
+            val resolvedSpatialNoiseModel = if (
                 strengthCapture != null && queuedStrengthReadback != null
             ) {
                 resolveSpatialNoiseModel(strengthCapture, queuedStrengthReadback)
+            } else {
+                null
+            }
+            val spatialNoiseModel = if (spatialDenoiseEnabled) {
+                resolvedSpatialNoiseModel ?: createIdentitySpatialNoiseModel(
+                    referenceCalibration = referenceCalibration,
+                    reason = when {
+                        strengthCapture == null -> "single-admitted-frame"
+                        queuedStrengthReadback == null -> "strength-readback-unavailable"
+                        else -> "strength-aot-invalid"
+                    },
+                )
             } else {
                 null
             }
@@ -1349,12 +1371,9 @@ internal class GlesMgcRawSpatialStacker(
                     values[channel] * outputExposure.readNoiseVarianceScale
                 }
             }
-            if (MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE &&
-                !referenceOnly &&
-                mergedFrames > 1
-            ) {
+            if (spatialDenoiseEnabled) {
                 checkNotNull(spatialNoiseModel) {
-                    "MGC Spatial exact output noise coefficients were not produced"
+                    "MGC Spatial output noise coefficients were not produced"
                 }
                 checkNotNull(denoiseModel) {
                     "MGC Spatial correlation spectrum was not produced"
@@ -1705,7 +1724,7 @@ internal class GlesMgcRawSpatialStacker(
             shotNoise = shot,
             readNoise = read,
         )
-        val globalFrameWeight = if (
+        val computedFrameWeight = if (
             kernelTuning.referenceNoiseVariance > MIN_NOISE_VARIANCE &&
             frameNoiseVariance > MIN_NOISE_VARIANCE
         ) {
@@ -1714,10 +1733,16 @@ internal class GlesMgcRawSpatialStacker(
         } else {
             1f
         }
+        val globalFrameWeight = computedFrameWeight
+            .takeIf { it.isFinite() && it > 0f }
+            ?: SPATIAL_IDENTITY_MULTIPLIER
         val frameKernelScale = spatialFrameWeightKernelScale(globalFrameWeight)
-        val kernelSigma = 1f / (
+        val computedKernelSigma = 1f / (
             kernelTuning.baseSpatialScale * frameKernelScale
             ).coerceAtLeast(MIN_BAYER_KERNEL_SCALE)
+        val kernelSigma = computedKernelSigma
+            .takeIf { it.isFinite() && it > 0f }
+            ?: SPATIAL_IDENTITY_MULTIPLIER
         return FrameCalibration(
             gains = gains,
             blackTerms = blackTerms,
@@ -3228,7 +3253,10 @@ internal class GlesMgcRawSpatialStacker(
         return ByteArray(byteCount.toInt()).also { output -> buffer.get(output) }
     }
 
-    private fun createStrengthCapture(frameCount: Int): StrengthCapture {
+    private fun createStrengthCapture(
+        frameCount: Int,
+        referenceCalibration: FrameCalibration,
+    ): StrengthCapture {
         val geometry = mgcSpatialDiagnosticGeometry(
             outputMode = outputMode,
             imageWidth = if (outputMode == MgcSpatialOutputMode.RGB) outputWidth else width,
@@ -3263,6 +3291,7 @@ internal class GlesMgcRawSpatialStacker(
                 "rejection=${rejectionLayout.atlasWidth}x${rejectionLayout.atlasHeight} " +
                 "grid=${rejectionLayout.columns}x${rejectionLayout.rows}",
         )
+        val identityNoise = spatialNoiseParameters(referenceCalibration)
         return StrengthCapture(
             geometry = geometry,
             outputMode = outputMode,
@@ -3281,10 +3310,14 @@ internal class GlesMgcRawSpatialStacker(
                 GLES30.GL_R8,
                 GLES30.GL_NEAREST,
             ),
-            inputReadNoise = FloatArray(frameCount * 3),
-            inputShotNoise = FloatArray(frameCount * 3),
-            frameWeights = FloatArray(frameCount) { 1f },
-            kernelSigmas = FloatArray(frameCount),
+            inputReadNoise = FloatArray(frameCount * 3) { index ->
+                identityNoise.read[index / frameCount]
+            },
+            inputShotNoise = FloatArray(frameCount * 3) { index ->
+                identityNoise.shot[index / frameCount]
+            },
+            frameWeights = FloatArray(frameCount) { SPATIAL_IDENTITY_MULTIPLIER },
+            kernelSigmas = FloatArray(frameCount) { SPATIAL_IDENTITY_MULTIPLIER },
             captured = BooleanArray(frameCount),
         )
     }
@@ -3356,16 +3389,90 @@ internal class GlesMgcRawSpatialStacker(
             viewportWidth = capture.rejectionWidth,
             viewportHeight = capture.rejectionHeight,
         )
+        val noise = spatialNoiseParameters(calibration)
+        var usedIdentity = false
         for (channel in 0 until 3) {
             val destination = channel * capture.frameCount + frameIndex
-            capture.inputReadNoise[destination] =
-                calibration.cameraRgbReadNoise[channel]
-            capture.inputShotNoise[destination] =
-                calibration.cameraRgbShotNoise[channel]
+            capture.inputReadNoise[destination] = noise.read[channel]
+            capture.inputShotNoise[destination] = noise.shot[channel]
+            usedIdentity = usedIdentity ||
+                noise.read[channel] != calibration.cameraRgbReadNoise.getOrElse(channel) { Float.NaN } ||
+                noise.shot[channel] != calibration.cameraRgbShotNoise.getOrElse(channel) { Float.NaN }
         }
         capture.frameWeights[frameIndex] = calibration.globalFrameWeight
+            .takeIf { it.isFinite() && it > 0f }
+            ?: SPATIAL_IDENTITY_MULTIPLIER.also { usedIdentity = true }
         capture.kernelSigmas[frameIndex] = calibration.kernelSigma
+            .takeIf { it.isFinite() && it > 0f }
+            ?: SPATIAL_IDENTITY_MULTIPLIER.also { usedIdentity = true }
         capture.captured[frameIndex] = true
+        if (usedIdentity) {
+            PLog.w(
+                TAG,
+                "MGC Spatial strength frame=$frameIndex contained invalid parameters; " +
+                    "using identity inputs read=${noise.read.contentToString()} " +
+                    "shot=${noise.shot.contentToString()} " +
+                    "frameWeight=${capture.frameWeights[frameIndex]} " +
+                    "kernelSigma=${capture.kernelSigmas[frameIndex]}",
+            )
+        }
+    }
+
+    private fun spatialNoiseParameters(
+        calibration: FrameCalibration,
+    ): SpatialNoiseParameters {
+        fun validPair(channel: Int): Boolean {
+            val read = calibration.cameraRgbReadNoise.getOrElse(channel) { Float.NaN }
+            val shot = calibration.cameraRgbShotNoise.getOrElse(channel) { Float.NaN }
+            return read.isFinite() && read >= 0f &&
+                shot.isFinite() && shot >= 0f &&
+                (read > 0f || shot > 0f)
+        }
+
+        val fallbackChannel = intArrayOf(1, 0, 2).firstOrNull(::validPair)
+        val fallbackRead = fallbackChannel?.let(calibration.cameraRgbReadNoise::get)
+            ?: SPATIAL_IDENTITY_READ_NOISE
+        val fallbackShot = fallbackChannel?.let(calibration.cameraRgbShotNoise::get)
+            ?: SPATIAL_IDENTITY_SHOT_NOISE
+        return SpatialNoiseParameters(
+            read = FloatArray(3) { channel ->
+                if (validPair(channel)) calibration.cameraRgbReadNoise[channel] else fallbackRead
+            },
+            shot = FloatArray(3) { channel ->
+                if (validPair(channel)) calibration.cameraRgbShotNoise[channel] else fallbackShot
+            },
+        )
+    }
+
+    private fun createIdentitySpatialNoiseModel(
+        referenceCalibration: FrameCalibration,
+        reason: String,
+    ): MgcSpatialStrengthMapGenerator.Result {
+        val geometry = mgcSpatialDiagnosticGeometry(
+            outputMode = outputMode,
+            imageWidth = if (outputMode == MgcSpatialOutputMode.RGB) outputWidth else width,
+            imageHeight = if (outputMode == MgcSpatialOutputMode.RGB) outputHeight else height,
+        )
+        val noise = spatialNoiseParameters(referenceCalibration)
+        PLog.w(
+            TAG,
+            "MGC Spatial denoise model fallback=identity reason=$reason " +
+                "strengthQ8=$SPATIAL_IDENTITY_STRENGTH_Q8 " +
+                "read=${noise.read.contentToString()} shot=${noise.shot.contentToString()}",
+        )
+        return MgcSpatialStrengthMapGenerator.Result(
+            strengthMap = MgcSpatialStrengthMap(
+                width = geometry.rejectionWidth,
+                height = geometry.rejectionHeight,
+                q8 = ShortArray(geometry.rejectionWidth * geometry.rejectionHeight) {
+                    SPATIAL_IDENTITY_STRENGTH_Q8.toShort()
+                },
+            ),
+            outputReadNoise = noise.read,
+            outputShotNoise = noise.shot,
+            outputWeightsSumTotalDiag0 = FloatArray(3) { SPATIAL_IDENTITY_MULTIPLIER },
+            outputWeightsSumTotalDiag1 = FloatArray(3),
+        )
     }
 
     private fun queueStrengthReadback(
@@ -5740,6 +5847,10 @@ internal class GlesMgcRawSpatialStacker(
         const val SPATIAL_KERNEL_SIGNAL_GRID_SIZE = 64
         const val MIN_NOISE_VARIANCE = 1e-12f
         const val MIN_BAYER_KERNEL_SCALE = 1e-3f
+        const val SPATIAL_IDENTITY_MULTIPLIER = 1f
+        const val SPATIAL_IDENTITY_READ_NOISE = 0f
+        const val SPATIAL_IDENTITY_SHOT_NOISE = 1f
+        const val SPATIAL_IDENTITY_STRENGTH_Q8 = 256
         // Captured from the original MGC rejection program on the same full-resolution path.
         const val FLOW_VARIATION_THRESHOLD = 9.88235261e-5f
 
