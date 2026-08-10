@@ -6837,20 +6837,27 @@ class RawDemosaicProcessor {
         }
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 8)
         readback.position(0)
         readback.limit(byteCount)
-        GLES30.glTexSubImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            0,
-            0,
-            width,
-            height,
-            GLES30.GL_RGBA,
-            GLES30.GL_HALF_FLOAT,
-            readback,
-        )
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 8)
+        try {
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+                0,
+                width,
+                height,
+                GLES30.GL_RGBA,
+                GLES30.GL_HALF_FLOAT,
+                readback,
+            )
+        } finally {
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        }
         checkGlError("MGC denoise camera RGB upload")
 
         renderPassthroughToTexture(
@@ -12954,6 +12961,12 @@ class RawDemosaicProcessor {
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + PROFILE_GAIN_TABLE_TEXTURE_UNIT)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        // Pixel-store state is global to the GL context. The 257-wide R32F table has a
+        // tightly-packed 1028-byte row, which an inherited 8-byte alignment would advance as
+        // 1032 bytes and shift every following spatial cell's curve by one float.
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D,
             0,
