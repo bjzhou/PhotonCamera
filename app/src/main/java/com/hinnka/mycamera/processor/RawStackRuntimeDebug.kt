@@ -53,6 +53,15 @@ internal object RawStackRuntimeDebug {
             SystemPropertiesUtil.get("debug.photon.mgc_spatial.input_diagnostics")
                 ?.toBooleanStrictOrNull() == true
 
+    /**
+     * Full-frame before/after scans in the static denoiser are useful for kernel validation but
+     * add memory-bandwidth pressure to every capture when left enabled.
+     */
+    val mgcFullResolutionDenoiseDiagnosticsEnabled: Boolean
+        get() = enabled &&
+            SystemPropertiesUtil.get("debug.photon.mgc_denoise.diagnostics")
+                ?.toBooleanStrictOrNull() == true
+
     inline fun d(tag: String, message: () -> String) {
         if (enabled) {
             PLog.d(tag, message())

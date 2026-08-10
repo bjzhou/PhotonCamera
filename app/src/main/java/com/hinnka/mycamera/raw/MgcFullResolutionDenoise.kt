@@ -3,6 +3,7 @@ package com.hinnka.mycamera.raw
 import android.content.Context
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.RawNoiseModel
+import com.hinnka.mycamera.processor.RawStackRuntimeDebug
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import kotlin.math.ln
@@ -275,6 +276,7 @@ internal object MgcFullResolutionDenoise {
             lumaRevertFactor = lumaTuning.revertFactor,
             chromaStrength = chromaTuning.strength,
             chromaOutlierThreshold = chromaTuning.outlierDistance,
+            diagnosticsEnabled = RawStackRuntimeDebug.mgcFullResolutionDenoiseDiagnosticsEnabled,
         )
         rgba16f.position(0)
         if (result != 0) {
@@ -610,5 +612,6 @@ internal object MgcFullResolutionDenoise {
         lumaRevertFactor: FloatArray,
         chromaStrength: FloatArray,
         chromaOutlierThreshold: FloatArray,
+        diagnosticsEnabled: Boolean,
     ): Int
 }

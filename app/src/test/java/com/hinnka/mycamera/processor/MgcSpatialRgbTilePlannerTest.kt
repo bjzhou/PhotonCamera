@@ -6,6 +6,23 @@ import org.junit.Test
 
 class MgcSpatialRgbTilePlannerTest {
     @Test
+    fun horizontalBandsCoverOutputWithBoundedHeight() {
+        val bands = MgcSpatialRgbTilePlanner.planHorizontalBands(
+            outputWidth = 8160,
+            outputHeight = 6128,
+        )
+
+        assertEquals(6, bands.size)
+        assertEquals(MgcSpatialRgbRect(0, 0, 8160, 1024), bands.first().outputCore)
+        assertEquals(MgcSpatialRgbRect(0, 5120, 8160, 6128), bands.last().outputCore)
+        assertEquals(
+            8160L * 6128L,
+            bands.sumOf { it.outputCore.width.toLong() * it.outputCore.height },
+        )
+        assertTrue(bands.all { it.outputCore.height <= 1024 })
+    }
+
+    @Test
     fun planCoversOutputExactlyOnce() {
         val tiles = MgcSpatialRgbTilePlanner.plan(
             outputWidth = 8160,

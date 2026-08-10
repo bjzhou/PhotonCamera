@@ -108,6 +108,7 @@ internal object GlesMgcRawSpatialShaders {
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
         uniform ivec2 uRawSize;
+        uniform ivec2 uRawTextureOrigin;
         uniform ivec2 uRegionOrigin;
         uniform ivec2 uRegionSize;
         uniform vec4 uGains;
@@ -153,7 +154,8 @@ internal object GlesMgcRawSpatialShaders {
         float gainedRaw(ivec2 globalPixel) {
             int channel = canonicalChannel(globalPixel);
             globalPixel = clampRawPixelToPhase(globalPixel);
-            return float(texelFetch(uRaw, globalPixel, 0).r) * uGains[channel] +
+            return float(texelFetch(uRaw, globalPixel - uRawTextureOrigin, 0).r) *
+                uGains[channel] +
                 uBlackLevelsTimesGains[channel];
         }
 
@@ -1162,6 +1164,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform sampler2D uFrameWeight;
         uniform sampler2D uCovariance;
         uniform ivec2 uRawSize;
+        uniform ivec2 uRawTextureOrigin;
         uniform ivec2 uRawRegionOrigin;
         uniform ivec2 uRawRegionSize;
         uniform ivec2 uOutputSize;
@@ -1217,7 +1220,8 @@ internal object GlesMgcRawSpatialShaders {
         float gainedRaw(ivec2 globalPixel) {
             int channel = canonicalChannel(globalPixel);
             globalPixel = clampRawPixelToPhase(globalPixel);
-            return float(texelFetch(uRaw, globalPixel, 0).r) * uGains[channel] +
+            return float(texelFetch(uRaw, globalPixel - uRawTextureOrigin, 0).r) *
+                uGains[channel] +
                 uBlackLevelsTimesGains[channel];
         }
 

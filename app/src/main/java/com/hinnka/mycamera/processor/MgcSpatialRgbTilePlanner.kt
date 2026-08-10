@@ -76,6 +76,32 @@ internal object MgcSpatialRgbTilePlanner {
         return tiles
     }
 
+    /**
+     * Full-width output bands used by streamed RAW reconstruction.
+     *
+     * Keeping one accumulator pair per band allows every admitted frame to be consumed once for
+     * that band while bounding accumulator and RAW-window storage independently of image height.
+     */
+    fun planHorizontalBands(
+        outputWidth: Int,
+        outputHeight: Int,
+        maximumBandHeight: Int = DEFAULT_OUTPUT_TILE_SIZE,
+    ): List<MgcSpatialRgbTile> {
+        require(outputWidth > 0 && outputHeight > 0)
+        require(maximumBandHeight > 0)
+        val bands = ArrayList<MgcSpatialRgbTile>()
+        var top = 0
+        while (top < outputHeight) {
+            val bottom = minOf(top + maximumBandHeight, outputHeight)
+            bands += MgcSpatialRgbTile(
+                index = bands.size,
+                outputCore = MgcSpatialRgbRect(0, top, outputWidth, bottom),
+            )
+            top = bottom
+        }
+        return bands
+    }
+
     fun sourceRegion(
         tile: MgcSpatialRgbTile,
         rawWidth: Int,

@@ -2,13 +2,16 @@
 
 #include <android/log.h>
 #include <jni.h>
+#include <omp.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
 #include <string>
 #include <vector>
@@ -16,7 +19,29 @@
 namespace {
 
 constexpr int kWhiteLevel = 16383;
+constexpr int kMaxHostWorkers = 16;
 constexpr char kLogTag[] = "PLog_MgcFullResolutionDenoise";
+
+int HostWorkerCount() {
+    return std::max(1, std::min(omp_get_num_procs(), kMaxHostWorkers));
+}
+
+void ZeroPlanarBuffers(
+    int16_t* planar_a,
+    int16_t* planar_b,
+    size_t sample_count,
+    int worker_count) {
+#pragma omp parallel num_threads(worker_count)
+    {
+        const size_t worker = static_cast<size_t>(omp_get_thread_num());
+        const size_t workers = static_cast<size_t>(omp_get_num_threads());
+        const size_t begin = sample_count * worker / workers;
+        const size_t end = sample_count * (worker + 1) / workers;
+        const size_t byte_count = (end - begin) * sizeof(int16_t);
+        std::memset(planar_a + begin, 0, byte_count);
+        std::memset(planar_b + begin, 0, byte_count);
+    }
+}
 
 int LogStageFailure(const char* stage, int result) {
     __android_log_print(
@@ -312,9 +337,11 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     jfloatArray luma_outlier_array,
     jfloatArray luma_revert_array,
     jfloatArray chroma_strength_array,
-    jfloatArray chroma_outlier_array) {
+    jfloatArray chroma_outlier_array,
+    jboolean diagnostics_enabled) {
     const bool run_luma = luma_enabled == JNI_TRUE;
     const bool run_chroma = chroma_enabled == JNI_TRUE;
+    const bool run_diagnostics = diagnostics_enabled == JNI_TRUE;
     const bool bayer_input = input_is_bayer == JNI_TRUE;
     const bool apply_bayer_lens_shading =
         apply_lens_shading_in_bayer_aot == JNI_TRUE;
@@ -422,23 +449,55 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         static_cast<size_t>(padded_width) * padded_height;
     const size_t strength_count =
         static_cast<size_t>(strength_width) * strength_height;
+    const int host_worker_count = HostWorkerCount();
 
+    using StageClock = std::chrono::steady_clock;
+    const auto elapsed_ms = [](StageClock::time_point start) -> int64_t {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            StageClock::now() - start).count();
+    };
+    const auto total_start = StageClock::now();
+    int64_t allocation_ms = 0;
+    int64_t input_pack_ms = 0;
+    int64_t strength_ms = 0;
+    int64_t rgb_to_yuv_ms = 0;
+    int64_t chroma_ms = 0;
+    int64_t pecan_ms = 0;
+    int64_t diagnostics_ms = 0;
+    int64_t yuv_to_rgb_ms = 0;
+    int64_t output_pack_ms = 0;
     try {
-        // Two planar allocations are reused across RGB -> YUV, chroma,
-        // Pecan luma and YUV -> RGB.
-        std::vector<int16_t> planar_a(pixel_count * 3);
-        std::vector<int16_t> planar_b(pixel_count * 3);
+        // Two zero-initialized planar allocations are reused across RGB -> YUV, chroma,
+        // Pecan luma and YUV -> RGB. The lifted AOT kernels may use untouched output regions as
+        // deterministic boundary state, so initialization is part of this buffer contract.
+        const auto allocation_start = StageClock::now();
+        const size_t planar_sample_count = pixel_count * 3;
+        // Array make_unique value-initializes every sample before returning.
+        // Allocate without initialization so the explicit parallel clear below
+        // is the only full-buffer zeroing pass.
+        std::unique_ptr<int16_t[]> planar_a(
+            new int16_t[planar_sample_count]);
+        std::unique_ptr<int16_t[]> planar_b(
+            new int16_t[planar_sample_count]);
+        ZeroPlanarBuffers(
+            planar_a.get(),
+            planar_b.get(),
+            planar_sample_count,
+            host_worker_count);
+        allocation_ms = elapsed_ms(allocation_start);
+        const auto input_pack_start = StageClock::now();
         if (bayer_input) {
             // BayerRawToYuv's exact input contract is a 3D U16 buffer whose
             // four planes are the spatial positions in each 2x2 Bayer cell.
             // Pack into planar_a's first pixel_count samples so this does not
             // require another full-resolution allocation.
             auto* packed_bayer =
-                reinterpret_cast<uint16_t*>(planar_a.data());
+                reinterpret_cast<uint16_t*>(planar_a.get());
             const int packed_width = padded_width / 2;
             const int packed_height = padded_height / 2;
             const size_t packed_plane_size =
                 static_cast<size_t>(packed_width) * packed_height;
+#pragma omp parallel for schedule(static) num_threads(host_worker_count)
             for (int packed_y = 0; packed_y < packed_height; ++packed_y) {
                 for (int packed_x = 0; packed_x < packed_width; ++packed_x) {
                     const size_t packed_index =
@@ -465,7 +524,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             }
         } else {
             auto* rgb_input =
-                reinterpret_cast<uint16_t*>(planar_a.data());
+                reinterpret_cast<uint16_t*>(planar_a.get());
+#pragma omp parallel for schedule(static) num_threads(host_worker_count)
             for (int y = 0; y < padded_height; ++y) {
                 const int source_y = std::min(y, height - 1);
                 for (int x = 0; x < padded_width; ++x) {
@@ -491,7 +551,9 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 }
             }
         }
+        input_pack_ms = elapsed_ms(input_pack_start);
 
+        const auto strength_start = StageClock::now();
         std::vector<uint16_t> base_strength(strength_count, 256);
         std::vector<uint16_t> strength(strength_count * 3, 256);
         if (spatial_strength_q8_array != nullptr) {
@@ -538,32 +600,34 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                    spatial_strength_height != 0) {
             return -1;
         }
-        uint16_t base_strength_min = std::numeric_limits<uint16_t>::max();
-        uint16_t base_strength_max = 0;
-        uint64_t base_strength_sum = 0;
-        for (const uint16_t value : base_strength) {
-            base_strength_min = std::min(base_strength_min, value);
-            base_strength_max = std::max(base_strength_max, value);
-            base_strength_sum += value;
+        if (run_diagnostics) {
+            uint16_t base_strength_min = std::numeric_limits<uint16_t>::max();
+            uint16_t base_strength_max = 0;
+            uint64_t base_strength_sum = 0;
+            for (const uint16_t value : base_strength) {
+                base_strength_min = std::min(base_strength_min, value);
+                base_strength_max = std::max(base_strength_max, value);
+                base_strength_sum += value;
+            }
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                kLogTag,
+                "MGC denoise base Spatial strengthQ8=%u..%u/%.3f "
+                "source=%s logical=%dx%d padded=%dx%d origin=(%d,%d)",
+                base_strength_min,
+                base_strength_max,
+                base_strength.empty()
+                    ? 0.0
+                    : static_cast<double>(base_strength_sum) /
+                        static_cast<double>(base_strength.size()),
+                spatial_strength_q8_array == nullptr ? "identity" : "spatial-aot",
+                spatial_strength_width,
+                spatial_strength_height,
+                strength_width,
+                strength_height,
+                global_origin_x,
+                global_origin_y);
         }
-        __android_log_print(
-            ANDROID_LOG_INFO,
-            kLogTag,
-            "MGC denoise base Spatial strengthQ8=%u..%u/%.3f "
-            "source=%s logical=%dx%d padded=%dx%d origin=(%d,%d)",
-            base_strength_min,
-            base_strength_max,
-            base_strength.empty()
-                ? 0.0
-                : static_cast<double>(base_strength_sum) /
-                    static_cast<double>(base_strength.size()),
-            spatial_strength_q8_array == nullptr ? "identity" : "spatial-aot",
-            spatial_strength_width,
-            spatial_strength_height,
-            strength_width,
-            strength_height,
-            global_origin_x,
-            global_origin_y);
         std::vector<float> lens;
         if (lens_shading != nullptr && lens_width > 0 && lens_height > 0) {
             const jsize lens_count = env->GetArrayLength(lens_shading);
@@ -613,6 +677,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                         static_cast<size_t>(channel) * strength_count);
             }
         }
+        strength_ms = elapsed_ms(strength_start);
 
         // Exact matrix stored by MGC at libgcastartup.so+0x0d64c24.
         constexpr float rgb_to_yuv[9] = {
@@ -795,6 +860,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             q14_yuv_shot[channel] = yuv_shot[channel] * white;
         }
 
+        const auto rgb_to_yuv_start = StageClock::now();
         int rgb_to_yuv_result = 0;
         if (bayer_input) {
             const float bayer_channel_gains[4] = {
@@ -805,7 +871,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             };
             rgb_to_yuv_result =
                 photon::mgc_denoise::RunDefaultBayerRawToYuv(
-                    reinterpret_cast<const uint16_t*>(planar_a.data()),
+                    reinterpret_cast<const uint16_t*>(planar_a.get()),
                     padded_width,
                     padded_height,
                     cfa_pattern,
@@ -823,19 +889,21 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                         ? 1.0f
                         : static_cast<float>(lens_height - 1) /
                             static_cast<float>(height - 1),
-                    planar_b.data());
+                    planar_b.get());
         } else {
             rgb_to_yuv_result = photon::mgc_denoise::RunRgbRawToYuv(
-                reinterpret_cast<const uint16_t*>(planar_a.data()),
+                reinterpret_cast<const uint16_t*>(planar_a.get()),
                 padded_width,
                 padded_height,
-                planar_b.data());
+                planar_b.get());
         }
         if (rgb_to_yuv_result != 0) {
             return LogStageFailure("rgb_to_yuv", rgb_to_yuv_result);
         }
+        rgb_to_yuv_ms = elapsed_ms(rgb_to_yuv_start);
 
         if (run_chroma) {
+            const auto chroma_start = StageClock::now();
             photon::mgc_denoise::ChromaDenoiseNoiseBuffers chroma_noise;
             if (!photon::mgc_denoise::BuildChromaNoiseBuffers(
                     q14_yuv_read,
@@ -849,20 +917,22 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             }
             const int chroma_result =
                 photon::mgc_denoise::RunChromaDenoise(
-                    planar_b.data(),
+                    planar_b.get(),
                     padded_width,
                     padded_height,
                     strength.data(),
                     strength_width,
                     strength_height,
                     chroma_noise,
-                    planar_a.data());
+                    planar_a.get());
             if (chroma_result != 0) {
                 return LogStageFailure("chroma_pyramid", chroma_result);
             }
+            chroma_ms = elapsed_ms(chroma_start);
         }
 
         if (run_luma) {
+            const auto pecan_start = StageClock::now();
             photon::mgc_denoise::DenoiseNoiseBuffers luma_noise;
             if (!photon::mgc_denoise::BuildNoiseBuffers(
                     q14_yuv_read[0],
@@ -875,57 +945,68 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                     &luma_noise)) {
                 return LogStageFailure("luma_noise_model", -1);
             }
-            LogPecanInputs(
-                yuv_read,
-                yuv_shot,
-                yuv_quadratic,
-                q14_yuv_read,
-                q14_yuv_shot,
-                prepared_luma_correlation,
-                luma_strength,
-                luma_noise);
+            if (run_diagnostics) {
+                LogPecanInputs(
+                    yuv_read,
+                    yuv_shot,
+                    yuv_quadratic,
+                    q14_yuv_read,
+                    q14_yuv_shot,
+                    prepared_luma_correlation,
+                    luma_strength,
+                    luma_noise);
+            }
             if (!run_chroma) {
                 std::copy_n(
-                    planar_b.data() + pixel_count,
+                    planar_b.get() + pixel_count,
                     pixel_count * 2,
-                    planar_a.data() + pixel_count);
+                    planar_a.get() + pixel_count);
             }
             const int pecan_result = photon::mgc_denoise::RunPecan(
                 strength.data(),
                 strength_width,
                 strength_height,
                 luma_noise,
-                planar_b.data(),
+                planar_b.get(),
                 padded_width,
                 padded_height,
-                planar_a.data());
+                planar_a.get());
             if (pecan_result != 0) {
                 return LogStageFailure("pecan_luma", pecan_result);
             }
+            pecan_ms = elapsed_ms(pecan_start);
         }
 
-        const auto output_delta = MeasurePlanarDelta(
-            planar_b.data(),
-            planar_a.data(),
-            width,
-            height,
-            padded_width,
-            pixel_count);
-        LogDenoiseDiagnostics(
-            strength.data(),
-            strength_count,
-            output_delta);
+        if (run_diagnostics) {
+            const auto diagnostics_start = StageClock::now();
+            const auto output_delta = MeasurePlanarDelta(
+                planar_b.get(),
+                planar_a.get(),
+                width,
+                height,
+                padded_width,
+                pixel_count);
+            LogDenoiseDiagnostics(
+                strength.data(),
+                strength_count,
+                output_delta);
+            diagnostics_ms = elapsed_ms(diagnostics_start);
+        }
 
+        const auto yuv_to_rgb_start = StageClock::now();
         const int yuv_to_rgb_result =
             photon::mgc_denoise::RunYuvToRgb(
-                planar_a.data(),
+                planar_a.get(),
                 padded_width,
                 padded_height,
-                planar_b.data());
+                planar_b.get());
         if (yuv_to_rgb_result != 0) {
             return LogStageFailure("yuv_to_rgb", yuv_to_rgb_result);
         }
+        yuv_to_rgb_ms = elapsed_ms(yuv_to_rgb_start);
 
+        const auto output_pack_start = StageClock::now();
+#pragma omp parallel for schedule(static) num_threads(host_worker_count)
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
                 const size_t source_index =
@@ -946,6 +1027,24 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 rgba[destination_index + 3] = FloatToHalf(1.0f);
             }
         }
+        output_pack_ms = elapsed_ms(output_pack_start);
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            kLogTag,
+            "MGC denoise stages hostWorkers=%d allocation=%lldms inputPack=%lldms strength=%lldms "
+            "rgbToYuv=%lldms chroma=%lldms pecan=%lldms diagnostics=%lldms "
+            "yuvToRgb=%lldms outputPack=%lldms total=%lldms",
+            host_worker_count,
+            static_cast<long long>(allocation_ms),
+            static_cast<long long>(input_pack_ms),
+            static_cast<long long>(strength_ms),
+            static_cast<long long>(rgb_to_yuv_ms),
+            static_cast<long long>(chroma_ms),
+            static_cast<long long>(pecan_ms),
+            static_cast<long long>(diagnostics_ms),
+            static_cast<long long>(yuv_to_rgb_ms),
+            static_cast<long long>(output_pack_ms),
+            static_cast<long long>(elapsed_ms(total_start)));
         return 0;
     } catch (const std::bad_alloc&) {
         return LogStageFailure("allocation", -2);
