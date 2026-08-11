@@ -4497,17 +4497,19 @@ object GalleryManager {
      * 仅适用于 Android 11+ (API 30+)
      * 返回 PendingIntent，需要在 Activity 中通过 startIntentSenderForResult 启动
      */
-    fun createDeleteRequest(context: Context, photoId: String): PendingIntent? {
+    fun createDeleteRequest(
+        context: Context,
+        photoId: String,
+        metadata: MediaMetadata?
+    ): PendingIntent? {
         return try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
                 PLog.w(TAG, "createDeleteRequest requires Android 11+")
                 return null
             }
 
-            // 加载元数据，获取导出的 URI 列表（使用 runBlocking 同步调用）
-            val metadata = runBlocking {
-                loadMetadata(context, photoId)
-            }
+            // Photon 列表项已携带完整元数据，直接使用当前快照，避免在删除交互中
+            // 同步等待 Room 查询或 metadataMutex（例如导出正在写入元数据时）。
             val exportedUris = collectExportedDeleteUriStrings(metadata)
 
             if (exportedUris.isEmpty()) {

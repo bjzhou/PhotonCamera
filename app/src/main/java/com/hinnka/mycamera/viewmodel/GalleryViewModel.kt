@@ -1492,9 +1492,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      *
      * @return PendingIntent 如果有导出的照片需要删除，返回 PendingIntent；否则返回 null
      */
-    private fun getDeleteRequest(photo: MediaData): android.app.PendingIntent? {
+    private suspend fun getDeleteRequest(photo: MediaData): android.app.PendingIntent? {
         val context = getApplication<Application>()
-        return GalleryManager.createDeleteRequest(context, photo.id)
+        val metadataSnapshot = photo.metadata
+        return withContext(Dispatchers.IO) {
+            val metadata = metadataSnapshot ?: GalleryManager.loadMetadata(context, photo.id)
+            GalleryManager.createDeleteRequest(context, photo.id, metadata)
+        }
     }
 
     /**
@@ -1508,12 +1512,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun requestDeletePhoto(photo: MediaData, deleteExported: Boolean = true) {
         if (selectedTab == GalleryTab.SYSTEM) {
-            // 系统相册删除
-            val pendingIntent = GalleryManager.createSystemDeleteRequest(getApplication(), photo.uri)
-            if (pendingIntent != null) {
-                pendingDeleteSystemPhoto = photo
-                systemDeletePendingIntent = pendingIntent
-                PLog.d(TAG, "Set system delete pending intent for photo ${photo.id}")
+            viewModelScope.launch {
+                // ContentProvider / MediaStore 请求可能跨进程阻塞，不在主线程创建。
+                val pendingIntent = withContext(Dispatchers.IO) {
+                    GalleryManager.createSystemDeleteRequest(getApplication(), photo.uri)
+                }
+                if (pendingIntent != null) {
+                    pendingDeleteSystemPhoto = photo
+                    systemDeletePendingIntent = pendingIntent
+                    PLog.d(TAG, "Set system delete pending intent for photo ${photo.id}")
+                }
             }
             return
         }
@@ -1524,17 +1532,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        // Android 11+: 检查是否有导出的照片
-        val pendingIntent = getDeleteRequest(photo)
+        viewModelScope.launch {
+            // Android 11+: 在 IO 线程筛选 URI 并创建系统删除请求。
+            val pendingIntent = getDeleteRequest(photo)
 
-        if (pendingIntent != null) {
-            // 有导出的照片，需要用户确认
-            pendingDeletePhoto = photo
-            deletePendingIntent = pendingIntent
-            PLog.d(TAG, "Set delete pending intent for photo ${photo.id}")
-        } else {
-            // 没有需要系统确认的 MediaStore 项，直接删除 SAF 导出文件和应用内照片
-            deletePhotoOnlyInternal(photo, deleteExportedDocuments = true)
+            if (pendingIntent != null) {
+                // 有导出的照片，需要用户确认
+                pendingDeletePhoto = photo
+                deletePendingIntent = pendingIntent
+                PLog.d(TAG, "Set delete pending intent for photo ${photo.id}")
+            } else {
+                // 没有需要系统确认的 MediaStore 项，直接删除 SAF 导出文件和应用内照片
+                deletePhotoOnlyInternal(photo, deleteExportedDocuments = true)
+            }
         }
     }
 
@@ -1745,7 +1755,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             if (allExportedUris.isNotEmpty()) {
                 // MediaStore 导出项需要系统确认；SAF 文档会在最终删除时直接处理
-                val pendingIntent = GalleryManager.createDeleteRequest(context, allExportedUris)
+                val pendingIntent = withContext(Dispatchers.IO) {
+                    GalleryManager.createDeleteRequest(context, allExportedUris)
+                }
                 if (pendingIntent != null) {
                     pendingDeletePhotos = toDelete
                     batchDeletePendingIntent = pendingIntent
