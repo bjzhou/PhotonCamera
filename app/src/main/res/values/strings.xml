@@ -89,6 +89,7 @@
     <string name="export_failed">Failed to export photo</string>
     <string name="export_dng_success">DNG exported successfully</string>
     <string name="export_dng_failed">Failed to export DNG</string>
+    <string name="dng_format">DNG</string>
     <string name="export_all_confirm">Export all burst photos?</string>
     <string name="export_video">Export Video</string>
     <string name="export_video_confirm">Bake effects into video and save to gallery? This may take a while depending on video length. The original video will not be changed.</string>

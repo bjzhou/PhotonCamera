@@ -111,6 +111,7 @@ fun PhysicalButton(
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true,
     shape: Shape = CircleShape,
+    backgroundColor: Color = PhysicalButtonDefaults.BackgroundColor,
     highlightBorderWidth: Dp = 1.dp,
     highlightGlowWidth: Dp = PhysicalButtonDefaults.HighlightGlowWidth,
     contentAlignment: Alignment = Alignment.Center,
@@ -147,7 +148,7 @@ fun PhysicalButton(
                 scaleY = pressScale
             }
             .clip(shape)
-            .background(PhysicalButtonDefaults.BackgroundColor)
+            .background(backgroundColor)
             .drawWithCache {
                 val outline = shape.createOutline(size, layoutDirection, this)
                 val glowWidthPx = highlightGlowWidth.toPx().coerceAtLeast(0f)

@@ -18,7 +18,6 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -36,6 +35,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEvent
@@ -45,6 +45,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +75,7 @@ import com.hinnka.mycamera.lut.VideoLutEffect
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.ui.components.PaymentDialog
+import com.hinnka.mycamera.ui.components.PhysicalButton
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.GalleryTab
@@ -87,6 +90,11 @@ import java.io.File
 import kotlin.math.min
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
+
+private val GalleryToolbarSurface = Color(0xFF0E0E0E)
+private val GalleryToolbarButton = Color(0xFF242424)
+private val GalleryToolbarContent = Color(0xFFF2F2F2)
+private val GallerySheetSurface = Color(0xFF171717)
 
 /**
  * 照片详情界面
@@ -432,62 +440,64 @@ fun GalleryDetailScreen(
             )
         },
         bottomBar = {
-            Surface(
-                color = Color.Black.copy(alpha = 0.8f),
-                modifier = Modifier.fillMaxWidth().navigationBarsPadding()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    // AI 评分
+            GalleryBottomActionBar(
+                leadingAction = {
+                    GalleryCircleActionButton(
+                        icon = Icons.Default.Share,
+                        contentDescription = stringResource(R.string.share),
+                        isLoading = isSharing,
+                        enabled = currentPhoto != null && !isSharing,
+                        onClick = {
+                            currentPhoto?.let(viewModel::sharePhoto)
+                        }
+                    )
+                },
+                groupedActions = {
                     if (currentPhoto?.isImage == true) {
-                        GalleryActionItem(
+                        GalleryGroupedActionButton(
                             icon = AppIcons.AutoAwesome,
-                            text = stringResource(R.string.gallery_ai_analysis),
-                            contentColor = AccentOrange,
-                            containerColor = AccentOrange.copy(alpha = 0.15f),
-                            onClick = { showAiScoreSheet = true },
+                            contentDescription = stringResource(R.string.gallery_ai_analysis),
+                            onClick = { showAiScoreSheet = true }
                         )
                     }
 
-                    // 编辑
                     if (currentPhoto?.isImage == true || currentPhoto?.isVideo == true) {
-                        GalleryActionItem(
+                        GalleryGroupedActionButton(
                             icon = Icons.Default.Edit,
-                            text = stringResource(R.string.edit),
+                            contentDescription = stringResource(R.string.edit),
                             isLoading = preparingEditPhotoId == currentPhoto.id,
                             onClick = {
                                 viewModel.prepareCurrentPhotoForEdit(
                                     index = pagerState.currentPage,
                                     onReady = onEdit,
                                     onFailure = {
-                                        Toast.makeText(context, R.string.gallery_prepare_edit_failed, Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(
+                                            context,
+                                            R.string.gallery_prepare_edit_failed,
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 )
-                            },
+                            }
                         )
                     }
 
-                    // 删除
-                    GalleryActionItem(
+                    GalleryGroupedActionButton(
                         icon = Icons.Default.Delete,
-                        text = stringResource(R.string.delete),
-                        contentColor = Color.Red,
-                        containerColor = Color.Red.copy(alpha = 0.2f),
-                        onClick = { showDeleteDialog = true },
+                        contentDescription = stringResource(R.string.delete),
+                        enabled = currentPhoto != null,
+                        onClick = { showDeleteDialog = true }
                     )
-
-                    // 更多
-                    GalleryActionItem(
+                },
+                trailingAction = {
+                    GalleryCircleActionButton(
                         icon = AppIcons.MoreHoriz,
-                        text = stringResource(R.string.more_options),
-                        onClick = { showMoreSheet = true },
+                        contentDescription = stringResource(R.string.more_options),
+                        enabled = currentPhoto != null,
+                        onClick = { showMoreSheet = true }
                     )
                 }
-            }
+            )
         },
         containerColor = Color.Black,
         modifier = modifier
@@ -870,154 +880,192 @@ fun GalleryDetailScreen(
 
     // 更多 BottomSheet
     if (showMoreSheet && currentPhoto != null) {
-        @OptIn(ExperimentalMaterial3Api::class)
-        ModalBottomSheet(
-            onDismissRequest = { showMoreSheet = false },
-            containerColor = Color(0xFF1E1E1E),
-            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f)) }
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 32.dp, start = 24.dp, end = 24.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.more_options),
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 24.dp)
+        val moreSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val moreActions = buildList {
+            if (currentPhoto.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {
+                add(
+                    GalleryMoreAction(
+                        icon = AppIcons.Output,
+                        text = context.getString(R.string.export),
+                        isLoading = isSaving,
+                        enabled = !isCopyingSettings && !isPastingSettings,
+                        onClick = {
+                            showMoreSheet = false
+                            showExportDialog = true
+                        }
+                    )
                 )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    GalleryActionItem(
-                        icon = AppIcons.ContentCopy,
-                        text = stringResource(R.string.copy_settings),
-                        isLoading = isCopyingSettings,
-                        enabled = !isCopyingSettings &&
-                            !isPastingSettings &&
-                            !isSharing &&
-                            !isSaving,
+            }
+
+            if (currentPhoto.isVideo) {
+                add(
+                    GalleryMoreAction(
+                        icon = AppIcons.Output,
+                        text = if (isVideoExporting && videoExportProgress > 0) {
+                            "$videoExportProgress%"
+                        } else {
+                            context.getString(R.string.export)
+                        },
+                        isLoading = isVideoExporting,
+                        enabled = !isCopyingSettings && !isPastingSettings,
                         onClick = {
-                            isCopyingSettings = true
-                            viewModel.copyPhotoSettings(currentPhoto) { success ->
-                                isCopyingSettings = false
-                                if (success) {
-                                    showMoreSheet = false
-                                }
+                            if (isVideoTransformerExportSupported()) {
+                                showMoreSheet = false
+                                showVideoExportConfirmDialog = true
+                            } else {
                                 Toast.makeText(
                                     context,
-                                    if (success) {
-                                        R.string.copy_settings_success
-                                    } else {
-                                        R.string.copy_settings_failed
-                                    },
+                                    R.string.export_video_requires_android12,
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }
                         }
                     )
+                )
+            }
 
-                    GalleryActionItem(
-                        icon = AppIcons.ContentCopy,
-                        text = stringResource(R.string.paste_settings),
-                        isLoading = isPastingSettings,
-                        enabled = hasCopiedEditSettings &&
-                            !isCopyingSettings &&
-                            !isPastingSettings &&
-                            !isSharing &&
-                            !isSaving,
-                        onClick = {
-                            isPastingSettings = true
-                            viewModel.pasteCopiedSettingsToPhoto(currentPhoto) { success ->
-                                isPastingSettings = false
-                                if (success) {
-                                    showMoreSheet = false
-                                }
-                                Toast.makeText(
-                                    context,
-                                    if (success) {
-                                        R.string.paste_settings_success
-                                    } else {
-                                        R.string.paste_settings_failed
-                                    },
-                                    Toast.LENGTH_SHORT
-                                ).show()
+            add(
+                GalleryMoreAction(
+                    icon = AppIcons.ContentCopy,
+                    text = context.getString(R.string.copy_settings),
+                    isLoading = isCopyingSettings,
+                    enabled = !isCopyingSettings &&
+                        !isPastingSettings &&
+                        !isSharing &&
+                        !isSaving,
+                    onClick = {
+                        isCopyingSettings = true
+                        viewModel.copyPhotoSettings(currentPhoto) { success ->
+                            isCopyingSettings = false
+                            if (success) {
+                                showMoreSheet = false
                             }
+                            Toast.makeText(
+                                context,
+                                if (success) {
+                                    R.string.copy_settings_success
+                                } else {
+                                    R.string.copy_settings_failed
+                                },
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
-                    )
+                    }
+                )
+            )
 
-                    // 分享
-                    GalleryActionItem(
-                        icon = Icons.Default.Share,
-                        text = stringResource(R.string.share),
-                        isLoading = isSharing,
-                        enabled = !isSharing &&
-                            !isSaving &&
+            add(
+                GalleryMoreAction(
+                    icon = AppIcons.ContentCopy,
+                    text = context.getString(R.string.paste_settings),
+                    isLoading = isPastingSettings,
+                    enabled = hasCopiedEditSettings &&
+                        !isCopyingSettings &&
+                        !isPastingSettings &&
+                        !isSharing &&
+                        !isSaving,
+                    onClick = {
+                        isPastingSettings = true
+                        viewModel.pasteCopiedSettingsToPhoto(currentPhoto) { success ->
+                            isPastingSettings = false
+                            if (success) {
+                                showMoreSheet = false
+                            }
+                            Toast.makeText(
+                                context,
+                                if (success) {
+                                    R.string.paste_settings_success
+                                } else {
+                                    R.string.paste_settings_failed
+                                },
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                )
+            )
+
+            if (isCurrentRawPhoto) {
+                add(
+                    GalleryMoreAction(
+                        iconText = context.getString(R.string.dng_format),
+                        text = context.getString(R.string.dng_format),
+                        isLoading = isExportingDng,
+                        enabled = !isSaving &&
+                            !isExportingDng &&
                             !isCopyingSettings &&
                             !isPastingSettings,
                         onClick = {
                             showMoreSheet = false
-                            viewModel.sharePhoto(currentPhoto)
+                            isExportingDng = true
+                            viewModel.exportDng(currentPhoto) { success ->
+                                isExportingDng = false
+                                Toast.makeText(
+                                    context,
+                                    if (success) R.string.export_dng_success else R.string.export_dng_failed,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         }
                     )
+                )
+            }
+        }
 
-                    // 导出
-                    if (currentPhoto.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {
-                        GalleryActionItem(
-                            icon = AppIcons.Output,
-                            text = stringResource(R.string.export),
-                            isLoading = isSaving,
-                            enabled = !isCopyingSettings && !isPastingSettings,
-                            onClick = {
-                                showExportDialog = true
+        @OptIn(ExperimentalMaterial3Api::class)
+        ModalBottomSheet(
+            onDismissRequest = { showMoreSheet = false },
+            sheetState = moreSheetState,
+            containerColor = GallerySheetSurface,
+            contentColor = GalleryToolbarContent,
+            shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+            scrimColor = Color.Black.copy(alpha = 0.64f),
+            tonalElevation = 0.dp,
+            dragHandle = {
+                BottomSheetDefaults.DragHandle(
+                    width = 36.dp,
+                    height = 4.dp,
+                    color = GalleryToolbarContent.copy(alpha = 0.24f)
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(start = 20.dp, end = 20.dp, bottom = 24.dp)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+                    Text(
+                        text = stringResource(R.string.more_options),
+                        color = GalleryToolbarContent,
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = (-0.2).sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+                HorizontalDivider(color = GalleryToolbarContent.copy(alpha = 0.09f))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    moreActions.chunked(4).forEach { rowActions ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            rowActions.forEach { action ->
+                                GalleryMoreActionCard(
+                                    action = action,
+                                    modifier = Modifier.weight(1f)
+                                )
                             }
-                        )
-                    }
-
-                    // 视频导出按钮（仅视频）
-                    if (currentPhoto.isVideo) {
-                        GalleryActionItem(
-                            icon = AppIcons.Output,
-                            text = if (isVideoExporting && videoExportProgress > 0) "$videoExportProgress%" else stringResource(R.string.export),
-                            isLoading = isVideoExporting,
-                            enabled = !isCopyingSettings && !isPastingSettings,
-                            onClick = {
-                                if (isVideoTransformerExportSupported()) {
-                                    showVideoExportConfirmDialog = true
-                                } else {
-                                    Toast.makeText(context, R.string.export_video_requires_android12, Toast.LENGTH_SHORT).show()
-                                }
+                            repeat(4 - rowActions.size) {
+                                Spacer(modifier = Modifier.weight(1f))
                             }
-                        )
-                    }
-
-                    // DNG
-                    if (isCurrentRawPhoto) {
-                        GalleryActionItem(
-                            iconText = "DNG",
-                            text = "DNG",
-                            isLoading = isExportingDng,
-                            enabled = !isSaving &&
-                                !isExportingDng &&
-                                !isCopyingSettings &&
-                                !isPastingSettings,
-                            onClick = {
-                                showMoreSheet = false
-                                isExportingDng = true
-                                viewModel.exportDng(currentPhoto) { success ->
-                                    isExportingDng = false
-                                    if (success) {
-                                        Toast.makeText(context, R.string.export_dng_success, Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, R.string.export_dng_failed, Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                                }
-                        )
+                        }
                     }
                 }
             }
@@ -1591,61 +1639,206 @@ private fun HdrStrengthPanel(
     }
 }
 
+private data class GalleryMoreAction(
+    val text: String,
+    val onClick: () -> Unit,
+    val icon: ImageVector? = null,
+    val iconText: String? = null,
+    val enabled: Boolean = true,
+    val contentColor: Color = GalleryToolbarContent,
+    val isLoading: Boolean = false
+)
+
 @Composable
-private fun GalleryActionItem(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    icon: ImageVector? = null,
-    iconText: String? = null,
-    enabled: Boolean = true,
-    contentColor: Color = Color.White,
-    containerColor: Color = Color.White.copy(alpha = 0.1f),
-    isLoading: Boolean = false
+private fun GalleryBottomActionBar(
+    leadingAction: @Composable () -> Unit,
+    groupedActions: @Composable RowScope.() -> Unit,
+    trailingAction: @Composable () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled && !isLoading, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .alpha(if (enabled) 1f else 0.5f)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = GalleryToolbarSurface,
+        shadowElevation = 10.dp
     ) {
         Box(
             modifier = Modifier
-                .size(52.dp)
-                .background(containerColor, CircleShape)
-                .autoRotate(),
+                .fillMaxWidth()
+                .navigationBarsPadding(),
             contentAlignment = Alignment.Center
         ) {
-            if (isLoading) {
+            Row(
+                modifier = Modifier
+                    .widthIn(max = 380.dp)
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                leadingAction()
+                Surface(
+                    modifier = Modifier
+                        .height(40.dp)
+                        .widthIn(min = 116.dp)
+                        .shadow(
+                            elevation = 5.dp,
+                            shape = CircleShape,
+                            ambientColor = Color.Black.copy(alpha = 0.18f),
+                            spotColor = Color.Black.copy(alpha = 0.18f)
+                        ),
+                    shape = CircleShape,
+                    color = GalleryToolbarButton,
+                    tonalElevation = 0.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        content = groupedActions
+                    )
+                }
+                trailingAction()
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryCircleActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    isLoading: Boolean = false
+) {
+    val isInteractive = enabled && !isLoading
+    PhysicalButton(
+        modifier = Modifier
+            .size(40.dp)
+            .shadow(
+                elevation = 5.dp,
+                shape = CircleShape,
+                ambientColor = Color.Black.copy(alpha = 0.18f),
+                spotColor = Color.Black.copy(alpha = 0.18f)
+            )
+            .alpha(if (enabled || isLoading) 1f else 0.42f),
+        onClick = onClick,
+        enabled = isInteractive,
+        shape = CircleShape,
+        backgroundColor = GalleryToolbarButton,
+        highlightBorderWidth = 0.5.dp,
+        highlightGlowWidth = 1.5.dp
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                color = GalleryToolbarContent,
+                modifier = Modifier.size(17.dp),
+                strokeWidth = 1.8.dp
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = GalleryToolbarContent,
+                modifier = Modifier
+                    .size(18.dp)
+                    .autoRotate()
+            )
+        }
+    }
+}
+
+@Composable
+private fun GalleryGroupedActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    isLoading: Boolean = false
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled && !isLoading,
+        modifier = Modifier.size(36.dp)
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                color = GalleryToolbarContent,
+                modifier = Modifier.size(17.dp),
+                strokeWidth = 1.8.dp
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = GalleryToolbarContent.copy(alpha = if (enabled) 1f else 0.38f),
+                modifier = Modifier
+                    .size(18.dp)
+                    .autoRotate()
+            )
+        }
+    }
+}
+
+@Composable
+private fun GalleryMoreActionCard(
+    action: GalleryMoreAction,
+    modifier: Modifier = Modifier
+) {
+    val isInteractive = action.enabled && !action.isLoading
+    Column(
+        modifier = modifier.alpha(if (action.enabled || action.isLoading) 1f else 0.38f),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        PhysicalButton(
+            modifier = Modifier
+                .size(44.dp)
+                .shadow(
+                    elevation = 4.dp,
+                    shape = CircleShape,
+                    ambientColor = Color.Black.copy(alpha = 0.15f),
+                    spotColor = Color.Black.copy(alpha = 0.15f)
+                ),
+            onClick = action.onClick,
+            enabled = isInteractive,
+            shape = CircleShape,
+            backgroundColor = GalleryToolbarButton,
+            highlightBorderWidth = 0.5.dp,
+            highlightGlowWidth = 1.5.dp
+        ) {
+            if (action.isLoading) {
                 CircularProgressIndicator(
-                    color = contentColor,
-                    modifier = Modifier.size(24.dp),
-                    strokeWidth = 2.dp
+                    color = action.contentColor,
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 1.8.dp
                 )
-            } else if (icon != null) {
+            } else if (action.icon != null) {
                 Icon(
-                    imageVector = icon,
-                    contentDescription = text,
-                    tint = contentColor,
-                    modifier = Modifier.size(24.dp)
+                    imageVector = action.icon,
+                    contentDescription = action.text,
+                    tint = action.contentColor,
+                    modifier = Modifier.size(19.dp)
                 )
-            } else if (iconText != null) {
+            } else if (action.iconText != null) {
                 Text(
-                    text = iconText,
-                    color = contentColor,
-                    fontSize = 14.sp,
+                    text = action.iconText,
+                    color = action.contentColor,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(7.dp))
         Text(
-            text = text,
-            color = contentColor.copy(alpha = 0.9f),
-            fontSize = 12.sp,
-            maxLines = 1
+            text = action.text,
+            color = GalleryToolbarContent.copy(alpha = 0.86f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            lineHeight = 14.sp,
+            maxLines = 2,
+            textAlign = TextAlign.Center,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
