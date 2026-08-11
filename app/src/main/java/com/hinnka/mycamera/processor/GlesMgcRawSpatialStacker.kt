@@ -85,10 +85,47 @@ internal class GlesMgcRawSpatialStacker(
         val uploadRegion: MgcSpatialRgbRect,
     )
 
+    private data class RgbBandPlan(
+        val bands: List<MgcSpatialRgbTile>,
+        val work: List<Pair<MgcSpatialRgbTile, List<RgbTileFrameRegion>>>,
+        val maximumOutputWidth: Int,
+        val maximumOutputHeight: Int,
+        val maximumDiagnosticWidth: Int,
+        val maximumDiagnosticHeight: Int,
+        val maximumSourceWidth: Int,
+        val maximumSourceHeight: Int,
+        val maximumUploadWidth: Int,
+        val maximumUploadHeight: Int,
+        val projectedGpuBytes: Long,
+    )
+
     private data class RgbMergeOutput(
         val cpuBuffer: ByteBuffer?,
         val gpuTexture: Int,
-        val diagnosticFixed16: QueuedTextureReadback?,
+        val diagnosticFixed16: PreparedTextureReadback?,
+        val completionTimeline: GpuStackCompletionTimeline?,
+    )
+
+    /**
+     * Full-output RGB accumulation used by the performance path.
+     *
+     * RAW stays frame-sequential: the current image is uploaded once, its temporal products are
+     * consumed immediately, and only the two full-resolution additive accumulators survive until
+     * normalization. Draw bands bound individual GPU jobs; they never trigger another RAW upload.
+     */
+    private data class OnlineRgbAccumulator(
+        val semanticAccumulator: Int,
+        val opponentWeightAccumulator: Int,
+        val chromaGuideTexture: Int,
+        val drawBands: List<MgcSpatialRgbTile>,
+        val rawSlots: IntArray,
+        val passWindow: GlesGpuScheduler.PassWindow,
+        val projectedGpuBytes: Long,
+        var nextRawSlot: Int,
+        var contributedFrames: Int = 0,
+        var rawUploadCount: Int = 0,
+        var rawUploadBytes: Long = 0L,
+        var rawUploadNs: Long = 0L,
     )
 
     private data class TextureSpec(
@@ -136,6 +173,11 @@ internal class GlesMgcRawSpatialStacker(
         fun end() {
             check(active) { "Temporal scratch frame was not active" }
             active = false
+        }
+
+        fun clearTracking() {
+            check(!active) { "Cannot clear active temporal scratch textures" }
+            entries.clear()
         }
     }
 
@@ -195,15 +237,44 @@ internal class GlesMgcRawSpatialStacker(
     )
 
     private data class QueuedStrengthReadback(
-        val alignment: QueuedTextureReadback,
-        val rejection: QueuedTextureReadback,
-        val fusedFixed16: QueuedTextureReadback,
+        val alignment: PreparedTextureReadback,
+        val rejection: PreparedTextureReadback,
+        val fusedFixed16: PreparedTextureReadback,
         val fusedFixed16PrepareSubmitMs: Long,
     )
+
+    private data class PreparedTextureReadback(
+        val byteCount: Int,
+        val queuedGpuReadback: QueuedTextureReadback?,
+        val cpuBuffer: ByteBuffer?,
+        val mode: String,
+        val targetBindMs: Long,
+        val readSubmitMs: Long,
+        val totalSubmitMs: Long,
+    ) {
+        init {
+            require(byteCount > 0)
+            require((queuedGpuReadback == null) != (cpuBuffer == null)) {
+                "Fixed16 readback must own exactly one GPU or CPU storage"
+            }
+            require(queuedGpuReadback?.storage?.byteCount == null ||
+                queuedGpuReadback.storage.byteCount == byteCount)
+            require(cpuBuffer?.capacity() == null || cpuBuffer.capacity() >= byteCount)
+        }
+    }
 
     private data class RgbDiagnosticPackTiming(
         val setupNs: Long,
         val dispatchNs: Long,
+        val byteCount: Int,
+        val destinationHeight: Int,
+    )
+
+    private data class PendingRgbDiagnosticBand(
+        val storage: PixelPackBuffer,
+        val outputCore: MgcSpatialRgbRect,
+        val destinationHeight: Int,
+        val byteCount: Int,
     )
 
     private enum class StrengthReadbackEncoding {
@@ -427,9 +498,13 @@ internal class GlesMgcRawSpatialStacker(
         var returned = false
         var exportedBayerTexture = 0
         var exportedRgbTexture = 0
+        var exportedRgbCompletionTimeline: GpuStackCompletionTimeline? = null
+        var strengthAlignmentHostBuffer: ByteBuffer? = null
+        var strengthRejectionHostBuffer: ByteBuffer? = null
+        var rgbDiagnosticHostBuffer: ByteBuffer? = null
         var strengthCapture: StrengthCapture? = null
+        var onlineRgbAccumulator: OnlineRgbAccumulator? = null
         val processStartNs = System.nanoTime()
-        val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
         return try {
             if (useCurrentGlContext) attachCurrentEgl() else initEgl()
             ensureGles3()
@@ -468,9 +543,6 @@ internal class GlesMgcRawSpatialStacker(
                     "${ceilDiv(height, UNBLOCKER_FULLRES_TILE_SIZE * 2)} " +
                     "scale=$UNBLOCKER_OUTPUT_SCALE offset=$UNBLOCKER_OUTPUT_OFFSET",
             )
-            // Temporal preparation is frame-sequential. Keep only the reference and one reusable
-            // current RAW texture; RGB reconstruction uploads bounded horizontal source bands
-            // after all persistent alignment/weight/covariance products have been prepared.
             val referenceRaw = createTexture(
                 width,
                 height,
@@ -987,7 +1059,37 @@ internal class GlesMgcRawSpatialStacker(
                     referenceCalibration = referenceCalibration,
                 )
             }
+            if (
+                outputMode == MgcSpatialOutputMode.RGB
+            ) {
+                onlineRgbAccumulator = createOnlineRgbAccumulator(
+                    reusableRawTexture = currentRaw,
+                    diagnosticCapture = strengthCapture,
+                )?.also { online ->
+                    online.rawUploadCount = 1 + if (ultrashortIndex >= 0) 1 else 0
+                    online.rawUploadBytes = online.rawUploadCount.toLong() *
+                        width * height * RAW_BYTES_PER_PIXEL
+                }
+            }
             var capturedFrameIndex = 0
+
+            fun submitOrRetainRgbFrame(
+                frame: RgbMergeFrame,
+                rawTexture: Int,
+                label: String,
+            ) {
+                val online = onlineRgbAccumulator
+                if (online != null) {
+                    contributeOnlineRgbFrame(
+                        accumulator = online,
+                        frame = frame,
+                        rawTexture = rawTexture,
+                        label = label,
+                    )
+                } else {
+                    rgbMergeFrames += frame
+                }
+            }
 
             if (outputMode == MgcSpatialOutputMode.BAYER) {
                 clearAccumulator(accumulatorColor)
@@ -1005,14 +1107,18 @@ internal class GlesMgcRawSpatialStacker(
                     )
                 }
                 if (outputMode == MgcSpatialOutputMode.RGB) {
-                    rgbMergeFrames += RgbMergeFrame(
-                        imageIndex = 0,
-                        calibration = referenceCalibration,
-                        alignmentTexture = zeroFlow,
-                        weightTexture = bentoBaseWeight,
-                        covarianceTexture = referenceCovariance,
-                        flowBounds = MgcSpatialRgbFlowBounds.Zero,
-                        useFrameWeight = true,
+                    submitOrRetainRgbFrame(
+                        frame = RgbMergeFrame(
+                            imageIndex = 0,
+                            calibration = referenceCalibration,
+                            alignmentTexture = zeroFlow,
+                            weightTexture = bentoBaseWeight,
+                            covarianceTexture = referenceCovariance,
+                            flowBounds = MgcSpatialRgbFlowBounds.Zero,
+                            useFrameWeight = true,
+                        ),
+                        rawTexture = referenceRaw,
+                        label = "reference",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1041,14 +1147,18 @@ internal class GlesMgcRawSpatialStacker(
                     check(bentoRgbCovarianceTexture != 0) {
                         "Accepted MGC Bento RGB frame has no covariance texture"
                     }
-                    rgbMergeFrames += RgbMergeFrame(
-                        imageIndex = ultrashortIndex,
-                        calibration = checkNotNull(bentoCalibration),
-                        alignmentTexture = bentoBayerAlignmentTexture,
-                        weightTexture = bentoShortWeight,
-                        covarianceTexture = bentoRgbCovarianceTexture,
-                        flowBounds = conservativeRgbFlowBounds,
-                        useFrameWeight = true,
+                    submitOrRetainRgbFrame(
+                        frame = RgbMergeFrame(
+                            imageIndex = ultrashortIndex,
+                            calibration = checkNotNull(bentoCalibration),
+                            alignmentTexture = bentoBayerAlignmentTexture,
+                            weightTexture = bentoShortWeight,
+                            covarianceTexture = bentoRgbCovarianceTexture,
+                            flowBounds = conservativeRgbFlowBounds,
+                            useFrameWeight = true,
+                        ),
+                        rawTexture = bentoRaw,
+                        label = "ultrashort $ultrashortIndex",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1075,14 +1185,18 @@ internal class GlesMgcRawSpatialStacker(
                     )
                 }
                 if (outputMode == MgcSpatialOutputMode.RGB) {
-                    rgbMergeFrames += RgbMergeFrame(
-                        imageIndex = 0,
-                        calibration = referenceCalibration,
-                        alignmentTexture = zeroFlow,
-                        weightTexture = identityWeight,
-                        covarianceTexture = referenceCovariance,
-                        flowBounds = MgcSpatialRgbFlowBounds.Zero,
-                        useFrameWeight = false,
+                    submitOrRetainRgbFrame(
+                        frame = RgbMergeFrame(
+                            imageIndex = 0,
+                            calibration = referenceCalibration,
+                            alignmentTexture = zeroFlow,
+                            weightTexture = identityWeight,
+                            covarianceTexture = referenceCovariance,
+                            flowBounds = MgcSpatialRgbFlowBounds.Zero,
+                            useFrameWeight = false,
+                        ),
+                        rawTexture = referenceRaw,
+                        label = "reference",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1097,13 +1211,38 @@ internal class GlesMgcRawSpatialStacker(
                 }
             }
 
+            if (onlineRgbAccumulator != null) {
+                images[0].close()
+                if (ultrashortIndex >= 0) images[ultrashortIndex].close()
+            }
+
             for (index in temporalFrameRange) {
                 val frame = frames[index]
                 if (frame.role == RawBurstFrameRole.HIGHLIGHT_SHORT) continue
                 beginTemporalScratchFrame()
                 try {
-                    val temporalRaw = currentRaw.also { texture ->
+                    val online = onlineRgbAccumulator
+                    val temporalRaw = if (online != null) {
+                        val slot = online.nextRawSlot
+                        val texture = online.rawSlots[slot]
+                        online.nextRawSlot = (slot + 1) % online.rawSlots.size
+                        online.passWindow.awaitResources(
+                            label = "MGC RGB RAW slot $slot upload frame $index",
+                            resources = longArrayOf(
+                                GlesGpuScheduler.textureResource(texture),
+                            ),
+                        )
+                        val uploadStartNs = System.nanoTime()
                         uploadRaw(images[index], texture, "frame $index")
+                        online.rawUploadNs += System.nanoTime() - uploadStartNs
+                        online.rawUploadCount += 1
+                        online.rawUploadBytes +=
+                            width.toLong() * height * RAW_BYTES_PER_PIXEL
+                        texture
+                    } else {
+                        currentRaw.also { texture ->
+                            uploadRaw(images[index], texture, "frame $index")
+                        }
                     }
                     val prepared = prepareTemporalFrame(
                         frame = frame,
@@ -1173,43 +1312,59 @@ internal class GlesMgcRawSpatialStacker(
                         )
                     }
                     if (outputMode == MgcSpatialOutputMode.RGB) {
-                        val retainedAlignment = copyPersistentTexture(
-                            source = prepared.bayerAlignmentTexture,
-                            textureWidth = bayerAlignmentWidth,
-                            textureHeight = bayerAlignmentHeight,
-                            internalFormat = GLES30.GL_RGBA32F,
-                            filter = GLES30.GL_NEAREST,
-                            label = "MGC RGB alignment frame $index",
-                        )
-                        val retainedWeight = if (mergeWeight == identityWeight) {
-                            identityWeight
+                        if (online != null) {
+                            submitOrRetainRgbFrame(
+                                frame = RgbMergeFrame(
+                                    imageIndex = index,
+                                    calibration = prepared.calibration,
+                                    alignmentTexture = prepared.bayerAlignmentTexture,
+                                    weightTexture = mergeWeight,
+                                    covarianceTexture = currentCovariance,
+                                    flowBounds = conservativeRgbFlowBounds,
+                                    useFrameWeight = true,
+                                ),
+                                rawTexture = temporalRaw,
+                                label = "frame $index",
+                            )
                         } else {
-                            copyPersistentTexture(
-                                source = mergeWeight,
-                                textureWidth = mergeWeightWidth,
-                                textureHeight = mergeWeightHeight,
-                                internalFormat = GLES30.GL_R8,
+                            val retainedAlignment = copyPersistentTexture(
+                                source = prepared.bayerAlignmentTexture,
+                                textureWidth = bayerAlignmentWidth,
+                                textureHeight = bayerAlignmentHeight,
+                                internalFormat = GLES30.GL_RGBA32F,
+                                filter = GLES30.GL_NEAREST,
+                                label = "MGC RGB alignment frame $index",
+                            )
+                            val retainedWeight = if (mergeWeight == identityWeight) {
+                                identityWeight
+                            } else {
+                                copyPersistentTexture(
+                                    source = mergeWeight,
+                                    textureWidth = mergeWeightWidth,
+                                    textureHeight = mergeWeightHeight,
+                                    internalFormat = GLES30.GL_R8,
+                                    filter = GLES30.GL_LINEAR,
+                                    label = "MGC RGB final weight frame $index",
+                                )
+                            }
+                            val retainedCovariance = copyPersistentTexture(
+                                source = currentCovariance,
+                                textureWidth = guideWidth,
+                                textureHeight = guideHeight,
+                                internalFormat = GLES30.GL_RGB10_A2,
                                 filter = GLES30.GL_LINEAR,
-                                label = "MGC RGB final weight frame $index",
+                                label = "MGC RGB covariance frame $index",
+                            )
+                            rgbMergeFrames += RgbMergeFrame(
+                                imageIndex = index,
+                                calibration = prepared.calibration,
+                                alignmentTexture = retainedAlignment,
+                                weightTexture = retainedWeight,
+                                covarianceTexture = retainedCovariance,
+                                flowBounds = conservativeRgbFlowBounds,
+                                useFrameWeight = true,
                             )
                         }
-                        val retainedCovariance = copyPersistentTexture(
-                            source = currentCovariance,
-                            textureWidth = guideWidth,
-                            textureHeight = guideHeight,
-                            internalFormat = GLES30.GL_RGB10_A2,
-                            filter = GLES30.GL_LINEAR,
-                            label = "MGC RGB covariance frame $index",
-                        )
-                        rgbMergeFrames += RgbMergeFrame(
-                            imageIndex = index,
-                            calibration = prepared.calibration,
-                            alignmentTexture = retainedAlignment,
-                            weightTexture = retainedWeight,
-                            covarianceTexture = retainedCovariance,
-                            flowBounds = conservativeRgbFlowBounds,
-                            useFrameWeight = true,
-                        )
                     }
                     strengthCapture?.let { capture ->
                         captureStrengthFrame(
@@ -1222,6 +1377,7 @@ internal class GlesMgcRawSpatialStacker(
                         )
                     }
                     mergedFrames += 1
+                    if (online != null) images[index].close()
                 } finally {
                     endTemporalScratchFrame()
                 }
@@ -1246,25 +1402,70 @@ internal class GlesMgcRawSpatialStacker(
             }
             val lensShadingCorrectionApplied: Boolean
             if (outputMode == MgcSpatialOutputMode.RGB) {
-                check(rgbMergeFrames.size == mergedFrames) {
-                    "MGC Spatial RGB admitted ${rgbMergeFrames.size} frames, " +
-                        "but Bayer/noise merge admitted $mergedFrames"
+                val online = onlineRgbAccumulator
+                val retainedTemporalTextures = if (online != null) {
+                    check(online.contributedFrames == mergedFrames) {
+                        "MGC Spatial online RGB admitted ${online.contributedFrames} frames, " +
+                            "but Bayer/noise merge admitted $mergedFrames"
+                    }
+                    intArrayOf(
+                        online.semanticAccumulator,
+                        online.opponentWeightAccumulator,
+                    )
+                } else {
+                    check(rgbMergeFrames.size == mergedFrames) {
+                        "MGC Spatial RGB admitted ${rgbMergeFrames.size} frames, " +
+                            "but Bayer/noise merge admitted $mergedFrames"
+                    }
+                    rgbMergeFrames.flatMap { frame ->
+                        listOf(
+                            frame.alignmentTexture,
+                            frame.weightTexture,
+                            frame.covarianceTexture,
+                        )
+                    }.toIntArray()
                 }
-                releaseOwnedTexture(referenceRaw, "RGB temporal reference RAW")
-                releaseOwnedTexture(currentRaw, "RGB temporal current RAW")
-                val rgbMergeStartNs = System.nanoTime()
-                val rgbOutput = renderRgbMerge(
-                    frames = rgbMergeFrames,
-                    images = images,
-                    outputExposureScale = outputExposure.normalizationScale,
-                    diagnosticCapture = readyStrengthCapture,
+                val temporalGpuBytes = estimatedOwnedTextureBytes()
+                check(temporalGpuBytes <= RGB_TEXTURE_BUDGET_BYTES) {
+                    "MGC Spatial RGB temporal resources=$temporalGpuBytes, " +
+                        "budget=$RGB_TEXTURE_BUDGET_BYTES"
+                }
+                releaseRgbTemporalPhaseResources(
+                    persistentTextures = retainedTemporalTextures,
+                    strengthCapture = readyStrengthCapture,
                 )
+                online?.passWindow?.clearAfterCheckpoint()
+                val preparedStrengthAtlases = readyStrengthCapture?.let { capture ->
+                    materializeRgbStrengthAtlases(capture).also { prepared ->
+                        strengthAlignmentHostBuffer = prepared.first.cpuBuffer
+                        strengthRejectionHostBuffer = prepared.second.cpuBuffer
+                    }
+                }
+                val rgbMergeStartNs = System.nanoTime()
+                val rgbOutput = if (online != null) {
+                    finishOnlineRgbMerge(
+                        accumulator = online,
+                        outputExposureScale = outputExposure.normalizationScale,
+                        diagnosticCapture = readyStrengthCapture,
+                    )
+                } else {
+                    renderRgbMerge(
+                        frames = resolveRgbFlowBounds(rgbMergeFrames),
+                        images = images,
+                        outputExposureScale = outputExposure.normalizationScale,
+                        diagnosticCapture = readyStrengthCapture,
+                    )
+                }
                 cpuOutput = rgbOutput.cpuBuffer
                 exportedRgbTexture = rgbOutput.gpuTexture
+                exportedRgbCompletionTimeline = rgbOutput.completionTimeline
+                rgbDiagnosticHostBuffer = rgbOutput.diagnosticFixed16?.cpuBuffer
                 readyStrengthCapture?.let { capture ->
                     val startNs = System.nanoTime()
                     queuedStrengthReadback = queueStrengthReadback(
                         capture = capture,
+                        preparedAlignment = checkNotNull(preparedStrengthAtlases).first,
+                        preparedRejection = preparedStrengthAtlases.second,
                         preparedFusedFixed16 = checkNotNull(rgbOutput.diagnosticFixed16),
                     )
                     strengthQueueElapsedMs = (System.nanoTime() - startNs) / 1_000_000L
@@ -1272,9 +1473,17 @@ internal class GlesMgcRawSpatialStacker(
                 lensShadingCorrectionApplied = hasLensShading()
                 PLog.i(
                     TAG,
-                    "MGC Spatial RGB dispatch complete frames=${rgbMergeFrames.size} " +
+                    "MGC Spatial RGB dispatch complete frames=$mergedFrames " +
                         "took=${(System.nanoTime() - rgbMergeStartNs) / 1_000_000L}ms " +
-                        "rawWindowSlots=$RGB_RAW_WINDOW_SLOTS flush=end-only",
+                        "mode=${when {
+                            online != null -> "online-full-accumulator"
+                            else -> "streamed-band"
+                        }} " +
+                        "rawWindowSlots=${when {
+                            online != null -> online.rawSlots.size
+                            else -> RGB_RAW_WINDOW_SLOTS
+                        }} " +
+                        "maxInFlight=$RGB_MAX_IN_FLIGHT_PASSES",
                 )
             } else {
                 val bayer16 = renderBayer16(
@@ -1295,9 +1504,9 @@ internal class GlesMgcRawSpatialStacker(
                 PLog.i(
                     TAG,
                     "MGC Spatial strength readback queued mode=${outputMode.name} bytes=" +
-                        "${queuedStrengthReadback.alignment.storage.byteCount.toLong() +
-                            queuedStrengthReadback.rejection.storage.byteCount.toLong() +
-                            queuedStrengthReadback.fusedFixed16.storage.byteCount.toLong()} " +
+                        "${queuedStrengthReadback.alignment.byteCount.toLong() +
+                            queuedStrengthReadback.rejection.byteCount.toLong() +
+                            queuedStrengthReadback.fusedFixed16.byteCount.toLong()} " +
                         "fixed16PrepareSubmit=" +
                         "${queuedStrengthReadback.fusedFixed16PrepareSubmitMs}ms " +
                         "modes=${queuedStrengthReadback.alignment.mode}/" +
@@ -1410,7 +1619,11 @@ internal class GlesMgcRawSpatialStacker(
                     "lscApplied=$lensShadingCorrectionApplied result=$resultLabel " +
                     "programInit=${programInitMs}ms " +
                     "queueMode=${if (outputMode == MgcSpatialOutputMode.RGB) {
-                        "streamed-raw-three-slot-band"
+                        if (onlineRgbAccumulator != null) {
+                            "online-raw-two-slot-two-in-flight-full-accumulator"
+                        } else {
+                            "streamed-raw-two-slot-two-in-flight-band"
+                        }
                     } else {
                         "ordered-continuous"
                     }} " +
@@ -1438,7 +1651,7 @@ internal class GlesMgcRawSpatialStacker(
                         width = outputWidth,
                         height = outputHeight,
                         samplesPerPixel = 4,
-                        stackCompletionTimeline = null,
+                        stackCompletionTimeline = exportedRgbCompletionTimeline,
                         storage = gpuLinearRgbStorage,
                     )
                 },
@@ -1465,9 +1678,13 @@ internal class GlesMgcRawSpatialStacker(
             null
         } finally {
             images.forEach { it.close() }
+            onlineRgbAccumulator?.passWindow?.drain("MGC Spatial RGB process release")
             release()
-            GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, TAG)
+            LargeDirectBuffer.free(strengthAlignmentHostBuffer)
+            LargeDirectBuffer.free(strengthRejectionHostBuffer)
+            LargeDirectBuffer.free(rgbDiagnosticHostBuffer)
             if (!returned) {
+                exportedRgbCompletionTimeline?.releasePending()
                 LargeDirectBuffer.free(cpuOutput)
                 if (exportedBayerTexture != 0) {
                     GLES30.glDeleteTextures(1, intArrayOf(exportedBayerTexture), 0)
@@ -3478,21 +3695,45 @@ internal class GlesMgcRawSpatialStacker(
     private fun queueStrengthReadback(
         capture: StrengthCapture,
         accumulator: Int = 0,
-        preparedFusedFixed16: QueuedTextureReadback? = null,
+        preparedAlignment: PreparedTextureReadback? = null,
+        preparedRejection: PreparedTextureReadback? = null,
+        preparedFusedFixed16: PreparedTextureReadback? = null,
     ): QueuedStrengthReadback {
         check(capture.captured.all { it }) {
             "MGC Spatial noise capture incomplete: ${capture.captured.contentToString()}"
         }
         val allocationStartNs = System.nanoTime()
-        val alignmentReadback = allocatePixelPackBuffer(
-            strengthAlignmentReadbackByteCount(capture),
-            "MGC Spatial strength alignment atlas",
-        )
-        val rejectionReadback = allocatePixelPackBuffer(
-            strengthRejectionReadbackByteCount(capture),
-            "MGC Spatial strength rejection atlas",
-        )
-        val fusedFixed16: QueuedTextureReadback
+        val alignment: PreparedTextureReadback
+        val rejection: PreparedTextureReadback
+        if (capture.outputMode == MgcSpatialOutputMode.RGB) {
+            alignment = checkNotNull(preparedAlignment) {
+                "MGC Spatial RGB alignment diagnostics were not prepared"
+            }
+            rejection = checkNotNull(preparedRejection) {
+                "MGC Spatial RGB rejection diagnostics were not prepared"
+            }
+        } else {
+            check(preparedAlignment == null && preparedRejection == null)
+            alignment = queuePreparedTextureReadback(
+                texture = capture.alignmentAtlas,
+                textureWidth = capture.alignmentLayout.atlasWidth,
+                textureHeight = capture.alignmentLayout.atlasHeight,
+                encoding = StrengthReadbackEncoding.FLOAT32,
+                byteCount = strengthAlignmentReadbackByteCount(capture),
+                label = "MGC Spatial strength alignment atlas",
+                atlasLayout = capture.alignmentLayout,
+            )
+            rejection = queuePreparedTextureReadback(
+                texture = capture.rejectionAtlas,
+                textureWidth = capture.rejectionLayout.atlasWidth,
+                textureHeight = capture.rejectionLayout.atlasHeight,
+                encoding = StrengthReadbackEncoding.UNORM8,
+                byteCount = strengthRejectionReadbackByteCount(capture),
+                label = "MGC Spatial strength rejection atlas",
+                atlasLayout = capture.rejectionLayout,
+            )
+        }
+        val fusedFixed16: PreparedTextureReadback
         val fusedFixed16PrepareSubmitMs: Long
         if (capture.outputMode == MgcSpatialOutputMode.BAYER) {
             check(accumulator != 0 && preparedFusedFixed16 == null)
@@ -3506,7 +3747,7 @@ internal class GlesMgcRawSpatialStacker(
             val fusedFixed16Texture = renderBayerFixed16Planes(accumulator)
             fusedFixed16PrepareSubmitMs =
                 (System.nanoTime() - fusedFixed16StartNs) / 1_000_000L
-            fusedFixed16 = queueTextureReadback(
+            val queued = queueTextureReadback(
                 texture = fusedFixed16Texture,
                 textureWidth = quadWidth,
                 textureHeight = quadHeight * 4,
@@ -3514,15 +3755,24 @@ internal class GlesMgcRawSpatialStacker(
                 storage = fusedFixed16Readback,
                 label = "MGC Spatial Bayer Fixed16 noise source",
             )
+            fusedFixed16 = PreparedTextureReadback(
+                byteCount = queued.storage.byteCount,
+                queuedGpuReadback = queued,
+                cpuBuffer = null,
+                mode = queued.mode,
+                targetBindMs = queued.targetBindMs,
+                readSubmitMs = queued.readSubmitMs,
+                totalSubmitMs = queued.totalSubmitMs,
+            )
         } else {
             check(accumulator == 0)
             fusedFixed16 = checkNotNull(preparedFusedFixed16) {
                 "MGC Spatial RGB Fixed16 diagnostic signal was not prepared"
             }
             check(
-                fusedFixed16.storage.byteCount == strengthFixed16ReadbackByteCount(capture)
+                fusedFixed16.byteCount == strengthFixed16ReadbackByteCount(capture)
             ) {
-                "MGC Spatial RGB Fixed16 readback size=${fusedFixed16.storage.byteCount}, " +
+                "MGC Spatial RGB Fixed16 readback size=${fusedFixed16.byteCount}, " +
                     "expected=${strengthFixed16ReadbackByteCount(capture)}"
             }
             fusedFixed16PrepareSubmitMs = fusedFixed16.totalSubmitMs
@@ -3531,29 +3781,13 @@ internal class GlesMgcRawSpatialStacker(
             TAG,
             "MGC Spatial strength PBOs prepared mode=${capture.outputMode.name} " +
                 "image=${capture.geometry.imageWidth}x${capture.geometry.imageHeight} bytes=" +
-                "${alignmentReadback.byteCount.toLong() + rejectionReadback.byteCount +
-                    fusedFixed16.storage.byteCount} " +
+                "${alignment.byteCount.toLong() + rejection.byteCount +
+                    fusedFixed16.byteCount} " +
                 "took=${(System.nanoTime() - allocationStartNs) / 1_000_000L}ms",
         )
         return QueuedStrengthReadback(
-            alignment = queueTextureReadback(
-                texture = capture.alignmentAtlas,
-                textureWidth = capture.alignmentLayout.atlasWidth,
-                textureHeight = capture.alignmentLayout.atlasHeight,
-                encoding = StrengthReadbackEncoding.FLOAT32,
-                storage = alignmentReadback,
-                label = "MGC Spatial strength alignment atlas",
-                atlasLayout = capture.alignmentLayout,
-            ),
-            rejection = queueTextureReadback(
-                texture = capture.rejectionAtlas,
-                textureWidth = capture.rejectionLayout.atlasWidth,
-                textureHeight = capture.rejectionLayout.atlasHeight,
-                encoding = StrengthReadbackEncoding.UNORM8,
-                storage = rejectionReadback,
-                label = "MGC Spatial strength rejection atlas",
-                atlasLayout = capture.rejectionLayout,
-            ),
+            alignment = alignment,
+            rejection = rejection,
             fusedFixed16 = fusedFixed16,
             fusedFixed16PrepareSubmitMs = fusedFixed16PrepareSubmitMs,
         )
@@ -3600,6 +3834,12 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         checkGlError("allocate $label PBO")
         return PixelPackBuffer(buffer, byteCount)
+    }
+
+    private fun releasePixelPackBuffer(storage: PixelPackBuffer, label: String) {
+        if (!buffers.remove(storage.buffer)) return
+        GLES30.glDeleteBuffers(1, intArrayOf(storage.buffer), 0)
+        checkGlError("release $label")
     }
 
     private fun queueTextureReadback(
@@ -3751,6 +3991,36 @@ internal class GlesMgcRawSpatialStacker(
         }
     }
 
+    private fun queuePreparedTextureReadback(
+        texture: Int,
+        textureWidth: Int,
+        textureHeight: Int,
+        encoding: StrengthReadbackEncoding,
+        byteCount: Int,
+        label: String,
+        atlasLayout: MgcSpatialStrengthAtlasLayout? = null,
+    ): PreparedTextureReadback {
+        val storage = allocatePixelPackBuffer(byteCount, label)
+        val queued = queueTextureReadback(
+            texture = texture,
+            textureWidth = textureWidth,
+            textureHeight = textureHeight,
+            encoding = encoding,
+            storage = storage,
+            label = label,
+            atlasLayout = atlasLayout,
+        )
+        return PreparedTextureReadback(
+            byteCount = queued.storage.byteCount,
+            queuedGpuReadback = queued,
+            cpuBuffer = null,
+            mode = queued.mode,
+            targetBindMs = queued.targetBindMs,
+            readSubmitMs = queued.readSubmitMs,
+            totalSubmitMs = queued.totalSubmitMs,
+        )
+    }
+
     private fun queueTextureSsboPack(
         texture: Int,
         textureWidth: Int,
@@ -3861,6 +4131,59 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
     }
 
+    private fun materializePreparedReadbackToHost(
+        prepared: PreparedTextureReadback,
+        label: String,
+    ): PreparedTextureReadback {
+        val queued = checkNotNull(prepared.queuedGpuReadback) {
+            "$label is already host-resident"
+        }
+        check(prepared.cpuBuffer == null)
+        val host = LargeDirectBuffer.allocate(prepared.byteCount.toLong(), label)
+            ?.order(ByteOrder.nativeOrder()) ?: error("Unable to allocate $label")
+        var mapped: ByteBuffer? = null
+        val materializeStartNs = System.nanoTime()
+        try {
+            try {
+                mapped = mapPixelPackBuffer(
+                    queued.storage.buffer,
+                    prepared.byteCount,
+                    label,
+                )
+                host.clear()
+                host.put(checkNotNull(mapped).duplicate())
+                host.rewind()
+            } finally {
+                try {
+                    if (mapped != null) {
+                        unmapPixelPackBuffer(queued.storage.buffer)
+                    }
+                } finally {
+                    releasePixelPackBuffer(queued.storage, label)
+                }
+            }
+        } catch (throwable: Throwable) {
+            LargeDirectBuffer.free(host)
+            throw throwable
+        }
+        val materializeMs = (System.nanoTime() - materializeStartNs) / 1_000_000L
+        return PreparedTextureReadback(
+            byteCount = prepared.byteCount,
+            queuedGpuReadback = null,
+            cpuBuffer = host,
+            mode = "${prepared.mode}-host",
+            targetBindMs = prepared.targetBindMs,
+            readSubmitMs = prepared.readSubmitMs,
+            totalSubmitMs = prepared.totalSubmitMs + materializeMs,
+        ).also {
+            PLog.i(
+                TAG,
+                "MGC Spatial diagnostic host materialized label=$label " +
+                    "bytes=${prepared.byteCount} took=${materializeMs}ms",
+            )
+        }
+    }
+
     private fun resolveSpatialNoiseModel(
         capture: StrengthCapture,
         queued: QueuedStrengthReadback,
@@ -3871,22 +4194,46 @@ internal class GlesMgcRawSpatialStacker(
         var alignment: ByteBuffer? = null
         var rejection: ByteBuffer? = null
         var fusedFixed16: ByteBuffer? = null
+        var alignmentGpuMapped = false
+        var rejectionGpuMapped = false
+        var fusedFixed16GpuMapped = false
         return try {
-            alignment = mapPixelPackBuffer(
-                queued.alignment.storage.buffer,
-                queued.alignment.storage.byteCount,
-                "MGC Spatial strength alignment atlas",
-            )
-            rejection = mapPixelPackBuffer(
-                queued.rejection.storage.buffer,
-                queued.rejection.storage.byteCount,
-                "MGC Spatial strength rejection atlas",
-            )
-            fusedFixed16 = mapPixelPackBuffer(
-                queued.fusedFixed16.storage.buffer,
-                queued.fusedFixed16.storage.byteCount,
-                "MGC Spatial ${capture.outputMode.name} Fixed16 noise source",
-            )
+            alignment = queued.alignment.queuedGpuReadback?.let { gpuReadback ->
+                mapPixelPackBuffer(
+                    gpuReadback.storage.buffer,
+                    gpuReadback.storage.byteCount,
+                    "MGC Spatial strength alignment atlas",
+                ).also { alignmentGpuMapped = true }
+            } ?: checkNotNull(queued.alignment.cpuBuffer).duplicate()
+                .order(ByteOrder.nativeOrder())
+                .apply {
+                    position(0)
+                    limit(queued.alignment.byteCount)
+                }
+            rejection = queued.rejection.queuedGpuReadback?.let { gpuReadback ->
+                mapPixelPackBuffer(
+                    gpuReadback.storage.buffer,
+                    gpuReadback.storage.byteCount,
+                    "MGC Spatial strength rejection atlas",
+                ).also { rejectionGpuMapped = true }
+            } ?: checkNotNull(queued.rejection.cpuBuffer).duplicate()
+                .order(ByteOrder.nativeOrder())
+                .apply {
+                    position(0)
+                    limit(queued.rejection.byteCount)
+                }
+            fusedFixed16 = queued.fusedFixed16.queuedGpuReadback?.let { gpuReadback ->
+                mapPixelPackBuffer(
+                    gpuReadback.storage.buffer,
+                    gpuReadback.storage.byteCount,
+                    "MGC Spatial ${capture.outputMode.name} Fixed16 noise source",
+                ).also { fusedFixed16GpuMapped = true }
+            } ?: checkNotNull(queued.fusedFixed16.cpuBuffer).duplicate()
+                .order(ByteOrder.nativeOrder())
+                .apply {
+                    position(0)
+                    limit(queued.fusedFixed16.byteCount)
+                }
             val mappedAlignment = checkNotNull(alignment)
             val mappedRejection = checkNotNull(rejection)
             val mappedFusedFixed16 = checkNotNull(fusedFixed16)
@@ -3918,14 +4265,20 @@ internal class GlesMgcRawSpatialStacker(
             }
         } finally {
             val unmapStartNs = System.nanoTime()
-            if (fusedFixed16 != null) {
-                unmapPixelPackBuffer(queued.fusedFixed16.storage.buffer)
+            if (fusedFixed16GpuMapped) {
+                unmapPixelPackBuffer(
+                    checkNotNull(queued.fusedFixed16.queuedGpuReadback).storage.buffer,
+                )
             }
-            if (rejection != null) {
-                unmapPixelPackBuffer(queued.rejection.storage.buffer)
+            if (rejectionGpuMapped) {
+                unmapPixelPackBuffer(
+                    checkNotNull(queued.rejection.queuedGpuReadback).storage.buffer,
+                )
             }
-            if (alignment != null) {
-                unmapPixelPackBuffer(queued.alignment.storage.buffer)
+            if (alignmentGpuMapped) {
+                unmapPixelPackBuffer(
+                    checkNotNull(queued.alignment.queuedGpuReadback).storage.buffer,
+                )
             }
             PLog.i(
                 TAG,
@@ -4157,28 +4510,336 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun renderRgbMerge(
-        frames: List<RgbMergeFrame>,
-        images: List<SafeImage>,
+    /**
+     * Selects the one-upload-per-frame path when both its temporal and final phases fit the hard
+     * RAW GPU budget. The estimates are phase-aware: final output/diagnostic storage never
+     * overlaps temporal scratch, while the two additive accumulators span both phases.
+     */
+    private fun createOnlineRgbAccumulator(
+        reusableRawTexture: Int,
+        diagnosticCapture: StrengthCapture?,
+    ): OnlineRgbAccumulator? {
+        check(outputMode == MgcSpatialOutputMode.RGB)
+        val rawBytes = width.toLong() * height * RAW_BYTES_PER_PIXEL
+        val accumulatorBytes = outputWidth.toLong() * outputHeight * 16L
+        val chromaGuideBytes = width.toLong() * height * 2L
+        val outputStorageBytes = outputWidth.toLong() * outputHeight * 8L
+        val diagnosticTextureBytes = diagnosticCapture?.let { capture ->
+            capture.geometry.fixed16Width.toLong() * capture.geometry.fixed16Height * 2L
+        } ?: 0L
+        val diagnosticPboBytes = diagnosticCapture?.let { capture ->
+            strengthFixed16ReadbackByteCount(capture).toLong()
+        } ?: 0L
+        // Sequential temporal scratch is allocated lazily by the first non-reference frame.
+        // Reserve two RAW-sized surfaces before choosing the online path so a near-budget burst
+        // falls back to reconstruction bands up front instead of failing after capture buffers
+        // have already started to close.
+        val temporalScratchReserveBytes = maxOf(
+            RGB_TEXTURE_BUDGET_RESERVE_BYTES,
+            rawBytes * 2L,
+        )
+        val temporalProjectedBytes = estimatedOwnedTextureBytes() + rawBytes +
+            accumulatorBytes + chromaGuideBytes + temporalScratchReserveBytes
+        val finalProjectedBytes = accumulatorBytes + outputStorageBytes +
+            diagnosticTextureBytes + diagnosticPboBytes + RGB_TEXTURE_BUDGET_RESERVE_BYTES
+        val projectedGpuBytes = maxOf(temporalProjectedBytes, finalProjectedBytes)
+        if (projectedGpuBytes > RGB_TEXTURE_BUDGET_BYTES) {
+            PLog.i(
+                TAG,
+                "MGC Spatial RGB online path skipped projectedGpuBytes=$projectedGpuBytes " +
+                    "temporalProjectedBytes=$temporalProjectedBytes " +
+                    "finalProjectedBytes=$finalProjectedBytes " +
+                    "budgetBytes=$RGB_TEXTURE_BUDGET_BYTES",
+            )
+            return null
+        }
+
+        val secondRawTexture = createTexture(
+            width,
+            height,
+            GLES30.GL_R16UI,
+            GLES30.GL_NEAREST,
+        )
+        val chromaGuideTexture = createTexture(
+            width,
+            height,
+            GLES30.GL_R16F,
+            GLES30.GL_NEAREST,
+        )
+        val semanticAccumulator = createTexture(
+            outputWidth,
+            outputHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_NEAREST,
+        )
+        val opponentWeightAccumulator = createTexture(
+            outputWidth,
+            outputHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_NEAREST,
+        )
+        clearRgbAccumulators(
+            semanticAccumulator = semanticAccumulator,
+            opponentWeightAccumulator = opponentWeightAccumulator,
+            tileWidth = outputWidth,
+            tileHeight = outputHeight,
+        )
+        val actualTemporalBytes = estimatedOwnedTextureBytes() +
+            RGB_TEXTURE_BUDGET_RESERVE_BYTES
+        check(actualTemporalBytes <= RGB_TEXTURE_BUDGET_BYTES) {
+            "MGC Spatial RGB online temporal allocation=$actualTemporalBytes, " +
+                "budget=$RGB_TEXTURE_BUDGET_BYTES"
+        }
+        val drawBands = MgcSpatialRgbTilePlanner.planHorizontalBands(
+            outputWidth = outputWidth,
+            outputHeight = outputHeight,
+            maximumBandHeight = RGB_ONLINE_DRAW_BAND_HEIGHT,
+        )
+        PLog.i(
+            TAG,
+            "MGC Spatial RGB online accumulator selected bands=${drawBands.size} " +
+                "drawBandHeight=$RGB_ONLINE_DRAW_BAND_HEIGHT rawSlots=2 " +
+                "textureBytes=${estimatedOwnedTextureBytes()} " +
+                "temporalProjectedBytes=$temporalProjectedBytes " +
+                "finalProjectedBytes=$finalProjectedBytes " +
+                "budgetBytes=$RGB_TEXTURE_BUDGET_BYTES",
+        )
+        return OnlineRgbAccumulator(
+            semanticAccumulator = semanticAccumulator,
+            opponentWeightAccumulator = opponentWeightAccumulator,
+            chromaGuideTexture = chromaGuideTexture,
+            drawBands = drawBands,
+            rawSlots = intArrayOf(reusableRawTexture, secondRawTexture),
+            passWindow = GlesGpuScheduler.PassWindow(
+                tag = TAG,
+                maxInFlight = RGB_MAX_IN_FLIGHT_PASSES,
+            ),
+            projectedGpuBytes = projectedGpuBytes,
+            // Slot zero contains the Bento candidate when present. Start on the independent slot.
+            nextRawSlot = 1,
+        )
+    }
+
+    private fun contributeOnlineRgbFrame(
+        accumulator: OnlineRgbAccumulator,
+        frame: RgbMergeFrame,
+        rawTexture: Int,
+        label: String,
+    ) {
+        val rawResource = GlesGpuScheduler.textureResource(rawTexture)
+        val fullRaw = MgcSpatialRgbRect(0, 0, width, height)
+        renderRgbChromaGuide(
+            frame = frame,
+            rawTexture = rawTexture,
+            rawTextureOrigin = fullRaw,
+            sourceRegion = fullRaw,
+            outputTexture = accumulator.chromaGuideTexture,
+        )
+        accumulator.drawBands.forEach { band ->
+            accumulator.passWindow.beginPass(
+                label = "MGC RGB online $label band ${band.index}",
+                reads = longArrayOf(rawResource),
+            )
+            try {
+                renderRgbFrameContribution(
+                    frame = frame,
+                    rawTexture = rawTexture,
+                    rawTextureOrigin = fullRaw,
+                    sourceRegion = fullRaw,
+                    outputCores = listOf(band.outputCore),
+                    chromaGuideRegionTexture = accumulator.chromaGuideTexture,
+                    semanticAccumulator = accumulator.semanticAccumulator,
+                    opponentWeightAccumulator = accumulator.opponentWeightAccumulator,
+                    accumulatorIsFullOutput = true,
+                )
+            } finally {
+                accumulator.passWindow.endPass()
+            }
+        }
+        accumulator.contributedFrames += 1
+    }
+
+    private fun finishOnlineRgbMerge(
+        accumulator: OnlineRgbAccumulator,
         outputExposureScale: Float,
         diagnosticCapture: StrengthCapture?,
     ): RgbMergeOutput {
-        check(outputMode == MgcSpatialOutputMode.RGB)
-        check(mergeRgbProgram != 0 && normalizeRgbProgram != 0)
-        require(frames.isNotEmpty())
-        require(frames.all { it.imageIndex in images.indices })
         require(outputExposureScale.isFinite() && outputExposureScale > 0f)
-        diagnosticCapture?.let { capture ->
-            check(capture.outputMode == MgcSpatialOutputMode.RGB)
-            check(
-                capture.geometry.imageWidth == outputWidth &&
-                    capture.geometry.imageHeight == outputHeight
-            ) {
-                "MGC RGB diagnostic geometry ${capture.geometry.imageWidth}x" +
-                    "${capture.geometry.imageHeight} does not match output ${outputWidth}x$outputHeight"
-            }
+        val fullOutput = MgcSpatialRgbRect(0, 0, outputWidth, outputHeight)
+        val lensShadingTexture = createLensShadingTexture()
+        val gpuOutput = if (exportGpuLinearRgbSource) {
+            createTexture(
+                outputWidth,
+                outputHeight,
+                when (gpuLinearRgbStorage) {
+                    GpuLinearRgbStorage.RGBA16UI -> GLES30.GL_RGBA16UI
+                    GpuLinearRgbStorage.RGBA16F -> GLES30.GL_RGBA16F
+                },
+                GLES30.GL_NEAREST,
+            )
+        } else {
+            0
         }
-        val bands = MgcSpatialRgbTilePlanner.planHorizontalBands(outputWidth, outputHeight)
+        val cpuOutputTexture = if (gpuOutput == 0) {
+            createTexture(
+                outputWidth,
+                outputHeight,
+                GLES30.GL_RGBA16UI,
+                GLES30.GL_NEAREST,
+            )
+        } else {
+            0
+        }
+        val outputBytes = outputWidth.toLong() * outputHeight * 3L * Short.SIZE_BYTES
+        require(outputBytes in 1..Int.MAX_VALUE.toLong())
+        val cpuOutput = if (gpuOutput == 0) {
+            LargeDirectBuffer.allocate(outputBytes, "MGC Spatial online RGB16 output")
+                ?.order(ByteOrder.nativeOrder()) ?: error(
+                "Unable to allocate MGC Spatial online RGB16 output",
+            )
+        } else {
+            null
+        }
+        val cpuReadback = if (cpuOutput != null) {
+            ByteBuffer.allocateDirect(
+                outputWidth * outputHeight * 4 * Short.SIZE_BYTES,
+            ).order(ByteOrder.nativeOrder())
+        } else {
+            null
+        }
+        var diagnosticStorage: PixelPackBuffer? = null
+        val completionRecorder = GlesGpuCompletion.StackTimelineRecorder()
+        var completionTimeline: GpuStackCompletionTimeline? = null
+        try {
+            val target = if (gpuOutput != 0) gpuOutput else cpuOutputTexture
+            renderRgbNormalizedTile(
+                semanticAccumulator = accumulator.semanticAccumulator,
+                opponentWeightAccumulator = accumulator.opponentWeightAccumulator,
+                lensShadingTexture = lensShadingTexture,
+                outputCore = fullOutput,
+                target = target,
+                targetIsFullOutput = gpuOutput != 0,
+                outputExposureScale = outputExposureScale,
+            )
+            if (cpuOutput != null) {
+                readRgbTile(
+                    texture = cpuOutputTexture,
+                    outputCore = fullOutput,
+                    readback = checkNotNull(cpuReadback),
+                    output = cpuOutput,
+                )
+                cpuOutput.rewind()
+            }
+
+            val diagnosticFixed16 = diagnosticCapture?.let { capture ->
+                val fixed16Texture = createTexture(
+                    capture.geometry.fixed16Width,
+                    capture.geometry.fixed16Height,
+                    GLES30.GL_R16I,
+                    GLES30.GL_NEAREST,
+                )
+                val diagnosticFramebuffer = createFramebuffer()
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, diagnosticFramebuffer)
+                GLES30.glFramebufferTexture2D(
+                    GLES30.GL_FRAMEBUFFER,
+                    GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D,
+                    fixed16Texture,
+                    0,
+                )
+                GLES30.glDrawBuffers(1, intArrayOf(GLES30.GL_COLOR_ATTACHMENT0), 0)
+                check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
+                    GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                    "MGC online RGB Fixed16 framebuffer is incomplete"
+                }
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                diagnosticStorage = allocatePixelPackBuffer(
+                    strengthFixed16ReadbackByteCount(capture),
+                    "MGC Spatial online RGB Fixed16 source",
+                )
+                val timing = packRgbFixed16TileReadback(
+                    capture = capture,
+                    semanticAccumulator = accumulator.semanticAccumulator,
+                    opponentWeightAccumulator = accumulator.opponentWeightAccumulator,
+                    outputCore = fullOutput,
+                    fixed16Texture = fixed16Texture,
+                    diagnosticFramebuffer = diagnosticFramebuffer,
+                    storage = checkNotNull(diagnosticStorage),
+                )
+                val queued = QueuedTextureReadback(
+                    storage = checkNotNull(diagnosticStorage),
+                    mode = "online-full-accumulator-pbo-rgb-planar-q14",
+                    targetBindMs = timing.setupNs / 1_000_000L,
+                    readSubmitMs = timing.dispatchNs / 1_000_000L,
+                    totalSubmitMs = (timing.setupNs + timing.dispatchNs) / 1_000_000L,
+                )
+                PreparedTextureReadback(
+                    byteCount = strengthFixed16ReadbackByteCount(capture),
+                    queuedGpuReadback = queued,
+                    cpuBuffer = null,
+                    mode = queued.mode,
+                    targetBindMs = queued.targetBindMs,
+                    readSubmitMs = queued.readSubmitMs,
+                    totalSubmitMs = queued.totalSubmitMs,
+                )
+            }
+
+            val gpuDeclaredBytes = estimatedOwnedTextureBytes() +
+                (diagnosticStorage?.byteCount?.toLong() ?: 0L)
+            check(gpuDeclaredBytes <= RGB_TEXTURE_BUDGET_BYTES) {
+                "MGC Spatial online RGB allocated $gpuDeclaredBytes GPU bytes, " +
+                    "budget=$RGB_TEXTURE_BUDGET_BYTES"
+            }
+            if (gpuOutput != 0) {
+                completionRecorder.mark(GpuStackCompletionStage.FINAL_EXPORT)
+                completionTimeline = completionRecorder.finish()
+                if (completionTimeline == null) {
+                    GlesGpuCompletion.awaitSubmittedWork(
+                        label = "MGC Spatial online RGB export",
+                        checkGlError = ::checkGlError,
+                    )
+                }
+                check(textures.remove(gpuOutput)) {
+                    "Exported online MGC Spatial RGB texture is not owned by the stacker"
+                }
+                textureSpecs.remove(gpuOutput)
+            }
+            PLog.i(
+                TAG,
+                "MGC Spatial RGB online RAW uploads=${accumulator.rawUploadCount} " +
+                    "bytes=${accumulator.rawUploadBytes} " +
+                    "submit=${accumulator.rawUploadNs / 1_000_000L}ms " +
+                    "frames=${accumulator.contributedFrames} drawBands=${accumulator.drawBands.size} " +
+                    "gpuDeclaredBytes=$gpuDeclaredBytes " +
+                    "projectedGpuBytes=${accumulator.projectedGpuBytes}",
+            )
+            return RgbMergeOutput(
+                cpuBuffer = cpuOutput,
+                gpuTexture = gpuOutput,
+                diagnosticFixed16 = diagnosticFixed16,
+                completionTimeline = completionTimeline,
+            )
+        } catch (throwable: Throwable) {
+            completionTimeline?.releasePending()
+            completionRecorder.releasePending()
+            diagnosticStorage?.let { storage ->
+                releasePixelPackBuffer(storage, "failed MGC Spatial online RGB Fixed16")
+            }
+            LargeDirectBuffer.free(cpuOutput)
+            throw throwable
+        }
+    }
+
+    private fun createRgbBandPlan(
+        frames: List<RgbMergeFrame>,
+        diagnosticCapture: StrengthCapture?,
+        maximumBandHeight: Int,
+    ): RgbBandPlan {
+        val bands = MgcSpatialRgbTilePlanner.planHorizontalBands(
+            outputWidth = outputWidth,
+            outputHeight = outputHeight,
+            maximumBandHeight = maximumBandHeight,
+        )
         val work = bands.map { band ->
             band to frames.map { frame ->
                 val sourceRegion = MgcSpatialRgbTilePlanner.sourceRegion(
@@ -4227,6 +4888,88 @@ internal class GlesMgcRawSpatialStacker(
         val maximumUploadHeight = work.maxOf { (_, regions) ->
             regions.maxOf { it.uploadRegion.height }
         }
+        val rawWindowBytes = maximumUploadWidth.toLong() * maximumUploadHeight *
+            RAW_BYTES_PER_PIXEL * RGB_RAW_WINDOW_SLOTS
+        val chromaGuideBytes = maximumSourceWidth.toLong() * maximumSourceHeight * 2L
+        val accumulatorBytes = maximumOutputWidth.toLong() * maximumOutputHeight * 16L
+        val outputStorageBytes = if (exportGpuLinearRgbSource) {
+            outputWidth.toLong() * outputHeight * 8L
+        } else {
+            maximumOutputWidth.toLong() * maximumOutputHeight * 8L
+        }
+        val diagnosticTextureBytes = if (diagnosticCapture != null) {
+            maximumDiagnosticWidth.toLong() * maximumDiagnosticHeight * 2L
+        } else {
+            0L
+        }
+        val diagnosticPboBytes = if (diagnosticCapture != null) {
+            maximumDiagnosticWidth.toLong() * maximumDiagnosticHeight * 3L *
+                Short.SIZE_BYTES * minOf(RGB_DIAGNOSTIC_PBO_SLOTS, bands.size)
+        } else {
+            0L
+        }
+        val projectedGpuBytes = estimatedOwnedTextureBytes() + rawWindowBytes +
+            chromaGuideBytes + accumulatorBytes + outputStorageBytes +
+            diagnosticTextureBytes + diagnosticPboBytes + RGB_TEXTURE_BUDGET_RESERVE_BYTES
+        return RgbBandPlan(
+            bands = bands,
+            work = work,
+            maximumOutputWidth = maximumOutputWidth,
+            maximumOutputHeight = maximumOutputHeight,
+            maximumDiagnosticWidth = maximumDiagnosticWidth,
+            maximumDiagnosticHeight = maximumDiagnosticHeight,
+            maximumSourceWidth = maximumSourceWidth,
+            maximumSourceHeight = maximumSourceHeight,
+            maximumUploadWidth = maximumUploadWidth,
+            maximumUploadHeight = maximumUploadHeight,
+            projectedGpuBytes = projectedGpuBytes,
+        )
+    }
+
+    private fun renderRgbMerge(
+        frames: List<RgbMergeFrame>,
+        images: List<SafeImage>,
+        outputExposureScale: Float,
+        diagnosticCapture: StrengthCapture?,
+    ): RgbMergeOutput {
+        check(outputMode == MgcSpatialOutputMode.RGB)
+        check(mergeRgbProgram != 0 && normalizeRgbProgram != 0)
+        require(frames.isNotEmpty())
+        require(frames.all { it.imageIndex in images.indices })
+        require(outputExposureScale.isFinite() && outputExposureScale > 0f)
+        diagnosticCapture?.let { capture ->
+            check(capture.outputMode == MgcSpatialOutputMode.RGB)
+            check(
+                capture.geometry.imageWidth == outputWidth &&
+                    capture.geometry.imageHeight == outputHeight
+            ) {
+                "MGC RGB diagnostic geometry ${capture.geometry.imageWidth}x" +
+                    "${capture.geometry.imageHeight} does not match output ${outputWidth}x$outputHeight"
+            }
+        }
+        val bandPlan = rgbBandHeightCandidates().asSequence()
+            .map { maximumBandHeight ->
+                createRgbBandPlan(
+                    frames = frames,
+                    diagnosticCapture = diagnosticCapture,
+                    maximumBandHeight = maximumBandHeight,
+                )
+            }
+            .firstOrNull { plan -> plan.projectedGpuBytes <= RGB_TEXTURE_BUDGET_BYTES }
+            ?: error(
+                "MGC Spatial RGB cannot fit reconstruction within " +
+                    "$RGB_TEXTURE_BUDGET_BYTES bytes",
+            )
+        val bands = bandPlan.bands
+        val work = bandPlan.work
+        val maximumOutputWidth = bandPlan.maximumOutputWidth
+        val maximumOutputHeight = bandPlan.maximumOutputHeight
+        val maximumDiagnosticWidth = bandPlan.maximumDiagnosticWidth
+        val maximumDiagnosticHeight = bandPlan.maximumDiagnosticHeight
+        val maximumSourceWidth = bandPlan.maximumSourceWidth
+        val maximumSourceHeight = bandPlan.maximumSourceHeight
+        val maximumUploadWidth = bandPlan.maximumUploadWidth
+        val maximumUploadHeight = bandPlan.maximumUploadHeight
         val rawBandTextures = List(RGB_RAW_WINDOW_SLOTS) {
             createTexture(
                 maximumUploadWidth,
@@ -4309,12 +5052,34 @@ internal class GlesMgcRawSpatialStacker(
             0
         }
         val diagnosticFramebuffer = if (diagnosticCapture != null) createFramebuffer() else 0
-        val diagnosticStorage = diagnosticCapture?.let { capture ->
-            allocatePixelPackBuffer(
-                strengthFixed16ReadbackByteCount(capture),
-                "MGC Spatial RGB Fixed16 noise source",
+        val diagnosticBandByteCount = (
+            maximumDiagnosticWidth.toLong() * maximumDiagnosticHeight * 3L * Short.SIZE_BYTES
+            ).also { bytes -> require(bytes in 1..Int.MAX_VALUE.toLong()) }
+            .toInt()
+        val diagnosticStorages = if (diagnosticCapture != null) {
+            // A second slot only overlaps readback with useful work when another band exists.
+            // Keeping one full-frame PBO makes the one-band fast path fit the same hard budget.
+            List(minOf(RGB_DIAGNOSTIC_PBO_SLOTS, bands.size)) { slot ->
+                allocatePixelPackBuffer(
+                    diagnosticBandByteCount,
+                    "MGC Spatial RGB Fixed16 band slot $slot",
+                )
+            }
+        } else {
+            emptyList()
+        }
+        val diagnosticHostBuffer = diagnosticCapture?.let { capture ->
+            val byteCount = strengthFixed16ReadbackByteCount(capture)
+            LargeDirectBuffer.allocate(
+                byteCount.toLong(),
+                "MGC Spatial RGB Fixed16 host source",
+            )?.order(ByteOrder.nativeOrder()) ?: error(
+                "Unable to allocate MGC Spatial RGB Fixed16 host source",
             )
         }
+        val pendingDiagnosticBands = arrayOfNulls<PendingRgbDiagnosticBand>(
+            diagnosticStorages.size,
+        )
         if (diagnosticCapture != null) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, diagnosticFramebuffer)
             GLES30.glFramebufferTexture2D(
@@ -4335,8 +5100,8 @@ internal class GlesMgcRawSpatialStacker(
         }
         PLog.i(
             TAG,
-            "MGC Spatial RGB streamed-raw bands=${bands.size} " +
-                "rawWindowSlots=${rawBandTextures.size} " +
+            "MGC Spatial RGB streamed-raw " +
+                "bands=${bands.size} rawWindowSlots=${rawBandTextures.size} " +
                 "rawWindow=${maximumUploadWidth}x$maximumUploadHeight " +
                 "rawWindowBytes=" +
                 "${maximumUploadWidth.toLong() * maximumUploadHeight * RAW_BYTES_PER_PIXEL * rawBandTextures.size} " +
@@ -4345,7 +5110,8 @@ internal class GlesMgcRawSpatialStacker(
                 "frames=${frames.size} reconstruction=joint-G/R-G/B-G " +
                 "chromaGuide=separate-pass diagnosticPack=${when {
                     diagnosticCapture == null -> "disabled"
-                    else -> "post-output-framebuffer-pbo"
+                    diagnosticStorages.size == 1 -> "one-slot-band-pbo-to-host"
+                    else -> "two-slot-band-pbo-to-host"
                 }}",
         )
         var diagnosticSetupNs = 0L
@@ -4353,81 +5119,182 @@ internal class GlesMgcRawSpatialStacker(
         var rawBandUploadNs = 0L
         var rawBandUploadBytes = 0L
         var rawBandUploadCount = 0
+        val passWindow = GlesGpuScheduler.PassWindow(
+            tag = TAG,
+            maxInFlight = RGB_MAX_IN_FLIGHT_PASSES,
+        )
+        val completionRecorder = GlesGpuCompletion.StackTimelineRecorder()
+        var diagnosticStoragesReleased = false
+        val gpuDeclaredBytes = estimatedOwnedTextureBytes() +
+            diagnosticBandByteCount.toLong() * diagnosticStorages.size
+        check(gpuDeclaredBytes <= RGB_TEXTURE_BUDGET_BYTES) {
+            "MGC Spatial RGB allocated $gpuDeclaredBytes GPU bytes, " +
+                "budget=$RGB_TEXTURE_BUDGET_BYTES"
+        }
+        PLog.i(
+            TAG,
+            "MGC Spatial RGB reconstruction textureBytes=${estimatedOwnedTextureBytes()} " +
+                "diagnosticPboBytes=" +
+                "${diagnosticBandByteCount.toLong() * diagnosticStorages.size} " +
+                "diagnosticHostBytes=${diagnosticHostBuffer?.capacity() ?: 0} " +
+                "gpuDeclaredBytes=$gpuDeclaredBytes " +
+                "projectedGpuBytes=${bandPlan.projectedGpuBytes} " +
+                "budgetBytes=$RGB_TEXTURE_BUDGET_BYTES " +
+                "bandHeight=${bands.maxOf { it.outputCore.height }} " +
+                "maxInFlight=$RGB_MAX_IN_FLIGHT_PASSES",
+        )
 
         try {
             for ((band, frameRegions) in work) {
-                clearRgbAccumulators(
-                    semanticAccumulator = semanticAccumulator,
-                    opponentWeightAccumulator = opponentWeightAccumulator,
-                    tileWidth = band.outputCore.width,
-                    tileHeight = band.outputCore.height,
-                )
+                val diagnosticSlotIndex = if (diagnosticStorages.isEmpty()) {
+                    -1
+                } else {
+                    band.index % diagnosticStorages.size
+                }
+                if (diagnosticSlotIndex >= 0) {
+                    pendingDiagnosticBands[diagnosticSlotIndex]?.let { pending ->
+                        passWindow.awaitResources(
+                            label = "MGC RGB diagnostic band ${pending.outputCore.top} host copy",
+                            resources = longArrayOf(
+                                GlesGpuScheduler.bufferResource(pending.storage.buffer),
+                            ),
+                        )
+                        copyRgbFixed16BandToHost(
+                            capture = checkNotNull(diagnosticCapture),
+                            pending = pending,
+                            destination = checkNotNull(diagnosticHostBuffer),
+                        )
+                        pendingDiagnosticBands[diagnosticSlotIndex] = null
+                    }
+                }
                 frameRegions.forEachIndexed { framePosition, frameRegion ->
+                    if (framePosition == 0) {
+                        clearRgbAccumulators(
+                            semanticAccumulator = semanticAccumulator,
+                            opponentWeightAccumulator = opponentWeightAccumulator,
+                            tileWidth = band.outputCore.width,
+                            tileHeight = band.outputCore.height,
+                        )
+                    }
                     val rawBandTexture = rawBandTextures[framePosition % rawBandTextures.size]
-                    val uploadStartNs = System.nanoTime()
-                    uploadRawRegion(
-                        image = images[frameRegion.frame.imageIndex],
-                        texture = rawBandTexture,
-                        region = frameRegion.uploadRegion,
-                        label = "RGB band ${band.index} frame ${frameRegion.frame.imageIndex}",
+                    val rawResource = GlesGpuScheduler.textureResource(rawBandTexture)
+                    passWindow.beginPass(
+                        label = "MGC RGB band ${band.index} frame $framePosition",
+                        reads = longArrayOf(rawResource),
+                        writes = longArrayOf(rawResource),
                     )
-                    rawBandUploadNs += System.nanoTime() - uploadStartNs
-                    rawBandUploadBytes += frameRegion.uploadRegion.width.toLong() *
-                        frameRegion.uploadRegion.height * RAW_BYTES_PER_PIXEL
-                    rawBandUploadCount += 1
-                    renderRgbChromaGuide(
-                        frame = frameRegion.frame,
-                        rawTexture = rawBandTexture,
-                        rawTextureOrigin = frameRegion.uploadRegion,
-                        sourceRegion = frameRegion.sourceRegion,
-                        outputTexture = chromaGuideRegionTexture,
-                    )
-                    renderRgbFrameContribution(
-                        frame = frameRegion.frame,
-                        rawTexture = rawBandTexture,
-                        rawTextureOrigin = frameRegion.uploadRegion,
-                        sourceRegion = frameRegion.sourceRegion,
-                        outputCore = band.outputCore,
-                        chromaGuideRegionTexture = chromaGuideRegionTexture,
-                        semanticAccumulator = semanticAccumulator,
-                        opponentWeightAccumulator = opponentWeightAccumulator,
-                    )
+                    try {
+                        val uploadStartNs = System.nanoTime()
+                        uploadRawRegion(
+                            image = images[frameRegion.frame.imageIndex],
+                            texture = rawBandTexture,
+                            region = frameRegion.uploadRegion,
+                            label =
+                                "RGB band ${band.index} frame ${frameRegion.frame.imageIndex}",
+                        )
+                        rawBandUploadNs += System.nanoTime() - uploadStartNs
+                        rawBandUploadBytes += frameRegion.uploadRegion.width.toLong() *
+                            frameRegion.uploadRegion.height * RAW_BYTES_PER_PIXEL
+                        rawBandUploadCount += 1
+                        renderRgbChromaGuide(
+                            frame = frameRegion.frame,
+                            rawTexture = rawBandTexture,
+                            rawTextureOrigin = frameRegion.uploadRegion,
+                            sourceRegion = frameRegion.sourceRegion,
+                            outputTexture = chromaGuideRegionTexture,
+                        )
+                        renderRgbFrameContribution(
+                            frame = frameRegion.frame,
+                            rawTexture = rawBandTexture,
+                            rawTextureOrigin = frameRegion.uploadRegion,
+                            sourceRegion = frameRegion.sourceRegion,
+                            outputCores = listOf(band.outputCore),
+                            chromaGuideRegionTexture = chromaGuideRegionTexture,
+                            semanticAccumulator = semanticAccumulator,
+                            opponentWeightAccumulator = opponentWeightAccumulator,
+                        )
+                    } finally {
+                        passWindow.endPass()
+                    }
                 }
-                val target = if (gpuOutput != 0) gpuOutput else cpuTileOutput
-                renderRgbNormalizedTile(
-                    semanticAccumulator = semanticAccumulator,
-                    opponentWeightAccumulator = opponentWeightAccumulator,
-                    lensShadingTexture = lensShadingTexture,
-                    outputCore = band.outputCore,
-                    target = target,
-                    targetIsFullOutput = gpuOutput != 0,
-                    outputExposureScale = outputExposureScale,
+                val diagnosticStorage = diagnosticSlotIndex.takeIf { it >= 0 }?.let {
+                    diagnosticStorages[it]
+                }
+                passWindow.beginPass(
+                    label = "MGC RGB band ${band.index} normalize",
+                    writes = longArrayOf(
+                        GlesGpuScheduler.bufferResource(diagnosticStorage?.buffer ?: 0),
+                    ),
                 )
-                if (cpuOutput != null) {
-                    readRgbTile(
-                        texture = cpuTileOutput,
-                        outputCore = band.outputCore,
-                        readback = checkNotNull(tileReadback),
-                        output = cpuOutput,
-                    )
-                }
-                diagnosticCapture?.let { capture ->
-                    // The production output for this band has already been submitted. The
-                    // accumulator remains valid until the next band begins with an explicit
-                    // clear, so pack diagnostics now without replaying any frame contribution.
-                    val timing = packRgbFixed16TileReadback(
-                        capture = capture,
+                var pendingDiagnosticBand: PendingRgbDiagnosticBand? = null
+                try {
+                    val target = if (gpuOutput != 0) gpuOutput else cpuTileOutput
+                    renderRgbNormalizedTile(
                         semanticAccumulator = semanticAccumulator,
                         opponentWeightAccumulator = opponentWeightAccumulator,
+                        lensShadingTexture = lensShadingTexture,
                         outputCore = band.outputCore,
-                        fixed16Texture = diagnosticTexture,
-                        diagnosticFramebuffer = diagnosticFramebuffer,
-                        storage = checkNotNull(diagnosticStorage),
+                        target = target,
+                        targetIsFullOutput = gpuOutput != 0,
+                        outputExposureScale = outputExposureScale,
                     )
-                    diagnosticSetupNs += timing.setupNs
-                    diagnosticDispatchNs += timing.dispatchNs
+                    if (cpuOutput != null) {
+                        readRgbTile(
+                            texture = cpuTileOutput,
+                            outputCore = band.outputCore,
+                            readback = checkNotNull(tileReadback),
+                            output = cpuOutput,
+                        )
+                    }
+                    diagnosticCapture?.let { capture ->
+                        // The production output for this band has already been submitted. The
+                        // accumulator remains valid until the next band begins with an explicit
+                        // clear, so pack diagnostics now without replaying any frame contribution.
+                        val timing = packRgbFixed16TileReadback(
+                            capture = capture,
+                            semanticAccumulator = semanticAccumulator,
+                            opponentWeightAccumulator = opponentWeightAccumulator,
+                            outputCore = band.outputCore,
+                            fixed16Texture = diagnosticTexture,
+                            diagnosticFramebuffer = diagnosticFramebuffer,
+                            storage = checkNotNull(diagnosticStorage),
+                        )
+                        diagnosticSetupNs += timing.setupNs
+                        diagnosticDispatchNs += timing.dispatchNs
+                        pendingDiagnosticBand = PendingRgbDiagnosticBand(
+                            storage = diagnosticStorage,
+                            outputCore = band.outputCore,
+                            destinationHeight = timing.destinationHeight,
+                            byteCount = timing.byteCount,
+                        )
+                    }
+                } finally {
+                    passWindow.endPass()
+                }
+                if (diagnosticSlotIndex >= 0) {
+                    pendingDiagnosticBands[diagnosticSlotIndex] =
+                        checkNotNull(pendingDiagnosticBand)
                 }
             }
+            pendingDiagnosticBands.forEachIndexed { slot, pending ->
+                pending ?: return@forEachIndexed
+                passWindow.awaitResources(
+                    label = "MGC RGB final diagnostic band ${pending.outputCore.top} host copy",
+                    resources = longArrayOf(
+                        GlesGpuScheduler.bufferResource(pending.storage.buffer),
+                    ),
+                )
+                copyRgbFixed16BandToHost(
+                    capture = checkNotNull(diagnosticCapture),
+                    pending = pending,
+                    destination = checkNotNull(diagnosticHostBuffer),
+                )
+                pendingDiagnosticBands[slot] = null
+            }
+            diagnosticStorages.forEach { storage ->
+                releasePixelPackBuffer(storage, "MGC Spatial RGB Fixed16 band slot")
+            }
+            diagnosticStoragesReleased = true
             PLog.i(
                 TAG,
                 "MGC Spatial RGB streamed RAW uploads=$rawBandUploadCount " +
@@ -4437,27 +5304,54 @@ internal class GlesMgcRawSpatialStacker(
             cpuOutput?.rewind()
             val diagnosticFixed16 = diagnosticCapture?.let {
                 checkGlError("MGC Spatial RGB Fixed16 diagnostic pack")
-                QueuedTextureReadback(
-                    storage = checkNotNull(diagnosticStorage),
-                    mode = "post-output-framebuffer-pbo-rgb-planar-q14",
+                PreparedTextureReadback(
+                    byteCount = strengthFixed16ReadbackByteCount(it),
+                    queuedGpuReadback = null,
+                    cpuBuffer = checkNotNull(diagnosticHostBuffer),
+                    mode = "${diagnosticStorages.size}-slot-band-pbo-host-rgb-planar-q14",
                     targetBindMs = diagnosticSetupNs / 1_000_000L,
                     readSubmitMs = diagnosticDispatchNs / 1_000_000L,
                     totalSubmitMs =
                         (diagnosticSetupNs + diagnosticDispatchNs) / 1_000_000L,
                 )
             }
+            val completionTimeline = if (gpuOutput != 0) {
+                completionRecorder.mark(GpuStackCompletionStage.FINAL_EXPORT)
+                completionRecorder.finish().also { timeline ->
+                    if (timeline != null) {
+                        passWindow.clearAfterCheckpoint()
+                    } else {
+                        passWindow.drain("MGC RGB final export without completion checkpoint")
+                    }
+                }
+            } else {
+                passWindow.drain("MGC RGB CPU output completion")
+                null
+            }
             if (gpuOutput != 0) {
-                GLES30.glFlush()
                 check(textures.remove(gpuOutput)) {
                     "Exported MGC Spatial RGB texture is not owned by the stacker"
                 }
+                textureSpecs.remove(gpuOutput)
             }
             return RgbMergeOutput(
                 cpuBuffer = cpuOutput,
                 gpuTexture = gpuOutput,
                 diagnosticFixed16 = diagnosticFixed16,
+                completionTimeline = completionTimeline,
             )
         } catch (throwable: Throwable) {
+            completionRecorder.releasePending()
+            passWindow.drain("MGC RGB reconstruction failure")
+            if (!diagnosticStoragesReleased) {
+                diagnosticStorages.forEach { storage ->
+                    releasePixelPackBuffer(
+                        storage,
+                        "failed MGC Spatial RGB Fixed16 band slot",
+                    )
+                }
+            }
+            LargeDirectBuffer.free(diagnosticHostBuffer)
             LargeDirectBuffer.free(cpuOutput)
             throw throwable
         }
@@ -4484,7 +5378,6 @@ internal class GlesMgcRawSpatialStacker(
                 diagnosticFramebuffer != 0
         )
         check(storage.buffer != 0)
-        check(storage.byteCount == strengthFixed16ReadbackByteCount(capture))
         val imageWidth = capture.geometry.imageWidth
         val imageHeight = capture.geometry.imageHeight
         val fixed16Width = capture.geometry.fixed16Width
@@ -4494,8 +5387,14 @@ internal class GlesMgcRawSpatialStacker(
             if (outputCore.right == imageWidth) fixed16Width - imageWidth else 0
         val destinationHeight = outputCore.height +
             if (outputCore.bottom == imageHeight) fixed16Height - imageHeight else 0
-        val rowBytes = fixed16Width.toLong() * Short.SIZE_BYTES
-        val planeBytes = rowBytes * fixed16Height.toLong()
+        check(outputCore.left == 0 && destinationWidth == fixed16Width) {
+            "RGB Fixed16 band packing requires full-width horizontal bands"
+        }
+        val rowBytes = destinationWidth.toLong() * Short.SIZE_BYTES
+        val planeBytes = rowBytes * destinationHeight.toLong()
+        val packedByteCount = (planeBytes * 3L)
+            .also { bytes -> require(bytes in 1..storage.byteCount.toLong()) }
+            .toInt()
         var setupNs = 0L
         var submitNs = 0L
         try {
@@ -4540,11 +5439,8 @@ internal class GlesMgcRawSpatialStacker(
                     storage.buffer,
                 )
                 GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
-                GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, fixed16Width)
-                val destinationOffset =
-                    channel.toLong() * planeBytes +
-                        outputCore.top.toLong() * rowBytes +
-                        outputCore.left.toLong() * Short.SIZE_BYTES
+                GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, destinationWidth)
+                val destinationOffset = channel.toLong() * planeBytes
                 val destinationEnd =
                     destinationOffset +
                         (destinationHeight - 1L) * rowBytes +
@@ -4580,7 +5476,47 @@ internal class GlesMgcRawSpatialStacker(
         return RgbDiagnosticPackTiming(
             setupNs = setupNs,
             dispatchNs = submitNs,
+            byteCount = packedByteCount,
+            destinationHeight = destinationHeight,
         )
+    }
+
+    private fun copyRgbFixed16BandToHost(
+        capture: StrengthCapture,
+        pending: PendingRgbDiagnosticBand,
+        destination: ByteBuffer,
+    ) {
+        check(capture.outputMode == MgcSpatialOutputMode.RGB)
+        check(pending.outputCore.left == 0)
+        val fixed16Width = capture.geometry.fixed16Width
+        val fixed16Height = capture.geometry.fixed16Height
+        val rowBytes = fixed16Width * Short.SIZE_BYTES
+        val sourcePlaneBytes = rowBytes * pending.destinationHeight
+        val destinationPlaneBytes = rowBytes * fixed16Height
+        check(pending.byteCount == sourcePlaneBytes * 3)
+        check(destination.capacity() >= destinationPlaneBytes * 3)
+        val mapped = mapPixelPackBuffer(
+            pending.storage.buffer,
+            pending.byteCount,
+            "MGC Spatial RGB Fixed16 band top=${pending.outputCore.top}",
+        )
+        try {
+            for (channel in 0 until 3) {
+                val sourceOffset = channel * sourcePlaneBytes
+                val destinationOffset =
+                    channel * destinationPlaneBytes + pending.outputCore.top * rowBytes
+                val source = mapped.duplicate().apply {
+                    position(sourceOffset)
+                    limit(sourceOffset + sourcePlaneBytes)
+                }
+                destination.duplicate().apply {
+                    position(destinationOffset)
+                    put(source)
+                }
+            }
+        } finally {
+            unmapPixelPackBuffer(pending.storage.buffer)
+        }
     }
 
     private fun clearRgbAccumulators(
@@ -4614,11 +5550,13 @@ internal class GlesMgcRawSpatialStacker(
         rawTexture: Int,
         rawTextureOrigin: MgcSpatialRgbRect,
         sourceRegion: MgcSpatialRgbRect,
-        outputCore: MgcSpatialRgbRect,
+        outputCores: List<MgcSpatialRgbRect>,
         chromaGuideRegionTexture: Int,
         semanticAccumulator: Int,
         opponentWeightAccumulator: Int,
+        accumulatorIsFullOutput: Boolean = false,
     ) {
+        require(outputCores.isNotEmpty())
         GLES30.glUseProgram(mergeRgbProgram)
         bindTexture(mergeRgbProgram, "uRaw", 0, rawTexture)
         bindTexture(mergeRgbProgram, "uChromaGuideRegion", 1, chromaGuideRegionTexture)
@@ -4645,12 +5583,6 @@ internal class GlesMgcRawSpatialStacker(
             sourceRegion.height,
         )
         uniform2i(mergeRgbProgram, "uOutputSize", outputWidth, outputHeight)
-        uniform2i(
-            mergeRgbProgram,
-            "uOutputOrigin",
-            outputCore.left,
-            outputCore.top,
-        )
         uniform4f(
             mergeRgbProgram,
             "uCovRangeRg",
@@ -4702,13 +5634,35 @@ internal class GlesMgcRawSpatialStacker(
         try {
             GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
             GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
-            draw(
-                mergeRgbProgram,
-                outputCore.width,
-                outputCore.height,
+            bindRenderTargets(
                 intArrayOf(semanticAccumulator, opponentWeightAccumulator),
-                preserveBlend = true,
+                "MGC RGB contributions",
             )
+            outputCores.forEach { outputCore ->
+                val accumulatorLeft = if (accumulatorIsFullOutput) outputCore.left else 0
+                val accumulatorTop = if (accumulatorIsFullOutput) outputCore.top else 0
+                uniform2i(
+                    mergeRgbProgram,
+                    "uOutputOrigin",
+                    outputCore.left,
+                    outputCore.top,
+                )
+                uniform2i(
+                    mergeRgbProgram,
+                    "uAccumulatorOrigin",
+                    accumulatorLeft,
+                    accumulatorTop,
+                )
+                GLES30.glViewport(
+                    accumulatorLeft,
+                    accumulatorTop,
+                    outputCore.width,
+                    outputCore.height,
+                )
+                GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+            }
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            checkGlError("MGC RGB contributions=${outputCores.size}")
         } finally {
             GLES30.glDisable(GLES30.GL_BLEND)
         }
@@ -5355,6 +6309,213 @@ internal class GlesMgcRawSpatialStacker(
         checkGlError("release $label")
     }
 
+    /**
+     * Closes the temporal resource arena before allocating the full RGB output and band storage.
+     *
+     * The caller supplies the complete texture contract consumed by the selected RGB path.
+     * Waiting once at this phase boundary allows the driver to reclaim every other temporal
+     * texture instead of overlapping deferred deletion with final output allocation.
+     */
+    private fun releaseRgbTemporalPhaseResources(
+        persistentTextures: IntArray,
+        strengthCapture: StrengthCapture?,
+    ) {
+        check(activeSequentialScratchTextures == null) {
+            "RGB temporal resources cannot be released during an active scratch frame"
+        }
+        val retained = HashSet<Int>(persistentTextures.size + 2)
+        persistentTextures.forEach(retained::add)
+        strengthCapture?.let { capture ->
+            retained += capture.alignmentAtlas
+            retained += capture.rejectionAtlas
+        }
+        retained.remove(0)
+        check(retained.all(textures::contains)) {
+            "RGB persistent temporal resource is not owned by the stacker"
+        }
+
+        val beforeBytes = estimatedOwnedTextureBytes()
+        val waitMs = GlesGpuCompletion.awaitSubmittedWork(
+            label = "MGC Spatial RGB temporal resource handoff",
+            checkGlError = ::checkGlError,
+        )
+        detachRenderTargets()
+        val releasedTextures = textures.filterNot(retained::contains).toIntArray()
+        val releasedBytes = estimatedTextureBytes(releasedTextures)
+        if (releasedTextures.isNotEmpty()) {
+            GLES30.glDeleteTextures(releasedTextures.size, releasedTextures, 0)
+            releasedTextures.forEach { texture ->
+                check(textures.remove(texture))
+                textureSpecs.remove(texture)
+            }
+        }
+        temporalScratchTextures.clearTracking()
+        checkGlError("release MGC Spatial RGB temporal resource arena")
+        PLog.i(
+            TAG,
+            "MGC Spatial RGB temporal arena released textures=${releasedTextures.size} " +
+                "releasedBytes=$releasedBytes retainedTextures=${retained.size} " +
+                "retainedBytes=${estimatedOwnedTextureBytes()} beforeBytes=$beforeBytes " +
+                "gpuWait=${waitMs}ms",
+        )
+    }
+
+    /** Moves strength atlases out of GL storage before the full-resolution RGB output exists. */
+    private fun materializeRgbStrengthAtlases(
+        capture: StrengthCapture,
+    ): Pair<PreparedTextureReadback, PreparedTextureReadback> {
+        check(capture.outputMode == MgcSpatialOutputMode.RGB)
+        var alignmentHost: PreparedTextureReadback? = null
+        var rejectionHost: PreparedTextureReadback? = null
+        return try {
+            alignmentHost = materializePreparedReadbackToHost(
+                prepared = queuePreparedTextureReadback(
+                    texture = capture.alignmentAtlas,
+                    textureWidth = capture.alignmentLayout.atlasWidth,
+                    textureHeight = capture.alignmentLayout.atlasHeight,
+                    encoding = StrengthReadbackEncoding.FLOAT32,
+                    byteCount = strengthAlignmentReadbackByteCount(capture),
+                    label = "MGC Spatial RGB strength alignment atlas",
+                    atlasLayout = capture.alignmentLayout,
+                ),
+                label = "MGC Spatial RGB strength alignment host",
+            )
+            detachRenderTargets()
+            releaseOwnedTexture(capture.alignmentAtlas, "RGB strength alignment atlas")
+
+            rejectionHost = materializePreparedReadbackToHost(
+                prepared = queuePreparedTextureReadback(
+                    texture = capture.rejectionAtlas,
+                    textureWidth = capture.rejectionLayout.atlasWidth,
+                    textureHeight = capture.rejectionLayout.atlasHeight,
+                    encoding = StrengthReadbackEncoding.UNORM8,
+                    byteCount = strengthRejectionReadbackByteCount(capture),
+                    label = "MGC Spatial RGB strength rejection atlas",
+                    atlasLayout = capture.rejectionLayout,
+                ),
+                label = "MGC Spatial RGB strength rejection host",
+            )
+            detachRenderTargets()
+            releaseOwnedTexture(capture.rejectionAtlas, "RGB strength rejection atlas")
+            checkNotNull(alignmentHost) to checkNotNull(rejectionHost)
+        } catch (throwable: Throwable) {
+            LargeDirectBuffer.free(alignmentHost?.cpuBuffer)
+            LargeDirectBuffer.free(rejectionHost?.cpuBuffer)
+            throw throwable
+        }
+    }
+
+    /**
+     * Resolves the small persistent alignment grids once after temporal completion. Exact bounds
+     * avoid replaying hundreds of unused RAW halo rows for every reconstruction band.
+     */
+    private fun resolveRgbFlowBounds(frames: List<RgbMergeFrame>): List<RgbMergeFrame> {
+        val byteCount = bayerAlignmentWidth.toLong() * bayerAlignmentHeight * 4L * Float.SIZE_BYTES
+        require(byteCount in 1..Int.MAX_VALUE.toLong())
+        val readback = ByteBuffer.allocateDirect(byteCount.toInt()).order(ByteOrder.nativeOrder())
+        return frames.map { frame ->
+            if (frame.flowBounds == MgcSpatialRgbFlowBounds.Zero) {
+                frame
+            } else {
+                bindRenderTargets(
+                    intArrayOf(frame.alignmentTexture),
+                    "MGC RGB alignment bounds frame ${frame.imageIndex}",
+                )
+                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, Float.SIZE_BYTES)
+                GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
+                readback.clear()
+                GLES30.glReadPixels(
+                    0,
+                    0,
+                    bayerAlignmentWidth,
+                    bayerAlignmentHeight,
+                    GLES30.GL_RGBA,
+                    GLES30.GL_FLOAT,
+                    readback,
+                )
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                checkGlError("read MGC RGB alignment bounds frame ${frame.imageIndex}")
+                val values = readback.asFloatBuffer()
+                var minimumX = Float.POSITIVE_INFINITY
+                var minimumY = Float.POSITIVE_INFINITY
+                var maximumX = Float.NEGATIVE_INFINITY
+                var maximumY = Float.NEGATIVE_INFINITY
+                for (pixel in 0 until bayerAlignmentWidth * bayerAlignmentHeight) {
+                    val x = values.get(pixel * 4)
+                    val y = values.get(pixel * 4 + 1)
+                    check(x.isFinite() && y.isFinite()) {
+                        "MGC RGB alignment frame ${frame.imageIndex} contains non-finite flow"
+                    }
+                    minimumX = minOf(minimumX, x)
+                    minimumY = minOf(minimumY, y)
+                    maximumX = maxOf(maximumX, x)
+                    maximumY = maxOf(maximumY, y)
+                }
+                val bounds = MgcSpatialRgbFlowBounds(
+                    minX = minimumX,
+                    minY = minimumY,
+                    maxX = maximumX,
+                    maxY = maximumY,
+                )
+                check(
+                    bounds.minX >= conservativeRgbFlowBounds.minX &&
+                        bounds.minY >= conservativeRgbFlowBounds.minY &&
+                        bounds.maxX <= conservativeRgbFlowBounds.maxX &&
+                        bounds.maxY <= conservativeRgbFlowBounds.maxY
+                ) {
+                    "MGC RGB alignment frame ${frame.imageIndex} exceeds analytical bounds: " +
+                        "$bounds expected=$conservativeRgbFlowBounds"
+                }
+                PLog.d(TAG, "MGC RGB flow bounds frame=${frame.imageIndex} $bounds")
+                frame.copy(flowBounds = bounds)
+            }
+        }.also {
+            detachRenderTargets()
+        }
+    }
+
+    private fun detachRenderTargets() {
+        if (renderFbo == 0 || renderTargetAttachmentCount == 0) return
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, renderFbo)
+        for (index in 0 until renderTargetAttachmentCount) {
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0 + index,
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+            )
+        }
+        renderTargetAttachmentCount = 0
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun estimatedOwnedTextureBytes(): Long =
+        textureSpecs.values.sumOf(::estimatedTextureBytes)
+
+    private fun estimatedTextureBytes(textures: IntArray): Long = textures.sumOf { texture ->
+        textureSpecs[texture]?.let(::estimatedTextureBytes) ?: 0L
+    }
+
+    private fun estimatedTextureBytes(spec: TextureSpec): Long {
+        val bytesPerPixel = when (spec.internalFormat) {
+            GLES30.GL_R8 -> 1
+            GLES30.GL_R16F,
+            GLES30.GL_R16I,
+            GLES30.GL_R16UI -> 2
+            GLES30.GL_R32F,
+            GLES30.GL_RGB10_A2 -> 4
+            GLES30.GL_RGBA16F,
+            GLES30.GL_RGBA16UI -> 8
+            GLES30.GL_RGBA32F -> 16
+            else -> error(
+                "Missing MGC texture byte size for format=0x" +
+                    spec.internalFormat.toString(16),
+            )
+        }
+        return spec.width.toLong() * spec.height * bytesPerPixel
+    }
+
     private fun drawRegion(
         program: Int,
         target: Int,
@@ -5782,6 +6943,26 @@ internal class GlesMgcRawSpatialStacker(
         tileStride,
     )
 
+    private fun rgbBandHeightCandidates(): IntArray = intArrayOf(
+        outputHeight,
+        4096,
+        3072,
+        2048,
+        1536,
+        MgcSpatialRgbTilePlanner.DEFAULT_OUTPUT_TILE_SIZE,
+        768,
+        512,
+        384,
+        256,
+        192,
+        128,
+        64,
+        32,
+    ).filter { it in 1..outputHeight }
+        .distinct()
+        .sortedDescending()
+        .toIntArray()
+
     private companion object {
         fun gaussianKernel(size: Int, sigma: Float): FloatArray {
             require(size > 0)
@@ -5799,7 +6980,12 @@ internal class GlesMgcRawSpatialStacker(
         const val TAG = "GlesMgcRawSpatial"
         const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         const val RAW_BYTES_PER_PIXEL = 2
-        const val RGB_RAW_WINDOW_SLOTS = 3
+        const val RGB_RAW_WINDOW_SLOTS = 2
+        const val RGB_MAX_IN_FLIGHT_PASSES = 2
+        const val RGB_DIAGNOSTIC_PBO_SLOTS = 2
+        const val RGB_TEXTURE_BUDGET_BYTES = 640L * 1024L * 1024L
+        const val RGB_TEXTURE_BUDGET_RESERVE_BYTES = 8L * 1024L * 1024L
+        const val RGB_ONLINE_DRAW_BAND_HEIGHT = 1024
         const val RGB_CHROMA_GUIDE_RAW_RADIUS = 2
         const val NOISE_LUT_WIDTH = 10
         const val ALIGN_TARGET_FINEST_DIMENSION = 256

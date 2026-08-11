@@ -1513,7 +1513,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val useRawMaxSpatialRgb: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMaxSpatialRgb }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(

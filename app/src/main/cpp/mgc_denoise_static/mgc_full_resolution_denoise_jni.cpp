@@ -19,11 +19,11 @@
 namespace {
 
 constexpr int kWhiteLevel = 16383;
-constexpr int kMaxHostWorkers = 16;
+constexpr int kHostWorkers = 4;
 constexpr char kLogTag[] = "PLog_MgcFullResolutionDenoise";
 
 int HostWorkerCount() {
-    return std::max(1, std::min(omp_get_num_procs(), kMaxHostWorkers));
+    return kHostWorkers;
 }
 
 void ZeroPlanarBuffers(

@@ -195,7 +195,7 @@ data class UserPreferences(
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
     val useRawMaxHdrComposition: Boolean = true, // RAWmax：包围曝光 HDR 融合
-    val useRawMaxSpatialRgb: Boolean = false, // RAWmax：可选 Spatial RGB；默认保留 Bayer
+    val useRawMaxSpatialRgb: Boolean = true, // RAWmax：Spatial RGB 默认开启；关闭时保留 Bayer
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
@@ -697,7 +697,7 @@ class UserPreferencesRepository(private val context: Context) {
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useRawMax = useRawMax,
                 useRawMaxHdrComposition = preferences[USE_RAW_MAX_HDR_COMPOSITION] ?: true,
-                useRawMaxSpatialRgb = preferences[USE_RAW_MAX_SPATIAL_RGB] ?: false,
+                useRawMaxSpatialRgb = preferences[USE_RAW_MAX_SPATIAL_RGB] ?: true,
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
                     ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
                     MultiFrameConfig.normalizeOutputScale(

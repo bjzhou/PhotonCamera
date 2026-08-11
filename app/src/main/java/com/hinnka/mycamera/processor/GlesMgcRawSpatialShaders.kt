@@ -1169,6 +1169,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform ivec2 uRawRegionSize;
         uniform ivec2 uOutputSize;
         uniform ivec2 uOutputOrigin;
+        uniform ivec2 uAccumulatorOrigin;
         uniform vec4 uCovRangeRg;
         uniform vec2 uCovRangeB;
         uniform vec4 uGains;
@@ -1289,7 +1290,7 @@ internal object GlesMgcRawSpatialShaders {
         }
 
         void main() {
-            ivec2 localOutput = ivec2(gl_FragCoord.xy);
+            ivec2 localOutput = ivec2(gl_FragCoord.xy) - uAccumulatorOrigin;
             ivec2 outputPixel = localOutput + uOutputOrigin;
             vec2 referenceRaw = (vec2(outputPixel) + vec2(0.5)) *
                 vec2(uRawSize) / vec2(uOutputSize) - vec2(0.5);
