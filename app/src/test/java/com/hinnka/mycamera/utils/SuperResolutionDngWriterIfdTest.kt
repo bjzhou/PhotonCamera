@@ -52,6 +52,7 @@ class SuperResolutionDngWriterIfdTest {
         assertTrue(exifIfd.containsKey(TAG_DATETIME_ORIGINAL))
         assertEquals(TYPE_UNDEFINED, exifIfd.getValue(TAG_USER_COMMENT).type)
         assertTrue(exifIfd.containsKey(TAG_LENS_MODEL))
+        assertTrue(exifIfdOffset < primaryIfd.getValue(TAG_MAKE).valueOrOffset)
         assertEquals(header.size, primaryIfd.getValue(TAG_STRIP_OFFSETS).valueOrOffset)
 
         val focalLength = exifIfd.getValue(TAG_FOCAL_LENGTH)

@@ -11,6 +11,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * EXIF 元数据写入器
@@ -195,6 +196,13 @@ object ExifWriter {
                 exif.setAttribute(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, fl35.toString())
             }
 
+            captureInfo.exposureBias?.takeIf { it.isFinite() }?.let { exposureBias ->
+                exif.setAttribute(
+                    ExifInterface.TAG_EXPOSURE_BIAS_VALUE,
+                    formatSignedRational(exposureBias),
+                )
+            }
+
             // ========== 白平衡 ==========
             captureInfo.whiteBalance?.let { wb ->
                 // 0 = Auto, 1 = Manual
@@ -238,6 +246,16 @@ object ExifWriter {
         // 简化分数
         val gcd = gcd(numerator, multiplier)
         return "${numerator / gcd}/${multiplier / gcd}"
+    }
+
+    /**
+     * ExposureBiasValue 是有符号有理数，需要保留 1/3 EV 等常用档位精度。
+     */
+    private fun formatSignedRational(value: Float): String {
+        val denominator = 1_000_000
+        val numerator = (value * denominator).roundToInt()
+        val divisor = gcd(numerator, denominator)
+        return "${numerator / divisor}/${denominator / divisor}"
     }
 
     /**

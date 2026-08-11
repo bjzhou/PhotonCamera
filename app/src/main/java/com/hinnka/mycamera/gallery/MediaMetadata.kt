@@ -169,6 +169,7 @@ data class MediaMetadata(
             aperture = aperture?.substringAfter("/")?.toFloatOrNull(),
             focalLength = focalLength?.substringBefore("mm")?.toFloatOrNull(),
             focalLength35mm = focalLength35mm?.substringBefore("mm")?.toIntOrNull(),
+            exposureBias = exposureBias,
             exposureTime = parseExposureTime(shutterSpeed),
             software = software ?: "PhotonCamera",
             latitude = latitude,

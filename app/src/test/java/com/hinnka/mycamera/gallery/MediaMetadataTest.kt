@@ -41,6 +41,18 @@ class MediaMetadataTest {
         assertEquals("X-T5", captureInfo.model)
     }
 
+    @Test
+    fun captureInfoKeepsExposureBiasForExif() {
+        val captureInfo = MediaMetadata(
+            brand = "FUJIFILM",
+            deviceModel = "X-T5",
+            exposureBias = -2f / 3f,
+            isImported = true,
+        ).toCaptureInfo()
+
+        assertEquals(-2f / 3f, captureInfo.exposureBias)
+    }
+
     private fun rawMetadata(iso: Int): RawMetadata {
         return RawMetadata(
             width = 4000,

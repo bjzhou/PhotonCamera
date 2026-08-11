@@ -202,14 +202,28 @@ object SuperResolutionDngWriter {
     private const val TAG_EXIF_IFD_POINTER = 34665
     private const val TAG_EXPOSURE_TIME = 33434
     private const val TAG_F_NUMBER = 33437
+    private const val TAG_EXPOSURE_PROGRAM = 34850
     private const val TAG_ISO_SPEED_RATINGS = 34855
+    private const val TAG_EXIF_VERSION = 36864
     private const val TAG_DATETIME_ORIGINAL = 36867
     private const val TAG_DATETIME_DIGITIZED = 36868
+    private const val TAG_OFFSET_TIME = 36880
+    private const val TAG_OFFSET_TIME_ORIGINAL = 36881
+    private const val TAG_OFFSET_TIME_DIGITIZED = 36882
+    private const val TAG_SHUTTER_SPEED_VALUE = 37377
     private const val TAG_APERTURE_VALUE = 37378
+    private const val TAG_EXPOSURE_BIAS_VALUE = 37380
+    private const val TAG_MAX_APERTURE_VALUE = 37381
+    private const val TAG_FLASH = 37385
     private const val TAG_FOCAL_LENGTH = 37386
     private const val TAG_USER_COMMENT = 37510
+    private const val TAG_SUBSEC_TIME = 37520
+    private const val TAG_SUBSEC_TIME_ORIGINAL = 37521
+    private const val TAG_SUBSEC_TIME_DIGITIZED = 37522
     private const val TAG_WHITE_BALANCE = 41987
+    private const val TAG_DIGITAL_ZOOM_RATIO = 41988
     private const val TAG_FOCAL_LENGTH_IN_35MM_FILM = 41989
+    private const val TAG_LENS_MAKE = 42035
     private const val TAG_LENS_MODEL = 42036
     private const val TAG_CFA_REPEAT_PATTERN_DIM = 33421
     private const val TAG_CFA_PATTERN = 33422
@@ -493,11 +507,13 @@ object SuperResolutionDngWriter {
         val calibrationMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)
         val calibrationMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)
         val noiseProfile = buildNoiseProfile(captureResult)
-        val dateTime = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(
+        val captureDate =
             captureMetadataResult.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestampNs ->
                 Date(System.currentTimeMillis() - SystemClock.elapsedRealtime() + timestampNs / 1_000_000L)
             } ?: Date()
-        )
+        val dateTime = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(captureDate)
+        val offsetTime = SimpleDateFormat("XXX", Locale.US).format(captureDate)
+        val subSecTime = SimpleDateFormat("SSS", Locale.US).format(captureDate)
         val exposureTimeSeconds = captureMetadataResult.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             ?.takeIf { it > 0L }
             ?.let { it.toDouble() / 1_000_000_000.0 }
@@ -519,6 +535,32 @@ object SuperResolutionDngWriter {
         val exifWhiteBalance = captureMetadataResult.get(CaptureResult.CONTROL_AWB_MODE)?.let { awbMode ->
             if (awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
         }
+        val exposureBiasEv = captureInfo.exposureBias
+            ?.takeIf { it.isFinite() }
+            ?: captureMetadataResult.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION)
+                ?.let { compensationSteps ->
+                    characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+                        ?.toFloat()
+                        ?.takeIf { it.isFinite() && it > 0f }
+                        ?.let { compensationSteps * it }
+                }
+        val exposureProgram = if (
+            captureMetadataResult.get(CaptureResult.CONTROL_AE_MODE) == CameraMetadata.CONTROL_AE_MODE_OFF
+        ) {
+            1
+        } else {
+            2
+        }
+        val exifFlash = when (captureMetadataResult.get(CaptureResult.FLASH_STATE)) {
+            CameraMetadata.FLASH_STATE_FIRED,
+            CameraMetadata.FLASH_STATE_PARTIAL -> 1
+            CameraMetadata.FLASH_STATE_UNAVAILABLE -> 16
+            else -> if (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) 0 else 16
+        }
+        val digitalZoomRatio = captureMetadataResult.get(CaptureResult.CONTROL_ZOOM_RATIO)
+            ?.takeIf { it.isFinite() && it > 1f }
+            ?.toDouble()
+            ?: 0.0
         val isCfa = imageLayout == ImageLayout.CFA
         val samplesPerPixel = imageLayout.samplesPerPixel
         val opcodeList2 = if (isCfa && !pixelsIncludeLensShadingCorrection) {
@@ -564,18 +606,36 @@ object SuperResolutionDngWriter {
             aperture?.let {
                 add(rationalArray(TAG_F_NUMBER, listOf(it.toDouble())))
                 add(rationalArray(TAG_APERTURE_VALUE, listOf(apexAperture(it).toDouble())))
+                add(rationalArray(TAG_MAX_APERTURE_VALUE, listOf(apexAperture(it).toDouble())))
             }
+            add(short(TAG_EXPOSURE_PROGRAM, exposureProgram))
             iso?.let { add(short(TAG_ISO_SPEED_RATINGS, it.coerceIn(1, MAX_TIFF_SHORT))) }
+            add(undefined(TAG_EXIF_VERSION, "0231".toByteArray(Charsets.US_ASCII)))
             add(ascii(TAG_DATETIME_ORIGINAL, dateTime))
             add(ascii(TAG_DATETIME_DIGITIZED, dateTime))
+            add(ascii(TAG_OFFSET_TIME, offsetTime))
+            add(ascii(TAG_OFFSET_TIME_ORIGINAL, offsetTime))
+            add(ascii(TAG_OFFSET_TIME_DIGITIZED, offsetTime))
+            exposureTimeSeconds?.let {
+                add(sRationalArray(TAG_SHUTTER_SPEED_VALUE, listOf(-kotlin.math.log2(it))))
+            }
+            exposureBiasEv?.let {
+                add(sRationalArray(TAG_EXPOSURE_BIAS_VALUE, listOf(it.toDouble())))
+            }
+            add(short(TAG_FLASH, exifFlash))
             focalLength?.let { add(rationalArray(TAG_FOCAL_LENGTH, listOf(it.toDouble()))) }
             if (DeviceUtil.isOppo) {
                 add(undefined(TAG_USER_COMMENT, encodeExifAsciiUserComment(OPPO_EXIF_USER_COMMENT)))
             }
+            add(ascii(TAG_SUBSEC_TIME, subSecTime))
+            add(ascii(TAG_SUBSEC_TIME_ORIGINAL, subSecTime))
+            add(ascii(TAG_SUBSEC_TIME_DIGITIZED, subSecTime))
             exifWhiteBalance?.let { add(short(TAG_WHITE_BALANCE, it)) }
+            add(rationalArray(TAG_DIGITAL_ZOOM_RATIO, listOf(digitalZoomRatio)))
             focalLength35mm?.let {
                 add(short(TAG_FOCAL_LENGTH_IN_35MM_FILM, it.coerceIn(1, MAX_TIFF_SHORT)))
             }
+            add(ascii(TAG_LENS_MAKE, captureInfo.make))
             lensModel?.let { add(ascii(TAG_LENS_MODEL, it)) }
         }.sortedBy { it.tag }
 
@@ -720,22 +780,19 @@ object SuperResolutionDngWriter {
         require(rawEntries.isNotEmpty() || previewByteCount == 0) {
             "Preview image requires a RAW SubIFD"
         }
+        // Keep ExifIFD ahead of potentially multi-megabyte DNG profile payloads, as in the PXL
+        // reference DNG. The IFD0 tags still own that payload; only its physical byte order moves.
         val primaryEntryCount = primaryEntries.size
-        val primaryDataBaseOffset = 8 + 2 + primaryEntryCount * 12 + 4
-        val (encodedPrimaryEntries, primaryData) = encodeDirectoryEntries(
-            entries = primaryEntries,
-            dataBaseOffset = primaryDataBaseOffset,
-        )
-
+        val primaryIfdEndOffset = 8 + 2 + primaryEntryCount * 12 + 4
         val exifIfdOffset = if (exifEntries.isNotEmpty()) {
-            primaryDataBaseOffset + primaryData.size
+            primaryIfdEndOffset
         } else {
             0
         }
         val exifDataBaseOffset = if (exifEntries.isNotEmpty()) {
             exifIfdOffset + 2 + exifEntries.size * 12 + 4
         } else {
-            primaryDataBaseOffset + primaryData.size
+            primaryIfdEndOffset
         }
         val (encodedExifEntries, exifData) = encodeDirectoryEntries(
             entries = exifEntries,
@@ -755,7 +812,12 @@ object SuperResolutionDngWriter {
             entries = rawEntries,
             dataBaseOffset = rawDataBaseOffset,
         )
-        val previewOffset = rawDataBaseOffset + rawIfdData.size
+        val primaryDataBaseOffset = rawDataBaseOffset + rawIfdData.size
+        val (encodedPrimaryEntries, primaryData) = encodeDirectoryEntries(
+            entries = primaryEntries,
+            dataBaseOffset = primaryDataBaseOffset,
+        )
+        val previewOffset = primaryDataBaseOffset + primaryData.size
         val previewPadding = if ((previewByteCount and 1) != 0) 1 else 0
         val rawOffset = previewOffset + previewByteCount + previewPadding
         val headerEndOffset = if (rawEntries.isNotEmpty()) previewOffset else rawOffset
@@ -779,7 +841,6 @@ object SuperResolutionDngWriter {
             out.write(value)
         }
         out.write(uintBytes(0))
-        out.write(primaryData)
 
         if (exifEntries.isNotEmpty()) {
             check(out.size() == exifIfdOffset) {
@@ -815,6 +876,10 @@ object SuperResolutionDngWriter {
             out.write(uintBytes(0))
             out.write(rawIfdData)
         }
+        check(out.size() == primaryDataBaseOffset) {
+            "IFD0 data offset mismatch: expected=$primaryDataBaseOffset actual=${out.size()}"
+        }
+        out.write(primaryData)
         check(out.size() == headerEndOffset) {
             "DNG header offset mismatch: expected=$headerEndOffset actual=${out.size()}"
         }
