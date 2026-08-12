@@ -95,6 +95,7 @@ import android.view.LayoutInflater
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.VideoFrameProcessor
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.hinnka.mycamera.lut.VideoLutEffect
@@ -720,8 +721,8 @@ fun GalleryEditScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(isZoomed) {
-                        if (!isZoomed) {
+                    .pointerInput(isZoomed, currentPhoto.isVideo) {
+                        if (!isZoomed && !currentPhoto.isVideo) {
                             var totalDrag = 0f
                             detectHorizontalDragGestures(
                                 onDragEnd = {
@@ -743,8 +744,8 @@ fun GalleryEditScreen(
                             )
                         }
                     }
-                    .pointerInput(Unit) {
-                        awaitPointerEventScope {
+                    .pointerInput(currentPhoto.isVideo) {
+                        if (!currentPhoto.isVideo) awaitPointerEventScope {
                             while (true) {
                                 // 确认第一个手指按下，且当前只有一个指针
                                 val downEvent = awaitPointerEvent(PointerEventPass.Initial)
@@ -2133,15 +2134,10 @@ private fun VideoEditPlayer(
         VideoLutEffect(lutConfig, recipeParams)
     }
     
-    LaunchedEffect(lutConfig, recipeParams) {
-        PLog.d("VideoEditPlayer", "Updating VideoLutEffect with lutConfig: ${lutConfig?.title}, recipeParams: ${recipeParams != null}")
-        videoLutEffect.update(lutConfig, recipeParams)
-    }
-
     val exoPlayer = remember(photo.id, mediaUri, isPlayerActive) {
         if (!isPlayerActive) return@remember null
         PLog.d("VideoEditPlayer", "Re-creating loopable ExoPlayer instance for video preview.")
-        ExoPlayer.Builder(context).build().apply {
+        ExoPlayer.Builder(context, VideoEditRenderersFactory(context)).build().apply {
             setMediaItem(MediaItem.fromUri(mediaUri))
             repeatMode = Player.REPEAT_MODE_ONE
             setVideoEffects(listOf(videoLutEffect))
@@ -2156,6 +2152,18 @@ private fun VideoEditPlayer(
                     PLog.e("VideoEditPlayer", "ExoPlayer encountered playback error!", error)
                 }
             })
+        }
+    }
+
+    LaunchedEffect(lutConfig, recipeParams, exoPlayer) {
+        PLog.d("VideoEditPlayer", "Updating VideoLutEffect with lutConfig: ${lutConfig?.title}, recipeParams: ${recipeParams != null}")
+        videoLutEffect.update(lutConfig, recipeParams)
+
+        // A paused player does not submit another frame to the GL effect pipeline. REDRAW asks the
+        // Media3 video graph to process its retained frame again without seeking or changing the
+        // playback state, so the controller stays hidden and the new LUT is visible immediately.
+        if (exoPlayer != null && !exoPlayer.playWhenReady) {
+            exoPlayer.setVideoEffects(VideoFrameProcessor.REDRAW)
         }
     }
 
@@ -2176,9 +2184,10 @@ private fun VideoEditPlayer(
             },
             update = {
                 PLog.d("VideoEditPlayer", "Updating PlayerView with ExoPlayer.")
-                it.player = exoPlayer
                 it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                it.useController = false
+                it.useController = true
+                it.controllerAutoShow = true
+                it.player = exoPlayer
                 it.visibility = android.view.View.VISIBLE
             },
             modifier = modifier.autoRotate(matchParentSize = true)
