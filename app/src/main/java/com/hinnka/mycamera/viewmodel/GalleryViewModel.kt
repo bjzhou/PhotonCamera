@@ -2956,6 +2956,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         invalidateGridThumbnailCache(photoId)
     }
 
+    /**
+     * Waits for an empty prepared-photo placeholder to be replaced by its final internal image.
+     * External and already-materialized media are not watched here.
+     */
+    suspend fun awaitPreparedPhotoReady(photo: MediaData): Boolean {
+        val localPath = photo.uri.takeIf { it.scheme == "file" }?.path ?: return false
+        val context = getApplication<Application>()
+        val placeholderFile = GalleryManager.getPhotoFile(context, photo.id)
+        if (File(localPath).absolutePath != placeholderFile.absolutePath) return false
+        return GalleryManager.awaitInternalPhotoReady(context, photo.id)
+    }
+
+    fun getInternalPhotoSize(photoId: String): Long {
+        val context = getApplication<Application>()
+        return GalleryManager.getOriginalImageFile(context, photoId)?.length() ?: 0L
+    }
+
     private fun invalidateGridThumbnailCache(photoId: String) {
         val snapshot = gridThumbnailCache.snapshot()
         snapshot.keys.filter { it.startsWith("${photoId}_") }.forEach {

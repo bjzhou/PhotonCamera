@@ -44,6 +44,7 @@ import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
@@ -3301,42 +3302,15 @@ class RawDemosaicProcessor {
                 )
             }
 
-            // The HDR reference branches directly from undenoised, demosaicked camera RGB.
-            // It intentionally excludes denoise, ProfileGainMap, rendering engines, their
-            // additional tone mapping, and output sharpening. Explicit user RAW exposure is
-            // retained so the HDR reference stays exposure-aligned with the rendered SDR base.
-            // The complete ACR3 reference curve is applied. Its output contract is linear extended
-            // sRGB.
-            val hdrReferenceBitmap = if (includeHdrReference) {
-                setupHdrReferenceFramebuffer(actualWidth, actualHeight)
-                renderHdrReferencePass(
-                    metadata = actualMetadata,
-                    rawExposureCompensation = effectiveExposureCompensation,
-                    inputTextureId = demosaicTextureId,
-                    colorCorrectionMatrix = linearColorCorrectionMatrix,
-                    cameraWhite = linearCameraWhite,
-                    hueSatMap = activeDcpRenderPlan?.hueSatMap,
-                    profileToLinearSrgb = profileToLinearSrgbTransform,
-                )
-                setupOutputFramebuffer(finalWidth, finalHeight)
-                renderOutputPass(
-                    actualRotation,
-                    actualWidth,
-                    actualHeight,
-                    bounds,
-                    hdrReferenceTextureId,
-                )
-                val hdrPixels = readPixels(
-                    finalWidth,
-                    finalHeight,
-                    android.graphics.ColorSpace.get(
-                        android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB
-                    ),
-                )
-                releaseHdrReferenceFramebuffer()
-                hdrPixels
+            // Preserve the undenoised camera-RGB source identity for the lower-priority HDR
+            // branch. LinearRcdPass swaps the full-resolution ping-pong members below, so looking
+            // up demosaicTextureId after the SDR render would select the post-CCM texture instead.
+            // The source texture itself remains read-only and alive until the complete render ends.
+            val hdrReferenceSourceTextureId = if (includeHdrReference) {
+                check(demosaicTextureId != 0) { "HDR reference source texture is unavailable" }
+                demosaicTextureId
             } else {
-                null
+                0
             }
 
             val denoiseProfileTextureId = renderMgcUserAdjustmentDenoise(
@@ -3538,24 +3512,107 @@ class RawDemosaicProcessor {
             val outputMaterializationMs = System.currentTimeMillis() - readStart
             PLog.d(
                 TAG,
-                "RAW output materialization timing " +
+                "RAW output materialization timing target=SDR " +
                     "upstreamStackGpuWait=${upstreamStackTiming?.totalWaitMs ?: 0L}ms " +
                     "renderGpuQueueWait=${outputGpuQueueWaitMs}ms " +
                     "pixelTransferAndBitmap=${outputMaterializationMs}ms",
             )
 
-            PLog.d(TAG, "RAW processing complete: ${finalBitmap?.width}x${finalBitmap?.height}")
-            finalBitmap?.let {
-                RawHdrRenderResult(
-                    sdrBitmap = it,
-                    hdrReferenceBitmap = hdrReferenceBitmap,
-                    rawInputWidth = actualWidth,
-                    rawInputHeight = actualHeight,
-                    outputSourceBounds = Rect(outputSourceBounds),
-                    outputRotation = actualRotation,
-                    effectiveDefaultCrop = effectiveDefaultCrop?.let(::Rect),
-                )
+            if (finalBitmap == null) {
+                PLog.e(TAG, "Unable to materialize RAW SDR output")
+                return@withContext null
             }
+            PLog.i(
+                TAG,
+                "RAW output schedule stage=SDR_BITMAP_COMPLETE size=" +
+                    "${finalBitmap.width}x${finalBitmap.height}",
+            )
+
+            // Keep both output materializations contiguous: HDR follows the completed SDR readback
+            // without yielding to JPEG encoding or another CPU consumer in between.
+            // It branches from the preserved undenoised camera RGB, excludes the SDR denoise/tone/
+            // sharpen chain, and reuses the existing rotated Output FBO after its SDR pixels have
+            // already been copied into the bitmap.
+            val hdrReferenceBitmap = if (includeHdrReference) {
+                val hdrStartNs = System.nanoTime()
+                try {
+                    setupHdrReferenceFramebuffer(actualWidth, actualHeight)
+                    renderHdrReferencePass(
+                        metadata = actualMetadata,
+                        rawExposureCompensation = effectiveExposureCompensation,
+                        inputTextureId = hdrReferenceSourceTextureId,
+                        colorCorrectionMatrix = linearColorCorrectionMatrix,
+                        cameraWhite = linearCameraWhite,
+                        hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                        profileToLinearSrgb = profileToLinearSrgbTransform,
+                    )
+                    renderOutputPass(
+                        actualRotation,
+                        actualWidth,
+                        actualHeight,
+                        bounds,
+                        hdrReferenceTextureId,
+                    )
+                    val hdrGpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+                        label = "RAW HDR reference output",
+                        checkGlError = ::checkGlError,
+                    )
+                    val hdrReadStartNs = System.nanoTime()
+                    val hdrPixels = readPixels(
+                        finalWidth,
+                        finalHeight,
+                        android.graphics.ColorSpace.get(
+                            android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB
+                        ),
+                    )
+                    val hdrMaterializationMs =
+                        (System.nanoTime() - hdrReadStartNs) / 1_000_000L
+                    PLog.i(
+                        TAG,
+                        "RAW output materialization timing target=HDR " +
+                            "renderGpuQueueWait=${hdrGpuQueueWaitMs}ms " +
+                            "pixelTransferAndBitmap=${hdrMaterializationMs}ms " +
+                            "total=${(System.nanoTime() - hdrStartNs) / 1_000_000L}ms",
+                    )
+                    hdrPixels
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: OutOfMemoryError) {
+                    PLog.e(
+                        TAG,
+                        "Unable to allocate RAW HDR output; preserving SDR",
+                        error,
+                    )
+                    null
+                } catch (error: Exception) {
+                    PLog.e(
+                        TAG,
+                        "Unable to materialize RAW HDR output; preserving SDR",
+                        error,
+                    )
+                    null
+                } finally {
+                    releaseHdrReferenceFramebuffer()
+                }
+            } else {
+                null
+            }
+            PLog.i(
+                TAG,
+                "RAW output schedule stage=HDR_BITMAP_COMPLETE enabled=$includeHdrReference " +
+                    "success=${hdrReferenceBitmap != null}",
+            )
+
+            PLog.d(TAG, "RAW processing complete: ${finalBitmap.width}x${finalBitmap.height}")
+            RawHdrRenderResult(
+                sdrBitmap = finalBitmap,
+                hdrReferenceBitmap = hdrReferenceBitmap,
+                rawInputWidth = actualWidth,
+                rawInputHeight = actualHeight,
+                outputSourceBounds = Rect(outputSourceBounds),
+                outputRotation = actualRotation,
+                effectiveDefaultCrop = effectiveDefaultCrop?.let(::Rect),
+            )
         } finally {
             if (rawTextureId == borrowedGpuSource?.textureId) {
                 rawTextureId = 0

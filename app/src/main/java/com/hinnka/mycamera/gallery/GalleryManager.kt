@@ -12,6 +12,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.FileObserver
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.core.graphics.createBitmap
@@ -81,13 +82,16 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.IntBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.resume
 import kotlin.io.copyTo
 import kotlin.io.deleteRecursively
 import kotlin.io.extension
@@ -448,6 +452,72 @@ object GalleryManager {
 
     fun getPhotoFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), PHOTO_FILE)
+    }
+
+    /**
+     * Suspends until a prepared Photon photo publishes a non-empty internal display file.
+     *
+     * Capture creates an empty [PHOTO_FILE] so the pending item can enter the gallery, then
+     * atomically moves the completed JPEG/HEIC into the same directory. Watching the directory
+     * is required because watching the empty file itself would remain attached to the replaced
+     * inode.
+     */
+    suspend fun awaitInternalPhotoReady(context: Context, photoId: String): Boolean {
+        val photoDir = getPhotoDir(context, photoId)
+        if (!photoDir.isDirectory) return false
+        if (getOriginalImageFile(context, photoId) != null) return true
+
+        return suspendCancellableCoroutine { continuation ->
+            val completed = AtomicBoolean(false)
+            lateinit var observer: FileObserver
+
+            fun complete(result: Boolean) {
+                if (!completed.compareAndSet(false, true)) return
+                observer.stopWatching()
+                continuation.resume(result)
+            }
+
+            fun completeIfReady() {
+                if (getOriginalImageFile(context, photoId) != null) {
+                    PLog.d(TAG, "Observed internal photo ready: $photoId")
+                    complete(true)
+                }
+            }
+
+            observer = object : FileObserver(
+                photoDir,
+                FileObserver.CREATE or
+                    FileObserver.CLOSE_WRITE or
+                    FileObserver.MOVED_TO or
+                    FileObserver.DELETE_SELF
+            ) {
+                override fun onEvent(event: Int, path: String?) {
+                    val eventType = event and FileObserver.ALL_EVENTS
+                    if (eventType == FileObserver.DELETE_SELF) {
+                        complete(false)
+                        return
+                    }
+                    if (path != PHOTO_FILE && path != HIGH_QUALITY_PHOTO_FILE) return
+                    if (
+                        eventType == FileObserver.CREATE ||
+                        eventType == FileObserver.CLOSE_WRITE ||
+                        eventType == FileObserver.MOVED_TO
+                    ) {
+                        completeIfReady()
+                    }
+                }
+            }
+
+            // Start before registering cancellation/checking readiness so neither publication nor
+            // an already-cancelled continuation can leave an unowned observer running.
+            observer.startWatching()
+            continuation.invokeOnCancellation {
+                if (completed.compareAndSet(false, true)) {
+                    observer.stopWatching()
+                }
+            }
+            completeIfReady()
+        }
     }
 
     fun getHighQualityPhotoFile(context: Context, photoId: String): File {
@@ -2285,10 +2355,17 @@ object GalleryManager {
                 chromaNoiseReduction = rawChromaNoiseReduction
             )
 
-            FileOutputStream(tempFile).use { outputStream ->
+            val jpegWritten = FileOutputStream(tempFile).use { outputStream ->
                 writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
-            tempFile.renameTo(photoFile)
+            if (!jpegWritten) {
+                tempFile.delete()
+                throw IOException("Failed to encode final JPEG for $photoId")
+            }
+            if (!tempFile.renameTo(photoFile)) {
+                tempFile.delete()
+                throw IOException("Failed to publish final JPEG for $photoId")
+            }
             saveMetadata(context, photoId, updatedMetadata)
             val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
             val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {
@@ -3417,7 +3494,10 @@ object GalleryManager {
                             "cpuMaterializationBeforeRender=false",
                     )
                     if (inMemoryResult != null) {
-                        pendingDngWrite = async(Dispatchers.IO) {
+                        pendingDngWrite = async(
+                            context = Dispatchers.IO,
+                            start = CoroutineStart.LAZY,
+                        ) {
                             try {
                                 val dngStartMs = System.currentTimeMillis()
                                 val written = materializeAndPersistDng()
@@ -3434,7 +3514,8 @@ object GalleryManager {
                         }
                         PLog.i(
                             TAG,
-                            "RAW GPU render completed; deferred DNG materialization started",
+                            "RAW GPU render completed; DNG materialization queued behind " +
+                                "SDR JPEG publication",
                         )
                         inMemoryResult
                     } else {
@@ -3467,7 +3548,6 @@ object GalleryManager {
                 releaseInitialFusedBuffer()
             }
             var bitmap = rawResult.sdrBitmap
-
             if (updatedMetadata.isMirrored) {
                 bitmap = BitmapUtils.flipHorizontal(bitmap)
             }
@@ -3475,15 +3555,28 @@ object GalleryManager {
                 width = bitmap.width,
                 height = bitmap.height,
                 sharpening = rawSharpening,
-                chromaNoiseReduction = rawChromaNoiseReduction
+                chromaNoiseReduction = rawChromaNoiseReduction,
             )
-
-            // Save Original (Stacked Result)
-            FileOutputStream(tempFile).use { outputStream ->
+            val jpegWritten = FileOutputStream(tempFile).use { outputStream ->
                 writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
-            tempFile.renameTo(photoFile)
+            if (!jpegWritten) {
+                tempFile.delete()
+                throw IOException("Failed to encode final stacked JPEG for $photoId")
+            }
+            if (!tempFile.renameTo(photoFile)) {
+                tempFile.delete()
+                throw IOException("Failed to publish final stacked JPEG for $photoId")
+            }
             saveMetadata(context, photoId, updatedMetadata)
+            PLog.i(TAG, "RAW output schedule stage=SDR_JPEG_PUBLISHED")
+            pendingDngWrite?.let { write ->
+                PLog.i(
+                    TAG,
+                    "RAW output schedule stage=DNG_MATERIALIZATION_START",
+                )
+                write.start()
+            }
             val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
 
             val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {

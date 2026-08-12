@@ -278,15 +278,19 @@ fun GalleryDetailScreen(
         displayPhotoSize = photo.size
         if (displayPhotoSize > 0L) return@LaunchedEffect
 
-        repeat(20) {
-            val resolvedSize = withContext(Dispatchers.IO) {
-                resolveCurrentMediaSize(context, photo)
+        var resolvedSize = withContext(Dispatchers.IO) {
+            resolveCurrentMediaSize(context, photo)
+        }
+        if (resolvedSize <= 0L && viewModel.awaitPreparedPhotoReady(photo)) {
+            resolvedSize = withContext(Dispatchers.IO) {
+                maxOf(
+                    resolveCurrentMediaSize(context, photo),
+                    viewModel.getInternalPhotoSize(photo.id)
+                )
             }
-            if (resolvedSize > 0L) {
-                displayPhotoSize = resolvedSize
-                return@LaunchedEffect
-            }
-            delay(300L)
+        }
+        if (resolvedSize > 0L) {
+            displayPhotoSize = resolvedSize
         }
     }
 
@@ -2115,27 +2119,32 @@ private fun ZoomableImage(
         val isSettledActive = isActive && !isScrollInProgress
 
         LaunchedEffect(displayPhoto.id, metadataHash, showOrigin, refreshKey, isSettledActive) {
-            suspend fun loadBitmap() {
-                isLoading = bitmap == null
-                bitmap = viewModel.getPreviewBitmap(displayPhoto, showOrigin = showOrigin,
-                    ignoreDenoise = !isSettledActive, maxEdge = if (isSettledActive) 4096 else 1024)
-                if (bitmap == null) {
-                    delay(500)
-                    loadBitmap()
-                }
-                colorSpace.value = bitmap?.colorSpace
-                isLoading = bitmap == null
-
-                if (displayPhoto.metadata?.manualHdrEffectEnabled == true && isSettledActive) {
-                    hdrBitmap = viewModel.getDetailBitmap(displayPhoto)
-                    hdrBitmap?.let {
-                        colorSpace.value = it.colorSpace
-                    }
-                } else {
-                    hdrBitmap = null
-                }
+            isLoading = bitmap == null
+            bitmap = viewModel.getPreviewBitmap(
+                displayPhoto,
+                showOrigin = showOrigin,
+                ignoreDenoise = !isSettledActive,
+                maxEdge = if (isSettledActive) 4096 else 1024
+            )
+            if (bitmap == null && viewModel.awaitPreparedPhotoReady(displayPhoto)) {
+                bitmap = viewModel.getPreviewBitmap(
+                    displayPhoto,
+                    showOrigin = showOrigin,
+                    ignoreDenoise = !isSettledActive,
+                    maxEdge = if (isSettledActive) 4096 else 1024
+                )
             }
-            loadBitmap()
+            colorSpace.value = bitmap?.colorSpace
+            isLoading = bitmap == null
+
+            if (displayPhoto.metadata?.manualHdrEffectEnabled == true && isSettledActive) {
+                hdrBitmap = viewModel.getDetailBitmap(displayPhoto)
+                hdrBitmap?.let {
+                    colorSpace.value = it.colorSpace
+                }
+            } else {
+                hdrBitmap = null
+            }
         }
 
         LaunchedEffect(hdrBitmap, showOrigin, isActive) {
