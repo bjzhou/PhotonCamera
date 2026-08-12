@@ -161,7 +161,6 @@ internal object RawViewfinderExposureMatcher {
                     "meanAbsoluteLog2Ratio=${result.best.meanAbsoluteLog2Ratio} " +
                     "medianLog2Ratio=${result.best.medianLog2Ratio} " +
                     "sampleCount=${result.evaluatedSampleCount} " +
-                    "excludedShadowCells=${result.excludedShadowCellCount} " +
                     "excludedHighlightCells=${result.excludedHighlightCellCount} " +
                     "endpointFallback=${result.endpointFallbackUsed}",
             )

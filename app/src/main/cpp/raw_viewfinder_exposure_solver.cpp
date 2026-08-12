@@ -17,7 +17,6 @@ constexpr int kGridCellCount = kGridColumns * kGridRows;
 constexpr float kMinExposureEv = -4.0f;
 constexpr float kMaxExposureEv = 4.0f;
 constexpr float kMaximumMatchLumaRatio = 1.10f;
-constexpr int kShadowExclusionSrgbCode = 16;
 constexpr int kHighlightExclusionSrgbCode = 240;
 constexpr float kMinimumLumaDeltaEv = 0.01f;
 constexpr float kMinimumCandidateStepEv = 0.01f;
@@ -32,7 +31,7 @@ constexpr float kSrgbLinearScale = 12.92f;
 constexpr float kSrgbTransferA = 0.055f;
 constexpr float kSrgbTransferGamma = 2.4f;
 constexpr float kDisplayLinearLumaFloor = 1.0f / (255.0f * 12.92f);
-constexpr int kNativeResultSize = 13;
+constexpr int kNativeResultSize = 11;
 
 float SrgbToLinear(float value) {
     const float clamped = std::clamp(value, 0.0f, 1.0f);
@@ -44,8 +43,6 @@ float SrgbToLinear(float value) {
         kSrgbTransferGamma);
 }
 
-const float kShadowExclusionDisplayLinearLuma =
-    SrgbToLinear(kShadowExclusionSrgbCode / 255.0f);
 const float kHighlightExclusionDisplayLinearLuma =
     SrgbToLinear(kHighlightExclusionSrgbCode / 255.0f);
 
@@ -203,7 +200,6 @@ public:
 
     const Sample& LastSample() const { return samples_.back(); }
     int SampleCount() const { return static_cast<int>(samples_.size()); }
-    int ExcludedShadowCellCount() const { return excluded_shadow_cell_count_; }
     int ExcludedHighlightCellCount() const { return excluded_highlight_cell_count_; }
     bool EndpointFallbackUsed() const { return endpoint_fallback_used_; }
 
@@ -217,9 +213,7 @@ private:
         for (int cell = 0; cell < kGridCellCount; ++cell) {
             const float luma = reference_grid_lumas_[cell];
             if (!std::isfinite(luma)) continue;
-            if (luma <= kShadowExclusionDisplayLinearLuma) {
-                ++excluded_shadow_cell_count_;
-            } else if (luma >= kHighlightExclusionDisplayLinearLuma) {
+            if (luma >= kHighlightExclusionDisplayLinearLuma) {
                 ++excluded_highlight_cell_count_;
             } else {
                 eligible_cell_indices_.push_back(cell);
@@ -227,7 +221,6 @@ private:
         }
         if (eligible_cell_indices_.empty()) {
             endpoint_fallback_used_ = true;
-            excluded_shadow_cell_count_ = 0;
             excluded_highlight_cell_count_ = 0;
             for (int cell = 0; cell < kGridCellCount; ++cell) {
                 if (std::isfinite(reference_grid_lumas_[cell])) {
@@ -473,7 +466,6 @@ private:
 
     int width_ = 0;
     int height_ = 0;
-    int excluded_shadow_cell_count_ = 0;
     int excluded_highlight_cell_count_ = 0;
     bool endpoint_fallback_used_ = false;
     bool finished_ = false;
@@ -595,9 +587,7 @@ Java_com_hinnka_mycamera_raw_RawViewfinderExposureNativeBridge_nativeGetResult(
         best.match.mean_absolute_log2_ratio,
         best.match.median_log2_ratio,
         static_cast<float>(solver->SampleCount()),
-        static_cast<float>(solver->ExcludedShadowCellCount()),
         static_cast<float>(solver->ExcludedHighlightCellCount()),
-        kShadowExclusionDisplayLinearLuma,
         kHighlightExclusionDisplayLinearLuma,
         solver->EndpointFallbackUsed() ? 1.0f : 0.0f,
     };

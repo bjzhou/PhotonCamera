@@ -21,9 +21,7 @@ internal object RawViewfinderExposureNativeBridge {
     data class Result(
         val best: Sample,
         val evaluatedSampleCount: Int,
-        val excludedShadowCellCount: Int,
         val excludedHighlightCellCount: Int,
-        val shadowThresholdLinear: Float,
         val highlightThresholdLinear: Float,
         val endpointFallbackUsed: Boolean,
     )
@@ -59,11 +57,9 @@ internal object RawViewfinderExposureNativeBridge {
             return Result(
                 best = values.toSample() ?: return null,
                 evaluatedSampleCount = values[7].roundToInt(),
-                excludedShadowCellCount = values[8].roundToInt(),
-                excludedHighlightCellCount = values[9].roundToInt(),
-                shadowThresholdLinear = values[10],
-                highlightThresholdLinear = values[11],
-                endpointFallbackUsed = values[12] != 0f,
+                excludedHighlightCellCount = values[8].roundToInt(),
+                highlightThresholdLinear = values[9],
+                endpointFallbackUsed = values[10] != 0f,
             )
         }
 
@@ -120,5 +116,5 @@ internal object RawViewfinderExposureNativeBridge {
     private external fun nativeDestroy(handle: Long)
 
     private const val SAMPLE_VALUE_COUNT = 7
-    private const val RESULT_VALUE_COUNT = 13
+    private const val RESULT_VALUE_COUNT = 11
 }
