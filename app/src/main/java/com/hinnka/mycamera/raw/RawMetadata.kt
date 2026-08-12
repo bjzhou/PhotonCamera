@@ -8,10 +8,11 @@ import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
-import com.hinnka.mycamera.utils.DeviceUtil
-import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawNoiseProfileSelection
+import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.utils.PLog
 import kotlin.collections.contentToString
 
 enum class RawNoiseProfileLayout {
@@ -139,9 +140,26 @@ data class RawMetadata(
     val profileGainTableMap: DngProfileGainTableMap? = null
 ) {
     fun withNoiseProfileSelection(selection: RawNoiseProfileSelection): RawMetadata {
-        if (selection == RawNoiseProfileSelection.Camera2) return this
-        val calibrated = selection as RawNoiseProfileSelection.Calibrated
-        val model = calibrated.profile.evaluate(iso)
+        val profile = when (selection) {
+            is RawNoiseProfileSelection.Calibrated -> selection.profile
+            RawNoiseProfileSelection.Camera2 -> {
+                val hasUsableSourceProfile = when (noiseProfileLayout) {
+                    RawNoiseProfileLayout.CAMERA2_CFA,
+                    RawNoiseProfileLayout.CANONICAL_BAYER ->
+                        RawNoiseModel.fromCamera2NoiseProfile(channelNoiseProfile)
+                            .hasValidCamera2Profile
+                    RawNoiseProfileLayout.DNG_RGB ->
+                        RawNoiseModel.fromDngNoiseProfile(channelNoiseProfile).let { model ->
+                            model.shotNoise.all { it > 0f } &&
+                                model.readNoise.any { it > 0f }
+                        }
+                    RawNoiseProfileLayout.NONE -> false
+                }
+                if (hasUsableSourceProfile) return this
+                CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
+            }
+        }
+        val model = profile.evaluate(iso)
         return if (model != null) {
             copy(
                 channelNoiseProfile = model.canonicalChannelPairs(),

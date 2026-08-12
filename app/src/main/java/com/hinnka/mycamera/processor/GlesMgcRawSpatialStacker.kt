@@ -634,6 +634,9 @@ internal class GlesMgcRawSpatialStacker(
             val calibratedProfiles = resolvedNoiseModels.count {
                 it.source == RawNoiseModelSource.GCAM_CALIBRATED
             }
+            val pixel3FallbackProfiles = resolvedNoiseModels.count {
+                it.source == RawNoiseModelSource.PIXEL3_FALLBACK
+            }
             val calibratedProfile = (noiseProfileSelection as? RawNoiseProfileSelection.Calibrated)
                 ?.profile
             val profileSource = calibratedProfile?.let { profile ->
@@ -646,7 +649,8 @@ internal class GlesMgcRawSpatialStacker(
                 "MGC Spatial noise profile source=$profileSource " +
                     "perFrame=$perFrameCamera2Profiles/${frames.size} " +
                     "baseFallback=$baseFrameCamera2Profiles/${frames.size} " +
-                    "calibrated=$calibratedProfiles/${frames.size}",
+                    "calibrated=$calibratedProfiles/${frames.size} " +
+                    "pixel3Fallback=$pixel3FallbackProfiles/${frames.size}",
             )
             calibratedProfile?.let { profile ->
                 PLog.i(

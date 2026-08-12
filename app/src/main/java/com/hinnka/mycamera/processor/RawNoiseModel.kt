@@ -88,7 +88,11 @@ class RawNoiseModel private constructor(
             return RawNoiseModel(
                 shotNoise = shotNoise,
                 readNoise = readNoise,
-                hasValidCamera2Profile = shotNoise.any { it > 0f } || readNoise.any { it > 0f },
+                // DNG requires S > 0 and O >= 0. Some O channels may legitimately be zero, but
+                // an all-zero O vector is the Camera2 default seen on devices without a usable
+                // read-noise profile and cannot drive Spatial's read-only propagation pass.
+                hasValidCamera2Profile =
+                    shotNoise.all { it > 0f } && readNoise.any { it > 0f },
                 cfaPhaseOrdered = true,
             )
         }
@@ -182,6 +186,7 @@ internal enum class RawNoiseModelSource {
     GCAM_CALIBRATED,
     CAMERA2_PER_FRAME,
     CAMERA2_BASE_FRAME,
+    PIXEL3_FALLBACK,
     UNAVAILABLE,
 }
 
@@ -190,7 +195,7 @@ internal data class ResolvedRawNoiseModel(
     val source: RawNoiseModelSource,
 )
 
-/** Selection order after the caller has resolved its default calibrated profile policy. */
+/** Resolves the selected source, with Pixel 3 as the default for unusable Camera2 profiles. */
 internal object RawNoiseModelResolver {
     fun resolve(
         selection: RawNoiseProfileSelection,
@@ -221,6 +226,12 @@ internal object RawNoiseModelResolver {
                 RawNoiseModelSource.CAMERA2_BASE_FRAME,
             )
         }
-        return ResolvedRawNoiseModel(RawNoiseModel.EMPTY, RawNoiseModelSource.UNAVAILABLE)
+        val fallback = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
+            .evaluate(sensitivity)
+            ?: return ResolvedRawNoiseModel(
+                RawNoiseModel.EMPTY,
+                RawNoiseModelSource.UNAVAILABLE,
+            )
+        return ResolvedRawNoiseModel(fallback, RawNoiseModelSource.PIXEL3_FALLBACK)
     }
 }

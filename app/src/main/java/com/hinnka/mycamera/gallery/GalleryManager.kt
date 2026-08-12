@@ -3055,14 +3055,15 @@ object GalleryManager {
             val noiseProfileSelection = ContentRepository.getInstance(context)
                 .rawNoiseProfileManager
                 .resolveSelection(resolveRawNoiseProfileId(context, metadata))
-            val rawMetadata = RawMetadata.create(
+            val captureRawMetadata = RawMetadata.create(
                 firstImageWidth,
                 firstImageHeight,
                 characteristics,
                 captureResult,
                 exposureBias,
                 RawDemosaicProcessor.getInstance().getRawColorSpace()
-            ).withNoiseProfileSelection(noiseProfileSelection)
+            )
+            val rawMetadata = captureRawMetadata.withNoiseProfileSelection(noiseProfileSelection)
             val stackBlackLevel = RawProcessor.resolveBlackLevelForMode(
                 defaultBlackLevel = rawMetadata.blackLevel,
                 blackLevelMode = metadata.rawBlackLevelMode,
@@ -3117,7 +3118,9 @@ object GalleryManager {
                         focusDistanceDiopters = frameFocusDistances.getOrNull(index)
                             ?.takeIf { it.isFinite() }
                             ?: Float.NaN,
-                        channelNoiseProfile = rawMetadata.channelNoiseProfile
+                        // Spatial resolves Camera2 versus Pixel 3 itself so that a calibrated
+                        // canonical profile is never reinterpreted as CFA-phase-ordered Camera2.
+                        channelNoiseProfile = captureRawMetadata.channelNoiseProfile
                             .takeIf { it.size >= 8 },
                     )
                 }
