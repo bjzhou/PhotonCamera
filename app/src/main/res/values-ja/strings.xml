@@ -175,6 +175,7 @@
     <string name="edit_color_and_effects">カラーとエフェクトを調整</string>
     <string name="recipe_tab_color">カラー</string>
     <string name="recipe_color_basic">基本</string>
+    <string name="recipe_color_style">スタイル</string>
     <string name="recipe_color_grading">グレーディング</string>
     <string name="recipe_grading_midtones">中間調</string>
     <string name="recipe_grading_balance">バランス</string>
@@ -183,7 +184,6 @@
     <string name="effects_group_light">光効果</string>
     <string name="effects_group_optics">光学</string>
     <string name="effects_group_texture">テクスチャ</string>
-    <string name="recipe_tab_texture">テクスチャ</string>
     <string name="recipe_tab_post">現像</string>
     
     <!-- Post-Processing Parameters (Capture/Edit only) -->

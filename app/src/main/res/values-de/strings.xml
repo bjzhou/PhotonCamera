@@ -175,6 +175,7 @@
     <string name="edit_color_and_effects">Farbe und Effekte anpassen</string>
     <string name="recipe_tab_color">Farbe</string>
     <string name="recipe_color_basic">Grundlagen</string>
+    <string name="recipe_color_style">Stil</string>
     <string name="recipe_color_grading">Grading</string>
     <string name="recipe_grading_midtones">Mitteltöne</string>
     <string name="recipe_grading_balance">Balance</string>
@@ -183,7 +184,6 @@
     <string name="effects_group_light">Lichteffekte</string>
     <string name="effects_group_optics">Optik</string>
     <string name="effects_group_texture">Textur</string>
-    <string name="recipe_tab_texture">Textur</string>
     <string name="recipe_tab_post">Entwicklung</string>
     
     <!-- Post-Processing Parameters (Capture/Edit only) -->

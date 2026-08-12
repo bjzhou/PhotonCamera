@@ -176,6 +176,7 @@
     <string name="edit_color_and_effects">색상 및 효과 조정</string>
     <string name="recipe_tab_color">색상</string>
     <string name="recipe_color_basic">기본</string>
+    <string name="recipe_color_style">스타일</string>
     <string name="recipe_color_grading">그레이딩</string>
     <string name="recipe_grading_midtones">중간톤</string>
     <string name="recipe_grading_balance">밸런스</string>
@@ -184,7 +185,6 @@
     <string name="effects_group_light">조명 효과</string>
     <string name="effects_group_optics">광학</string>
     <string name="effects_group_texture">질감</string>
-    <string name="recipe_tab_texture">질감</string>
     <string name="recipe_tab_post">후보정</string>
     
     <!-- Post-Processing Parameters (Capture/Edit only) -->

@@ -42,7 +42,6 @@ private enum class RecipePanelTab {
     LIGHT,
     CURVE,
     COLOR,
-    TEXTURE,
     LENS,
     EFFECTS,
     REMARKS,
@@ -50,6 +49,7 @@ private enum class RecipePanelTab {
 
 private enum class ColorPanelSection {
     BASIC,
+    STYLE,
     CALIBRATION,
     LCH,
     GRADING,
@@ -58,7 +58,7 @@ private enum class ColorPanelSection {
 /**
  * 色彩配方控制面板
  *
- * 色彩调整与物理效果共用同一组一级菜单。校准和 LCH 收纳在颜色的二级菜单中。
+ * 色彩调整与物理效果共用同一组一级菜单。风格、校准和 LCH 收纳在颜色的二级菜单中。
  */
 @Composable
 fun ColorRecipePanel(
@@ -102,11 +102,16 @@ fun ColorRecipePanel(
         add(RecipePanelTab.LIGHT to R.string.recipe_tab_light)
         add(RecipePanelTab.CURVE to R.string.recipe_tab_curve)
         add(RecipePanelTab.COLOR to R.string.recipe_tab_color)
-        add(RecipePanelTab.TEXTURE to R.string.recipe_tab_texture)
         if (!hideNonBakeable) add(RecipePanelTab.LENS to R.string.recipe_tab_lens)
         if (showEffects) add(RecipePanelTab.EFFECTS to R.string.effects_title)
         if (!hideNonBakeable) add(RecipePanelTab.REMARKS to R.string.recipe_tab_remarks)
     }
+    val colorStyleParams = listOf(
+        RecipeParam.VIGNETTE,
+        RecipeParam.FILM_GRAIN,
+        RecipeParam.FADE,
+        RecipeParam.BLEACH_BYPASS,
+    )
     val parameterGroups = mapOf(
         RecipePanelTab.LIGHT to listOf(
             RecipeParam.EXPOSURE,
@@ -119,12 +124,6 @@ fun ColorRecipePanel(
             RecipeParam.TEMPERATURE,
             RecipeParam.TINT,
             RecipeParam.COLOR
-        ),
-        RecipePanelTab.TEXTURE to listOf(
-            RecipeParam.VIGNETTE,
-            RecipeParam.FILM_GRAIN,
-            RecipeParam.FADE,
-            RecipeParam.BLEACH_BYPASS,
         ),
         RecipePanelTab.LENS to listOf(
             RecipeParam.HALATION,
@@ -215,14 +214,18 @@ fun ColorRecipePanel(
                     blueCurvePoints = null
                 )
             )
-            RecipePanelTab.COLOR -> onParamsChange(
-                resetParams(
-                    currentParams.resetColorGrading(),
-                    parameterGroups[RecipePanelTab.COLOR].orEmpty() +
-                        calibrationGroups.flatMap { it.second } +
-                        lchGroups.flatMap { it.second }
+            RecipePanelTab.COLOR -> {
+                val colorParams = parameterGroups[RecipePanelTab.COLOR].orEmpty() +
+                    colorStyleParams +
+                    calibrationGroups.flatMap { it.second } +
+                    lchGroups.flatMap { it.second }
+                onParamsChange(
+                    resetParams(
+                        currentParams.resetColorGrading(),
+                        if (hideNonBakeable) colorParams.filter(isBakeable) else colorParams
+                    )
                 )
-            )
+            }
             RecipePanelTab.EFFECTS -> onEffectsChange?.invoke(EffectParams.DEFAULT)
             RecipePanelTab.REMARKS -> Unit
             else -> {
@@ -246,6 +249,7 @@ fun ColorRecipePanel(
         val visibleParams = parameterGroups
             .values
             .flatten()
+            .plus(colorStyleParams)
             .filter(isBakeable) +
             calibrationGroups.flatMap { it.second } +
             lchGroups.flatMap { it.second } +
@@ -443,6 +447,20 @@ fun ColorRecipePanel(
                                         )
                                     }
                                 }
+                                ColorPanelSection.STYLE -> {
+                                    val visibleParams = if (hideNonBakeable) {
+                                        colorStyleParams.filter(isBakeable)
+                                    } else {
+                                        colorStyleParams
+                                    }
+                                    visibleParams.forEach { param ->
+                                        RecipeParamSlider(
+                                            param = param,
+                                            currentParams = currentParams,
+                                            onParamChange = onParamChange
+                                        )
+                                    }
+                                }
                                 ColorPanelSection.CALIBRATION -> {
                                     ColorRingTabs(
                                         count = calibrationGroups.size,
@@ -535,6 +553,7 @@ private fun ColorSectionTabs(
 ) {
     val tabs = listOf(
         ColorPanelSection.BASIC to R.string.recipe_color_basic,
+        ColorPanelSection.STYLE to R.string.recipe_color_style,
         ColorPanelSection.CALIBRATION to R.string.recipe_tab_calibration,
         ColorPanelSection.LCH to R.string.recipe_tab_lch,
         ColorPanelSection.GRADING to R.string.recipe_color_grading,

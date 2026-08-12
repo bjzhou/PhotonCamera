@@ -509,6 +509,7 @@
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">Color</string>
     <string name="recipe_color_basic">Basic</string>
+    <string name="recipe_color_style">Style</string>
     <string name="recipe_color_grading">Grading</string>
     <string name="recipe_grading_midtones">Midtones</string>
     <string name="recipe_grading_balance">Balance</string>
@@ -529,7 +530,6 @@
     <string name="recipe_lch_blue">Blue</string>
     <string name="recipe_lch_purple">Purple</string>
     <string name="recipe_lch_magenta">Magenta</string>
-    <string name="recipe_tab_texture">Texture</string>
     <string name="recipe_tab_lens">Atmosphere</string>
     <string name="recipe_tab_post">Post</string>
     <string name="recipe_tab_remarks">Notes</string>

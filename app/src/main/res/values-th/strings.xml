@@ -356,6 +356,7 @@
     <string name="edit_color_and_effects">ปรับสีและเอฟเฟกต์</string>
     <string name="recipe_tab_color">สี</string>
     <string name="recipe_color_basic">พื้นฐาน</string>
+    <string name="recipe_color_style">สไตล์</string>
     <string name="recipe_color_grading">เกรดสี</string>
     <string name="recipe_grading_midtones">โทนกลาง</string>
     <string name="recipe_grading_balance">สมดุล</string>
@@ -376,7 +377,6 @@
     <string name="recipe_lch_blue">สีฟ้า</string>
     <string name="recipe_lch_purple">สีม่วง</string>
     <string name="recipe_lch_magenta">สีม่วงแดง</string>
-    <string name="recipe_tab_texture">เนื้อผิว</string>
     <string name="recipe_tab_lens">บรรยากาศ</string>
     <string name="recipe_tab_post">ขั้นตอนส่งออก</string>
     <string name="recipe_tab_remarks">หมายเหตุ</string>

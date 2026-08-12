@@ -478,6 +478,7 @@
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">色彩</string>
     <string name="recipe_color_basic">基礎</string>
+    <string name="recipe_color_style">風格</string>
     <string name="recipe_color_grading">色彩分級</string>
     <string name="recipe_grading_midtones">中間調</string>
     <string name="recipe_grading_balance">平衡</string>
@@ -498,7 +499,6 @@
     <string name="recipe_lch_blue">藍</string>
     <string name="recipe_lch_purple">紫</string>
     <string name="recipe_lch_magenta">品紅</string>
-    <string name="recipe_tab_texture">質感</string>
     <string name="recipe_tab_lens">氛圍</string>
     <string name="recipe_tab_post">細節</string>
     <string name="recipe_tab_remarks">備注</string>
