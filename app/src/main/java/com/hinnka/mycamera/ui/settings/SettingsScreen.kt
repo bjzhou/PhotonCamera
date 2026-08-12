@@ -1858,9 +1858,6 @@ fun SettingsScreen(
                         },
                         onRawHighlightsAdjustmentChange = {
                             rawHighlightsAdjustmentUi = it
-                            if (it != 0f && rawAutoExposure) {
-                                viewModel.setRawAutoExposure(false)
-                            }
                         },
                         onRawShadowsAdjustmentChange = {
                             rawShadowsAdjustmentUi = it
