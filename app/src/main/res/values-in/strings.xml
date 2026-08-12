@@ -162,6 +162,7 @@
     <string name="recipe_param_vignette">Vinyet</string>
     <string name="recipe_param_flash">Lampu Kilat</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
+    <string name="recipe_param_clarity">Kejernihan</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Cahaya Lembut</string>
     <string name="recipe_param_halation">Halasi</string>

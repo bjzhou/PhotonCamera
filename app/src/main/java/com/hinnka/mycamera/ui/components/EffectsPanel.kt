@@ -12,6 +12,7 @@ enum class EffectType(
     val recipeParam: RecipeParam
 ) {
     FILM_GRAIN(RecipeParam.FILM_GRAIN),
+    CLARITY(RecipeParam.CLARITY),
     VIGNETTE(RecipeParam.VIGNETTE),
     FLASH(RecipeParam.FLASH),
     BLOOM(RecipeParam.BLOOM),
@@ -27,6 +28,7 @@ enum class EffectType(
     fun getValue(params: EffectParams): Float {
         return when (this) {
             FILM_GRAIN -> params.filmGrain
+            CLARITY -> params.clarity
             VIGNETTE -> params.vignette
             FLASH -> params.flash
             BLOOM -> params.bloom
@@ -42,6 +44,7 @@ enum class EffectType(
         val clamped = value.coerceIn(recipeParam.minValue, recipeParam.maxValue)
         return when (this) {
             FILM_GRAIN -> params.copy(filmGrain = clamped)
+            CLARITY -> params.copy(clarity = clamped)
             VIGNETTE -> params.copy(vignette = clamped)
             FLASH -> params.copy(flash = clamped)
             BLOOM -> params.copy(bloom = clamped)
@@ -72,6 +75,7 @@ private val effectGroups = listOf(
         EffectType.CHROMATIC_ABERRATION,
     ),
     EffectGroup.TEXTURE to listOf(
+        EffectType.CLARITY,
         EffectType.FILM_GRAIN,
         EffectType.NOISE,
         EffectType.LOW_RES,

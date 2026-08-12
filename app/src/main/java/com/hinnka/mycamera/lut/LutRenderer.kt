@@ -61,6 +61,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         private const val RAW_PREVIEW_INPUT_STAGE = 0
         private const val RAW_PREVIEW_COMBINED_STAGE = 1
         private const val RAW_PREVIEW_OUTPUT_STAGE = 2
+        private const val CLARITY_PYRAMID_LEVELS = 3
     }
 
     private val colorProgramCache = PreviewColorProgramCache()
@@ -256,6 +257,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var postProcessScratchWidth: Int = 0
     private var postProcessScratchHeight: Int = 0
 
+    // 清晰度实时预览资源（仅参数非零时懒加载和执行）
+    private var clarityDownsampleProgram: Int = 0
+    private var clarityCompositeProgram: Int = 0
+    private var clarityPyramidTextureIds = IntArray(CLARITY_PYRAMID_LEVELS)
+    private var clarityPyramidFboIds = IntArray(CLARITY_PYRAMID_LEVELS)
+    private var clarityPyramidWidths = IntArray(CLARITY_PYRAMID_LEVELS)
+    private var clarityPyramidHeights = IntArray(CLARITY_PYRAMID_LEVELS)
+    private var clarityOutputTextureId: Int = 0
+    private var clarityOutputFboId: Int = 0
+    private var clarityOutputWidth: Int = 0
+    private var clarityOutputHeight: Int = 0
+
     // Focus Peaking 实时预览资源
     private var focusPeakingProgramId: Int = 0
     private var uPeakInputTexLoc: Int = 0
@@ -385,6 +398,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     @Volatile
     var bleachBypass: Float = 0f // 0.0 ~ 1.0
+
+    @Volatile
+    var clarity: Float = 0f // -1.0 ~ +1.0
 
     @Volatile
     var bloom: Float = 0f // 0.0 ~ 1.0
@@ -604,6 +620,16 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         postProcessScratchTextureId = 0
         postProcessScratchWidth = 0
         postProcessScratchHeight = 0
+        clarityDownsampleProgram = 0
+        clarityCompositeProgram = 0
+        clarityPyramidTextureIds = IntArray(CLARITY_PYRAMID_LEVELS)
+        clarityPyramidFboIds = IntArray(CLARITY_PYRAMID_LEVELS)
+        clarityPyramidWidths = IntArray(CLARITY_PYRAMID_LEVELS)
+        clarityPyramidHeights = IntArray(CLARITY_PYRAMID_LEVELS)
+        clarityOutputTextureId = 0
+        clarityOutputFboId = 0
+        clarityOutputWidth = 0
+        clarityOutputHeight = 0
         focusPeakingProgramId = 0
         focusPeakingFboId = 0
         focusPeakingTextureId = 0
@@ -1509,6 +1535,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val halationEnabled = redHalation > 0.001f
         val bloomEnabled = bloom > 0.001f
         val softLightEnabled = softLight > 0.001f
+        val clarityEnabled = abs(clarity) > 0.001f
         val postProcessEffectEnabled = hdfEnabled || halationEnabled || bloomEnabled || softLightEnabled
         val aiFocusInputNeeded = onAiFocusInputAvailable != null && isAutoFocus && !isAiFocusBusy
         val suppressBaselineLayerForVideoLog = videoLogProfile.isEnabled
@@ -1520,6 +1547,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val requestedFbo = rawPreviewNeeded ||
             liveRecorder != null ||
             postProcessEffectEnabled ||
+            clarityEnabled ||
             aiFocusInputNeeded ||
             hasDualLayer ||
             (!isAutoFocus && focusPeakingEnabled)
@@ -1582,6 +1610,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     treatSourceAsHlgInput = false
                 )
                 currentTexId = stackTextureId
+            }
+
+            if (clarityEnabled) {
+                currentTexId = renderClarityPreview(
+                    sourceTextureId = currentTexId,
+                    width = currentWidth,
+                    height = currentHeight,
+                    strength = clarity,
+                )
             }
 
             if (aiFocusInputNeeded) {
@@ -2329,6 +2366,258 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         postProcessScratchHeight = height
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun ensureClarityPrograms(): Boolean {
+        if (clarityDownsampleProgram != 0 && clarityCompositeProgram != 0) return true
+
+        val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
+        val downsampleShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, ClarityShaders.DOWNSAMPLE)
+        val compositeShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, ClarityShaders.COMPOSITE)
+        if (vertexShader == 0 || downsampleShader == 0 || compositeShader == 0) {
+            if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
+            if (downsampleShader != 0) GLES30.glDeleteShader(downsampleShader)
+            if (compositeShader != 0) GLES30.glDeleteShader(compositeShader)
+            PLog.e(TAG, "Failed to compile clarity preview shaders")
+            return false
+        }
+
+        clarityDownsampleProgram = GlUtils.linkProgram(vertexShader, downsampleShader)
+        clarityCompositeProgram = GlUtils.linkProgram(vertexShader, compositeShader)
+        GLES30.glDeleteShader(vertexShader)
+        GLES30.glDeleteShader(downsampleShader)
+        GLES30.glDeleteShader(compositeShader)
+        if (clarityDownsampleProgram == 0 || clarityCompositeProgram == 0) {
+            GlUtils.deleteProgram(clarityDownsampleProgram)
+            GlUtils.deleteProgram(clarityCompositeProgram)
+            clarityDownsampleProgram = 0
+            clarityCompositeProgram = 0
+            PLog.e(TAG, "Failed to link clarity preview programs")
+            return false
+        }
+        return true
+    }
+
+    private fun setupClarityPreviewFramebuffers(width: Int, height: Int): Boolean {
+        if (
+            clarityOutputWidth == width &&
+            clarityOutputHeight == height &&
+            clarityOutputTextureId != 0 &&
+            clarityOutputFboId != 0 &&
+            clarityPyramidTextureIds.all { it != 0 } &&
+            clarityPyramidFboIds.all { it != 0 }
+        ) {
+            return true
+        }
+
+        val maxTextureSize = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
+        if (width <= 0 || height <= 0 || width > maxTextureSize[0] || height > maxTextureSize[0]) {
+            PLog.e(
+                TAG,
+                "Clarity preview target ${width}x$height exceeds GL_MAX_TEXTURE_SIZE=${maxTextureSize[0]}"
+            )
+            return false
+        }
+
+        releaseClarityPreviewFramebuffers()
+        var levelWidth = width
+        var levelHeight = height
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            levelWidth = maxOf(1, (levelWidth + 1) / 2)
+            levelHeight = maxOf(1, (levelHeight + 1) / 2)
+            val target = createClarityPreviewFramebuffer(
+                width = levelWidth,
+                height = levelHeight,
+                internalFormat = GLES30.GL_RGBA16F,
+                label = "pyramid[$level]",
+            ) ?: run {
+                releaseClarityPreviewFramebuffers()
+                return false
+            }
+            clarityPyramidTextureIds[level] = target.first
+            clarityPyramidFboIds[level] = target.second
+            clarityPyramidWidths[level] = levelWidth
+            clarityPyramidHeights[level] = levelHeight
+        }
+
+        val output = createClarityPreviewFramebuffer(
+            width = width,
+            height = height,
+            internalFormat = GLES30.GL_RGBA8,
+            label = "output",
+        ) ?: run {
+            releaseClarityPreviewFramebuffers()
+            return false
+        }
+        clarityOutputTextureId = output.first
+        clarityOutputFboId = output.second
+        clarityOutputWidth = width
+        clarityOutputHeight = height
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return true
+    }
+
+    private fun createClarityPreviewFramebuffer(
+        width: Int,
+        height: Int,
+        internalFormat: Int,
+        label: String,
+    ): Pair<Int, Int>? {
+        val texture = IntArray(1)
+        val framebuffer = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, internalFormat, width, height)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glGenFramebuffers(1, framebuffer, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            texture[0],
+            0,
+        )
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val error = GLES30.glGetError()
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE || error != GLES30.GL_NO_ERROR) {
+            PLog.e(
+                TAG,
+                "Clarity preview $label framebuffer allocation failed: status=$status glError=$error"
+            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+            GLES30.glDeleteTextures(1, texture, 0)
+            return null
+        }
+        return texture[0] to framebuffer[0]
+    }
+
+    private fun releaseClarityPreviewFramebuffers() {
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            if (clarityPyramidTextureIds[level] != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(clarityPyramidTextureIds[level]), 0)
+                clarityPyramidTextureIds[level] = 0
+            }
+            if (clarityPyramidFboIds[level] != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(clarityPyramidFboIds[level]), 0)
+                clarityPyramidFboIds[level] = 0
+            }
+            clarityPyramidWidths[level] = 0
+            clarityPyramidHeights[level] = 0
+        }
+        if (clarityOutputTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(clarityOutputTextureId), 0)
+            clarityOutputTextureId = 0
+        }
+        if (clarityOutputFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(clarityOutputFboId), 0)
+            clarityOutputFboId = 0
+        }
+        clarityOutputWidth = 0
+        clarityOutputHeight = 0
+    }
+
+    private fun clearClarityPreviewBindings() {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        for (textureUnit in CLARITY_PYRAMID_LEVELS downTo 0) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + textureUnit)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glUseProgram(0)
+    }
+
+    private fun renderClarityPreview(
+        sourceTextureId: Int,
+        width: Int,
+        height: Int,
+        strength: Float,
+    ): Int {
+        if (abs(strength) <= 0.001f) return sourceTextureId
+        if (!ensureClarityPrograms()) return sourceTextureId
+
+        val upstreamError = GLES30.glGetError()
+        if (upstreamError != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderClarityPreview skipped after upstream glError $upstreamError")
+            return sourceTextureId
+        }
+        if (!setupClarityPreviewFramebuffers(width, height)) return sourceTextureId
+
+        GLES30.glDisable(GLES30.GL_BLEND)
+        var inputTextureId = sourceTextureId
+        var inputWidth = width
+        var inputHeight = height
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, clarityPyramidFboIds[level])
+            GLES30.glViewport(0, 0, clarityPyramidWidths[level], clarityPyramidHeights[level])
+            GLES30.glUseProgram(clarityDownsampleProgram)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(clarityDownsampleProgram, "uInputTexture"),
+                0,
+            )
+            GLES30.glUniform2f(
+                GLES30.glGetUniformLocation(clarityDownsampleProgram, "uInputTexelSize"),
+                1f / inputWidth,
+                1f / inputHeight,
+            )
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(clarityDownsampleProgram, "uInputIsLuma"),
+                if (level == 0) 0 else 1,
+            )
+            drawSimpleQuad(clarityDownsampleProgram)
+            val error = GLES30.glGetError()
+            if (error != GLES30.GL_NO_ERROR) {
+                clearClarityPreviewBindings()
+                PLog.e(TAG, "renderClarityPreview pyramid[$level] glError $error")
+                return sourceTextureId
+            }
+            inputTextureId = clarityPyramidTextureIds[level]
+            inputWidth = clarityPyramidWidths[level]
+            inputHeight = clarityPyramidHeights[level]
+        }
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, clarityOutputFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glUseProgram(clarityCompositeProgram)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(clarityCompositeProgram, "uInputTexture"), 0)
+        val lumaUniforms = arrayOf(
+            "uFineLumaTexture",
+            "uMediumLumaTexture",
+            "uCoarseLumaTexture",
+        )
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            val textureUnit = level + 1
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + textureUnit)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, clarityPyramidTextureIds[level])
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(clarityCompositeProgram, lumaUniforms[level]),
+                textureUnit,
+            )
+        }
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(clarityCompositeProgram, "uClarity"),
+            strength.coerceIn(-1f, 1f),
+        )
+        drawSimpleQuad(clarityCompositeProgram)
+        val error = GLES30.glGetError()
+        clearClarityPreviewBindings()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderClarityPreview glError $error")
+            return sourceTextureId
+        }
+        return clarityOutputTextureId
     }
 
     private fun drawPostProcessEffects(targetFboId: Int, width: Int, height: Int, sourceTextureId: Int) {
@@ -3532,6 +3821,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             baselineCurveTextureId = 0
         }
 
+        // 释放清晰度实时预览资源
+        GlUtils.deleteProgram(clarityDownsampleProgram)
+        GlUtils.deleteProgram(clarityCompositeProgram)
+        clarityDownsampleProgram = 0
+        clarityCompositeProgram = 0
+        releaseClarityPreviewFramebuffers()
+
         // 释放 HDF 实时预览资源
         if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
         if (hdfBlurVProgram != 0) GLES30.glDeleteProgram(hdfBlurVProgram)
@@ -3676,6 +3972,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             vignette = vignette,
             flash = flash,
             bleachBypass = bleachBypass,
+            clarity = clarity,
             bloom = bloom,
             softLight = softLight,
             chromaticAberration = chromaticAberration,
@@ -3766,6 +4063,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         vignette = params.vignette
         flash = params.flash
         bleachBypass = params.bleachBypass
+        clarity = params.clarity
         bloom = params.bloom
         softLight = params.softLight
         chromaticAberration = params.chromaticAberration

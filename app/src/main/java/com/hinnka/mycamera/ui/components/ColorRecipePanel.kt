@@ -81,6 +81,7 @@ fun ColorRecipePanel(
         param != RecipeParam.VIGNETTE &&
         param != RecipeParam.FLASH &&
         param != RecipeParam.FILM_GRAIN &&
+        param != RecipeParam.CLARITY &&
         param != RecipeParam.BLOOM &&
         param != RecipeParam.SOFT_LIGHT &&
         param != RecipeParam.HDF &&
@@ -841,6 +842,7 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
         RecipeParam.PRIMARY_BLUE_HUE,
         RecipeParam.PRIMARY_BLUE_SATURATION,
         RecipeParam.PRIMARY_BLUE_LIGHTNESS,
+        RecipeParam.CLARITY,
         RecipeParam.VIGNETTE -> {
             if (value >= 0) {
                 String.format("+%.2f", value)
@@ -939,6 +941,7 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.VIGNETTE -> Color(0xFF795548) // 棕色
         RecipeParam.FLASH -> Color(0xFFE3F2FD) // 冷白色（直闪）
         RecipeParam.BLEACH_BYPASS -> Color(0xFF00BCD4) // 青色
+        RecipeParam.CLARITY -> Color(0xFF26A69A) // 青绿色（局部对比度）
         RecipeParam.BLOOM -> Color(0xFFFFD54F) // 泛光
         RecipeParam.SOFT_LIGHT -> Color(0xFFE8E1D4) // 柔光
         RecipeParam.HDF -> Color(0xFFFFC107) // 暖黄色（高光扩散）

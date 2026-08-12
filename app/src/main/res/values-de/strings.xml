@@ -162,6 +162,7 @@
     <string name="recipe_param_vignette">Vignettierung</string>
     <string name="recipe_param_flash">Blitz</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
+    <string name="recipe_param_clarity">Klarheit</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Weiches Licht</string>
     <string name="recipe_param_halation">Halation</string>

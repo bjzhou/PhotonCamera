@@ -48,8 +48,8 @@ class CameraPresetJsonCodecTest {
             id = "preset_current_raw_engine",
             name = "Current RAW Engine",
             lutId = null,
-            colorRecipe = ColorRecipeParams.DEFAULT,
-            effects = EffectParams.DEFAULT,
+            colorRecipe = ColorRecipeParams.DEFAULT.copy(clarity = 0.42f),
+            effects = EffectParams.DEFAULT.copy(clarity = -0.31f),
             useRaw = true,
             ultraHdrGainMapEnabled = false,
             rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
@@ -79,6 +79,8 @@ class CameraPresetJsonCodecTest {
         assertEquals("DR400", preset.rawDROMode)
         assertTrue(preset.useRaw)
         assertFalse(preset.ultraHdrGainMapEnabled)
+        assertEquals(0.42f, preset.colorRecipe.clarity, 0.0001f)
+        assertEquals(-0.31f, preset.effects.clarity, 0.0001f)
     }
 
     @Test

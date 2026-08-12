@@ -143,6 +143,18 @@ class LutImageProcessor(context: Context? = null) {
     private var softLightWidth = 0
     private var softLightHeight = 0
 
+    // Still-image clarity resources. Preview uses the same shaders with its own GL context/resources.
+    private var clarityDownsampleProgram = 0
+    private var clarityCompositeProgram = 0
+    private val clarityPyramidTexId = IntArray(CLARITY_PYRAMID_LEVELS)
+    private val clarityPyramidFboId = IntArray(CLARITY_PYRAMID_LEVELS)
+    private val clarityPyramidWidths = IntArray(CLARITY_PYRAMID_LEVELS)
+    private val clarityPyramidHeights = IntArray(CLARITY_PYRAMID_LEVELS)
+    private var clarityOutputTextureId = 0
+    private var clarityOutputFboId = 0
+    private var clarityOutputWidth = 0
+    private var clarityOutputHeight = 0
+
     // Halation (胶片红晕) 效果资源
     private var halationExtractBlurHProgram = 0
     private var halationBlurVProgram = 0
@@ -337,6 +349,7 @@ class LutImageProcessor(context: Context? = null) {
             initShaderProgram()
             initBitmapDenoiseProfilePrograms()
             initHDFPrograms()
+            initClarityPrograms()
             initBuffers()
 
             isInitialized = true
@@ -1035,6 +1048,7 @@ class LutImageProcessor(context: Context? = null) {
         val vignette = effectiveRecipeParams?.vignette ?: 0f
         val flash = effectiveRecipeParams?.flash ?: 0f
         val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
+        val clarity = effectiveRecipeParams?.clarity ?: 0f
         val bloom = effectiveRecipeParams?.bloom ?: 0f
         val halation = 0f
         val softLight = effectiveRecipeParams?.softLight ?: 0f
@@ -1219,9 +1233,15 @@ class LutImageProcessor(context: Context? = null) {
         if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
 
-        val sharpened = sharpening > 0f && renderLutSharpenPass(outputTextureId, width, height, sharpening)
-        val postSharpenTextureId = if (sharpened) lutSharpenTextureId else outputTextureId
-        val postSharpenFramebufferId = if (sharpened) lutSharpenFboId else framebufferId
+        val clarityApplied = kotlin.math.abs(clarity) > 0.001f &&
+            renderClarity(outputTextureId, width, height, clarity)
+        val postClarityTextureId = if (clarityApplied) clarityOutputTextureId else outputTextureId
+        val postClarityFramebufferId = if (clarityApplied) clarityOutputFboId else framebufferId
+
+        val sharpened = sharpening > 0f &&
+            renderLutSharpenPass(postClarityTextureId, width, height, sharpening)
+        val postSharpenTextureId = if (sharpened) lutSharpenTextureId else postClarityTextureId
+        val postSharpenFramebufferId = if (sharpened) lutSharpenFboId else postClarityFramebufferId
 
         val readFramebufferId = if (bloom > 0.001f && renderLdrBloom(postSharpenTextureId, width, height, bloom)) {
             bloomOutputFboId
@@ -2056,6 +2076,24 @@ class LutImageProcessor(context: Context? = null) {
         )
     }
 
+    private fun initClarityPrograms() {
+        clarityDownsampleProgram = createFragmentProgram(
+            IMAGE_VERTEX_SHADER,
+            ClarityShaders.DOWNSAMPLE,
+            "ClarityDownsample",
+        )
+        clarityCompositeProgram = createFragmentProgram(
+            IMAGE_VERTEX_SHADER,
+            ClarityShaders.COMPOSITE,
+            "ClarityComposite",
+        )
+        PLog.d(
+            TAG,
+            "Static clarity programs initialized: " +
+                "downsample=$clarityDownsampleProgram composite=$clarityCompositeProgram",
+        )
+    }
+
     private fun setupBitmapDenoiseFramebuffers(width: Int, height: Int) {
         if (bitmapDenoiseWidth == width && bitmapDenoiseHeight == height && bitmapDenoiseTexId[0] != 0) return
         bitmapDenoiseWidth = width
@@ -2729,6 +2767,231 @@ class LutImageProcessor(context: Context? = null) {
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun setupClarityFramebuffers(width: Int, height: Int): Boolean {
+        if (
+            clarityOutputWidth == width &&
+            clarityOutputHeight == height &&
+            clarityOutputTextureId != 0 &&
+            clarityPyramidTexId.all { it != 0 }
+        ) {
+            return true
+        }
+
+        val maxTextureSize = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
+        if (width <= 0 || height <= 0 || width > maxTextureSize[0] || height > maxTextureSize[0]) {
+            PLog.e(
+                TAG,
+                "Clarity target ${width}x$height exceeds GL_MAX_TEXTURE_SIZE=${maxTextureSize[0]}",
+            )
+            return false
+        }
+
+        releaseClarityFramebuffers()
+        var levelWidth = width
+        var levelHeight = height
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            levelWidth = max(1, (levelWidth + 1) / 2)
+            levelHeight = max(1, (levelHeight + 1) / 2)
+            val target = createClarityFramebuffer(
+                width = levelWidth,
+                height = levelHeight,
+                internalFormat = GLES30.GL_RGBA16F,
+                label = "pyramid[$level]",
+            ) ?: run {
+                releaseClarityFramebuffers()
+                return false
+            }
+            clarityPyramidTexId[level] = target.first
+            clarityPyramidFboId[level] = target.second
+            clarityPyramidWidths[level] = levelWidth
+            clarityPyramidHeights[level] = levelHeight
+        }
+
+        val output = createClarityFramebuffer(
+            width = width,
+            height = height,
+            internalFormat = GLES30.GL_RGBA8,
+            label = "output",
+        ) ?: run {
+            releaseClarityFramebuffers()
+            return false
+        }
+        clarityOutputTextureId = output.first
+        clarityOutputFboId = output.second
+        clarityOutputWidth = width
+        clarityOutputHeight = height
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return true
+    }
+
+    private fun createClarityFramebuffer(
+        width: Int,
+        height: Int,
+        internalFormat: Int,
+        label: String,
+    ): Pair<Int, Int>? {
+        val texture = IntArray(1)
+        val framebuffer = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, internalFormat, width, height)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glGenFramebuffers(1, framebuffer, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            texture[0],
+            0,
+        )
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val error = GLES30.glGetError()
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE || error != GLES30.GL_NO_ERROR) {
+            PLog.e(
+                TAG,
+                "Clarity $label framebuffer allocation failed: status=$status glError=$error",
+            )
+            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+            GLES30.glDeleteTextures(1, texture, 0)
+            return null
+        }
+        return texture[0] to framebuffer[0]
+    }
+
+    private fun releaseClarityFramebuffers() {
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            if (clarityPyramidTexId[level] != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(clarityPyramidTexId[level]), 0)
+                clarityPyramidTexId[level] = 0
+            }
+            if (clarityPyramidFboId[level] != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(clarityPyramidFboId[level]), 0)
+                clarityPyramidFboId[level] = 0
+            }
+            clarityPyramidWidths[level] = 0
+            clarityPyramidHeights[level] = 0
+        }
+        if (clarityOutputTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(clarityOutputTextureId), 0)
+            clarityOutputTextureId = 0
+        }
+        if (clarityOutputFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(clarityOutputFboId), 0)
+            clarityOutputFboId = 0
+        }
+        clarityOutputWidth = 0
+        clarityOutputHeight = 0
+    }
+
+    private fun renderClarity(
+        sourceTextureId: Int,
+        width: Int,
+        height: Int,
+        clarity: Float,
+    ): Boolean {
+        if (clarityDownsampleProgram == 0 || clarityCompositeProgram == 0) {
+            return false
+        }
+        val upstreamError = GLES30.glGetError()
+        if (upstreamError != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderClarity skipped after upstream glError $upstreamError")
+            return false
+        }
+        if (!setupClarityFramebuffers(width, height)) return false
+
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+        GLES30.glDisable(GLES30.GL_BLEND)
+
+        var inputTextureId = sourceTextureId
+        var inputWidth = width
+        var inputHeight = height
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            GLES30.glUseProgram(clarityDownsampleProgram)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, clarityPyramidFboId[level])
+            GLES30.glViewport(0, 0, clarityPyramidWidths[level], clarityPyramidHeights[level])
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(clarityDownsampleProgram, "uInputTexture"),
+                0,
+            )
+            GLES30.glUniform2f(
+                GLES30.glGetUniformLocation(clarityDownsampleProgram, "uInputTexelSize"),
+                1f / inputWidth,
+                1f / inputHeight,
+            )
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(clarityDownsampleProgram, "uInputIsLuma"),
+                if (level == 0) 0 else 1,
+            )
+            GLES30.glUniformMatrix4fv(
+                GLES30.glGetUniformLocation(clarityDownsampleProgram, "uMVPMatrix"),
+                1,
+                false,
+                identityMatrix,
+                0,
+            )
+            drawQuad(clarityDownsampleProgram)
+            val error = GLES30.glGetError()
+            if (error != GLES30.GL_NO_ERROR) {
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                PLog.e(TAG, "renderClarity pyramid[$level] glError $error")
+                return false
+            }
+            inputTextureId = clarityPyramidTexId[level]
+            inputWidth = clarityPyramidWidths[level]
+            inputHeight = clarityPyramidHeights[level]
+        }
+
+        GLES30.glUseProgram(clarityCompositeProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, clarityOutputFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(clarityCompositeProgram, "uInputTexture"), 0)
+        val lumaUniforms = arrayOf(
+            "uFineLumaTexture",
+            "uMediumLumaTexture",
+            "uCoarseLumaTexture",
+        )
+        for (level in 0 until CLARITY_PYRAMID_LEVELS) {
+            val textureUnit = level + 1
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + textureUnit)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, clarityPyramidTexId[level])
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(clarityCompositeProgram, lumaUniforms[level]),
+                textureUnit,
+            )
+        }
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(clarityCompositeProgram, "uClarity"),
+            clarity.coerceIn(-1f, 1f),
+        )
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(clarityCompositeProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0,
+        )
+        drawQuad(clarityCompositeProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderClarity glError $error")
+            return false
+        }
+        return true
     }
 
     private fun setupHalationFramebuffers(width: Int, height: Int) {
@@ -3429,6 +3692,9 @@ class LutImageProcessor(context: Context? = null) {
         if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
         if (hdfBlurVProgram != 0) GLES30.glDeleteProgram(hdfBlurVProgram)
         if (softLightBlurHProgram != 0) GLES30.glDeleteProgram(softLightBlurHProgram)
+        if (clarityDownsampleProgram != 0) GLES30.glDeleteProgram(clarityDownsampleProgram)
+        if (clarityCompositeProgram != 0) GLES30.glDeleteProgram(clarityCompositeProgram)
+        releaseClarityFramebuffers()
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
@@ -3466,6 +3732,7 @@ class LutImageProcessor(context: Context? = null) {
         private const val BITMAP_DENOISE_A = 0.008f
         private const val BITMAP_DENOISE_B = 0.0005f
         private const val LUT_LUMINANCE_OFFSET = 1e-4f
+        private const val CLARITY_PYRAMID_LEVELS = 3
         private const val EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
         private const val EGL_CONTEXT_PRIORITY_LOW_IMG = 0x3103
 

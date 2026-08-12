@@ -429,6 +429,7 @@
     <string name="recipe_param_vignette">暈影</string>
     <string name="recipe_param_flash">閃光燈</string>
     <string name="recipe_param_bleach_bypass">留銀沖洗</string>
+    <string name="recipe_param_clarity">清晰度</string>
     <string name="recipe_param_bloom">泛光</string>
     <string name="recipe_param_soft_light">柔光</string>
     <string name="recipe_param_hdf">HDF</string>

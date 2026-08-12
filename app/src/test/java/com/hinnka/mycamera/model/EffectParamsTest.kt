@@ -24,4 +24,18 @@ class EffectParamsTest {
         assertTrue(EffectParams.DEFAULT.isDefault())
         assertEquals(0f, ColorRecipeParams.DEFAULT.flash, 0.0001f)
     }
+
+    @Test
+    fun clarity_roundTripsAndBridgesToColorRecipe() {
+        val source = EffectParams.DEFAULT.copy(clarity = -0.38f)
+
+        val restored = EffectParams.fromJson(source.toJson())
+        val recipe = restored.applyTo(ColorRecipeParams.DEFAULT)
+
+        assertFalse(restored.isDefault())
+        assertEquals(-0.38f, restored.clarity, 0.0001f)
+        assertEquals(-0.38f, recipe.clarity, 0.0001f)
+        assertFalse(recipe.isDefault())
+        assertEquals(restored, recipe.toEffectParams())
+    }
 }

@@ -460,6 +460,7 @@
     <string name="recipe_param_vignette">Vignette</string>
     <string name="recipe_param_flash">Flash</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
+    <string name="recipe_param_clarity">Clarity</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Soft Light</string>
     <string name="recipe_param_hdf">HDF</string>

@@ -31,6 +31,7 @@ data class ColorRecipeParams(
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     val flash: Float = 0f,          // 0.0 ~ 1.0 (镜头轴向直闪模拟强度，0为无效果)
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
+    val clarity: Float = 0f,        // -1.0 ~ 1.0 (局部对比度，0为无效果)
     val bloom: Float = 0f,          // 0.0 ~ 1.0 (Bevy Bloom 泛光强度，0为无效果)
     val softLight: Float = 0f,      // 0.0 ~ 1.0 (柔光扩散强度，0为无效果)
     val halation: Float = 0f,       // 0.0 ~ 1.0 (高光扩散强度，0为无效果，模拟 GR3 HDF)
@@ -113,6 +114,7 @@ data class ColorRecipeParams(
                 vignette == 0f &&
                 flash == 0f &&
                 bleachBypass == 0f &&
+                clarity == 0f &&
                 bloom == 0f &&
                 softLight == 0f &&
                 redHalation == 0f &&
@@ -193,6 +195,7 @@ data class ColorRecipeParams(
                 vignette == other.vignette &&
                 flash == other.flash &&
                 bleachBypass == other.bleachBypass &&
+                clarity == other.clarity &&
                 bloom == other.bloom &&
                 softLight == other.softLight &&
                 redHalation == other.redHalation &&
@@ -312,6 +315,7 @@ enum class RecipeParam(
     VIGNETTE(R.string.recipe_param_vignette, -1.0f, 1.0f, 0f),
     FLASH(R.string.recipe_param_flash, 0.0f, 1.0f, 0f),
     BLEACH_BYPASS(R.string.recipe_param_bleach_bypass, 0.0f, 1.0f, 0f),
+    CLARITY(R.string.recipe_param_clarity, -1.0f, 1.0f, 0f),
     BLOOM(R.string.recipe_param_bloom, 0.0f, 1.0f, 0f),
     SOFT_LIGHT(R.string.recipe_param_soft_light, 0.0f, 1.0f, 0f),
     HDF(R.string.recipe_param_hdf, 0.0f, 1.0f, 0f),
@@ -382,6 +386,7 @@ enum class RecipeParam(
             VIGNETTE -> params.vignette
             FLASH -> params.flash
             BLEACH_BYPASS -> params.bleachBypass
+            CLARITY -> params.clarity
             BLOOM -> params.bloom
             SOFT_LIGHT -> params.softLight
             HDF -> params.halation
@@ -448,6 +453,7 @@ enum class RecipeParam(
             VIGNETTE -> params.copy(vignette = clampedValue)
             FLASH -> params.copy(flash = clampedValue)
             BLEACH_BYPASS -> params.copy(bleachBypass = clampedValue)
+            CLARITY -> params.copy(clarity = clampedValue)
             BLOOM -> params.copy(bloom = clampedValue)
             SOFT_LIGHT -> params.copy(softLight = clampedValue)
             HDF -> params.copy(halation = clampedValue)

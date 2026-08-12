@@ -163,6 +163,7 @@
     <string name="recipe_param_vignette">비네팅</string>
     <string name="recipe_param_flash">플래시</string>
     <string name="recipe_param_bleach_bypass">블리치 바이패스</string>
+    <string name="recipe_param_clarity">명료도</string>
     <string name="recipe_param_bloom">블룸</string>
     <string name="recipe_param_soft_light">소프트 라이트</string>
     <string name="recipe_param_halation">할레이션</string>

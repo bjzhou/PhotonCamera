@@ -163,6 +163,7 @@
     <string name="recipe_param_vignette">Vinheta</string>
     <string name="recipe_param_flash">Flash</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
+    <string name="recipe_param_clarity">Clareza</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Luz suave</string>
     <string name="recipe_param_halation">Halação</string>

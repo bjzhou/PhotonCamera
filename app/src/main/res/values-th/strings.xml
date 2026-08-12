@@ -303,6 +303,7 @@
     <string name="recipe_param_vignette">ขอบมืด</string>
     <string name="recipe_param_flash">แฟลช</string>
     <string name="recipe_param_bleach_bypass">การข้ามกระบวนการล้าง (Bleach Bypass)</string>
+    <string name="recipe_param_clarity">ความชัดเจน</string>
     <string name="recipe_param_bloom">แสงฟุ้ง</string>
     <string name="recipe_param_soft_light">แสงนุ่ม</string>
     <string name="recipe_param_hdf">HDF</string>

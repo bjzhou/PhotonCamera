@@ -11,6 +11,7 @@ data class EffectParams(
     val vignette: Float = 0f,               // 暗角 (-1.0 ~ 1.0)
     val flash: Float = 0f,                  // 镜头轴向直闪模拟 (0.0 ~ 1.0)
     val filmGrain: Float = 0f,             // 胶片颗粒 (0.0 ~ 1.0)
+    val clarity: Float = 0f,               // 清晰度 (-1.0 ~ 1.0)
     val bloom: Float = 0f,                 // Bevy Bloom 泛光 (0.0 ~ 1.0)
     val softLight: Float = 0f,             // 柔光扩散 (0.0 ~ 1.0)
     val hdf: Float = 0f,                   // 高光扩散 HDF (0.0 ~ 1.0)
@@ -26,6 +27,7 @@ data class EffectParams(
         return vignette == 0f &&
                 flash == 0f &&
                 filmGrain == 0f &&
+                clarity == 0f &&
                 bloom == 0f &&
                 softLight == 0f &&
                 halation == 0f &&
@@ -43,6 +45,7 @@ data class EffectParams(
             vignette = vignette,
             flash = flash,
             filmGrain = filmGrain,
+            clarity = clarity,
             bloom = bloom,
             softLight = softLight,
             halation = 0f,             // 旧 HDF 已移除 UI 入口，强制归零以避免旧值继续生效
@@ -74,6 +77,7 @@ fun ColorRecipeParams.toEffectParams(): EffectParams {
         vignette = vignette,
         flash = flash,
         filmGrain = filmGrain,
+        clarity = clarity,
         bloom = bloom,
         softLight = softLight,
         hdf = 0f,
