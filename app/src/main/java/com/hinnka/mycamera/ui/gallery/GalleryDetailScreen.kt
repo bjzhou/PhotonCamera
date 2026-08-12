@@ -271,10 +271,32 @@ fun GalleryDetailScreen(
     val isCurrentRawPhoto = currentPhoto?.let {
         it.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || it.relatedPhoto != null) && viewModel.isRaw(it.id)
     } == true
+    val displayInfoPhoto = currentPhoto?.relatedPhoto ?: currentPhoto
+    val displayInfoMetadata = displayInfoPhoto?.metadata ?: currentPhoto?.metadata
+    val displayInfoRefreshKey = displayInfoPhoto?.let { viewModel.photoRefreshKeys[it.id] } ?: 0L
     var displayPhotoSize by remember(currentPhoto?.id) { mutableLongStateOf(currentPhoto?.size ?: 0L) }
 
-    LaunchedEffect(currentPhoto?.id, currentPhoto?.size, currentPhoto?.uri, currentPhoto?.sourceUri) {
+    LaunchedEffect(
+        currentPhoto?.id,
+        currentPhoto?.size,
+        currentPhoto?.uri,
+        currentPhoto?.sourceUri,
+        displayInfoPhoto?.id,
+        displayInfoMetadata?.hasAiSuperResolutionBase,
+        displayInfoMetadata?.aiSuperResolutionWidth,
+        displayInfoMetadata?.aiSuperResolutionHeight,
+        displayInfoRefreshKey,
+    ) {
         val photo = currentPhoto ?: return@LaunchedEffect
+        if (displayInfoMetadata?.hasAiSuperResolutionBase == true) {
+            val superResolutionSize = withContext(Dispatchers.IO) {
+                viewModel.getAiSuperResolutionPhotoSize(displayInfoPhoto?.id ?: photo.id)
+            }
+            if (superResolutionSize > 0L) {
+                displayPhotoSize = superResolutionSize
+                return@LaunchedEffect
+            }
+        }
         displayPhotoSize = photo.size
         if (displayPhotoSize > 0L) return@LaunchedEffect
 

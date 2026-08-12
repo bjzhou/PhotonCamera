@@ -135,6 +135,10 @@ data class MediaMetadata(
     val multipleExposureFrameCount: Int? = null,
     val hasAiDenoisedBase: Boolean = false,
     val aiDenoiseStrength: Float? = null,
+    val hasAiSuperResolutionBase: Boolean = false,
+    /** Actual dimensions of the persisted AI super-resolution base. */
+    val aiSuperResolutionWidth: Int? = null,
+    val aiSuperResolutionHeight: Int? = null,
     val rawBlackLevelMode: String? = null,
     val rawCustomBlackLevel: Float? = null,
     val rawWhiteLevelMode: String? = null,
@@ -209,7 +213,28 @@ data class MediaMetadata(
      * 分辨率字符串 (用于边框水印显示)
      */
     val resolution: String
-        get() = "${width}x${height}"
+        get() = "${activeImageWidth}x${activeImageHeight}"
+
+    /** Display/render dimensions; [width]/[height] remain the post-crop geometry basis. */
+    val activeImageWidth: Int
+        get() = if (hasAiSuperResolutionBase) {
+            aiSuperResolutionWidth?.takeIf { it > 0 } ?: width.safeDoubleDimension()
+        } else {
+            width
+        }
+
+    val activeImageHeight: Int
+        get() = if (hasAiSuperResolutionBase) {
+            aiSuperResolutionHeight?.takeIf { it > 0 } ?: height.safeDoubleDimension()
+        } else {
+            height
+        }
+
+    private fun Int.safeDoubleDimension(): Int = when {
+        this <= 0 -> this
+        this > Int.MAX_VALUE / 2 -> Int.MAX_VALUE
+        else -> this * 2
+    }
 
     fun usesNaturalLightToneMap(): Boolean {
         return tonemapMode == TONEMAP_MODE_NATURAL_LIGHT
@@ -482,6 +507,20 @@ data class MediaMetadata(
                     multipleExposureFrameCount = if (obj.isNull("multipleExposureFrameCount")) null else obj.optInt("multipleExposureFrameCount"),
                     hasAiDenoisedBase = obj.optBoolean("hasAiDenoisedBase", false),
                     aiDenoiseStrength = if (obj.isNull("aiDenoiseStrength")) null else obj.optDouble("aiDenoiseStrength").toFloat(),
+                    hasAiSuperResolutionBase = obj.optBoolean(
+                        "hasAiSuperResolutionBase",
+                        false,
+                    ),
+                    aiSuperResolutionWidth = if (obj.isNull("aiSuperResolutionWidth")) {
+                        null
+                    } else {
+                        obj.optInt("aiSuperResolutionWidth").takeIf { it > 0 }
+                    },
+                    aiSuperResolutionHeight = if (obj.isNull("aiSuperResolutionHeight")) {
+                        null
+                    } else {
+                        obj.optInt("aiSuperResolutionHeight").takeIf { it > 0 }
+                    },
                     applyEffectsToVideo = obj.optBoolean("applyEffectsToVideo", false),
                     spectralFilmStock = if (obj.isNull("spectralFilmStock")) null else obj.optString("spectralFilmStock"),
                     spectralFilmPrint = if (obj.isNull("spectralFilmPrint")) null else obj.optString("spectralFilmPrint"),

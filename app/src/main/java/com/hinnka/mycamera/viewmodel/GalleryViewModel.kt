@@ -55,6 +55,9 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -90,6 +93,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     companion object {
         private const val TAG = "GalleryViewModel"
         private const val FULL_QUALITY_PREVIEW_MAX_EDGE = 4096
+        private const val AI_SUPER_RESOLUTION_JPEG_QUALITY = 98
     }
 
 
@@ -445,7 +449,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val _aiDenoiseProgress = MutableStateFlow(0f)
     val aiDenoiseProgress = _aiDenoiseProgress.asStateFlow()
 
+    private val _editAiSuperResolutionEnabled = MutableStateFlow(false)
+    val editAiSuperResolutionEnabled = _editAiSuperResolutionEnabled.asStateFlow()
+
+    private val _isAiSuperResolving = MutableStateFlow(false)
+    val isAiSuperResolving = _isAiSuperResolving.asStateFlow()
+
+    private val _aiSuperResolutionProgress = MutableStateFlow(0f)
+    val aiSuperResolutionProgress = _aiSuperResolutionProgress.asStateFlow()
+
     private var bokehJob: Job? = null
+
+    private fun MediaMetadata.withCurrentBokehEditState(): MediaMetadata = copy(
+        computationalAperture = editComputationalAperture.value,
+        focusPointX = editFocusPointX.value,
+        focusPointY = editFocusPointY.value,
+    )
 
     fun setComputationalAperture(value: Float?) {
         editComputationalAperture.value = value
@@ -501,32 +520,44 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             val focusPointX = editFocusPointX.value
             val focusPointY = editFocusPointY.value
-            val metadata = GalleryManager.loadMetadata(context, photoData.id) ?: photoData.metadata ?: MediaMetadata()
-            val bitmap = if (metadata.hasAiDenoisedBase) {
-                GalleryManager.loadBitmap(context, Uri.fromFile(GalleryManager.getAiDenoiseFile(context, photoData.id)))
-            } else {
-                GalleryManager.loadOriginalBitmap(context, photoData.id)
+            val metadata = (
+                GalleryManager.loadMetadata(context, photoData.id)
+                    ?: photoData.metadata
+                    ?: MediaMetadata()
+                ).withCurrentBokehEditState()
+            var bitmap: Bitmap? = null
+            var bokeh: Bitmap? = null
+            try {
+                val sourceBitmap = GalleryManager.getPreferredAiBaseFile(context, photoData.id, metadata)
+                    ?.let { GalleryManager.loadBitmap(context, Uri.fromFile(it)) }
+                    ?: GalleryManager.loadOriginalBitmap(context, photoData.id)
+                    ?: GalleryManager.loadBitmap(context, photoData.uri)
+                    ?: return@launch
+                bitmap = sourceBitmap
+                if (!isActive) return@launch
+                val renderedBokeh = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
+                    context,
+                    photoData.id,
+                    sourceBitmap,
+                    focusPointX,
+                    focusPointY,
+                    aperture
+                )
+                bokeh = renderedBokeh
+                if (!isActive) return@launch
+                GalleryManager.saveBokehPhoto(context, photoData.id, renderedBokeh)
+                GalleryManager.deleteDetailHdrFile(context, photoData.id)
+                GalleryManager.updateThumbnail(
+                    context = context,
+                    photoId = photoData.id,
+                    photoProcessor = contentRepository.photoProcessor,
+                    metadata = metadata
+                )
+                photoRefreshKeys[photoData.id] = System.currentTimeMillis()
+            } finally {
+                bokeh?.takeIf { it !== bitmap && !it.isRecycled }?.recycle()
+                bitmap?.takeIf { !it.isRecycled }?.recycle()
             }
-                ?: GalleryManager.loadBitmap(context, photoData.uri) ?: return@launch
-            if (!isActive) return@launch
-            val bokeh = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
-                context,
-                photoData.id,
-                bitmap,
-                focusPointX,
-                focusPointY,
-                aperture
-            )
-            if (!isActive) return@launch
-            GalleryManager.saveBokehPhoto(context, photoData.id, bokeh)
-            GalleryManager.deleteDetailHdrFile(context, photoData.id)
-            GalleryManager.updateThumbnail(
-                context = context,
-                photoId = photoData.id,
-                photoProcessor = contentRepository.photoProcessor,
-                metadata = metadata
-            )
-            photoRefreshKeys[photoData.id] = System.currentTimeMillis()
         }
     }
 
@@ -534,14 +565,91 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _editAiDenoiseStrength.value = value
     }
 
+    private fun saveJpegAtomically(bitmap: Bitmap, target: File, quality: Int): Boolean {
+        target.parentFile?.mkdirs()
+        val temporary = File(target.parentFile, ".${target.name}.${System.nanoTime()}.tmp")
+        return try {
+            val encoded = FileOutputStream(temporary).use { output ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)
+            }
+            if (!encoded || temporary.length() <= 0L) return false
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(
+                    temporary.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
+            target.isFile && target.length() > 0L
+        } finally {
+            temporary.takeIf { it.exists() }?.delete()
+        }
+    }
+
+    private suspend fun rebuildBokehFromPreferredBase(
+        photoId: String,
+        metadata: MediaMetadata,
+    ) {
+        val context = getApplication<Application>()
+        if ((metadata.computationalAperture ?: 0f) <= 0f) {
+            GalleryManager.getBokehFile(context, photoId).takeIf { it.exists() }?.delete()
+            return
+        }
+        val bitmap = GalleryManager.getPreferredAiBaseFile(context, photoId, metadata)
+            ?.let { GalleryManager.loadBitmap(context, Uri.fromFile(it)) }
+            ?: GalleryManager.loadOriginalBitmap(context, photoId)
+            ?: return
+        try {
+            GalleryManager.generateBokehPhoto(context, photoId, metadata, bitmap)
+        } finally {
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
+    private suspend fun refreshAiDerivedCaches(
+        photoId: String,
+        metadata: MediaMetadata,
+        thumbnailMetadata: MediaMetadata = metadata,
+    ) {
+        val context = getApplication<Application>()
+        photoRefreshKeys[photoId] = System.currentTimeMillis()
+        invalidatePreviewCache(photoId)
+        GalleryManager.deleteDetailHdrFile(context, photoId)
+        if (metadata.manualHdrEffectEnabled) {
+            GalleryManager.queueDetailHdrCacheBuild(
+                context = context,
+                photoId = photoId,
+                metadata = metadata,
+                sharpening = metadata.sharpening ?: 0f,
+                noiseReduction = metadata.noiseReduction ?: 0f,
+                chromaNoiseReduction = metadata.chromaNoiseReduction ?: 0f,
+            )
+        }
+        GalleryManager.updateThumbnail(
+            context = context,
+            photoId = photoId,
+            photoProcessor = contentRepository.photoProcessor,
+            metadata = thumbnailMetadata,
+        )
+    }
+
     fun applyDnCNNDenoise(photo: MediaData, strength: Float = 1.0f, onComplete: (Boolean) -> Unit) {
-        if (_isAiDenoising.value) return
+        if (_isAiDenoising.value || _isAiSuperResolving.value) return
         _isAiDenoising.value = true
         _aiDenoiseProgress.value = 0f
 
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
+            var denoisedBitmap: Bitmap? = null
             try {
+                bokehJob?.cancelAndJoin()
                 var bitmap = GalleryManager.loadOriginalBitmap(context, photo.id) ?: GalleryManager.loadBitmap(context, photo.uri)
                 if (bitmap == null) {
                     _isAiDenoising.value = false
@@ -564,6 +672,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val denoised = estimator.denoisePatchwise(bitmap, strength = strength) { p ->
                     _aiDenoiseProgress.value = p
                 }
+                denoisedBitmap = denoised
                 estimator.close()
                 bitmap.recycle()
                 
@@ -574,13 +683,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 
                 val file = GalleryManager.getAiDenoiseFile(context, photo.id)
-                file.parentFile?.mkdirs()
-                FileOutputStream(file).use { outputStream ->
-                    denoised.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                if (!saveJpegAtomically(denoised, file, 95)) {
+                    _isAiDenoising.value = false
+                    withContext(Dispatchers.Main) { onComplete(false) }
+                    return@launch
                 }
                 
                 // Update metadata to mark that we have an AI denoised base
-                val metadata = currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
+                val metadata = (
+                    currentMediaMetadata
+                        ?: photo.metadata
+                        ?: MediaMetadata()
+                    ).withCurrentBokehEditState()
                 val aperture = metadata.computationalAperture ?: 0f
                 if (aperture > 0f) {
                     val bokeh = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
@@ -599,7 +713,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val updatedMetadata = GalleryManager.updateMetadata(context, photo.id) { current ->
                     current.copy(
                         hasAiDenoisedBase = true,
-                        aiDenoiseStrength = strength
+                        aiDenoiseStrength = strength,
+                        hasAiSuperResolutionBase = false,
+                        aiSuperResolutionWidth = null,
+                        aiSuperResolutionHeight = null,
                     )
                 } ?: run {
                     _isAiDenoising.value = false
@@ -607,6 +724,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
                 currentMediaMetadata = updatedMetadata
+                GalleryManager.getAiSuperResolutionFile(context, photo.id)
+                    .takeIf { it.exists() }
+                    ?.delete()
+                _editAiSuperResolutionEnabled.value = false
                 
                 val updatedPhotos = _photos.value.map { p ->
                     if (p.id == photo.id) p.copy(metadata = updatedMetadata) else p
@@ -616,24 +737,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     _latestPhoto.value = _latestPhoto.value?.copy(metadata = updatedMetadata)
                 }
                 
-                photoRefreshKeys[photo.id] = System.currentTimeMillis()
-                invalidatePreviewCache(photo.id)
-                
                 // Clear and rebuild HDR cache so the user sees the new denoised image in HDR view
-                GalleryManager.deleteDetailHdrFile(context, photo.id)
-                GalleryManager.queueDetailHdrCacheBuild(
-                    context = context,
-                    photoId = photo.id,
-                    metadata = updatedMetadata,
-                    sharpening = updatedMetadata.sharpening ?: 0f,
-                    noiseReduction = updatedMetadata.noiseReduction ?: 0f,
-                    chromaNoiseReduction = updatedMetadata.chromaNoiseReduction ?: 0f
-                )
-                GalleryManager.updateThumbnail(
-                    context = context,
-                    photoId = photo.id,
-                    photoProcessor = contentRepository.photoProcessor,
-                    metadata = updatedMetadata
+                refreshAiDerivedCaches(
+                    photo.id,
+                    updatedMetadata,
+                    updatedMetadata.withCurrentBokehEditState(),
                 )
 
                 _isAiDenoising.value = false
@@ -642,62 +750,187 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 PLog.e(TAG, "Failed to apply DnCNN denoise", e)
                 _isAiDenoising.value = false
                 withContext(Dispatchers.Main) { onComplete(false) }
+            } finally {
+                denoisedBitmap?.takeIf { !it.isRecycled }?.recycle()
             }
         }
     }
 
     fun resetDnCNNDenoise(photo: MediaData, onComplete: (Boolean) -> Unit = {}) {
-        if (_isAiDenoising.value) return
+        if (_isAiDenoising.value || _isAiSuperResolving.value) return
         _isAiDenoising.value = true
 
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
             try {
-                GalleryManager.getAiDenoiseFile(context, photo.id).takeIf { it.exists() }?.delete()
+                bokehJob?.cancelAndJoin()
                 val updatedMetadata = updatePhotoMetadata(photo.id) {
-                    it.copy(hasAiDenoisedBase = false, aiDenoiseStrength = 0.0f)
+                    it.copy(
+                        hasAiDenoisedBase = false,
+                        aiDenoiseStrength = 0.0f,
+                        hasAiSuperResolutionBase = false,
+                        aiSuperResolutionWidth = null,
+                        aiSuperResolutionHeight = null,
+                    )
                 } ?: run {
                     _isAiDenoising.value = false
                     withContext(Dispatchers.Main) { onComplete(false) }
                     return@launch
                 }
+                GalleryManager.getAiDenoiseFile(context, photo.id).takeIf { it.exists() }?.delete()
+                GalleryManager.getAiSuperResolutionFile(context, photo.id)
+                    .takeIf { it.exists() }
+                    ?.delete()
+                _editAiSuperResolutionEnabled.value = false
 
-                val aperture = updatedMetadata.computationalAperture ?: 0f
-                if (aperture > 0f) {
-                    val originalBitmap = GalleryManager.loadOriginalBitmap(context, photo.id)
-                    if (originalBitmap != null) {
-                        GalleryManager.generateBokehPhoto(context, photo.id, updatedMetadata, originalBitmap)
-                        if (!originalBitmap.isRecycled) originalBitmap.recycle()
-                    }
-                } else {
-                    GalleryManager.getBokehFile(context, photo.id).takeIf { it.exists() }?.delete()
+                val effectiveMetadata = updatedMetadata.withCurrentBokehEditState()
+                GalleryManager.getBokehFile(context, photo.id).takeIf { it.exists() }?.delete()
+                try {
+                    rebuildBokehFromPreferredBase(photo.id, effectiveMetadata)
+                } catch (error: Exception) {
+                    PLog.e(TAG, "Failed to rebuild bokeh after resetting AI denoise", error)
                 }
 
-                GalleryManager.deleteDetailHdrFile(context, photo.id)
-                if (updatedMetadata.manualHdrEffectEnabled) {
-                    GalleryManager.queueDetailHdrCacheBuild(
-                        context = context,
-                        photoId = photo.id,
-                        metadata = updatedMetadata,
-                        sharpening = updatedMetadata.sharpening ?: 0f,
-                        noiseReduction = updatedMetadata.noiseReduction ?: 0f,
-                        chromaNoiseReduction = updatedMetadata.chromaNoiseReduction ?: 0f
-                    )
-                }
-                GalleryManager.updateThumbnail(
-                    context = context,
-                    photoId = photo.id,
-                    photoProcessor = contentRepository.photoProcessor,
-                    metadata = updatedMetadata
-                )
-                invalidatePreviewCache(photo.id)
-                photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                refreshAiDerivedCaches(photo.id, updatedMetadata, effectiveMetadata)
                 _isAiDenoising.value = false
                 withContext(Dispatchers.Main) { onComplete(true) }
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to reset AI denoise", e)
                 _isAiDenoising.value = false
                 withContext(Dispatchers.Main) { onComplete(false) }
+            }
+        }
+    }
+
+    fun applyEtDsSuperResolution(
+        photo: MediaData,
+        onComplete: (Boolean) -> Unit,
+    ) {
+        if (_isAiDenoising.value || _isAiSuperResolving.value) return
+        _isAiSuperResolving.value = true
+        _aiSuperResolutionProgress.value = 0f
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val target = GalleryManager.getAiSuperResolutionFile(context, photo.id)
+            var source: Bitmap? = null
+            var superResolved: Bitmap? = null
+            var originalMetadata: MediaMetadata? = null
+            var success = false
+            try {
+                bokehJob?.cancelAndJoin()
+                val metadata = GalleryManager.loadMetadata(context, photo.id)
+                    ?: photo.metadata
+                    ?: MediaMetadata()
+                val effectiveMetadata = metadata.withCurrentBokehEditState()
+                originalMetadata = effectiveMetadata
+                source = GalleryManager.getPreferredAiBaseFile(context, photo.id, metadata)
+                    ?.takeIf { it != target }
+                    ?.let { GalleryManager.loadBitmap(context, Uri.fromFile(it)) }
+                    ?: GalleryManager.loadOriginalBitmap(context, photo.id)
+                    ?: GalleryManager.loadBitmap(context, photo.uri)
+                if (source == null) return@launch
+
+                val estimator = com.hinnka.mycamera.ml.EtDsSuperResolutionEstimator(context)
+                try {
+                    if (!estimator.isReady) return@launch
+                    superResolved = estimator.superResolvePatchwise(source) { progress ->
+                        _aiSuperResolutionProgress.value = progress
+                    }
+                } finally {
+                    estimator.close()
+                }
+                val result = superResolved ?: return@launch
+                if (!saveJpegAtomically(result, target, AI_SUPER_RESOLUTION_JPEG_QUALITY)) {
+                    return@launch
+                }
+
+                val pendingMetadata = effectiveMetadata.copy(
+                    hasAiSuperResolutionBase = true,
+                    aiSuperResolutionWidth = result.width,
+                    aiSuperResolutionHeight = result.height,
+                )
+                if ((pendingMetadata.computationalAperture ?: 0f) > 0f) {
+                    GalleryManager.generateBokehPhoto(
+                        context,
+                        photo.id,
+                        pendingMetadata,
+                        result,
+                    )
+                }
+                val updatedMetadata = updatePhotoMetadata(photo.id) {
+                    it.copy(
+                        hasAiSuperResolutionBase = true,
+                        aiSuperResolutionWidth = result.width,
+                        aiSuperResolutionHeight = result.height,
+                    )
+                } ?: return@launch
+                _editAiSuperResolutionEnabled.value = true
+                success = true
+                refreshAiDerivedCaches(
+                    photo.id,
+                    updatedMetadata,
+                    updatedMetadata.withCurrentBokehEditState(),
+                )
+            } catch (error: OutOfMemoryError) {
+                PLog.e(TAG, "Not enough memory to apply ETDS super resolution", error)
+            } catch (error: Exception) {
+                PLog.e(TAG, "Failed to apply ETDS super resolution", error)
+            } finally {
+                if (!success) {
+                    target.takeIf { it.exists() }?.delete()
+                    originalMetadata?.let { metadata ->
+                        try {
+                            rebuildBokehFromPreferredBase(photo.id, metadata)
+                        } catch (error: Exception) {
+                            PLog.e(TAG, "Failed to restore bokeh after ETDS failure", error)
+                        }
+                    }
+                }
+                source?.takeIf { !it.isRecycled }?.recycle()
+                superResolved?.takeIf { !it.isRecycled }?.recycle()
+                _isAiSuperResolving.value = false
+                withContext(Dispatchers.Main) { onComplete(success) }
+            }
+        }
+    }
+
+    fun resetEtDsSuperResolution(
+        photo: MediaData,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
+        if (_isAiDenoising.value || _isAiSuperResolving.value) return
+        _isAiSuperResolving.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            var success = false
+            try {
+                bokehJob?.cancelAndJoin()
+                val updatedMetadata = updatePhotoMetadata(photo.id) {
+                    it.copy(
+                        hasAiSuperResolutionBase = false,
+                        aiSuperResolutionWidth = null,
+                        aiSuperResolutionHeight = null,
+                    )
+                } ?: return@launch
+                GalleryManager.getAiSuperResolutionFile(context, photo.id)
+                    .takeIf { it.exists() }
+                    ?.delete()
+                _editAiSuperResolutionEnabled.value = false
+                val effectiveMetadata = updatedMetadata.withCurrentBokehEditState()
+                GalleryManager.getBokehFile(context, photo.id).takeIf { it.exists() }?.delete()
+                try {
+                    rebuildBokehFromPreferredBase(photo.id, effectiveMetadata)
+                } catch (error: Exception) {
+                    PLog.e(TAG, "Failed to rebuild bokeh after resetting ETDS", error)
+                }
+                refreshAiDerivedCaches(photo.id, updatedMetadata, effectiveMetadata)
+                success = true
+            } catch (error: Exception) {
+                PLog.e(TAG, "Failed to reset ETDS super resolution", error)
+            } finally {
+                _isAiSuperResolving.value = false
+                withContext(Dispatchers.Main) { onComplete(success) }
             }
         }
     }
@@ -1361,6 +1594,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRotationDegrees.value = PostEditGeometry.normalizeRotation(m.postRotationDegrees)
             editMirrorHorizontal.value = m.postMirrorHorizontal
             _editAiDenoiseStrength.value = if (m.hasAiDenoisedBase) m.aiDenoiseStrength ?: 1.0f else 0.0f
+            _editAiSuperResolutionEnabled.value = m.hasAiSuperResolutionBase
             restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
@@ -1375,6 +1609,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRotationDegrees.value = 0
             editMirrorHorizontal.value = false
             _editAiDenoiseStrength.value = 0.0f
+            _editAiSuperResolutionEnabled.value = false
             restoreCropEditState(photo, null)
         }
     }
@@ -2973,6 +3208,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return GalleryManager.getOriginalImageFile(context, photoId)?.length() ?: 0L
     }
 
+    fun getAiSuperResolutionPhotoSize(photoId: String): Long {
+        val context = getApplication<Application>()
+        return GalleryManager.getAiSuperResolutionFile(context, photoId)
+            .takeIf { it.isFile }
+            ?.length()
+            ?: 0L
+    }
+
     private fun invalidateGridThumbnailCache(photoId: String) {
         val snapshot = gridThumbnailCache.snapshot()
         snapshot.keys.filter { it.startsWith("${photoId}_") }.forEach {
@@ -3113,13 +3356,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     val bokehFile = GalleryManager.getBokehFile(context, photo.id)
                     when {
-                        bokehFile.exists() -> GalleryManager.loadBitmap(context, Uri.fromFile(bokehFile), maxEdge)
-                        finalMetadata.hasAiDenoisedBase -> GalleryManager.loadBitmap(
+                        bokehFile.exists() &&
+                            (finalMetadata.computationalAperture ?: 0f) > 0f ->
+                            GalleryManager.loadBitmap(context, Uri.fromFile(bokehFile), maxEdge)
+                        else -> GalleryManager.getPreferredAiBaseFile(
                             context,
-                            Uri.fromFile(GalleryManager.getAiDenoiseFile(context, photo.id)),
-                            maxEdge
-                        )
-                        else -> GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
+                            photo.id,
+                            finalMetadata,
+                        )?.let { aiFile ->
+                            GalleryManager.loadBitmap(context, Uri.fromFile(aiFile), maxEdge)
+                        } ?: GalleryManager.loadOriginalBitmap(context, photo.id, maxEdge)
                     } ?: if (canLoadExternalUri) GalleryManager.loadBitmap(context, externalUri, maxEdge, preserveHdr = false) else null
                 } ?: return@withContext null
 

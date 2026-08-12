@@ -1055,6 +1055,10 @@
     <string name="ai_denoise_description">使用神经网络重构画质细节</string>
     <string name="ai_denoise_processing">正在处理... %1$.1f%%</string>
     <string name="ai_denoise_failed">AI 降噪失败</string>
+    <string name="ai_super_resolution_title">AI 超分辨率</string>
+    <string name="ai_super_resolution_description">使用 ETDS 在设备端将图像提升至 2 倍分辨率</string>
+    <string name="ai_super_resolution_processing">正在超分… %1$.1f%%</string>
+    <string name="ai_super_resolution_failed">AI 超分辨率处理失败</string>
 
     <!-- 测光模式 -->
     <string name="metering_mode">测光</string>

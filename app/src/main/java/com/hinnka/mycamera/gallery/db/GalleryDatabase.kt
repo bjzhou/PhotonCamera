@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 32,
+    version = 34,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -279,6 +279,22 @@ abstract class GalleryDatabase : RoomDatabase() {
         private val MIGRATION_31_32 = object : androidx.room.migration.Migration(31, 32) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawChromaDenoiseValue REAL")
+            }
+        }
+
+        private val MIGRATION_32_33 = object : androidx.room.migration.Migration(32, 33) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN " +
+                        "hasAiSuperResolutionBase INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        private val MIGRATION_33_34 = object : androidx.room.migration.Migration(33, 34) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN aiSuperResolutionWidth INTEGER")
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN aiSuperResolutionHeight INTEGER")
             }
         }
 
@@ -645,7 +661,9 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_28_29,
                         MIGRATION_29_30,
                         MIGRATION_30_31,
-                        MIGRATION_31_32
+                        MIGRATION_31_32,
+                        MIGRATION_32_33,
+                        MIGRATION_33_34
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

@@ -61,9 +61,20 @@ data class MediaData(
     fun getResolution(): String {
         val displayedPhoto = relatedPhoto ?: this
         val displayedMetadata = displayedPhoto.metadata
-        val displayedWidth = displayedMetadata?.width?.takeIf { it > 0 } ?: displayedPhoto.width
-        val displayedHeight = displayedMetadata?.height?.takeIf { it > 0 } ?: displayedPhoto.height
+        val hasSuperResolution = displayedMetadata?.hasAiSuperResolutionBase == true
+        val baseWidth = displayedMetadata?.width?.takeIf { it > 0 } ?: displayedPhoto.width
+        val baseHeight = displayedMetadata?.height?.takeIf { it > 0 } ?: displayedPhoto.height
+        val displayedWidth = displayedMetadata?.activeImageWidth?.takeIf { it > 0 }
+            ?: if (hasSuperResolution) baseWidth.safeDoubleDimension() else baseWidth
+        val displayedHeight = displayedMetadata?.activeImageHeight?.takeIf { it > 0 }
+            ?: if (hasSuperResolution) baseHeight.safeDoubleDimension() else baseHeight
         return "${displayedWidth}x${displayedHeight}"
+    }
+
+    private fun Int.safeDoubleDimension(): Int = when {
+        this <= 0 -> this
+        this > Int.MAX_VALUE / 2 -> Int.MAX_VALUE
+        else -> this * 2
     }
 
     fun getFormattedDuration(): String {

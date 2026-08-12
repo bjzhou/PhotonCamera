@@ -821,6 +821,10 @@
     <string name="ai_denoise_description">ใช้โครงข่ายประสาทเทียมเพื่อสร้างรายละเอียดคุณภาพของภาพขึ้นมาใหม่</string>
     <string name="ai_denoise_processing">กำลังประมวลผล... %1$.1f%%</string>
     <string name="ai_denoise_failed">การลดสัญญาณรบกวน AI ล้มเหลว</string>
+    <string name="ai_super_resolution_title">เพิ่มความละเอียดด้วย AI</string>
+    <string name="ai_super_resolution_description">เพิ่มความละเอียดภาพ 2 เท่าบนอุปกรณ์ด้วย ETDS</string>
+    <string name="ai_super_resolution_processing">กำลังเพิ่มความละเอียด… %1$.1f%%</string>
+    <string name="ai_super_resolution_failed">การเพิ่มความละเอียดด้วย AI ล้มเหลว</string>
 
     <!-- 测光模式 -->
     <string name="metering_mode">การวัดแสง</string>

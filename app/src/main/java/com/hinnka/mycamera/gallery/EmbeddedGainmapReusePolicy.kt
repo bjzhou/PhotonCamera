@@ -6,6 +6,7 @@ object EmbeddedGainmapReusePolicy {
     fun canReuse(metadata: MediaMetadata): Boolean {
         return metadata.manualHdrEffectEnabled &&
                 !metadata.hasAiDenoisedBase &&
+                !metadata.hasAiSuperResolutionBase &&
                 metadata.hasEmbeddedGainmap &&
                 HdrGainmapStrength.coerce(metadata.hdrEffectStrength) == HdrGainmapStrength.DEFAULT &&
                 metadata.lutId == null &&

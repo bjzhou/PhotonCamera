@@ -281,6 +281,8 @@ fun GalleryEditScreen(
     val editMirrorHorizontal by viewModel.editMirrorHorizontal.collectAsState()
 
     val editAiDenoiseStrength by viewModel.editAiDenoiseStrength.collectAsState()
+    val editAiSuperResolutionEnabled by
+        viewModel.editAiSuperResolutionEnabled.collectAsState()
 
     val isRaw = editSourcePhoto?.let { viewModel.isRaw(it.id) } ?: false
 
@@ -1397,6 +1399,12 @@ fun GalleryEditScreen(
                                     if (!currentPhoto.isVideo) {
                                         val isDnCNNDenoising by viewModel.isAiDenoising.collectAsState()
                                         val dnCNNProgress by viewModel.aiDenoiseProgress.collectAsState()
+                                        val isAiSuperResolving by
+                                            viewModel.isAiSuperResolving.collectAsState()
+                                        val aiSuperResolutionProgress by
+                                            viewModel.aiSuperResolutionProgress.collectAsState()
+                                        val isAnyAiProcessing =
+                                            isDnCNNDenoising || isAiSuperResolving
 
                                         SliderSettingItem(
                                             title = stringResource(R.string.ai_denoise_title),
@@ -1406,9 +1414,10 @@ fun GalleryEditScreen(
                                             ) else stringResource(R.string.ai_denoise_description),
                                             value = editAiDenoiseStrength,
                                             valueRange = 0f..1f,
+                                            enabled = !isAnyAiProcessing,
                                             onValueChange = { viewModel.setAiDenoiseStrength(it) },
                                             onValueChangeFinished = {
-                                                if (isDnCNNDenoising) return@SliderSettingItem
+                                                if (isAnyAiProcessing) return@SliderSettingItem
                                                 if (editAiDenoiseStrength > 0.01f) {
                                                     viewModel.applyDnCNNDenoise(
                                                         photo = currentEditSourcePhoto,
@@ -1438,6 +1447,55 @@ fun GalleryEditScreen(
                                                     )
                                                 }
                                             }
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        SwitchSettingItem(
+                                            title = stringResource(R.string.ai_super_resolution_title),
+                                            description = if (isAiSuperResolving) {
+                                                stringResource(
+                                                    R.string.ai_super_resolution_processing,
+                                                    aiSuperResolutionProgress * 100f,
+                                                )
+                                            } else {
+                                                stringResource(
+                                                    R.string.ai_super_resolution_description
+                                                )
+                                            },
+                                            checked = editAiSuperResolutionEnabled,
+                                            enabled = !isAnyAiProcessing,
+                                            onCheckedChange = { enabled ->
+                                                if (enabled) {
+                                                    viewModel.applyEtDsSuperResolution(
+                                                        photo = currentEditSourcePhoto,
+                                                        onComplete = { success ->
+                                                            if (!success) {
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    context.getString(
+                                                                        R.string.ai_super_resolution_failed
+                                                                    ),
+                                                                    Toast.LENGTH_SHORT,
+                                                                ).show()
+                                                            }
+                                                        },
+                                                    )
+                                                } else {
+                                                    viewModel.resetEtDsSuperResolution(
+                                                        photo = currentEditSourcePhoto,
+                                                        onComplete = { success ->
+                                                            if (!success) {
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    context.getString(
+                                                                        R.string.ai_super_resolution_failed
+                                                                    ),
+                                                                    Toast.LENGTH_SHORT,
+                                                                ).show()
+                                                            }
+                                                        },
+                                                    )
+                                                }
+                                            },
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         // 细节处理调整 (锐化, 降噪, 杂色降噪)

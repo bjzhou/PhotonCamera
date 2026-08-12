@@ -3839,6 +3839,103 @@ Java_com_hinnka_mycamera_ml_DnCNNDenoiseEstimator_postprocessNative(
   AndroidBitmap_unlockPixels(env, dstBitmap);
 }
 
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_ml_EtDsSuperResolutionEstimator_preprocessNative(
+    JNIEnv *env, jobject, jobject bitmap, jint x, jint y, jint width,
+    jint height, jobject outputBuffer) {
+  AndroidBitmapInfo info;
+  void *pixels = nullptr;
+  if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 ||
+      info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+      AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) {
+    LOGE("ETDS preprocess: expected a lockable RGBA_8888 bitmap");
+    return;
+  }
+
+  auto *output =
+      static_cast<float *>(env->GetDirectBufferAddress(outputBuffer));
+  const int64_t requiredBytes = static_cast<int64_t>(width) * height * 3 *
+                                static_cast<int64_t>(sizeof(float));
+  const jlong capacity = env->GetDirectBufferCapacity(outputBuffer);
+  if (!output || width <= 0 || height <= 0 || info.width <= 0 ||
+      info.height <= 0 || capacity < requiredBytes) {
+    LOGE("ETDS preprocess: invalid buffer or geometry");
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return;
+  }
+
+  const auto *source = static_cast<const uint32_t *>(pixels);
+  const int sourceStride = static_cast<int>(info.stride / sizeof(uint32_t));
+#pragma omp parallel for num_threads(8)
+  for (int patchY = 0; patchY < height; ++patchY) {
+    const int sourceY = std::clamp(static_cast<int>(y + patchY), 0,
+                                   static_cast<int>(info.height) - 1);
+    for (int patchX = 0; patchX < width; ++patchX) {
+      const int sourceX = std::clamp(static_cast<int>(x + patchX), 0,
+                                     static_cast<int>(info.width) - 1);
+      const uint32_t pixel = source[sourceY * sourceStride + sourceX];
+      const int outputIndex = (patchY * width + patchX) * 3;
+      output[outputIndex] = static_cast<float>(pixel & 0xFFu) / 255.0f;
+      output[outputIndex + 1] =
+          static_cast<float>((pixel >> 8) & 0xFFu) / 255.0f;
+      output[outputIndex + 2] =
+          static_cast<float>((pixel >> 16) & 0xFFu) / 255.0f;
+    }
+  }
+  AndroidBitmap_unlockPixels(env, bitmap);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_ml_EtDsSuperResolutionEstimator_postprocessNative(
+    JNIEnv *env, jobject, jobject inputBuffer, jobject bitmap, jint patchX,
+    jint patchY, jint destinationX, jint destinationY, jint width, jint height,
+    jint patchWidth, jint patchHeight) {
+  AndroidBitmapInfo info;
+  void *pixels = nullptr;
+  if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 ||
+      info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+      AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) {
+    LOGE("ETDS postprocess: expected a lockable RGBA_8888 bitmap");
+    return;
+  }
+
+  const auto *input =
+      static_cast<const float *>(env->GetDirectBufferAddress(inputBuffer));
+  const int64_t requiredBytes = static_cast<int64_t>(patchWidth) * patchHeight *
+                                3 * static_cast<int64_t>(sizeof(float));
+  const jlong capacity = env->GetDirectBufferCapacity(inputBuffer);
+  if (!input || width <= 0 || height <= 0 || patchWidth <= 0 ||
+      patchHeight <= 0 || patchX < 0 || patchY < 0 || destinationX < 0 ||
+      destinationY < 0 || patchX + width > patchWidth ||
+      patchY + height > patchHeight || destinationX + width > info.width ||
+      destinationY + height > info.height || capacity < requiredBytes) {
+    LOGE("ETDS postprocess: invalid buffer or geometry");
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return;
+  }
+
+  auto *destination = static_cast<uint32_t *>(pixels);
+  const int destinationStride =
+      static_cast<int>(info.stride / sizeof(uint32_t));
+#pragma omp parallel for num_threads(8)
+  for (int copyY = 0; copyY < height; ++copyY) {
+    for (int copyX = 0; copyX < width; ++copyX) {
+      const int inputIndex =
+          ((patchY + copyY) * patchWidth + patchX + copyX) * 3;
+      const auto red = static_cast<uint32_t>(std::lround(
+          std::clamp(input[inputIndex], 0.0f, 1.0f) * 255.0f));
+      const auto green = static_cast<uint32_t>(std::lround(
+          std::clamp(input[inputIndex + 1], 0.0f, 1.0f) * 255.0f));
+      const auto blue = static_cast<uint32_t>(std::lround(
+          std::clamp(input[inputIndex + 2], 0.0f, 1.0f) * 255.0f));
+      destination[(destinationY + copyY) * destinationStride +
+                  destinationX + copyX] =
+          0xFF000000u | (blue << 16) | (green << 8) | red;
+    }
+  }
+  AndroidBitmap_unlockPixels(env, bitmap);
+}
+
 JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_utils_DirectBufferAllocator_allocateNative(
     JNIEnv *env, jobject, jlong capacity) {

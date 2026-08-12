@@ -1036,6 +1036,10 @@
     <string name="ai_denoise_description">使用神經網路重構畫質細節</string>
     <string name="ai_denoise_processing">正在處理... %1$.1f%%</string>
     <string name="ai_denoise_failed">AI 降噪失敗</string>
+    <string name="ai_super_resolution_title">AI 超解像度</string>
+    <string name="ai_super_resolution_description">使用 ETDS 在裝置端將影像提升至 2 倍解像度</string>
+    <string name="ai_super_resolution_processing">正在超解像… %1$.1f%%</string>
+    <string name="ai_super_resolution_failed">AI 超解像度處理失敗</string>
 
     <!-- 測光模式 -->
     <string name="metering_mode">測光</string>

@@ -20,6 +20,7 @@ fun SwitchSettingItem(
     description: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -35,7 +36,7 @@ fun SwitchSettingItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    color = Color.White,
+                    color = Color.White.copy(alpha = if (enabled) 1f else 0.45f),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Normal
                 )
@@ -43,7 +44,7 @@ fun SwitchSettingItem(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = it,
-                        color = Color.White.copy(alpha = 0.6f),
+                        color = Color.White.copy(alpha = if (enabled) 0.6f else 0.35f),
                         fontSize = 13.sp,
                         lineHeight = 18.sp
                     )
@@ -53,6 +54,7 @@ fun SwitchSettingItem(
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
+                enabled = enabled,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = AccentOrange,

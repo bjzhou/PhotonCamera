@@ -121,6 +121,7 @@ object GalleryManager {
     private const val VIDEO_FILE = "video.mp4"
     private const val DNG_FILE = "original.dng"
     private const val AI_DENOISE_FILE = "ai_denoise.jpg"
+    private const val AI_SUPER_RESOLUTION_FILE = "ai_super_resolution.jpg"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
     private const val BOKEH_FILE = "bokeh.jpg"
     private const val DETAIL_HDR_FILE = "detail_hdr.jpg"
@@ -547,6 +548,29 @@ object GalleryManager {
 
     fun getAiDenoiseFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), AI_DENOISE_FILE)
+    }
+
+    fun getAiSuperResolutionFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), AI_SUPER_RESOLUTION_FILE)
+    }
+
+    /** Returns the highest-resolution valid AI base without including derived bokeh. */
+    fun getPreferredAiBaseFile(
+        context: Context,
+        photoId: String,
+        metadata: MediaMetadata,
+    ): File? {
+        if (metadata.hasAiSuperResolutionBase) {
+            getAiSuperResolutionFile(context, photoId)
+                .takeIf { it.exists() && it.length() > 0L }
+                ?.let { return it }
+        }
+        if (metadata.hasAiDenoisedBase) {
+            getAiDenoiseFile(context, photoId)
+                .takeIf { it.exists() && it.length() > 0L }
+                ?.let { return it }
+        }
+        return null
     }
 
     fun getDepthFile(context: Context, photoId: String): File {
@@ -1330,7 +1354,9 @@ object GalleryManager {
                 val sourceBitmap = ultraHdrSource
                     ?.takeUnless { it.sourceKind == SourceKind.SDR_BITMAP && metadata.hasEmbeddedGainmap }
                     ?.sdrBase
-                val processedBitmap = (sourceBitmap ?: if (metadata.hasAiDenoisedBase) {
+                val processedBitmap = (sourceBitmap ?: if (
+                    getPreferredAiBaseFile(context, id, metadata) != null
+                ) {
                     photoProcessor.process(
                         context, id, metadata,
                         sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
@@ -4808,11 +4834,18 @@ object GalleryManager {
             try {
                 val resolvedMetadata = metadata ?: loadMetadata(context, photoId) ?: return@withContext
                 // Use provided bitmap or load from disk if unavailable
-                val originalBitmap = inputBitmap?.let { 
-                    createScaledThumbnail(it, THUMBNAIL_MAX_EDGE) 
+                val bokehFile = getBokehFile(context, photoId).takeIf {
+                    (resolvedMetadata.computationalAperture ?: 0f) > 0f &&
+                        it.exists() && it.length() > 0L
+                }
+                val originalBitmap = inputBitmap?.let {
+                    createScaledThumbnail(it, THUMBNAIL_MAX_EDGE)
+                } ?: bokehFile?.let {
+                    loadBitmap(context, Uri.fromFile(it), maxEdge = THUMBNAIL_MAX_EDGE)
+                } ?: getPreferredAiBaseFile(context, photoId, resolvedMetadata)?.let {
+                    loadBitmap(context, Uri.fromFile(it), maxEdge = THUMBNAIL_MAX_EDGE)
                 } ?: loadOriginalBitmap(context, photoId, maxEdge = THUMBNAIL_MAX_EDGE)
-                  ?: loadBitmap(context, photoId, maxEdge = THUMBNAIL_MAX_EDGE)
-                  ?: return@withContext
+                    ?: return@withContext
 
                 // 应用所有效果（LUT、虚化、裁切、边框等）到缩略图尺寸的位图
                 val thumbnailMetadata = resolvedMetadata.copy(
@@ -5338,14 +5371,18 @@ object GalleryManager {
                         tempPhotoFile.delete()
                         return@withContext null
                     }
-                    // 刷新 RAW 后，AI 降噪结果已失效，清理之
+                    // RAW 底图变化后，所有由它派生的 AI 基础图均已失效。
                     getAiDenoiseFile(context, photoId).takeIf { it.exists() }?.delete()
+                    getAiSuperResolutionFile(context, photoId).takeIf { it.exists() }?.delete()
 
                     updatedMetadata?.let {
                         val finalMetadata = it.copy(
                             width = processedBitmap.width,
                             height = processedBitmap.height,
                             hasAiDenoisedBase = false,
+                            hasAiSuperResolutionBase = false,
+                            aiSuperResolutionWidth = null,
+                            aiSuperResolutionHeight = null,
                             chromaNoiseReduction = rawChromaNoiseReduction
                         )
                         generateBokehPhoto(context, photoId, finalMetadata, processedBitmap.copy(Bitmap.Config.ARGB_8888, true))

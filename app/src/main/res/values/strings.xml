@@ -1056,6 +1056,10 @@
     <string name="ai_denoise_description">Use neural network to reconstruct image details</string>
     <string name="ai_denoise_processing">Processing... %1$.1f%%</string>
     <string name="ai_denoise_failed">AI Denoise Failed</string>
+    <string name="ai_super_resolution_title">AI Super Resolution</string>
+    <string name="ai_super_resolution_description">Enhance the image to 2× resolution on device with ETDS</string>
+    <string name="ai_super_resolution_processing">Upscaling… %1$.1f%%</string>
+    <string name="ai_super_resolution_failed">AI super resolution failed</string>
 
     <!-- Metering Mode -->
     <string name="metering_mode">Metering</string>

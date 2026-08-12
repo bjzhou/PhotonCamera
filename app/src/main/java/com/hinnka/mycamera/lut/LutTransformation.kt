@@ -65,6 +65,9 @@ private fun MediaMetadata.thumbnailTransformCacheKey(): Int {
         sourceUri = null,
         exportedUris = emptyList(),
         hasAiDenoisedBase = false,
-        aiDenoiseStrength = null
+        aiDenoiseStrength = null,
+        hasAiSuperResolutionBase = false,
+        aiSuperResolutionWidth = null,
+        aiSuperResolutionHeight = null,
     ).hashCode()
 }
