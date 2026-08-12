@@ -1,10 +1,24 @@
 package com.hinnka.mycamera.processor
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GlesMgcRawSpatialShadersTest {
+    @Test
+    fun bentoHighlightCountUsesBaselineCompatibleGroupedReduction() {
+        val shader = GlesMgcRawSpatialShaders.bentoCountHighlightMask
+
+        assertEquals(
+            GlesComputeWorkGroup.Size(x = 8, y = 8, z = 1),
+            GlesComputeWorkGroup.declaredSize(shader),
+        )
+        GlesComputeWorkGroup.requireBaselineCompatible(shader, "MGC_BENTO_HIGHLIGHT_COUNT")
+        assertTrue(shader.contains("shared uint localCounts[64]"))
+        assertTrue(shader.contains("atomicAdd(activeCount, localCounts[0])"))
+    }
+
     @Test
     fun rgbMergeUsesJointGreenOpponentReconstruction() {
         val guide = GlesMgcRawSpatialShaders.rgbChromaGuide

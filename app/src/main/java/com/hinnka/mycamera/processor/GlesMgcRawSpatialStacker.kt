@@ -62,6 +62,18 @@ internal class GlesMgcRawSpatialStacker(
         val gridMin: Int,
     )
 
+    /** Reference-only LK products shared by every current frame at one pyramid level. */
+    private data class ReferenceAlignmentProducts(
+        val referenceTexture: Int,
+        val gridWidth: Int,
+        val gridHeight: Int,
+        val tileStride: Int,
+        val tileSize: Int,
+        val normalize: Boolean,
+        val products0: Int,
+        val products1: Int,
+    )
+
     private data class PreparedTemporalFrame(
         val calibration: FrameCalibration,
         val flowTexture: Int,
@@ -118,10 +130,7 @@ internal class GlesMgcRawSpatialStacker(
         val opponentWeightAccumulator: Int,
         val chromaGuideTexture: Int,
         val drawBands: List<MgcSpatialRgbTile>,
-        val rawSlots: IntArray,
-        val passWindow: GlesGpuScheduler.PassWindow,
         val projectedGpuBytes: Long,
-        var nextRawSlot: Int,
         var contributedFrames: Int = 0,
         var rawUploadCount: Int = 0,
         var rawUploadBytes: Long = 0L,
@@ -133,6 +142,14 @@ internal class GlesMgcRawSpatialStacker(
         val height: Int,
         val internalFormat: Int,
         val filter: Int,
+    )
+
+    private data class ActiveMaskGpuCount(
+        val activePixels: Int,
+        val setupNs: Long,
+        val submitNs: Long,
+        val gpuWaitMs: Long,
+        val mapNs: Long,
     )
 
     /**
@@ -400,6 +417,7 @@ internal class GlesMgcRawSpatialStacker(
     private var findBlockTilesFilterIntermediateProgram = 0
     private var findBlockTilesOutputProgram = 0
     private var bentoHighlightProgram = 0
+    private var bentoHighlightCountProgram = 0
     private var bentoAdjustProgram = 0
     private var bentoRewriteWeightProgram = 0
     private var alignedRawClippingMaskProgram = 0
@@ -505,6 +523,7 @@ internal class GlesMgcRawSpatialStacker(
         var strengthCapture: StrengthCapture? = null
         var onlineRgbAccumulator: OnlineRgbAccumulator? = null
         val processStartNs = System.nanoTime()
+        val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
         return try {
             if (useCurrentGlContext) attachCurrentEgl() else initEgl()
             ensureGles3()
@@ -684,6 +703,10 @@ internal class GlesMgcRawSpatialStacker(
                 rawTexture = referenceRaw,
                 calibration = referenceCalibration,
             )
+            val referenceAlignmentProducts = buildReferenceAlignmentProducts(
+                referenceGrayPyramid,
+            )
+            GlesGpuScheduler.yieldToUiRenderer()
 
             val diagnosticMode = RawStackRuntimeDebug.mgcSpatialDiagnosticMode
             val referenceOnly =
@@ -733,14 +756,6 @@ internal class GlesMgcRawSpatialStacker(
                     frame.role == RawBurstFrameRole.HIGHLIGHT_SHORT
                 }
             }
-            val bentoMask = ultrashortIndex.takeIf { it >= 0 }?.let {
-                createTexture(
-                    guideWidth,
-                    guideHeight,
-                    GLES30.GL_R8,
-                    GLES30.GL_LINEAR,
-                )
-            }
             val referenceHighlightMask = if (
                 !referenceOnly && (ultrashortIndex >= 0 || hasShadowLongFrame)
             ) {
@@ -758,25 +773,113 @@ internal class GlesMgcRawSpatialStacker(
             } else {
                 0
             }
+            val bentoExposureRatio = ultrashortIndex.takeIf { it >= 0 }?.let { index ->
+                (
+                    referenceExposure /
+                        validExposureProduct(frames[index].exposureProduct)
+                    ).toFloat().also { ratio ->
+                        check(ratio.isFinite() && ratio > 1f) {
+                            "MGC Bento requires baseTET/ultrashortTET > 1.0, got $ratio"
+                        }
+                    }
+            }
+            var baseHighlightClippedRatio = 0f
+            var baseHighlightMask: ByteArray? = null
+            if (ultrashortIndex >= 0) {
+                check(referenceHighlightMask != 0)
+                val gateStartNs = System.nanoTime()
+                if (bentoHighlightCountProgram != 0) {
+                    val gpuCount = countActiveMaskPixelsGpu(
+                        texture = referenceHighlightMask,
+                        label = "MGC Bento base highlight gate",
+                    )
+                    baseHighlightClippedRatio =
+                        gpuCount.activePixels.toFloat() / (guideWidth * guideHeight).toFloat()
+                    PLog.i(
+                        TAG,
+                        "MGC Bento base gate mode=compute-ssbo eligible=" +
+                            "${baseHighlightClippedRatio > BENTO_MIN_CLIPPED_PIXEL_RATIO} " +
+                            "clipped=${gpuCount.activePixels}/${guideWidth * guideHeight} " +
+                            "ratio=$baseHighlightClippedRatio " +
+                            "threshold=$BENTO_MIN_CLIPPED_PIXEL_RATIO " +
+                            "setup=${gpuCount.setupNs / 1_000_000L}ms " +
+                            "submit=${gpuCount.submitNs / 1_000_000L}ms " +
+                            "gpuWait=${gpuCount.gpuWaitMs}ms " +
+                            "map=${gpuCount.mapNs / 1_000_000L}ms " +
+                            "total=${elapsedMs(gateStartNs)}ms",
+                    )
+                } else {
+                    val gpuWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+                        label = "MGC Bento base highlight gate",
+                        checkGlError = ::checkGlError,
+                    )
+                    val readStartNs = System.nanoTime()
+                    val mask = readR8Mask(
+                        texture = referenceHighlightMask,
+                        label = "Bento base highlight gate",
+                    )
+                    val readNs = System.nanoTime() - readStartNs
+                    val countStartNs = System.nanoTime()
+                    val clippedPixels = countActiveMaskPixels(mask)
+                    val countNs = System.nanoTime() - countStartNs
+                    baseHighlightMask = mask
+                    baseHighlightClippedRatio = clippedPixels.toFloat() / mask.size.toFloat()
+                    PLog.i(
+                        TAG,
+                        "MGC Bento base gate mode=cpu-readback eligible=" +
+                            "${baseHighlightClippedRatio > BENTO_MIN_CLIPPED_PIXEL_RATIO} " +
+                            "clipped=$clippedPixels/${mask.size} " +
+                            "ratio=$baseHighlightClippedRatio " +
+                            "threshold=$BENTO_MIN_CLIPPED_PIXEL_RATIO " +
+                            "gpuWait=${gpuWaitMs}ms " +
+                            "read=${readNs / 1_000_000L}ms " +
+                            "count=${countNs / 1_000_000L}ms " +
+                            "total=${elapsedMs(gateStartNs)}ms",
+                    )
+                }
+            }
+            val evaluateBentoCandidate = ultrashortIndex >= 0 &&
+                baseHighlightClippedRatio > BENTO_MIN_CLIPPED_PIXEL_RATIO
+            val bentoMask = if (evaluateBentoCandidate) {
+                createTexture(
+                    guideWidth,
+                    guideHeight,
+                    GLES30.GL_R8,
+                    GLES30.GL_LINEAR,
+                )
+            } else {
+                null
+            }
+            if (ultrashortIndex >= 0 && !evaluateBentoCandidate) {
+                PLog.i(
+                    TAG,
+                    "Bento assessment accepted=false reason=insufficient_clipped_pixels " +
+                        "clippedRatio=$baseHighlightClippedRatio largestInpaintingArea=0 " +
+                        "largestTilingArea=0 ultrashortOverlap=0.0 " +
+                        "exposureRatio=$bentoExposureRatio earlyGate=true",
+                )
+            }
             val bentoRaw = currentRaw
             val bentoGuide = currentGuide
-            if (ultrashortIndex >= 0) {
+            if (evaluateBentoCandidate) {
+                val bentoScheduleStartNs = System.nanoTime()
+                var bentoUploadCallNs = 0L
+                var bentoPreAlignSubmitNs = 0L
+                var bentoAlignSubmitNs = 0L
+                var bentoPostAlignNs = 0L
                 val transientTextureStart = textures.size
                 val ultrashortFrame = frames[ultrashortIndex]
                 try {
-                    val exposureRatio = (
-                        referenceExposure /
-                            validExposureProduct(ultrashortFrame.exposureProduct)
-                        ).toFloat()
-                    check(exposureRatio.isFinite() && exposureRatio > 1f) {
-                        "MGC Bento requires baseTET/ultrashortTET > 1.0, got $exposureRatio"
-                    }
+                    val exposureRatio = checkNotNull(bentoExposureRatio)
                     val normalizedCalibration = calibrationForFrame(
                         ultrashortFrame,
                         exposureRatio,
                         bayerKernelTuning,
                     )
+                    val uploadStartNs = System.nanoTime()
                     uploadRaw(images[ultrashortIndex], bentoRaw, "ultrashort")
+                    bentoUploadCallNs = System.nanoTime() - uploadStartNs
+                    val preAlignStartNs = System.nanoTime()
                     val normalizedNoiseLut = createNoiseLut(
                         referenceCalibration,
                         normalizedCalibration,
@@ -808,10 +911,15 @@ internal class GlesMgcRawSpatialStacker(
                         rawTexture = bentoRaw,
                         calibration = normalizedCalibration,
                     )
+                    bentoPreAlignSubmitNs = System.nanoTime() - preAlignStartNs
+                    val alignmentStartNs = System.nanoTime()
                     val alignment = alignPyramids(
                         reference = referenceGrayPyramid,
                         current = ultrashortGrayPyramid,
+                        referenceProducts = referenceAlignmentProducts,
                     )
+                    bentoAlignSubmitNs = System.nanoTime() - alignmentStartNs
+                    val postAlignStartNs = System.nanoTime()
                     val flow = createTexture(
                         rejectionWidth,
                         rejectionHeight,
@@ -879,11 +987,17 @@ internal class GlesMgcRawSpatialStacker(
                         inpaintingMask = inpaintingMask,
                         ultrashortClippingMask = ultrashortClippingMask,
                     )
+                    val assessmentReadStartNs = System.nanoTime()
+                    val assessmentGpuWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+                        label = "MGC Bento assessment masks",
+                        checkGlError = ::checkGlError,
+                    )
+                    val assessmentBaseHighlightMask = baseHighlightMask ?: readR8Mask(
+                        texture = referenceHighlightMask,
+                        label = "Bento base highlight mask",
+                    ).also { mask -> baseHighlightMask = mask }
                     val assessment = assessBentoMasks(
-                        baseHighlightMask = readR8Mask(
-                            referenceHighlightMask,
-                            "Bento base highlight mask",
-                        ),
+                        baseHighlightMask = assessmentBaseHighlightMask,
                         inpaintingMask = readR8Mask(
                             inpaintingMask,
                             "Bento inpainting mask",
@@ -907,7 +1021,9 @@ internal class GlesMgcRawSpatialStacker(
                             "largestInpaintingArea=${assessment.largestInpaintingArea} " +
                             "largestTilingArea=${assessment.largestTilingArea} " +
                             "ultrashortOverlap=${assessment.ultrashortClippingOverlap} " +
-                            "exposureRatio=$exposureRatio",
+                            "exposureRatio=$exposureRatio earlyGate=false " +
+                            "gpuWait=${assessmentGpuWaitMs}ms " +
+                            "readAndAssess=${elapsedMs(assessmentReadStartNs)}ms",
                     )
                     if (assessment.accepted) {
                         bentoAccepted = true
@@ -916,6 +1032,7 @@ internal class GlesMgcRawSpatialStacker(
                         bentoFlowTexture = flow
                         bentoBayerAlignmentTexture = bayerAlignment
                     }
+                    bentoPostAlignNs = System.nanoTime() - postAlignStartNs
                 } finally {
                     if (
                         bentoAccepted &&
@@ -939,6 +1056,22 @@ internal class GlesMgcRawSpatialStacker(
                         releaseTexturesFrom(transientTextureStart)
                     }
                 }
+                PLog.i(
+                    TAG,
+                    "MGC Bento frame schedule index=$ultrashortIndex " +
+                        "frame=${ultrashortFrame.frameNumber} " +
+                        "uploadCall=${bentoUploadCallNs / 1_000_000L}ms " +
+                        "preAlignSubmit=${bentoPreAlignSubmitNs / 1_000_000L}ms " +
+                        "alignSubmit=${bentoAlignSubmitNs / 1_000_000L}ms " +
+                        "postAlignAndAssessment=${bentoPostAlignNs / 1_000_000L}ms " +
+                        "totalCpu=${elapsedMs(bentoScheduleStartNs)}ms",
+                )
+            }
+            if (evaluateBentoCandidate && !bentoAccepted) {
+                releaseOwnedTexture(checkNotNull(bentoMask), "rejected Bento mask")
+            }
+            if (ultrashortIndex >= 0 && !bentoAccepted) {
+                images[ultrashortIndex].close()
             }
 
             val outputExposure = MgcSpatialOutputExposure.forAcceptedUltrashort(
@@ -1063,10 +1196,9 @@ internal class GlesMgcRawSpatialStacker(
                 outputMode == MgcSpatialOutputMode.RGB
             ) {
                 onlineRgbAccumulator = createOnlineRgbAccumulator(
-                    reusableRawTexture = currentRaw,
                     diagnosticCapture = strengthCapture,
                 )?.also { online ->
-                    online.rawUploadCount = 1 + if (ultrashortIndex >= 0) 1 else 0
+                    online.rawUploadCount = 1 + if (evaluateBentoCandidate) 1 else 0
                     online.rawUploadBytes = online.rawUploadCount.toLong() *
                         width * height * RAW_BYTES_PER_PIXEL
                 }
@@ -1076,7 +1208,6 @@ internal class GlesMgcRawSpatialStacker(
             fun submitOrRetainRgbFrame(
                 frame: RgbMergeFrame,
                 rawTexture: Int,
-                label: String,
             ) {
                 val online = onlineRgbAccumulator
                 if (online != null) {
@@ -1084,7 +1215,6 @@ internal class GlesMgcRawSpatialStacker(
                         accumulator = online,
                         frame = frame,
                         rawTexture = rawTexture,
-                        label = label,
                     )
                 } else {
                     rgbMergeFrames += frame
@@ -1118,7 +1248,6 @@ internal class GlesMgcRawSpatialStacker(
                             useFrameWeight = true,
                         ),
                         rawTexture = referenceRaw,
-                        label = "reference",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1158,7 +1287,6 @@ internal class GlesMgcRawSpatialStacker(
                             useFrameWeight = true,
                         ),
                         rawTexture = bentoRaw,
-                        label = "ultrashort $ultrashortIndex",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1196,7 +1324,6 @@ internal class GlesMgcRawSpatialStacker(
                             useFrameWeight = false,
                         ),
                         rawTexture = referenceRaw,
-                        label = "reference",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1213,48 +1340,46 @@ internal class GlesMgcRawSpatialStacker(
 
             if (onlineRgbAccumulator != null) {
                 images[0].close()
-                if (ultrashortIndex >= 0) images[ultrashortIndex].close()
+                if (bentoAccepted) images[ultrashortIndex].close()
             }
+            GlesGpuScheduler.yieldToUiRenderer()
 
             for (index in temporalFrameRange) {
                 val frame = frames[index]
                 if (frame.role == RawBurstFrameRole.HIGHLIGHT_SHORT) continue
+                val frameScheduleStartNs = System.nanoTime()
+                var uploadCallNs = 0L
+                var prepareCallNs = 0L
+                var postPrepareSubmitNs = 0L
                 beginTemporalScratchFrame()
                 try {
                     val online = onlineRgbAccumulator
-                    val temporalRaw = if (online != null) {
-                        val slot = online.nextRawSlot
-                        val texture = online.rawSlots[slot]
-                        online.nextRawSlot = (slot + 1) % online.rawSlots.size
-                        online.passWindow.awaitResources(
-                            label = "MGC RGB RAW slot $slot upload frame $index",
-                            resources = longArrayOf(
-                                GlesGpuScheduler.textureResource(texture),
-                            ),
-                        )
+                    val temporalRaw = currentRaw.also { texture ->
                         val uploadStartNs = System.nanoTime()
                         uploadRaw(images[index], texture, "frame $index")
-                        online.rawUploadNs += System.nanoTime() - uploadStartNs
-                        online.rawUploadCount += 1
-                        online.rawUploadBytes +=
-                            width.toLong() * height * RAW_BYTES_PER_PIXEL
-                        texture
-                    } else {
-                        currentRaw.also { texture ->
-                            uploadRaw(images[index], texture, "frame $index")
+                        uploadCallNs = System.nanoTime() - uploadStartNs
+                        if (online != null) {
+                            online.rawUploadNs += uploadCallNs
+                            online.rawUploadCount += 1
+                            online.rawUploadBytes +=
+                                width.toLong() * height * RAW_BYTES_PER_PIXEL
                         }
                     }
+                    val prepareStartNs = System.nanoTime()
                     val prepared = prepareTemporalFrame(
                         frame = frame,
                         referenceExposure = referenceExposure,
                         referenceCalibration = referenceCalibration,
                         referenceGuide = referenceGuide,
                         referenceGrayPyramid = referenceGrayPyramid,
+                        referenceAlignmentProducts = referenceAlignmentProducts,
                         currentRaw = temporalRaw,
                         currentGuide = currentGuide,
                         currentCovariance = currentCovariance,
                         kernelTuning = bayerKernelTuning,
                     )
+                    prepareCallNs = System.nanoTime() - prepareStartNs
+                    val postPrepareStartNs = System.nanoTime()
                     val mergeWeight = if (identityTemporalWeights) {
                         identityWeight
                     } else {
@@ -1324,7 +1449,6 @@ internal class GlesMgcRawSpatialStacker(
                                     useFrameWeight = true,
                                 ),
                                 rawTexture = temporalRaw,
-                                label = "frame $index",
                             )
                         } else {
                             val retainedAlignment = copyPersistentTexture(
@@ -1378,9 +1502,19 @@ internal class GlesMgcRawSpatialStacker(
                     }
                     mergedFrames += 1
                     if (online != null) images[index].close()
+                    postPrepareSubmitNs = System.nanoTime() - postPrepareStartNs
                 } finally {
                     endTemporalScratchFrame()
                 }
+                PLog.i(
+                    TAG,
+                    "MGC Spatial frame schedule index=$index frame=${frame.frameNumber} " +
+                        "role=${frame.role} uploadCall=${uploadCallNs / 1_000_000L}ms " +
+                        "prepareCall=${prepareCallNs / 1_000_000L}ms " +
+                        "postPrepareSubmit=${postPrepareSubmitNs / 1_000_000L}ms " +
+                        "totalCpu=${elapsedMs(frameScheduleStartNs)}ms",
+                )
+                GlesGpuScheduler.yieldToUiRenderer()
             }
 
             val readyStrengthCapture = strengthCapture?.also { capture ->
@@ -1434,7 +1568,6 @@ internal class GlesMgcRawSpatialStacker(
                     persistentTextures = retainedTemporalTextures,
                     strengthCapture = readyStrengthCapture,
                 )
-                online?.passWindow?.clearAfterCheckpoint()
                 val preparedStrengthAtlases = readyStrengthCapture?.let { capture ->
                     materializeRgbStrengthAtlases(capture).also { prepared ->
                         strengthAlignmentHostBuffer = prepared.first.cpuBuffer
@@ -1480,16 +1613,17 @@ internal class GlesMgcRawSpatialStacker(
                             else -> "streamed-band"
                         }} " +
                         "rawWindowSlots=${when {
-                            online != null -> online.rawSlots.size
+                            online != null -> 1
                             else -> RGB_RAW_WINDOW_SLOTS
                         }} " +
-                        "maxInFlight=$RGB_MAX_IN_FLIGHT_PASSES",
+                        "maxInFlight=${if (online != null) 1 else RGB_MAX_IN_FLIGHT_PASSES}",
                 )
             } else {
                 val bayer16 = renderBayer16(
                     accumulator = accumulatorColor,
                     outputExposureScale = outputExposure.normalizationScale,
                 )
+                GlesGpuScheduler.yieldToUiRenderer()
                 if (useCurrentGlContext && exportGpuLinearRgbSource) {
                     exportedBayerTexture = bayer16
                     check(textures.remove(bayer16)) {
@@ -1620,7 +1754,7 @@ internal class GlesMgcRawSpatialStacker(
                     "programInit=${programInitMs}ms " +
                     "queueMode=${if (outputMode == MgcSpatialOutputMode.RGB) {
                         if (onlineRgbAccumulator != null) {
-                            "online-raw-two-slot-two-in-flight-full-accumulator"
+                            "online-raw-sequential-full-accumulator"
                         } else {
                             "streamed-raw-two-slot-two-in-flight-band"
                         }
@@ -1678,8 +1812,8 @@ internal class GlesMgcRawSpatialStacker(
             null
         } finally {
             images.forEach { it.close() }
-            onlineRgbAccumulator?.passWindow?.drain("MGC Spatial RGB process release")
             release()
+            GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, TAG)
             LargeDirectBuffer.free(strengthAlignmentHostBuffer)
             LargeDirectBuffer.free(strengthRejectionHostBuffer)
             LargeDirectBuffer.free(rgbDiagnosticHostBuffer)
@@ -1791,6 +1925,21 @@ internal class GlesMgcRawSpatialStacker(
                 GlesMgcRawSpatialShaders.bentoAdjustHighlightMask,
                 "mgc_bento_adjust_mask",
             )
+            if (supportsComputeReadback) {
+                runCatching {
+                    bentoHighlightCountProgram = linkComputeProgram(
+                        GlesMgcRawSpatialShaders.bentoCountHighlightMask,
+                        "mgc_bento_count_highlight_mask",
+                    )
+                }.onFailure { error ->
+                    bentoHighlightCountProgram = 0
+                    PLog.w(
+                        TAG,
+                        "MGC Bento GPU highlight count unavailable; using CPU readback",
+                        error,
+                    )
+                }
+            }
         }
         if (includeReferenceHighlightMask) {
             bentoHighlightProgram = linkProgram(
@@ -2181,6 +2330,81 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
+     * Computes the reference-only half of LK once for the burst.
+     *
+     * Gradient products depend on neither the current frame nor its initial flow. Keeping these
+     * small textures alive across temporal frames removes four serial tile reductions per frame
+     * without changing LK iterations, accumulation order, or output precision.
+     */
+    private fun buildReferenceAlignmentProducts(
+        reference: List<TextureLevel>,
+    ): List<ReferenceAlignmentProducts> {
+        check(reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
+        val startNs = System.nanoTime()
+        return reference.mapIndexed { levelIndex, level ->
+            val tileSize = ALIGN_LEVEL_TILE_STRIDES[levelIndex]
+            val normalize = levelIndex != 0
+            val gridWidth = alignmentGridWidth(level, tileSize)
+            val gridHeight = alignmentGridHeight(level, tileSize)
+            val products0 = createTexture(
+                gridWidth,
+                gridHeight,
+                GLES30.GL_RGBA32F,
+                GLES30.GL_NEAREST,
+            )
+            val products1 = createTexture(
+                gridWidth,
+                gridHeight,
+                GLES30.GL_R32F,
+                GLES30.GL_NEAREST,
+            )
+            GLES30.glUseProgram(alignmentGradientProductsProgram)
+            bindTexture(
+                alignmentGradientProductsProgram,
+                "uReference",
+                0,
+                level.texture,
+            )
+            uniform2i(
+                alignmentGradientProductsProgram,
+                "uImageSize",
+                level.width,
+                level.height,
+            )
+            uniform1i(alignmentGradientProductsProgram, "uTileStride", tileSize)
+            uniform1i(alignmentGradientProductsProgram, "uTileSize", tileSize)
+            uniform1i(
+                alignmentGradientProductsProgram,
+                "uNormalize",
+                if (normalize) 1 else 0,
+            )
+            draw(
+                alignmentGradientProductsProgram,
+                gridWidth,
+                gridHeight,
+                intArrayOf(products0, products1),
+            )
+            ReferenceAlignmentProducts(
+                referenceTexture = level.texture,
+                gridWidth = gridWidth,
+                gridHeight = gridHeight,
+                tileStride = tileSize,
+                tileSize = tileSize,
+                normalize = normalize,
+                products0 = products0,
+                products1 = products1,
+            )
+        }.also { products ->
+            PLog.i(
+                TAG,
+                "MGC Align reference products cached levels=${products.size} " +
+                    "grids=${products.joinToString { "${it.gridWidth}x${it.gridHeight}" }} " +
+                    "cpuSubmit=${elapsedMs(startNs)}ms",
+            )
+        }
+    }
+
+    /**
      * BuildAlignPyramidForBurst (0x3883e98), using the options captured at runtime from this
      * MGC build:
      *
@@ -2202,9 +2426,11 @@ internal class GlesMgcRawSpatialStacker(
     private fun alignPyramids(
         reference: List<TextureLevel>,
         current: List<TextureLevel>,
+        referenceProducts: List<ReferenceAlignmentProducts>,
     ): Alignment {
         check(reference.size == current.size)
         check(reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
+        check(referenceProducts.size == reference.size)
         val coarseIndex = reference.lastIndex
         val coarse = reference[coarseIndex]
         var alignment = renderLucasKanadeLevel(
@@ -2215,6 +2441,7 @@ internal class GlesMgcRawSpatialStacker(
             tileSize = ALIGN_LEVEL_TILE_STRIDES[coarseIndex],
             iterations = ALIGN_LK_ITERATIONS_COARSER,
             normalize = true,
+            referenceProducts = referenceProducts[coarseIndex],
         )
 
         val schedule = ArrayList<String>().apply {
@@ -2255,6 +2482,7 @@ internal class GlesMgcRawSpatialStacker(
                 tileSize = tileSize,
                 iterations = iterations,
                 normalize = normalize,
+                referenceProducts = referenceProducts[levelIndex],
             )
             schedule +=
                 "${level.width}x${level.height}:${tileSize}px," +
@@ -2278,6 +2506,7 @@ internal class GlesMgcRawSpatialStacker(
                 "${reference.first().width}x${reference.first().height} " +
                 "flowGrid=${alignment.gridWidth}x${alignment.gridHeight} " +
                 "flowScale=${alignment.scaleToBayerQuads} useL1=false " +
+                "gradientProducts=cached " +
                 "upsampleL1=3-candidate median=false " +
                 "runtimeOptions=256/8/64/-1/2/3/0/1/0 " +
                 "schedule=${schedule.joinToString(" -> ")}",
@@ -2362,6 +2591,7 @@ internal class GlesMgcRawSpatialStacker(
         tileSize: Int,
         iterations: Int,
         normalize: Boolean,
+        referenceProducts: ReferenceAlignmentProducts,
     ): Alignment {
         check(iterations > 0)
         val gridWidth = alignmentGridWidth(reference, tileStride)
@@ -2378,48 +2608,16 @@ internal class GlesMgcRawSpatialStacker(
         ) {
             "LK initial flow must already match the target grid"
         }
-        val products0 = createTexture(
-            gridWidth,
-            gridHeight,
-            GLES30.GL_RGBA32F,
-            GLES30.GL_NEAREST,
-        )
-        val products1 = createTexture(
-            gridWidth,
-            gridHeight,
-            GLES30.GL_R32F,
-            GLES30.GL_NEAREST,
-        )
-        GLES30.glUseProgram(alignmentGradientProductsProgram)
-        bindTexture(
-            alignmentGradientProductsProgram,
-            "uReference",
-            0,
-            reference.texture,
-        )
-        uniform2i(
-            alignmentGradientProductsProgram,
-            "uImageSize",
-            reference.width,
-            reference.height,
-        )
-        uniform1i(
-            alignmentGradientProductsProgram,
-            "uTileStride",
-            tileStride,
-        )
-        uniform1i(alignmentGradientProductsProgram, "uTileSize", tileSize)
-        uniform1i(
-            alignmentGradientProductsProgram,
-            "uNormalize",
-            if (normalize) 1 else 0,
-        )
-        draw(
-            alignmentGradientProductsProgram,
-            gridWidth,
-            gridHeight,
-            intArrayOf(products0, products1),
-        )
+        check(
+            referenceProducts.referenceTexture == reference.texture &&
+                referenceProducts.gridWidth == gridWidth &&
+                referenceProducts.gridHeight == gridHeight &&
+                referenceProducts.tileStride == tileStride &&
+                referenceProducts.tileSize == tileSize &&
+                referenceProducts.normalize == normalize
+        ) {
+            "Cached LK reference products do not match the requested pyramid level"
+        }
 
         var input = initial
         repeat(iterations) {
@@ -2432,8 +2630,18 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.glUseProgram(blockLucasKanadeProgram)
             bindTexture(blockLucasKanadeProgram, "uReference", 0, reference.texture)
             bindTexture(blockLucasKanadeProgram, "uCurrent", 1, current.texture)
-            bindTexture(blockLucasKanadeProgram, "uProducts0", 2, products0)
-            bindTexture(blockLucasKanadeProgram, "uProducts1", 3, products1)
+            bindTexture(
+                blockLucasKanadeProgram,
+                "uProducts0",
+                2,
+                referenceProducts.products0,
+            )
+            bindTexture(
+                blockLucasKanadeProgram,
+                "uProducts1",
+                3,
+                referenceProducts.products1,
+            )
             val inputTexture = input?.texture ?: createZeroFlowTexture()
             bindTexture(
                 blockLucasKanadeProgram,
@@ -3025,11 +3233,13 @@ internal class GlesMgcRawSpatialStacker(
         referenceCalibration: FrameCalibration,
         referenceGuide: Int,
         referenceGrayPyramid: List<TextureLevel>,
+        referenceAlignmentProducts: List<ReferenceAlignmentProducts>,
         currentRaw: Int,
         currentGuide: Int,
         currentCovariance: Int,
         kernelTuning: BayerKernelTuning,
     ): PreparedTemporalFrame {
+        val totalStartNs = System.nanoTime()
         val exposureScale = (
             referenceExposure / validExposureProduct(frame.exposureProduct)
             ).toFloat().coerceIn(MIN_EXPOSURE_SCALE, MAX_EXPOSURE_SCALE)
@@ -3044,6 +3254,7 @@ internal class GlesMgcRawSpatialStacker(
             exposureScale = exposureScale,
             kernelTuning = kernelTuning,
         )
+        val guideStartNs = System.nanoTime()
         val currentNoiseLut = createNoiseLut(referenceCalibration, calibration)
         renderGuide(
             rawTexture = currentRaw,
@@ -3060,14 +3271,21 @@ internal class GlesMgcRawSpatialStacker(
                 outputTexture = currentCovariance,
             )
         }
+        val guideNs = System.nanoTime() - guideStartNs
+        val pyramidStartNs = System.nanoTime()
         val currentGrayPyramid = buildGrayPyramid(
             rawTexture = currentRaw,
             calibration = calibration,
         )
+        val pyramidNs = System.nanoTime() - pyramidStartNs
+        val alignmentStartNs = System.nanoTime()
         val alignment = alignPyramids(
             reference = referenceGrayPyramid,
             current = currentGrayPyramid,
+            referenceProducts = referenceAlignmentProducts,
         )
+        val alignmentNs = System.nanoTime() - alignmentStartNs
+        val flowStartNs = System.nanoTime()
         val flow = createTexture(
             rejectionWidth,
             rejectionHeight,
@@ -3082,6 +3300,8 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_NEAREST,
         )
         renderBayerAlignment(alignment, bayerAlignment)
+        val flowNs = System.nanoTime() - flowStartNs
+        val rejectionStartNs = System.nanoTime()
         val unblockerWidth = ceilDiv(width, UNBLOCKER_FULLRES_TILE_SIZE * 2)
         val unblockerHeight = ceilDiv(height, UNBLOCKER_FULLRES_TILE_SIZE * 2)
         val unblocker = createTexture(
@@ -3183,6 +3403,17 @@ internal class GlesMgcRawSpatialStacker(
             output = postprocessedRejection,
         )
         renderDilation(postprocessedRejection, frameWeight)
+        val rejectionNs = System.nanoTime() - rejectionStartNs
+        PLog.i(
+            TAG,
+            "MGC Spatial temporal cpuSubmit frame=${frame.frameNumber} role=${frame.role} " +
+                "guideCov=${guideNs / 1_000_000L}ms " +
+                "pyramid=${pyramidNs / 1_000_000L}ms " +
+                "align=${alignmentNs / 1_000_000L}ms " +
+                "flow=${flowNs / 1_000_000L}ms " +
+                "rejection=${rejectionNs / 1_000_000L}ms " +
+                "total=${elapsedMs(totalStartNs)}ms",
+        )
         return PreparedTemporalFrame(
             calibration = calibration,
             flowTexture = flow,
@@ -3449,12 +3680,16 @@ internal class GlesMgcRawSpatialStacker(
         maskWidth: Int = guideWidth,
         maskHeight: Int = guideHeight,
     ): ByteArray {
+        val totalStartNs = System.nanoTime()
         val byteCount = maskWidth.toLong() * maskHeight.toLong()
         require(byteCount <= Int.MAX_VALUE) { "$label is too large: $byteCount" }
         val buffer = ByteBuffer.allocateDirect(byteCount.toInt())
+        val bindStartNs = System.nanoTime()
         bindRenderTargets(intArrayOf(texture), label)
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+        val bindNs = System.nanoTime() - bindStartNs
+        val readStartNs = System.nanoTime()
         GLES30.glReadPixels(
             0,
             0,
@@ -3464,10 +3699,130 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_UNSIGNED_BYTE,
             buffer,
         )
+        val readCallNs = System.nanoTime() - readStartNs
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGlError(label)
         buffer.rewind()
-        return ByteArray(byteCount.toInt()).also { output -> buffer.get(output) }
+        val copyStartNs = System.nanoTime()
+        return ByteArray(byteCount.toInt()).also { output ->
+            buffer.get(output)
+            PLog.i(
+                TAG,
+                "MGC R8 readback label=$label size=${maskWidth}x$maskHeight " +
+                    "bytes=$byteCount bind=${bindNs / 1_000_000L}ms " +
+                    "readCall=${readCallNs / 1_000_000L}ms " +
+                    "cpuCopy=${elapsedMs(copyStartNs)}ms total=${elapsedMs(totalStartNs)}ms",
+            )
+        }
+    }
+
+    /**
+     * Reduces an R8 mask to one exact active-pixel count on GLES 3.1+.
+     *
+     * The source texture stays on the GPU and each 8x8 work group contributes one atomic add to a
+     * four-byte SSBO. The CPU synchronization is required by Bento admission either way, but this
+     * avoids both the full 786 KiB transfer and the background-priority Kotlin scan.
+     */
+    private fun countActiveMaskPixelsGpu(
+        texture: Int,
+        label: String,
+    ): ActiveMaskGpuCount {
+        check(bentoHighlightCountProgram != 0) {
+            "$label compute program is unavailable"
+        }
+        val setupStartNs = System.nanoTime()
+        val ids = IntArray(1)
+        GLES31.glGenBuffers(1, ids, 0)
+        val buffer = ids[0]
+        check(buffer != 0) { "$label glGenBuffers returned 0" }
+        buffers += buffer
+        var bufferMapped = false
+        try {
+            val zero = ByteBuffer.allocateDirect(Int.SIZE_BYTES)
+                .order(ByteOrder.nativeOrder())
+                .apply {
+                    putInt(0)
+                    rewind()
+                }
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                Int.SIZE_BYTES,
+                zero,
+                GLES31.GL_STREAM_READ,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, buffer)
+            GLES31.glUseProgram(bentoHighlightCountProgram)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture)
+            GLES31.glUniform1i(
+                uniformLocation(bentoHighlightCountProgram, "uMask"),
+                0,
+            )
+            GLES31.glUniform2i(
+                uniformLocation(bentoHighlightCountProgram, "uSize"),
+                guideWidth,
+                guideHeight,
+            )
+            val setupNs = System.nanoTime() - setupStartNs
+            val submitStartNs = System.nanoTime()
+            GLES31.glDispatchCompute(
+                GlesComputeWorkGroup.imageGroupCount(guideWidth),
+                GlesComputeWorkGroup.imageGroupCount(guideHeight),
+                1,
+            )
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
+                    GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
+            )
+            val submitNs = System.nanoTime() - submitStartNs
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+            GLES31.glUseProgram(0)
+            checkGlError("submit $label GPU count")
+
+            val gpuWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+                label = "$label GPU count",
+                checkGlError = ::checkGlError,
+            )
+            val mapStartNs = System.nanoTime()
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer)
+            val mapped = GLES31.glMapBufferRange(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                0,
+                Int.SIZE_BYTES,
+                GLES31.GL_MAP_READ_BIT,
+            ) as? ByteBuffer ?: error("Unable to map $label GPU count")
+            bufferMapped = true
+            val activePixels = mapped.order(ByteOrder.nativeOrder()).getInt(0)
+            check(GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)) {
+                "$label GPU count buffer contents became invalid"
+            }
+            bufferMapped = false
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+            val mapNs = System.nanoTime() - mapStartNs
+            check(activePixels in 0..guideWidth * guideHeight) {
+                "$label GPU count is out of range: $activePixels"
+            }
+            checkGlError("read $label GPU count")
+            return ActiveMaskGpuCount(
+                activePixels = activePixels,
+                setupNs = setupNs,
+                submitNs = submitNs,
+                gpuWaitMs = gpuWaitMs,
+                mapNs = mapNs,
+            )
+        } finally {
+            if (bufferMapped) {
+                GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer)
+                GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
+            }
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+            if (buffers.remove(buffer)) {
+                GLES31.glDeleteBuffers(1, intArrayOf(buffer), 0)
+            }
+        }
     }
 
     private fun createStrengthCapture(
@@ -4366,6 +4721,12 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
+    private fun countActiveMaskPixels(mask: ByteArray): Int =
+        mask.count { (it.toInt() and 0xff) != 0 }
+
+    private fun elapsedMs(startNs: Long): Long =
+        (System.nanoTime() - startNs) / 1_000_000L
+
     private fun assessBentoMasks(
         baseHighlightMask: ByteArray,
         inpaintingMask: ByteArray,
@@ -4516,7 +4877,6 @@ internal class GlesMgcRawSpatialStacker(
      * overlaps temporal scratch, while the two additive accumulators span both phases.
      */
     private fun createOnlineRgbAccumulator(
-        reusableRawTexture: Int,
         diagnosticCapture: StrengthCapture?,
     ): OnlineRgbAccumulator? {
         check(outputMode == MgcSpatialOutputMode.RGB)
@@ -4531,14 +4891,13 @@ internal class GlesMgcRawSpatialStacker(
             strengthFixed16ReadbackByteCount(capture).toLong()
         } ?: 0L
         // Sequential temporal scratch is allocated lazily by the first non-reference frame.
-        // Reserve two RAW-sized surfaces before choosing the online path so a near-budget burst
-        // falls back to reconstruction bands up front instead of failing after capture buffers
-        // have already started to close.
+        // Reserve two RAW-sized scratch surfaces before choosing the online path so a near-budget
+        // burst falls back to reconstruction bands before capture buffers have started to close.
         val temporalScratchReserveBytes = maxOf(
             RGB_TEXTURE_BUDGET_RESERVE_BYTES,
             rawBytes * 2L,
         )
-        val temporalProjectedBytes = estimatedOwnedTextureBytes() + rawBytes +
+        val temporalProjectedBytes = estimatedOwnedTextureBytes() +
             accumulatorBytes + chromaGuideBytes + temporalScratchReserveBytes
         val finalProjectedBytes = accumulatorBytes + outputStorageBytes +
             diagnosticTextureBytes + diagnosticPboBytes + RGB_TEXTURE_BUDGET_RESERVE_BYTES
@@ -4554,12 +4913,6 @@ internal class GlesMgcRawSpatialStacker(
             return null
         }
 
-        val secondRawTexture = createTexture(
-            width,
-            height,
-            GLES30.GL_R16UI,
-            GLES30.GL_NEAREST,
-        )
         val chromaGuideTexture = createTexture(
             width,
             height,
@@ -4598,7 +4951,7 @@ internal class GlesMgcRawSpatialStacker(
         PLog.i(
             TAG,
             "MGC Spatial RGB online accumulator selected bands=${drawBands.size} " +
-                "drawBandHeight=$RGB_ONLINE_DRAW_BAND_HEIGHT rawSlots=2 " +
+                "drawBandHeight=$RGB_ONLINE_DRAW_BAND_HEIGHT rawSlots=1 " +
                 "textureBytes=${estimatedOwnedTextureBytes()} " +
                 "temporalProjectedBytes=$temporalProjectedBytes " +
                 "finalProjectedBytes=$finalProjectedBytes " +
@@ -4609,14 +4962,7 @@ internal class GlesMgcRawSpatialStacker(
             opponentWeightAccumulator = opponentWeightAccumulator,
             chromaGuideTexture = chromaGuideTexture,
             drawBands = drawBands,
-            rawSlots = intArrayOf(reusableRawTexture, secondRawTexture),
-            passWindow = GlesGpuScheduler.PassWindow(
-                tag = TAG,
-                maxInFlight = RGB_MAX_IN_FLIGHT_PASSES,
-            ),
             projectedGpuBytes = projectedGpuBytes,
-            // Slot zero contains the Bento candidate when present. Start on the independent slot.
-            nextRawSlot = 1,
         )
     }
 
@@ -4624,9 +4970,7 @@ internal class GlesMgcRawSpatialStacker(
         accumulator: OnlineRgbAccumulator,
         frame: RgbMergeFrame,
         rawTexture: Int,
-        label: String,
     ) {
-        val rawResource = GlesGpuScheduler.textureResource(rawTexture)
         val fullRaw = MgcSpatialRgbRect(0, 0, width, height)
         renderRgbChromaGuide(
             frame = frame,
@@ -4636,25 +4980,17 @@ internal class GlesMgcRawSpatialStacker(
             outputTexture = accumulator.chromaGuideTexture,
         )
         accumulator.drawBands.forEach { band ->
-            accumulator.passWindow.beginPass(
-                label = "MGC RGB online $label band ${band.index}",
-                reads = longArrayOf(rawResource),
+            renderRgbFrameContribution(
+                frame = frame,
+                rawTexture = rawTexture,
+                rawTextureOrigin = fullRaw,
+                sourceRegion = fullRaw,
+                outputCores = listOf(band.outputCore),
+                chromaGuideRegionTexture = accumulator.chromaGuideTexture,
+                semanticAccumulator = accumulator.semanticAccumulator,
+                opponentWeightAccumulator = accumulator.opponentWeightAccumulator,
+                accumulatorIsFullOutput = true,
             )
-            try {
-                renderRgbFrameContribution(
-                    frame = frame,
-                    rawTexture = rawTexture,
-                    rawTextureOrigin = fullRaw,
-                    sourceRegion = fullRaw,
-                    outputCores = listOf(band.outputCore),
-                    chromaGuideRegionTexture = accumulator.chromaGuideTexture,
-                    semanticAccumulator = accumulator.semanticAccumulator,
-                    opponentWeightAccumulator = accumulator.opponentWeightAccumulator,
-                    accumulatorIsFullOutput = true,
-                )
-            } finally {
-                accumulator.passWindow.endPass()
-            }
         }
         accumulator.contributedFrames += 1
     }
@@ -4721,6 +5057,7 @@ internal class GlesMgcRawSpatialStacker(
                 targetIsFullOutput = gpuOutput != 0,
                 outputExposureScale = outputExposureScale,
             )
+            GlesGpuScheduler.yieldToUiRenderer()
             if (cpuOutput != null) {
                 readRgbTile(
                     texture = cpuOutputTexture,
@@ -5238,6 +5575,7 @@ internal class GlesMgcRawSpatialStacker(
                         targetIsFullOutput = gpuOutput != 0,
                         outputExposureScale = outputExposureScale,
                     )
+                    GlesGpuScheduler.yieldToUiRenderer()
                     if (cpuOutput != null) {
                         readRgbTile(
                             texture = cpuTileOutput,
@@ -6265,6 +6603,7 @@ internal class GlesMgcRawSpatialStacker(
         val count = textures.size - startIndex
         val transientTextures = IntArray(count) { offset -> textures[startIndex + offset] }
         GLES30.glDeleteTextures(count, transientTextures, 0)
+        transientTextures.forEach(textureSpecs::remove)
         repeat(count) { textures.removeAt(textures.lastIndex) }
     }
 
@@ -6279,6 +6618,7 @@ internal class GlesMgcRawSpatialStacker(
             .toIntArray()
         if (toDelete.isNotEmpty()) {
             GLES30.glDeleteTextures(toDelete.size, toDelete, 0)
+            toDelete.forEach(textureSpecs::remove)
         }
         for (index in textures.lastIndex downTo startIndex) {
             if (textures[index] !in retained) textures.removeAt(index)

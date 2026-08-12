@@ -1044,6 +1044,42 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
+    /**
+     * Counts non-zero R8 highlight-mask pixels without materializing the full mask on the CPU.
+     * One atomic update is issued per 8x8 work group rather than per active pixel.
+     */
+    val bentoCountHighlightMask = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        uniform highp sampler2D uMask;
+        uniform ivec2 uSize;
+        layout(std430, binding = 0) buffer ActiveCountBuffer {
+            uint activeCount;
+        };
+        shared uint localCounts[64];
+
+        void main() {
+            uint lane = gl_LocalInvocationIndex;
+            ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+            localCounts[lane] =
+                all(lessThan(p, uSize)) && texelFetch(uMask, p, 0).r > 0.0
+                    ? 1u
+                    : 0u;
+            barrier();
+            for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+                if (lane < stride) {
+                    localCounts[lane] += localCounts[lane + stride];
+                }
+                barrier();
+            }
+            if (lane == 0u && localCounts[0] != 0u) {
+                atomicAdd(activeCount, localCounts[0]);
+            }
+        }
+    """.trimIndent()
+
     // Embedded OpenCL sources: GainUp and
     // Mask_AdjustHighlightMaskAndGenerateInpaintingMask. The third output is the aligned
     // ultrashort clipping mask consumed by Bento's high-overlap fallback predicate.
