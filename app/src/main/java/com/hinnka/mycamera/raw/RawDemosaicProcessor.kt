@@ -13136,16 +13136,18 @@ class RawDemosaicProcessor {
                         MeteringSystem.RAW_EXPOSURE_MIN_EV,
                         MeteringSystem.RAW_EXPOSURE_MAX_EV,
                     )
-                    PLog.d(
-                        TAG,
-                        "RAW viewfinder candidate: domain=" +
-                            "${if (useAdobeSdkExposure) "ADOBE_DNG_SDK" else "LINEAR_GAIN"} " +
-                            "sourceBaselineEv=$sourceBaselineEv " +
-                            "offsetEv=$clampedExposureEv " +
-                            "effectiveBaselineEv=${sourceBaselineEv + clampedExposureEv} " +
-                            "totalProfileExposureEv=" +
-                            "${sourceBaselineEv + profileBaselineExposureOffsetEv + clampedExposureEv}"
-                    )
+                    if (request.diagnosticsEnabled) {
+                        PLog.d(
+                            TAG,
+                            "RAW viewfinder candidate: domain=" +
+                                "${if (useAdobeSdkExposure) "ADOBE_DNG_SDK" else "LINEAR_GAIN"} " +
+                                "sourceBaselineEv=$sourceBaselineEv " +
+                                "offsetEv=$clampedExposureEv " +
+                                "effectiveBaselineEv=${sourceBaselineEv + clampedExposureEv} " +
+                                "totalProfileExposureEv=" +
+                                "${sourceBaselineEv + profileBaselineExposureOffsetEv + clampedExposureEv}"
+                        )
+                    }
                     if (!useAdobeSdkExposure) {
                         renderLinearRcdPass(
                             metadata = metadata,
@@ -13196,6 +13198,7 @@ class RawDemosaicProcessor {
                         outputRotation = outputRotation,
                         readbackBuffer = readbackBuffer,
                         stackCompletionTimeline = stackCompletionTimeline,
+                        diagnosticsEnabled = request.diagnosticsEnabled,
                     )
                 }
             } finally {
@@ -13311,6 +13314,7 @@ class RawDemosaicProcessor {
         outputRotation: Int,
         readbackBuffer: ByteBuffer,
         stackCompletionTimeline: GpuStackCompletionTimeline?,
+        diagnosticsEnabled: Boolean,
     ): RawExposurePreviewFrame? {
         val clampedExposureEv = exposureEv.coerceIn(-4f, 4f)
         val profileExposureUniforms = computeProfileExposureUniforms(
@@ -13360,6 +13364,7 @@ class RawDemosaicProcessor {
             height = readbackHeight,
             pixelBuffer = readbackBuffer,
             stackCompletionTimeline = stackCompletionTimeline,
+            diagnosticsEnabled = diagnosticsEnabled,
         )
     }
 
@@ -13428,6 +13433,7 @@ class RawDemosaicProcessor {
         height: Int,
         pixelBuffer: ByteBuffer,
         stackCompletionTimeline: GpuStackCompletionTimeline?,
+        diagnosticsEnabled: Boolean,
     ): RawExposurePreviewFrame? {
         if (width <= 0 || height <= 0) {
             return null
@@ -13469,14 +13475,16 @@ class RawDemosaicProcessor {
             argbPixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
         val cpuPackMs = (System.nanoTime() - cpuPackStartNs) / 1_000_000L
-        PLog.d(
-            TAG,
-            "RAW exposure preview timing size=${width}x$height " +
-                "upstreamStackGpuWait=${upstreamStackTiming?.totalWaitMs ?: 0L}ms " +
-                "previewGpuQueueWait=${previewGpuQueueWaitMs}ms " +
-                "pixelTransfer=${pixelTransferMs}ms " +
-                "cpuPack=${cpuPackMs}ms",
-        )
+        if (diagnosticsEnabled) {
+            PLog.d(
+                TAG,
+                "RAW exposure preview timing size=${width}x$height " +
+                    "upstreamStackGpuWait=${upstreamStackTiming?.totalWaitMs ?: 0L}ms " +
+                    "previewGpuQueueWait=${previewGpuQueueWaitMs}ms " +
+                    "pixelTransfer=${pixelTransferMs}ms " +
+                    "cpuPack=${cpuPackMs}ms",
+            )
+        }
         return RawExposurePreviewFrame(
             width = width,
             height = height,
