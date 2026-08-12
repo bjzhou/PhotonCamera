@@ -5931,6 +5931,29 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
+        if (MultiFrameFocusLockPolicy.canFreezeSettledContinuousFocus(
+                afMode = currentAfMode,
+                afState = afState,
+                lensState = lensState,
+                focusDistanceDiopters = focusDistance,
+                supportsAfOff = availableAfModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF),
+            )
+        ) {
+            activeMultiFrameFocusSnapshot = createMultiFrameFocusSnapshot(
+                result = baseResult,
+                fallbackAfMode = currentAfMode,
+                source = "settled_continuous_af",
+            ).copy(afMode = CaptureRequest.CONTROL_AF_MODE_OFF)
+            PLog.i(
+                TAG,
+                "Multi-frame focus froze settled continuous AF without retrigger: " +
+                    "previousMode=$currentAfMode fixedMode=${CaptureRequest.CONTROL_AF_MODE_OFF} " +
+                    "afState=$afState lensState=$lensState focus=$focusDistance",
+            )
+            continueCaptureAfterFocusPreparation(device, reader, baseResult)
+            return
+        }
+
         val generation = ++multiFrameFocusGeneration
         val pending = PendingMultiFrameFocusCapture(
             generation = generation,
