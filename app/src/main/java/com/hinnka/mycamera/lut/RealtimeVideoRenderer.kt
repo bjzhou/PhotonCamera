@@ -17,6 +17,7 @@ import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoEncoderColorConfig
+import com.hinnka.mycamera.video.VideoEncodedColorPipeline
 import com.hinnka.mycamera.video.VideoLogProfile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -76,6 +77,12 @@ class RealtimeVideoRenderer(
         }
     private val colorProgramCache = PreviewColorProgramCache()
     private val basicToneTextures = BasicToneGlTextures()
+    private val filmGrainGl = FilmGrainGl(TAG)
+    private val filmGrainAmount: Float
+        get() = layers.lastOrNull { it.params.filmGrain > 0.001f }?.params?.filmGrain ?: 0f
+    private val finalFilmGrainEnabled: Boolean
+        get() = filmGrainAmount > 0.001f &&
+            encoderColorConfig.pipeline != VideoEncodedColorPipeline.CUSTOM_LOG
     private val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private val firstPassMvpMatrix = FloatArray(16).also {
         Matrix.setIdentityM(it, 0)
@@ -102,6 +109,8 @@ class RealtimeVideoRenderer(
     private var cameraSurface: Surface? = null
     private var intermediateTextureId = 0
     private var intermediateFboId = 0
+    private var finalColorTextureId = 0
+    private var finalColorFboId = 0
     private var vertexBuffer: FloatBuffer? = null
     private var textureCoordinateBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
@@ -119,8 +128,16 @@ class RealtimeVideoRenderer(
         check(makeCurrent()) { "Cannot make realtime video EGL context current" }
         initializeGeometry()
         initializeLayerTextures()
-        if (layers.size > 1) {
+        if (layers.size > 1 || finalFilmGrainEnabled) {
             initializeIntermediateFramebuffer()
+        }
+        if (layers.size > 1 && finalFilmGrainEnabled) {
+            val finalTarget = createColorFramebuffer("final color")
+            finalColorTextureId = finalTarget.first
+            finalColorFboId = finalTarget.second
+        }
+        if (finalFilmGrainEnabled) {
+            check(filmGrainGl.prepare()) { "Cannot create realtime video film grain program" }
         }
 
         cameraTextureId = GlUtils.createOESTexture()
@@ -162,7 +179,8 @@ class RealtimeVideoRenderer(
         if (timestampNs <= 0L) return null
 
         val firstLayer = layers.first()
-        val firstTargetFbo = if (layers.size > 1) intermediateFboId else 0
+        val grainEnabled = finalFilmGrainEnabled
+        val firstTargetFbo = if (layers.size > 1 || grainEnabled) intermediateFboId else 0
         drawLayer(
             layer = firstLayer,
             targetFboId = firstTargetFbo,
@@ -182,7 +200,11 @@ class RealtimeVideoRenderer(
                 val isLast = index == layers.lastIndex - 1
                 drawLayer(
                     layer = layer,
-                    targetFboId = if (isLast) 0 else intermediateFboId,
+                    targetFboId = if (isLast) {
+                        if (grainEnabled) finalColorFboId else 0
+                    } else {
+                        intermediateFboId
+                    },
                     textureSource = PreviewColorTextureSource.TEXTURE_2D,
                     textureTarget = GLES30.GL_TEXTURE_2D,
                     textureId = intermediateTextureId,
@@ -193,6 +215,23 @@ class RealtimeVideoRenderer(
                     treatSourceAsHlgInput = false,
                     presentationTimeNs = timestampNs,
                 )
+            }
+        }
+
+        if (grainEnabled) {
+            val sourceTextureId = if (layers.size > 1) finalColorTextureId else intermediateTextureId
+            check(
+                filmGrainGl.drawToFramebuffer(
+                    targetFramebufferId = 0,
+                    sourceTextureId = sourceTextureId,
+                    width = encoderOutputSize.width,
+                    height = encoderOutputSize.height,
+                    amount = filmGrainAmount,
+                    frameSeed = FilmGrainShaders.frameSeed(timestampNs),
+                    drawQuad = ::drawSimpleQuad,
+                )
+            ) {
+                "Realtime video film grain pass failed"
             }
         }
 
@@ -408,6 +447,14 @@ class RealtimeVideoRenderer(
         GLES30.glUniform1f(locations.uToneShoulderLocation, params.toneShoulder)
         GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
         GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
+        GLES30.glUniform1f(
+            locations.uFilmGrainSeedLocation,
+            FilmGrainShaders.frameSeed(presentationTimeNs),
+        )
+        GLES30.glUniform1f(
+            locations.uFilmGrainPixelScaleLocation,
+            FilmGrainShaders.pixelScale(encoderOutputSize.width, encoderOutputSize.height),
+        )
         GLES30.glUniform1f(locations.uVignetteLocation, params.vignette)
         GLES30.glUniform1f(locations.uFlashLocation, params.flash)
         GLES30.glUniform1f(locations.uBleachBypassLocation, params.bleachBypass)
@@ -623,10 +670,29 @@ class RealtimeVideoRenderer(
     }
 
     private fun initializeIntermediateFramebuffer() {
+        val target = createColorFramebuffer("intermediate")
+        intermediateTextureId = target.first
+        intermediateFboId = target.second
+    }
+
+    private fun createColorFramebuffer(label: String): Pair<Int, Int> {
+        val maxTextureSize = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
+        check(
+            encoderOutputSize.width in 1..maxTextureSize[0] &&
+                encoderOutputSize.height in 1..maxTextureSize[0]
+        ) {
+            "Realtime video $label target ${encoderOutputSize.width}x${encoderOutputSize.height} " +
+                "exceeds GL_MAX_TEXTURE_SIZE=${maxTextureSize[0]}"
+        }
+        check(GLES30.glGetError() == GLES30.GL_NO_ERROR) {
+            "Realtime video $label framebuffer has an upstream GL error"
+        }
+
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
-        intermediateTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, intermediateTextureId)
+        val textureId = textures[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
@@ -645,19 +711,50 @@ class RealtimeVideoRenderer(
 
         val framebuffers = IntArray(1)
         GLES30.glGenFramebuffers(1, framebuffers, 0)
-        intermediateFboId = framebuffers[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, intermediateFboId)
+        val framebufferId = framebuffers[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glFramebufferTexture2D(
             GLES30.GL_FRAMEBUFFER,
             GLES30.GL_COLOR_ATTACHMENT0,
             GLES30.GL_TEXTURE_2D,
-            intermediateTextureId,
+            textureId,
             0,
         )
-        check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            "Realtime video intermediate framebuffer is incomplete"
-        }
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val glError = GLES30.glGetError()
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE || glError != GLES30.GL_NO_ERROR) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(framebufferId), 0)
+            GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
+            error(
+                "Realtime video $label framebuffer is incomplete: status=$status glError=$glError"
+            )
+        }
+        return textureId to framebufferId
+    }
+
+    private fun drawSimpleQuad(programId: Int) {
+        val positions = vertexBuffer ?: return
+        val textureCoordinates = textureCoordinateBuffer ?: return
+        val indices = indexBuffer ?: return
+        val positionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
+        val textureLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
+        positions.position(0)
+        textureCoordinates.position(0)
+        indices.position(0)
+        GLES30.glEnableVertexAttribArray(positionLocation)
+        GLES30.glVertexAttribPointer(positionLocation, 2, GLES30.GL_FLOAT, false, 0, positions)
+        GLES30.glEnableVertexAttribArray(textureLocation)
+        GLES30.glVertexAttribPointer(textureLocation, 2, GLES30.GL_FLOAT, false, 0, textureCoordinates)
+        GLES30.glDrawElements(
+            GLES30.GL_TRIANGLES,
+            Shaders.DRAW_ORDER.size,
+            GLES30.GL_UNSIGNED_SHORT,
+            indices,
+        )
+        GLES30.glDisableVertexAttribArray(positionLocation)
+        GLES30.glDisableVertexAttribArray(textureLocation)
     }
 
     fun release() {
@@ -695,6 +792,15 @@ class RealtimeVideoRenderer(
             GLES30.glDeleteFramebuffers(1, intArrayOf(intermediateFboId), 0)
             intermediateFboId = 0
         }
+        if (finalColorTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(finalColorTextureId), 0)
+            finalColorTextureId = 0
+        }
+        if (finalColorFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(finalColorFboId), 0)
+            finalColorFboId = 0
+        }
+        filmGrainGl.release()
         colorProgramCache.release()
         basicToneTextures.release()
 

@@ -52,7 +52,11 @@ internal object PreviewColorShader {
             uniform float uToneToe;
             uniform float uToneShoulder;
             uniform float uTonePivot;
+            ${if (variant.includePreLogFilmGrain) """
             uniform float uFilmGrain;
+            uniform float uFilmGrainSeed;
+            uniform float uFilmGrainPixelScale;
+            """ else ""}
             uniform float uVignette;
             uniform float uFlash;
             uniform float uBleachBypass;
@@ -131,8 +135,8 @@ internal object PreviewColorShader {
             ${if (variant.includeOklchDensity) PreviewColorShaderModules.OKLCH_DENSITY else PreviewColorShaderModules.OKLCH_DENSITY_STUB}
             ${if (variant.includeLchMixer) PreviewColorShaderModules.LCH_MIXER else PreviewColorShaderModules.LCH_MIXER_STUB}
             ${if (variant.includeLutMask) PreviewColorShaderModules.LUT_MASK else PreviewColorShaderModules.LUT_MASK_STUB}
-            ${if (variant.includeFilmGrain) PreviewColorShaderModules.FILM_GRAIN else PreviewColorShaderModules.FILM_GRAIN_STUB}
             ${if (variant.includeExtendedLutCurves) PreviewColorShaderModules.EXTENDED_LUT_CURVES else PreviewColorShaderModules.SIMPLE_LUT_CURVES}
+            ${if (variant.includePreLogFilmGrain) FilmGrainShaders.FUNCTIONS else ""}
 
             float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
                 float safeLuma = clamp(luma, 0.0, 1.0);
@@ -299,11 +303,6 @@ internal object PreviewColorShader {
                         color.rgb = sanitizeColor(color.rgb);
                     }
 
-                    if (uFilmGrain > 0.001) {
-                        color.rgb = applyDensityParticleGrain(color.rgb, uvCoord, uFilmGrain);
-                        color.rgb = sanitizeColor(color.rgb);
-                    }
-
                     if (uNoise > 0.001) {
                         vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
                         vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;
@@ -337,6 +336,19 @@ internal object PreviewColorShader {
                     float halationMask = smoothstep(0.001, 0.06, dot(halationBlur, W));
                     vec3 halationStrength = vec3(0.42, 0.14, 0.02) * uRedHalation;
                     color.rgb += halationBlur * halationStrength * halationMask;
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+                """ else ""}
+
+                ${if (variant.includePreLogFilmGrain) """
+                if (uFilmGrain > 0.001) {
+                    color.rgb = applyDensityFilmGrain(
+                        color.rgb,
+                        gl_FragCoord.xy,
+                        uFilmGrain,
+                        uFilmGrainSeed,
+                        uFilmGrainPixelScale
+                    );
                     color.rgb = sanitizeColor(color.rgb);
                 }
                 """ else ""}

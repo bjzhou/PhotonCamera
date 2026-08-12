@@ -293,59 +293,6 @@ internal object PreviewColorShaderModules {
         }
     """.trimIndent()
 
-    val FILM_GRAIN = """
-        float hash12(vec2 p) {
-            vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-            p3 += dot(p3, p3.yzx + 33.33);
-            return fract((p3.x + p3.y) * p3.z);
-        }
-
-        float gaussianNoise(vec2 p) {
-            return (hash12(p) + hash12(p + 17.17) + hash12(p + 43.31) + hash12(p + 91.73) - 2.0) * 0.5;
-        }
-
-        vec3 applyDensityParticleGrain(vec3 srgbColor, vec2 uv, float amount) {
-            float grainAmount = pow(clamp(amount, 0.0, 1.0), 0.58);
-            vec3 linearColor = max(srgbToLinear(max(srgbColor, vec3(0.0))), vec3(1e-4));
-            vec3 density = -log10(linearColor);
-            vec3 densityMin = vec3(0.03);
-            vec3 densityMax = vec3(2.2) + densityMin;
-            vec3 development = clamp((density + densityMin) / densityMax, vec3(0.02), vec3(0.98));
-            float effectivePixelSizeUm = mix(5.2, 1.8, grainAmount);
-            float agxParticleAreaUm2 = 0.2;
-            vec3 particleScale = vec3(1.6, 1.6, 3.2);
-            vec3 particles = (effectivePixelSizeUm * effectivePixelSizeUm) / (agxParticleAreaUm2 * particleScale);
-            vec3 uniformity = vec3(0.97, 0.99, 0.97);
-            vec2 grainCoord = uv * mix(820.0, 1380.0, grainAmount);
-            float lumaGrain = gaussianNoise(grainCoord + vec2(11.0, 7.0));
-            vec2 dyeCoord = uv * mix(260.0, 420.0, grainAmount);
-            vec3 dyeCloud = vec3(
-                gaussianNoise(dyeCoord + vec2(31.0, 53.0)),
-                gaussianNoise(dyeCoord + vec2(71.0, 23.0)),
-                gaussianNoise(dyeCoord + vec2(19.0, 97.0))
-            );
-            float clump = gaussianNoise(floor(uv * 180.0) + vec2(5.0, 19.0));
-            vec3 saturation = 1.0 - development * uniformity;
-            vec3 densityStd = densityMax * sqrt(max(development * (1.0 - development) * saturation, vec3(0.001)) / max(particles, vec3(1.0)));
-            float lumaDensityStd = dot(densityStd, vec3(0.333333));
-            float positiveLuma = dot(linearColor, vec3(0.2126, 0.7152, 0.0722));
-            float positiveHighlightMask = smoothstep(0.55, 0.92, positiveLuma);
-            float highlightGrainVisibility = mix(1.0, 0.32, positiveHighlightMask);
-            vec3 densityNoise = vec3(lumaGrain * lumaDensityStd * 2.7);
-            densityNoise += dyeCloud * densityStd * 0.28;
-            densityNoise += clump * grainAmount * vec3(0.013, 0.012, 0.016);
-            densityNoise *= highlightGrainVisibility;
-            density = max(density + densityNoise * grainAmount * 1.8, vec3(0.0));
-            return linearToSrgb(pow(vec3(10.0), -density));
-        }
-    """.trimIndent()
-
-    val FILM_GRAIN_STUB = """
-        vec3 applyDensityParticleGrain(vec3 srgbColor, vec2 uv, float amount) {
-            return srgbColor;
-        }
-    """.trimIndent()
-
     val PRIMARY_CALIBRATION = """
         vec3 applyPrimaryCalibration(vec3 color) {
             vec3 linearColor = srgbToLinear(max(color, vec3(0.0)));

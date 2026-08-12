@@ -268,6 +268,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var clarityOutputFboId: Int = 0
     private var clarityOutputWidth: Int = 0
     private var clarityOutputHeight: Int = 0
+    private val filmGrainGl = FilmGrainGl(TAG)
+    private var filmGrainSourceTextureId: Int = 0
+    private var filmGrainSourceFboId: Int = 0
+    private var filmGrainSourceWidth: Int = 0
+    private var filmGrainSourceHeight: Int = 0
 
     // Focus Peaking 实时预览资源
     private var focusPeakingProgramId: Int = 0
@@ -630,6 +635,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         clarityOutputFboId = 0
         clarityOutputWidth = 0
         clarityOutputHeight = 0
+        filmGrainGl.resetAfterContextLoss()
+        filmGrainSourceTextureId = 0
+        filmGrainSourceFboId = 0
+        filmGrainSourceWidth = 0
+        filmGrainSourceHeight = 0
         focusPeakingProgramId = 0
         focusPeakingFboId = 0
         focusPeakingTextureId = 0
@@ -1426,6 +1436,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uToneShoulderLocation, params.toneShoulder)
             GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
             GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
+            GLES30.glUniform1f(
+                locations.uFilmGrainSeedLocation,
+                FilmGrainShaders.frameSeed(surfaceTexture?.timestamp ?: 0L)
+            )
+            GLES30.glUniform1f(
+                locations.uFilmGrainPixelScaleLocation,
+                FilmGrainShaders.pixelScale(width, height)
+            )
             GLES30.glUniform1f(locations.uVignetteLocation, params.vignette)
             GLES30.glUniform1f(locations.uFlashLocation, params.flash)
             GLES30.glUniform1f(locations.uBleachBypassLocation, params.bleachBypass)
@@ -1536,6 +1554,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val bloomEnabled = bloom > 0.001f
         val softLightEnabled = softLight > 0.001f
         val clarityEnabled = abs(clarity) > 0.001f
+        val preLogFilmGrainEnabled = filmGrain > 0.001f &&
+            videoLogProfile.isEnabled &&
+            !(lutEnabled && currentLutConfig != null)
+        val filmGrainEnabled = filmGrain > 0.001f && !preLogFilmGrainEnabled
         val postProcessEffectEnabled = hdfEnabled || halationEnabled || bloomEnabled || softLightEnabled
         val aiFocusInputNeeded = onAiFocusInputAvailable != null && isAutoFocus && !isAiFocusBusy
         val suppressBaselineLayerForVideoLog = videoLogProfile.isEnabled
@@ -1548,6 +1570,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             liveRecorder != null ||
             postProcessEffectEnabled ||
             clarityEnabled ||
+            filmGrainEnabled ||
             aiFocusInputNeeded ||
             hasDualLayer ||
             (!isAutoFocus && focusPeakingEnabled)
@@ -1625,6 +1648,36 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 runAiFocusInputCaptureInternal(currentTexId)
             }
 
+            var postProcessMaterialized = false
+            if (
+                filmGrainEnabled &&
+                postProcessEffectEnabled &&
+                setupFilmGrainSourceFramebuffer(currentWidth, currentHeight)
+            ) {
+                drawPostProcessEffects(
+                    filmGrainSourceFboId,
+                    currentWidth,
+                    currentHeight,
+                    currentTexId,
+                )
+                currentTexId = filmGrainSourceTextureId
+                postProcessMaterialized = true
+            }
+
+            if (filmGrainEnabled) {
+                val grainOutput = filmGrainGl.renderToTexture(
+                    sourceTextureId = currentTexId,
+                    width = currentWidth,
+                    height = currentHeight,
+                    amount = filmGrain,
+                    frameSeed = FilmGrainShaders.frameSeed(surfaceTexture?.timestamp ?: 0L),
+                    drawQuad = ::drawSimpleQuad,
+                )
+                if (grainOutput != null) {
+                    currentTexId = grainOutput.textureId
+                }
+            }
+
             val outputTexId = currentTexId
 
             // 确保 FBO 内容已刷入显存
@@ -1662,7 +1715,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             }
 
             // 显示到屏幕
-            if (postProcessEffectEnabled) {
+            if (postProcessEffectEnabled && !postProcessMaterialized) {
                 drawPostProcessEffects(0, viewportWidth, viewportHeight, currentTexId)
             } else {
                 drawFboToScreen(0, viewportWidth, viewportHeight, currentTexId)
@@ -1670,7 +1723,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             val finalDisplayTextureId = currentTexId
             val finalDisplayWidth = viewportWidth
             val finalDisplayHeight = viewportHeight
-            val needsHdfCompositeForSampling = postProcessEffectEnabled
+            val needsHdfCompositeForSampling = postProcessEffectEnabled && !postProcessMaterialized
             capturePendingPreviewFrames(
                 rawPreviewSource = rawPreviewSource,
                 finalDisplayTextureId = finalDisplayTextureId,
@@ -2523,6 +2576,72 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         clarityOutputWidth = 0
         clarityOutputHeight = 0
+    }
+
+    private fun setupFilmGrainSourceFramebuffer(width: Int, height: Int): Boolean {
+        if (
+            filmGrainSourceTextureId != 0 &&
+            filmGrainSourceFboId != 0 &&
+            filmGrainSourceWidth == width &&
+            filmGrainSourceHeight == height
+        ) {
+            return true
+        }
+
+        releaseFilmGrainSourceFramebuffer()
+        val maxTextureSize = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
+        if (width <= 0 || height <= 0 || width > maxTextureSize[0] || height > maxTextureSize[0]) {
+            PLog.e(TAG, "Film grain source ${width}x$height exceeds GL_MAX_TEXTURE_SIZE=${maxTextureSize[0]}")
+            return false
+        }
+
+        val texture = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        filmGrainSourceTextureId = texture[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, filmGrainSourceTextureId)
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA8, width, height)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        val framebuffer = IntArray(1)
+        GLES30.glGenFramebuffers(1, framebuffer, 0)
+        filmGrainSourceFboId = framebuffer[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, filmGrainSourceFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            filmGrainSourceTextureId,
+            0,
+        )
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val error = GLES30.glGetError()
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE || error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "Film grain source framebuffer incomplete: status=$status glError=$error")
+            releaseFilmGrainSourceFramebuffer()
+            return false
+        }
+        filmGrainSourceWidth = width
+        filmGrainSourceHeight = height
+        return true
+    }
+
+    private fun releaseFilmGrainSourceFramebuffer() {
+        if (filmGrainSourceFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(filmGrainSourceFboId), 0)
+            filmGrainSourceFboId = 0
+        }
+        if (filmGrainSourceTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(filmGrainSourceTextureId), 0)
+            filmGrainSourceTextureId = 0
+        }
+        filmGrainSourceWidth = 0
+        filmGrainSourceHeight = 0
     }
 
     private fun clearClarityPreviewBindings() {
@@ -3827,6 +3946,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         clarityDownsampleProgram = 0
         clarityCompositeProgram = 0
         releaseClarityPreviewFramebuffers()
+        filmGrainGl.release()
+        releaseFilmGrainSourceFramebuffer()
 
         // 释放 HDF 实时预览资源
         if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)

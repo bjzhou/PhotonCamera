@@ -15,7 +15,7 @@ internal data class PreviewColorShaderVariant(
     val includeExtendedLutCurves: Boolean,
     val includeOklchDensity: Boolean,
     val includeLchMixer: Boolean,
-    val includeFilmGrain: Boolean,
+    val includePreLogFilmGrain: Boolean,
     val includeLutMask: Boolean = false,
     val includeJpegInputToneCurve: Boolean = false,
     val includeSpatialRecipeEffects: Boolean = false,
@@ -37,7 +37,10 @@ internal data class PreviewColorShaderVariant(
                     (lutEnabled && lutCurve.shaderId !in SIMPLE_LUT_CURVES),
                 includeOklchDensity = abs(params.color) > EPSILON,
                 includeLchMixer = params.hasLchAdjustments(),
-                includeFilmGrain = params.filmGrain > EPSILON,
+                // A custom Log recording has no display LUT, so bake grain before encoding.
+                includePreLogFilmGrain = videoLogEnabled &&
+                    !lutEnabled &&
+                    params.filmGrain > EPSILON,
             )
         }
 

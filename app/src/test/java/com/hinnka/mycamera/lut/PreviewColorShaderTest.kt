@@ -13,7 +13,7 @@ class PreviewColorShaderTest {
             includeExtendedLutCurves = true,
             includeOklchDensity = true,
             includeLchMixer = true,
-            includeFilmGrain = true,
+            includePreLogFilmGrain = false,
             includeJpegInputToneCurve = true,
         )
         val source = PreviewColorShader.source(variant)
@@ -34,7 +34,7 @@ class PreviewColorShaderTest {
             includeExtendedLutCurves = true,
             includeOklchDensity = true,
             includeLchMixer = true,
-            includeFilmGrain = true,
+            includePreLogFilmGrain = false,
         )
 
         assertFalse(
@@ -50,7 +50,7 @@ class PreviewColorShaderTest {
             includeExtendedLutCurves = true,
             includeOklchDensity = true,
             includeLchMixer = true,
-            includeFilmGrain = true,
+            includePreLogFilmGrain = false,
             includeJpegInputToneCurve = true,
             includeSpatialRecipeEffects = true,
         )
@@ -64,5 +64,41 @@ class PreviewColorShaderTest {
         assertTrue(halationIndex > curveIndex)
         assertTrue(lutIndex > halationIndex)
         assertTrue(softLightIndex > lutIndex)
+    }
+
+    @Test
+    fun customLogFilmGrainRunsBeforeLogEncoding() {
+        val variant = PreviewColorShaderVariant(
+            textureSource = PreviewColorTextureSource.TEXTURE_2D,
+            includeHlgInput = false,
+            includeExtendedLutCurves = true,
+            includeOklchDensity = false,
+            includeLchMixer = false,
+            includePreLogFilmGrain = true,
+        )
+        val source = PreviewColorShader.source(variant)
+
+        val grainIndex = source.indexOf("color.rgb = applyDensityFilmGrain(")
+        val logIndex = source.indexOf("if (uVideoLogEnabled)")
+        val lutIndex = source.indexOf("if (uLutEnabled && uLutIntensity > 0.0)")
+        assertTrue(grainIndex >= 0)
+        assertTrue(logIndex > grainIndex)
+        assertTrue(lutIndex > logIndex)
+    }
+
+    @Test
+    fun displayPipelineDoesNotInlineFilmGrain() {
+        val variant = PreviewColorShaderVariant(
+            textureSource = PreviewColorTextureSource.TEXTURE_2D,
+            includeHlgInput = false,
+            includeExtendedLutCurves = false,
+            includeOklchDensity = false,
+            includeLchMixer = false,
+            includePreLogFilmGrain = false,
+        )
+
+        val source = PreviewColorShader.source(variant)
+        assertFalse(source.contains("uniform float uFilmGrain;"))
+        assertFalse(source.contains("applyDensityFilmGrain("))
     }
 }

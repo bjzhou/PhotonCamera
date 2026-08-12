@@ -129,6 +129,7 @@ class LutImageProcessor(context: Context? = null) {
     private var lutSharpenFboId = 0
     private var lutSharpenWidth = 0
     private var lutSharpenHeight = 0
+    private val filmGrainGl = FilmGrainGl(TAG)
 
     // HDF (Highlight Diffusion) 光晕效果资源
     private var hdfExtractBlurHProgram = 0
@@ -206,7 +207,6 @@ class LutImageProcessor(context: Context? = null) {
     private var uToneToeLoc = 0
     private var uToneShoulderLoc = 0
     private var uTonePivotLoc = 0
-    private var uFilmGrainLoc = 0
     private var uVignetteLoc = 0
     private var uBleachBypassLoc = 0
     private var uNoiseLoc = 0
@@ -1111,7 +1111,6 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uToneToe"), toneToe)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uToneShoulder"), toneShoulder)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTonePivot"), tonePivot)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFilmGrain"), filmGrain)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVignette"), vignette)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFlash"), flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBleachBypass"), bleachBypass)
@@ -1243,11 +1242,22 @@ class LutImageProcessor(context: Context? = null) {
         val postSharpenTextureId = if (sharpened) lutSharpenTextureId else postClarityTextureId
         val postSharpenFramebufferId = if (sharpened) lutSharpenFboId else postClarityFramebufferId
 
-        val readFramebufferId = if (bloom > 0.001f && renderLdrBloom(postSharpenTextureId, width, height, bloom)) {
-            bloomOutputFboId
+        val bloomApplied = bloom > 0.001f && renderLdrBloom(postSharpenTextureId, width, height, bloom)
+        val postBloomTextureId = if (bloomApplied) bloomOutputTextureId else postSharpenTextureId
+        val postBloomFramebufferId = if (bloomApplied) bloomOutputFboId else postSharpenFramebufferId
+        val filmGrainOutput = if (filmGrain > 0.001f) {
+            filmGrainGl.renderToTexture(
+                sourceTextureId = postBloomTextureId,
+                width = width,
+                height = height,
+                amount = filmGrain,
+                frameSeed = 0f,
+                drawQuad = ::drawQuad,
+            )
         } else {
-            postSharpenFramebufferId
+            null
         }
+        val readFramebufferId = filmGrainOutput?.framebufferId ?: postBloomFramebufferId
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFramebufferId)
         val pixelSize = width * height * 4
@@ -2003,7 +2013,6 @@ class LutImageProcessor(context: Context? = null) {
         uToneToeLoc = GLES30.glGetUniformLocation(shaderProgram, "uToneToe")
         uToneShoulderLoc = GLES30.glGetUniformLocation(shaderProgram, "uToneShoulder")
         uTonePivotLoc = GLES30.glGetUniformLocation(shaderProgram, "uTonePivot")
-        uFilmGrainLoc = GLES30.glGetUniformLocation(shaderProgram, "uFilmGrain")
         uVignetteLoc = GLES30.glGetUniformLocation(shaderProgram, "uVignette")
         uBleachBypassLoc = GLES30.glGetUniformLocation(shaderProgram, "uBleachBypass")
         uNoiseLoc = GLES30.glGetUniformLocation(shaderProgram, "uNoise")
@@ -3695,6 +3704,7 @@ class LutImageProcessor(context: Context? = null) {
         if (clarityDownsampleProgram != 0) GLES30.glDeleteProgram(clarityDownsampleProgram)
         if (clarityCompositeProgram != 0) GLES30.glDeleteProgram(clarityCompositeProgram)
         releaseClarityFramebuffers()
+        filmGrainGl.release()
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
@@ -3861,7 +3871,6 @@ class LutImageProcessor(context: Context? = null) {
             uniform float uToneToe;       // -1.0 ~ +1.0 (暗部曲线塑形)
             uniform float uToneShoulder;  // -1.0 ~ +1.0 (亮部曲线塑形)
             uniform float uTonePivot;     // -1.0 ~ +1.0 (曲线中点偏移)
-            uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
             uniform float uFlash;         // 0.0 ~ 1.0 (镜头轴向直闪模拟)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
@@ -3944,7 +3953,6 @@ class LutImageProcessor(context: Context? = null) {
 
             ${ShadowsHighlightsShader.GLSL}
 
-            ${PreviewColorShaderModules.FILM_GRAIN}
 
             float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
                 float safeLuma = clamp(luma, 0.0, 1.0);
@@ -4166,12 +4174,7 @@ class LutImageProcessor(context: Context? = null) {
                         }
                     }
 
-                    // 10. 颗粒（Film Grain - 胶片颗粒感）
-                    if (uFilmGrain > 0.0) {
-                        color.rgb = applyDensityParticleGrain(color.rgb, uvCoord, uFilmGrain);
-                    }
-
-                    // 11. 随机噪点 (增强的亮度和彩色噪点，动态刷新)
+                    // 10. 随机噪点 (增强的亮度和彩色噪点，动态刷新)
                     if (uNoise > 0.001) {
                         vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
                         vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;

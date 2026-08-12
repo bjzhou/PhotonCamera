@@ -107,6 +107,8 @@ private class VideoLutShaderProgram(
             uniform float uToneShoulder;  // -1.0 ~ +1.0
             uniform float uTonePivot;     // -1.0 ~ +1.0
             uniform float uFilmGrain;     // 0.0 ~ 1.0
+            uniform float uFilmGrainSeed;
+            uniform float uFilmGrainPixelScale;
             uniform float uVignette;      // -1.0 ~ +1.0
             uniform float uFlash;         // 0.0 ~ 1.0
             uniform float uBleachBypass;  // 0.0 ~ 1.0
@@ -134,6 +136,8 @@ private class VideoLutShaderProgram(
             uniform vec2 uTexelSize;
             
             const float PI = 3.14159265359;
+
+            ${FilmGrainShaders.FUNCTIONS}
 
             float getLuma(vec3 color) {
                 vec3 weights = (uInputColorSpace == 1) ? vec3(0.2290, 0.6917, 0.0793) : vec3(0.2126, 0.7152, 0.0722);
@@ -632,16 +636,6 @@ private class VideoLutShaderProgram(
                         }
                     }
 
-                    if (uFilmGrain > 0.0) {
-                        float grainNoise = fract(sin(dot(uvCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
-                        grainNoise = (grainNoise - 0.5) * 2.0;
-                        float grainLuma = getLuma(color.rgb);
-                        float grainMask = 1.0 - abs(grainLuma - 0.5) * 2.0;
-                        grainMask = grainMask * 0.5 + 0.5;
-                        float grainStrength = uFilmGrain * 0.1 * grainMask;
-                        color.rgb += grainNoise * grainStrength;
-                    }
-
                     if (uNoise > 0.001) {
                         vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
                         vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;
@@ -703,6 +697,16 @@ private class VideoLutShaderProgram(
                     float blurLuma = neighborsLuma * 0.25;
                     float detail = inputLuma - blurLuma;
                     color.rgb += detail * uSharpening * 2.0;
+                }
+
+                if (uFilmGrain > 0.001) {
+                    color.rgb = applyDensityFilmGrain(
+                        color.rgb,
+                        gl_FragCoord.xy,
+                        uFilmGrain,
+                        uFilmGrainSeed,
+                        uFilmGrainPixelScale
+                    );
                 }
 
                 fragColor = clamp(color, 0.0, 1.0);
@@ -878,6 +882,18 @@ private class VideoLutShaderProgram(
         // 设置色彩配方 uniforms
         val colorRecipeEnabled = currentRecipeParams != null && !currentRecipeParams.isDefault()
         GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled"), if (colorRecipeEnabled) 1 else 0)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uFilmGrain"),
+            currentRecipeParams?.filmGrain ?: 0f,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uFilmGrainSeed"),
+            FilmGrainShaders.videoFrameSeed(presentationTimeUs),
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uFilmGrainPixelScale"),
+            FilmGrainShaders.pixelScale(inputWidth, inputHeight),
+        )
         
         if (colorRecipeEnabled) {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uExposure"), currentRecipeParams.exposure)
@@ -895,7 +911,6 @@ private class VideoLutShaderProgram(
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uToneToe"), currentRecipeParams.toneToe)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uToneShoulder"), currentRecipeParams.toneShoulder)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uTonePivot"), currentRecipeParams.tonePivot)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uFilmGrain"), currentRecipeParams.filmGrain)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uVignette"), currentRecipeParams.vignette)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uFlash"), currentRecipeParams.flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uBleachBypass"), currentRecipeParams.bleachBypass)
