@@ -267,4 +267,11 @@
     <string name="settings_raw_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von RAW-Aufnahmen angewendet wird.</string>
     <string name="settings_raw_max_default_sharpening">RAWmax-Standardschärfung</string>
     <string name="settings_raw_max_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von RAWmax-Aufnahmen angewendet wird.</string>
+    <string name="preset_import">Voreinstellung importieren</string>
+    <string name="preset_export">Voreinstellung exportieren</string>
+    <string name="preset_import_success">%1$d Voreinstellungen importiert</string>
+    <string name="preset_import_failed">Import von %1$d Voreinstellungen fehlgeschlagen</string>
+    <string name="preset_import_partial">%1$d Voreinstellungen importiert; %2$d fehlgeschlagen</string>
+    <string name="preset_export_success">Voreinstellung erfolgreich exportiert</string>
+    <string name="preset_export_failed">Export der Voreinstellung fehlgeschlagen</string>
 </resources>

@@ -1129,4 +1129,11 @@
     <string name="settings_raw_max_default_luma_denoise_description">調整 RAWmax 相片的亮度雜訊抑制強度。</string>
     <string name="settings_raw_max_default_chroma_denoise">RAWmax 寫入色度降噪</string>
     <string name="settings_raw_max_default_chroma_denoise_description">調整 RAWmax 相片的彩色雜訊抑制強度。</string>
+    <string name="preset_import">匯入預設</string>
+    <string name="preset_export">匯出預設</string>
+    <string name="preset_import_success">已成功匯入 %1$d 個預設</string>
+    <string name="preset_import_failed">%1$d 個預設匯入失敗</string>
+    <string name="preset_import_partial">已匯入 %1$d 個預設，%2$d 個失敗</string>
+    <string name="preset_export_success">預設匯出成功</string>
+    <string name="preset_export_failed">預設匯出失敗</string>
 </resources>

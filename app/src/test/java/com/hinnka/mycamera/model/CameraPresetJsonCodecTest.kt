@@ -11,6 +11,38 @@ import org.junit.Test
 
 class CameraPresetJsonCodecTest {
     @Test
+    fun contentReferences_includeAndRemapEveryLutSlot() {
+        val source = CameraPreset(
+            id = "preset_resource_mapping",
+            name = "Resource Mapping",
+            lutId = "main",
+            colorRecipe = ColorRecipeParams.DEFAULT,
+            effects = EffectParams.DEFAULT,
+            frameId = "frame_source",
+            jpgBaselineLutId = "jpg",
+            rawBaselineLutId = "raw",
+            phantomBaselineLutId = "phantom",
+        )
+
+        assertEquals(listOf("main", "jpg", "raw", "phantom"), source.referencedLutIds())
+
+        val resolved = source.withResolvedContentReferences(
+            lutIdsBySourceKey = mapOf(
+                "main" to "imported_main",
+                "jpg" to "imported_jpg",
+                "raw" to "imported_raw",
+                "phantom" to "imported_phantom",
+            ),
+            resolvedFrameId = "imported_frame",
+        )
+        assertEquals("imported_main", resolved.lutId)
+        assertEquals("imported_jpg", resolved.jpgBaselineLutId)
+        assertEquals("imported_raw", resolved.rawBaselineLutId)
+        assertEquals("imported_phantom", resolved.phantomBaselineLutId)
+        assertEquals("imported_frame", resolved.frameId)
+    }
+
+    @Test
     fun fromJson_readsCurrentRawRenderingEngineField() {
         val source = CameraPreset(
             id = "preset_current_raw_engine",

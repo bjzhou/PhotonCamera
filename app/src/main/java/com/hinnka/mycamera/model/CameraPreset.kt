@@ -95,6 +95,41 @@ data class CameraPreset(
         return rawDcpId != null || rawDcpIdsByLens.values.any { it != null }
     }
 
+    /**
+     * 返回该预设依赖的全部 LUT 键，包括主 LUT 与三种基准色彩校正 LUT。
+     */
+    fun referencedLutIds(): List<String> {
+        return listOfNotNull(
+            normalizeLutId(lutId),
+            normalizeLutId(jpgBaselineLutId),
+            normalizeLutId(rawBaselineLutId),
+            normalizeLutId(phantomBaselineLutId),
+        ).distinct()
+    }
+
+    /**
+     * 将包内资源键替换为导入后实际生成的资源 ID。
+     */
+    fun withResolvedContentReferences(
+        lutIdsBySourceKey: Map<String, String>,
+        resolvedFrameId: String?,
+    ): CameraPreset {
+        fun resolveLut(sourceKey: String?): String? {
+            val normalizedKey = normalizeLutId(sourceKey) ?: return null
+            return requireNotNull(lutIdsBySourceKey[normalizedKey]) {
+                "Missing resolved LUT key: $normalizedKey"
+            }
+        }
+
+        return copy(
+            lutId = resolveLut(lutId),
+            frameId = resolvedFrameId,
+            jpgBaselineLutId = resolveLut(jpgBaselineLutId),
+            rawBaselineLutId = resolveLut(rawBaselineLutId),
+            phantomBaselineLutId = resolveLut(phantomBaselineLutId),
+        )
+    }
+
     fun normalizedForPersistence(): CameraPreset {
         return withSupportedCaptureCombination()
             .withoutLegacyHdf()

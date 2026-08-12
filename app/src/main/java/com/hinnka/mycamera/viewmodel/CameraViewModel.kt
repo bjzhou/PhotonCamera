@@ -24,6 +24,7 @@ import com.hinnka.mycamera.data.AiFocusTargetMode
 import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.PreferenceUpdateValue
+import com.hinnka.mycamera.data.PresetPackageManager
 import com.hinnka.mycamera.data.UserPreferences
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameEditorDraft
@@ -483,6 +484,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 内容仓库（单例，与 GalleryViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
+    private val presetPackageManager = PresetPackageManager(application, contentRepository)
 
     private val userPreferencesRepository = contentRepository.userPreferencesRepository
 
@@ -614,6 +616,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile
     private var isApplyingPreset = false
     private val presetApplyMutex = Mutex()
+    private val presetMutationMutex = Mutex()
     private var presetApplyGeneration = 0L
     private var lutLoadJob: Job? = null
     private var lutLoadGeneration = 0L
@@ -1022,54 +1025,110 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun savePreset(preset: com.hinnka.mycamera.model.CameraPreset) {
         viewModelScope.launch {
-            val resolvedPreset = preset.normalizedForPersistence()
-            val currentList = customPresets.value.toMutableList()
-            val index = currentList.indexOfFirst { it.id == resolvedPreset.id }
-            if (index >= 0) {
-                currentList[index] = resolvedPreset
-            } else {
-                currentList.add(resolvedPreset)
+            val resolvedPreset = presetMutationMutex.withLock {
+                val normalizedPreset = preset.normalizedForPersistence()
+                val currentList = userPreferencesRepository.userPreferences
+                    .first()
+                    .customPresets
+                    .toMutableList()
+                val index = currentList.indexOfFirst { it.id == normalizedPreset.id }
+                if (index >= 0) {
+                    currentList[index] = normalizedPreset
+                } else {
+                    currentList.add(normalizedPreset)
+                }
+                userPreferencesRepository.saveCustomPresets(currentList)
+                normalizedPreset
             }
-            userPreferencesRepository.saveCustomPresets(currentList)
             applyPreset(resolvedPreset)
+        }
+    }
+
+    suspend fun exportPresetPackage(
+        preset: com.hinnka.mycamera.model.CameraPreset,
+        displayName: String,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        presetPackageManager.exportPreset(preset, displayName)
+    }
+
+    suspend fun importPresetPackage(uri: Uri): Boolean = presetMutationMutex.withLock {
+        withContext(NonCancellable) transaction@{
+            val imported = withContext(Dispatchers.IO) {
+                presetPackageManager.importPreset(uri)
+            } ?: return@transaction false
+
+            try {
+                val currentPresets = userPreferencesRepository.userPreferences.first().customPresets
+                userPreferencesRepository.saveCustomPresets(currentPresets + imported.preset)
+            } catch (e: Exception) {
+                withContext(Dispatchers.IO) {
+                    presetPackageManager.rollbackImport(imported)
+                    runCatching { contentRepository.refreshCustomContent() }
+                }
+                PLog.e(TAG, "Failed to persist imported preset: $uri", e)
+                return@transaction false
+            }
+
+            withContext(Dispatchers.IO) {
+                runCatching { contentRepository.refreshCustomContent() }
+                    .onFailure { PLog.e(TAG, "Failed to refresh imported preset resources", it) }
+            }
+            true
         }
     }
 
     fun deletePreset(presetId: String) {
         viewModelScope.launch {
-            val currentList = customPresets.value.toMutableList()
-            currentList.removeAll { it.id == presetId }
-            userPreferencesRepository.saveCustomPresets(currentList)
+            presetMutationMutex.withLock {
+                val currentList = userPreferencesRepository.userPreferences
+                    .first()
+                    .customPresets
+                    .toMutableList()
+                currentList.removeAll { it.id == presetId }
+                userPreferencesRepository.saveCustomPresets(currentList)
 
-            // 如果删除的是内置预设，将其加入 deletedBuiltInIds
-            val isBuiltIn = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS.any { it.id == presetId }
-            if (isBuiltIn) {
-                val currentDeleted = userPreferencesRepository.userPreferences.first().deletedBuiltInIds
-                val deletedList = currentDeleted.split(",").filter { it.isNotEmpty() }.toMutableList()
-                if (presetId !in deletedList) {
-                    deletedList.add(presetId)
-                    userPreferencesRepository.saveDeletedBuiltInIds(deletedList.joinToString(","))
+                // 如果删除的是内置预设，将其加入 deletedBuiltInIds
+                val isBuiltIn = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS.any { it.id == presetId }
+                if (isBuiltIn) {
+                    val currentDeleted = userPreferencesRepository.userPreferences.first().deletedBuiltInIds
+                    val deletedList = currentDeleted.split(",").filter { it.isNotEmpty() }.toMutableList()
+                    if (presetId !in deletedList) {
+                        deletedList.add(presetId)
+                        userPreferencesRepository.saveDeletedBuiltInIds(deletedList.joinToString(","))
+                    }
                 }
-            }
 
-            if (activePresetId.value == presetId) {
-                userPreferencesRepository.saveActivePresetId(null)
+                if (activePresetId.value == presetId) {
+                    userPreferencesRepository.saveActivePresetId(null)
+                }
             }
         }
     }
 
     fun resetToDefaultPresets() {
         viewModelScope.launch {
-            userPreferencesRepository.saveDeletedBuiltInIds("")
-            val currentList = customPresets.value.toMutableList()
-            currentList.removeAll { it.isBuiltIn || it.id.startsWith("builtin_") }
-            userPreferencesRepository.saveCustomPresets(currentList)
+            presetMutationMutex.withLock {
+                userPreferencesRepository.saveDeletedBuiltInIds("")
+                val currentList = userPreferencesRepository.userPreferences
+                    .first()
+                    .customPresets
+                    .toMutableList()
+                currentList.removeAll { it.isBuiltIn || it.id.startsWith("builtin_") }
+                userPreferencesRepository.saveCustomPresets(currentList)
+            }
         }
     }
 
     fun savePresetOrder(presets: List<com.hinnka.mycamera.model.CameraPreset>) {
         viewModelScope.launch {
-            userPreferencesRepository.saveCustomPresets(presets)
+            presetMutationMutex.withLock {
+                val latestPresets = userPreferencesRepository.userPreferences.first().customPresets
+                val latestById = latestPresets.associateBy { it.id }
+                val orderedIds = presets.map { it.id }.toSet()
+                val orderedPresets = presets.map { preset -> latestById[preset.id] ?: preset }
+                val concurrentlyAddedPresets = latestPresets.filter { it.id !in orderedIds }
+                userPreferencesRepository.saveCustomPresets(orderedPresets + concurrentlyAddedPresets)
+            }
         }
     }
 

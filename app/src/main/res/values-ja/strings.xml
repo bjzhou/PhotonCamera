@@ -267,4 +267,11 @@
     <string name="settings_raw_default_sharpening_description">RAW 撮影の現像時に適用するデフォルトのシャープネスです。</string>
     <string name="settings_raw_max_default_sharpening">RAWmax のデフォルトシャープネス</string>
     <string name="settings_raw_max_default_sharpening_description">RAWmax 撮影の現像時に適用するデフォルトのシャープネスです。</string>
+    <string name="preset_import">プリセットをインポート</string>
+    <string name="preset_export">プリセットをエクスポート</string>
+    <string name="preset_import_success">%1$d 件のプリセットをインポートしました</string>
+    <string name="preset_import_failed">%1$d 件のプリセットをインポートできませんでした</string>
+    <string name="preset_import_partial">%1$d 件をインポート、%2$d 件は失敗しました</string>
+    <string name="preset_export_success">プリセットをエクスポートしました</string>
+    <string name="preset_export_failed">プリセットをエクスポートできませんでした</string>
 </resources>

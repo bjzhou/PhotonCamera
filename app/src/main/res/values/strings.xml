@@ -1151,4 +1151,11 @@
     <string name="settings_raw_max_default_luma_denoise_description">Adjusts luminance noise reduction for RAWmax photos.</string>
     <string name="settings_raw_max_default_chroma_denoise">RAWmax baked chroma denoise</string>
     <string name="settings_raw_max_default_chroma_denoise_description">Adjusts color noise reduction for RAWmax photos.</string>
+    <string name="preset_import">Import Preset</string>
+    <string name="preset_export">Export Preset</string>
+    <string name="preset_import_success">Imported %1$d presets</string>
+    <string name="preset_import_failed">Failed to import %1$d presets</string>
+    <string name="preset_import_partial">Imported %1$d presets; %2$d failed</string>
+    <string name="preset_export_success">Preset exported successfully</string>
+    <string name="preset_export_failed">Failed to export preset</string>
 </resources>

@@ -267,4 +267,11 @@
     <string name="settings_raw_default_sharpening_description">Netteté appliquée par défaut lors du développement des captures RAW.</string>
     <string name="settings_raw_max_default_sharpening">Netteté RAWmax par défaut</string>
     <string name="settings_raw_max_default_sharpening_description">Netteté appliquée par défaut lors du développement des captures RAWmax.</string>
+    <string name="preset_import">Importer un préréglage</string>
+    <string name="preset_export">Exporter le préréglage</string>
+    <string name="preset_import_success">%1$d préréglages importés</string>
+    <string name="preset_import_failed">Échec de l’importation de %1$d préréglages</string>
+    <string name="preset_import_partial">%1$d préréglages importés ; %2$d échecs</string>
+    <string name="preset_export_success">Préréglage exporté</string>
+    <string name="preset_export_failed">Échec de l’exportation du préréglage</string>
 </resources>

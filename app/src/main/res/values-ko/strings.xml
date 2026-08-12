@@ -268,4 +268,11 @@
     <string name="settings_raw_default_sharpening_description">RAW 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
     <string name="settings_raw_max_default_sharpening">RAWmax 기본 선명도</string>
     <string name="settings_raw_max_default_sharpening_description">RAWmax 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
+    <string name="preset_import">프리셋 가져오기</string>
+    <string name="preset_export">프리셋 내보내기</string>
+    <string name="preset_import_success">프리셋 %1$d개를 가져왔습니다</string>
+    <string name="preset_import_failed">프리셋 %1$d개를 가져오지 못했습니다</string>
+    <string name="preset_import_partial">%1$d개를 가져왔고 %2$d개는 실패했습니다</string>
+    <string name="preset_export_success">프리셋을 내보냈습니다</string>
+    <string name="preset_export_failed">프리셋을 내보내지 못했습니다</string>
 </resources>

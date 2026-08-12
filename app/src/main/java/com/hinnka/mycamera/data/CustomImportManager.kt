@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.frame.FrameElement
 import com.hinnka.mycamera.frame.FrameTemplate
 import com.hinnka.mycamera.frame.FrameTemplateParser
 import com.hinnka.mycamera.lut.LutInfo
@@ -17,10 +18,45 @@ import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.Locale
 import java.util.UUID
+
+private const val PRESET_PLUT_MAGIC = 0x54554C50
+private const val PRESET_PLUT_MAX_VERSION = 4
+private const val PRESET_PLUT_MAX_DIMENSION = 65
+
+internal fun isStructurallyValidPresetPlut(bytes: ByteArray): Boolean {
+    return runCatching {
+        if (bytes.size < 16) return false
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        if (buffer.int != PRESET_PLUT_MAGIC) return false
+        val version = buffer.int
+        if (version !in 1..PRESET_PLUT_MAX_VERSION) return false
+        val dimension = buffer.int
+        if (dimension !in 2..PRESET_PLUT_MAX_DIMENSION) return false
+        val dataType = buffer.int
+        if (dataType !in 0..1) return false
+        if (version >= 2) buffer.int
+        if (version >= 3) buffer.int
+
+        val bytesPerComponent = if (dataType == 1) 2L else 1L
+        val payloadBytes = dimension.toLong() * dimension * dimension * 3L * bytesPerComponent
+        val payloadEnd = buffer.position().toLong() + payloadBytes
+        if (payloadEnd > bytes.size) return false
+        if (version < 4) return payloadEnd == bytes.size.toLong()
+        if (payloadEnd == bytes.size.toLong()) return true
+        if (payloadEnd + Int.SIZE_BYTES > bytes.size) return false
+
+        buffer.position(payloadEnd.toInt())
+        val recipeBytes = buffer.int
+        recipeBytes >= 0 && payloadEnd + Int.SIZE_BYTES + recipeBytes == bytes.size.toLong()
+    }.getOrDefault(false)
+}
 
 /**
  * 自定义导入管理器
@@ -274,6 +310,48 @@ class CustomImportManager(private val context: Context) {
             lutId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import LUT", e)
+            null
+        }
+    }
+
+    /**
+     * 从预设包导入应用原生 .plut，并保留资源的名称与分类元数据。
+     */
+    internal fun importPresetLut(
+        bytes: ByteArray,
+        nameMap: Map<String, String>,
+        category: String,
+        isFavorite: Boolean,
+    ): String? {
+        val lutId = "custom_${UUID.randomUUID()}"
+        val plutFileName = "$lutId.plut"
+        val plutFile = File(customLutDir, plutFileName)
+        return try {
+            require(isStructurallyValidPresetPlut(bytes)) { "Invalid LUT data in preset package" }
+            val success = ByteArrayInputStream(bytes).use { input ->
+                FileOutputStream(plutFile).use { output ->
+                    LutConverter.importPlutStrippingRecipe(input, output)
+                }
+            }
+            if (!success) {
+                plutFile.delete()
+                return null
+            }
+
+            val resolvedNameMap = nameMap
+                .filter { (language, name) -> language.isNotBlank() && name.isNotBlank() }
+                .ifEmpty { mapOf("en" to lutId) }
+            saveLutToConfig(
+                lutId = lutId,
+                nameMap = resolvedNameMap,
+                fileName = plutFileName,
+                category = sanitizeCustomLutCategory(category),
+                isFavorite = isFavorite,
+            )
+            lutId
+        } catch (e: Exception) {
+            plutFile.delete()
+            PLog.e(TAG, "Failed to import LUT from preset package", e)
             null
         }
     }
@@ -608,6 +686,100 @@ class CustomImportManager(private val context: Context) {
             frameId
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save frame template", e)
+            null
+        }
+    }
+
+    /**
+     * 导入预设包中的边框模板，并将包内图片、字体和 Logo 复制到对应私有目录。
+     */
+    internal fun importPresetFrame(
+        template: FrameTemplate,
+        assets: Map<String, PresetPackageFrameAsset>,
+    ): String? {
+        val frameId = "custom_${UUID.randomUUID()}"
+        val createdFiles = mutableListOf<File>()
+        val installedPaths = mutableMapOf<String, String>()
+
+        fun installAsset(reference: String, kind: String): String {
+            require(reference.startsWith(PRESET_PACKAGE_FRAME_RESOURCE_PREFIX)) {
+                "Invalid preset frame resource reference"
+            }
+            val cacheKey = "$kind:$reference"
+            installedPaths[cacheKey]?.let { return it }
+            val asset = requireNotNull(assets[reference]) {
+                "Missing preset frame resource: $reference"
+            }
+            require(asset.bytes.isNotEmpty()) { "Preset frame resource is empty" }
+            val extension = asset.fileName.substringAfterLast('.', missingDelimiterValue = "")
+                .lowercase(Locale.US)
+                .filter { it.isLetterOrDigit() }
+                .take(10)
+                .ifBlank {
+                    when (kind) {
+                        "font" -> "ttf"
+                        else -> "png"
+                    }
+                }
+            val destination = when (kind) {
+                "image" -> File(customFrameDir, "${frameId}_image.$extension")
+                "font" -> File(customFontDir, "${frameId}_font_${UUID.randomUUID()}.$extension")
+                "logo" -> File(customLogoDir, "${frameId}_logo_${UUID.randomUUID()}.$extension")
+                else -> error("Unsupported preset frame resource kind: $kind")
+            }
+            destination.outputStream().use { it.write(asset.bytes) }
+            createdFiles += destination
+            return destination.absolutePath.also { installedPaths[cacheKey] = it }
+        }
+
+        fun resolveOptionalAsset(source: String?, kind: String): String? {
+            source ?: return null
+            return if (source.startsWith(PRESET_PACKAGE_FRAME_RESOURCE_PREFIX)) {
+                installAsset(source, kind)
+            } else {
+                require(!source.startsWith("/") && !source.startsWith("content://")) {
+                    "Preset frame contains an external resource reference"
+                }
+                source
+            }
+        }
+
+        fun resolveElements(elements: List<FrameElement>): List<FrameElement> {
+            return elements.map { element ->
+                when (element) {
+                    is FrameElement.Text -> element.copy(
+                        fontFamily = resolveOptionalAsset(element.fontFamily, "font")
+                    )
+
+                    is FrameElement.Logo -> element.copy(
+                        overrideSource = resolveOptionalAsset(element.overrideSource, "logo")
+                    )
+
+                    else -> element
+                }
+            }
+        }
+
+        return try {
+            val resolvedImagePath = template.layout.imagePath?.let { source ->
+                require(source.startsWith(PRESET_PACKAGE_FRAME_RESOURCE_PREFIX)) {
+                    "Preset frame image is not bundled"
+                }
+                installAsset(source, "image")
+            }
+            val resolvedTemplate = template.copy(
+                id = frameId,
+                layout = template.layout.copy(imagePath = resolvedImagePath),
+                elements = resolveElements(template.elements),
+                elementsTop = template.elementsTop?.let(::resolveElements),
+            )
+            saveFrameTemplate(resolvedTemplate)
+                ?: error("Failed to save preset frame template")
+        } catch (e: Exception) {
+            runCatching { deleteCustomFrame(frameId) }
+            File(customFrameDir, "$frameId.json").delete()
+            createdFiles.asReversed().forEach { it.delete() }
+            PLog.e(TAG, "Failed to import frame from preset package", e)
             null
         }
     }
@@ -1054,22 +1226,29 @@ class CustomImportManager(private val context: Context) {
                 // 删除文件
                 fileName?.let {
                     val frameFile = File(customFrameDir, it)
-                    val imagePath = runCatching {
-                        if (frameFile.exists()) {
-                            JSONObject(frameFile.readText())
-                                .optJSONObject("layout")
-                                ?.optString("imagePath")
-                                ?.takeIf { path -> path.isNotBlank() }
-                        } else {
-                            null
+                    val ownedAssetPaths = runCatching {
+                        val template = FrameTemplateParser.parseFromFile(frameFile.absolutePath)
+                            ?: return@runCatching emptyList()
+                        buildList {
+                            template.layout.imagePath?.let(::add)
+                            (template.elements + template.elementsTop.orEmpty()).forEach { element ->
+                                when (element) {
+                                    is FrameElement.Text -> element.fontFamily?.let(::add)
+                                    is FrameElement.Logo -> element.overrideSource?.let(::add)
+                                    else -> Unit
+                                }
+                            }
+                        }.filter { path ->
+                            val assetFile = File(path)
+                            val parent = assetFile.parentFile
+                            assetFile.name.startsWith("${frameId}_") && parent != null &&
+                                parent in setOf(customFrameDir, customFontDir, customLogoDir)
                         }
-                    }.getOrNull()
+                    }.getOrDefault(emptyList())
                     frameFile.delete()
-                    imagePath?.let { path ->
+                    ownedAssetPaths.forEach { path ->
                         val imageFile = File(path)
-                        if (imageFile.exists() && imageFile.parentFile == customFrameDir) {
-                            imageFile.delete()
-                        }
+                        if (imageFile.exists()) imageFile.delete()
                     }
                 }
             }
@@ -1146,6 +1325,22 @@ class CustomImportManager(private val context: Context) {
      * 保存 LUT 到配置文件
      */
     private fun saveLutToConfig(lutId: String, name: String, fileName: String, category: String? = null) {
+        saveLutToConfig(
+            lutId = lutId,
+            nameMap = mapOf("en" to name, "zh" to name),
+            fileName = fileName,
+            category = category,
+            isFavorite = false,
+        )
+    }
+
+    private fun saveLutToConfig(
+        lutId: String,
+        nameMap: Map<String, String>,
+        fileName: String,
+        category: String? = null,
+        isFavorite: Boolean = false,
+    ) {
         val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
 
         val jsonArray = if (configFile.exists()) {
@@ -1157,12 +1352,16 @@ class CustomImportManager(private val context: Context) {
         val lutObj = JSONObject().apply {
             put("id", lutId)
             put("name", JSONObject().apply {
-                put("en", name)
-                put("zh", name)
+                nameMap.toSortedMap().forEach { (language, name) ->
+                    put(language, name)
+                }
             })
             put("fileName", fileName)
             if (!category.isNullOrEmpty()) {
                 put("category", category)
+            }
+            if (isFavorite) {
+                put("isFavorite", true)
             }
         }
 

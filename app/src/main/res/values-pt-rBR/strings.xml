@@ -268,4 +268,11 @@
     <string name="settings_raw_default_sharpening_description">Nitidez aplicada por padrão ao revelar capturas RAW.</string>
     <string name="settings_raw_max_default_sharpening">Nitidez RAWmax padrão</string>
     <string name="settings_raw_max_default_sharpening_description">Nitidez aplicada por padrão ao revelar capturas RAWmax.</string>
+    <string name="preset_import">Importar predefinição</string>
+    <string name="preset_export">Exportar predefinição</string>
+    <string name="preset_import_success">%1$d predefinições importadas</string>
+    <string name="preset_import_failed">Falha ao importar %1$d predefinições</string>
+    <string name="preset_import_partial">%1$d predefinições importadas; %2$d falharam</string>
+    <string name="preset_export_success">Predefinição exportada</string>
+    <string name="preset_export_failed">Falha ao exportar a predefinição</string>
 </resources>
