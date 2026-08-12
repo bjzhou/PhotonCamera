@@ -70,6 +70,7 @@ import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.ui.components.*
@@ -1662,27 +1663,29 @@ fun CameraScreen(
                         .padding(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    val currentLut = viewModel.availableLutList.find { it.id == currentLutId }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = currentLut?.getName() ?: "",
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f).basicMarquee()
-                        )
+                    if (lutSelectorMode == LutSelectorMode.Style) {
+                        val currentLut = viewModel.availableLutList.find { it.id == currentLutId }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = currentLut?.getName() ?: "",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f).basicMarquee()
+                            )
 
-                        LutEditButton(
-                            onClick = {
-                                activePanel = ActivePanel.EDIT
-                            }
-                        )
+                            LutEditButton(
+                                onClick = {
+                                    activePanel = ActivePanel.EDIT
+                                }
+                            )
+                        }
                     }
 
                     val allPresets by viewModel.allPresets.collectAsState()
@@ -1699,6 +1702,13 @@ fun CameraScreen(
                         activePresetId = activePresetId,
                         selectedMode = lutSelectorMode,
                         onModeSelected = { viewModel.setLutSelectorMode(it) },
+                        availableFrames = viewModel.availableFrameList,
+                        currentFrameId = viewModel.currentFrameId,
+                        onFrameSelected = { viewModel.setFrame(it) },
+                        onFrameManagementClick = {
+                            activePanel = ActivePanel.NONE
+                            onFrameManagementClick()
+                        },
                         onPresetSelected = { preset ->
                             discardTransientLookEdits()
                             if (presetRequiresPreviewTransition(preset)) {

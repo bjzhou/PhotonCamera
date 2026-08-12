@@ -33,6 +33,7 @@ import coil.size.Size
 import coil.transform.Transformation
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.CameraPreset
@@ -106,6 +107,10 @@ fun LutSelector(
     activePresetId: String? = null,
     selectedMode: LutSelectorMode = LutSelectorMode.Style,
     onModeSelected: (LutSelectorMode) -> Unit = {},
+    availableFrames: List<FrameInfo> = emptyList(),
+    currentFrameId: String? = null,
+    onFrameSelected: ((String?) -> Unit)? = null,
+    onFrameManagementClick: (() -> Unit)? = null,
     onPresetSelected: (CameraPreset?) -> Unit = {},
     onCreatePresetClick: () -> Unit = {},
     onPresetManagementClick: () -> Unit = {},
@@ -120,6 +125,7 @@ fun LutSelector(
     val builtInText = stringResource(R.string.built_in)
     val uncategorizedText = stringResource(R.string.uncategorized)
     val styleText = stringResource(R.string.filter)
+    val frameText = stringResource(R.string.frame)
     val presetText = stringResource(R.string.preset_title)
     val noneText = stringResource(R.string.none)
 
@@ -170,7 +176,13 @@ fun LutSelector(
 
     var selectedCategory by remember { mutableStateOf<LutCategoryTab>(LutCategoryTab.BuiltIn) }
     val activeLutId = currentLutId
-    val actualMode = if (allPresets.isEmpty()) LutSelectorMode.Style else selectedMode
+    val supportsFrames = onFrameSelected != null
+    val supportsPresets = allPresets.isNotEmpty()
+    val actualMode = when (selectedMode) {
+        LutSelectorMode.Style -> LutSelectorMode.Style
+        LutSelectorMode.Frame -> if (supportsFrames) LutSelectorMode.Frame else LutSelectorMode.Style
+        LutSelectorMode.Presets -> if (supportsPresets) LutSelectorMode.Presets else LutSelectorMode.Style
+    }
 
     LaunchedEffect(activeLutId, availableLuts, categoryTabs) {
         val selectedLut = availableLuts.find { it.id == activeLutId }
@@ -210,7 +222,7 @@ fun LutSelector(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        if (allPresets.isNotEmpty()) {
+        if (supportsFrames || supportsPresets) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -223,119 +235,165 @@ fun LutSelector(
                     isSelected = actualMode == LutSelectorMode.Style,
                     onClick = { onModeSelected(LutSelectorMode.Style) }
                 )
-                LutSelectorModeTab(
-                    text = presetText,
-                    isSelected = actualMode == LutSelectorMode.Presets,
-                    onClick = { onModeSelected(LutSelectorMode.Presets) }
-                )
+                if (supportsFrames) {
+                    LutSelectorModeTab(
+                        text = frameText,
+                        isSelected = actualMode == LutSelectorMode.Frame,
+                        onClick = { onModeSelected(LutSelectorMode.Frame) }
+                    )
+                }
+                if (supportsPresets) {
+                    LutSelectorModeTab(
+                        text = presetText,
+                        isSelected = actualMode == LutSelectorMode.Presets,
+                        onClick = { onModeSelected(LutSelectorMode.Presets) }
+                    )
+                }
             }
         }
 
-        if (actualMode == LutSelectorMode.Style) {
-            // 分类选择器 (小芯片样式)
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                LazyRow(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp)
+        when (actualMode) {
+            LutSelectorMode.Style -> {
+                // 分类选择器 (小芯片样式)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(categoryTabs, key = { it.stableKey() }) { category ->
-                        val isSelected = selectedCategory == category
-                        val categoryName = when (category) {
-                            LutCategoryTab.Favorite -> favoriteText
-                            LutCategoryTab.BuiltIn -> builtInText
-                            LutCategoryTab.Uncategorized -> uncategorizedText
-                            is LutCategoryTab.Category -> category.name
-                        }
+                    LazyRow(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        items(categoryTabs, key = { it.stableKey() }) { category ->
+                            val isSelected = selectedCategory == category
+                            val categoryName = when (category) {
+                                LutCategoryTab.Favorite -> favoriteText
+                                LutCategoryTab.BuiltIn -> builtInText
+                                LutCategoryTab.Uncategorized -> uncategorizedText
+                                is LutCategoryTab.Category -> category.name
+                            }
 
-                        Text(
-                            text = categoryName,
-                            color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.7f),
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            Text(
+                                text = categoryName,
+                                color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        selectedCategory = category
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    if (onManageClick != null) {
+                        var lastClickTime by remember { mutableLongStateOf(0L) }
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.settings_filter_management),
+                            tint = Color.White.copy(alpha = 0.6f),
                             modifier = Modifier
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    selectedCategory = category
+                                .padding(end = 12.dp)
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    val currentTime = System.currentTimeMillis()
+                                    if (currentTime - lastClickTime > 1000) {
+                                        lastClickTime = currentTime
+                                        onManageClick(currentLutId ?: "")
+                                    }
                                 }
-                                .padding(horizontal = 4.dp, vertical = 6.dp)
+                                .padding(4.dp)
                         )
                     }
                 }
 
-                if (onManageClick != null) {
-                    var lastClickTime by remember { mutableLongStateOf(0L) }
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Manage Filters",
-                        tint = Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier
-                            .padding(end = 12.dp)
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .clickable {
-                                val currentTime = System.currentTimeMillis()
-                                if (currentTime - lastClickTime > 1000) {
-                                    lastClickTime = currentTime
-                                    onManageClick(currentLutId ?: "")
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    state = scrollState
+                ) {
+                    // LUT 列表
+                    items(filteredLuts, key = { it.id }) { lut ->
+                        var lastManageClickTime by remember { mutableLongStateOf(0L) }
+                        LutItem(
+                            id = lut.id,
+                            name = lut.getName(),
+                            previewBitmap = thumbnail,
+                            isSelected = activeLutId == lut.id,
+                            isVip = lut.isVip,
+                            isCustom = !lut.isBuiltIn,
+                            onClick = {
+                                if (currentLutId == lut.id) {
+                                    onEditClick?.invoke()
+                                } else {
+                                    onLutSelected(lut.id)
                                 }
-                            }
-                            .padding(4.dp)
-                    )
+                            },
+                            onManageClick = if (onManageClick != null) {
+                                {
+                                    val currentTime = System.currentTimeMillis()
+                                    if (currentTime - lastManageClickTime > 1000) {
+                                        lastManageClickTime = currentTime
+                                        onManageClick(lut.id)
+                                    }
+                                }
+                            } else null
+                        )
+                    }
                 }
             }
-
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                state = scrollState
-            ) {
-                // LUT 列表
-                items(filteredLuts, key = { it.id }) { lut ->
-                    var lastManageClickTime by remember { mutableLongStateOf(0L) }
-                    LutItem(
-                        id = lut.id,
-                        name = lut.getName(),
-                        previewBitmap = thumbnail,
-                        isSelected = activeLutId == lut.id,
-                        isVip = lut.isVip,
-                        isCustom = !lut.isBuiltIn,
-                        onClick = {
-                            if (currentLutId == lut.id) {
-                                onEditClick?.invoke()
-                            } else {
-                                onLutSelected(lut.id)
-                            }
-                        },
-                        onManageClick = if (onManageClick != null) {
-                            {
-                                val currentTime = System.currentTimeMillis()
-                                if (currentTime - lastManageClickTime > 1000) {
-                                    lastManageClickTime = currentTime
-                                    onManageClick(lut.id)
-                                }
-                            }
-                        } else null
+            LutSelectorMode.Frame -> {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = frameText,
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
                     )
+                    if (onFrameManagementClick != null) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.settings_frame_management),
+                            tint = Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onFrameManagementClick)
+                                .padding(4.dp)
+                        )
+                    }
                 }
+                FrameSelector(
+                    availableFrames = availableFrames,
+                    currentFrameId = currentFrameId,
+                    onFrameSelected = requireNotNull(onFrameSelected),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
             }
-        } else {
-            // 预设列表
-            PresetsPanel(
-                activePresetId = activePresetId,
-                allPresets = allPresets,
-                onPresetSelected = onPresetSelected,
-                onCreatePreset = onCreatePresetClick,
-                onManagePresets = onPresetManagementClick,
-                modifier = Modifier.fillMaxWidth()
-            )
+            LutSelectorMode.Presets -> {
+                // 预设列表
+                PresetsPanel(
+                    activePresetId = activePresetId,
+                    allPresets = allPresets,
+                    onPresetSelected = onPresetSelected,
+                    onCreatePreset = onCreatePresetClick,
+                    onManagePresets = onPresetManagementClick,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }

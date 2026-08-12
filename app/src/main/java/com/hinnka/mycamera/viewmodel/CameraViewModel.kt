@@ -3790,9 +3790,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     val categoryOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.categoryOrder }
 
-    val lutSelectorMode: StateFlow<LutSelectorMode> = userPreferencesRepository.userPreferences
-        .map { it.lutSelectorMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, LutSelectorMode.Style)
+    private val _lutSelectorMode = MutableStateFlow(LutSelectorMode.Style)
+    val lutSelectorMode: StateFlow<LutSelectorMode> = _lutSelectorMode.asStateFlow()
+    private var lutSelectorModeSelectionGeneration = 0
+
+    init {
+        val initializationGeneration = lutSelectorModeSelectionGeneration
+        viewModelScope.launch {
+            val persistedMode = userPreferencesRepository.userPreferences.first().lutSelectorMode
+            if (lutSelectorModeSelectionGeneration == initializationGeneration) {
+                _lutSelectorMode.value = persistedMode
+            }
+        }
+    }
 
     /**
      * 保存滤镜排序顺序
@@ -3822,6 +3832,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setLutSelectorMode(mode: LutSelectorMode) {
+        if (_lutSelectorMode.value == mode) return
+        lutSelectorModeSelectionGeneration++
+        _lutSelectorMode.value = mode
         viewModelScope.launch {
             userPreferencesRepository.saveLutSelectorMode(mode)
         }
@@ -4180,6 +4193,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置当前边框
      */
     fun setFrame(frameId: String?) {
+        if (currentFrameId == frameId) return
+        currentFrameId = frameId
         viewModelScope.launch {
             applyCameraFeatureUpdate(
                 CameraFeatureUpdate(frameId = SettingValue(frameId))

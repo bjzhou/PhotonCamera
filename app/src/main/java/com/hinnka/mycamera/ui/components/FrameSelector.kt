@@ -3,18 +3,20 @@ package com.hinnka.mycamera.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -22,7 +24,6 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.theme.AccentOrange
-import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
  * 边框选择器组件
@@ -36,25 +37,39 @@ fun FrameSelector(
     onFrameSelected: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(currentFrameId, availableFrames) {
+        val selectedIndex = currentFrameId
+            ?.let { frameId -> availableFrames.indexOfFirst { it.id == frameId } }
+            ?.takeIf { it >= 0 }
+            ?.plus(1)
+            ?: 0
+        listState.scrollToItem((selectedIndex - 1).coerceAtLeast(0))
+    }
+
+    LazyRow(
         modifier = modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .fillMaxWidth(),
+        state = listState,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp)
     ) {
         // 无边框选项
-        FrameItem(
-            name = stringResource(R.string.none),
-            isSelected = currentFrameId == null,
-            onClick = { onFrameSelected(null) },
-            isNone = true
-        )
+        item(key = "frame:none") {
+            FrameItem(
+                name = stringResource(R.string.none),
+                isSelected = currentFrameId == null,
+                onClick = { onFrameSelected(null) }
+            )
+        }
         
         // 边框选项
-        availableFrames.forEach { frame ->
+        items(availableFrames, key = { it.id }) { frame ->
             FrameItem(
                 name = frame.name,
                 isSelected = currentFrameId == frame.id,
+                isCustom = !frame.isBuiltIn,
                 onClick = { onFrameSelected(frame.id) }
             )
         }
@@ -69,13 +84,13 @@ private fun FrameItem(
     name: String,
     isSelected: Boolean,
     onClick: () -> Unit,
-    isNone: Boolean = false,
+    isCustom: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .width(72.dp)
+            .width(64.dp)
             .clickable { onClick() }
     ) {
         Box(
@@ -83,30 +98,39 @@ private fun FrameItem(
                 .size(56.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(
-                    if (isSelected) AccentOrange.copy(alpha = 0.2f)
+                    if (isSelected) AccentOrange.copy(alpha = 0.3f)
                     else Color.White.copy(alpha = 0.1f)
                 )
                 .then(
                     if (isSelected) Modifier.border(2.dp, AccentOrange, RoundedCornerShape(8.dp))
-                    else Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    else Modifier
                 ),
             contentAlignment = Alignment.Center
         ) {
-            if (isNone) {
-                Icon(
-                    imageVector = AppIcons.Image,
-                    contentDescription = null,
-                    tint = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.6f),
-                    modifier = Modifier.size(24.dp)
-                )
-            } else {
-                // 显示边框预览图标
-                Icon(
-                    imageVector = AppIcons.Crop169,
-                    contentDescription = null,
-                    tint = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.6f),
-                    modifier = Modifier.size(24.dp)
-                )
+            Text(
+                text = name.take(2).uppercase(),
+                color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
+                fontSize = 16.sp
+            )
+
+            if (isCustom) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .background(
+                            color = Color(0xFF4CAF50),
+                            shape = RoundedCornerShape(bottomEnd = 4.dp)
+                        )
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.custom_tag),
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 8.sp
+                    )
+                }
             }
         }
         
