@@ -80,6 +80,16 @@
     <string name="export_dng_failed">การส่งออก DNG ล้มเหลว</string>
     <string name="export_all_confirm">ส่งออกภาพถ่ายต่อเนื่องทั้งหมดหรือไม่</string>
     <string name="export_video">ส่งออกวิดีโอ</string>
+    <string name="export_video_select_resolution">เลือกความละเอียดในการส่งออก</string>
+    <string name="export_video_resolution_original">ความละเอียดต้นฉบับ</string>
+    <string name="export_video_resolution_8k">8K</string>
+    <string name="export_video_resolution_4k">4K</string>
+    <string name="export_video_resolution_1080p">1080p</string>
+    <string name="export_video_resolution_720p">720p</string>
+    <string name="export_video_resolution_may_fail">ยืนยันการรองรับไม่ได้ การส่งออกอาจล้มเหลว</string>
+    <string name="export_video_resolution_unsupported">อุปกรณ์นี้ไม่รองรับ</string>
+    <string name="export_video_resolution_source_too_small">สูงกว่าความละเอียดต้นฉบับ</string>
+    <string name="export_video_resolution_details">%1$d × %2$d · %3$s</string>
     <string name="export_video_confirm">สร้างเอฟเฟ็กต์ลงในวิดีโอและบันทึกลงในอัลบั้มรูปหรือไม่? อาจใช้เวลาสักครู่ขึ้นอยู่กับความยาวของวิดีโอ วิดีโอต้นฉบับจะไม่ได้รับการแก้ไข</string>
     <string name="export_video_success">ส่งออกวิดีโอเรียบร้อยแล้ว</string>
     <string name="export_video_failed">การส่งออกวิดีโอล้มเหลว</string>

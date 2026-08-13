@@ -26,6 +26,16 @@
     <string name="share">共有</string>
     <string name="delete">削除</string>
     <string name="export">書き出し</string>
+    <string name="export_video_select_resolution">書き出し解像度を選択</string>
+    <string name="export_video_resolution_original">元の解像度</string>
+    <string name="export_video_resolution_8k">8K</string>
+    <string name="export_video_resolution_4k">4K</string>
+    <string name="export_video_resolution_1080p">1080p</string>
+    <string name="export_video_resolution_720p">720p</string>
+    <string name="export_video_resolution_may_fail">対応を確認できません。書き出しに失敗する可能性があります</string>
+    <string name="export_video_resolution_unsupported">この端末では対応していません</string>
+    <string name="export_video_resolution_source_too_small">元の動画より高い解像度です</string>
+    <string name="export_video_resolution_details">%1$d × %2$d · %3$s</string>
     <string name="export_success">書き出しに成功しました</string>
     <string name="export_failed">書き出しに失敗しました</string>
     <string name="edit">編集</string>

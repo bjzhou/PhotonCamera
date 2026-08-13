@@ -71,6 +71,9 @@ import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.lut.creator.AiPhotoCriterion
 import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
+import com.hinnka.mycamera.lut.VideoExportOption
+import com.hinnka.mycamera.lut.VideoExportResolution
+import com.hinnka.mycamera.lut.VideoExportSupport
 import com.hinnka.mycamera.lut.VideoLutEffect
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.CustomSlider
@@ -95,6 +98,50 @@ private val GalleryToolbarSurface = Color(0xFF0E0E0E)
 private val GalleryToolbarButton = Color(0xFF242424)
 private val GalleryToolbarContent = Color(0xFFF2F2F2)
 private val GallerySheetSurface = Color(0xFF171717)
+
+private class VideoPreviewHandle {
+    private var activeLease: Lease? = null
+
+    fun attach(player: ExoPlayer): Lease {
+        release()
+        return Lease(player).also { activeLease = it }
+    }
+
+    fun release(lease: Lease) {
+        if (activeLease === lease) {
+            activeLease = null
+        }
+        lease.release()
+    }
+
+    fun release() {
+        activeLease?.release()
+        activeLease = null
+    }
+
+    class Lease(private val player: ExoPlayer) {
+        private var isReleased = false
+
+        fun release() {
+            if (isReleased) return
+            isReleased = true
+            player.release()
+        }
+    }
+}
+
+@Composable
+private fun videoExportResolutionLabel(resolution: VideoExportResolution): String {
+    return stringResource(
+        when (resolution) {
+            VideoExportResolution.ORIGINAL -> R.string.export_video_resolution_original
+            VideoExportResolution.UHD_8K -> R.string.export_video_resolution_8k
+            VideoExportResolution.UHD_4K -> R.string.export_video_resolution_4k
+            VideoExportResolution.FHD_1080P -> R.string.export_video_resolution_1080p
+            VideoExportResolution.HD_720P -> R.string.export_video_resolution_720p
+        }
+    )
+}
 
 /**
  * 照片详情界面
@@ -127,12 +174,16 @@ fun GalleryDetailScreen(
     val isVideoExporting = viewModel.isVideoExporting
     val videoExportProgress = viewModel.videoExportProgress
     var showVideoExportConfirmDialog by remember { mutableStateOf(false) }
+    var videoExportOptions by remember { mutableStateOf<List<VideoExportOption>>(emptyList()) }
+    var selectedVideoExportOption by remember { mutableStateOf<VideoExportOption?>(null) }
+    var isLoadingVideoExportOptions by remember { mutableStateOf(false) }
     val isSharing by viewModel.isSharing.collectAsState()
     val hasCopiedEditSettings by viewModel.hasCopiedEditSettings.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     var showAiScoreSheet by remember { mutableStateOf(false) }
     var showMoreSheet by remember { mutableStateOf(false) }
     var showHdrStrengthPanel by remember { mutableStateOf(false) }
+    val videoPreviewHandle = remember { VideoPreviewHandle() }
 
     val currentColorSpace = remember { mutableStateOf<ColorSpace?>(null) }
 
@@ -258,6 +309,21 @@ fun GalleryDetailScreen(
     }
 
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
+
+    LaunchedEffect(showVideoExportConfirmDialog, currentPhoto?.id) {
+        if (!showVideoExportConfirmDialog || currentPhoto?.isVideo != true) return@LaunchedEffect
+        selectedVideoExportOption = null
+        videoExportOptions = emptyList()
+        isLoadingVideoExportOptions = true
+        try {
+            videoExportOptions = viewModel.getVideoExportOptions(currentPhoto)
+            selectedVideoExportOption = videoExportOptions.firstOrNull {
+                it.resolution == VideoExportResolution.ORIGINAL && it.isSelectable
+            }
+        } finally {
+            isLoadingVideoExportOptions = false
+        }
+    }
     val preparingEditPhotoId = viewModel.preparingEditPhotoId
     var hdrStrengthSliderValue by remember(currentPhoto?.id) {
         mutableFloatStateOf(currentPhoto?.let { viewModel.getManualHdrStrength(it) } ?: HdrGainmapStrength.DEFAULT)
@@ -592,8 +658,12 @@ fun GalleryDetailScreen(
                                 if (photo.isVideo) {
                                     VideoDetailPlayer(
                                         photo = photo,
-                                        isActive = page == pagerState.currentPage && !viewModel.isEditing,
+                                        isActive = page == pagerState.currentPage &&
+                                            !viewModel.isEditing &&
+                                            !showVideoExportConfirmDialog &&
+                                            !isVideoExporting,
                                         viewModel = viewModel,
+                                        previewHandle = videoPreviewHandle,
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
@@ -755,7 +825,6 @@ fun GalleryDetailScreen(
                         currentPhoto?.let {
                             isSaving = true
                             viewModel.exportPhoto(it) { success ->
-                                showMoreSheet = false
                                 isSaving = false
                                 if (success) {
                                     Toast.makeText(context, R.string.export_success, Toast.LENGTH_SHORT).show()
@@ -783,25 +852,118 @@ fun GalleryDetailScreen(
     // 视频导出确认对话框
     if (showVideoExportConfirmDialog) {
         AlertDialog(
-            onDismissRequest = { showVideoExportConfirmDialog = false },
+            onDismissRequest = {
+                showVideoExportConfirmDialog = false
+                selectedVideoExportOption = null
+            },
             title = { Text(stringResource(R.string.export_video)) },
-            text = { Text(stringResource(R.string.export_video_confirm)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showVideoExportConfirmDialog = false
-                    currentPhoto?.let { photo ->
-                        viewModel.exportVideo(photo) { success, _ ->
-                            showMoreSheet = false
-                            val msgRes = if (success) R.string.export_video_success else R.string.export_video_failed
-                            Toast.makeText(context, msgRes, Toast.LENGTH_SHORT).show()
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(stringResource(R.string.export_video_select_resolution))
+                    if (isLoadingVideoExportOptions) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator()
+                        }
+                    } else {
+                        videoExportOptions.forEach { option ->
+                            val selectable = option.isSelectable && !isVideoExporting
+                            val statusText = when (option.support) {
+                                VideoExportSupport.SUPPORTED -> null
+                                VideoExportSupport.MAY_FAIL -> R.string.export_video_resolution_may_fail
+                                VideoExportSupport.UNSUPPORTED -> R.string.export_video_resolution_unsupported
+                                VideoExportSupport.SOURCE_TOO_SMALL -> R.string.export_video_resolution_source_too_small
+                            }
+                            val statusColor = when (option.support) {
+                                VideoExportSupport.SUPPORTED -> MaterialTheme.colorScheme.primary
+                                VideoExportSupport.MAY_FAIL -> AccentOrange
+                                VideoExportSupport.UNSUPPORTED,
+                                VideoExportSupport.SOURCE_TOO_SMALL -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable(enabled = selectable) {
+                                        selectedVideoExportOption = option
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = selectedVideoExportOption == option,
+                                    onClick = { selectedVideoExportOption = option },
+                                    enabled = selectable,
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = videoExportResolutionLabel(option.resolution),
+                                        color = if (selectable) {
+                                            MaterialTheme.colorScheme.onSurface
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                        },
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                    Text(
+                                        text = if (statusText == null) {
+                                            stringResource(
+                                                R.string.export_video_resolution_dimensions,
+                                                option.outputWidth,
+                                                option.outputHeight,
+                                            )
+                                        } else {
+                                            stringResource(
+                                                R.string.export_video_resolution_details,
+                                                option.outputWidth,
+                                                option.outputHeight,
+                                                stringResource(statusText),
+                                            )
+                                        },
+                                        color = statusColor,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
                         }
                     }
-                }) {
+                    Text(
+                        text = stringResource(R.string.export_video_confirm),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = selectedVideoExportOption != null && !isLoadingVideoExportOptions,
+                    onClick = {
+                        val exportOption = selectedVideoExportOption ?: return@TextButton
+                        showVideoExportConfirmDialog = false
+                        selectedVideoExportOption = null
+                        currentPhoto?.let { photo ->
+                            viewModel.exportVideo(photo, exportOption) { success, _ ->
+                                val msgRes = if (success) R.string.export_video_success else R.string.export_video_failed
+                                Toast.makeText(context, msgRes, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                ) {
                     Text(stringResource(R.string.export_video))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showVideoExportConfirmDialog = false }) {
+                TextButton(onClick = {
+                    showVideoExportConfirmDialog = false
+                    selectedVideoExportOption = null
+                }) {
                     Text(stringResource(R.string.cancel))
                 }
             }
@@ -894,7 +1056,6 @@ fun GalleryDetailScreen(
                         isLoading = isSaving,
                         enabled = !isCopyingSettings && !isPastingSettings,
                         onClick = {
-                            showMoreSheet = false
                             showExportDialog = true
                         }
                     )
@@ -914,7 +1075,7 @@ fun GalleryDetailScreen(
                         enabled = !isCopyingSettings && !isPastingSettings,
                         onClick = {
                             if (isVideoTransformerExportSupported()) {
-                                showMoreSheet = false
+                                videoPreviewHandle.release()
                                 showVideoExportConfirmDialog = true
                             } else {
                                 Toast.makeText(
@@ -1927,6 +2088,7 @@ private fun VideoDetailPlayer(
     photo: MediaData,
     isActive: Boolean,
     viewModel: GalleryViewModel,
+    previewHandle: VideoPreviewHandle,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1995,11 +2157,12 @@ private fun VideoDetailPlayer(
         }
     }
 
-    DisposableEffect(exoPlayer) {
+    DisposableEffect(exoPlayer, previewHandle) {
+        val previewLease = exoPlayer?.let(previewHandle::attach)
         onDispose {
-            if (exoPlayer != null) {
+            if (previewLease != null) {
                 PLog.d("VideoDetailPlayer", "Disposing ExoPlayer.")
-                exoPlayer.release()
+                previewHandle.release(previewLease)
             }
         }
     }

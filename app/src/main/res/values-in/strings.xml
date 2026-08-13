@@ -26,6 +26,16 @@
     <string name="share">Bagikan</string>
     <string name="delete">Hapus</string>
     <string name="export">Ekspor</string>
+    <string name="export_video_select_resolution">Pilih resolusi ekspor</string>
+    <string name="export_video_resolution_original">Resolusi asli</string>
+    <string name="export_video_resolution_8k">8K</string>
+    <string name="export_video_resolution_4k">4K</string>
+    <string name="export_video_resolution_1080p">1080p</string>
+    <string name="export_video_resolution_720p">720p</string>
+    <string name="export_video_resolution_may_fail">Dukungan tidak dapat dipastikan; ekspor mungkin gagal</string>
+    <string name="export_video_resolution_unsupported">Tidak didukung oleh perangkat ini</string>
+    <string name="export_video_resolution_source_too_small">Lebih tinggi dari resolusi sumber</string>
+    <string name="export_video_resolution_details">%1$d × %2$d · %3$s</string>
     <string name="export_success">Foto berhasil diekspor</string>
     <string name="export_failed">Gagal mengekspor foto</string>
     <string name="edit">Edit</string>

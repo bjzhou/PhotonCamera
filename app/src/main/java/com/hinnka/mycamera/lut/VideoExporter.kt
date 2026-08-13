@@ -2,6 +2,10 @@ package com.hinnka.mycamera.lut
 
 import android.content.ContentValues
 import android.content.Context
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -10,13 +14,17 @@ import android.provider.MediaStore
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.LanczosResample
+import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
+import androidx.media3.transformer.VideoEncoderSettings
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CancellationException
@@ -35,6 +43,112 @@ import kotlin.coroutines.resume
 
 private const val TAG = "VideoExporter"
 
+private data class VideoSourceFormat(
+    val mimeType: String?,
+    val width: Int,
+    val height: Int,
+    val frameRate: Double?,
+    val bitrate: Int?,
+)
+
+private enum class CodecSupport {
+    SUPPORTED,
+    UNKNOWN,
+    UNSUPPORTED,
+}
+
+/**
+ * Builds the choices shown by the export UI from the source geometry and the codecs advertised by
+ * the device. Codec capability queries are advisory: vendors occasionally publish incomplete
+ * ranges, so inconclusive results remain selectable and are surfaced as [VideoExportSupport.MAY_FAIL].
+ */
+fun getVideoExportOptions(
+    context: Context,
+    inputUri: Uri,
+    fallbackWidth: Int = 0,
+    fallbackHeight: Int = 0,
+): List<VideoExportOption> {
+    val detectedFormat = detectVideoSourceFormat(context, inputUri)
+    val sourceFormat = detectedFormat.copy(
+        width = detectedFormat.width.takeIf { it > 0 } ?: fallbackWidth,
+        height = detectedFormat.height.takeIf { it > 0 } ?: fallbackHeight,
+    )
+    val sourceDecoderSupport = queryCodecSupport(
+        mimeType = sourceFormat.mimeType,
+        width = sourceFormat.width,
+        height = sourceFormat.height,
+        frameRate = sourceFormat.frameRate,
+        encoder = false,
+    )
+
+    return VideoExportResolution.entries.map { resolution ->
+        val outputSize = calculateVideoExportSize(
+            sourceWidth = sourceFormat.width,
+            sourceHeight = sourceFormat.height,
+            resolution = resolution,
+        )
+        val fallbackOutputSize = VideoExportSize(resolution.longEdge, resolution.shortEdge)
+        val resolvedOutputSize = outputSize ?: fallbackOutputSize
+        val targetMimeCandidates = if (sourceFormat.mimeType == MimeTypes.VIDEO_H265) {
+            listOf(MimeTypes.VIDEO_H265, MimeTypes.VIDEO_H264)
+        } else {
+            listOf(MimeTypes.VIDEO_H264, MimeTypes.VIDEO_H265)
+        }
+        val encoderSupportByMime = targetMimeCandidates.associateWith { mimeType ->
+            queryCodecSupport(
+                mimeType = mimeType,
+                width = resolvedOutputSize.width,
+                height = resolvedOutputSize.height,
+                frameRate = sourceFormat.frameRate,
+                encoder = true,
+            )
+        }
+        val targetMime = targetMimeCandidates.firstOrNull {
+            encoderSupportByMime[it] == CodecSupport.SUPPORTED
+        } ?: targetMimeCandidates.firstOrNull {
+            encoderSupportByMime[it] == CodecSupport.UNKNOWN
+        } ?: targetMimeCandidates.first()
+        val encoderSupport = encoderSupportByMime.getValue(targetMime)
+        val targetBitrate = calculateVideoExportBitrate(
+            sourceBitrate = sourceFormat.bitrate,
+            sourceWidth = sourceFormat.width,
+            sourceHeight = sourceFormat.height,
+            outputWidth = resolvedOutputSize.width,
+            outputHeight = resolvedOutputSize.height,
+        )
+        val exceedsStandard4K =
+            resolvedOutputSize.width.toLong() * resolvedOutputSize.height.toLong() > 3840L * 2160L
+
+        val support = when {
+            sourceFormat.width <= 0 || sourceFormat.height <= 0 -> VideoExportSupport.MAY_FAIL
+            outputSize == null -> VideoExportSupport.SOURCE_TOO_SMALL
+            sourceDecoderSupport == CodecSupport.UNSUPPORTED -> VideoExportSupport.UNSUPPORTED
+            encoderSupport == CodecSupport.UNSUPPORTED -> VideoExportSupport.UNSUPPORTED
+            exceedsStandard4K -> VideoExportSupport.MAY_FAIL
+            encoderSupport == CodecSupport.SUPPORTED && sourceDecoderSupport == CodecSupport.SUPPORTED -> {
+                VideoExportSupport.SUPPORTED
+            }
+            else -> VideoExportSupport.MAY_FAIL
+        }
+
+        PLog.d(
+            TAG,
+            "Export option $resolution: source=${sourceFormat.width}x${sourceFormat.height} " +
+                "${sourceFormat.mimeType}@${sourceFormat.frameRate}, output=${resolvedOutputSize.width}x${resolvedOutputSize.height} " +
+                "mime=$targetMime bitrate=$targetBitrate decoder=$sourceDecoderSupport " +
+                "encoder=$encoderSupport support=$support",
+        )
+        VideoExportOption(
+            resolution = resolution,
+            outputWidth = resolvedOutputSize.width,
+            outputHeight = resolvedOutputSize.height,
+            targetVideoMime = targetMime,
+            targetBitrate = targetBitrate,
+            support = support,
+        )
+    }
+}
+
 /**
  * 视频导出器：使用 Media3 Transformer 将 LUT / 色彩配方 GL 效果烘焙到视频文件中并保存到相册。
  *
@@ -52,6 +166,7 @@ suspend fun exportVideoWithEffects(
     inputUri: Uri,
     lutConfig: LutConfig?,
     recipeParams: ColorRecipeParams?,
+    exportOption: VideoExportOption,
     outputDisplayName: String? = null,
     onProgress: ((Int) -> Unit)? = null,
 ): Uri? = withContext(Dispatchers.Main) {
@@ -59,17 +174,30 @@ suspend fun exportVideoWithEffects(
         return@withContext null
     }
 
-    // 检测原始视频编码，决定输出 MIME
-    val originalMime = detectVideoMime(context, inputUri)
-    PLog.d(TAG, "Input video MIME: $originalMime")
-
     // 构建临时输出文件
     val tempDir = File(context.cacheDir, "video_export").also { it.mkdirs() }
     val tempFile = File(tempDir, "export_${System.nanoTime()}.mp4")
 
     try {
-        // 构建 VideoLutEffect
+        // Downscale before the LUT pass so high-resolution exports do not keep an 8K intermediate
+        // texture alive when the user selected a smaller output.
         val effect = VideoLutEffect(lutConfig, recipeParams)
+        val videoEffects = if (exportOption.resolution == VideoExportResolution.ORIGINAL) {
+            listOf(effect)
+        } else {
+            listOf(
+                LanczosResample.scaleToFitWithFlexibleOrientation(
+                    exportOption.resolution.longEdge,
+                    exportOption.resolution.shortEdge,
+                ),
+                Presentation.createForWidthAndHeight(
+                    exportOption.outputWidth,
+                    exportOption.outputHeight,
+                    Presentation.LAYOUT_SCALE_TO_FIT,
+                ),
+                effect,
+            )
+        }
 
         // 构建 EditedMediaItem，注入 GL 效果
         val mediaItem = MediaItem.fromUri(inputUri)
@@ -77,24 +205,38 @@ suspend fun exportVideoWithEffects(
             .setEffects(
                 Effects(
                     /* audioProcessors= */ emptyList(),
-                    /* videoEffects= */ listOf(effect)
+                    /* videoEffects= */ videoEffects
                 )
             )
             .build()
 
         // 构建 Transformer
-        val transformer = Transformer.Builder(context)
-            .also { builder ->
-                // 优先保留原始编码，不指定 videoMimeType 则 Transformer 自动保留
-                // 若原始为 HEVC 则尝试输出 HEVC，否则回落到 H264
-                val targetMime = when {
-                    originalMime == MimeTypes.VIDEO_H265 -> MimeTypes.VIDEO_H265
-                    else -> MimeTypes.VIDEO_H264
-                }
-                PLog.d(TAG, "Target video MIME: $targetMime")
-                builder.setVideoMimeType(targetMime)
+        val encoderSettings = VideoEncoderSettings.Builder()
+            .setEncoderPerformanceParameters(
+                VideoEncoderSettings.RATE_UNSET,
+                VideoEncoderSettings.RATE_UNSET,
+            )
+            .also { settings ->
+                exportOption.targetBitrate?.let(settings::setBitrate)
             }
             .build()
+        val transformer = Transformer.Builder(context)
+            .setVideoMimeType(exportOption.targetVideoMime)
+            // The selected resolution is a contract with the user. Do not silently fall back to a
+            // smaller encoder size after they explicitly chose 8K or 4K.
+            .setEncoderFactory(
+                DefaultEncoderFactory.Builder(context)
+                    .setEnableFallback(false)
+                    .setRequestedVideoEncoderSettings(encoderSettings)
+                    .build()
+            )
+            .build()
+
+        PLog.d(
+            TAG,
+            "Exporting ${exportOption.resolution} at ${exportOption.outputWidth}x${exportOption.outputHeight}, " +
+                "target MIME: ${exportOption.targetVideoMime}, bitrate=${exportOption.targetBitrate}",
+        )
 
         // 执行转码（挂起，直到完成或出错）
         val exportResult = runTransformer(
@@ -109,7 +251,23 @@ suspend fun exportVideoWithEffects(
             return@withContext null
         }
 
-        PLog.d(TAG, "Transformer succeeded, output size: ${tempFile.length()} bytes")
+        val outputSizeMatchesSelection =
+            (exportResult.width == exportOption.outputWidth && exportResult.height == exportOption.outputHeight) ||
+                (exportResult.width == exportOption.outputHeight && exportResult.height == exportOption.outputWidth)
+        if (!outputSizeMatchesSelection) {
+            PLog.e(
+                TAG,
+                "Transformer ignored selected output size: requested=${exportOption.outputWidth}x${exportOption.outputHeight}, " +
+                    "actual=${exportResult.width}x${exportResult.height}",
+            )
+            return@withContext null
+        }
+
+        PLog.d(
+            TAG,
+            "Transformer succeeded, resolution=${exportResult.width}x${exportResult.height}, " +
+                "size=${tempFile.length()} bytes",
+        )
 
         // 将临时文件写入 MediaStore Movies/PhotonCamera/
         val displayName = outputDisplayName
@@ -264,8 +422,15 @@ private suspend fun runTransformer(
     }
 
     transformer.addListener(listener)
-    transformer.start(editedMediaItem, outputPath)
-    PLog.d(TAG, "Transformer started, outputPath: $outputPath")
+    try {
+        transformer.start(editedMediaItem, outputPath)
+        PLog.d(TAG, "Transformer started, outputPath: $outputPath")
+    } catch (error: Exception) {
+        completed = true
+        pollingJob?.cancel()
+        PLog.e(TAG, "Transformer failed to start", error)
+        cont.resume(null)
+    }
 
     // 在取消时停止 Transformer
     cont.invokeOnCancellation {
@@ -279,15 +444,112 @@ private suspend fun runTransformer(
  * 检测视频的编码 MIME 类型（用于决定输出编码）。
  */
 private fun detectVideoMime(context: Context, uri: Uri): String? {
-    return try {
+    return detectVideoSourceFormat(context, uri).mimeType
+}
+
+private fun detectVideoSourceFormat(context: Context, uri: Uri): VideoSourceFormat {
+    var mimeType: String? = null
+    var width = 0
+    var height = 0
+    var frameRate: Double? = null
+    var bitrate: Int? = null
+
+    try {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(context, uri, emptyMap())
+            for (trackIndex in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(trackIndex)
+                val trackMime = format.getString(MediaFormat.KEY_MIME)
+                if (trackMime?.startsWith("video/") != true) continue
+                mimeType = trackMime
+                width = format.getIntegerOrNull(MediaFormat.KEY_WIDTH) ?: width
+                height = format.getIntegerOrNull(MediaFormat.KEY_HEIGHT) ?: height
+                frameRate = format.getIntegerOrNull(MediaFormat.KEY_FRAME_RATE)?.toDouble()
+                bitrate = format.getIntegerOrNull(MediaFormat.KEY_BIT_RATE)?.takeIf { it > 0 }
+                break
+            }
+        } finally {
+            extractor.release()
+        }
+    } catch (error: Exception) {
+        PLog.w(TAG, "MediaExtractor could not inspect $uri: ${error.message}")
+    }
+
+    try {
         val retriever = MediaMetadataRetriever()
         retriever.use {
             it.setDataSource(context, uri)
-            it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+            width = width.takeIf { value -> value > 0 }
+                ?: it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+                ?: 0
+            height = height.takeIf { value -> value > 0 }
+                ?: it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+                ?: 0
+            frameRate = frameRate
+                ?: it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull()
+            bitrate = bitrate
+                ?: it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()?.takeIf { value -> value > 0 }
         }
-    } catch (e: Exception) {
-        PLog.w(TAG, "Failed to detect video MIME: ${e.message}")
-        null
+    } catch (error: Exception) {
+        PLog.w(TAG, "MediaMetadataRetriever could not inspect $uri: ${error.message}")
+    }
+
+    return VideoSourceFormat(mimeType, width, height, frameRate, bitrate)
+}
+
+private fun MediaFormat.getIntegerOrNull(key: String): Int? {
+    return if (containsKey(key)) runCatching { getInteger(key) }.getOrNull() else null
+}
+
+private fun queryCodecSupport(
+    mimeType: String?,
+    width: Int,
+    height: Int,
+    frameRate: Double?,
+    encoder: Boolean,
+): CodecSupport {
+    if (mimeType == null || width <= 0 || height <= 0) return CodecSupport.UNKNOWN
+
+    val matchingCodecs = try {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { codecInfo ->
+            codecInfo.isEncoder == encoder && codecInfo.supportedTypes.any {
+                it.equals(mimeType, ignoreCase = true)
+            }
+        }
+    } catch (error: Exception) {
+        PLog.w(TAG, "Unable to enumerate codecs for $mimeType: ${error.message}")
+        return CodecSupport.UNKNOWN
+    }
+    if (matchingCodecs.isEmpty()) return CodecSupport.UNSUPPORTED
+
+    var completedQuery = false
+    for (codecInfo in matchingCodecs) {
+        val supported = try {
+            val capabilities = codecInfo.getCapabilitiesForType(mimeType).videoCapabilities
+                ?: error("Codec exposes no video capabilities")
+            completedQuery = true
+            supportsVideoSizeAndRate(capabilities, width, height, frameRate) ||
+                supportsVideoSizeAndRate(capabilities, height, width, frameRate)
+        } catch (error: Exception) {
+            PLog.w(TAG, "Codec capability query failed for ${codecInfo.name}: ${error.message}")
+            continue
+        }
+        if (supported) return CodecSupport.SUPPORTED
+    }
+    return if (completedQuery) CodecSupport.UNSUPPORTED else CodecSupport.UNKNOWN
+}
+
+private fun supportsVideoSizeAndRate(
+    capabilities: MediaCodecInfo.VideoCapabilities,
+    width: Int,
+    height: Int,
+    frameRate: Double?,
+): Boolean {
+    return if (frameRate != null && frameRate > 0.0) {
+        capabilities.areSizeAndRateSupported(width, height, frameRate)
+    } else {
+        capabilities.isSizeSupported(width, height)
     }
 }
 

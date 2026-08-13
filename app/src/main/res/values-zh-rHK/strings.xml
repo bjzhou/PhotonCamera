@@ -91,6 +91,16 @@
     <string name="export_dng_failed">DNG 匯出失敗</string>
     <string name="export_all_confirm">匯出所有連拍相片嗎？</string>
     <string name="export_video">匯出影片</string>
+    <string name="export_video_select_resolution">選擇匯出解像度</string>
+    <string name="export_video_resolution_original">原始解像度</string>
+    <string name="export_video_resolution_8k">8K</string>
+    <string name="export_video_resolution_4k">4K</string>
+    <string name="export_video_resolution_1080p">1080p</string>
+    <string name="export_video_resolution_720p">720p</string>
+    <string name="export_video_resolution_may_fail">無法確認支援，匯出可能失敗</string>
+    <string name="export_video_resolution_unsupported">此裝置不支援</string>
+    <string name="export_video_resolution_source_too_small">高於原始影片解像度</string>
+    <string name="export_video_resolution_details">%1$d × %2$d · %3$s</string>
     <string name="export_video_confirm">將效果烘焙到影片并儲存到相簿？根據影片時長可能需要一些時間，原始影片不會被修改。</string>
     <string name="export_video_success">影片匯出成功</string>
     <string name="export_video_failed">影片匯出失敗</string>

@@ -30,7 +30,9 @@ import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
+import com.hinnka.mycamera.lut.VideoExportOption
 import com.hinnka.mycamera.lut.exportVideoWithEffects
+import com.hinnka.mycamera.lut.getVideoExportOptions as resolveVideoExportOptions
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -3665,12 +3667,31 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 导出视频：使用 Media3 Transformer 将 LUT / 色彩配方效果烘焙到视频文件并保存到系统相册。
      * 导出不修改原始视频，结果保存在 Movies/PhotonCamera/ 目录。
      */
+    suspend fun getVideoExportOptions(photo: MediaData): List<VideoExportOption> {
+        if (!photo.isVideo) return emptyList()
+        val inputUri = photo.sourceUri ?: photo.uri
+        return withContext(Dispatchers.IO) {
+            resolveVideoExportOptions(
+                context = getApplication<Application>(),
+                inputUri = inputUri,
+                fallbackWidth = photo.width,
+                fallbackHeight = photo.height,
+            )
+        }
+    }
+
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun exportVideo(
         photo: MediaData,
+        exportOption: VideoExportOption,
         onComplete: (success: Boolean, exportedUri: android.net.Uri?) -> Unit = { _, _ -> }
     ) {
         if (!photo.isVideo) {
+            onComplete(false, null)
+            return
+        }
+        if (!exportOption.isSelectable) {
+            PLog.w(TAG, "exportVideo skipped: selected option is not available: $exportOption")
             onComplete(false, null)
             return
         }
@@ -3716,6 +3737,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     inputUri = inputUri,
                     lutConfig = lutConfig,
                     recipeParams = recipeParams,
+                    exportOption = exportOption,
                     outputDisplayName = outputName,
                     onProgress = { progress ->
                         videoExportProgress = progress

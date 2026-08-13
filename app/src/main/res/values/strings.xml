@@ -92,6 +92,17 @@
     <string name="dng_format">DNG</string>
     <string name="export_all_confirm">Export all burst photos?</string>
     <string name="export_video">Export Video</string>
+    <string name="export_video_select_resolution">Select export resolution</string>
+    <string name="export_video_resolution_original">Original</string>
+    <string name="export_video_resolution_8k">8K</string>
+    <string name="export_video_resolution_4k">4K</string>
+    <string name="export_video_resolution_1080p">1080p</string>
+    <string name="export_video_resolution_720p">720p</string>
+    <string name="export_video_resolution_may_fail">Support could not be confirmed; export may fail</string>
+    <string name="export_video_resolution_unsupported">Not supported by this device</string>
+    <string name="export_video_resolution_source_too_small">Higher than source resolution</string>
+    <string name="export_video_resolution_details">%1$d × %2$d · %3$s</string>
+    <string name="export_video_resolution_dimensions">%1$d × %2$d</string>
     <string name="export_video_confirm">Bake effects into video and save to gallery? This may take a while depending on video length. The original video will not be changed.</string>
     <string name="export_video_success">Video exported successfully</string>
     <string name="export_video_failed">Failed to export video</string>

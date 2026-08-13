@@ -26,6 +26,16 @@
     <string name="share">Teilen</string>
     <string name="delete">Löschen</string>
     <string name="export">Exportieren</string>
+    <string name="export_video_select_resolution">Exportauflösung auswählen</string>
+    <string name="export_video_resolution_original">Originalauflösung</string>
+    <string name="export_video_resolution_8k">8K</string>
+    <string name="export_video_resolution_4k">4K</string>
+    <string name="export_video_resolution_1080p">1080p</string>
+    <string name="export_video_resolution_720p">720p</string>
+    <string name="export_video_resolution_may_fail">Unterstützung nicht bestätigt; Export kann fehlschlagen</string>
+    <string name="export_video_resolution_unsupported">Von diesem Gerät nicht unterstützt</string>
+    <string name="export_video_resolution_source_too_small">Höher als die Quellauflösung</string>
+    <string name="export_video_resolution_details">%1$d × %2$d · %3$s</string>
     <string name="export_success">Foto erfolgreich exportiert</string>
     <string name="export_failed">Export fehlgeschlagen</string>
     <string name="edit">Bearbeiten</string>

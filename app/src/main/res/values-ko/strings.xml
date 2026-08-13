@@ -26,6 +26,16 @@
     <string name="share">공유</string>
     <string name="delete">삭제</string>
     <string name="export">내보내기</string>
+    <string name="export_video_select_resolution">내보내기 해상도 선택</string>
+    <string name="export_video_resolution_original">원본 해상도</string>
+    <string name="export_video_resolution_8k">8K</string>
+    <string name="export_video_resolution_4k">4K</string>
+    <string name="export_video_resolution_1080p">1080p</string>
+    <string name="export_video_resolution_720p">720p</string>
+    <string name="export_video_resolution_may_fail">지원 여부를 확인할 수 없어 내보내기에 실패할 수 있음</string>
+    <string name="export_video_resolution_unsupported">이 기기에서 지원되지 않음</string>
+    <string name="export_video_resolution_source_too_small">원본 동영상보다 높은 해상도</string>
+    <string name="export_video_resolution_details">%1$d × %2$d · %3$s</string>
     <string name="export_success">사진을 성공적으로 내보냈습니다</string>
     <string name="export_failed">사진 내보내기에 실패했습니다</string>
     <string name="edit">편집</string>
