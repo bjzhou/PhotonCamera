@@ -67,6 +67,7 @@ fun ZoomControlBar(
     availableCameras: List<CameraInfo>,
     currentCameraId: String,
     onZoomChange: (Float) -> Unit,
+    onZoomStopClick: (Float) -> Unit,
     onLensSwitch: (String) -> Unit,
     onFilterClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -311,7 +312,7 @@ fun ZoomControlBar(
                     displayMode = displayMode,
                     onZoomChange = { stop ->
                         val targetStop = if (customZoomStop != null && stop == customZoomStop) originalStopRatio else stop
-                        onZoomChange(targetStop)
+                        onZoomStopClick(targetStop)
                         customZoomStop = null
                         replacedStopIndex = -1
                     },
