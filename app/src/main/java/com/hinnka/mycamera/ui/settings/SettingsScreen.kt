@@ -161,6 +161,7 @@ private enum class SettingsPage {
     ASSIST,
     FOCUS_LENS,
     CAPTURE_STORAGE,
+    VIDEO,
     COLOR_HDR,
     MULTIFRAME_EXPOSURE,
     RAW,
@@ -264,6 +265,7 @@ fun SettingsScreen(
     viewModel: CameraViewModel,
     onBack: () -> Unit,
     onFilterManagementClick: () -> Unit,
+    onVideoFilterManagementClick: () -> Unit,
     onFrameManagementClick: () -> Unit,
     onPhantomPipCropClick: () -> Unit,
     onPresetManagementClick: () -> Unit,
@@ -330,6 +332,8 @@ fun SettingsScreen(
     val photoSaveTreeUri by viewModel.photoSaveTreeUri.collectAsState()
     val videoRecordingPath by viewModel.videoRecordingPath.collectAsState()
     val videoRecordingTreeUri by viewModel.videoRecordingTreeUri.collectAsState()
+    val separateVideoLutEnabled by viewModel.separateVideoLutEnabled.collectAsState()
+    val videoLutId by viewModel.videoLutId.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
     val openAIUrl by viewModel.openAIUrl.collectAsState()
     val openAIModel by viewModel.openAIModel.collectAsState()
@@ -915,6 +919,7 @@ fun SettingsScreen(
         SettingsPage.ASSIST -> stringResource(R.string.settings_section_assist)
         SettingsPage.FOCUS_LENS -> stringResource(R.string.settings_section_focus_lens)
         SettingsPage.CAPTURE_STORAGE -> stringResource(R.string.settings_section_capture_storage)
+        SettingsPage.VIDEO -> stringResource(R.string.settings_section_video)
         SettingsPage.COLOR_HDR -> stringResource(R.string.settings_section_color_hdr)
         SettingsPage.MULTIFRAME_EXPOSURE -> stringResource(R.string.settings_section_multiframe_exposure)
         SettingsPage.RAW -> stringResource(R.string.baseline_target_raw)
@@ -1423,38 +1428,6 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
 
-                        DropdownSettingItem(
-                            title = stringResource(
-                                R.string.settings_storage_path_title,
-                                stringResource(R.string.settings_storage_path_video_title_arg)
-                            ),
-                            description = stringResource(
-                                R.string.settings_storage_path_description,
-                                stringResource(R.string.settings_storage_path_video_description_arg)
-                            ),
-                            value = videoRecordingPathValue,
-                            options = videoRecordingPathLabels,
-                            isLoading = false,
-                            onExpanded = {},
-                            onOptionSelected = { selected ->
-                                val selectedIndex = videoRecordingPathLabels.indexOf(selected)
-                                when (videoRecordingPathOptions.getOrNull(selectedIndex)) {
-                                    VideoRecordingPath.DCIM_PHOTON -> {
-                                        viewModel.setVideoRecordingPath(VideoRecordingPath.DCIM_PHOTON)
-                                    }
-                                    VideoRecordingPath.EXTERNAL_TREE -> {
-                                        videoRecordingTreeLauncher.launch(null)
-                                    }
-                                    null -> Unit
-                                }
-                            }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_auto_save),
                             description = stringResource(R.string.settings_auto_save_description),
@@ -1494,6 +1467,75 @@ fun SettingsScreen(
                                     }
                                 } else {
                                     viewModel.setSaveLocation(false)
+                                }
+                            }
+                        )
+                    }
+                }
+
+                SettingsPage.VIDEO -> {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_section_video),
+                        showTitle = false
+                    ) {
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_separate_video_lut),
+                            description = stringResource(R.string.settings_separate_video_lut_description),
+                            checked = separateVideoLutEnabled,
+                            onCheckedChange = viewModel::setSeparateVideoLutEnabled
+                        )
+
+                        if (separateVideoLutEnabled) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            val effectiveVideoLutId = videoLutId
+                                ?: userPreferences.lutId
+                                ?: availableLuts.firstOrNull { it.isDefault }?.id
+                            val selectedVideoLutName = availableLuts
+                                .find { it.id == effectiveVideoLutId }
+                                ?.getName()
+                                ?: stringResource(R.string.none)
+                            NavigationSettingItem(
+                                title = stringResource(R.string.settings_video_lut),
+                                description = stringResource(
+                                    R.string.settings_video_lut_description,
+                                    selectedVideoLutName
+                                ),
+                                onClick = onVideoFilterManagementClick
+                            )
+                        }
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        DropdownSettingItem(
+                            title = stringResource(
+                                R.string.settings_storage_path_title,
+                                stringResource(R.string.settings_storage_path_video_title_arg)
+                            ),
+                            description = stringResource(
+                                R.string.settings_storage_path_description,
+                                stringResource(R.string.settings_storage_path_video_description_arg)
+                            ),
+                            value = videoRecordingPathValue,
+                            options = videoRecordingPathLabels,
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { selected ->
+                                val selectedIndex = videoRecordingPathLabels.indexOf(selected)
+                                when (videoRecordingPathOptions.getOrNull(selectedIndex)) {
+                                    VideoRecordingPath.DCIM_PHOTON -> {
+                                        viewModel.setVideoRecordingPath(VideoRecordingPath.DCIM_PHOTON)
+                                    }
+                                    VideoRecordingPath.EXTERNAL_TREE -> {
+                                        videoRecordingTreeLauncher.launch(null)
+                                    }
+                                    null -> Unit
                                 }
                             }
                         )
@@ -2779,6 +2821,20 @@ private fun SettingsCategoryOverview(
                 stringResource(R.string.settings_save_location)
             ).joinToString(" · "),
             onClick = { onPageSelected(SettingsPage.CAPTURE_STORAGE) }
+        )
+
+        SettingsCategoryDivider()
+
+        NavigationSettingItem(
+            title = stringResource(R.string.settings_section_video),
+            description = listOf(
+                stringResource(R.string.settings_separate_video_lut),
+                stringResource(
+                    R.string.settings_storage_path_title,
+                    stringResource(R.string.settings_storage_path_video_title_arg)
+                )
+            ).joinToString(" · "),
+            onClick = { onPageSelected(SettingsPage.VIDEO) }
         )
 
     }

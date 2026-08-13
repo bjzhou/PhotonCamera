@@ -98,6 +98,7 @@ import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
+import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
@@ -113,7 +114,7 @@ object Routes {
     const val BURST_DETAIL = "burst_detail/{photoId}"
     const val PHOTO_EDIT = "photo_edit"
     const val SETTINGS = "settings"
-    const val FILTER_MANAGEMENT = "filter_management?locateLutId={locateLutId}"
+    const val FILTER_MANAGEMENT = "filter_management?locateLutId={locateLutId}&videoLut={videoLut}"
     const val FRAME_MANAGEMENT = "frame_management"
     const val FRAME_EDITOR = "frame_editor?frameId={frameId}&imageFrame={imageFrame}"
     const val LUT_CREATOR = "lut_creator"
@@ -136,8 +137,15 @@ object Routes {
     fun photoDetail(tab: GalleryTab = GalleryTab.PHOTON, index: Int = 0, photoId: String? = null) =
         "photo_detail/$tab/$index" + (if (photoId != null) "?photoId=$photoId" else "")
 
-    fun filterManagement(locateLutId: String? = null) = 
-        "filter_management" + (if (locateLutId != null) "?locateLutId=$locateLutId" else "")
+    fun filterManagement(locateLutId: String? = null, videoLut: Boolean = false): String {
+        val arguments = buildList {
+            locateLutId?.let { add("locateLutId=$it") }
+            if (videoLut) add("videoLut=true")
+        }
+        return "filter_management" + arguments.takeIf { it.isNotEmpty() }
+            ?.joinToString(prefix = "?", separator = "&")
+            .orEmpty()
+    }
 
     fun burstDetail(photoId: String) = "burst_detail/$photoId"
 
@@ -385,7 +393,7 @@ class MainActivity : ComponentActivity() {
         if (lutImportUris.isNotEmpty()) {
             PLog.d("MainActivity", "External LUT import intent: action=${intent.action}, type=${intent.type}, count=${lutImportUris.size}")
             pendingLutImportUris = lutImportUris
-            pendingRoute = Routes.FILTER_MANAGEMENT
+            pendingRoute = Routes.filterManagement()
         } else if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
             val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -683,7 +691,14 @@ fun NavigationHost(
                                 navController.navigate(Routes.SETTINGS)
                             },
                             onFilterManagementClick = { lutId ->
-                                navController.navigate(Routes.filterManagement(lutId))
+                                navController.navigate(
+                                    Routes.filterManagement(
+                                        locateLutId = lutId,
+                                        videoLut = cameraViewModel.state.value.captureMode ==
+                                            CaptureMode.VIDEO &&
+                                            cameraViewModel.separateVideoLutEnabled.value
+                                    )
+                                )
                             },
                             onFrameManagementClick = {
                                 navController.navigate(Routes.FRAME_MANAGEMENT)
@@ -728,7 +743,14 @@ fun NavigationHost(
                             navController.navigate(Routes.SETTINGS)
                         },
                         onFilterManagementClick = { lutId ->
-                            navController.navigate(Routes.filterManagement(lutId))
+                            navController.navigate(
+                                Routes.filterManagement(
+                                    locateLutId = lutId,
+                                    videoLut = cameraViewModel.state.value.captureMode ==
+                                        CaptureMode.VIDEO &&
+                                        cameraViewModel.separateVideoLutEnabled.value
+                                )
+                            )
                         },
                         onFrameManagementClick = {
                             navController.navigate(Routes.FRAME_MANAGEMENT)
@@ -837,7 +859,10 @@ fun NavigationHost(
                         navController.popBackStack()
                     },
                     onFilterManagementClick = {
-                        navController.navigate(Routes.FILTER_MANAGEMENT)
+                        navController.navigate(Routes.filterManagement())
+                    },
+                    onVideoFilterManagementClick = {
+                        navController.navigate(Routes.filterManagement(videoLut = true))
                     },
                     onFrameManagementClick = {
                         navController.navigate(Routes.FRAME_MANAGEMENT)
@@ -902,10 +927,15 @@ fun NavigationHost(
                         type = NavType.StringType
                         nullable = true
                         defaultValue = null
+                    },
+                    navArgument("videoLut") {
+                        type = NavType.BoolType
+                        defaultValue = false
                     }
                 )
             ) { backStackEntry ->
                 val locateLutId = backStackEntry.arguments?.getString("locateLutId")
+                val videoLut = backStackEntry.arguments?.getBoolean("videoLut") ?: false
                 FilterManagementScreen(
                     viewModel = cameraViewModel,
                     onBack = {
@@ -913,7 +943,8 @@ fun NavigationHost(
                     },
                     pendingLutImportUris = pendingLutImportUris,
                     onLutImportHandled = onLutImportHandled,
-                    locateLutId = locateLutId
+                    locateLutId = locateLutId,
+                    manageVideoLut = videoLut
                 )
             }
 

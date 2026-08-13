@@ -122,6 +122,8 @@ data class UserPreferences(
     val topSheetAspectRatios: List<AspectRatio> = AspectRatio.defaultTopSheetRatios,
     val customAspectRatios: List<AspectRatio> = emptyList(),
     val lutId: String? = null,  // 默认为 null，由 CameraViewModel 根据配置文件设置
+    val separateVideoLutEnabled: Boolean = false,
+    val videoLutId: String? = null,
     val jpgBaselineLutId: String? = null,
     val rawBaselineLutId: String? = null,
     val rawBaselineLutConfigured: Boolean = false,
@@ -341,6 +343,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val TOP_SHEET_ASPECT_RATIOS = stringPreferencesKey("top_sheet_aspect_ratios")
         private val CUSTOM_ASPECT_RATIOS = stringPreferencesKey("custom_aspect_ratios")
         private val LUT_ID_KEY = stringPreferencesKey("lut_id")
+        private val SEPARATE_VIDEO_LUT_ENABLED_KEY = booleanPreferencesKey("separate_video_lut_enabled")
+        private val VIDEO_LUT_ID_KEY = stringPreferencesKey("video_lut_id")
         private val LEGACY_PHANTOM_LUT_ID_KEY = stringPreferencesKey("phantom_lut_id")
         private val JPG_BASELINE_LUT_ID_KEY = stringPreferencesKey("jpg_baseline_lut_id")
         private val RAW_BASELINE_LUT_ID_KEY = stringPreferencesKey("raw_baseline_lut_id")
@@ -558,6 +562,8 @@ class UserPreferencesRepository(private val context: Context) {
                 customAspectRatios = customAspectRatios,
                 lutId = preferences[LUT_ID_KEY]
                     ?: preferences[LEGACY_PHANTOM_LUT_ID_KEY],  // 不提供默认值，由 CameraViewModel 处理
+                separateVideoLutEnabled = preferences[SEPARATE_VIDEO_LUT_ENABLED_KEY] ?: false,
+                videoLutId = preferences[VIDEO_LUT_ID_KEY],
                 jpgBaselineLutId = preferences[JPG_BASELINE_LUT_ID_KEY],
                 rawBaselineLutId = preferences[RAW_BASELINE_LUT_ID_KEY],
                 rawBaselineLutConfigured = rawBaselineLutConfigured,
@@ -1066,6 +1072,25 @@ class UserPreferencesRepository(private val context: Context) {
             preferences.remove(LEGACY_PHANTOM_LUT_ID_KEY)
         }
         PhotonLookContract.notifyLookChanged(context)
+    }
+
+    suspend fun saveVideoLutConfig(lutId: String?) {
+        context.dataStore.edit { preferences ->
+            if (lutId != null) {
+                preferences[VIDEO_LUT_ID_KEY] = lutId
+            } else {
+                preferences.remove(VIDEO_LUT_ID_KEY)
+            }
+        }
+    }
+
+    suspend fun saveSeparateVideoLutEnabled(enabled: Boolean, initialVideoLutId: String?) {
+        context.dataStore.edit { preferences ->
+            preferences[SEPARATE_VIDEO_LUT_ENABLED_KEY] = enabled
+            if (enabled && !preferences.contains(VIDEO_LUT_ID_KEY) && initialVideoLutId != null) {
+                preferences[VIDEO_LUT_ID_KEY] = initialVideoLutId
+            }
+        }
     }
 
     suspend fun saveBaselineLutConfig(

@@ -418,6 +418,21 @@ internal fun resolveMultiFrameOutputScale(
     else -> null
 }
 
+internal fun resolveLutIdForCaptureMode(
+    photoLutId: String?,
+    videoLutId: String?,
+    separateVideoLutEnabled: Boolean,
+    captureMode: CaptureMode,
+    defaultLutId: String?,
+): String? {
+    val persistedLutId = if (captureMode == CaptureMode.VIDEO && separateVideoLutEnabled) {
+        videoLutId ?: photoLutId
+    } else {
+        photoLutId
+    }
+    return persistedLutId ?: defaultLutId
+}
+
 private data class CameraFeatureUpdate(
     val lutId: SettingValue<String?>? = null,
     val colorRecipe: SettingValue<ColorRecipeParams>? = null,
@@ -797,6 +812,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawMaxOutputScale = prefs.rawMaxOutputScale,
         )
         val currentState = state.value
+        val persistLutInVideoSlot = currentState.captureMode == CaptureMode.VIDEO &&
+            prefs.separateVideoLutEnabled && update.lutId != null
         val targetAspectRatio = update.aspectRatio?.value
         val needsCameraReopen =
             targetAspectRatio != null && targetAspectRatio != currentState.aspectRatio ||
@@ -875,7 +892,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         userPreferencesRepository.saveCameraFeaturePreferences(
             CameraFeaturePreferencesUpdate(
-                lutId = update.lutId?.let { PreferenceUpdateValue(it.value) },
+                lutId = if (persistLutInVideoSlot) {
+                    null
+                } else {
+                    update.lutId?.let { PreferenceUpdateValue(it.value) }
+                },
                 effects = update.effects?.let { PreferenceUpdateValue(it.value) },
                 aspectRatio = update.aspectRatio?.let { PreferenceUpdateValue(it.value.name) },
                 useRaw = if (update.useRaw != null || desiredUseRaw != prefs.useRaw) {
@@ -952,6 +973,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 activePresetId = update.activePresetId?.let { PreferenceUpdateValue(it.value) }
             )
         )
+        if (persistLutInVideoSlot) {
+            userPreferencesRepository.saveVideoLutConfig(update.lutId.value ?: "none")
+        }
 
         if (needsCameraReopen) {
             reopenCamera()
@@ -1422,6 +1446,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         userPreferencesRepository.userPreferences.map { it.logicalCameraBindingWhitelist }
     val userPreferences: StateFlow<UserPreferences> = userPreferencesRepository.userPreferences
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserPreferences())
+    val photoLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.lutId }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val separateVideoLutEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.separateVideoLutEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val videoLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.videoLutId }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val jpgBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.jpgBaselineLutId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -2173,13 +2206,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoCodec(prefs.videoCodec)
                 cameraController.setMeteringMode(prefs.meteringMode)
 
-                // 应用保存的 LUT 配置
-                if (prefs.lutId != null) {
-                    setLut(prefs.lutId)
-                } else {
-                    // 如果没有保存的 LUT，使用配置文件中的默认 LUT（第一个）
-                    val defaultLut = availableLutList.firstOrNull { it.isDefault }
-                    defaultLut?.let { setLut(it.id, persist = false) }
+                // 根据启动时的拍摄模式应用照片 LUT 或独立的视频 LUT。
+                resolveLutIdForMode(prefs, prefs.captureMode)?.let {
+                    setLut(it, persist = false)
                 }
 
                 // 应用保存的边框配置
@@ -3575,6 +3604,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val shouldDisableVideoLog = mode != CaptureMode.VIDEO &&
             state.value.videoConfig.logProfile != VideoLogProfile.OFF
         cameraController.setCaptureMode(mode)
+        resolveLutIdForMode(userPreferences.value, mode)?.let {
+            applyLut(it)
+        }
         currentSurfaceTexture = null
         cameraController.closeCamera()
         viewModelScope.launch {
@@ -3906,10 +3938,82 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setLut(lutId: String?, persist: Boolean = true) {
         val normalizedLutId = lutId ?: "none"
+        applyLut(normalizedLutId)
+
+        if (persist) {
+            val useVideoSlot = state.value.captureMode == CaptureMode.VIDEO &&
+                userPreferences.value.separateVideoLutEnabled
+            viewModelScope.launch {
+                if (useVideoSlot) {
+                    userPreferencesRepository.saveVideoLutConfig(normalizedLutId)
+                } else {
+                    userPreferencesRepository.saveLutConfig(normalizedLutId)
+                    clearActivePresetIfCurrentSettingsMismatch()
+                }
+            }
+        }
+    }
+
+    fun setPhotoLut(lutId: String?) {
+        val normalizedLutId = lutId ?: "none"
+        val shouldApply = state.value.captureMode != CaptureMode.VIDEO ||
+            !userPreferences.value.separateVideoLutEnabled
+        if (shouldApply) {
+            applyLut(normalizedLutId)
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.saveLutConfig(normalizedLutId)
+            clearActivePresetIfCurrentSettingsMismatch()
+        }
+    }
+
+    fun setVideoLut(lutId: String?) {
+        val normalizedLutId = lutId ?: "none"
+        if (state.value.captureMode == CaptureMode.VIDEO &&
+            userPreferences.value.separateVideoLutEnabled
+        ) {
+            applyLut(normalizedLutId)
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoLutConfig(normalizedLutId)
+        }
+    }
+
+    fun setSeparateVideoLutEnabled(enabled: Boolean) {
+        if (userPreferences.value.separateVideoLutEnabled == enabled) return
+        viewModelScope.launch {
+            val currentPreferences = userPreferencesRepository.userPreferences.first()
+            val initialVideoLutId = currentPreferences.videoLutId
+                ?: currentPreferences.lutId
+                ?: currentLutId.value
+            userPreferencesRepository.saveSeparateVideoLutEnabled(enabled, initialVideoLutId)
+            if (state.value.captureMode == CaptureMode.VIDEO) {
+                val updatedPreferences = currentPreferences.copy(
+                    separateVideoLutEnabled = enabled,
+                    videoLutId = currentPreferences.videoLutId ?: initialVideoLutId
+                )
+                resolveLutIdForMode(updatedPreferences, CaptureMode.VIDEO)?.let {
+                    applyLut(it)
+                }
+            }
+        }
+    }
+
+    private fun resolveLutIdForMode(preferences: UserPreferences, mode: CaptureMode): String? {
+        return resolveLutIdForCaptureMode(
+            photoLutId = preferences.lutId,
+            videoLutId = preferences.videoLutId,
+            separateVideoLutEnabled = preferences.separateVideoLutEnabled,
+            captureMode = mode,
+            defaultLutId = availableLutList.firstOrNull { it.isDefault }?.id,
+        )
+    }
+
+    private fun applyLut(normalizedLutId: String) {
         val loadGeneration = ++lutLoadGeneration
         lutLoadJob?.cancel()
         currentLutId.value = normalizedLutId
-        if (lutId == null || lutId == "none") {
+        if (normalizedLutId == "none") {
             currentLutConfig = null
             // LUT 已禁用，通知相机控制器
             cameraController.setLogLutActive(false)
@@ -3922,7 +4026,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             lutLoadJob = viewModelScope.launch {
                 val loadedLut = withContext(Dispatchers.IO) {
-                    contentRepository.lutManager.loadLut(lutId)
+                    contentRepository.lutManager.loadLut(normalizedLutId)
                 }
                 if (lutLoadGeneration != loadGeneration || currentLutId.value != normalizedLutId) {
                     return@launch
@@ -3946,13 +4050,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             if (hadActiveLut) {
                 cameraController.setLutEnabled(true)
-            }
-        }
-
-        if (persist) {
-            viewModelScope.launch {
-                userPreferencesRepository.saveLutConfig(lutId)
-                clearActivePresetIfCurrentSettingsMismatch()
             }
         }
     }
@@ -4005,9 +4102,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updateLut() {
         viewModelScope.launch {
-            val newLutId = userPreferencesRepository.userPreferences.map { it.lutId }.firstOrNull() ?: return@launch
+            val preferences = userPreferencesRepository.userPreferences.first()
+            val newLutId = resolveLutIdForMode(preferences, state.value.captureMode) ?: return@launch
             if (currentLutId.value != newLutId) {
-                setLut(newLutId)
+                setLut(newLutId, persist = false)
             }
         }
     }

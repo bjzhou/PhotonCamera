@@ -170,6 +170,11 @@
     <string name="settings_focus_lens_group_lens_discovery">鏡頭偵測</string>
     <string name="settings_focus_lens_group_camera2_extensions">Camera2 擴充</string>
     <string name="settings_section_capture_storage">拍攝與存儲</string>
+    <string name="settings_section_video">影片</string>
+    <string name="settings_separate_video_lut">相片與影片使用不同 LUT</string>
+    <string name="settings_separate_video_lut_description">為影片模式單獨選擇並記住 LUT。</string>
+    <string name="settings_video_lut">影片 LUT</string>
+    <string name="settings_video_lut_description">目前選擇：%1$s</string>
     <string name="settings_section_quality_perf">畫質與性能</string>
     <string name="settings_section_color_hdr">成像與色彩</string>
     <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>
@@ -537,6 +542,7 @@
     <string name="restore_failed">還原失敗</string>
     <string name="restore_in_progress">正在還原設定和自訂內容...</string>
     <string name="filter_management_title">濾鏡管理</string>
+    <string name="video_lut_management_title">影片 LUT 管理</string>
     <string name="apply_lut_title">應用 LUT</string>
     <string name="apply_lut_processing">正在應用 LUT...</string>
     <string name="apply_lut_processing_progress">正在應用 LUT...（%1$d/%2$d）</string>

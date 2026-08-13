@@ -103,11 +103,19 @@ fun FilterManagementScreen(
     pendingLutImportUris: List<Uri> = emptyList(),
     onLutImportHandled: () -> Unit = {},
     locateLutId: String? = null,
+    manageVideoLut: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val currentLutId by viewModel.currentLutId.collectAsState()
+    val photoLutId by viewModel.photoLutId.collectAsState()
+    val videoLutId by viewModel.videoLutId.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     val availableLuts = viewModel.availableLutList
+    val fallbackLutId = availableLuts.firstOrNull { it.isDefault }?.id
+    val selectedLutId = if (manageVideoLut) {
+        videoLutId ?: photoLutId ?: fallbackLutId
+    } else {
+        photoLutId ?: fallbackLutId
+    }
     val customImportManager = viewModel.getCustomImportManager()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -401,7 +409,10 @@ fun FilterManagementScreen(
                     )
                 } else {
                     Text(
-                        text = stringResource(R.string.filter_management_title),
+                        text = stringResource(
+                            if (manageVideoLut) R.string.video_lut_management_title
+                            else R.string.filter_management_title
+                        ),
                         color = Color.White,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Medium
@@ -467,10 +478,18 @@ fun FilterManagementScreen(
                         val toDelete = availableLuts.filter { it.id in selectedIds && !it.isBuiltIn }
                         if (toDelete.isNotEmpty()) {
                             scope.launch {
+                                val deletedIds = toDelete.map { it.id }.toSet()
                                 withContext(Dispatchers.IO) {
                                     toDelete.forEach {
                                         customImportManager.deleteCustomLut(it.id)
                                     }
+                                }
+                                val replacementId = localLutList.firstOrNull { it.id !in deletedIds }?.id
+                                if (photoLutId != null && photoLutId in deletedIds) {
+                                    viewModel.setPhotoLut(replacementId)
+                                }
+                                if (videoLutId != null && videoLutId in deletedIds) {
+                                    viewModel.setVideoLut(replacementId)
                                 }
                                 viewModel.refreshCustomContent()
                                 selectedIds = emptySet()
@@ -678,7 +697,7 @@ fun FilterManagementScreen(
                     ReorderableItem(reorderableLazyListState, key = lutInfo.id) { isDragging ->
                         FilterManagementItem(
                             lutInfo = lutInfo,
-                            isDefault = currentLutId == lutInfo.id,
+                            isDefault = selectedLutId == lutInfo.id,
                             isSelected = selectedIds.contains(lutInfo.id),
                             isSelectionMode = isSelectionMode,
                             isDragging = isDragging,
@@ -690,7 +709,11 @@ fun FilterManagementScreen(
                                         selectedIds + lutInfo.id
                                     }
                                 } else {
-                                    viewModel.setLut(lutInfo.id)
+                                    if (manageVideoLut) {
+                                        viewModel.setVideoLut(lutInfo.id)
+                                    } else {
+                                        viewModel.setPhotoLut(lutInfo.id)
+                                    }
                                 }
                             },
                             onToggleSelection = {
@@ -857,9 +880,13 @@ fun FilterManagementScreen(
                                 withContext(Dispatchers.IO) {
                                     customImportManager.deleteCustomLut(deletingLut!!.id)
                                 }
-                                // 如果删除的是当前选中的滤镜，切换到第一个
-                                if (currentLutId == deletingLut!!.id) {
-                                    viewModel.setLut(localLutList.firstOrNull()?.id)
+                                val deletedId = deletingLut!!.id
+                                val replacementId = localLutList.firstOrNull { it.id != deletedId }?.id
+                                if (photoLutId == deletedId) {
+                                    viewModel.setPhotoLut(replacementId)
+                                }
+                                if (videoLutId == deletedId) {
+                                    viewModel.setVideoLut(replacementId)
                                 }
                                 viewModel.refreshCustomContent()
                                 showDeleteDialog = false

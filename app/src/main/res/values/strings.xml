@@ -173,6 +173,11 @@
     <string name="settings_focus_lens_group_lens_discovery">Lens Discovery</string>
     <string name="settings_focus_lens_group_camera2_extensions">Camera2 Extensions</string>
     <string name="settings_section_capture_storage">Capture &amp; Storage</string>
+    <string name="settings_section_video">Video</string>
+    <string name="settings_separate_video_lut">Separate Photo and Video LUTs</string>
+    <string name="settings_separate_video_lut_description">Use and remember an independent LUT selection in video mode.</string>
+    <string name="settings_video_lut">Video LUT</string>
+    <string name="settings_video_lut_description">Selected LUT: %1$s</string>
     <string name="settings_section_quality_perf">Quality &amp; Performance</string>
     <string name="settings_section_color_hdr">Imaging &amp; Color</string>
     <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>
@@ -568,6 +573,7 @@
     <string name="restore_failed">Restore failed</string>
     <string name="restore_in_progress">Restoring settings and custom content...</string>
     <string name="filter_management_title">LUT Management</string>
+    <string name="video_lut_management_title">Video LUT Management</string>
     <string name="apply_lut_title">Apply LUT</string>
     <string name="apply_lut_processing">Applying LUT...</string>
     <string name="apply_lut_processing_progress">Applying LUT... (%1$d/%2$d)</string>

@@ -94,7 +94,7 @@ class MyCameraApplication : Application() {
             .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.auto_awesome_color))
             .setIntent(Intent(this, MainActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
-                putExtra("route", Routes.FILTER_MANAGEMENT)
+                putExtra("route", Routes.filterManagement())
             })
             .build()
         shortcutManager.dynamicShortcuts = listOf(phantomShortcut, lutShortcut)

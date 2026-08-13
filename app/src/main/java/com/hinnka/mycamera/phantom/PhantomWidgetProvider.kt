@@ -113,7 +113,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
             ACTION_OPEN_FILTERS -> {
                 val mainIntent = Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    putExtra("route", com.hinnka.mycamera.Routes.FILTER_MANAGEMENT)
+                    putExtra("route", com.hinnka.mycamera.Routes.filterManagement())
                 }
                 context.startActivity(mainIntent)
             }
