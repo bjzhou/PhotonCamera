@@ -55,6 +55,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileOutputStream
+import java.net.SocketException
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -1407,7 +1408,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 bitmap
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to load thumbnail for ${photo.id}", e)
+            PLog.w(TAG, "Failed to load thumbnail for ${photo.id}", e)
             null
         }
     }
@@ -3250,7 +3251,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 localeTag = Locale.getDefault().toLanguageTag()
             )
             result.onSuccess { aiEvaluationCache[cacheKey] = it }
-            result.onFailure { PLog.e(TAG, "AI photo evaluation request failed", it) }
+            result.onFailure {
+                if (it is SocketException) {
+                    PLog.w(TAG, "AI photo evaluation request failed", it)
+                } else {
+                    PLog.e(TAG, "AI photo evaluation request failed", it)
+                }
+            }
             result
         } catch (e: Exception) {
             if (e is CancellationException) throw e

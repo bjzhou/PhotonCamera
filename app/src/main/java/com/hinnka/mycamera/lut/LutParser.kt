@@ -144,7 +144,7 @@ object LutParser {
             PLog.d(TAG, "Loaded ${lutList.size} LUTs from config.json")
             lutList
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to load LUT config", e)
+            PLog.w(TAG, "Failed to load LUT config", e)
             emptyList()
         }
     }

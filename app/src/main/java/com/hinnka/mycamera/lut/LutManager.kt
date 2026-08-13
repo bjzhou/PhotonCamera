@@ -254,7 +254,7 @@ class LutManager(private val context: Context) {
                 null
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to load LUT: $id", e)
+            PLog.w(TAG, "Failed to load LUT: $id", e)
             null
         }
     }

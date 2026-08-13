@@ -4485,7 +4485,7 @@ object GalleryManager {
                 PLog.w(TAG, "Document provider refused to delete exported URI: $uri")
             }
         }.onFailure { e ->
-            PLog.e(TAG, "Failed to delete exported document URI: $uri", e)
+            PLog.w(TAG, "Failed to delete exported document URI: $uri", e)
         }.getOrDefault(false)
     }
 
@@ -4566,7 +4566,7 @@ object GalleryManager {
         return try {
             MediaStore.createDeleteRequest(context.contentResolver, mediaStoreUris)
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to create MediaStore delete request for $logContext", e)
+            PLog.w(TAG, "Failed to create MediaStore delete request for $logContext", e)
             null
         }
     }

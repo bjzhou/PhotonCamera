@@ -527,7 +527,7 @@ data class MediaMetadata(
                     mimeType = options.outMimeType
                 }
             } catch (e: Exception) {
-                PLog.e(TAG, "Failed to decode bounds from $uri", e)
+                PLog.w(TAG, "Failed to decode bounds from $uri", e)
             }
 
             if (mimeType == null) {

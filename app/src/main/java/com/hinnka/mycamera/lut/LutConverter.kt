@@ -64,6 +64,9 @@ object LutConverter {
             writePLutFile(cubeData, plutOutputStream, colorSpace, curve)
 
             true
+        } catch (e: IllegalArgumentException) {
+            PLog.w(TAG, "Failed to convert cube LUT", e)
+            false
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to convert cube LUT", e)
             false
