@@ -17,6 +17,7 @@ object EmbeddedGainmapReusePolicy {
                 metadata.cropRegion == null &&
                 metadata.postCropRegion == null &&
                 PostEditGeometry.normalizeRotation(metadata.postRotationDegrees) == 0 &&
+                kotlin.math.abs(metadata.postStraightenDegrees) < 0.001f &&
                 !metadata.postMirrorHorizontal &&
                 metadata.computationalAperture == null
     }

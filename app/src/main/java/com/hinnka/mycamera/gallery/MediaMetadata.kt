@@ -119,6 +119,7 @@ data class MediaMetadata(
     val focusPointY: Float? = null,
     val postCropRegion: Rect? = null,
     val postRotationDegrees: Int = 0,
+    val postStraightenDegrees: Float = 0f,
     val postMirrorHorizontal: Boolean = false,
     // Live Photo 演示时间戳 (us)
     val presentationTimestampUs: Long? = null,
@@ -426,6 +427,11 @@ data class MediaMetadata(
                         )
                     },
                     postRotationDegrees = obj.optInt("postRotationDegrees", 0),
+                    postStraightenDegrees = if (obj.isNull("postStraightenDegrees")) {
+                        0f
+                    } else {
+                        obj.optDouble("postStraightenDegrees").toFloat()
+                    },
                     postMirrorHorizontal = obj.optBoolean("postMirrorHorizontal", false),
                     rotation = obj.optInt("rotation", 0),
                     // 拍摄信息

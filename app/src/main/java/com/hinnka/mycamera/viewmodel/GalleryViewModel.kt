@@ -434,6 +434,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRotationDegrees = MutableStateFlow(0)
         private set
+    var editStraightenDegrees = MutableStateFlow(0f)
+        private set
     var editMirrorHorizontal = MutableStateFlow(false)
         private set
 
@@ -454,9 +456,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setFocusPoint(x: Float, y: Float) {
+        val cropRect = editCropRect.value
+        val croppedX = cropRect?.let { it.left + x * it.width() } ?: x
+        val croppedY = cropRect?.let { it.top + y * it.height() } ?: y
+        val preStraightenPoint = resolveCurrentEditBaseDimensions()?.let { (baseWidth, baseHeight) ->
+            val (straightenSourceWidth, straightenSourceHeight) = PostEditGeometry.rotatedDimensions(
+                baseWidth,
+                baseHeight,
+                editRotationDegrees.value
+            )
+            PostEditGeometry.mapStraightenedPointToSource(
+                x = croppedX,
+                y = croppedY,
+                width = straightenSourceWidth,
+                height = straightenSourceHeight,
+                straightenDegrees = editStraightenDegrees.value
+            )
+        } ?: (croppedX to croppedY)
         val (sourceX, sourceY) = PostEditGeometry.mapEditedPointToSource(
-            x = x,
-            y = y,
+            x = preStraightenPoint.first,
+            y = preStraightenPoint.second,
             rotationDegrees = editRotationDegrees.value,
             mirrorHorizontal = editMirrorHorizontal.value
         )
@@ -1298,10 +1317,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         val baseWidth = metadata.width.takeIf { it > 0 } ?: photo?.width ?: 0
         val baseHeight = metadata.height.takeIf { it > 0 } ?: photo?.height ?: 0
-        val (cw, ch) = PostEditGeometry.rotatedDimensions(
+        val (cw, ch) = PostEditGeometry.editedDimensions(
             baseWidth,
             baseHeight,
-            metadata.postRotationDegrees
+            metadata.postRotationDegrees,
+            metadata.postStraightenDegrees
         )
         if (metadata.postCropRegion != null && cw > 0 && ch > 0) {
             val cropRect = RectF(
@@ -1360,6 +1380,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawSpectralFilmMDensityGain.value = m.spectralFilmMDensityGain
             editRawSpectralFilmYDensityGain.value = m.spectralFilmYDensityGain
             editRotationDegrees.value = PostEditGeometry.normalizeRotation(m.postRotationDegrees)
+            editStraightenDegrees.value =
+                PostEditGeometry.normalizeStraightenDegrees(m.postStraightenDegrees)
             editMirrorHorizontal.value = m.postMirrorHorizontal
             _editAiDenoiseStrength.value = if (m.hasAiDenoisedBase) m.aiDenoiseStrength ?: 1.0f else 0.0f
             restoreCropEditState(photo, m)
@@ -1374,6 +1396,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         } ?: run {
             editRotationDegrees.value = 0
+            editStraightenDegrees.value = 0f
             editMirrorHorizontal.value = false
             _editAiDenoiseStrength.value = 0.0f
             restoreCropEditState(photo, null)
@@ -1978,6 +2001,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawSpectralFilmYDensityGain.value = metadata.spectralFilmYDensityGain
                 editRotationDegrees.value =
                     PostEditGeometry.normalizeRotation(metadata.postRotationDegrees)
+                editStraightenDegrees.value =
+                    PostEditGeometry.normalizeStraightenDegrees(metadata.postStraightenDegrees)
                 editMirrorHorizontal.value = metadata.postMirrorHorizontal
                 restoreCropEditState(targetPhoto, metadata)
                 editSharpening.value = metadata.sharpening ?: 0f
@@ -2039,6 +2064,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawSpectralFilmMDensityGain.value = 1f
                 editRawSpectralFilmYDensityGain.value = 1f
                 editRotationDegrees.value = 0
+                editStraightenDegrees.value = 0f
                 editMirrorHorizontal.value = false
                 editComputationalAperture.value = null
                 editFocusPointX.value = null
@@ -2130,6 +2156,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
         editRotationDegrees.value = 0
+        editStraightenDegrees.value = 0f
         editMirrorHorizontal.value = false
         editRawExposureCompensation.value = 0f
         editRawAutoExposure.value = true
@@ -2280,6 +2307,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 focusPointX = editFocusPointX.value,
                 focusPointY = editFocusPointY.value,
                 postRotationDegrees = editRotationDegrees.value,
+                postStraightenDegrees = editStraightenDegrees.value,
                 postMirrorHorizontal = editMirrorHorizontal.value,
                 applyEffectsToVideo = editApplyEffectsToVideo.value
             ),
@@ -2321,10 +2349,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                 val baseWidth = metadata.width.takeIf { it > 0 } ?: sourcePhoto.width
                 val baseHeight = metadata.height.takeIf { it > 0 } ?: sourcePhoto.height
-                val (cropWidth, cropHeight) = PostEditGeometry.rotatedDimensions(
+                val (cropWidth, cropHeight) = PostEditGeometry.editedDimensions(
                     baseWidth,
                     baseHeight,
-                    metadata.postRotationDegrees
+                    metadata.postRotationDegrees,
+                    metadata.postStraightenDegrees
                 )
                 val normalizedCrop = metadata.postCropRegion
                     ?.takeIf { cropWidth > 0 && cropHeight > 0 }
@@ -2351,6 +2380,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         focusPointX = metadata.focusPointX,
                         focusPointY = metadata.focusPointY,
                         postRotationDegrees = metadata.postRotationDegrees,
+                        postStraightenDegrees = metadata.postStraightenDegrees,
                         postMirrorHorizontal = metadata.postMirrorHorizontal,
                         applyEffectsToVideo = metadata.applyEffectsToVideo
                     ),
@@ -2396,6 +2426,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editFocusPointY.value = settings.focusPointY
         editRotationDegrees.value =
             PostEditGeometry.normalizeRotation(settings.postRotationDegrees)
+        editStraightenDegrees.value =
+            PostEditGeometry.normalizeStraightenDegrees(settings.postStraightenDegrees)
         editMirrorHorizontal.value = settings.postMirrorHorizontal
         editCropRect.value = copied.normalizedCropRect?.let(::RectF)
         editCropAspectOption.value = copied.normalizedCropRect?.let {
@@ -2798,14 +2830,68 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val baseHeight = photo.metadata?.height?.takeIf { it > 0 }
             ?: currentMediaMetadata?.height?.takeIf { it > 0 }
             ?: photo.height
-        val (w, h) = PostEditGeometry.rotatedDimensions(
+        val (straightenSourceWidth, straightenSourceHeight) = PostEditGeometry.rotatedDimensions(
             baseWidth,
             baseHeight,
             editRotationDegrees.value
         )
+        val (w, h) = PostEditGeometry.straightenedDimensions(
+            straightenSourceWidth,
+            straightenSourceHeight,
+            editStraightenDegrees.value
+        )
         if (w > 0 && h > 0) {
-            editCropRect.value = calculateInitialCropRect(w, h, option)
+            val selectedPixelAspect = when (option) {
+                CropAspectOption.Free -> null
+                CropAspectOption.Original ->
+                    straightenSourceWidth.toFloat() / straightenSourceHeight
+                else -> option.getAspectRatioValue(
+                    straightenSourceWidth,
+                    straightenSourceHeight
+                )
+            }
+            val cropBounds = selectedPixelAspect?.let { aspect ->
+                PostEditGeometry.straightenSafeCropRectForAspect(
+                    width = straightenSourceWidth,
+                    height = straightenSourceHeight,
+                    straightenDegrees = editStraightenDegrees.value,
+                    pixelAspect = aspect
+                )
+            } ?: PostEditGeometry.straightenSafeCropRect(
+                straightenSourceWidth,
+                straightenSourceHeight,
+                editStraightenDegrees.value
+            )
+            editCropRect.value = calculateInitialCropRect(
+                imageWidth = w,
+                imageHeight = h,
+                aspectOption = option,
+                cropBounds = cropBounds,
+                originalAspectRatio = straightenSourceWidth.toFloat() / straightenSourceHeight
+            )
         }
+    }
+
+    fun setStraightenDegrees(degrees: Float) {
+        val normalized = PostEditGeometry.normalizeStraightenDegrees(degrees)
+        val previous = editStraightenDegrees.value
+        if (normalized == previous) return
+
+        resolveCurrentEditBaseDimensions()?.let { (baseWidth, baseHeight) ->
+            val (sourceWidth, sourceHeight) = PostEditGeometry.rotatedDimensions(
+                baseWidth,
+                baseHeight,
+                editRotationDegrees.value
+            )
+            editCropRect.value = PostEditGeometry.remapCropRectForStraighten(
+                rect = editCropRect.value,
+                width = sourceWidth,
+                height = sourceHeight,
+                oldDegrees = previous,
+                newDegrees = normalized
+            )
+        }
+        editStraightenDegrees.value = normalized
     }
 
     fun rotateEditClockwise() {
@@ -2833,6 +2919,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editCropRect.value = editCropRect.value?.let {
             PostEditGeometry.mirrorNormalizedRectHorizontally(it)
         }
+        editStraightenDegrees.value = -editStraightenDegrees.value
         editMirrorHorizontal.value = !editMirrorHorizontal.value
     }
 
@@ -2842,6 +2929,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun resetCrop() {
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
+        editStraightenDegrees.value = 0f
+    }
+
+    private fun resolveCurrentEditBaseDimensions(): Pair<Int, Int>? {
+        val photo = getCurrentPhoto()?.let { it.relatedPhoto ?: it } ?: return null
+        val width = photo.metadata?.width?.takeIf { it > 0 }
+            ?: currentMediaMetadata?.width?.takeIf { it > 0 }
+            ?: photo.width.takeIf { it > 0 }
+            ?: return null
+        val height = photo.metadata?.height?.takeIf { it > 0 }
+            ?: currentMediaMetadata?.height?.takeIf { it > 0 }
+            ?: photo.height.takeIf { it > 0 }
+            ?: return null
+        return width to height
     }
 
     private fun normalizeEditCropRect(rect: RectF?, minSize: Float = 0.01f): RectF? {
@@ -2990,6 +3091,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         showOrigin: Boolean = false,
         bitmap: Bitmap? = null,
         ignoreCrop: Boolean = false,
+        ignoreStraighten: Boolean = false,
+        ignoreFrame: Boolean = false,
         ignoreDenoise: Boolean = false,
         recipeParamsOverride: ColorRecipeParams? = null,
         maxEdge: Int = FULL_QUALITY_PREVIEW_MAX_EDGE
@@ -3053,10 +3156,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         postCropRegion = editCropRect.value?.let { rectF ->
                             val baseWidth = photo.metadata?.width ?: photo.width
                             val baseHeight = photo.metadata?.height ?: photo.height
-                            val (cw, ch) = PostEditGeometry.rotatedDimensions(
+                            val (cw, ch) = PostEditGeometry.editedDimensions(
                                 baseWidth,
                                 baseHeight,
-                                editRotationDegrees.value
+                                editRotationDegrees.value,
+                                editStraightenDegrees.value
                             )
                             android.graphics.Rect(
                                 (rectF.left * cw).roundToInt(),
@@ -3066,11 +3170,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                             )
                         },
                         postRotationDegrees = editRotationDegrees.value,
+                        postStraightenDegrees = editStraightenDegrees.value,
                         postMirrorHorizontal = editMirrorHorizontal.value
                     )
                     
                     if (ignoreCrop) {
                         finalMetadata = finalMetadata.copy(postCropRegion = null)
+                    }
+                    if (ignoreStraighten) {
+                        finalMetadata = finalMetadata.copy(postStraightenDegrees = 0f)
                     }
                     finalS = editSharpening.value
                     finalNR = editNoiseReduction.value
@@ -3087,6 +3195,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     if (ignoreCrop) {
                         finalMetadata = finalMetadata.copy(postCropRegion = null)
                     }
+                    if (ignoreStraighten) {
+                        finalMetadata = finalMetadata.copy(postStraightenDegrees = 0f)
+                    }
+                }
+
+                if (ignoreFrame) {
+                    finalMetadata = finalMetadata.copy(frameId = null)
                 }
 
                 // 使用多级缓存优化性能
@@ -3355,10 +3470,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val baseHeight = targetMetadata?.height?.takeIf { it > 0 }
                     ?: photo.relatedPhoto?.height?.takeIf { it > 0 }
                     ?: photo.height
-                val (w, h) = PostEditGeometry.rotatedDimensions(
+                val (w, h) = PostEditGeometry.editedDimensions(
                     baseWidth,
                     baseHeight,
-                    editRotationDegrees.value
+                    editRotationDegrees.value,
+                    editStraightenDegrees.value
                 )
                 val finalCropRegion = editCropRect.value?.let { rectF ->
                     android.graphics.Rect(
@@ -3410,6 +3526,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         focusPointY = editFocusPointY.value,
                         postCropRegion = finalCropRegion,
                         postRotationDegrees = editRotationDegrees.value,
+                        postStraightenDegrees = editStraightenDegrees.value,
                         postMirrorHorizontal = editMirrorHorizontal.value,
                         applyEffectsToVideo = editApplyEffectsToVideo.value
                     )
@@ -3659,10 +3776,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         copyDetailProcessing: Boolean
     ): MediaMetadata {
         val settings = copied.metadata
-        val (cropWidth, cropHeight) = PostEditGeometry.rotatedDimensions(
+        val (cropWidth, cropHeight) = PostEditGeometry.editedDimensions(
             current.width,
             current.height,
-            settings.postRotationDegrees
+            settings.postRotationDegrees,
+            settings.postStraightenDegrees
         )
         val cropRegion = copied.normalizedCropRect
             ?.takeIf { cropWidth > 0 && cropHeight > 0 }
@@ -3703,6 +3821,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             postCropRegion = cropRegion,
             postRotationDegrees =
                 PostEditGeometry.normalizeRotation(settings.postRotationDegrees),
+            postStraightenDegrees =
+                PostEditGeometry.normalizeStraightenDegrees(settings.postStraightenDegrees),
             postMirrorHorizontal = settings.postMirrorHorizontal,
             applyEffectsToVideo = settings.applyEffectsToVideo
         )

@@ -860,7 +860,11 @@ class PhotoProcessor(
         } else {
             rotated
         }
-        return applyCrop(transformed, metadata, label)
+        val straightened = BitmapUtils.rotate(
+            transformed,
+            PostEditGeometry.normalizeStraightenDegrees(metadata.postStraightenDegrees)
+        )
+        return applyCrop(straightened, metadata, label)
     }
 
     private suspend fun resolveRawNoiseProfileId(metadata: MediaMetadata): String =
@@ -874,10 +878,11 @@ class PhotoProcessor(
 
         val baseWidth = metadata.width.takeIf { it > 0 } ?: input.width
         val baseHeight = metadata.height.takeIf { it > 0 } ?: input.height
-        val (sourceWidth, sourceHeight) = PostEditGeometry.rotatedDimensions(
+        val (sourceWidth, sourceHeight) = PostEditGeometry.editedDimensions(
             baseWidth,
             baseHeight,
-            metadata.postRotationDegrees
+            metadata.postRotationDegrees,
+            metadata.postStraightenDegrees
         )
         val mappedCropRegion = mapPostCropRegionToInput(cropRegion, sourceWidth, sourceHeight, input.width, input.height)
         if (mappedCropRegion.isEmpty) return input

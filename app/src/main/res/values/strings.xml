@@ -109,6 +109,11 @@
     <string name="crop_reset">Reset</string>
     <string name="rotate">Rotate</string>
     <string name="flip_horizontal">Flip horizontally</string>
+    <string name="crop_straighten">Straighten</string>
+    <string name="crop_straighten_degrees">%1$.1f°</string>
+    <string name="crop_straighten_range_min">−45°</string>
+    <string name="crop_straighten_range_zero">0°</string>
+    <string name="crop_straighten_range_max">+45°</string>
     <string name="delete_confirm">Delete this photo?</string>
     <string name="delete_multiple_confirm">Delete %d photos?</string>
     <string name="delete_exported_photos_count">Also delete %d exported photos</string>

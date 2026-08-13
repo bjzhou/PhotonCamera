@@ -3,7 +3,10 @@ package com.hinnka.mycamera.ui.gallery
 import android.graphics.Bitmap
 import android.graphics.RectF
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -18,18 +21,21 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.gallery.PostEditGeometry
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextAlign
@@ -37,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
@@ -107,6 +114,8 @@ fun getCropAspectOptions(allRatios: List<AspectRatio>): List<CropAspectOption> {
 fun CropEditPanel(
     selectedOption: CropAspectOption,
     onOptionSelected: (CropAspectOption) -> Unit,
+    straightenDegrees: Float,
+    onStraightenDegreesChanged: (Float) -> Unit,
     isHorizontallyMirrored: Boolean,
     onRotate: () -> Unit,
     onMirrorHorizontal: () -> Unit,
@@ -124,6 +133,13 @@ fun CropEditPanel(
             .fillMaxWidth()
             .padding(vertical = 12.dp)
     ) {
+        StraightenControl(
+            degrees = straightenDegrees,
+            onDegreesChanged = onStraightenDegreesChanged
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -211,6 +227,176 @@ fun CropEditPanel(
                     onClick = { onOptionSelected(option) }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun StraightenControl(
+    degrees: Float,
+    onDegreesChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentOnDegreesChanged by rememberUpdatedState(onDegreesChanged)
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.crop_straighten).uppercase(),
+                color = Color.White.copy(alpha = 0.4f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Text(
+                text = stringResource(R.string.crop_straighten_degrees, degrees),
+                color = AccentOrange,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { currentOnDegreesChanged(0f) }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        StraightenRuler(
+            degrees = degrees,
+            onDegreesChanged = currentOnDegreesChanged,
+            onDoubleTap = { currentOnDegreesChanged(0f) }
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                stringResource(R.string.crop_straighten_range_min),
+                color = Color.White.copy(alpha = 0.35f),
+                fontSize = 9.sp
+            )
+            Text(
+                stringResource(R.string.crop_straighten_range_zero),
+                color = Color.White.copy(alpha = 0.35f),
+                fontSize = 9.sp
+            )
+            Text(
+                stringResource(R.string.crop_straighten_range_max),
+                color = Color.White.copy(alpha = 0.35f),
+                fontSize = 9.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun StraightenRuler(
+    degrees: Float,
+    onDegreesChanged: (Float) -> Unit,
+    onDoubleTap: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentOnDegreesChanged by rememberUpdatedState(onDegreesChanged)
+    val currentOnDoubleTap by rememberUpdatedState(onDoubleTap)
+    val trackInsetPx = with(LocalDensity.current) { 10.dp.toPx() }
+
+    fun updateFromPosition(positionX: Float, width: Float) {
+        val trackWidth = (width - trackInsetPx * 2f).coerceAtLeast(1f)
+        val fraction = ((positionX - trackInsetPx) / trackWidth).coerceIn(0f, 1f)
+        val value = -PostEditGeometry.MAX_STRAIGHTEN_DEGREES +
+            fraction * PostEditGeometry.MAX_STRAIGHTEN_DEGREES * 2f
+        currentOnDegreesChanged(if (abs(value) < 0.12f) 0f else value)
+    }
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .straightenSliderDragInput(trackInsetPx) { positionX, width ->
+                updateFromPosition(positionX, width)
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = { currentOnDoubleTap() },
+                    onTap = { position ->
+                        updateFromPosition(position.x, size.width.toFloat())
+                    }
+                )
+            }
+    ) {
+        val centerY = size.height / 2f
+        val trackWidth = (size.width - trackInsetPx * 2f).coerceAtLeast(1f)
+        for (tick in -45..45) {
+            val x = trackInsetPx + (tick + 45f) / 90f * trackWidth
+            val isMajor = tick % 5 == 0
+            val tickHeight = if (isMajor) 12.dp.toPx() else 6.dp.toPx()
+            drawLine(
+                color = Color.White.copy(alpha = if (isMajor) 0.5f else 0.22f),
+                start = Offset(x, centerY - tickHeight / 2f),
+                end = Offset(x, centerY + tickHeight / 2f),
+                strokeWidth = if (isMajor) 1.5.dp.toPx() else 1.dp.toPx()
+            )
+        }
+
+        val normalizedValue = (
+            PostEditGeometry.normalizeStraightenDegrees(degrees) +
+                PostEditGeometry.MAX_STRAIGHTEN_DEGREES
+            ) / (PostEditGeometry.MAX_STRAIGHTEN_DEGREES * 2f)
+        val thumbWidth = 5.dp.toPx()
+        val thumbHeight = 30.dp.toPx()
+        val thumbX = trackInsetPx + normalizedValue * trackWidth
+        drawRoundRect(
+            color = AccentOrange,
+            topLeft = Offset(thumbX - thumbWidth / 2f, centerY - thumbHeight / 2f),
+            size = Size(thumbWidth, thumbHeight),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                thumbWidth / 2f,
+                thumbWidth / 2f
+            )
+        )
+    }
+}
+
+private fun Modifier.straightenSliderDragInput(
+    trackInsetPx: Float,
+    onPositionChange: (positionX: Float, width: Float) -> Unit
+): Modifier = pointerInput(trackInsetPx) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        var totalX = 0f
+        var totalY = 0f
+        var dragging = false
+
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+
+            val delta = change.positionChange()
+            if (!dragging) {
+                totalX += delta.x
+                totalY += delta.y
+                if (abs(totalY) > viewConfiguration.touchSlop && abs(totalY) > abs(totalX)) {
+                    break
+                }
+                if (abs(totalX) <= viewConfiguration.touchSlop || abs(totalX) <= abs(totalY)) {
+                    continue
+                }
+                dragging = true
+            }
+
+            change.consume()
+            onPositionChange(change.position.x, size.width.toFloat())
         }
     }
 }
@@ -317,6 +503,9 @@ private fun CropAspectOptionItem(
 fun CropOverlay(
     bitmap: Bitmap?,
     cropRect: RectF,
+    cropBounds: RectF = RectF(0f, 0f, 1f, 1f),
+    cropAspectRatio: Float? = null,
+    straightenDegrees: Float = 0f,
     onCropRectChanged: (RectF) -> Unit,
     aspectOption: CropAspectOption,
     contentPadding: Dp = 0.dp,
@@ -324,16 +513,41 @@ fun CropOverlay(
 ) {
     if (bitmap == null) return
 
-    val imageWidth = bitmap.width.toFloat()
-    val imageHeight = bitmap.height.toFloat()
+    val sourceImageWidth = bitmap.width.toFloat()
+    val sourceImageHeight = bitmap.height.toFloat()
+    val normalizedStraightenDegrees = PostEditGeometry.normalizeStraightenDegrees(straightenDegrees)
+    val straightenedImageSize = remember(bitmap.width, bitmap.height, normalizedStraightenDegrees) {
+        PostEditGeometry.straightenedDimensions(
+            bitmap.width,
+            bitmap.height,
+            normalizedStraightenDegrees
+        )
+    }
+    val imageWidth = straightenedImageSize.first.toFloat()
+    val imageHeight = straightenedImageSize.second.toFloat()
+    val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
     val density = LocalDensity.current
     val contentPaddingPx = with(density) { contentPadding.toPx() }
 
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var dragHandle by remember { mutableStateOf<DragHandle?>(null) }
     
-    val safeCropRect = remember(cropRect.left, cropRect.top, cropRect.right, cropRect.bottom) {
-        normalizeCropRect(cropRect)
+    val safeBounds = remember(
+        cropBounds.left,
+        cropBounds.top,
+        cropBounds.right,
+        cropBounds.bottom
+    ) {
+        normalizeCropRect(cropBounds, minSize = 0.001f)
+    }
+    val safeCropRect = remember(
+        cropRect.left,
+        cropRect.top,
+        cropRect.right,
+        cropRect.bottom,
+        safeBounds
+    ) {
+        cropRect.coerceInside(safeBounds)
     }
     val currentCropRect by rememberUpdatedState(safeCropRect)
 
@@ -357,22 +571,40 @@ fun CropOverlay(
             .fillMaxSize()
             .onSizeChanged { containerSize = it }
     ) {
-        // 绘制图片
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(contentPadding)
-        )
+        // 裁剪页持有未应用水平校正的底图。这里直接在绘制阶段旋转，滑杆的每次
+        // value change 都能在下一帧显示，无需等待后台重新生成 Bitmap。
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            if (imageDisplayRect != Rect.Zero) {
+                val pixelScale = min(
+                    imageDisplayRect.width / imageWidth,
+                    imageDisplayRect.height / imageHeight
+                )
+                val sourceDisplayWidth = (sourceImageWidth * pixelScale).roundToInt().coerceAtLeast(1)
+                val sourceDisplayHeight = (sourceImageHeight * pixelScale).roundToInt().coerceAtLeast(1)
+                val destinationOffset = IntOffset(
+                    x = (imageDisplayRect.center.x - sourceDisplayWidth / 2f).roundToInt(),
+                    y = (imageDisplayRect.center.y - sourceDisplayHeight / 2f).roundToInt()
+                )
+                rotate(
+                    degrees = normalizedStraightenDegrees,
+                    pivot = imageDisplayRect.center
+                ) {
+                    drawImage(
+                        image = imageBitmap,
+                        dstOffset = destinationOffset,
+                        dstSize = IntSize(sourceDisplayWidth, sourceDisplayHeight),
+                        filterQuality = FilterQuality.Medium
+                    )
+                }
+            }
+        }
 
         // 裁剪叠加层
         if (imageDisplayRect != Rect.Zero) {
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(imageDisplayRect, aspectOption) {
+                    .pointerInput(imageDisplayRect, aspectOption, safeBounds, cropAspectRatio) {
                         detectDragGestures(
                             onDragStart = { offset ->
                                 // 转换触摸坐标到归一化坐标
@@ -389,14 +621,20 @@ fun CropOverlay(
                                 change.consume()
                                 val handle = dragHandle ?: return@detectDragGestures
 
-                                val dx = dragAmount.x / imageDisplayRect.width
-                                val dy = dragAmount.y / imageDisplayRect.height
+                                val dx = dragAmount.x / imageDisplayRect.width / safeBounds.width()
+                                val dy = dragAmount.y / imageDisplayRect.height / safeBounds.height()
+                                val localCropRect = currentCropRect.toLocal(safeBounds)
 
                                 val newRect = moveCropRect(
-                                    currentCropRect, handle, dx, dy,
-                                    aspectOption.getAspectRatioValue(bitmap.width, bitmap.height),
-                                    imageWidth / imageHeight
-                                )
+                                    localCropRect,
+                                    handle,
+                                    dx,
+                                    dy,
+                                    cropAspectRatio
+                                        ?: aspectOption.getAspectRatioValue(bitmap.width, bitmap.height),
+                                    imageWidth * safeBounds.width() /
+                                        (imageHeight * safeBounds.height())
+                                ).fromLocal(safeBounds)
 
                                 onCropRectChanged(newRect)
                             },
@@ -410,6 +648,29 @@ fun CropOverlay(
             }
         }
     }
+}
+
+private fun RectF.toLocal(bounds: RectF): RectF = RectF(
+    (left - bounds.left) / bounds.width(),
+    (top - bounds.top) / bounds.height(),
+    (right - bounds.left) / bounds.width(),
+    (bottom - bounds.top) / bounds.height()
+)
+
+private fun RectF.fromLocal(bounds: RectF): RectF = RectF(
+    bounds.left + left * bounds.width(),
+    bounds.top + top * bounds.height(),
+    bounds.left + right * bounds.width(),
+    bounds.top + bottom * bounds.height()
+)
+
+private fun RectF.coerceInside(bounds: RectF): RectF {
+    val left = min(left, right).coerceIn(bounds.left, bounds.right)
+    val top = min(top, bottom).coerceIn(bounds.top, bounds.bottom)
+    val right = max(this.left, this.right).coerceIn(bounds.left, bounds.right)
+    val bottom = max(this.top, this.bottom).coerceIn(bounds.top, bounds.bottom)
+    if (right <= left || bottom <= top) return RectF(bounds)
+    return RectF(left, top, right, bottom)
 }
 
 /**
@@ -783,13 +1044,19 @@ private fun DrawScope.drawCropOverlay(
 fun calculateInitialCropRect(
     imageWidth: Int,
     imageHeight: Int,
-    aspectOption: CropAspectOption
+    aspectOption: CropAspectOption,
+    cropBounds: RectF = RectF(0f, 0f, 1f, 1f),
+    originalAspectRatio: Float = imageWidth.toFloat() / imageHeight
 ): RectF {
-    if (aspectOption.isFree || aspectOption.isOriginal) {
-        return RectF(0f, 0f, 1f, 1f)
+    if (aspectOption.isFree) {
+        return RectF(cropBounds)
     }
 
-    val targetAspect = aspectOption.getAspectRatioValue(imageWidth, imageHeight) ?: return RectF(0f, 0f, 1f, 1f)
+    val targetAspect = if (aspectOption.isOriginal) {
+        originalAspectRatio
+    } else {
+        aspectOption.getAspectRatioValue(imageWidth, imageHeight)
+    } ?: return RectF(cropBounds)
     val imageAspect = imageWidth.toFloat() / imageHeight.toFloat()
 
     // 裁剪框在归一化坐标中的比例 = targetAspect / imageAspect
@@ -798,18 +1065,18 @@ fun calculateInitialCropRect(
     val cropW: Float
     val cropH: Float
 
-    if (normalizedAspect > 1f) {
-        // 裁剪框比图片宽 → 宽度为1，高度缩小
-        cropW = 1f
-        cropH = 1f / normalizedAspect
+    val boundsAspect = cropBounds.width() / cropBounds.height()
+    if (normalizedAspect > boundsAspect) {
+        cropW = cropBounds.width()
+        cropH = cropW / normalizedAspect
     } else {
-        // 裁剪框比图片窄 → 高度为1，宽度缩小
-        cropH = 1f
+        cropH = cropBounds.height()
         cropW = normalizedAspect
+            .times(cropH)
     }
 
-    val left = (1f - cropW) / 2f
-    val top = (1f - cropH) / 2f
+    val left = cropBounds.centerX() - cropW / 2f
+    val top = cropBounds.centerY() - cropH / 2f
 
     return RectF(left, top, left + cropW, top + cropH)
 }

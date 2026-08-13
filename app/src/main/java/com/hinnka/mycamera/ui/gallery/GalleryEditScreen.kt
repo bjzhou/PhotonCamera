@@ -58,6 +58,7 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.gallery.MediaData
+import com.hinnka.mycamera.gallery.PostEditGeometry
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -149,6 +150,7 @@ private data class PreviewRenderSignature(
     val editFocusX: Float?,
     val editFocusY: Float?,
     val editRotationDegrees: Int,
+    val editStraightenDegrees: Float,
     val editMirrorHorizontal: Boolean,
     val showOrigin: Boolean,
     val editTab: Int,
@@ -231,6 +233,7 @@ fun GalleryEditScreen(
 
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var cropPreviewBitmap by remember(editSourcePhoto?.id) { mutableStateOf<Bitmap?>(null) }
     var thumbnailBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var imageHistogram by remember { mutableStateOf<ImageHistogram?>(null) }
 
@@ -280,6 +283,7 @@ fun GalleryEditScreen(
     val editCropRect by viewModel.editCropRect.collectAsState()
     val editCropAspectOption by viewModel.editCropAspectOption.collectAsState()
     val editRotationDegrees by viewModel.editRotationDegrees.collectAsState()
+    val editStraightenDegrees by viewModel.editStraightenDegrees.collectAsState()
     val editMirrorHorizontal by viewModel.editMirrorHorizontal.collectAsState()
 
     val editAiDenoiseStrength by viewModel.editAiDenoiseStrength.collectAsState()
@@ -357,6 +361,8 @@ fun GalleryEditScreen(
             editFocusX = editFocusX,
             editFocusY = editFocusY,
             editRotationDegrees = editRotationDegrees,
+            // 裁剪页通过 Compose Canvas 实时校正，不触发防抖后的 Bitmap 重渲染。
+            editStraightenDegrees = if (editTab == EDIT_TAB_CROP) 0f else editStraightenDegrees,
             editMirrorHorizontal = editMirrorHorizontal,
             showOrigin = showOrigin,
             editTab = editTab
@@ -369,17 +375,26 @@ fun GalleryEditScreen(
         cancelStaleResult: Boolean
     ) {
         val requestId = ++previewRenderRequestId
+        val isCropPreview = editTab == EDIT_TAB_CROP
         val bitmap = withContext(Dispatchers.IO) {
             viewModel.getPreviewBitmap(
                 photo,
                 useGlobalEdit = true,
                 showOrigin = showOrigin,
-                ignoreCrop = editTab == EDIT_TAB_CROP,
+                ignoreCrop = isCropPreview,
+                ignoreStraighten = isCropPreview,
+                ignoreFrame = isCropPreview,
                 maxEdge = maxEdge
             )
         }
         if ((!cancelStaleResult || requestId == previewRenderRequestId) && bitmap != null) {
-            previewBitmap = bitmap
+            if (isCropPreview) {
+                if (editTab == EDIT_TAB_CROP) {
+                    cropPreviewBitmap = bitmap
+                }
+            } else {
+                previewBitmap = bitmap
+            }
             isLoadingPreview = false
         }
     }
@@ -435,6 +450,10 @@ fun GalleryEditScreen(
             .collect {
                 renderPreview(photo, maxEdge = 1440, cancelStaleResult = false)
             }
+    }
+
+    LaunchedEffect(editSourcePhoto?.id, refreshKey) {
+        cropPreviewBitmap = null
     }
 
     LaunchedEffect(editSourcePhoto?.id, refreshKey) {
@@ -858,10 +877,62 @@ fun GalleryEditScreen(
                         recipeParams = if (showOrigin) null else (editPhotoRecipeParams ?: editLutRecipeParams),
                         modifier = previewMediaModifier
                     )
-                } else if (editTab == EDIT_TAB_CROP && previewBitmap != null) {
+                } else if (editTab == EDIT_TAB_CROP && cropPreviewBitmap != null) {
+                    val geometryBaseWidth = currentEditSourcePhoto.metadata?.width?.takeIf { it > 0 }
+                        ?: currentEditSourcePhoto.width.coerceAtLeast(1)
+                    val geometryBaseHeight = currentEditSourcePhoto.metadata?.height?.takeIf { it > 0 }
+                        ?: currentEditSourcePhoto.height.coerceAtLeast(1)
+                    val (straightenSourceWidth, straightenSourceHeight) =
+                        PostEditGeometry.rotatedDimensions(
+                            geometryBaseWidth,
+                            geometryBaseHeight,
+                            editRotationDegrees
+                        )
+                    val (straightenedWidth, straightenedHeight) =
+                        PostEditGeometry.straightenedDimensions(
+                            straightenSourceWidth,
+                            straightenSourceHeight,
+                            editStraightenDegrees
+                        )
+                    val cropAspectRatio = when (editCropAspectOption) {
+                        CropAspectOption.Free -> null
+                        CropAspectOption.Original ->
+                            straightenSourceWidth.toFloat() / straightenSourceHeight
+                        else -> editCropAspectOption.getAspectRatioValue(
+                            straightenSourceWidth,
+                            straightenSourceHeight
+                        )
+                    }
+                    // Keep the no-black-corner constraint stable while the user drags a free crop
+                    // handle. Recomputing it from editCropRect on every pointer move changes the
+                    // pointerInput key and cancels the active gesture after each small movement.
+                    val effectiveCropAspectRatio = remember(
+                        currentEditSourcePhoto.id,
+                        editRotationDegrees,
+                        editStraightenDegrees,
+                        editCropAspectOption,
+                        straightenSourceWidth,
+                        straightenSourceHeight
+                    ) {
+                        cropAspectRatio
+                            ?: editCropRect?.takeIf { it.width() > 0f && it.height() > 0f }?.let {
+                                it.width() * straightenedWidth /
+                                    (it.height() * straightenedHeight)
+                            }
+                            ?: straightenSourceWidth.toFloat() / straightenSourceHeight
+                    }
+                    val cropBounds = PostEditGeometry.straightenSafeCropRectForAspect(
+                        width = straightenSourceWidth,
+                        height = straightenSourceHeight,
+                        straightenDegrees = editStraightenDegrees,
+                        pixelAspect = effectiveCropAspectRatio
+                    )
                     CropOverlay(
-                        bitmap = previewBitmap,
-                        cropRect = editCropRect ?: android.graphics.RectF(0f, 0f, 1f, 1f),
+                        bitmap = cropPreviewBitmap,
+                        cropRect = editCropRect ?: cropBounds,
+                        cropBounds = cropBounds,
+                        cropAspectRatio = cropAspectRatio,
+                        straightenDegrees = editStraightenDegrees,
                         onCropRectChanged = { rect -> viewModel.setCropRect(rect) },
                         aspectOption = editCropAspectOption,
                         contentPadding = 28.dp,
@@ -1202,9 +1273,12 @@ fun GalleryEditScreen(
                                     }
                                     if (!currentPhoto.isVideo) {
                                         TabItem(
-                                            title = stringResource(R.string.crop),
-                                            isSelected = editTab == EDIT_TAB_CROP,
-                                            onClick = { editTab = EDIT_TAB_CROP }
+                                        title = stringResource(R.string.crop),
+                                        isSelected = editTab == EDIT_TAB_CROP,
+                                        onClick = {
+                                            cropPreviewBitmap = null
+                                            editTab = EDIT_TAB_CROP
+                                        }
                                         )
                                     }
                                 }
@@ -1741,16 +1815,22 @@ fun GalleryEditScreen(
                                         CropEditPanel(
                                             selectedOption = editCropAspectOption,
                                             onOptionSelected = { viewModel.setCropAspectOption(it) },
+                                            straightenDegrees = editStraightenDegrees,
+                                            onStraightenDegreesChanged = {
+                                                viewModel.setStraightenDegrees(it)
+                                            },
                                             isHorizontallyMirrored = editMirrorHorizontal,
                                             onRotate = {
+                                                cropPreviewBitmap = null
                                                 viewModel.rotateEditClockwise()
                                             },
                                             onMirrorHorizontal = {
+                                                cropPreviewBitmap = null
                                                 viewModel.toggleEditHorizontalMirror()
                                             },
                                             availableRatios = availablePhotoAspectRatios,
-                                            imageWidth = previewBitmap?.width ?: 1,
-                                            imageHeight = previewBitmap?.height ?: 1
+                                            imageWidth = cropPreviewBitmap?.width ?: 1,
+                                            imageHeight = cropPreviewBitmap?.height ?: 1
                                         )
                                     }
                                 }
