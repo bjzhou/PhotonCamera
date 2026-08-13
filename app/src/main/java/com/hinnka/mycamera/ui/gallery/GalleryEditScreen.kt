@@ -217,6 +217,7 @@ fun GalleryEditScreen(
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showImageHistogram by remember { mutableStateOf(false) }
     val frameScrollState = rememberLazyListState()
     var showBaselineLutEditSheet by remember { mutableStateOf(false) }
     var baselineLutEditId by remember { mutableStateOf<String?>(null) }
@@ -308,7 +309,9 @@ fun GalleryEditScreen(
 
     var previewRenderRequestId by remember { mutableLongStateOf(0L) }
     val shouldCalculateImageHistogram =
-        editTab == EDIT_TAB_ADJUSTMENTS || isBaselineLutEditSheetVisible
+        (currentPhoto?.isVideo != true && showImageHistogram) ||
+            editTab == EDIT_TAB_ADJUSTMENTS ||
+            isBaselineLutEditSheetVisible
 
     fun currentPreviewSignature(fast: Boolean = false): PreviewRenderSignature? {
         val photo = editSourcePhoto ?: return null
@@ -471,7 +474,7 @@ fun GalleryEditScreen(
         } catch (error: Exception) {
             PLog.e(
                 "GalleryEditScreen",
-                "Failed to calculate curve histogram from the current preview",
+                "Failed to calculate histogram from the current preview",
                 error,
             )
             null
@@ -888,6 +891,25 @@ fun GalleryEditScreen(
                     state = lutNameOverlayState,
                     modifier = Modifier.align(Alignment.Center),
                 )
+
+                AnimatedVisibility(
+                    visible = showImageHistogram && !currentPhoto.isVideo,
+                    enter = fadeIn(animationSpec = tween(150)),
+                    exit = fadeOut(animationSpec = tween(150)),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
+                        .padding(top = 64.dp, start = 20.dp, end = 20.dp)
+                        .widthIn(max = 520.dp)
+                        .fillMaxWidth()
+                ) {
+                    RgbHistogramView(
+                        histogram = imageHistogram,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(3.15f)
+                    )
+                }
             }
 
             AnimatedVisibility(
@@ -948,6 +970,18 @@ fun GalleryEditScreen(
                                                 rotationZ = rotation
                                             }
                                         }
+                                    )
+                                }
+                            }
+                            if (!currentPhoto.isVideo) {
+                                IconToggleButton(
+                                    checked = showImageHistogram,
+                                    onCheckedChange = { showImageHistogram = it }
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.BarChart,
+                                        contentDescription = stringResource(R.string.histogram),
+                                        tint = if (showImageHistogram) AccentOrange else Color.White
                                     )
                                 }
                             }
