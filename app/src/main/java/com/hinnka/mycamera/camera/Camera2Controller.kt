@@ -2151,7 +2151,10 @@ class Camera2Controller(private val context: Context) {
         val surface = previewSurface ?: return
         val captureMode = _state.value.captureMode
         val reader = imageReader
-        val videoSurface = if (captureMode == CaptureMode.VIDEO) {
+        val videoSurface = if (
+            captureMode == CaptureMode.VIDEO &&
+            _state.value.videoRecordingState.shouldAttachCameraInput()
+        ) {
             videoRecorder.cameraInputSurface
         } else {
             null
@@ -2575,6 +2578,13 @@ class Camera2Controller(private val context: Context) {
         state: CameraState = _state.value,
         camera: CameraInfo? = state.getCurrentCameraInfo()
     ): String? {
+        if (state.videoConfig.shouldLockLens(
+                captureMode = state.captureMode,
+                isRecording = state.videoRecordingState.isRecording
+            )
+        ) {
+            return activeOutputPhysicalCameraId
+        }
         return resolveRequestedPhysicalCameraId(state, camera)
             ?.takeUnless { isPhysicalOutputProfileFailed(it) }
     }
@@ -2671,7 +2681,10 @@ class Camera2Controller(private val context: Context) {
             previewRequestBuilder?.let { builder ->
                 session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
             }
-            if (_state.value.captureMode == CaptureMode.VIDEO && videoRecorder.cameraInputSurface != null) {
+            if (_state.value.captureMode == CaptureMode.VIDEO &&
+                _state.value.videoRecordingState.shouldAttachCameraInput() &&
+                videoRecorder.cameraInputSurface != null
+            ) {
                 if (videoRecorder.onCameraInputStarted()) {
                     startVideoRecordingTicker()
                 }
@@ -3510,7 +3523,13 @@ class Camera2Controller(private val context: Context) {
             CameraMetadata.CONTROL_AWB_MODE_AUTO
         }
         builder.set(CaptureRequest.CONTROL_AWB_MODE, awbMode)
-        builder.set(CaptureRequest.CONTROL_AWB_LOCK, false)
+        val shouldLockAwb = state.videoConfig.shouldLockWhiteBalance(
+            captureMode = state.captureMode,
+            isRecording = state.videoRecordingState.isRecording
+        ) &&
+            getActiveOpenCameraCharacteristics()
+                ?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
+        builder.set(CaptureRequest.CONTROL_AWB_LOCK, shouldLockAwb)
 
         // 自动白平衡：拍照优先高质量色彩校正，预览维持快速路径
         if (isManualPostProcessingSupported) {
@@ -5632,6 +5651,24 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    fun setVideoLensLockEnabled(enabled: Boolean) {
+        if (_state.value.videoConfig.lensLockEnabled == enabled) return
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(lensLockEnabled = enabled)
+        )
+    }
+
+    fun setVideoWhiteBalanceLockEnabled(enabled: Boolean) {
+        if (_state.value.videoConfig.whiteBalanceLockEnabled == enabled) return
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(whiteBalanceLockEnabled = enabled)
+        )
+        previewRequestBuilder?.apply {
+            applyWhiteBalanceSettings(this, _state.value, isCapture = false)
+            updatePreview()
+        }
+    }
+
     fun setMirrorFrontCameraEnabled(enabled: Boolean) {
         mirrorFrontCameraEnabled = enabled
     }
@@ -5760,6 +5797,11 @@ class Camera2Controller(private val context: Context) {
         )
         if (videoRecorder.usesDedicatedCameraInput && !_state.value.videoRecordingState.isPaused) {
             updateDedicatedVideoRepeatingTarget(includeVideoSurface = false)
+        } else {
+            previewRequestBuilder?.apply {
+                applyWhiteBalanceSettings(this, _state.value, isCapture = false)
+                updatePreview()
+            }
         }
         videoRecorder.stopRecording()
         if (pendingVendorSessionParameterRestart && cameraDevice != null && previewSurface != null) {
@@ -7367,7 +7409,6 @@ class Camera2Controller(private val context: Context) {
             pendingFrameMetadata.clear()
             cameraOpenGeneration++
             val keepVideoRecording = preserveVideoRecording && _state.value.videoRecordingState.isRecording
-            val keepVideoProcessing = _state.value.videoRecordingState.isProcessing
             if (keepVideoRecording) {
                 PLog.d(TAG, "Closing camera while keeping active video recording")
             }
@@ -7377,6 +7418,10 @@ class Camera2Controller(private val context: Context) {
                 videoRecorder.forceStop()
                 stopVideoRecordingTicker()
                 _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            }
+            val videoStateAfterStopRequest = _state.value.videoRecordingState
+            if (videoStateAfterStopRequest.isProcessing) {
+                PLog.d(TAG, "Closing camera while video recording is finalizing")
             }
 
             clearCameraSessionState("closeCamera")
@@ -7389,8 +7434,8 @@ class Camera2Controller(private val context: Context) {
             } else {
                 _state.value.copy(
                     isPreviewActive = false,
-                    videoRecordingState = if (keepVideoProcessing) {
-                        _state.value.videoRecordingState
+                    videoRecordingState = if (videoStateAfterStopRequest.isProcessing) {
+                        videoStateAfterStopRequest
                     } else {
                         VideoRecordingState()
                     }

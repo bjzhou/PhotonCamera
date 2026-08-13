@@ -178,6 +178,10 @@
     <string name="settings_separate_video_lut_description">Use and remember an independent LUT selection in video mode.</string>
     <string name="settings_video_lut">Video LUT</string>
     <string name="settings_video_lut_description">Selected LUT: %1$s</string>
+    <string name="settings_video_lock_lens">Lock Lens</string>
+    <string name="settings_video_lock_lens_description">Prevent zooming from switching cameras while video is recording.</string>
+    <string name="settings_video_lock_white_balance">Lock White Balance</string>
+    <string name="settings_video_lock_white_balance_description">Keep automatic white balance fixed while video is recording.</string>
     <string name="settings_section_quality_perf">Quality &amp; Performance</string>
     <string name="settings_section_color_hdr">Imaging &amp; Color</string>
     <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>

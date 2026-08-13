@@ -1712,6 +1712,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val videoRecordingTreeUri: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.videoRecordingTreeUri }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val videoLensLockEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.videoLensLockEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val videoWhiteBalanceLockEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.videoWhiteBalanceLockEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val videoAudioInputOptions: StateFlow<List<VideoAudioInputOption>> = videoAudioInputManager.availableInputs
 
     val phantomButtonHidden: StateFlow<Boolean> = userPreferencesRepository.userPreferences
@@ -2063,6 +2069,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
+                cameraController.setVideoLensLockEnabled(it.videoLensLockEnabled)
+                cameraController.setVideoWhiteBalanceLockEnabled(it.videoWhiteBalanceLockEnabled)
                 cameraController.setVideoCodec(it.videoCodec)
                 cameraController.setMirrorFrontCameraEnabled(it.mirrorFrontCamera)
                 multipleExposureState = multipleExposureState.copy(
@@ -2203,6 +2211,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoRecordingPath(prefs.videoRecordingPath, prefs.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(prefs.videoStabilizationMode)
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
+                cameraController.setVideoLensLockEnabled(prefs.videoLensLockEnabled)
+                cameraController.setVideoWhiteBalanceLockEnabled(prefs.videoWhiteBalanceLockEnabled)
                 cameraController.setVideoCodec(prefs.videoCodec)
                 cameraController.setMeteringMode(prefs.meteringMode)
 
@@ -3420,6 +3430,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 切换到指定的镜头类型
      */
     fun switchToLens(cameraId: String) {
+        if (isVideoLensLocked()) return
         val targetCamera = state.value.availableCameras.find { it.cameraId == cameraId }
         syncVendorCaptureSettingsToController()
         cameraController.switchToCameraId(cameraId)
@@ -3432,6 +3443,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun switchToLensAndSetZoomRatio(cameraId: String, ratio: Float) {
+        if (isVideoLensLocked()) {
+            setZoomRatio(ratio)
+            return
+        }
         syncVendorCaptureSettingsToController()
         cameraController.switchToCameraId(cameraId)
         setZoomRatioForCamera(ratio, cameraId)
@@ -3721,6 +3736,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoTorchEnabled(enabled)
         viewModelScope.launch {
             userPreferencesRepository.saveVideoTorchEnabled(enabled)
+        }
+    }
+
+    fun setVideoLensLockEnabled(enabled: Boolean) {
+        cameraController.setVideoLensLockEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoLensLockEnabled(enabled)
+        }
+    }
+
+    fun setVideoWhiteBalanceLockEnabled(enabled: Boolean) {
+        cameraController.setVideoWhiteBalanceLockEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoWhiteBalanceLockEnabled(enabled)
         }
     }
 
@@ -4907,6 +4936,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameras: List<CameraInfo>,
         currentCameraId: String
     ): CameraInfo? {
+        if (isVideoLensLocked()) {
+            return cameras.firstOrNull { it.cameraId == currentCameraId }
+        }
         val currentLensType = cameras.find { it.cameraId == currentCameraId }?.lensType
         val zoomableCameras =
             cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
@@ -4932,6 +4964,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             CustomFocalLengthValue.isZoomRatio(value) &&
                     abs((CustomFocalLengthValue.toZoomRatio(value, mainCamera, currentCamera) ?: return@any false) - targetZoom) <= 0.01f
         }
+    }
+
+    fun isVideoLensLocked(): Boolean {
+        val currentState = state.value
+        return currentState.videoConfig.shouldLockLens(
+            captureMode = currentState.captureMode,
+            isRecording = currentState.videoRecordingState.isRecording
+        )
     }
 
     /**

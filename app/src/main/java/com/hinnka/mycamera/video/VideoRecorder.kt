@@ -265,7 +265,7 @@ class VideoRecorder(
     }
 
     fun forceStop() {
-        if (!isRecording) return
+        if (!isRecording || stopRequested) return
         stopRequested = true
         val completion = finishCallback
         scope.launch {

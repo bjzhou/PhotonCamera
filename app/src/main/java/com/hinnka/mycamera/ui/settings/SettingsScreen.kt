@@ -334,6 +334,8 @@ fun SettingsScreen(
     val videoRecordingTreeUri by viewModel.videoRecordingTreeUri.collectAsState()
     val separateVideoLutEnabled by viewModel.separateVideoLutEnabled.collectAsState()
     val videoLutId by viewModel.videoLutId.collectAsState()
+    val videoLensLockEnabled by viewModel.videoLensLockEnabled.collectAsState()
+    val videoWhiteBalanceLockEnabled by viewModel.videoWhiteBalanceLockEnabled.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
     val openAIUrl by viewModel.openAIUrl.collectAsState()
     val openAIModel by viewModel.openAIModel.collectAsState()
@@ -1507,6 +1509,30 @@ fun SettingsScreen(
                                 onClick = onVideoFilterManagementClick
                             )
                         }
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_video_lock_lens),
+                            description = stringResource(R.string.settings_video_lock_lens_description),
+                            checked = videoLensLockEnabled,
+                            onCheckedChange = viewModel::setVideoLensLockEnabled
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_video_lock_white_balance),
+                            description = stringResource(R.string.settings_video_lock_white_balance_description),
+                            checked = videoWhiteBalanceLockEnabled,
+                            onCheckedChange = viewModel::setVideoWhiteBalanceLockEnabled
+                        )
 
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
@@ -2829,6 +2855,8 @@ private fun SettingsCategoryOverview(
             title = stringResource(R.string.settings_section_video),
             description = listOf(
                 stringResource(R.string.settings_separate_video_lut),
+                stringResource(R.string.settings_video_lock_lens),
+                stringResource(R.string.settings_video_lock_white_balance),
                 stringResource(
                     R.string.settings_storage_path_title,
                     stringResource(R.string.settings_storage_path_video_title_arg)

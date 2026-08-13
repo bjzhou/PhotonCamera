@@ -124,12 +124,22 @@ data class VideoConfig(
     val recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
     val recordingTreeUri: String? = null,
     val stabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
-    val torchEnabled: Boolean = false
+    val torchEnabled: Boolean = false,
+    val lensLockEnabled: Boolean = false,
+    val whiteBalanceLockEnabled: Boolean = false
 ) {
     fun resolveOutputSize(openGatePortraitAspectRatio: Float): Size {
         return resolution.resolveOutputSize(
             aspectRatio.getPortraitAspectRatio(openGatePortraitAspectRatio)
         )
+    }
+
+    fun shouldLockLens(captureMode: CaptureMode, isRecording: Boolean): Boolean {
+        return lensLockEnabled && captureMode == CaptureMode.VIDEO && isRecording
+    }
+
+    fun shouldLockWhiteBalance(captureMode: CaptureMode, isRecording: Boolean): Boolean {
+        return whiteBalanceLockEnabled && captureMode == CaptureMode.VIDEO && isRecording
     }
 }
 
@@ -153,7 +163,11 @@ data class VideoRecordingState(
     val isPaused: Boolean = false,
     val isProcessing: Boolean = false,
     val elapsedMs: Long = 0L
-)
+) {
+    fun shouldAttachCameraInput(): Boolean {
+        return isRecording && !isPaused && !isProcessing
+    }
+}
 
 data class VideoCapabilitySnapshot(
     val config: VideoConfig,

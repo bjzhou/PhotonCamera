@@ -233,6 +233,8 @@ data class UserPreferences(
     val videoRecordingTreeUri: String? = null,
     val videoStabilizationMode: com.hinnka.mycamera.video.VideoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.OIS,
     val videoTorchEnabled: Boolean = false,
+    val videoLensLockEnabled: Boolean = false,
+    val videoWhiteBalanceLockEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
     val ultraHdrGainMapEnabled: Boolean = true,
     val phantomMode: Boolean = false,
@@ -480,6 +482,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_RECORDING_TREE_URI = stringPreferencesKey("video_recording_tree_uri")
         private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
+        private val VIDEO_LENS_LOCK_ENABLED = booleanPreferencesKey("video_lens_lock_enabled")
+        private val VIDEO_WHITE_BALANCE_LOCK_ENABLED = booleanPreferencesKey("video_white_balance_lock_enabled")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
         // Keep the persisted key for compatibility with existing installations.
         private val ULTRA_HDR_GAIN_MAP_ENABLED = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
@@ -764,6 +768,8 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[VIDEO_STABILIZATION_MODE] ?: com.hinnka.mycamera.video.VideoStabilizationMode.OIS.name
                 ),
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
+                videoLensLockEnabled = preferences[VIDEO_LENS_LOCK_ENABLED] ?: false,
+                videoWhiteBalanceLockEnabled = preferences[VIDEO_WHITE_BALANCE_LOCK_ENABLED] ?: false,
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
@@ -2176,6 +2182,18 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveVideoTorchEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_TORCH_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveVideoLensLockEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_LENS_LOCK_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveVideoWhiteBalanceLockEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_WHITE_BALANCE_LOCK_ENABLED] = enabled
         }
     }
 

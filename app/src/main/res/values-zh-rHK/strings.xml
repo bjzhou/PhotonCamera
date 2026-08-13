@@ -175,6 +175,10 @@
     <string name="settings_separate_video_lut_description">為影片模式單獨選擇並記住 LUT。</string>
     <string name="settings_video_lut">影片 LUT</string>
     <string name="settings_video_lut_description">目前選擇：%1$s</string>
+    <string name="settings_video_lock_lens">鎖定鏡頭</string>
+    <string name="settings_video_lock_lens_description">影片錄製過程中變焦不切換鏡頭。</string>
+    <string name="settings_video_lock_white_balance">鎖定白平衡</string>
+    <string name="settings_video_lock_white_balance_description">影片錄製過程中鎖定白平衡。</string>
     <string name="settings_section_quality_perf">畫質與性能</string>
     <string name="settings_section_color_hdr">成像與色彩</string>
     <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>
