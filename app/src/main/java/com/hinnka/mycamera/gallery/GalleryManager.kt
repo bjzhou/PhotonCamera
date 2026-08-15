@@ -61,6 +61,7 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawViewfinderExposureMatcher
+import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -228,6 +229,25 @@ object GalleryManager {
         return metadata?.rawAutoExposure ?: fallback
     }
 
+    private suspend fun resolveRawAutoExposureMeteringPriority(
+        context: Context,
+        metadata: MediaMetadata,
+    ): Float {
+        RawAutoExposureMeteringPriority.fromMetadata(
+            metadata.customProperties[RawAutoExposureMeteringPriority.METADATA_PROPERTY]
+        )?.let { return it }
+        if (!metadata.isImported) {
+            return RawAutoExposureMeteringPriority.DEFAULT
+        }
+        val value = ContentRepository.getInstance(context)
+            .userPreferencesRepository
+            .userPreferences
+            .firstOrNull()
+            ?.rawAutoExposureMeteringPriority
+            ?: RawAutoExposureMeteringPriority.DEFAULT
+        return RawAutoExposureMeteringPriority.normalize(value)
+    }
+
     private fun resolveNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
         return metadata.noiseReduction ?: (if (metadata.isImported) 0f else fallback)
     }
@@ -295,6 +315,13 @@ object GalleryManager {
             val resolvedRotation = rotation.takeIf { it != 0 } ?: baseMetadata.rotation
             val customProperties = baseMetadata.customProperties.toMutableMap().apply {
                 put("captureSource", "MGC")
+                put(
+                    RawAutoExposureMeteringPriority.METADATA_PROPERTY,
+                    RawAutoExposureMeteringPriority.normalize(
+                        preferences?.rawAutoExposureMeteringPriority
+                            ?: RawAutoExposureMeteringPriority.DEFAULT
+                    ).toString()
+                )
                 sourcePackage?.takeIf { it.isNotBlank() }?.let { put("mgcSourcePackage", it) }
                 source?.takeIf { it.isNotBlank() }?.let { put("mgcSource", it) }
             }
@@ -4158,6 +4185,8 @@ object GalleryManager {
         val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
             !mainFlashFired &&
             resolveRawAutoExposure(context, metadata)
+        val rawAutoExposureMeteringPriority =
+            resolveRawAutoExposureMeteringPriority(context, metadata)
         val profileGainTableRequired = profileToneMapMode == RawProfileToneMapMode.Photon
         val captureProfilePreparer = if (viewfinderMatchEnabled || profileGainTableRequired) {
             RawDngCaptureProfilePreparer { input ->
@@ -4185,6 +4214,7 @@ object GalleryManager {
                     ),
                     rawBlackBorderCrop = metadata.rawBlackBorderCrop,
                     rawNoiseProfileId = resolveRawNoiseProfileId(context, metadata),
+                    rawAutoExposureMeteringPriority = rawAutoExposureMeteringPriority,
                 )
             }
         } else {
@@ -4196,6 +4226,7 @@ object GalleryManager {
                 "curve=DEFAULT pgtmOnGpu=$profileGainTableRequired " +
                 "statsBounds=$statsBounds blackBorderDefaultCrop=$blackBorderDefaultCrop " +
                 "mainFlashFired=$mainFlashFired " +
+                "meteringPriority=$rawAutoExposureMeteringPriority " +
                 "flashState=${captureResult?.get(CaptureResult.FLASH_STATE)} " +
                 "sourceAutoExposure=${metadata.rawAutoExposure} " +
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"

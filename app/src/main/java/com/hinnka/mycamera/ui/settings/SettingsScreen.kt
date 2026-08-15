@@ -355,6 +355,8 @@ fun SettingsScreen(
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
     val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
+    val rawAutoExposureMeteringPriority by
+        viewModel.rawAutoExposureMeteringPriority.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
     val rawShadowsAdjustment by viewModel.rawShadowsAdjustment.collectAsState()
     val rawMinShutterSpeedNs by viewModel.rawMinShutterSpeedNs.collectAsState()
@@ -391,6 +393,9 @@ fun SettingsScreen(
     var mainCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
     var macroCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
     var rawExposureCompensationUi by remember { mutableStateOf(rawExposureCompensation) }
+    var rawAutoExposureMeteringPriorityUi by remember {
+        mutableStateOf(rawAutoExposureMeteringPriority)
+    }
     var rawHighlightsAdjustmentUi by remember { mutableStateOf(rawHighlightsAdjustment) }
     var rawShadowsAdjustmentUi by remember { mutableStateOf(rawShadowsAdjustment) }
     var rawBlackPointCorrectionUi by remember { mutableStateOf(rawBlackPointCorrection) }
@@ -412,6 +417,7 @@ fun SettingsScreen(
 
     LaunchedEffect(
         rawExposureCompensation,
+        rawAutoExposureMeteringPriority,
         rawHighlightsAdjustment,
         rawShadowsAdjustment,
         rawBlackPointCorrection,
@@ -426,6 +432,7 @@ fun SettingsScreen(
     ) {
         if (!isRawSliderAdjusting) {
             rawExposureCompensationUi = rawExposureCompensation
+            rawAutoExposureMeteringPriorityUi = rawAutoExposureMeteringPriority
             rawHighlightsAdjustmentUi = rawHighlightsAdjustment
             rawShadowsAdjustmentUi = rawShadowsAdjustment
             rawBlackPointCorrectionUi = rawBlackPointCorrection
@@ -479,6 +486,7 @@ fun SettingsScreen(
     fun commitRawSliderValues() {
         isRawSliderAdjusting = false
         viewModel.setRawExposureCompensation(rawExposureCompensationUi)
+        viewModel.setRawAutoExposureMeteringPriority(rawAutoExposureMeteringPriorityUi)
         viewModel.setRawHighlightsAdjustment(rawHighlightsAdjustmentUi)
         viewModel.setRawShadowsAdjustment(rawShadowsAdjustmentUi)
         viewModel.setRawBlackPointCorrection(rawBlackPointCorrectionUi)
@@ -1895,6 +1903,8 @@ fun SettingsScreen(
                         thumbnail = previewThumbnail,
                         rawExposureCompensation = rawExposureCompensationUi,
                         rawAutoExposure = rawAutoExposure,
+                        rawAutoExposureMeteringPriority =
+                            rawAutoExposureMeteringPriorityUi,
                         rawHighlightsAdjustment = rawHighlightsAdjustmentUi,
                         rawShadowsAdjustment = rawShadowsAdjustmentUi,
                         rawBlackPointCorrection = rawBlackPointCorrectionUi,
@@ -1923,6 +1933,9 @@ fun SettingsScreen(
                                 viewModel.setRawHighlightsAdjustment(0f)
                             }
                             viewModel.setRawAutoExposure(it)
+                        },
+                        onRawAutoExposureMeteringPriorityChange = {
+                            rawAutoExposureMeteringPriorityUi = it
                         },
                         onRawHighlightsAdjustmentChange = {
                             rawHighlightsAdjustmentUi = it

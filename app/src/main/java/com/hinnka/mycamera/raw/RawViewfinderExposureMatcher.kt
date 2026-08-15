@@ -54,6 +54,7 @@ internal object RawViewfinderExposureMatcher {
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
+        rawAutoExposureMeteringPriority: Float = RawAutoExposureMeteringPriority.DEFAULT,
     ): RawDngCaptureProfileResult? {
         val testImageCache = ExposureMatchTestImageCache.create(context)
         val reference = capturePreviewThumbnail?.let { bitmap ->
@@ -74,6 +75,7 @@ internal object RawViewfinderExposureMatcher {
                         reference = it,
                         renderSample = renderSample,
                         testImageCache = testImageCache,
+                        meteringPriority = rawAutoExposureMeteringPriority,
                     )
                 },
             )
@@ -132,6 +134,7 @@ internal object RawViewfinderExposureMatcher {
         reference: ViewfinderReference,
         renderSample: (Float) -> RawExposurePreviewFrame?,
         testImageCache: ExposureMatchTestImageCache?,
+        meteringPriority: Float,
     ): Float? {
         var candidateIndex = 0
         var meteringSelection: RawViewfinderExposureMath.MeteringSelection? = null
@@ -154,15 +157,17 @@ internal object RawViewfinderExposureMatcher {
                     pixels = frame.argbPixels,
                     width = frame.width,
                     height = frame.height,
+                    meteringPriority = meteringPriority,
                 )
                 meteringSelection?.let { selection ->
                     PLog.d(
                         TAG,
                         "RAW metering selection: seedExposureEv=$exposureEv " +
-                            "candidateDisplayLinearLumaP25=" +
-                            "${selection.seedCandidateDisplayLinearLumaP25} " +
-                            "candidateDisplayLinearLumaP50=" +
-                            "${selection.seedCandidateDisplayLinearLumaP50} " +
+                            "meteringPriority=$meteringPriority " +
+                            "candidateDisplayLinearLumaLow=" +
+                            "${selection.seedCandidateDisplayLinearLumaLow} " +
+                            "candidateDisplayLinearLumaHigh=" +
+                            "${selection.seedCandidateDisplayLinearLumaHigh} " +
                             "sampleCount=${selection.sampleCount}"
                     )
                 }

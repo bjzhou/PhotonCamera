@@ -39,6 +39,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.RawNoiseProfileInfo
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
+import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -139,6 +140,8 @@ fun RawEditPanel(
     onRawNoiseProfileIdsByLensChange: ((Map<String, String>) -> Unit)? = null,
     onImportRawNoiseProfile: (() -> Unit)? = null,
     onDeleteRawNoiseProfile: ((RawNoiseProfileInfo) -> Unit)? = null,
+    rawAutoExposureMeteringPriority: Float? = null,
+    onRawAutoExposureMeteringPriorityChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -278,6 +281,33 @@ fun RawEditPanel(
                     checked = rawAutoExposure,
                     onCheckedChange = onRawAutoExposureChange
                 )
+                rawAutoExposureMeteringPriority?.let { priority ->
+                    SliderSettingItem(
+                        title = stringResource(
+                            R.string.settings_raw_auto_exposure_metering_priority
+                        ),
+                        description = stringResource(
+                            R.string.settings_raw_auto_exposure_metering_priority_description
+                        ),
+                        value = RawAutoExposureMeteringPriority.normalize(priority),
+                        valueRange = RawAutoExposureMeteringPriority.MIN..
+                            RawAutoExposureMeteringPriority.MAX,
+                        valueTextFormatter = { value ->
+                            if (kotlin.math.abs(value) < 0.005f) {
+                                "0.00"
+                            } else {
+                                String.format("%+.2f", value)
+                            }
+                        },
+                        resetValue = RawAutoExposureMeteringPriority.DEFAULT,
+                        onValueChange = {
+                            onAdjustmentStart()
+                            onRawAutoExposureMeteringPriorityChange(it)
+                        },
+                        onValueChangeFinished = onAdjustmentEnd,
+                        enabled = rawAutoExposure,
+                    )
+                }
             }
             SliderSettingItem(
                 title = stringResource(R.string.settings_raw_exposure_compensation),

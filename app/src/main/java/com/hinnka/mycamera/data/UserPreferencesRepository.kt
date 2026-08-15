@@ -34,6 +34,7 @@ import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
+import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -139,6 +140,7 @@ data class UserPreferences(
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val rawExposureCompensation: Float = 0f,
     val rawAutoExposure: Boolean = true,
+    val rawAutoExposureMeteringPriority: Float = RawAutoExposureMeteringPriority.DEFAULT,
     val rawHighlightsAdjustment: Float = 0f,
     val rawShadowsAdjustment: Float = 0f,
     val rawMinShutterSpeedNs: Long = 0L,
@@ -372,6 +374,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_exposure_compensation")
         private val RAW_AUTO_EXPOSURE_KEY = booleanPreferencesKey("raw_auto_exposure")
         private val RAW_AUTO_EXPOSURE_MODE_KEY = stringPreferencesKey("raw_auto_exposure_mode")
+        private val RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY =
+            floatPreferencesKey("raw_auto_exposure_metering_priority")
         private val RAW_HIGHLIGHTS_ADJUSTMENT_KEY = floatPreferencesKey("raw_highlights_adjustment")
         private val RAW_SHADOWS_ADJUSTMENT_KEY = floatPreferencesKey("raw_shadows_adjustment")
         private val RAW_MIN_SHUTTER_SPEED_NS_KEY = longPreferencesKey("raw_min_shutter_speed_ns")
@@ -613,6 +617,10 @@ class UserPreferencesRepository(private val context: Context) {
                 rawAutoExposure = resolveStoredRawAutoExposure(
                     mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
                     legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
+                ),
+                rawAutoExposureMeteringPriority = RawAutoExposureMeteringPriority.normalize(
+                    preferences[RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY]
+                        ?: RawAutoExposureMeteringPriority.DEFAULT
                 ),
                 rawHighlightsAdjustment = preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] ?: 0f,
                 rawShadowsAdjustment = preferences[RAW_SHADOWS_ADJUSTMENT_KEY] ?: 0f,
@@ -1251,6 +1259,13 @@ class UserPreferencesRepository(private val context: Context) {
             } else {
                 "OFF"
             }
+        }
+    }
+
+    suspend fun saveRawAutoExposureMeteringPriority(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY] =
+                RawAutoExposureMeteringPriority.normalize(value)
         }
     }
 

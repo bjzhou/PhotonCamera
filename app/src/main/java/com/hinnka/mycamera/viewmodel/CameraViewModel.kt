@@ -72,6 +72,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawNoiseProfileInfo
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
@@ -161,6 +162,16 @@ private fun resolveEffectiveRawAutoExposure(
 ): Boolean {
     return userPrefs?.rawAutoExposure ?: true
 }
+
+private fun rawAutoExposureMetadataProperties(
+    userPrefs: UserPreferences?
+): Map<String, String> = mapOf(
+    RawAutoExposureMeteringPriority.METADATA_PROPERTY to
+        RawAutoExposureMeteringPriority.normalize(
+            userPrefs?.rawAutoExposureMeteringPriority
+                ?: RawAutoExposureMeteringPriority.DEFAULT
+        ).toString()
+)
 
 private fun resolveCaptureSharpening(
     isRawCapture: Boolean,
@@ -1501,6 +1512,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawAutoExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawAutoExposure }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val rawAutoExposureMeteringPriority: StateFlow<Float> =
+        userPreferencesRepository.userPreferences
+            .map { it.rawAutoExposureMeteringPriority }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                RawAutoExposureMeteringPriority.DEFAULT,
+            )
     val rawHighlightsAdjustment: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawHighlightsAdjustment }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
@@ -2426,6 +2445,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawAutoExposure(enabled: Boolean) {
         viewModelScope.launch { userPreferencesRepository.saveRawAutoExposure(enabled) }
     }
+    fun setRawAutoExposureMeteringPriority(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawAutoExposureMeteringPriority(value)
+        }
+    }
     fun setRawHighlightsAdjustment(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawHighlightsAdjustment(value) }
     }
@@ -2847,6 +2871,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ?: HncsFilmCurveMode.Standard,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
             rawAutoExposure = effectiveRawAutoExposure,
+            customProperties = rawAutoExposureMetadataProperties(userPrefs),
             rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
@@ -5418,6 +5443,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: HncsFilmCurveMode.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
+                customProperties = rawAutoExposureMetadataProperties(userPrefs),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
@@ -5593,6 +5619,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: HncsFilmCurveMode.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
+                customProperties = rawAutoExposureMetadataProperties(userPrefs),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
@@ -5743,6 +5770,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         ?: HncsFilmCurveMode.Standard,
                     rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                     rawAutoExposure = effectiveRawAutoExposure,
+                    customProperties = rawAutoExposureMetadataProperties(userPrefs),
                     rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
                     rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                     rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
@@ -5999,6 +6027,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: HncsFilmCurveMode.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
+                customProperties = rawAutoExposureMetadataProperties(userPrefs),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
@@ -6436,6 +6465,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ?: HncsFilmCurveMode.Standard,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
             rawAutoExposure = effectiveRawAutoExposure,
+            customProperties = rawAutoExposureMetadataProperties(userPrefs),
             rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,

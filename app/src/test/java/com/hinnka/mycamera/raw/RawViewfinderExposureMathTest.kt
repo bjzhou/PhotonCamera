@@ -47,8 +47,8 @@ class RawViewfinderExposureMathTest {
         assertEquals(-1f, match.meteringLog2Error!!, 0.04f)
         assertEquals(0.20f, match.referenceMeteringDisplayLinearLumaMean!!, 0.005f)
         assertEquals(0.10f, match.candidateMeteringDisplayLinearLumaMean!!, 0.005f)
-        assertEquals(0.10f, selection.seedCandidateDisplayLinearLumaP25, 0.005f)
-        assertEquals(0.10f, selection.seedCandidateDisplayLinearLumaP50, 0.005f)
+        assertEquals(0.10f, selection.seedCandidateDisplayLinearLumaLow, 0.005f)
+        assertEquals(0.10f, selection.seedCandidateDisplayLinearLumaHigh, 0.005f)
     }
 
     @Test
@@ -77,9 +77,66 @@ class RawViewfinderExposureMathTest {
         assertNotNull(match)
         assertTrue(match!!.meteringSampleCount in 60..70)
         assertEquals(0f, match.meteringLog2Error!!, 0.001f)
-        assertEquals(0.2075f, selection.seedCandidateDisplayLinearLumaP25, 0.01f)
-        assertEquals(0.405f, selection.seedCandidateDisplayLinearLumaP50, 0.01f)
+        assertEquals(0.2075f, selection.seedCandidateDisplayLinearLumaLow, 0.01f)
+        assertEquals(0.405f, selection.seedCandidateDisplayLinearLumaHigh, 0.01f)
         assertTrue(selection.pixelIndices.all { it in 60..132 })
+    }
+
+    @Test
+    fun meteringPriorityMovesTheFixedBandTowardShadowsOrHighlights() {
+        val width = 16
+        val height = 16
+        val pixels = IntArray(width * height) { index ->
+            grayscaleArgb(0.01f + 0.79f * index / (width * height - 1))
+        }
+        val reference = buildReference(pixels, width, height)
+
+        val shadowSelection = RawViewfinderExposureMath.buildMeteringSelection(
+            reference = reference,
+            pixels = pixels,
+            width = width,
+            height = height,
+            meteringPriority = RawAutoExposureMeteringPriority.MIN,
+        )!!
+        val highlightSelection = RawViewfinderExposureMath.buildMeteringSelection(
+            reference = reference,
+            pixels = pixels,
+            width = width,
+            height = height,
+            meteringPriority = RawAutoExposureMeteringPriority.MAX,
+        )!!
+
+        assertTrue(
+            shadowSelection.seedCandidateDisplayLinearLumaHigh <
+                highlightSelection.seedCandidateDisplayLinearLumaLow
+        )
+        assertTrue(
+            shadowSelection.pixelIndices.last() < highlightSelection.pixelIndices.first()
+        )
+        assertTrue(shadowSelection.sampleCount in 60..70)
+        assertTrue(highlightSelection.sampleCount in 60..70)
+    }
+
+    @Test
+    fun zeroMeteringBalanceCentersTheBandOnTheBrightnessDistribution() {
+        val width = 16
+        val height = 16
+        val pixels = IntArray(width * height) { index ->
+            grayscaleArgb(0.01f + 0.79f * index / (width * height - 1))
+        }
+        val reference = buildReference(pixels, width, height)
+
+        val selection = RawViewfinderExposureMath.buildMeteringSelection(
+            reference = reference,
+            pixels = pixels,
+            width = width,
+            height = height,
+            meteringPriority = 0f,
+        )!!
+
+        assertTrue(selection.pixelIndices.first() in 90..105)
+        assertTrue(selection.pixelIndices.last() in 150..165)
+        assertTrue(selection.sampleCount in 60..70)
     }
 
     @Test

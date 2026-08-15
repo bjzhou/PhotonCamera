@@ -4,13 +4,27 @@ import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
 
+internal object RawAutoExposureMeteringPriority {
+    const val MIN = -1f
+    // Preserves the historical P25-P50 metering band while 0 represents a centered band.
+    const val DEFAULT = -0.5f
+    const val MAX = 1f
+    const val METADATA_PROPERTY = "rawAutoExposureMeteringPriority"
+
+    fun normalize(value: Float): Float =
+        if (value.isFinite()) value.coerceIn(MIN, MAX) else DEFAULT
+
+    fun fromMetadata(value: String?): Float? =
+        value?.toFloatOrNull()?.takeIf { it.isFinite() }?.let(::normalize)
+}
+
 /**
  * Display-referred exposure matching math shared by the capture preview matcher and unit tests.
  *
  * Both inputs are tone-mapped 8-bit sRGB previews. Converting their surviving code values back
  * to display-linear light does not recover scene-linear RAW data; it only makes the logarithmic
  * ratio describe a ratio of displayed light. Capture metering builds one fixed coordinate set from
- * the first rendered RAW candidate by selecting the continuous display-linear P25-P50 band. Every
+ * the first rendered RAW candidate by selecting a continuous display-linear luminance band. Every
  * exposure candidate is then compared with the viewfinder over that same coordinate set.
  * Distribution quantiles and full-area means remain available as diagnostics for local tone-map
  * differences.
@@ -19,8 +33,10 @@ internal object RawViewfinderExposureMath {
     private const val PERCEPTUAL_BRIGHTNESS_FLOOR = 1f / 255f
     private const val DISPLAY_LINEAR_LUMA_FLOOR = 1f / (255f * 12.92f)
     private const val MIN_SAMPLE_COUNT = 32
-    private const val METERING_QUANTILE_LOW = 0.25f
-    private const val METERING_QUANTILE_HIGH = 0.50f
+    private const val BALANCED_METERING_QUANTILE_LOW = 0.375f
+    private const val BALANCED_METERING_QUANTILE_HIGH = 0.625f
+    // Keeps the 25%-wide band within P12.5-P87.5 at the two adjustment extremes.
+    private const val METERING_QUANTILE_SHIFT = 0.25f
     private const val QUANTILE_TRIM_LOW_FRACTION = 0.15f
     private const val QUANTILE_TRIM_HIGH_FRACTION = 0.85f
     private const val QUANTILE_SPREAD_LOW_FRACTION = 0.15f
@@ -121,8 +137,8 @@ internal object RawViewfinderExposureMath {
     class MeteringSelection internal constructor(
         internal val pixelIndices: IntArray,
         internal val referenceDisplayLinearLumas: FloatArray,
-        val seedCandidateDisplayLinearLumaP25: Float,
-        val seedCandidateDisplayLinearLumaP50: Float,
+        val seedCandidateDisplayLinearLumaLow: Float,
+        val seedCandidateDisplayLinearLumaHigh: Float,
     ) {
         val sampleCount: Int
             get() = pixelIndices.size
@@ -131,13 +147,13 @@ internal object RawViewfinderExposureMath {
             require(pixelIndices.size >= MIN_SAMPLE_COUNT)
             require(referenceDisplayLinearLumas.size == pixelIndices.size)
             require(referenceDisplayLinearLumas.all { it.isFinite() && it in 0f..1f })
-            require(seedCandidateDisplayLinearLumaP25.isFinite())
-            require(seedCandidateDisplayLinearLumaP50.isFinite())
+            require(seedCandidateDisplayLinearLumaLow.isFinite())
+            require(seedCandidateDisplayLinearLumaHigh.isFinite())
             require(
-                seedCandidateDisplayLinearLumaP25 in
-                    0f..seedCandidateDisplayLinearLumaP50
+                seedCandidateDisplayLinearLumaLow in
+                    0f..seedCandidateDisplayLinearLumaHigh
             )
-            require(seedCandidateDisplayLinearLumaP50 <= 1f)
+            require(seedCandidateDisplayLinearLumaHigh <= 1f)
         }
     }
 
@@ -418,6 +434,7 @@ internal object RawViewfinderExposureMath {
         pixels: IntArray,
         width: Int,
         height: Int,
+        meteringPriority: Float = RawAutoExposureMeteringPriority.DEFAULT,
     ): MeteringSelection? {
         if (width != reference.width ||
             height != reference.height ||
@@ -450,20 +467,22 @@ internal object RawViewfinderExposureMath {
 
         val sortedCandidateLumas = candidateLumas.copyOf(validPairCount)
         sortedCandidateLumas.sort()
-        val candidateP25 = unweightedQuantile(
+        val normalizedPriority = RawAutoExposureMeteringPriority.normalize(meteringPriority)
+        val quantileShift = normalizedPriority * METERING_QUANTILE_SHIFT
+        val candidateLow = unweightedQuantile(
             sortedCandidateLumas,
-            METERING_QUANTILE_LOW,
+            BALANCED_METERING_QUANTILE_LOW + quantileShift,
         )
-        val candidateP50 = unweightedQuantile(
+        val candidateHigh = unweightedQuantile(
             sortedCandidateLumas,
-            METERING_QUANTILE_HIGH,
+            BALANCED_METERING_QUANTILE_HIGH + quantileShift,
         )
 
         val selectedPixelIndices = IntArray(validPairCount)
         val selectedReferenceLumas = FloatArray(validPairCount)
         var selectedCount = 0
         for (index in 0 until validPairCount) {
-            if (candidateLumas[index] !in candidateP25..candidateP50) continue
+            if (candidateLumas[index] !in candidateLow..candidateHigh) continue
             selectedPixelIndices[selectedCount] = pixelIndices[index]
             selectedReferenceLumas[selectedCount] = referenceLumas[index]
             selectedCount++
@@ -472,8 +491,8 @@ internal object RawViewfinderExposureMath {
         return MeteringSelection(
             pixelIndices = selectedPixelIndices.copyOf(selectedCount),
             referenceDisplayLinearLumas = selectedReferenceLumas.copyOf(selectedCount),
-            seedCandidateDisplayLinearLumaP25 = candidateP25,
-            seedCandidateDisplayLinearLumaP50 = candidateP50,
+            seedCandidateDisplayLinearLumaLow = candidateLow,
+            seedCandidateDisplayLinearLumaHigh = candidateHigh,
         )
     }
 
