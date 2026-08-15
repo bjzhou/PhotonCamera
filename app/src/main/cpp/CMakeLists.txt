@@ -126,7 +126,6 @@ add_library(my-native-lib SHARED
     yuv_utils.cpp
     lut_processor.cpp
     dcp_parser.cpp
-    raw_viewfinder_exposure_solver.cpp
     mgc_denoise_static/mgc_denoise_static.cpp
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
     mgc_denoise_static/mgc_spatial_strength_jni.cpp
@@ -139,13 +138,6 @@ add_library(my-native-lib SHARED
 # This host-side scaler is deliberately independent of the MGC AOT/capsule sources.
 set_source_files_properties(
     mgc_strength_map_scaler.cpp
-    PROPERTIES
-    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
-)
-
-# Exposure solving relies on finite/NaN state and deterministic score comparisons.
-set_source_files_properties(
-    raw_viewfinder_exposure_solver.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

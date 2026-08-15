@@ -20,10 +20,10 @@ internal data class RawExposurePreviewFrame(
 /**
  * Capture-side viewfinder matcher.
  *
- * The RAW renderer supplies default-curve preview samples and prepares the GPU profile map in the
- * same capture-side GL pass. Native code owns grid analysis, candidate scoring and adaptive target
- * selection. The resulting automatic offset remains independent from the user's RAW exposure
- * compensation applied on top during development.
+ * Thumbnail analysis, error calculation and iterative exposure solving live here. The RAW
+ * renderer supplies default-curve preview samples and prepares the GPU profile map in the same
+ * capture-side GL pass. This solver produces only the automatic viewfinder-match offset; the
+ * user's RAW exposure compensation remains an independent development control applied on top.
  */
 internal object RawViewfinderExposureMatcher {
     private const val TAG = "RawViewfinderExposureMatcher"
@@ -35,7 +35,7 @@ internal object RawViewfinderExposureMatcher {
                 ?.toBooleanStrictOrNull() == true
 
     private data class ViewfinderReference(
-        val frame: RawExposurePreviewFrame,
+        val analysis: RawViewfinderExposureMath.Reference,
     )
 
     suspend fun prepareCaptureProfile(
@@ -67,9 +67,8 @@ internal object RawViewfinderExposureMatcher {
         }
         val request = reference?.let {
             RawExposurePreviewRequest(
-                width = it.frame.width,
-                height = it.frame.height,
-                diagnosticsEnabled = diagnosticsEnabled,
+                width = it.analysis.width,
+                height = it.analysis.height,
                 solve = { renderSample ->
                     solve(
                         reference = it,
@@ -111,8 +110,17 @@ internal object RawViewfinderExposureMatcher {
                 argbPixels = pixels,
             )
             testImageCache?.writeViewfinder(frame)
+            val analysis = RawViewfinderExposureMath.buildReference(
+                pixels = pixels,
+                width = size.width,
+                height = size.height,
+                left = 0,
+                top = 0,
+                right = size.width,
+                bottom = size.height,
+            ) ?: return null
             ViewfinderReference(
-                frame = frame,
+                analysis = analysis,
             )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to analyze capture preview", e)
@@ -125,48 +133,110 @@ internal object RawViewfinderExposureMatcher {
         renderSample: (Float) -> RawExposurePreviewFrame?,
         testImageCache: ExposureMatchTestImageCache?,
     ): Float? {
-        val solver = RawViewfinderExposureNativeBridge.Solver.create(reference.frame)
-            ?: return null
-        return solver.use {
-            var candidateIndex = 0
-            while (true) {
-                val exposureEv = solver.nextExposureEv() ?: break
-                val frame = renderSample(exposureEv) ?: return@use null
+        var candidateIndex = 0
+        var meteringSelection: RawViewfinderExposureMath.MeteringSelection? = null
+        return RawViewfinderExposureMath.solve { exposureEv ->
+            val frame = renderSample(exposureEv)
+            if (frame != null) {
                 testImageCache?.writeCandidate(
-                    index = candidateIndex++,
+                    index = candidateIndex,
                     exposureEv = exposureEv,
                     frame = frame,
                 )
-                if (!solver.submitCandidate(exposureEv, frame)) return@use null
-                if (diagnosticsEnabled) {
-                    solver.lastSample()?.let { sample ->
-                        PLog.d(
-                            TAG,
-                            "RAW viewfinder native sample: exposureEv=${sample.exposureEv} " +
-                                "matchedCells=${sample.matchedCellCount}/" +
-                                "${sample.validCellCount} " +
-                                "matchRate=${sample.matchRate} " +
-                                "meanAbsoluteLog2Ratio=${sample.meanAbsoluteLog2Ratio} " +
-                                "medianLog2Ratio=${sample.medianLog2Ratio}",
-                        )
-                    }
+            }
+            if (candidateIndex == 0 &&
+                frame != null &&
+                frame.width == reference.analysis.width &&
+                frame.height == reference.analysis.height
+            ) {
+                meteringSelection = RawViewfinderExposureMath.buildMeteringSelection(
+                    reference = reference.analysis,
+                    pixels = frame.argbPixels,
+                    width = frame.width,
+                    height = frame.height,
+                )
+                meteringSelection?.let { selection ->
+                    PLog.d(
+                        TAG,
+                        "RAW metering selection: seedExposureEv=$exposureEv " +
+                            "candidateDisplayLinearLumaP25=" +
+                            "${selection.seedCandidateDisplayLinearLumaP25} " +
+                            "candidateDisplayLinearLumaP50=" +
+                            "${selection.seedCandidateDisplayLinearLumaP50} " +
+                            "sampleCount=${selection.sampleCount}"
+                    )
                 }
             }
-            val result = solver.result() ?: return@use null
-            PLog.i(
-                TAG,
-                "RAW viewfinder exposure result: nativeEv=${result.best.exposureEv} " +
-                    "matchedCells=${result.best.matchedCellCount}/" +
-                    "${result.best.validCellCount} matchRate=${result.best.matchRate} " +
-                    "meanAbsoluteLog2Ratio=${result.best.meanAbsoluteLog2Ratio} " +
-                    "medianLog2Ratio=${result.best.medianLog2Ratio} " +
-                    "sampleCount=${result.evaluatedSampleCount} " +
-                    "excludedShadowCells=${result.excludedShadowCellCount} " +
-                    "excludedHighlightCells=${result.excludedHighlightCellCount} " +
-                    "endpointFallback=${result.endpointFallbackUsed}",
+            candidateIndex++
+            evaluate(
+                reference = reference.analysis,
+                meteringSelection = meteringSelection,
+                exposureEv = exposureEv,
+                frame = frame,
             )
-            result.best.exposureEv
         }
+    }
+
+    private fun evaluate(
+        reference: RawViewfinderExposureMath.Reference,
+        meteringSelection: RawViewfinderExposureMath.MeteringSelection?,
+        exposureEv: Float,
+        frame: RawExposurePreviewFrame?,
+    ): Float? {
+        if (meteringSelection == null ||
+            frame == null ||
+            frame.width != reference.width ||
+            frame.height != reference.height
+        ) {
+            return null
+        }
+        if (!diagnosticsEnabled) {
+            return RawViewfinderExposureMath.evaluateMeteringLog2Error(
+                reference = reference,
+                pixels = frame.argbPixels,
+                width = frame.width,
+                height = frame.height,
+                meteringSelection = meteringSelection,
+            )
+        }
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = frame.argbPixels,
+            width = frame.width,
+            height = frame.height,
+            meteringSelection = meteringSelection,
+        ) ?: return null
+        val meteringLog2Error = match.meteringLog2Error
+        PLog.d(
+            TAG,
+                "RAW viewfinder sample: exposureEv=$exposureEv " +
+                "meteringLog2Error=$meteringLog2Error " +
+                "quantileBlendLog2Error=${match.matchLog2Error} " +
+                "shadowPriorityTrimmedLog2Error=${match.toneWeightedLog2Error} " +
+                "linearArithmeticMeanLog2Error=${match.linearArithmeticMeanLog2Error} " +
+                "linearLogAverageLog2Error=${match.linearLogAverageLog2Error} " +
+                "perceptualArithmeticMeanLog2Error=${match.meanBrightnessLog2Error} " +
+                "perceptualLogAverageLog2Error=${match.perceptualLogAverageLog2Error} " +
+                "p50PerceptualLog2Error=${match.p50Log2Error} " +
+                "quantileLog2Errors=${match.quantileLog2Errors.contentToString()} " +
+                "quantileMedianLog2Error=${match.quantileMedianLog2Error} " +
+                "solverQuantileTrimmedLog2Error=${match.quantileTrimmedMeanLog2Error} " +
+                "quantileSpreadLog2=${match.quantileSpreadLog2} " +
+                "referenceSampleCount=${match.referenceSampleCount} " +
+                "candidateSampleCount=${match.candidateSampleCount} " +
+                "referenceDisplayLinearLumaMean=${match.referenceDisplayLinearLumaMean} " +
+                "candidateDisplayLinearLumaMean=${match.candidateDisplayLinearLumaMean} " +
+                "referencePerceptualBrightnessMean=" +
+                "${match.referencePerceptualBrightnessMean} " +
+                "candidatePerceptualBrightnessMean=" +
+                "${match.candidatePerceptualBrightnessMean} " +
+                "meteringSampleCount=${match.meteringSampleCount} " +
+                "referenceMeteringDisplayLinearLumaMean=" +
+                "${match.referenceMeteringDisplayLinearLumaMean} " +
+                "candidateMeteringDisplayLinearLumaMean=" +
+                "${match.candidateMeteringDisplayLinearLumaMean}"
+        )
+        return meteringLog2Error
     }
 
     private data class Size(val width: Int, val height: Int)
@@ -315,6 +385,5 @@ internal object RawViewfinderExposureMatcher {
 internal data class RawExposurePreviewRequest(
     val width: Int,
     val height: Int,
-    val diagnosticsEnabled: Boolean = false,
     val solve: ((Float) -> RawExposurePreviewFrame?) -> Float?,
 )
