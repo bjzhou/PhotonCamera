@@ -246,7 +246,7 @@ private data class PresetMatchSnapshot(
     val rawMaxNoiseReduction: Float,
     val rawMaxChromaNoiseReduction: Float,
     val rawOppoMasterToneMap: Boolean,
-    val rawPhotonPgtmToneMap: Boolean,
+    val rawPhotonHdr: Boolean,
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
     val rawDROMode: String,
@@ -285,7 +285,7 @@ private data class PresetMatchSnapshot(
             rawMaxNoiseReduction == preset.rawMaxNoiseReduction &&
             rawMaxChromaNoiseReduction == preset.rawMaxChromaNoiseReduction &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
-            rawPhotonPgtmToneMap == preset.rawPhotonPgtmToneMap &&
+            rawPhotonHdr == preset.rawPhotonHdr &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
             rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
             rawDROMode == preset.rawDROMode &&
@@ -378,10 +378,9 @@ private data class PresetMatchSnapshot(
                         "preset=${preset.rawOppoMasterToneMap}"
                 )
             }
-            if (rawPhotonPgtmToneMap != preset.rawPhotonPgtmToneMap) {
+            if (rawPhotonHdr != preset.rawPhotonHdr) {
                 add(
-                    "rawPhotonPgtmToneMap current=$rawPhotonPgtmToneMap " +
-                        "preset=${preset.rawPhotonPgtmToneMap}"
+                    "rawPhotonHdr current=$rawPhotonHdr preset=${preset.rawPhotonHdr}"
                 )
             }
             if (rawSpectralFilmStock != preset.rawSpectralFilmStock) {
@@ -467,7 +466,7 @@ private data class CameraFeatureUpdate(
     val rawMaxNoiseReduction: SettingValue<Float>? = null,
     val rawMaxChromaNoiseReduction: SettingValue<Float>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
-    val rawPhotonPgtmToneMap: SettingValue<Boolean>? = null,
+    val rawPhotonHdr: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
     val droMode: SettingValue<String>? = null,
@@ -600,7 +599,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawMaxNoiseReduction = saved.rawMaxNoiseReduction,
                             rawMaxChromaNoiseReduction = saved.rawMaxChromaNoiseReduction,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
-                            rawPhotonPgtmToneMap = saved.rawPhotonPgtmToneMap,
+                            rawPhotonHdr = saved.rawPhotonHdr,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
                             rawDROMode = saved.rawDROMode,
@@ -673,7 +672,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
-            rawPhotonPgtmToneMap = rawToneMappingParameters.value.usePhotonPgtmToneMap,
+            rawPhotonHdr = rawToneMappingParameters.value.usePhotonHdr,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
@@ -765,7 +764,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
             ),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
-            rawPhotonPgtmToneMap = SettingValue(this?.rawPhotonPgtmToneMap ?: false),
+            rawPhotonHdr = SettingValue(this?.rawPhotonHdr ?: false),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
             droMode = SettingValue(this?.rawDROMode ?: RawProcessingPreferences.DROMode.OFF.name),
@@ -887,14 +886,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val rawToneMappingUpdate = if (
             update.rawOppoMasterToneMap != null ||
-            update.rawPhotonPgtmToneMap != null
+            update.rawPhotonHdr != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
             update.rawOppoMasterToneMap?.let {
                 toneMappingParameters = toneMappingParameters.withOppoMasterToneMap(it.value)
             }
-            update.rawPhotonPgtmToneMap?.let {
-                toneMappingParameters = toneMappingParameters.withPhotonPgtmToneMap(it.value)
+            update.rawPhotonHdr?.let {
+                toneMappingParameters = toneMappingParameters.withPhotonHdr(it.value)
             }
             PreferenceUpdateValue(toneMappingParameters)
         } else {
@@ -1235,7 +1234,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
-            rawPhotonPgtmToneMap = rawToneMappingParameters.value.usePhotonPgtmToneMap,
+            rawPhotonHdr = rawToneMappingParameters.value.usePhotonHdr,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
@@ -1269,7 +1268,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawMaxNoiseReduction = prefs.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = prefs.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
-            rawPhotonPgtmToneMap = prefs.rawToneMappingParameters.usePhotonPgtmToneMap,
+            rawPhotonHdr = prefs.rawToneMappingParameters.usePhotonHdr,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,
             rawDROMode = prefs.droMode,
@@ -2699,12 +2698,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // share one GPU with preview, so running both at once only increases contention.
                 if (rawCaptureEnabled) {
                     runCatching {
+                        val rawToneParameters = prefs.rawToneMappingParameters.normalized()
                         RawDemosaicProcessor.getInstance().prewarmCapturePipeline(
                             getApplication<Application>().applicationContext,
                             prefs.rawRenderingEngine,
-                            prefs.rawToneMappingParameters
-                                .normalized()
-                                .profileToneMapMode,
+                            photonHdrEnabled = rawToneParameters.usePhotonHdr,
                             captureWidth = captureSize.width,
                             captureHeight = captureSize.height,
                             rawMaxFrameCount = rawMaxFrameCount,

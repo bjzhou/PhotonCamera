@@ -148,7 +148,7 @@ fun PresetEditorScreen(
         mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine))
     }
     var rawOppoMasterToneMap by remember { mutableStateOf(sourcePreset?.rawOppoMasterToneMap ?: false) }
-    var rawPhotonPgtmToneMap by remember { mutableStateOf(sourcePreset?.rawPhotonPgtmToneMap ?: false) }
+    var rawPhotonHdr by remember { mutableStateOf(sourcePreset?.rawPhotonHdr ?: false) }
     var rawSpectralFilmStock by remember { mutableStateOf(sourcePreset?.rawSpectralFilmStock ?: "kodak_portra_400") }
     var rawSpectralFilmPrint by remember { mutableStateOf(sourcePreset?.rawSpectralFilmPrint ?: "kodak_2383") }
     var rawDROMode by remember { mutableStateOf(sourcePreset?.rawDROMode ?: "OFF") }
@@ -194,7 +194,7 @@ fun PresetEditorScreen(
             rawMaxNoiseReduction = rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = rawOppoMasterToneMap,
-            rawPhotonPgtmToneMap = rawPhotonPgtmToneMap,
+            rawPhotonHdr = rawPhotonHdr,
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
             rawDROMode = rawDROMode,
@@ -544,6 +544,15 @@ fun PresetEditorScreen(
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
 
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_raw_photon_hdr),
+                    description = stringResource(R.string.settings_raw_photon_hdr_description),
+                    checked = rawPhotonHdr,
+                    onCheckedChange = { rawPhotonHdr = it }
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
                 val engineNames = RawRenderingEngine.entries.associateWith { engine ->
                     when (engine) {
                         RawRenderingEngine.AdobeCurve -> stringResource(R.string.settings_raw_color_engine_adobe_curve)
@@ -585,12 +594,10 @@ fun PresetEditorScreen(
 
                         val toneMapLabels = mapOf(
                             RawProfileToneMapMode.Default to stringResource(R.string.settings_raw_profile_tone_map_default),
-                            RawProfileToneMapMode.Photon to stringResource(R.string.settings_raw_profile_tone_map_photon_pgtm),
                             RawProfileToneMapMode.OppoMaster to stringResource(R.string.settings_raw_profile_tone_map_oppo_master),
                         )
                         val selectedToneMapMode = when {
                             rawOppoMasterToneMap -> RawProfileToneMapMode.OppoMaster
-                            rawPhotonPgtmToneMap -> RawProfileToneMapMode.Photon
                             else -> RawProfileToneMapMode.Default
                         }
                         DropdownSettingItem(
@@ -606,7 +613,6 @@ fun PresetEditorScreen(
                                     ?.key
                                     ?: RawProfileToneMapMode.Default
                                 rawOppoMasterToneMap = selectedMode == RawProfileToneMapMode.OppoMaster
-                                rawPhotonPgtmToneMap = selectedMode == RawProfileToneMapMode.Photon
                             }
                         )
 

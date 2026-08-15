@@ -594,7 +594,7 @@ object SuperResolutionDngWriter {
             listOf(red, green, blue)
         }
         val profileLookName = profileName?.takeIf { it.isNotBlank() }
-            ?: DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
+            ?: "Embedded"
         val cameraRawProfileXmp = profileGainTableMap?.let {
             DngCameraRawProfileXmp.build(
                 profileLookName = profileLookName,
@@ -712,7 +712,7 @@ object SuperResolutionDngWriter {
             add(sRationalArray(TAG_BASELINE_EXPOSURE, listOf(resolvedBaselineExposureEv.toDouble())))
             if (profileGainTableMap != null) {
                 add(floatArray(TAG_PROFILE_TONE_CURVE, profileToneCurve?.takeIf { it.size >= 4 }
-                    ?: DngProfileToneCurve.photonPgtmToneCurvePoints()))
+                    ?: DngProfileToneCurve.linearToneCurvePoints()))
             }
             add(short(TAG_CALIBRATION_ILLUMINANT_1, illuminant1))
             if (illuminant2 != null && colorMatrix2 != null) {

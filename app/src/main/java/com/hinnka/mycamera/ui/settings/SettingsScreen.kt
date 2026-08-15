@@ -2914,6 +2914,7 @@ private fun SettingsCategoryOverview(
             title = stringResource(R.string.baseline_target_raw),
             description = listOf(
                 stringResource(R.string.raw_dcp_title),
+                stringResource(R.string.settings_raw_photon_hdr),
                 stringResource(R.string.settings_raw_profile_tone_map),
                 stringResource(R.string.settings_raw_cfa_correction)
             ).joinToString(" · "),

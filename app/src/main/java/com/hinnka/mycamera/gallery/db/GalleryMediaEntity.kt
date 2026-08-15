@@ -70,7 +70,8 @@ data class GalleryMediaEntity(
     @ColumnInfo(name = "rawGooglePixelToneMap")
     val legacyPhotonToneMap: Boolean,
     val rawOppoMasterToneMap: Boolean,
-    val rawPhotonPgtmToneMap: Boolean,
+    @ColumnInfo(name = "rawPhotonPgtmToneMap")
+    val rawPhotonHdr: Boolean,
     val rawAppleProRawToneMap: Boolean,
     val frameId: String?,
     val width: Int,

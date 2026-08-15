@@ -2606,7 +2606,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val updated = value.normalized()
         val shouldEnableHdrGainmap =
             previous.profileToneMapMode != updated.profileToneMapMode &&
-                updated.usePhotonPgtmToneMap
+                updated.usePhotonHdr
         editRawToneMappingParameters.value = updated
         persistRawEditMetadata(
             mediaData = mediaData,

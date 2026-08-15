@@ -84,6 +84,26 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
+    fun fromJson_migratesLegacyPhotonPgtmSwitchToIndependentPhotonHdr() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_legacy_photon",
+              "name": "Legacy Photon",
+              "rawPhotonPgtmToneMap": true,
+              "rawOppoMasterToneMap": true
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertTrue(preset.rawPhotonHdr)
+        assertTrue(preset.rawOppoMasterToneMap)
+        assertTrue(preset.toJson().contains("\"rawPhotonHdr\":true"))
+        assertFalse(preset.toJson().contains("rawPhotonPgtmToneMap"))
+    }
+
+    @Test
     fun fromJson_normalizesNoneLutSentinelToNull() {
         val preset = CameraPreset.fromJson(
             """

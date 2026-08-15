@@ -865,10 +865,11 @@
     <string name="settings_raw_oppo_master_tone_map">OPPO Master tone mapping</string>
     <string name="settings_raw_oppo_master_tone_map_description">Use OPPO embedded master tonal rendering.</string>
     <string name="settings_raw_profile_tone_map">RAW tone curve</string>
-    <string name="settings_raw_profile_tone_map_description">Choose the tone curve rendering.</string>
+    <string name="settings_raw_profile_tone_map_description">Choose the Adobe profile tone curve.</string>
     <string name="settings_raw_profile_tone_map_default">Default</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
-    <string name="settings_raw_profile_tone_map_photon_pgtm">Photon HDR</string>
+    <string name="settings_raw_photon_hdr">Photon HDR</string>
+    <string name="settings_raw_photon_hdr_description">Preserves more highlight and shadow detail in high-contrast scenes for more natural tonal transitions.</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX Black Relative Exposure</string>
     <string name="settings_raw_agx_shoulder">AgX Shoulder</string>

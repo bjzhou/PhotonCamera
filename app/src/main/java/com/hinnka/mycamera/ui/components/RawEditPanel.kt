@@ -150,6 +150,19 @@ fun RawEditPanel(
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        RawSwitchSettingItem(
+            title = stringResource(R.string.settings_raw_photon_hdr),
+            description = stringResource(R.string.settings_raw_photon_hdr_description),
+            checked = rawToneMappingParameters.usePhotonHdr,
+            onCheckedChange = { enabled ->
+                onRawToneMappingParametersChange(
+                    rawToneMappingParameters.withPhotonHdr(enabled)
+                )
+                onAdjustmentEnd()
+            }
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
         RawRenderingEngineSelector(
             selectedEngine = rawRenderingEngine,
             onSelectEngine = onRawColorEngineChange
@@ -589,7 +602,6 @@ private fun RawProfileToneMapSwitches(
         description = stringResource(R.string.settings_raw_profile_tone_map_description),
         levels = listOf(
             RawProfileToneMapMode.Default.name to stringResource(R.string.settings_raw_profile_tone_map_default),
-            RawProfileToneMapMode.Photon.name to stringResource(R.string.settings_raw_profile_tone_map_photon_pgtm),
             RawProfileToneMapMode.OppoMaster.name to stringResource(R.string.settings_raw_profile_tone_map_oppo_master),
         ),
         currentLevel = params.profileToneMapMode.name,

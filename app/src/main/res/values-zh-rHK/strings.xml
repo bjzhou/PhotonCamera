@@ -860,10 +860,11 @@
     <string name="settings_raw_oppo_master_tone_map">OPPO 大師影調</string>
     <string name="settings_raw_oppo_master_tone_map_description">使用 OPPO 內嵌的大師影調渲染。</string>
     <string name="settings_raw_profile_tone_map">RAW 影調曲線</string>
-    <string name="settings_raw_profile_tone_map_description">選擇影調曲線渲染</string>
+    <string name="settings_raw_profile_tone_map_description">選擇 Adobe 描述檔影調曲線</string>
     <string name="settings_raw_profile_tone_map_default">預設</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO 大師</string>
-    <string name="settings_raw_profile_tone_map_photon_pgtm">光子HDR</string>
+    <string name="settings_raw_photon_hdr">光子 HDR</string>
+    <string name="settings_raw_photon_hdr_description">在明暗反差較大的場景中保留更多高光與暗部細節，讓畫面亮度過渡更自然。</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX 白色相對曝光</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX 黑色相對曝光</string>
     <string name="settings_raw_agx_shoulder">AgX 肩部</string>

@@ -39,7 +39,7 @@ data class CameraPreset(
     val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
     val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
     val rawOppoMasterToneMap: Boolean = false,
-    val rawPhotonPgtmToneMap: Boolean = false,
+    val rawPhotonHdr: Boolean = false,
     val rawSpectralFilmStock: String? = null,
     val rawSpectralFilmPrint: String? = null,
     val rawDROMode: String = "OFF",
@@ -149,7 +149,7 @@ data class CameraPreset(
                 rawMaxChromaNoiseReduction =
                     RawDenoiseDefaults.normalize(rawMaxChromaNoiseReduction),
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
-                rawPhotonPgtmToneMap = rawPhotonPgtmToneMap && !rawOppoMasterToneMap
+                rawPhotonHdr = rawPhotonHdr
             )
     }
 

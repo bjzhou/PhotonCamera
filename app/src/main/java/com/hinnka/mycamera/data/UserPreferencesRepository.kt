@@ -370,7 +370,9 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_filmic_white_relative_exposure")
         private val LEGACY_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_google_pixel_tone_map")
         private val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
-        private val RAW_PHOTON_PGTM_TONE_MAP_KEY = booleanPreferencesKey("raw_photon_pgtm_tone_map")
+        private val RAW_PHOTON_HDR_KEY = booleanPreferencesKey("raw_photon_hdr")
+        private val LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY =
+            booleanPreferencesKey("raw_photon_pgtm_tone_map")
         private val RAW_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_exposure_compensation")
         private val RAW_AUTO_EXPOSURE_KEY = booleanPreferencesKey("raw_auto_exposure")
         private val RAW_AUTO_EXPOSURE_MODE_KEY = stringPreferencesKey("raw_auto_exposure_mode")
@@ -609,8 +611,9 @@ class UserPreferencesRepository(private val context: Context) {
                     filmicWhiteRelativeExposure = preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY]
                         ?: RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
                     useOppoMasterToneMap = preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false,
-                    usePhotonPgtmToneMap =
-                        (preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] ?: false) ||
+                    usePhotonHdr =
+                        (preferences[RAW_PHOTON_HDR_KEY] ?: false) ||
+                            (preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] ?: false) ||
                             (preferences[LEGACY_PROFILE_TONE_MAP_KEY] ?: false)
                 ).normalized(),
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
@@ -1241,7 +1244,8 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.filmicWhiteRelativeExposure
             preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
             preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
-            preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] = normalized.usePhotonPgtmToneMap
+            preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
+            preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
         }
     }
 
@@ -2467,7 +2471,8 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.filmicWhiteRelativeExposure
                 preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
                 preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
-                preferences[RAW_PHOTON_PGTM_TONE_MAP_KEY] = normalized.usePhotonPgtmToneMap
+                preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
+                preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
             }
             update.rawSharpening?.let {
                 preferences[RAW_SHARPENING_KEY] = RawSharpeningDefaults.normalize(it.value)

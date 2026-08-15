@@ -47,7 +47,6 @@ import com.hinnka.mycamera.processor.YuvHdrStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
-import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.MgcSpatialGpuDenoiseMode
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
@@ -3454,15 +3453,13 @@ object GalleryManager {
                 } else {
                     null
                 }
-                val profileToneMapMode = profileOptions.profileToneMapMode
                 val embeddedRenderPlan = renderMetadata?.let { preparedMetadata ->
                     SuperResolutionDngWriter.resolveEmbeddedRenderPlan(
                         characteristics = characteristics,
                         metadata = preparedMetadata,
                         imageLayout = imageLayout,
-                        profileGainTableMap = dngProfilePreparation.profileGainTableMap,
-                        profileToneCurve =
-                            DngProfileToneCurve.profileToneCurveForPgtmMode(profileToneMapMode),
+                        profileGainTableMap = null,
+                        profileToneCurve = null,
                     )
                 }
                 val canBypassDngPixels = directBufferCompatible &&
@@ -3922,7 +3919,6 @@ object GalleryManager {
         exportDngWithRawExport: Boolean,
         baselineExposureEv: Float? = null,
         profileGainTableMap: DngProfileGainTableMap? = null,
-        profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Photon,
         imageLayout: SuperResolutionDngWriter.ImageLayout = SuperResolutionDngWriter.ImageLayout.CFA,
         compression: SuperResolutionDngWriter.Compression = SuperResolutionDngWriter.Compression.UNCOMPRESSED,
         inputRowStepSamples: Int? = null,
@@ -3974,9 +3970,8 @@ object GalleryManager {
                     cfaCorrectionMode = metadata.rawCfaCorrectionMode,
                     baselineExposureEv = baselineExposureEv,
                     profileGainTableMap = profileGainTableMap,
-                    profileName = DngProfileToneCurve.profileNameForPgtmMode(profileToneMapMode),
-                    profileToneCurve =
-                        DngProfileToneCurve.profileToneCurveForPgtmMode(profileToneMapMode),
+                    profileName = null,
+                    profileToneCurve = null,
                     imageLayout = imageLayout,
                     compression = compression,
                     inputRowStepSamples = inputRowStepSamples,
@@ -4151,10 +4146,6 @@ object GalleryManager {
         }
     }
 
-    private fun rawDngPgtmModeForMetadata(metadata: MediaMetadata): RawProfileToneMapMode {
-        return metadata.rawToneMappingParameters.profileToneMapMode
-    }
-
     private suspend fun rawDngProfilePreparationOptions(
         context: Context,
         metadata: MediaMetadata,
@@ -4166,7 +4157,6 @@ object GalleryManager {
         capturePreviewThumbnail: Bitmap?,
         captureResult: CaptureResult?,
     ): RawDngProfilePreparationOptions {
-        val profileToneMapMode = rawDngPgtmModeForMetadata(metadata)
         val blackBorderDefaultCrop =
             RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
                 width = width,
@@ -4174,21 +4164,13 @@ object GalleryManager {
                 rawBlackBorderCrop = metadata.rawBlackBorderCrop,
                 metadataDefaultCrop = defaultCrop,
             )
-        val statsBounds = RawDefaultCropOverride.resolveOutputSourceBounds(
-            width = width,
-            height = height,
-            aspectRatio = aspectRatio,
-            userCrop = metadata.cropRegion,
-            metadataDefaultCrop = blackBorderDefaultCrop ?: defaultCrop,
-        ).takeUnless { it.hasSameBounds(Rect(0, 0, width, height)) }
         val mainFlashFired = didMainFlashFire(captureResult)
         val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
             !mainFlashFired &&
             resolveRawAutoExposure(context, metadata)
         val rawAutoExposureMeteringPriority =
             resolveRawAutoExposureMeteringPriority(context, metadata)
-        val profileGainTableRequired = profileToneMapMode == RawProfileToneMapMode.Photon
-        val captureProfilePreparer = if (viewfinderMatchEnabled || profileGainTableRequired) {
+        val captureProfilePreparer = if (viewfinderMatchEnabled) {
             RawDngCaptureProfilePreparer { input ->
                 RawViewfinderExposureMatcher.prepareCaptureProfile(
                     renderer = RawDemosaicProcessor.getInstance(),
@@ -4200,8 +4182,6 @@ object GalleryManager {
                     capturePreviewThumbnail = capturePreviewThumbnail.takeIf {
                         viewfinderMatchEnabled
                     },
-                    profileToneMapMode = profileToneMapMode,
-                    statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
                     rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(
@@ -4223,8 +4203,7 @@ object GalleryManager {
         PLog.i(
             TAG,
             "RAW_VIEWFINDER_BASELINE stage=DNG_PREPARE enabled=$viewfinderMatchEnabled " +
-                "curve=DEFAULT pgtmOnGpu=$profileGainTableRequired " +
-                "statsBounds=$statsBounds blackBorderDefaultCrop=$blackBorderDefaultCrop " +
+                "curve=DEFAULT blackBorderDefaultCrop=$blackBorderDefaultCrop " +
                 "mainFlashFired=$mainFlashFired " +
                 "meteringPriority=$rawAutoExposureMeteringPriority " +
                 "flashState=${captureResult?.get(CaptureResult.FLASH_STATE)} " +
@@ -4232,8 +4211,6 @@ object GalleryManager {
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
         return RawDngProfilePreparationOptions(
-            profileToneMapMode = profileToneMapMode,
-            statsBounds = statsBounds,
             captureProfilePreparer = captureProfilePreparer,
         )
     }
@@ -4961,40 +4938,22 @@ object GalleryManager {
         return hasBitmapGainmap(loadBitmap(context, Uri.fromFile(photoFile), maxEdge = 512, preserveHdr = true))
     }
 
-    /**
-     * Applies an embedded DNG profile only when no profile tone map was selected for the photo.
-     *
-     * Capture metadata snapshots the global RAW setting.  Imported DNGs do the same below before
-     * reaching this point.  An embedded PGTM/ProfileToneCurve is therefore a useful default, not
-     * an override of the user's selected rendering intent.
-     */
+    /** Migrates legacy Photon PGTM DNGs to the independent Photon HDR switch. */
     private fun MediaMetadata.withEmbeddedDngToneMapDefaults(
         dngFile: File
     ): MediaMetadata {
-        val selectedProfileToneMapMode = rawToneMappingParameters.normalized().profileToneMapMode
-        if (selectedProfileToneMapMode != RawProfileToneMapMode.Default) {
-            PLog.d(
-                TAG,
-                "Keeping selected $selectedProfileToneMapMode profile tone map; " +
-                    "embedded DNG PGTM/ProfileToneCurve remains a fallback"
-            )
-            return this
-        }
+        if (rawToneMappingParameters.normalized().usePhotonHdr) return this
         val hasProfileGainTableMap = DngProfileGainTableMap.readFrom(dngFile)?.isValid == true
         if (!hasProfileGainTableMap) return this
         val toneMappingParameters = when {
             DngEmbeddedProfile.hasPhotonPgtmProfile(dngFile) -> {
-                rawToneMappingParameters.withPhotonPgtmToneMap(true)
+                rawToneMappingParameters.withPhotonHdr(true)
             }
 
             else -> return this
         }
         if (toneMappingParameters == rawToneMappingParameters && manualHdrEffectEnabled) return this
-        PLog.d(
-            TAG,
-            "DNG contains PGTM + ${toneMappingParameters.profileToneMapMode} ProfileToneCurve; " +
-                "enabling profile tone map and HDR gainmap for this photo"
-        )
+        PLog.d(TAG, "Legacy Photon PGTM DNG detected; enabling independent Photon HDR")
         return copy(
             rawToneMappingParameters = toneMappingParameters,
             manualHdrEffectEnabled = true
@@ -5011,12 +4970,16 @@ object GalleryManager {
             ?.rawToneMappingParameters
             ?.normalized()
             ?: return this
-        if (globalToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Default) {
+        if (!globalToneMappingParameters.usePhotonHdr &&
+            globalToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Default
+        ) {
             return this
         }
         PLog.d(
             TAG,
-            "Applying global ${globalToneMappingParameters.profileToneMapMode} profile tone map to imported RAW"
+            "Applying global RAW tone settings to imported RAW: " +
+                "profile=${globalToneMappingParameters.profileToneMapMode} " +
+                "photonHdr=${globalToneMappingParameters.usePhotonHdr}"
         )
         return copy(rawToneMappingParameters = globalToneMappingParameters)
     }

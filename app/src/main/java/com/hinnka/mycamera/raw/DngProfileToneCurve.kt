@@ -12,22 +12,6 @@ internal object DngProfileToneCurve {
 
     private val LINEAR_TONE_CURVE_POINTS = floatArrayOf(0f, 0f, 1f, 1f)
 
-    fun profileNameForPgtmMode(mode: RawProfileToneMapMode): String? {
-        return when (mode) {
-            RawProfileToneMapMode.Photon -> PHOTON_PGTM_PROFILE_NAME
-            RawProfileToneMapMode.Default,
-            RawProfileToneMapMode.OppoMaster -> null
-        }
-    }
-
-    fun profileToneCurveForPgtmMode(mode: RawProfileToneMapMode): FloatArray? {
-        return when (mode) {
-            RawProfileToneMapMode.Photon -> photonPgtmToneCurvePoints()
-            RawProfileToneMapMode.Default,
-            RawProfileToneMapMode.OppoMaster -> null
-        }
-    }
-
     private val GOOGLE_HDR_TONE_CURVE_Y = floatArrayOf(
         0f, 0.000817775668f, 0.00170822139f, 0.00267076469f, 0.0037048338f, 0.00480985641f, 0.00598525954f, 0.00723047229f,
         0.00854492188f, 0.00992803555f, 0.0113792419f, 0.0128979683f, 0.0144836418f, 0.0161356926f, 0.017853545f, 0.019636631f,
