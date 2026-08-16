@@ -8,7 +8,7 @@ data class RawToneMappingParameters(
     val filmicBlackRelativeExposure: Float = FILMIC_BLACK_RELATIVE_EXPOSURE_DEFAULT,
     val filmicWhiteRelativeExposure: Float = FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
     val useOppoMasterToneMap: Boolean = false,
-    val usePhotonHdr: Boolean = false
+    val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT
 ) {
     val profileToneMapMode: RawProfileToneMapMode
         get() = when {
@@ -60,6 +60,7 @@ data class RawToneMappingParameters(
     }
 
     companion object {
+        const val PHOTON_HDR_DEFAULT = true
         const val MIN_DYNAMIC_RANGE_EV = 0.2f
 
         const val AGX_BLACK_RELATIVE_EXPOSURE_MIN = -20f

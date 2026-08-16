@@ -198,7 +198,7 @@ data class UserPreferences(
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
-    val useRawMaxHdrComposition: Boolean = true, // RAWmax：包围曝光 HDR 融合
+    val useRawMaxHdrComposition: Boolean = MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION, // RAWmax：包围曝光 HDR 融合
     val useRawMaxSpatialRgb: Boolean = true, // RAWmax：Spatial RGB 默认开启；关闭时保留 Bayer
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
@@ -612,7 +612,7 @@ class UserPreferencesRepository(private val context: Context) {
                         ?: RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
                     useOppoMasterToneMap = preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false,
                     usePhotonHdr =
-                        (preferences[RAW_PHOTON_HDR_KEY] ?: false) ||
+                        (preferences[RAW_PHOTON_HDR_KEY] ?: RawToneMappingParameters.PHOTON_HDR_DEFAULT) ||
                             (preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] ?: false) ||
                             (preferences[LEGACY_PROFILE_TONE_MAP_KEY] ?: false)
                 ).normalized(),
@@ -717,7 +717,8 @@ class UserPreferencesRepository(private val context: Context) {
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useRawMax = useRawMax,
-                useRawMaxHdrComposition = preferences[USE_RAW_MAX_HDR_COMPOSITION] ?: true,
+                useRawMaxHdrComposition = preferences[USE_RAW_MAX_HDR_COMPOSITION]
+                    ?: MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION,
                 useRawMaxSpatialRgb = preferences[USE_RAW_MAX_SPATIAL_RGB] ?: true,
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
                     ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {

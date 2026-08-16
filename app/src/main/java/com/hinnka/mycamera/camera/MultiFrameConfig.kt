@@ -11,7 +11,8 @@ object MultiFrameConfig {
 
     const val MIN_FRAME_COUNT = 3
     const val MAX_FRAME_COUNT = 20
-    const val DEFAULT_FRAME_COUNT = 7
+    const val DEFAULT_FRAME_COUNT = 5
+    const val DEFAULT_RAW_MAX_HDR_COMPOSITION = false
     const val MIN_OUTPUT_SCALE = 1f
     const val MAX_OUTPUT_SCALE = 2f
     const val DEFAULT_SUPER_RESOLUTION_SCALE = 1f

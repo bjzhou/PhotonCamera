@@ -1620,7 +1620,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useRawMaxHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMaxHdrComposition }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION,
+        )
     val useRawMaxSpatialRgb: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMaxSpatialRgb }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
@@ -2671,7 +2675,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val rawCaptureEnabled = prefs?.useRaw == true
             val rawMaxEnabled = currentState.isRawMaxEnabled
             val rawMaxHdrCompositionEnabled =
-                rawMaxEnabled && (prefs?.useRawMaxHdrComposition ?: true)
+                rawMaxEnabled &&
+                    (prefs?.useRawMaxHdrComposition ?: MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION)
             val totalRawMaxFrameCount = MultiFrameConfig.normalizeFrameCount(
                 prefs?.multiFrameCount ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
             )
