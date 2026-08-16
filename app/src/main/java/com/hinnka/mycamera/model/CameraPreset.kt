@@ -8,6 +8,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
+import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 
 /**
  * 拍摄预设组合（用户自定义档位配置）
@@ -38,6 +39,13 @@ data class CameraPreset(
     val rawChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
     val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
     val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+    val rawExposureCompensation: Float = 0f,
+    val rawAutoExposure: Boolean = true,
+    val rawAutoExposureMeteringPriority: Float = RawAutoExposureMeteringPriority.DEFAULT,
+    val rawHighlightsAdjustment: Float = 0f,
+    val rawShadowsAdjustment: Float = 0f,
+    val rawBlackPointCorrection: Float = 0f,
+    val rawWhitePointCorrection: Float = 0f,
     val rawOppoMasterToneMap: Boolean = false,
     val rawPhotonHdr: Boolean = false,
     val rawSpectralFilmStock: String? = null,
@@ -107,12 +115,23 @@ data class CameraPreset(
         ).distinct()
     }
 
+    /** 返回该预设依赖的全部 DCP 键，包括统一 DCP 与镜头覆盖 DCP。 */
+    fun referencedDcpIds(): List<String> {
+        return buildList {
+            rawDcpId?.takeIf { it.isNotBlank() }?.let(::add)
+            rawDcpIdsByLens.values.forEach { dcpId ->
+                dcpId?.takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }.distinct()
+    }
+
     /**
      * 将包内资源键替换为导入后实际生成的资源 ID。
      */
     fun withResolvedContentReferences(
         lutIdsBySourceKey: Map<String, String>,
         resolvedFrameId: String?,
+        dcpIdsBySourceKey: Map<String, String> = emptyMap(),
     ): CameraPreset {
         fun resolveLut(sourceKey: String?): String? {
             val normalizedKey = normalizeLutId(sourceKey) ?: return null
@@ -121,9 +140,18 @@ data class CameraPreset(
             }
         }
 
+        fun resolveDcp(sourceKey: String?): String? {
+            val normalizedKey = sourceKey?.takeIf { it.isNotBlank() } ?: return null
+            return requireNotNull(dcpIdsBySourceKey[normalizedKey]) {
+                "Missing resolved DCP key: $normalizedKey"
+            }
+        }
+
         return copy(
             lutId = resolveLut(lutId),
             frameId = resolvedFrameId,
+            rawDcpId = resolveDcp(rawDcpId),
+            rawDcpIdsByLens = rawDcpIdsByLens.mapValues { (_, dcpId) -> resolveDcp(dcpId) },
             jpgBaselineLutId = resolveLut(jpgBaselineLutId),
             rawBaselineLutId = resolveLut(rawBaselineLutId),
             phantomBaselineLutId = resolveLut(phantomBaselineLutId),
@@ -135,6 +163,7 @@ data class CameraPreset(
             .withoutLegacyHdf()
             .copy(
                 lutId = normalizeLutId(lutId),
+                rawDcpId = rawDcpId?.takeIf { it.isNotBlank() },
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),
                 rawHncsProfileId = rawHncsProfileId?.takeIf(String::isNotBlank),
                 rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
@@ -148,6 +177,14 @@ data class CameraPreset(
                 rawMaxNoiseReduction = RawDenoiseDefaults.normalize(rawMaxNoiseReduction),
                 rawMaxChromaNoiseReduction =
                     RawDenoiseDefaults.normalize(rawMaxChromaNoiseReduction),
+                rawExposureCompensation = rawExposureCompensation.coerceIn(-4f, 4f),
+                rawAutoExposureMeteringPriority = RawAutoExposureMeteringPriority.normalize(
+                    rawAutoExposureMeteringPriority
+                ),
+                rawHighlightsAdjustment = rawHighlightsAdjustment.coerceIn(-1f, 1f),
+                rawShadowsAdjustment = rawShadowsAdjustment.coerceIn(-1f, 1f),
+                rawBlackPointCorrection = rawBlackPointCorrection.coerceIn(-1f, 1f),
+                rawWhitePointCorrection = rawWhitePointCorrection.coerceIn(-1f, 1f),
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
                 rawPhotonHdr = rawPhotonHdr
             )

@@ -544,6 +544,29 @@ class CustomImportManager(private val context: Context) {
         }
     }
 
+    /** 从预设包导入原始 DCP 文件，并保留预设包中的显示名称。 */
+    internal fun importPresetDcp(
+        bytes: ByteArray,
+        nameMap: Map<String, String>,
+    ): String? {
+        val dcpId = "custom_dcp_${UUID.randomUUID()}"
+        val normalizedFileName = "$dcpId.dcp"
+        val dcpFile = File(customDcpDir, normalizedFileName)
+        return try {
+            require(bytes.isNotEmpty()) { "DCP data is empty" }
+            FileOutputStream(dcpFile).use { it.write(bytes) }
+            val resolvedNameMap = nameMap
+                .filter { (language, name) -> language.isNotBlank() && name.isNotBlank() }
+                .ifEmpty { mapOf("en" to dcpId, "zh" to dcpId) }
+            saveDcpToConfig(dcpId, resolvedNameMap, normalizedFileName)
+            dcpId
+        } catch (e: Exception) {
+            dcpFile.delete()
+            PLog.e(TAG, "Failed to import DCP from preset package", e)
+            null
+        }
+    }
+
     fun importRawNoiseProfile(uri: Uri, displayName: String? = null): String? {
         var profileFile: File? = null
         return try {
@@ -1370,14 +1393,27 @@ class CustomImportManager(private val context: Context) {
     }
 
     private fun saveDcpToConfig(dcpId: String, name: String, fileName: String) {
+        saveDcpToConfig(
+            dcpId = dcpId,
+            nameMap = mapOf("en" to name, "zh" to name),
+            fileName = fileName,
+        )
+    }
+
+    private fun saveDcpToConfig(
+        dcpId: String,
+        nameMap: Map<String, String>,
+        fileName: String,
+    ) {
         val configFile = File(context.filesDir, CUSTOM_DCP_CONFIG)
         val jsonArray = if (configFile.exists()) JSONArray(configFile.readText()) else JSONArray()
         jsonArray.put(
             JSONObject().apply {
                 put("id", dcpId)
                 put("name", JSONObject().apply {
-                    put("en", name)
-                    put("zh", name)
+                    nameMap.toSortedMap().forEach { (language, name) ->
+                        put(language, name)
+                    }
                 })
                 put("fileName", fileName)
             }

@@ -35,7 +35,7 @@ class PresetPackageManager(
     companion object {
         private const val TAG = "PresetPackageManager"
         private const val FORMAT = "com.hinnka.photon.preset"
-        private const val VERSION = 1
+        private const val VERSION = 2
         private const val MANIFEST_ENTRY = "manifest.json"
         private const val STORAGE_REFERENCE = "reference"
         private const val STORAGE_BUNDLED = "bundled"
@@ -49,6 +49,7 @@ class PresetPackageManager(
     class ImportedPresetPackage internal constructor(
         val preset: CameraPreset,
         internal val importedLutIds: List<String>,
+        internal val importedDcpIds: List<String>,
         internal val importedFrameId: String?,
     )
 
@@ -92,6 +93,29 @@ class PresetPackageManager(
                 lutReferences.add(resource)
             }
 
+            val dcpReferences = JsonArray()
+            normalizedPreset.referencedDcpIds().forEachIndexed { index, dcpId ->
+                val dcp = requireNotNull(contentRepository.dcpManager.getAvailableDcps()
+                    .firstOrNull { it.id == dcpId }) {
+                    "Preset references missing DCP: $dcpId"
+                }
+                val resource = JsonObject().apply {
+                    addProperty("key", dcpId)
+                    if (dcp.isBuiltIn) {
+                        addProperty("storage", STORAGE_REFERENCE)
+                    } else {
+                        val sourceFile = File(dcp.filePath)
+                        require(sourceFile.isFile) { "Custom DCP file is missing: $dcpId" }
+                        val entryName = "resources/dcps/$index.dcp"
+                        archiveEntries[entryName] = sourceFile.readBytesChecked()
+                        addProperty("storage", STORAGE_BUNDLED)
+                        addProperty("entry", entryName)
+                        add("name", dcp.nameMap.toJsonObject())
+                    }
+                }
+                dcpReferences.add(resource)
+            }
+
             val frameReference = normalizedPreset.frameId?.let { frameId ->
                 val frame = requireNotNull(contentRepository.frameManager.getFrameInfo(frameId)) {
                     "Preset references missing frame: $frameId"
@@ -117,6 +141,7 @@ class PresetPackageManager(
 
             val resources = JsonObject().apply {
                 add("luts", lutReferences)
+                add("dcps", dcpReferences)
                 frameReference?.let { add("frame", it) }
             }
             val manifest = JsonObject().apply {
@@ -137,6 +162,7 @@ class PresetPackageManager(
 
     fun importPreset(uri: Uri): ImportedPresetPackage? {
         val importedLutIds = mutableListOf<String>()
+        val importedDcpIds = mutableListOf<String>()
         var importedFrameId: String? = null
         return try {
             val archiveEntries = readArchive(uri)
@@ -146,7 +172,8 @@ class PresetPackageManager(
             require(manifestBytes.size <= MAX_MANIFEST_BYTES) { "Preset manifest is too large" }
             val manifest = JsonParser.parseString(manifestBytes.toString(Charsets.UTF_8)).asJsonObject
             require(manifest.requiredString("format") == FORMAT) { "Unsupported preset package format" }
-            require(manifest.requiredInt("version") == VERSION) { "Unsupported preset package version" }
+            val version = manifest.requiredInt("version")
+            require(version in 1..VERSION) { "Unsupported preset package version" }
 
             val presetJson = manifest.getAsJsonObject("preset")
                 ?: error("Preset package does not contain a preset")
@@ -205,6 +232,49 @@ class PresetPackageManager(
                 }
             }
 
+            val dcpResources = resources.getAsJsonArray("dcps") ?: JsonArray()
+            val expectedDcpKeys = packagedPreset.referencedDcpIds().toSet()
+            val declaredDcpKeys = dcpResources.map { it.asJsonObject.requiredString("key") }
+            require(declaredDcpKeys.size == declaredDcpKeys.distinct().size) {
+                "Preset package contains duplicate DCP keys"
+            }
+            require(declaredDcpKeys.toSet() == expectedDcpKeys) {
+                "Preset package DCP references do not match the preset"
+            }
+
+            val resolvedDcpIds = linkedMapOf<String, String>()
+            dcpResources.forEach { element ->
+                val resource = element.asJsonObject
+                val sourceKey = resource.requiredString("key")
+                when (resource.requiredString("storage")) {
+                    STORAGE_REFERENCE -> {
+                        val builtIn = contentRepository.dcpManager.getAvailableDcps()
+                            .firstOrNull { it.id == sourceKey }
+                        require(builtIn?.isBuiltIn == true) {
+                            "Built-in DCP is unavailable: $sourceKey"
+                        }
+                        resolvedDcpIds[sourceKey] = sourceKey
+                    }
+
+                    STORAGE_BUNDLED -> {
+                        val entryName = resource.requiredSafeEntry("entry")
+                        require(entryName.startsWith("resources/dcps/") && entryName.endsWith(".dcp")) {
+                            "Invalid bundled DCP entry"
+                        }
+                        val bytes = requireNotNull(archiveEntries[entryName]) {
+                            "Bundled DCP entry is missing: $entryName"
+                        }
+                        val nameMap = resource.getAsJsonObject("name")?.toStringMap().orEmpty()
+                        val importedId = customImportManager.importPresetDcp(bytes, nameMap)
+                            ?: error("Failed to import bundled DCP: $sourceKey")
+                        importedDcpIds += importedId
+                        resolvedDcpIds[sourceKey] = importedId
+                    }
+
+                    else -> error("Unsupported DCP storage mode")
+                }
+            }
+
             val frameResource = resources.getAsJsonObject("frame")
             val resolvedFrameId = if (packagedPreset.frameId == null) {
                 require(frameResource == null) { "Preset package contains an unused frame" }
@@ -249,7 +319,11 @@ class PresetPackageManager(
             importedFrameId = resolvedFrameId?.takeIf { it != packagedPreset.frameId }
 
             val importedPreset = packagedPreset
-                .withResolvedContentReferences(resolvedLutIds, resolvedFrameId)
+                .withResolvedContentReferences(
+                    lutIdsBySourceKey = resolvedLutIds,
+                    resolvedFrameId = resolvedFrameId,
+                    dcpIdsBySourceKey = resolvedDcpIds,
+                )
                 .copy(
                     id = "preset_${UUID.randomUUID()}",
                     isBuiltIn = false,
@@ -259,10 +333,12 @@ class PresetPackageManager(
             ImportedPresetPackage(
                 preset = importedPreset,
                 importedLutIds = importedLutIds.toList(),
+                importedDcpIds = importedDcpIds.toList(),
                 importedFrameId = importedFrameId,
             )
         } catch (e: Exception) {
             importedFrameId?.let(customImportManager::deleteCustomFrame)
+            importedDcpIds.asReversed().forEach(customImportManager::deleteCustomDcp)
             importedLutIds.asReversed().forEach(customImportManager::deleteCustomLut)
             PLog.e(TAG, "Failed to import preset package: $uri", e)
             null
@@ -271,6 +347,7 @@ class PresetPackageManager(
 
     fun rollbackImport(imported: ImportedPresetPackage) {
         imported.importedFrameId?.let(customImportManager::deleteCustomFrame)
+        imported.importedDcpIds.asReversed().forEach(customImportManager::deleteCustomDcp)
         imported.importedLutIds.asReversed().forEach(customImportManager::deleteCustomLut)
     }
 

@@ -465,6 +465,13 @@ private data class CameraFeatureUpdate(
     val rawChromaNoiseReduction: SettingValue<Float>? = null,
     val rawMaxNoiseReduction: SettingValue<Float>? = null,
     val rawMaxChromaNoiseReduction: SettingValue<Float>? = null,
+    val rawExposureCompensation: SettingValue<Float>? = null,
+    val rawAutoExposure: SettingValue<Boolean>? = null,
+    val rawAutoExposureMeteringPriority: SettingValue<Float>? = null,
+    val rawHighlightsAdjustment: SettingValue<Float>? = null,
+    val rawShadowsAdjustment: SettingValue<Float>? = null,
+    val rawBlackPointCorrection: SettingValue<Float>? = null,
+    val rawWhitePointCorrection: SettingValue<Float>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
     val rawPhotonHdr: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
@@ -671,6 +678,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawChromaNoiseReduction = userPreferences.value.rawChromaNoiseReduction,
             rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
+            rawExposureCompensation = userPreferences.value.rawExposureCompensation,
+            rawAutoExposure = userPreferences.value.rawAutoExposure,
+            rawAutoExposureMeteringPriority = userPreferences.value.rawAutoExposureMeteringPriority,
+            rawHighlightsAdjustment = userPreferences.value.rawHighlightsAdjustment,
+            rawShadowsAdjustment = userPreferences.value.rawShadowsAdjustment,
+            rawBlackPointCorrection = userPreferences.value.rawBlackPointCorrection,
+            rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawPhotonHdr = rawToneMappingParameters.value.usePhotonHdr,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
@@ -763,6 +777,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 this?.rawMaxChromaNoiseReduction
                     ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
             ),
+            rawExposureCompensation = SettingValue(this?.rawExposureCompensation ?: 0f),
+            rawAutoExposure = SettingValue(this?.rawAutoExposure ?: true),
+            rawAutoExposureMeteringPriority = SettingValue(
+                this?.rawAutoExposureMeteringPriority
+                    ?: RawAutoExposureMeteringPriority.DEFAULT
+            ),
+            rawHighlightsAdjustment = SettingValue(this?.rawHighlightsAdjustment ?: 0f),
+            rawShadowsAdjustment = SettingValue(this?.rawShadowsAdjustment ?: 0f),
+            rawBlackPointCorrection = SettingValue(this?.rawBlackPointCorrection ?: 0f),
+            rawWhitePointCorrection = SettingValue(this?.rawWhitePointCorrection ?: 0f),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
             rawPhotonHdr = SettingValue(this?.rawPhotonHdr ?: false),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
@@ -970,6 +994,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     PreferenceUpdateValue(it.value)
                 },
                 rawMaxChromaNoiseReduction = update.rawMaxChromaNoiseReduction?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawExposureCompensation = update.rawExposureCompensation?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawAutoExposure = update.rawAutoExposure?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawAutoExposureMeteringPriority = update.rawAutoExposureMeteringPriority?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawHighlightsAdjustment = update.rawHighlightsAdjustment?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawShadowsAdjustment = update.rawShadowsAdjustment?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawBlackPointCorrection = update.rawBlackPointCorrection?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawWhitePointCorrection = update.rawWhitePointCorrection?.let {
                     PreferenceUpdateValue(it.value)
                 },
                 rawSpectralFilmStock = update.rawSpectralFilmStock?.let { PreferenceUpdateValue(it.value) },

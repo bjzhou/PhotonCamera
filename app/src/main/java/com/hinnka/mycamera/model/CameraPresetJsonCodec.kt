@@ -10,6 +10,7 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawProcessingPreferences
+import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 
 /**
  * Tolerant preset reader: only current CameraPreset fields are parsed.
@@ -97,6 +98,23 @@ internal object CameraPresetJsonCodec {
                     RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
                 )
             ),
+            rawExposureCompensation = obj.float("rawExposureCompensation", 0f)
+                .coerceIn(-4f, 4f),
+            rawAutoExposure = obj.boolean("rawAutoExposure", true),
+            rawAutoExposureMeteringPriority = RawAutoExposureMeteringPriority.normalize(
+                obj.float(
+                    "rawAutoExposureMeteringPriority",
+                    RawAutoExposureMeteringPriority.DEFAULT,
+                )
+            ),
+            rawHighlightsAdjustment = obj.float("rawHighlightsAdjustment", 0f)
+                .coerceIn(-1f, 1f),
+            rawShadowsAdjustment = obj.float("rawShadowsAdjustment", 0f)
+                .coerceIn(-1f, 1f),
+            rawBlackPointCorrection = obj.float("rawBlackPointCorrection", 0f)
+                .coerceIn(-1f, 1f),
+            rawWhitePointCorrection = obj.float("rawWhitePointCorrection", 0f)
+                .coerceIn(-1f, 1f),
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
             rawPhotonHdr =
                 obj.boolean("rawPhotonHdr", false) ||

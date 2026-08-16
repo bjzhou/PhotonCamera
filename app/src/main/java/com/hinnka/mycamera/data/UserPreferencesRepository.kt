@@ -325,6 +325,13 @@ data class CameraFeaturePreferencesUpdate(
     val rawChromaNoiseReduction: PreferenceUpdateValue<Float>? = null,
     val rawMaxNoiseReduction: PreferenceUpdateValue<Float>? = null,
     val rawMaxChromaNoiseReduction: PreferenceUpdateValue<Float>? = null,
+    val rawExposureCompensation: PreferenceUpdateValue<Float>? = null,
+    val rawAutoExposure: PreferenceUpdateValue<Boolean>? = null,
+    val rawAutoExposureMeteringPriority: PreferenceUpdateValue<Float>? = null,
+    val rawHighlightsAdjustment: PreferenceUpdateValue<Float>? = null,
+    val rawShadowsAdjustment: PreferenceUpdateValue<Float>? = null,
+    val rawBlackPointCorrection: PreferenceUpdateValue<Float>? = null,
+    val rawWhitePointCorrection: PreferenceUpdateValue<Float>? = null,
     val rawSpectralFilmStock: PreferenceUpdateValue<String?>? = null,
     val rawSpectralFilmPrint: PreferenceUpdateValue<String?>? = null,
     val droMode: PreferenceUpdateValue<String>? = null,
@@ -2493,6 +2500,33 @@ class UserPreferencesRepository(private val context: Context) {
             update.rawMaxChromaNoiseReduction?.let {
                 preferences[RAW_MAX_CHROMA_NOISE_REDUCTION_KEY] =
                     RawDenoiseDefaults.normalize(it.value)
+            }
+            update.rawExposureCompensation?.let {
+                preferences[RAW_EXPOSURE_COMPENSATION_KEY] = it.value.coerceIn(-4f, 4f)
+            }
+            update.rawAutoExposure?.let {
+                preferences[RAW_AUTO_EXPOSURE_KEY] = it.value
+                preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (it.value) {
+                    "VIEWFINDER_MATCH"
+                } else {
+                    "OFF"
+                }
+            }
+            update.rawAutoExposureMeteringPriority?.let {
+                preferences[RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY] =
+                    RawAutoExposureMeteringPriority.normalize(it.value)
+            }
+            update.rawHighlightsAdjustment?.let {
+                preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] = it.value.coerceIn(-1f, 1f)
+            }
+            update.rawShadowsAdjustment?.let {
+                preferences[RAW_SHADOWS_ADJUSTMENT_KEY] = it.value.coerceIn(-1f, 1f)
+            }
+            update.rawBlackPointCorrection?.let {
+                preferences[RAW_BLACK_POINT_CORRECTION_KEY] = it.value.coerceIn(-1f, 1f)
+            }
+            update.rawWhitePointCorrection?.let {
+                preferences[RAW_WHITE_POINT_CORRECTION_KEY] = it.value.coerceIn(-1f, 1f)
             }
             update.rawSpectralFilmStock?.let {
                 if (it.value != null) {
