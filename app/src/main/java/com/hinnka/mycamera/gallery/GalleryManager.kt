@@ -4157,6 +4157,7 @@ object GalleryManager {
         capturePreviewThumbnail: Bitmap?,
         captureResult: CaptureResult?,
     ): RawDngProfilePreparationOptions {
+        val generatePhotonPgtm = metadata.rawToneMappingParameters.usePhotonHdr
         val blackBorderDefaultCrop =
             RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
                 width = width,
@@ -4164,13 +4165,21 @@ object GalleryManager {
                 rawBlackBorderCrop = metadata.rawBlackBorderCrop,
                 metadataDefaultCrop = defaultCrop,
             )
+        val statsBounds = RawDefaultCropOverride.resolveOutputSourceBounds(
+            width = width,
+            height = height,
+            aspectRatio = aspectRatio,
+            userCrop = metadata.cropRegion,
+            metadataDefaultCrop = blackBorderDefaultCrop ?: defaultCrop,
+        ).takeUnless { it.hasSameBounds(Rect(0, 0, width, height)) }
         val mainFlashFired = didMainFlashFire(captureResult)
         val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
             !mainFlashFired &&
             resolveRawAutoExposure(context, metadata)
         val rawAutoExposureMeteringPriority =
             resolveRawAutoExposureMeteringPriority(context, metadata)
-        val captureProfilePreparer = if (viewfinderMatchEnabled) {
+        val profileGainTableRequired = generatePhotonPgtm
+        val captureProfilePreparer = if (viewfinderMatchEnabled || profileGainTableRequired) {
             RawDngCaptureProfilePreparer { input ->
                 RawViewfinderExposureMatcher.prepareCaptureProfile(
                     renderer = RawDemosaicProcessor.getInstance(),
@@ -4182,6 +4191,8 @@ object GalleryManager {
                     capturePreviewThumbnail = capturePreviewThumbnail.takeIf {
                         viewfinderMatchEnabled
                     },
+                    generatePhotonPgtm = generatePhotonPgtm,
+                    statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
                     rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(
@@ -4204,6 +4215,7 @@ object GalleryManager {
             TAG,
             "RAW_VIEWFINDER_BASELINE stage=DNG_PREPARE enabled=$viewfinderMatchEnabled " +
                 "curve=DEFAULT blackBorderDefaultCrop=$blackBorderDefaultCrop " +
+                "photonPgtm=$generatePhotonPgtm statsBounds=$statsBounds " +
                 "mainFlashFired=$mainFlashFired " +
                 "meteringPriority=$rawAutoExposureMeteringPriority " +
                 "flashState=${captureResult?.get(CaptureResult.FLASH_STATE)} " +
@@ -4211,6 +4223,8 @@ object GalleryManager {
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
         return RawDngProfilePreparationOptions(
+            generatePhotonPgtm = generatePhotonPgtm,
+            statsBounds = statsBounds,
             captureProfilePreparer = captureProfilePreparer,
         )
     }

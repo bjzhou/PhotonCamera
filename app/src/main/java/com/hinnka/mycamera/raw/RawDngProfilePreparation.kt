@@ -1,10 +1,13 @@
 package com.hinnka.mycamera.raw
 
+import android.graphics.Rect
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import java.nio.ByteBuffer
 
 /** Metadata generated before a RAW buffer is written as DNG. */
 data class RawDngProfilePreparationOptions(
+    val generatePhotonPgtm: Boolean = false,
+    val statsBounds: Rect? = null,
     val captureProfilePreparer: RawDngCaptureProfilePreparer? = null,
 )
 
@@ -25,6 +28,7 @@ data class RawDngCaptureProfileInput(
 
 data class RawDngCaptureProfileResult(
     val exposureOffsetEv: Float?,
+    val profileGainTableMap: DngProfileGainTableMap?,
 )
 
 /** Keeps the DNG color solution while enforcing the fixed Adobe/default metering pipeline. */
@@ -37,7 +41,8 @@ internal fun DcpRenderPlan.toAdobeDefaultMeteringPlan(): DcpRenderPlan {
     )
 }
 
-/** BaselineExposure prepared before the DNG writer starts. */
+/** BaselineExposure and optional PGTM prepared before the DNG writer starts. */
 data class RawDngProfilePreparation(
     val baselineExposureEv: Float,
+    val profileGainTableMap: DngProfileGainTableMap?,
 )

@@ -607,8 +607,25 @@ object RawProcessor {
         val finalBaselineExposureEv = DngBaselineExposure.sanitize(
             sourceBaselineExposureEv + (exposureOffsetEv ?: 0f)
         )
+        val profileRequired = options.generatePhotonPgtm
+        if (profileRequired && captureProfile?.profileGainTableMap == null) {
+            PLog.e(
+                TAG,
+                "GPU RAW profile preparation failed: photonPgtm=${options.generatePhotonPgtm} " +
+                    "size=${width}x$height samplesPerPixel=$inputSamplesPerPixel"
+            )
+            return null
+        }
+        val preparedProfileGainTableMap = captureProfile?.profileGainTableMap?.let { map ->
+            if (map.sourceTag == DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2) {
+                map
+            } else {
+                map.copy(sourceTag = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2)
+            }
+        }
         return RawDngProfilePreparation(
             baselineExposureEv = finalBaselineExposureEv,
+            profileGainTableMap = preparedProfileGainTableMap,
         ).also { finalProfile ->
             PLog.i(
                 TAG,
@@ -620,7 +637,9 @@ object RawProcessor {
                     "meteredExposureOffsetEv=${exposureOffsetEv ?: 0f} " +
                     "meteredExposureGain=${DngBaselineExposure.exactGain(exposureOffsetEv ?: 0f)} " +
                     "finalBaselineEv=${finalProfile.baselineExposureEv} " +
-                    "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)}"
+                    "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
+                    "pgtm=${finalProfile.profileGainTableMap != null} " +
+                    "pgtmSource=GPU photon=${options.generatePhotonPgtm} statsBounds=${options.statsBounds}"
             )
         }
     }
@@ -705,7 +724,7 @@ object RawProcessor {
         if (dngProfilePreparationOptions != null && preparedProfile == null) return false
         val writtenBaselineExposureEv = preparedProfile?.baselineExposureEv ?: baselineExposureEv
         val writtenProfileGainTableMap = if (dngProfilePreparationOptions != null) {
-            null
+            preparedProfile?.profileGainTableMap
         } else {
             profileGainTableMap
         }

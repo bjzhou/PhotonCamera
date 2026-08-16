@@ -41,11 +41,14 @@ object DarktableFilmicHighlightReconstructionShaders {
         }
     """
 
-    private const val PREPARE_INPUT = """
+    private val PREPARE_INPUT = """
         uniform float uProfileExposureLinearGain;
         uniform mat3 uProfileToEngineTransform;
 
+        ${DngProfileGainTableRenderShader.GLSL}
+
         vec3 prepareFilmicInput(vec3 color) {
+            color = applyProfileGainTableMap(color);
             return uProfileToEngineTransform * (color * uProfileExposureLinearGain);
         }
     """

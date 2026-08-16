@@ -20,9 +20,13 @@ object RawEngineTonePassShaders {
 
         return source.substring(0, cutoff) + """
 
+        ${DngProfileGainTableRenderShader.GLSL}
+
         void main() {
-            vec3 color = texture(uInputTexture, vTexCoord).rgb;
-            color = prepareEngineInput(color);
+            vec3 profileColor = texture(uInputTexture, vTexCoord).rgb;
+            profileColor = applyProfileGainTableMap(profileColor);
+            vec3 exposedProfileColor = prepareProfileGainInput(profileColor);
+            vec3 color = uProfileToEngineTransform * exposedProfileColor;
             color = applyEngineTone(color);
             fragColor = vec4(color, 1.0);
         }

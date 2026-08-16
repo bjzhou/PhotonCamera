@@ -184,18 +184,22 @@ object RawShaders {
         }
         val prepareEngineInputFunction = if (includeAdobeProfilePipeline) {
             """
+        vec3 prepareProfileGainInput(vec3 color) {
+            return applyAdobeProfilePipeline(color);
+        }
+
         vec3 prepareEngineInput(vec3 color) {
-            color = applyAdobeProfilePipeline(color);
-            color = uProfileToEngineTransform * color;
-            return color;
+            return uProfileToEngineTransform * prepareProfileGainInput(color);
         }
             """.trimIndent()
         } else {
             """
+        vec3 prepareProfileGainInput(vec3 color) {
+            return color * uProfileExposureLinearGain;
+        }
+
         vec3 prepareEngineInput(vec3 color) {
-            color *= uProfileExposureLinearGain;
-            color = uProfileToEngineTransform * color;
-            return color;
+            return uProfileToEngineTransform * prepareProfileGainInput(color);
         }
             """.trimIndent()
         }
