@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
 import android.hardware.camera2.CameraMetadata
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -114,7 +113,6 @@ fun CameraParameterValuesOverlay(
         modifier = modifier
             .fillMaxWidth()
             .height(CameraParameterValuesOverlayHeight)
-            .background(Color.Black.copy(alpha = 0.48f))
             .padding(horizontal = 6.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -151,9 +149,12 @@ fun CameraParameterValuesOverlay(
                     if (showLabels) {
                         Text(
                             text = item.label,
-                            color = Color(0xFFFFD700).copy(alpha = 0.82f),
+                            color = Color.White,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Medium,
+                            style = androidx.compose.ui.text.TextStyle(
+                                shadow = ViewfinderTextShadow
+                            ),
                             maxLines = 1
                         )
                         Spacer(modifier = Modifier.width(3.dp))
@@ -163,6 +164,9 @@ fun CameraParameterValuesOverlay(
                         color = item.valueColor,
                         fontSize = valueFontSize,
                         fontWeight = FontWeight.Medium,
+                        style = androidx.compose.ui.text.TextStyle(
+                            shadow = ViewfinderTextShadow
+                        ),
                         textAlign = TextAlign.Center,
                         maxLines = 1,
                         softWrap = false,

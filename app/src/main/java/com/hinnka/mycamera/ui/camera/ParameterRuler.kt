@@ -278,9 +278,10 @@ private fun RulerScale(
                 val text = formatParameterValue(parameter, value)
                 val textStyle = TextStyle(
                     fontSize = if (isCurrent) 12.sp else 10.sp,
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isCurrent) yellow else Color.White,
+                    textAlign = TextAlign.Center,
+                    shadow = ViewfinderTextShadow
                 )
                 val textLayoutResult = textMeasurer.measure(
                     text = text,

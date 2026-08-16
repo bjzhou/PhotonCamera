@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -1237,6 +1238,7 @@ fun CameraScreen(
                                         color = Color.White,
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Medium,
+                                        style = TextStyle(shadow = ViewfinderTextShadow),
                                         modifier = Modifier.padding(
                                             horizontal = 6.dp,
                                             vertical = 3.dp
@@ -1317,24 +1319,6 @@ fun CameraScreen(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(top = CameraParameterValuesOverlayHeight)
-                            )
-                        }
-
-                        if (isPhotoStyleMode) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(CameraParameterRulerHeight + 64.dp)
-                                    .align(Alignment.BottomCenter)
-                                    .background(
-                                        Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.Transparent,
-                                                Color.Black.copy(alpha = 0.2f),
-                                                Color.Black.copy(alpha = 0.6f)
-                                            )
-                                        )
-                                    )
                             )
                         }
 
@@ -1900,7 +1884,9 @@ fun MultipleExposureOverlay(
                 Text(
                     text = "${state.capturedCount}/${state.targetCount}",
                     color = Color.White,
-                    style = MaterialTheme.typography.labelLarge
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        shadow = ViewfinderTextShadow
+                    )
                 )
 
                 if (state.isSessionActive) {

@@ -334,7 +334,7 @@ private fun ZoomRulerVertical(
     modifier: Modifier = Modifier
 ) {
     val activeColor = Color(0xFFFFD700)
-    val inactiveColor = Color.White.copy(alpha = 0.5f)
+    val inactiveColor = Color.White
 
     val stopsState by rememberUpdatedState(stopItems)
 
@@ -384,10 +384,11 @@ private fun ZoomRulerVertical(
 
                 val style = TextStyle(
                     fontSize = if (isSelected) adaptiveMetrics.selectedFontSize else adaptiveMetrics.normalFontSize,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                     color = if (isSelected) activeColor else inactiveColor,
                     textAlign = TextAlign.Center,
-                    textDecoration = if (item.isLensStop) TextDecoration.Underline else TextDecoration.None
+                    textDecoration = if (item.isLensStop) TextDecoration.Underline else TextDecoration.None,
+                    shadow = ViewfinderTextShadow
                 )
 
                 Box(
@@ -530,8 +531,10 @@ fun ZoomContinuousRulerVertical(
                         text = text,
                         style = TextStyle(
                             fontSize = 8.sp,
-                            color = Color.White.copy(alpha = 0.8f),
-                            textAlign = TextAlign.Center
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White,
+                            textAlign = TextAlign.Center,
+                            shadow = ViewfinderTextShadow
                         ),
                         maxLines = 1,
                         softWrap = false,
@@ -596,7 +599,8 @@ fun ZoomContinuousRulerVertical(
                 style = TextStyle(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = yellowPx
+                    color = yellowPx,
+                    shadow = ViewfinderTextShadow
                 )
             )
             drawText(

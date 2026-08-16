@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,6 +84,7 @@ fun LutNameOverlay(
                 color = Color.White,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
+                style = TextStyle(shadow = com.hinnka.mycamera.ui.camera.ViewfinderTextShadow),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),

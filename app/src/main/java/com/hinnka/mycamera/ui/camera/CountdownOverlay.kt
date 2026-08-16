@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -42,6 +43,7 @@ fun CountdownOverlay(
                 fontSize = 120.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
+                style = TextStyle(shadow = ViewfinderTextShadow),
                 modifier = Modifier.scale(scale)
             )
         }
@@ -74,6 +76,7 @@ fun BurstCaptureOverlay(
                 fontSize = 36.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
+                style = TextStyle(shadow = ViewfinderTextShadow),
                 modifier = Modifier.padding(top = 16.dp).scale(scale)
             )
         }

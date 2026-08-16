@@ -99,6 +99,7 @@ internal fun ZoomStopVariantBadge(
         color = if (isSelected) activeColor else inactiveColor,
         fontSize = fontSize,
         fontWeight = FontWeight.Bold,
+        style = androidx.compose.ui.text.TextStyle(shadow = ViewfinderTextShadow),
         textAlign = TextAlign.Center,
         maxLines = 1,
         softWrap = false,
