@@ -3026,6 +3026,7 @@ internal class GlesMgcRawSpatialStacker(
             "uExtraMotionRobustnessMotionThreshold",
             motionPriorThreshold,
         )
+        GlesGpuScheduler.yieldToUiRenderer()
         draw(
             rejectionProgram,
             rejectionWidth,
