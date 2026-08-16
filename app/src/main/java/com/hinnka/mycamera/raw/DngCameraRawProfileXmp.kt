@@ -3,9 +3,8 @@ package com.hinnka.mycamera.raw
 import java.security.MessageDigest
 
 /**
- * Camera Raw treats ProfileGainTableMap and ProfileToneCurve as weighted
- * profile operations. The DNG tags provide the data, while this embedded Look
- * opts the selected camera profile into both operations at full strength.
+ * Camera Raw treats ProfileGainTableMap and ProfileToneCurve as weighted profile operations.
+ * The DNG tags provide the data; this Look enables exactly the operations supplied by the caller.
  */
 internal object DngCameraRawProfileXmp {
     const val TAG_XMP = 700
@@ -15,10 +14,19 @@ internal object DngCameraRawProfileXmp {
 
     fun build(
         profileLookName: String,
+        includeProfileGainTableMap: Boolean,
+        includeProfileToneCurve: Boolean,
     ): ByteArray {
         require(profileLookName.isNotBlank()) { "Camera Raw Look name must not be blank" }
+        require(includeProfileGainTableMap || includeProfileToneCurve) {
+            "Camera Raw Look must enable at least one profile operation"
+        }
         val escapedProfileLookName = escapeXmlAttribute(profileLookName)
         val lookUuid = stableLookUuid(profileLookName)
+        val profileOperationAttributes = buildList {
+            if (includeProfileGainTableMap) add("crs:ProfileGainTableMap=\"100\"")
+            if (includeProfileToneCurve) add("crs:ProfileToneCurve=\"100\"")
+        }.joinToString(separator = "\n                  ")
         return """
             <x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="PhotonCamera">
              <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -43,8 +51,7 @@ internal object DngCameraRawProfileXmp {
                  <crs:Parameters
                   crs:Version="$CAMERA_RAW_VERSION"
                   crs:ProcessVersion="$PROCESS_VERSION"
-                  crs:ProfileGainTableMap="100"
-                  crs:ProfileToneCurve="100"
+                  $profileOperationAttributes
                   crs:ConvertToGrayscale="False"/>
                 </rdf:Description>
                </crs:Look>

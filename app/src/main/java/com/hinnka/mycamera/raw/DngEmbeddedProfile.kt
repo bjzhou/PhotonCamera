@@ -92,11 +92,6 @@ internal object DngEmbeddedProfile {
         }.getOrNull()
     }
 
-    fun hasPhotonPgtmProfile(file: File): Boolean {
-        val profile = readFrom(file) ?: return false
-        return DngProfileToneCurve.isPhotonPgtmToneCurve(profile.toneCurve)
-    }
-
     fun isPhotonPgtmProfileName(profileName: String?): Boolean {
         val normalizedName = profileName?.trim()?.takeIf { it.isNotEmpty() } ?: return false
         return normalizedName.equals(

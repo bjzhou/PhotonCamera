@@ -45,7 +45,6 @@ import com.hinnka.mycamera.processor.RawStackBufferLayout
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
-import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.MgcSpatialGpuDenoiseMode
 import com.hinnka.mycamera.raw.RawCfaCorrection
@@ -55,7 +54,6 @@ import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawDngCaptureProfilePreparer
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
-import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -3886,7 +3884,7 @@ object GalleryManager {
         val photoDir = getPhotoDir(context, photoId, true)
         val photoFile = File(photoDir, PHOTO_FILE)
         val tempFile = File(photoDir, "temp.jpg")
-        var updatedMetadata: MediaMetadata = metadata.withEmbeddedDngToneMapDefaults(dngFile)
+        var updatedMetadata: MediaMetadata = metadata
         val rawSharpening = updatedMetadata.sharpening
             ?: RawSharpeningDefaults.normalize(sharpeningValue)
         val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
@@ -5096,30 +5094,9 @@ object GalleryManager {
         return hasBitmapGainmap(loadBitmap(context, Uri.fromFile(photoFile), maxEdge = 512, preserveHdr = true))
     }
 
-    /** Migrates legacy Photon PGTM DNGs to the independent Photon HDR switch. */
-    private fun MediaMetadata.withEmbeddedDngToneMapDefaults(
-        dngFile: File
-    ): MediaMetadata {
-        if (rawToneMappingParameters.normalized().usePhotonHdr) return this
-        val hasProfileGainTableMap = DngProfileGainTableMap.readFrom(dngFile)?.isValid == true
-        if (!hasProfileGainTableMap) return this
-        val toneMappingParameters = when {
-            DngEmbeddedProfile.hasPhotonPgtmProfile(dngFile) -> {
-                rawToneMappingParameters.withPhotonHdr(true)
-            }
-
-            else -> return this
-        }
-        if (toneMappingParameters == rawToneMappingParameters && manualHdrEffectEnabled) return this
-        PLog.d(TAG, "Legacy Photon PGTM DNG detected; enabling independent Photon HDR")
-        return copy(
-            rawToneMappingParameters = toneMappingParameters,
-            manualHdrEffectEnabled = true
-        )
-    }
-
     private suspend fun MediaMetadata.withImportedRawToneMapPreference(
-        context: Context
+        context: Context,
+        isDng: Boolean,
     ): MediaMetadata {
         val globalToneMappingParameters = ContentRepository.getInstance(context)
             .userPreferencesRepository
@@ -5127,19 +5104,20 @@ object GalleryManager {
             .firstOrNull()
             ?.rawToneMappingParameters
             ?.normalized()
-            ?: return this
-        if (!globalToneMappingParameters.usePhotonHdr &&
-            globalToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Default
-        ) {
-            return this
+            ?: rawToneMappingParameters.normalized()
+        val importedToneMappingParameters = if (isDng) {
+            globalToneMappingParameters.withPhotonHdr(false)
+        } else {
+            globalToneMappingParameters
         }
         PLog.d(
             TAG,
-            "Applying global RAW tone settings to imported RAW: " +
-                "profile=${globalToneMappingParameters.profileToneMapMode} " +
-                "photonHdr=${globalToneMappingParameters.usePhotonHdr}"
+            "Applying RAW tone defaults to imported RAW: " +
+                "profile=${importedToneMappingParameters.profileToneMapMode} " +
+                "photonHdr=${importedToneMappingParameters.usePhotonHdr} " +
+                "dng=$isDng activation=${if (isDng) "manual-only" else "global-default"}"
         )
-        return copy(rawToneMappingParameters = globalToneMappingParameters)
+        return copy(rawToneMappingParameters = importedToneMappingParameters)
     }
 
 
@@ -5232,9 +5210,10 @@ object GalleryManager {
                     return@withContext photoId
                 }
 
+                val isDng = mimeType?.contains("dng", ignoreCase = true) == true ||
+                    fileName.endsWith(".dng", ignoreCase = true)
                 val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
-                        mimeType?.contains("dng", ignoreCase = true) == true ||
-                        fileName.endsWith(".dng", ignoreCase = true) ||
+                        isDng ||
                         fileName.endsWith(".rw2", ignoreCase = true) ||
                         fileName.endsWith(".arw", ignoreCase = true) ||
                         fileName.endsWith(".3fr", ignoreCase = true) ||
@@ -5250,8 +5229,7 @@ object GalleryManager {
                     }
 
                     var updatedMetadata: MediaMetadata = metadata
-                        .withImportedRawToneMapPreference(context)
-                        .withEmbeddedDngToneMapDefaults(dngFile)
+                        .withImportedRawToneMapPreference(context, isDng)
                         .let { rawMetadata ->
                             rawMetadata.copy(
                                 chromaNoiseReduction = rawMetadata.chromaNoiseReduction

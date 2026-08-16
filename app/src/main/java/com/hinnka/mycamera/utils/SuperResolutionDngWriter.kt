@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.SystemClock
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
-import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.DngCameraRawProfileXmp
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpDefaultBlackRender
@@ -83,7 +82,7 @@ object SuperResolutionDngWriter {
         JPEG_LOSSLESS(7),
     }
 
-    /** Builds the same embedded color/tone plan that [write] serializes into the DNG IFD. */
+    /** Builds the same embedded color plan that [write] serializes into the DNG IFD. */
     fun resolveEmbeddedRenderPlan(
         characteristics: CameraCharacteristics,
         metadata: RawMetadata,
@@ -130,10 +129,7 @@ object SuperResolutionDngWriter {
             ?.let(::colorTransformToExactDngMatrix)
             ?.map(Double::toFloat)
             ?.toFloatArray()
-        val toneCurve = profileToneCurve
-            ?.takeIf { profileGainTableMap != null && it.size >= 4 }
-            ?.let(::DcpToneCurve)
-            ?.takeIf { it.isValid }
+        val toneCurve = normalizeProfileToneCurve(profileToneCurve)?.let(::DcpToneCurve)
         val profile = DcpProfile(
             profileName = "Embedded",
             calibrationIlluminant1 = characteristics.get(
@@ -242,7 +238,6 @@ object SuperResolutionDngWriter {
     private const val TAG_COLOR_MATRIX_2 = 50722
     private const val TAG_CAMERA_CALIBRATION_1 = 50723
     private const val TAG_CAMERA_CALIBRATION_2 = 50724
-    private const val TAG_PROFILE_TONE_CURVE = 50940
     private const val TAG_FORWARD_MATRIX_1 = 50964
     private const val TAG_FORWARD_MATRIX_2 = 50965
     private const val TAG_AS_SHOT_NEUTRAL = 50728
@@ -254,6 +249,7 @@ object SuperResolutionDngWriter {
     private const val TAG_OPCODE_LIST_3 = 51022
     private const val TAG_NOISE_PROFILE = 51041
     private const val TAG_DEFAULT_BLACK_RENDER = 51110
+    private const val TAG_PROFILE_TONE_CURVE = 50940
     private const val TAG_PROFILE_GAIN_TABLE_MAP_2 = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2
     private const val PREVIEW_MAX_EDGE = 512
     init {
@@ -379,7 +375,7 @@ object SuperResolutionDngWriter {
             val imageByteCount = imageBytes?.size?.toLong() ?: uncompressedByteCount
 
             val writtenProfileGainTableMap = profileGainTableMap
-                ?.takeIf { it.isValid }
+                ?.also { require(it.isValid) { "Invalid ProfileGainTableMap" } }
                 ?.let { map ->
                     if (map.sourceTag == DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2) {
                         map
@@ -387,6 +383,7 @@ object SuperResolutionDngWriter {
                         map.copy(sourceTag = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2)
                     }
                 }
+            val writtenProfileToneCurve = normalizeProfileToneCurve(profileToneCurve)
             val directories = buildEntries(
                 width = width,
                 height = height,
@@ -404,7 +401,7 @@ object SuperResolutionDngWriter {
                 baselineExposureEv = baselineExposureEv,
                 profileGainTableMap = writtenProfileGainTableMap,
                 profileName = profileName,
-                profileToneCurve = profileToneCurve,
+                profileToneCurve = writtenProfileToneCurve,
                 imageLayout = imageLayout,
                 compression = compression,
                 valueDomain = valueDomain,
@@ -432,8 +429,14 @@ object SuperResolutionDngWriter {
                     "baselineExposureEv=$baselineExposureEv " +
                     "ifdLayout=raw-ifd0 preview=none " +
                     "defaultBlackRender=${if (writtenProfileGainTableMap != null) "none" else "default"} " +
-                    "profileToneCurvePoints=${profileToneCurve?.size?.div(2) ?: 0} " +
-                    "cameraRawLook=${if (writtenProfileGainTableMap != null) "pgtm=100,toneCurve=100" else "none"} " +
+                    "profileToneCurvePoints=${writtenProfileToneCurve?.size?.div(2) ?: 0} " +
+                    "cameraRawLook=${when {
+                        writtenProfileGainTableMap != null && writtenProfileToneCurve != null ->
+                            "pgtm=100,toneCurve=100"
+                        writtenProfileGainTableMap != null -> "pgtm=100"
+                        writtenProfileToneCurve != null -> "toneCurve=100"
+                        else -> "none"
+                    }} " +
                     "profileGainTable=${writtenProfileGainTableMap?.let {
                         "tag=${it.sourceTag} ${it.mapPointsH}x${it.mapPointsV}x${it.mapPointsN} gamma=${it.gamma}"
                     } ?: "none"}"
@@ -595,10 +598,14 @@ object SuperResolutionDngWriter {
         }
         val profileLookName = profileName?.takeIf { it.isNotBlank() }
             ?: "Embedded"
-        val cameraRawProfileXmp = profileGainTableMap?.let {
+        val cameraRawProfileXmp = if (profileGainTableMap != null || profileToneCurve != null) {
             DngCameraRawProfileXmp.build(
                 profileLookName = profileLookName,
+                includeProfileGainTableMap = profileGainTableMap != null,
+                includeProfileToneCurve = profileToneCurve != null,
             )
+        } else {
+            null
         }
 
         val exifEntries = buildList {
@@ -710,10 +717,7 @@ object SuperResolutionDngWriter {
                 add(long(TAG_DEFAULT_BLACK_RENDER, 1))
             }
             add(sRationalArray(TAG_BASELINE_EXPOSURE, listOf(resolvedBaselineExposureEv.toDouble())))
-            if (profileGainTableMap != null) {
-                add(floatArray(TAG_PROFILE_TONE_CURVE, profileToneCurve?.takeIf { it.size >= 4 }
-                    ?: DngProfileToneCurve.linearToneCurvePoints()))
-            }
+            profileToneCurve?.let { add(floatArray(TAG_PROFILE_TONE_CURVE, it)) }
             add(short(TAG_CALIBRATION_ILLUMINANT_1, illuminant1))
             if (illuminant2 != null && colorMatrix2 != null) {
                 add(short(TAG_CALIBRATION_ILLUMINANT_2, illuminant2))
@@ -739,6 +743,12 @@ object SuperResolutionDngWriter {
                     "equivalent35mm=${focalLength35mm ?: "none"}mm"
             )
         }
+    }
+
+    private fun normalizeProfileToneCurve(points: FloatArray?): FloatArray? {
+        if (points == null) return null
+        require(DcpToneCurve(points).isValid) { "Invalid ProfileToneCurve" }
+        return points.copyOf()
     }
 
     private fun encodeDirectoryEntries(

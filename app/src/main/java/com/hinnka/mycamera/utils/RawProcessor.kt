@@ -754,6 +754,8 @@ object RawProcessor {
         val requiresCustomWriter = imageLayout != SuperResolutionDngWriter.ImageLayout.CFA ||
                 compression != SuperResolutionDngWriter.Compression.UNCOMPRESSED ||
                 dngProfilePreparationOptions != null ||
+                profileGainTableMap != null ||
+                profileToneCurve != null ||
                 pixelsIncludeLensShadingCorrection
         if (hasCfaOverride && resolvedCfaPattern != cfaPattern) {
             PLog.d(TAG, "RAW DNG CFA override mode=$cfaCorrectionMode cfa=$cfaPattern->$resolvedCfaPattern")
@@ -795,7 +797,6 @@ object RawProcessor {
             profileGainTableMap
         }
         val writtenProfileName = profileName
-        val writtenProfileToneCurve = profileToneCurve
         val orientation = when (rotation) {
             90 -> ExifInterface.ORIENTATION_ROTATE_90
             180 -> ExifInterface.ORIENTATION_ROTATE_180
@@ -827,7 +828,7 @@ object RawProcessor {
                 baselineExposureEv = writtenBaselineExposureEv,
                 profileGainTableMap = writtenProfileGainTableMap,
                 profileName = writtenProfileName,
-                profileToneCurve = writtenProfileToneCurve,
+                profileToneCurve = profileToneCurve,
                 imageLayout = imageLayout,
                 compression = compression,
                 inputRowStepSamples = inputRowStepSamples,

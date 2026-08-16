@@ -2582,7 +2582,16 @@ class RawDemosaicProcessor {
 
             else -> requestedColorEngine
         }
+        val normalizedToneMappingParameters = rawToneMappingParameters.normalized()
+        val photonHdrRequested = normalizedToneMappingParameters.usePhotonHdr
         val useAdobeProfilePipeline = colorEngine == RawRenderingEngine.AdobeCurve
+        val embeddedProfileDecision = EmbeddedDngProfilePolicy.resolve(
+            hasEmbeddedProfile = embeddedDngRenderPlan != null ||
+                actualMetadata.profileGainTableMap?.isValid == true,
+            colorEngine = colorEngine,
+            profileToneMapMode = normalizedToneMappingParameters.profileToneMapMode,
+            hasDcpSelection = hasDcpSelection,
+        )
         val resolvedDcpRenderPlan = if (useAdobeProfilePipeline) {
             resolveRawDcpRenderPlan(
                 context = context,
@@ -2590,6 +2599,7 @@ class RawDemosaicProcessor {
                 rawDcpId = rawDcpId,
                 metadata = actualMetadata,
                 embeddedDngRenderPlan = embeddedDngRenderPlan
+                    ?.takeIf { embeddedProfileDecision.applyEmbeddedProfile }
             )
         } else {
             null
@@ -2641,8 +2651,6 @@ class RawDemosaicProcessor {
             RawTilePlanner.shouldTile(outputSourceBounds.width(), outputSourceBounds.height()) ||
                 RawTilePlanner.shouldTile(actualWidth, actualHeight)
         val hasActiveWarp = applicableDngWarpRectilinear?.isNotEmpty() == true
-        val normalizedToneMappingParameters = rawToneMappingParameters.normalized()
-        val photonHdrRequested = normalizedToneMappingParameters.usePhotonHdr
         val prepareCaptureProfile =
             exposurePreviewRequest != null || captureProfilePreparationRequested
         val useHalfResolutionMeteringDemosaic =
@@ -2780,37 +2788,34 @@ class RawDemosaicProcessor {
                 actualRawData = null
             }
 
-        val embeddedProfileToneCurveLut = embeddedDngRenderPlan?.toneCurveLut
-        val embeddedPhotonPgtmProfile = embeddedProfileToneCurveLut != null &&
-            DngProfileToneCurve.isPhotonPgtmToneCurveLut(embeddedProfileToneCurveLut)
         val oppoMasterToneMapActive = useAdobeProfilePipeline &&
             normalizedToneMappingParameters.useOppoMasterToneMap
-        val embeddedProfileGainTableMap = actualMetadata.profileGainTableMap
-            ?.takeIf { photonHdrRequested && it.isValid }
-        if (!photonHdrRequested && actualMetadata.profileGainTableMap?.isValid == true) {
+        val validEmbeddedProfileGainTableMap = actualMetadata.profileGainTableMap
+            ?.takeIf { it.isValid }
+        val embeddedProfileGainTableMap = validEmbeddedProfileGainTableMap
+            ?.takeIf {
+                embeddedProfileDecision.shouldRetainEmbeddedPgtm()
+            }
+        if (embeddedProfileDecision.hasEmbeddedProfile) {
+            PLog.i(
+                TAG,
+                "DNG embedded profile: " +
+                    "action=${if (embeddedProfileDecision.applyEmbeddedProfile) "apply" else "disable"} " +
+                    "engine=$colorEngine profileToneMap=${normalizedToneMappingParameters.profileToneMapMode} " +
+                    "customDcp=$hasDcpSelection " +
+                    "photonHdr=${when {
+                        embeddedProfileDecision.applyEmbeddedProfile -> "replaced-by-embedded-profile"
+                        photonHdrRequested -> "generate-independent-pgtm"
+                        else -> "disabled"
+                    }}"
+            )
+        } else if (!photonHdrRequested && validEmbeddedProfileGainTableMap != null) {
             PLog.i(TAG, "DNG ProfileGainTableMap disabled by Photon HDR setting")
         }
         actualMetadata = actualMetadata.copy(
             profileGainTableMap = embeddedProfileGainTableMap
         )
-        val embeddedProfileToneCurveDisabled = embeddedPhotonPgtmProfile
-        val profileBaseDcpRenderPlan = if (
-            embeddedProfileToneCurveDisabled &&
-            !hasDcpSelection &&
-            useAdobeProfilePipeline
-        ) {
-            withoutProfileToneCurve(
-                resolvedDcpRenderPlan,
-                reason = when {
-                    embeddedProfileToneCurveDisabled && oppoMasterToneMapActive ->
-                        "OPPO master tone map requested"
-                    else ->
-                        "Photon PGTM carries its own local tone mapping"
-                }
-            )
-        } else {
-            resolvedDcpRenderPlan
-        }
+        val profileBaseDcpRenderPlan = resolvedDcpRenderPlan
         val activeDcpRenderPlan = when {
             oppoMasterToneMapActive -> {
                 oppoMasterToneMapRenderPlan(
@@ -2821,7 +2826,9 @@ class RawDemosaicProcessor {
             }
             else -> profileBaseDcpRenderPlan
         }
-        if (photonHdrRequested && actualMetadata.profileGainTableMap == null) {
+        if (embeddedProfileDecision.shouldGeneratePhotonPgtm(photonHdrRequested) &&
+            actualMetadata.profileGainTableMap == null
+        ) {
             val generatedProfileGainTableMap = generateProfileGainTableMapOnGpu(
                 rawTextureId = rawTextureId,
                 streamingRawData = tiledRawData,
@@ -2851,13 +2858,12 @@ class RawDemosaicProcessor {
             oppoMasterToneMapActive -> when {
                 dcpRenderPlan != null -> "provided+oppo-master-tone-map"
                 rawDcpId != null -> "$rawDcpId+oppo-master-tone-map"
-                !hasDcpSelection && embeddedDngRenderPlan != null -> "embedded-dng+oppo-master-tone-map"
                 else -> "oppo-master-tone-map"
             }
             activeDcpRenderPlan == null -> null
             dcpRenderPlan != null -> "provided"
             rawDcpId != null -> rawDcpId
-            !hasDcpSelection && embeddedDngRenderPlan != null -> "embedded-dng"
+            !hasDcpSelection && embeddedProfileDecision.applyEmbeddedProfile -> "embedded-dng"
             else -> null
         }
         if (!useAdobeProfilePipeline && requestedProfilePlanSource != null) {
@@ -12511,15 +12517,6 @@ class RawDemosaicProcessor {
             lookTable = basePlan?.lookTable,
             toneCurveLut = DngProfileToneCurve.oppoEmbeddedToneCurveLut()
         )
-    }
-
-    private fun withoutProfileToneCurve(
-        plan: DcpRenderPlan?,
-        reason: String
-    ): DcpRenderPlan? {
-        if (plan?.toneCurveLut == null) return plan
-        PLog.d(TAG, "Ignoring RAW profile tone curve: profile=${plan.profileName}, reason=$reason")
-        return plan.copy(toneCurveLut = null)
     }
 
     private fun resolveLinearColorCorrectionMatrix(

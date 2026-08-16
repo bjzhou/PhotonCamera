@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,7 +10,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 class DngCameraRawProfileXmpTest {
     @Test
-    fun `embedded Camera Raw Look enables PGTM and tone curve`() {
+    fun `embedded Camera Raw Look enables only PGTM`() {
         val profileLookName = "Photon \"HDR\" & Look"
         val document = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = true
@@ -17,6 +18,8 @@ class DngCameraRawProfileXmpTest {
             ByteArrayInputStream(
                 DngCameraRawProfileXmp.build(
                     profileLookName = profileLookName,
+                    includeProfileGainTableMap = true,
+                    includeProfileToneCurve = false,
                 )
             )
         )
@@ -37,8 +40,8 @@ class DngCameraRawProfileXmpTest {
             .getNamedItemNS(cameraRawNamespace, "Amount").nodeValue)
         assertEquals("100", parameters.attributes
             .getNamedItemNS(cameraRawNamespace, "ProfileGainTableMap").nodeValue)
-        assertEquals("100", parameters.attributes
-            .getNamedItemNS(cameraRawNamespace, "ProfileToneCurve").nodeValue)
+        assertNull(parameters.attributes
+            .getNamedItemNS(cameraRawNamespace, "ProfileToneCurve"))
         assertNull(parameters.attributes
             .getNamedItemNS(cameraRawNamespace, "CameraProfile"))
         assertTrue(lookDescription.attributes
@@ -49,8 +52,22 @@ class DngCameraRawProfileXmpTest {
     fun `Photon HDR Look keeps its existing Camera Raw identity`() {
         val xmp = DngCameraRawProfileXmp.build(
             profileLookName = DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME,
+            includeProfileGainTableMap = true,
+            includeProfileToneCurve = false,
         ).toString(Charsets.UTF_8)
 
         assertTrue(xmp.contains("crs:UUID=\"F73E46FD59ECF8FE66D156114E53ED6F\""))
+    }
+
+    @Test
+    fun `embedded Camera Raw Look reflects externally supplied tone curve`() {
+        val xmp = DngCameraRawProfileXmp.build(
+            profileLookName = "External curve",
+            includeProfileGainTableMap = false,
+            includeProfileToneCurve = true,
+        ).toString(Charsets.UTF_8)
+
+        assertTrue(xmp.contains("crs:ProfileToneCurve=\"100\""))
+        assertFalse(xmp.contains("crs:ProfileGainTableMap=\"100\""))
     }
 }
