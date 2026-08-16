@@ -100,7 +100,7 @@ class Camera2Controller(private val context: Context) {
             3 // Waiting for the exposure state to be something other than precapture.
         private const val STATE_PICTURE_TAKEN = 4 // Picture is already taken.
         private const val PRECAPTURE_TIMEOUT_MS = 3_000L
-        private const val MULTI_FRAME_TORCH_WARMUP_TIMEOUT_MS = 1_500L
+        private const val MULTI_FRAME_TORCH_WARMUP_TIMEOUT_MS = 2_000L
 
         // 场景变化检测阈值
         private const val SCENE_CHANGE_EXPOSURE_RATIO = 1.5   // 曝光乘积变化判定为场景变化
@@ -180,8 +180,13 @@ class Camera2Controller(private val context: Context) {
         val generation: Long,
     )
 
+    private data class PrecaptureSessionUpdateTag(
+        val generation: Long,
+    )
+
     private data class MultiFrameTorchWarmupRequestTag(
         val generation: Long,
+        val isAePrecaptureTrigger: Boolean = false,
     )
 
     private data class MultiFrameFocusSnapshot(
@@ -221,12 +226,17 @@ class Camera2Controller(private val context: Context) {
     private var precaptureGeneration = 0L
     private var activePrecaptureGeneration = 0L
     private var precaptureTriggerFrameNumber: Long? = null
+    private var precaptureTriggerSubmitted = false
+    private var precaptureTriggerResultSeen = false
     private var precaptureTimeoutRunnable: Runnable? = null
     private var multiFrameTorchWarmupGeneration = 0L
     private var activeMultiFrameTorchWarmupGeneration = 0L
     private var multiFrameTorchWarmupTimeoutRunnable: Runnable? = null
     private var lastMultiFrameTorchWarmupResult: TotalCaptureResult? = null
     private var pendingMultiFrameTorchWarmupAction: ((TotalCaptureResult?) -> Unit)? = null
+    private var multiFrameTorchWarmupNeedsAePrecapture = false
+    private var multiFrameTorchWarmupPrecaptureSubmitted = false
+    private var multiFrameTorchWarmupTriggerResultSeen = false
     private var isMultiFrameTorchCaptureActive = false
     private var isContinuousBurstTorchActive = false
     private var pendingMultiFrameFocusCapture: PendingMultiFrameFocusCapture? = null
@@ -652,6 +662,18 @@ class Camera2Controller(private val context: Context) {
             processPendingMultiFrameFocusResult(result)
             logVideoCaptureStats(result)
 
+            val precaptureTag = request.tag as? PrecaptureRequestTag
+            if (precaptureTag?.generation == activePrecaptureGeneration) {
+                // onCaptureStarted normally arrives first, but use the completed result as a
+                // fallback for devices that omit the started callback.
+                if (precaptureTriggerFrameNumber == null) {
+                    precaptureTriggerFrameNumber = result.frameNumber
+                }
+                precaptureTriggerResultSeen = true
+            }
+
+            processPrecaptureSessionUpdate(request, result)
+
             // 处理拍照状态机
             processCaptureState(result)
             processMultiFrameTorchWarmupState(request, result)
@@ -863,24 +885,144 @@ class Camera2Controller(private val context: Context) {
 
         when (internalCaptureState) {
             STATE_WAITING_PRECAPTURE -> {
-                when (aeState) {
-                    CaptureResult.CONTROL_AE_STATE_PRECAPTURE -> {
-                        internalCaptureState = STATE_WAITING_NON_PRECAPTURE
-                    }
-
-                    null -> {
-                        // CONTROL_AE_STATE is optional. HedgeCam treats a missing state as
-                        // precapture having started, then waits for the following result.
-                        internalCaptureState = STATE_WAITING_NON_PRECAPTURE
-                    }
+                if (precaptureTriggerResultSeen) {
+                    // The trigger result itself is never a valid still-capture exposure
+                    // result. Move to the post-trigger phase and evaluate a later repeating
+                    // result, even when this device reports CONVERGED/FLASH_REQUIRED/null on
+                    // the trigger frame instead of reporting PRECAPTURE.
+                    internalCaptureState = STATE_WAITING_NON_PRECAPTURE
                 }
             }
 
             STATE_WAITING_NON_PRECAPTURE -> {
-                if (aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                if (aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE &&
+                    isStillFlash3aReady(result)
+                ) {
                     completePrecapture(result, "left PRECAPTURE")
                 }
             }
+        }
+    }
+
+    private fun isStillFlash3aReady(result: CaptureResult): Boolean {
+        val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+        val aeReady = aeState == null ||
+            aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
+            // CameraX treats FLASH_REQUIRED as a converged result for a normal physical
+            // flash. Only its torch-as-flash path excludes this state because some devices
+            // report FLASH_REQUIRED continuously while the torch is enabled.
+            aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
+        val awbState = result.get(CaptureResult.CONTROL_AWB_STATE)
+        val awbReady = awbState == null || awbState == CaptureResult.CONTROL_AWB_STATE_CONVERGED
+        return aeReady && awbReady && isFlashAfReady(result)
+    }
+
+    private fun processPrecaptureSessionUpdate(
+        request: CaptureRequest,
+        result: TotalCaptureResult,
+    ) {
+        val tag = request.tag as? PrecaptureSessionUpdateTag ?: return
+        if (tag.generation != activePrecaptureGeneration ||
+            internalCaptureState != STATE_WAITING_PRECAPTURE ||
+            precaptureTriggerSubmitted
+        ) {
+            return
+        }
+
+        val requestedAeMode = request.get(CaptureRequest.CONTROL_AE_MODE)
+        val appliedAeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+        val requestedFlashMode = request.get(CaptureRequest.FLASH_MODE)
+        val appliedFlashMode = result.get(CaptureResult.FLASH_MODE)
+        val sessionUpdateApplied =
+            (appliedAeMode == null || appliedAeMode == requestedAeMode) &&
+                (appliedFlashMode == null || appliedFlashMode == requestedFlashMode)
+        if (!sessionUpdateApplied) {
+            PLog.w(
+                TAG,
+                "Waiting for flash session update: requestedAe=$requestedAeMode " +
+                    "appliedAe=$appliedAeMode requestedFlash=$requestedFlashMode " +
+                    "appliedFlash=$appliedFlashMode"
+            )
+            return
+        }
+
+        PLog.d(
+            TAG,
+            "Flash session update applied: generation=${tag.generation}, " +
+                "aeMode=$appliedAeMode, flashMode=$appliedFlashMode, frame=${result.frameNumber}"
+        )
+        submitPrecaptureTrigger(tag.generation)
+    }
+
+    private fun submitPrecaptureTrigger(generation: Long) {
+        if (precaptureTriggerSubmitted) return
+
+        val session = captureSession
+        val device = cameraDevice
+        val previewTarget = previewSurface
+        val handler = cameraHandler
+        if (session == null || device == null || previewTarget == null || handler == null) {
+            completePrecapture(lastCaptureResult, "precapture trigger unavailable")
+            return
+        }
+
+        try {
+            val triggerRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(previewTarget)
+                set(
+                    CaptureRequest.CONTROL_CAPTURE_INTENT,
+                    CaptureRequest.CONTROL_CAPTURE_INTENT_PREVIEW
+                )
+                applyBaseCameraSettings(
+                    builder = this,
+                    isCapture = false,
+                    useStillFlashAeMode = true,
+                    useStillFlashTrigger = true,
+                )
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                set(CaptureRequest.CONTROL_AE_LOCK, false)
+                setAePrecaptureTriggerIfSupported(
+                    this,
+                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START,
+                )
+                setTag(PrecaptureRequestTag(generation))
+            }.build()
+
+            precaptureTriggerSubmitted = true
+            session.capture(triggerRequest, previewCallback, handler)
+            PLog.d(
+                TAG,
+                "Precapture trigger submitted: generation=$generation, " +
+                    "aeMode=${triggerRequest.get(CaptureRequest.CONTROL_AE_MODE)}, " +
+                    "flashMode=${triggerRequest.get(CaptureRequest.FLASH_MODE)}"
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to submit precapture trigger", e)
+            completePrecapture(lastCaptureResult, "precapture trigger submission failed")
+        }
+    }
+
+    /**
+     * CameraX does not wait for an AF lock when continuous AF, manual focus, or an unknown AF
+     * mode is active. For a one-shot AF mode it waits for one of the terminal AF states.
+     */
+    private fun isFlashAfReady(result: CaptureResult): Boolean {
+        val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
+        if (afMode == null ||
+            afMode == CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
+            afMode == CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO ||
+            afMode == CaptureRequest.CONTROL_AF_MODE_OFF
+        ) {
+            return true
+        }
+
+        return when (result.get(CaptureResult.CONTROL_AF_STATE)) {
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED,
+            CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
+            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> true
+
+            else -> false
         }
     }
 
@@ -910,6 +1052,8 @@ class Camera2Controller(private val context: Context) {
         precaptureTimeoutRunnable = null
         activePrecaptureGeneration = 0L
         precaptureTriggerFrameNumber = null
+        precaptureTriggerSubmitted = false
+        precaptureTriggerResultSeen = false
     }
 
     private fun processMultiFrameTorchWarmupState(
@@ -920,15 +1064,106 @@ class Camera2Controller(private val context: Context) {
         if (tag.generation != activeMultiFrameTorchWarmupGeneration) return
 
         lastMultiFrameTorchWarmupResult = result
-        val flashState = result.get(CaptureResult.FLASH_STATE)
+        if (tag.isAePrecaptureTrigger) {
+            multiFrameTorchWarmupTriggerResultSeen = true
+            return
+        }
+
+        if (multiFrameTorchWarmupNeedsAePrecapture &&
+            !multiFrameTorchWarmupPrecaptureSubmitted
+        ) {
+            if (isTorchSessionUpdateApplied(request, result)) {
+                submitMultiFrameTorchWarmupPrecapture(tag.generation)
+            }
+            return
+        }
+
+        if (multiFrameTorchWarmupNeedsAePrecapture &&
+            !multiFrameTorchWarmupTriggerResultSeen
+        ) {
+            return
+        }
+
+        if (isTorchWarmup3aReady(result)) {
+            completeMultiFrameTorchWarmup(result, "torch and 3A ready")
+        }
+    }
+
+    private fun isTorchSessionUpdateApplied(
+        request: CaptureRequest,
+        result: TotalCaptureResult,
+    ): Boolean {
+        val requestedAeMode = request.get(CaptureRequest.CONTROL_AE_MODE)
+        val appliedAeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+        val requestedFlashMode = request.get(CaptureRequest.FLASH_MODE)
+        val appliedFlashMode = result.get(CaptureResult.FLASH_MODE)
+        return (appliedAeMode == null || appliedAeMode == requestedAeMode) &&
+            (appliedFlashMode == null || appliedFlashMode == requestedFlashMode)
+    }
+
+    private fun submitMultiFrameTorchWarmupPrecapture(generation: Long) {
+        if (multiFrameTorchWarmupPrecaptureSubmitted) return
+
+        val session = captureSession
+        val device = cameraDevice
+        val previewTarget = previewSurface
+        val handler = cameraHandler
+        if (session == null || device == null || previewTarget == null || handler == null) {
+            completeMultiFrameTorchWarmup(lastMultiFrameTorchWarmupResult, "torch precapture unavailable")
+            return
+        }
+
+        try {
+            val triggerRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(previewTarget)
+                set(
+                    CaptureRequest.CONTROL_CAPTURE_INTENT,
+                    CaptureRequest.CONTROL_CAPTURE_INTENT_PREVIEW
+                )
+                applyBaseCameraSettings(this, isCapture = false)
+                if (_state.value.isAutoExposure) {
+                    set(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
+                    )
+                }
+                set(CaptureRequest.CONTROL_AE_LOCK, false)
+                set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                setAePrecaptureTriggerIfSupported(
+                    this,
+                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START,
+                )
+                setTag(
+                    MultiFrameTorchWarmupRequestTag(
+                        generation = generation,
+                        isAePrecaptureTrigger = true,
+                    )
+                )
+            }.build()
+
+            multiFrameTorchWarmupPrecaptureSubmitted = true
+            session.capture(triggerRequest, previewCallback, handler)
+            PLog.d(
+                TAG,
+                "Multi-frame torch precapture submitted: generation=$generation, " +
+                    "aeMode=${triggerRequest.get(CaptureRequest.CONTROL_AE_MODE)}"
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to submit multi-frame torch precapture", e)
+            completeMultiFrameTorchWarmup(lastMultiFrameTorchWarmupResult, "torch precapture submission failed")
+        }
+    }
+
+    private fun isTorchWarmup3aReady(result: CaptureResult): Boolean {
+        val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
         val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-        val exposureReady = !_state.value.isAutoExposure ||
-            aeState == null ||
+        val aeReady = aeMode == CaptureResult.CONTROL_AE_MODE_OFF ||
             aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
             aeState == CaptureResult.CONTROL_AE_STATE_LOCKED
-        if (flashState == CaptureResult.FLASH_STATE_FIRED && exposureReady) {
-            completeMultiFrameTorchWarmup(result, "torch and exposure ready")
-        }
+        val awbState = result.get(CaptureResult.CONTROL_AWB_STATE)
+        val awbReady = awbState == null || awbState == CaptureResult.CONTROL_AWB_STATE_CONVERGED
+        return aeReady && awbReady && isFlashAfReady(result)
     }
 
     private fun completeMultiFrameTorchWarmup(
@@ -957,6 +1192,9 @@ class Camera2Controller(private val context: Context) {
         activeMultiFrameTorchWarmupGeneration = 0L
         lastMultiFrameTorchWarmupResult = null
         pendingMultiFrameTorchWarmupAction = null
+        multiFrameTorchWarmupNeedsAePrecapture = false
+        multiFrameTorchWarmupPrecaptureSubmitted = false
+        multiFrameTorchWarmupTriggerResultSeen = false
     }
 
     private fun abortMultiFrameTorchWarmup(reason: String, error: Throwable? = null) {
@@ -1011,9 +1249,11 @@ class Camera2Controller(private val context: Context) {
         activeMultiFrameTorchWarmupGeneration = generation
         lastMultiFrameTorchWarmupResult = null
         pendingMultiFrameTorchWarmupAction = onReady
+        multiFrameTorchWarmupPrecaptureSubmitted = false
+        multiFrameTorchWarmupTriggerResultSeen = false
 
         try {
-            val torchRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            val torchRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(previewTarget)
                 set(
                     CaptureRequest.CONTROL_CAPTURE_INTENT,
@@ -1021,19 +1261,26 @@ class Camera2Controller(private val context: Context) {
                 )
                 applyBaseCameraSettings(this, isCapture = false)
                 if (_state.value.isAutoExposure) {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
+                    )
                 }
                 set(CaptureRequest.CONTROL_AE_LOCK, false)
                 set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                 set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                set(
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
+                setAePrecaptureTriggerIfSupported(
+                    this,
+                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
                 )
                 setTag(MultiFrameTorchWarmupRequestTag(generation))
-            }.build()
+            }
+            val torchRequest = torchRequestBuilder.build()
 
             session.setRepeatingRequest(torchRequest, previewCallback, handler)
+            multiFrameTorchWarmupNeedsAePrecapture = _state.value.isAutoExposure &&
+                torchRequest.get(CaptureRequest.CONTROL_AE_MODE) != CaptureRequest.CONTROL_AE_MODE_OFF &&
+                isAePrecaptureSupported()
             val timeout = Runnable {
                 if (activeMultiFrameTorchWarmupGeneration != generation) return@Runnable
                 val latestResult = lastMultiFrameTorchWarmupResult
@@ -1078,43 +1325,38 @@ class Camera2Controller(private val context: Context) {
         activePrecaptureGeneration = generation
         precaptureTriggerFrameNumber = null
         lastAeState = null
+        precaptureTriggerSubmitted = false
+        precaptureTriggerResultSeen = false
 
         try {
-            // Match HedgeCam's standard Camera2 flash sequence. A dedicated still-template
-            // request first resets the trigger to IDLE, then remains repeating with the same
-            // AE/flash configuration before the one-shot START request is submitted.
-            val precaptureBuilder =
-                device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+            // CameraX first applies the flash AE mode to the repeating session and waits for
+            // that session update to be observed before issuing the one-shot AE precapture
+            // trigger. This ordering is required on devices whose AE state machine ignores a
+            // trigger that arrives in the same transition as the flash-mode change.
+            val sessionUpdateRequest =
+                device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                     addTarget(previewTarget)
                     set(
                         CaptureRequest.CONTROL_CAPTURE_INTENT,
-                        CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE
+                        CaptureRequest.CONTROL_CAPTURE_INTENT_PREVIEW
                     )
                     applyBaseCameraSettings(
                         builder = this,
                         isCapture = false,
-                        useStillFlashAeMode = true
+                        useStillFlashAeMode = true,
+                        useStillFlashTrigger = false,
                     )
                     set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
                     set(CaptureRequest.CONTROL_AE_LOCK, false)
-                    set(
-                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
+                    setAePrecaptureTriggerIfSupported(
+                        this,
+                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
                     )
-                }
-            val idleRequest = precaptureBuilder.build()
+                    setTag(PrecaptureSessionUpdateTag(generation))
+                }.build()
 
             internalCaptureState = STATE_WAITING_PRECAPTURE
-            val idleSequenceId = session.capture(idleRequest, previewCallback, handler)
-            session.setRepeatingRequest(idleRequest, previewCallback, handler)
-
-            precaptureBuilder.set(
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START
-            )
-            precaptureBuilder.setTag(PrecaptureRequestTag(generation))
-            val triggerSequenceId =
-                session.capture(precaptureBuilder.build(), previewCallback, handler)
+            session.setRepeatingRequest(sessionUpdateRequest, previewCallback, handler)
 
             val timeout = Runnable {
                 if (activePrecaptureGeneration != generation ||
@@ -1126,6 +1368,7 @@ class Camera2Controller(private val context: Context) {
                 PLog.w(
                     TAG,
                     "Precapture timeout: generation=$generation, " +
+                        "triggerSubmitted=$precaptureTriggerSubmitted, " +
                         "triggerFrame=$precaptureTriggerFrameNumber, lastAeState=$lastAeState"
                 )
                 completePrecapture(lastCaptureResult, "timeout")
@@ -1134,10 +1377,9 @@ class Camera2Controller(private val context: Context) {
             handler.postDelayed(timeout, PRECAPTURE_TIMEOUT_MS)
             PLog.d(
                 TAG,
-                "Precapture submitted: generation=$generation, idleSequence=$idleSequenceId, " +
-                    "triggerSequence=$triggerSequenceId, aeMode=" +
-                    "${idleRequest.get(CaptureRequest.CONTROL_AE_MODE)}, flashMode=" +
-                    "${idleRequest.get(CaptureRequest.FLASH_MODE)}"
+                "Flash session update submitted: generation=$generation, " +
+                    "aeMode=${sessionUpdateRequest.get(CaptureRequest.CONTROL_AE_MODE)}, " +
+                    "flashMode=${sessionUpdateRequest.get(CaptureRequest.FLASH_MODE)}"
             )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to run precapture sequence", e)
@@ -1723,6 +1965,15 @@ class Camera2Controller(private val context: Context) {
                     openCharacteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
                 availableAwbModes =
                     openCharacteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
+
+                PLog.i(
+                    TAG,
+                    "Flash capabilities: available=$isFlashSupported, " +
+                            "aeModes=${availableAeModes.joinToString()}, " +
+                            "alwaysFlash=${availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)}, " +
+                            "aeOn=${availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)}, " +
+                            "aeOff=${availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)}"
+                )
 
                 isP010Supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                         isOutputFormatAdvertised(capabilityCharacteristics, ImageFormat.YCBCR_P010) &&
@@ -2766,14 +3017,17 @@ class Camera2Controller(private val context: Context) {
      * @param builder 需要配置的 Builder
      * @param isCapture 是否为拍摄请求（预览时某些参数有限制）
      * @param isRawCapture 是否为 RAW 拍摄请求（跳过 RAW 不需要的 ISP 后处理参数）
-     * @param useStillFlashAeMode 是否进入静态拍摄的闪光 AE 流程；预览 repeating request 必须保持关闭
+     * @param useStillFlashAeMode 是否强制进入静态拍摄的闪光 AE 流程；自动闪光预览在设备支持
+     * ON_ALWAYS_FLASH 时也会使用同一 AE 模式，以便后续预闪与 CameraX 的会话更新顺序一致
+     * @param useStillFlashTrigger 是否允许当前请求本身触发 SINGLE 闪光；会话更新和预览请求必须关闭
      */
     private fun applyBaseCameraSettings(
         builder: CaptureRequest.Builder,
         isCapture: Boolean = false,
         isRawCapture: Boolean = false,
         disableZslForHdrCapture: Boolean = false,
-        useStillFlashAeMode: Boolean = isCapture
+        useStillFlashAeMode: Boolean = isCapture,
+        useStillFlashTrigger: Boolean = isCapture,
     ) {
         val currentState = _state.value
 
@@ -2788,8 +3042,8 @@ class Camera2Controller(private val context: Context) {
         // 2. 白平衡设置
         applyWhiteBalanceSettings(builder, currentState, isCapture)
 
-        // 3. 闪光灯设置（传递 isCapture 参数）
-        applyFlashSettings(builder, currentState, isCapture)
+        // 3. 闪光灯设置（触发权限与 AE 模式分开控制）
+        applyFlashSettings(builder, currentState, isCapture, useStillFlashTrigger)
 
         // 4. 变焦设置
         applyZoomSettings(builder, currentState)
@@ -3249,6 +3503,50 @@ class Camera2Controller(private val context: Context) {
      *
      * 统一管理 CONTROL_AE_MODE，确保与闪光灯模式正确配合
      */
+    private fun resolveSupportedAeMode(preferredMode: Int): Int {
+        if (availableAeModes.contains(preferredMode)) return preferredMode
+        if (availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)) {
+            return CaptureRequest.CONTROL_AE_MODE_ON
+        }
+        if (availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
+            return CaptureRequest.CONTROL_AE_MODE_OFF
+        }
+        // CameraX deliberately falls back to OFF instead of selecting an arbitrary AE mode.
+        // This is also required for FLASH_MODE_TORCH, whose AE mode may only be ON or OFF.
+        return CaptureRequest.CONTROL_AE_MODE_OFF
+    }
+
+    private fun isAePrecaptureSupported(): Boolean {
+        return cachedHardwareLevel != CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY &&
+            isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER.name)
+    }
+
+    private fun setAePrecaptureTriggerIfSupported(
+        builder: CaptureRequest.Builder,
+        trigger: Int,
+    ) {
+        if (isAePrecaptureSupported()) {
+            builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, trigger)
+        }
+    }
+
+    private fun resolveStillFlashAeMode(): Int {
+        return if (availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)) {
+            resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+        } else {
+            resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
+        }
+    }
+
+    private fun shouldUsePreviewStillFlashAeMode(state: CameraState): Boolean {
+        return isFlashSupported &&
+            state.captureMode == CaptureMode.PHOTO &&
+            state.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
+            state.isIsoAuto &&
+            state.isShutterSpeedAuto &&
+            availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+    }
+
     private fun applyExposureSettings(
         builder: CaptureRequest.Builder,
         state: CameraState,
@@ -3259,19 +3557,23 @@ class Camera2Controller(private val context: Context) {
             applyVideoFpsRange(builder, state.videoConfig.fps.fps)
         }
 
+        val effectiveUseStillFlashAeMode = useStillFlashAeMode ||
+            (!isCapture && shouldUsePreviewStillFlashAeMode(state))
+
         // 根据曝光模式和闪光灯模式联合决定 AE_MODE
         val aeMode = when {
-            // 1. 全自动曝光：仅在预闪/静态拍摄阶段进入闪光 AE 模式
+            // 1. 全自动曝光：静态闪光拍摄及其预览会话使用闪光 AE 模式；真正的预闪仍由
+            // CONTROL_AE_PRECAPTURE_TRIGGER 或静态拍摄请求触发
             state.isIsoAuto && state.isShutterSpeedAuto -> {
                 if (state.captureMode == CaptureMode.VIDEO) {
-                    CaptureRequest.CONTROL_AE_MODE_ON
+                    resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
                 } else {
                     when {
                         state.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
-                                useStillFlashAeMode ->
-                            CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                                effectiveUseStillFlashAeMode ->
+                            resolveStillFlashAeMode()
 
-                        else -> CaptureRequest.CONTROL_AE_MODE_ON
+                        else -> resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
                     }
                 }
             }
@@ -3280,7 +3582,7 @@ class Camera2Controller(private val context: Context) {
                 if (availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
                     CaptureRequest.CONTROL_AE_MODE_OFF
                 } else {
-                    CaptureRequest.CONTROL_AE_MODE_ON
+                    resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
                 }
             }
         }
@@ -3686,7 +3988,12 @@ class Camera2Controller(private val context: Context) {
      *
      * @param isCapture 是否为拍摄请求（预览时某些闪光模式需要特殊处理）
      */
-    private fun applyFlashSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
+    private fun applyFlashSettings(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        isCapture: Boolean,
+        useStillFlashTrigger: Boolean = isCapture,
+    ) {
         if (!isFlashSupported) {
             builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
             return
@@ -3718,8 +4025,25 @@ class Camera2Controller(private val context: Context) {
                         }
                     )
                 } else {
-                    // AE_MODE_ON_ALWAYS_FLASH owns precapture and main-flash control.
-                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                    val alwaysFlashAeSupported = availableAeModes.contains(
+                        CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                    )
+                    if (alwaysFlashAeSupported) {
+                        // AE_MODE_ON_ALWAYS_FLASH owns precapture and main-flash control.
+                        builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                    } else {
+                        // Some devices advertise AE_MODE_ON but not ON_ALWAYS_FLASH. Keep the
+                        // repeating session at FLASH_OFF; only the one-shot precapture request
+                        // and the final still request use FLASH_SINGLE.
+                        builder.set(
+                            CaptureRequest.FLASH_MODE,
+                            if (isCapture || useStillFlashTrigger) {
+                                CameraMetadata.FLASH_MODE_SINGLE
+                            } else {
+                                CameraMetadata.FLASH_MODE_OFF
+                            }
+                        )
+                    }
                 }
             }
 
@@ -4459,11 +4783,12 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(flashMode = value)
 
         previewRequestBuilder?.apply {
-            // 单次闪光只在拍摄流程生效；预览不得持续运行预闪触发器或 ALWAYS_FLASH AE。
+            // 预览不发送预闪触发器；支持 ON_ALWAYS_FLASH 时由 AE 模式保留闪光会话配置，
+            // 实际闪光仍只由静态拍摄/预闪序列触发。
             applyBaseCameraSettings(this, isCapture = false)
-            set(
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
+            setAePrecaptureTriggerIfSupported(
+                this,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
             )
             updatePreview()
         }
@@ -6166,9 +6491,12 @@ class Camera2Controller(private val context: Context) {
         val currentState = _state.value
         val useMultiFrameTorch = shouldUseMultiFrameTorch(currentState)
         val needsPrecapture =
+            isFlashSupported &&
+            isAePrecaptureSupported() &&
             currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
             currentState.isIsoAuto &&
-            currentState.isShutterSpeedAuto
+            currentState.isShutterSpeedAuto &&
+            resolveStillFlashAeMode() != CaptureRequest.CONTROL_AE_MODE_OFF
 
         if (useMultiFrameTorch) {
             pendingCaptureDevice = device
@@ -6286,7 +6614,10 @@ class Camera2Controller(private val context: Context) {
                         disableZslForHdrCapture = true
                     )
                     applyHdrBracketExposure(this, currentState, evOffset, manualBaseExposure)
-                    set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                    setAePrecaptureTriggerIfSupported(
+                        this,
+                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
+                    )
                     set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
                     if (currentState.awbMode != CameraMetadata.CONTROL_AWB_MODE_OFF) {
                         set(CaptureRequest.CONTROL_AWB_LOCK, true)
@@ -6608,8 +6939,8 @@ class Camera2Controller(private val context: Context) {
         return device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(reader.surface)
             applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
-            set(
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+            setAePrecaptureTriggerIfSupported(
+                this,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
             )
             set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
@@ -6712,8 +7043,8 @@ class Camera2Controller(private val context: Context) {
         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(reader.surface)
             applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
-            set(
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+            setAePrecaptureTriggerIfSupported(
+                this,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
             )
             set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
@@ -6892,9 +7223,18 @@ class Camera2Controller(private val context: Context) {
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
                 applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
 
+                // A previous multi-frame/torch sequence may have used AE_LOCK. Standard
+                // single-frame flash capture must let the flash AE routine choose exposure.
+                if (!currentState.isMultiFrameEnabled) {
+                    set(CaptureRequest.CONTROL_AE_LOCK, false)
+                }
+
                 if (useMultiFrameTorch) {
                     if (currentState.isAutoExposure) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        set(
+                            CaptureRequest.CONTROL_AE_MODE,
+                            resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
+                        )
                     }
                     set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                 }
@@ -6919,7 +7259,10 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 // 强制将此请求的触发器设为 IDLE，防止携带预览中的触发状态
-                set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                setAePrecaptureTriggerIfSupported(
+                    this,
+                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
+                )
 
                 // 从预览请求复制对焦相关设置
                 previewRequestBuilder?.let { preview ->
@@ -7207,18 +7550,19 @@ class Camera2Controller(private val context: Context) {
             } else {
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
             }
-            builder.set(
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL
+            setAePrecaptureTriggerIfSupported(
+                builder,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL,
             )
             session.capture(builder.build(), null, cameraHandler)
 
             clearMultiFrameFocusState("capture sequence finished")
             applyBaseCameraSettings(builder, isCapture = false)
+            builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
             builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-            builder.set(
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
+            setAePrecaptureTriggerIfSupported(
+                builder,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
             )
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
         } catch (e: Exception) {
@@ -7716,7 +8060,10 @@ class Camera2Controller(private val context: Context) {
 
                 if (isContinuousBurstTorchActive) {
                     if (_state.value.isAutoExposure) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        set(
+                            CaptureRequest.CONTROL_AE_MODE,
+                            resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
+                        )
                         val aeLockAvailable = getActiveOpenCameraCharacteristics()
                             ?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
                         if (aeLockAvailable) {
@@ -7726,7 +8073,10 @@ class Camera2Controller(private val context: Context) {
                     set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                 }
 
-                set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                setAePrecaptureTriggerIfSupported(
+                    this,
+                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
+                )
 
                 builder.get(CaptureRequest.CONTROL_AF_MODE)?.let { set(CaptureRequest.CONTROL_AF_MODE, it) }
                 builder.get(CaptureRequest.LENS_FOCUS_DISTANCE)?.let { set(CaptureRequest.LENS_FOCUS_DISTANCE, it) }
