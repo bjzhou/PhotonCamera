@@ -22,7 +22,7 @@ class OglBokehProcessor {
         private const val TAG = "OglBokehProcessor"
         private const val MAX_BOKEH_RENDER_EDGE = 2560
         private const val HIGHLIGHT_MASK_THRESHOLD = 0.02f
-        private const val MIN_ANALYTIC_COC_PIXELS = 1.5f
+        private const val MIN_ANALYTIC_COC_PIXELS = 20f
         private const val FOCUS_DEPTH_DEAD_BAND = 0.015f
         // Synthetic-highlight background gate. A depth sample is accepted when
         // its gap behind the focused subject is >= X, OR its normalized depth is <= Y.
@@ -32,7 +32,7 @@ class OglBokehProcessor {
         // Tunable highlight-quality gates. Radius is measured in original-image
         // pixels; luminance difference is measured in linear RGB.
         private const val MIN_HIGHLIGHT_COMPONENT_RADIUS_PIXELS = 12.0f
-        private const val MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE = 0.08f
+        private const val MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE = 0.1f
         private const val HIGHLIGHT_MIN_CENTER_SPACING_SCALE = 0.9f
         private const val HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE = 0.5f
         private const val PREEXISTING_BOKEH_RADIUS_SCALE = 0.05f

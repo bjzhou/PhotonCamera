@@ -2078,7 +2078,7 @@ class RawDemosaicProcessor {
                 rawRenderingEngine = RawRenderingEngine.AdobeCurve,
                 rawToneMappingParameters = RawToneMappingParameters.DEFAULT.withProfileToneMapMode(
                     RawProfileToneMapMode.Default
-                ),
+                ).withPhotonHdr(false),
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 exposurePreviewRequest = request,
                 captureProfilePreparationRequested = true,
@@ -2179,14 +2179,11 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Renders the original LinearRaw RGB buffer with the same prepared metadata/profile passed
-     * to the DNG writer. This keeps the established DNG rendering contract while avoiding
-     * lossless-JPEG decompression and the native pixel-buffer copy performed by [processDngNative].
-     *
-     * BaselineExposure and the embedded color/tone plan are prepared once and shared by
-     * both consumers; the only permitted difference is numeric quantization during TIFF write.
+     * Renders the original CFA or LinearRaw buffer with the same prepared metadata/profile passed
+     * to the DNG writer. This keeps the established DNG rendering contract while avoiding TIFF
+     * decompression and the native pixel-buffer copy performed by [processDngNative].
      */
-    suspend fun processLinearDngBufferForHdrSources(
+    suspend fun processDngBufferForHdrSources(
         context: Context,
         rawData: ByteBuffer?,
         width: Int,
@@ -2230,11 +2227,11 @@ class RawDemosaicProcessor {
         onMetadata: ((RawMetadata) -> Unit)? = null,
     ): RawHdrRenderResult? = withContext(glDispatcher) {
         if ((rawData == null && gpuLinearRgbSource == null) ||
-            samplesPerPixel !in 3..4 || width <= 0 || height <= 0 || rowStride <= 0
+            samplesPerPixel !in setOf(1, 3, 4) || width <= 0 || height <= 0 || rowStride <= 0
         ) {
             PLog.e(
                 TAG,
-                "Invalid in-memory LinearRaw DNG source: ${width}x$height " +
+                "Invalid in-memory DNG source: ${width}x$height " +
                     "samplesPerPixel=$samplesPerPixel rowStride=$rowStride"
             )
             return@withContext null
@@ -2254,8 +2251,12 @@ class RawDemosaicProcessor {
         onMetadata?.invoke(renderMetadata)
         PLog.i(
             TAG,
-            "RAW_LINEAR_DNG_BYPASS source=" +
-                "${if (gpuLinearRgbSource != null) "GPU_STACK_TEXTURE" else "CPU_RGB16_BUFFER"} " +
+            "RAW_DNG_BUFFER_BYPASS source=" +
+                "${when {
+                    gpuLinearRgbSource != null -> "GPU_STACK_TEXTURE"
+                    samplesPerPixel == 1 -> "CPU_CFA16_BUFFER"
+                    else -> "CPU_RGB16_BUFFER"
+                }} " +
                 "metadata=SHARED_DNG_PARAMS " +
                 "size=${width}x$height samplesPerPixel=$samplesPerPixel rowStride=$rowStride " +
                 "baselineExposure=${renderMetadata.baselineExposure} " +
@@ -2268,7 +2269,7 @@ class RawDemosaicProcessor {
                 "pgtm=${renderMetadata.profileGainTableMap?.let {
                     "${it.mapPointsH}x${it.mapPointsV}x${it.mapPointsN}:tag=${it.sourceTag}"
                 } ?: "none"} profile=${embeddedDngRenderPlan.profileName} " +
-                "rawAwbIgnoredForLinear=$rawAutoWhiteBalanceEstimate"
+                "rawAwbIgnoredForEmbeddedDng=$rawAutoWhiteBalanceEstimate"
         )
 
         try {
@@ -2317,7 +2318,7 @@ class RawDemosaicProcessor {
                 defaultCropIsAuthoritative = true,
             )
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to process in-memory LinearRaw DNG source", e)
+            PLog.e(TAG, "Failed to process in-memory DNG source", e)
             null
         }
     }
@@ -2655,13 +2656,11 @@ class RawDemosaicProcessor {
             actualSamplesPerPixel !in setOf(1, 3, 4) ->
                 "unsupported samplesPerPixel=$actualSamplesPerPixel"
             borrowedGpuSource != null -> "GPU-resident stacked source"
-            hasActiveWarp -> "DNG WarpRectilinear requires a displacement-aware source region"
+            hasActiveWarp && !(captureProfilePreparationRequested && exposurePreviewRequest == null) ->
+                "DNG WarpRectilinear requires a displacement-aware render source region"
             colorEngine == RawRenderingEngine.DarktableFilmic ->
                 "Darktable Filmic wavelet reconstruction requires scale-by-scale tiling"
-            photonHdrRequested ->
-                "Photon HDR Local Laplacian requires one global full-frame pyramid"
-            prepareCaptureProfile ->
-                "capture metering/profile preparation"
+            exposurePreviewRequest != null -> "capture exposure metering"
             else -> null
         }
         val rawRenderTiles = if (highResolutionOutput && tileBlockingReason == null) {
@@ -2690,11 +2689,20 @@ class RawDemosaicProcessor {
                     "tiledCpuUpload=false",
             )
         } else if (highResolutionOutput && tileBlockingReason != null) {
-            PLog.w(
-                TAG,
-                "RAW tiled rendering unavailable for this pipeline: $tileBlockingReason; " +
-                    "size=${outputSourceBounds.width()}x${outputSourceBounds.height()}",
-            )
+            if (tileBlockingReason == "capture exposure metering") {
+                PLog.i(
+                    TAG,
+                    "RAW capture metering path=FULL_FRAME " +
+                        "source=${actualWidth}x$actualHeight " +
+                        "output=${outputSourceBounds.width()}x${outputSourceBounds.height()}",
+                )
+            } else {
+                PLog.w(
+                    TAG,
+                    "RAW tiled rendering unavailable for this pipeline: $tileBlockingReason; " +
+                        "size=${outputSourceBounds.width()}x${outputSourceBounds.height()}",
+                )
+            }
         }
         val tiledRawData = rawRenderTiles.takeIf { it.isNotEmpty() }?.let {
             requireNotNull(actualRawData).duplicate().order(ByteOrder.nativeOrder())
@@ -2706,11 +2714,13 @@ class RawDemosaicProcessor {
             }
             if (rawRenderTiles.isNotEmpty()) {
                 // A singleton renderer may still own size-cached intermediates from the previous
-                // image. They are not part of this tile pool and must not overlap the full RAW
-                // upload used for global profile statistics.
+                // image. They are not part of this tile pool and must not overlap the bounded RAW
+                // uploads used by PGTM sampling and final rendering.
                 releaseTiledRenderFramebuffers()
             }
-            if (actualWidth > maxTextureSize || actualHeight > maxTextureSize) {
+            if (rawRenderTiles.isEmpty() &&
+                (actualWidth > maxTextureSize || actualHeight > maxTextureSize)
+            ) {
                 PLog.e(
                     TAG,
                     "Input ${actualWidth}x$actualHeight exceeds GL_MAX_TEXTURE_SIZE=$maxTextureSize",
@@ -2731,7 +2741,14 @@ class RawDemosaicProcessor {
                         setupFullResFramebuffer(actualWidth, actualHeight)
                 }
             }
-            if (borrowedGpuSource != null) {
+            if (rawRenderTiles.isNotEmpty()) {
+                PLog.i(
+                    TAG,
+                    "RAW full upload deferred to bounded tiles: source=${actualWidth}x$actualHeight " +
+                        "tiles=${rawRenderTiles.size} photonPgtm=$photonHdrRequested " +
+                        "capturePgtm=$capturePhotonPgtmRequested",
+                )
+            } else if (borrowedGpuSource != null) {
                 if (rawTextureId != 0 && rawTextureId != borrowedGpuSource.textureId) {
                     GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
                 }
@@ -2768,7 +2785,11 @@ class RawDemosaicProcessor {
             DngProfileToneCurve.isPhotonPgtmToneCurveLut(embeddedProfileToneCurveLut)
         val oppoMasterToneMapActive = useAdobeProfilePipeline &&
             normalizedToneMappingParameters.useOppoMasterToneMap
-        val embeddedProfileGainTableMap = actualMetadata.profileGainTableMap?.takeIf { it.isValid }
+        val embeddedProfileGainTableMap = actualMetadata.profileGainTableMap
+            ?.takeIf { photonHdrRequested && it.isValid }
+        if (!photonHdrRequested && actualMetadata.profileGainTableMap?.isValid == true) {
+            PLog.i(TAG, "DNG ProfileGainTableMap disabled by Photon HDR setting")
+        }
         actualMetadata = actualMetadata.copy(
             profileGainTableMap = embeddedProfileGainTableMap
         )
@@ -2803,6 +2824,8 @@ class RawDemosaicProcessor {
         if (photonHdrRequested && actualMetadata.profileGainTableMap == null) {
             val generatedProfileGainTableMap = generateProfileGainTableMapOnGpu(
                 rawTextureId = rawTextureId,
+                streamingRawData = tiledRawData,
+                streamingRowStride = actualRowStride,
                 width = actualWidth,
                 height = actualHeight,
                 samplesPerPixel = actualSamplesPerPixel,
@@ -3077,6 +3100,8 @@ class RawDemosaicProcessor {
                 val captureProfileGainTableMap = if (capturePhotonPgtmRequested) {
                     generateProfileGainTableMapOnGpu(
                         rawTextureId = rawTextureId,
+                        streamingRawData = tiledRawData,
+                        streamingRowStride = actualRowStride,
                         width = actualWidth,
                         height = actualHeight,
                         samplesPerPixel = actualSamplesPerPixel,
@@ -4063,6 +4088,8 @@ class RawDemosaicProcessor {
 
     private fun generateProfileGainTableMapOnGpu(
         rawTextureId: Int,
+        streamingRawData: ByteBuffer? = null,
+        streamingRowStride: Int = 0,
         width: Int,
         height: Int,
         rawTextureWidth: Int = width,
@@ -4076,12 +4103,16 @@ class RawDemosaicProcessor {
         hueSatMapSupportsOverrange: Boolean,
         warpRectilinear: FloatArray? = null,
     ): DngProfileGainTableMap? {
-        if (rawTextureId == 0 || width <= 0 || height <= 0 ||
+        val streamingInput = streamingRawData != null
+        if ((!streamingInput && rawTextureId == 0) ||
+            (streamingInput && streamingRowStride <= 0) ||
+            width <= 0 || height <= 0 ||
             rawTextureWidth <= 0 || rawTextureHeight <= 0 || metadata.whiteLevel <= 0f
         ) {
             PLog.e(
                 TAG,
-                "GPU RAW PGTM input invalid: texture=$rawTextureId size=${width}x$height " +
+                "GPU RAW PGTM input invalid: texture=$rawTextureId streaming=$streamingInput " +
+                    "size=${width}x$height " +
                     "source=${rawTextureWidth}x$rawTextureHeight white=${metadata.whiteLevel}",
             )
             return null
@@ -4124,6 +4155,19 @@ class RawDemosaicProcessor {
 
         val cellCount = gridWidth * gridHeight
         val sampleFloatCount = cellCount * DngPhotonLocalToneMapper.SAMPLES_PER_CELL
+        val streamingTiles = if (streamingInput) {
+            RawTilePlanner.plan(
+                sourceWidth = rawTextureWidth,
+                sourceHeight = rawTextureHeight,
+                outputSourceBounds = RawTileRect(0, 0, rawTextureWidth, rawTextureHeight),
+                rotation = 0,
+                coreEdgePx = RAW_TILE_CORE_EDGE_PX,
+                supportPx = 2,
+                cfaPeriod = RawCfaCorrection.repeatPatternDim(metadata.cfaPattern)[0],
+            )
+        } else {
+            emptyList()
+        }
         val bufferIds = IntArray(2)
         val totalStartNs = System.nanoTime()
         GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
@@ -4160,8 +4204,6 @@ class RawDemosaicProcessor {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, warpBufferId)
 
             GLES31.glUseProgram(pgtmCellSamplesProgram)
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uRawTexture"),
                 RCD_RAW_TEXTURE_UNIT,
@@ -4257,7 +4299,59 @@ class RawDemosaicProcessor {
                 0,
             )
             val samplesGpuStartNs = System.nanoTime()
-            GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
+            if (streamingInput) {
+                val source = requireNotNull(streamingRawData)
+                streamingTiles.forEachIndexed { tileIndex, tile ->
+                    val working = tile.sourceWorking
+                    uploadRawTextureRegion(
+                        buffer = source,
+                        rowStride = streamingRowStride,
+                        region = working,
+                        samplesPerPixel = samplesPerPixel,
+                    )
+                    GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+                    GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, this.rawTextureId)
+                    GLES31.glUniform2i(
+                        GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uRawTextureOrigin"),
+                        working.left,
+                        working.top,
+                    )
+                    GLES31.glUniform4i(
+                        GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uSampleSourceBounds"),
+                        tile.sourceCore.left,
+                        tile.sourceCore.top,
+                        tile.sourceCore.right,
+                        tile.sourceCore.bottom,
+                    )
+                    GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
+                    if (tileIndex < streamingTiles.lastIndex) {
+                        // The next CPU upload overwrites this same texture. A fence is the
+                        // ownership boundary required before reusing that storage while the
+                        // previous compute dispatch may still be reading it.
+                        GlesGpuCompletion.awaitSubmittedWork(
+                            label = "PGTM sample tile ${tile.index}",
+                            checkGlError = ::checkGlError,
+                        )
+                        GlesGpuScheduler.yieldToUiRenderer()
+                    }
+                }
+            } else {
+                GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+                GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
+                GLES31.glUniform2i(
+                    GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uRawTextureOrigin"),
+                    0,
+                    0,
+                )
+                GLES31.glUniform4i(
+                    GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uSampleSourceBounds"),
+                    0,
+                    0,
+                    rawTextureWidth,
+                    rawTextureHeight,
+                )
+                GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
+            }
             GLES31.glMemoryBarrier(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
             )
@@ -4305,6 +4399,7 @@ class RawDemosaicProcessor {
                 TAG,
                 "GPU Photon HDR prepared: size=${width}x$height " +
                     "source=${rawTextureWidth}x$rawTextureHeight " +
+                    "streaming=$streamingInput sampleTiles=${streamingTiles.size} " +
                     "statsBounds=$safeStatsBounds " +
                     "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
                     "lsc=${lensShadingLogString(metadata)} " +
@@ -4338,6 +4433,12 @@ class RawDemosaicProcessor {
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
             GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
             GLES31.glDeleteBuffers(bufferIds.size, bufferIds, 0)
+            if (streamingInput && this.rawTextureId != 0) {
+                GLES31.glDeleteTextures(1, intArrayOf(this.rawTextureId), 0)
+                this.rawTextureId = 0
+                rawTileTextureWidth = 0
+                rawTileTextureHeight = 0
+            }
         }
     }
 

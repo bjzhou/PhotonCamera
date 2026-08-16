@@ -124,4 +124,14 @@ class DngPhotonPercentileTest {
             ),
         )
     }
+
+    @Test
+    fun streamedPgtmSamplesUseGlobalCoordinatesWithSingleTileOwnership() {
+        val source = DngPhotonProfileGainTableInputShader.CELL_SAMPLES
+
+        assertTrue(source.contains("coord - uRawTextureOrigin"))
+        assertTrue(source.contains("lessThan(sourceCoord, uSampleSourceBounds.xy)"))
+        assertTrue(source.contains("greaterThanEqual(sourceCoord, uSampleSourceBounds.zw)"))
+        assertTrue(source.contains("continue;"))
+    }
 }

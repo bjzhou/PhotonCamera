@@ -29,6 +29,29 @@ class RawTilePlannerTest {
     }
 
     @Test
+    fun twoHundredMegapixelPgtmScanKeepsRawTextureBounded() {
+        val bounds = RawTileRect(0, 0, 20_000, 10_000)
+        val tiles = RawTilePlanner.plan(
+            sourceWidth = bounds.width,
+            sourceHeight = bounds.height,
+            outputSourceBounds = bounds,
+            rotation = 0,
+            coreEdgePx = 3_072,
+            supportPx = 2,
+            cfaPeriod = 2,
+        )
+
+        assertEquals(
+            200_000_000L,
+            tiles.sumOf { it.sourceCore.width.toLong() * it.sourceCore.height },
+        )
+        // Two-sided sample support plus CFA-phase preservation can add six pixels to the core.
+        assertTrue(tiles.all { it.sourceWorking.width <= 3_078 })
+        assertTrue(tiles.all { it.sourceWorking.height <= 3_078 })
+        assertTrue(tiles.all { it.sourceWorking.contains(it.sourceCore) })
+    }
+
+    @Test
     fun allRotationsMapOutputBackToTheSameSourceCrop() {
         val sourceWidth = 43
         val sourceHeight = 34

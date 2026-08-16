@@ -16,6 +16,8 @@ internal object DngPhotonProfileGainTableInputShader {
         uniform sampler2D uLensShadingMap;
         uniform sampler3D uHueSatMap;
         uniform ivec2 uImageSize;
+        uniform ivec2 uRawTextureOrigin;
+        uniform ivec4 uSampleSourceBounds;
         uniform ivec4 uStatsBounds;
         uniform ivec2 uGridSize;
         uniform int uSamplesPerPixel;
@@ -141,7 +143,7 @@ internal object DngPhotonProfileGainTableInputShader {
         float sampleSceneInput(ivec2 baseCoord) {
             if (uSamplesPerPixel >= 3) {
                 ivec2 coord = clamp(baseCoord, ivec2(0), uImageSize - ivec2(1));
-                uvec3 rawRgb = texelFetch(uRawTexture, coord, 0).rgb;
+                uvec3 rawRgb = texelFetch(uRawTexture, coord - uRawTextureOrigin, 0).rgb;
                 return profileSceneInput(vec3(
                     normalizeRaw(rawRgb.r, 0) * lensShadingGainAt(0, coord),
                     normalizeRaw(rawRgb.g, 1) * lensShadingGainAt(1, coord),
@@ -156,7 +158,10 @@ internal object DngPhotonProfileGainTableInputShader {
                     ivec2 coord = clamp(baseCoord + ivec2(dx, dy), ivec2(0), uImageSize - ivec2(1));
                     int channel = channelIndexForPixel(coord);
                     float value =
-                        normalizeRaw(texelFetch(uRawTexture, coord, 0).r, channel) *
+                        normalizeRaw(
+                            texelFetch(uRawTexture, coord - uRawTextureOrigin, 0).r,
+                            channel
+                        ) *
                         lensShadingGainAt(channel, coord);
                     if (channel == 0) {
                         sums.r += value;
@@ -255,6 +260,14 @@ internal object DngPhotonProfileGainTableInputShader {
                     vec2 sourcePixel = warpDestinationToSource(vec2(x, y));
                     ivec2 sourceCoord = ivec2(round(sourcePixel)) & ~ivec2(1);
                     sourceCoord = clamp(sourceCoord, ivec2(0), uImageSize - ivec2(2));
+                    // A streamed dispatch owns only its non-overlapping source core. The uploaded
+                    // texture also contains the right/bottom support needed by the 2x2 CFA read.
+                    // Dispatching every cell for every source tile preserves the exact global
+                    // sampling coordinates, including WarpRectilinear, without a full RAW texture.
+                    if (any(lessThan(sourceCoord, uSampleSourceBounds.xy)) ||
+                        any(greaterThanEqual(sourceCoord, uSampleSourceBounds.zw))) {
+                        continue;
+                    }
                     inputValue = sampleSceneInput(sourceCoord);
                 }
                 cellSamples[cellIndex * 256 + int(sampleIndex)] = inputValue;

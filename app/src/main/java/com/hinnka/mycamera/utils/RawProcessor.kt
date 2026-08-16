@@ -76,12 +76,12 @@ object RawProcessor {
     }
 
     /**
-     * The custom LinearRaw DNG writer stores the full buffer as its active image unless the
+     * The custom CFA/LinearRaw DNG writer stores the full buffer as its active image unless the
      * buffer is the physical pixel array with a smaller pre-correction active area. In that
      * exceptional case LibRaw crops the file during unpack, so the original buffer cannot be
      * substituted without applying the same crop first.
      */
-    fun canRenderLinearDngBufferDirectly(
+    fun canRenderDngBufferDirectly(
         width: Int,
         height: Int,
         characteristics: CameraCharacteristics,
@@ -142,7 +142,65 @@ object RawProcessor {
             exposureBias = baseMetadata.exposureBias,
             frameCount = 1,
             rotation = rotation,
-            profileGainTableMap = null,
+            profileGainTableMap = profilePreparation.profileGainTableMap,
+        )
+    }
+
+    /** Builds the metadata LibRaw would expose after reopening a directly compatible CFA DNG. */
+    fun buildCfaDngRenderMetadata(
+        width: Int,
+        height: Int,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+        sourceMetadata: RawMetadata,
+        defaultCrop: Rect,
+        rotation: Int,
+        profilePreparation: RawDngProfilePreparation,
+        blackLevelMode: String?,
+        customBlackLevel: Float?,
+        whiteLevelMode: String?,
+        customWhiteLevel: Float?,
+        cfaCorrectionMode: String?,
+    ): RawMetadata {
+        val resolvedCfaPattern = resolveCfaPatternForMode(
+            sourceMetadata.cfaPattern,
+            cfaCorrectionMode,
+        )
+        val resolvedBlackLevel = resolveBlackLevelForMode(
+            sourceMetadata.blackLevel,
+            blackLevelMode,
+            customBlackLevel,
+        )
+        val resolvedWhiteLevel = resolveWhiteLevelForMode(
+            sourceMetadata.whiteLevel,
+            whiteLevelMode,
+            customWhiteLevel,
+        )
+        return buildAdobeDngColorMetadata(
+            width = width,
+            height = height,
+            characteristics = characteristics,
+            captureResult = captureResult,
+            userExposureCompensation = sourceMetadata.exposureBias,
+        ).copy(
+            width = width,
+            height = height,
+            cfaPattern = resolvedCfaPattern,
+            blackLevel = resolvedBlackLevel,
+            whiteLevel = resolvedWhiteLevel,
+            postRawSensitivityBoost = 1f,
+            baselineExposure = DngBaselineExposure.sanitize(profilePreparation.baselineExposureEv),
+            shadowScale = 1f,
+            channelNoiseProfile = resolveDngWriterNoiseProfile(captureResult),
+            noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB,
+            afRegions = null,
+            activeArray = Rect(0, 0, width, height),
+            defaultCrop = Rect(defaultCrop),
+            aeMode = CaptureResult.CONTROL_AE_MODE_ON,
+            exposureCompensation = 0f,
+            frameCount = 1,
+            rotation = rotation,
+            profileGainTableMap = profilePreparation.profileGainTableMap,
         )
     }
 
@@ -430,34 +488,38 @@ object RawProcessor {
         )
 
         PLog.i(TAG, "Writing RAW_SENSOR DNG with custom writer")
-        return saveRawBufferToDng(
-            rawBuffer = rawBuffer,
-            width = image.width,
-            height = image.height,
-            characteristics = characteristics,
-            captureResult = captureResult,
-            outputStream = outputStream,
-            rotation = rotation,
-            thumbnail = thumbnail,
-            cfaPattern = rawMetadata.cfaPattern,
-            blackLevel = rawMetadata.blackLevel,
-            whiteLevel = rawMetadata.whiteLevel.toInt(),
-            valueDomain = RawBufferValueDomain.SENSOR,
-            customWriter = true,
-            blackLevelMode = blackLevelMode,
-            customBlackLevel = customBlackLevel,
-            whiteLevelMode = whiteLevelMode,
-            customWhiteLevel = customWhiteLevel,
-            cfaCorrectionMode = cfaCorrectionMode,
-            effectiveFocalLengthMm = effectiveFocalLengthMm,
-            effectiveFocalLength35mm = effectiveFocalLength35mm,
-            captureInfo = captureInfo,
-            dngProfilePreparationOptions = dngProfilePreparationOptions,
-            defaultCrop = defaultCrop,
-        )
+        return try {
+            saveRawBufferToDng(
+                rawBuffer = rawBuffer,
+                width = image.width,
+                height = image.height,
+                characteristics = characteristics,
+                captureResult = captureResult,
+                outputStream = outputStream,
+                rotation = rotation,
+                thumbnail = thumbnail,
+                cfaPattern = rawMetadata.cfaPattern,
+                blackLevel = rawMetadata.blackLevel,
+                whiteLevel = rawMetadata.whiteLevel.toInt(),
+                valueDomain = RawBufferValueDomain.SENSOR,
+                customWriter = true,
+                blackLevelMode = blackLevelMode,
+                customBlackLevel = customBlackLevel,
+                whiteLevelMode = whiteLevelMode,
+                customWhiteLevel = customWhiteLevel,
+                cfaCorrectionMode = cfaCorrectionMode,
+                effectiveFocalLengthMm = effectiveFocalLengthMm,
+                effectiveFocalLength35mm = effectiveFocalLength35mm,
+                captureInfo = captureInfo,
+                dngProfilePreparationOptions = dngProfilePreparationOptions,
+                defaultCrop = defaultCrop,
+            )
+        } finally {
+            LargeDirectBuffer.free(rawBuffer)
+        }
     }
 
-    private fun copyRawSensorImageToContiguousBuffer(image: SafeImage): ByteBuffer? {
+    internal fun copyRawSensorImageToContiguousBuffer(image: SafeImage): ByteBuffer? {
         val plane = image.planes.firstOrNull() ?: return null
         val rowStride = plane.rowStride
         val pixelStride = runCatching { plane.pixelStride }.getOrDefault(2).takeIf { it > 0 } ?: 2
@@ -471,12 +533,16 @@ object RawProcessor {
         }
 
         val source = plane.buffer.duplicate()
-        val output = ByteBuffer.allocateDirect(rowBytes * height).order(ByteOrder.nativeOrder())
+        val output = LargeDirectBuffer.allocate(
+            rowBytes.toLong() * height.toLong(),
+            "RAW_SENSOR contiguous copy",
+        )?.order(ByteOrder.nativeOrder()) ?: return null
         for (row in 0 until height) {
             val rowOffset = row * rowStride
             val rowEnd = rowOffset + rowBytes
             if (rowEnd > source.capacity()) {
                 PLog.w(TAG, "RAW_SENSOR plane too small row=$row rowEnd=$rowEnd capacity=${source.capacity()}")
+                LargeDirectBuffer.free(output)
                 return null
             }
             source.limit(rowEnd)
