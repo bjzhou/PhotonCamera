@@ -7,6 +7,19 @@ import org.junit.Test
 
 class GlesMgcRawSpatialShadersTest {
     @Test
+    fun sabreBayerMergePreservesMgcRbfAndCfaContract() {
+        val shader = GlesMgcRawSpatialShaders.sabreMergeBayer
+
+        assertTrue(shader.contains("exp2(-0.5 * kernelDistance) + 0.00005"))
+        assertTrue(shader.contains("pixelOffset.x * pixelOffset.y * covariance.z * 2.0"))
+        assertTrue(shader.contains("uniform sampler2D uCovariance"))
+        assertTrue(shader.contains("uniform sampler2D uFrameWeight"))
+        assertTrue(shader.contains("targetIsGreen"))
+        assertTrue(shader.contains("uBlackLevelsTimesGains[channel]"))
+        assertFalse(shader.contains("uLinearKernelMask"))
+    }
+
+    @Test
     fun bentoHighlightCountUsesBaselineCompatibleGroupedReduction() {
         val shader = GlesMgcRawSpatialShaders.bentoCountHighlightMask
 
@@ -69,5 +82,49 @@ class GlesMgcRawSpatialShadersTest {
         assertTrue(clippingMask.contains("vec2 sourceFlow = texture(uFlow, flowUv).xy"))
         assertFalse(clippingMask.contains("uGains"))
         assertFalse(clippingMask.contains("uExposureRatio"))
+    }
+
+    @Test
+    fun alignmentPyramidPreservesMgcSignedS16BlackResiduals() {
+        val rawToGray = GlesMgcRawSpatialShaders.rawToGray
+        val signedConsumers = listOf(
+            GlesMgcRawSpatialShaders.grayDownsample,
+            GlesMgcRawSpatialShaders.grayDownsample4,
+            GlesMgcRawSpatialShaders.alignmentGradientProducts,
+            GlesMgcRawSpatialShaders.upsampleAlignment,
+            GlesMgcRawSpatialShaders.blockLucasKanade,
+        )
+
+        assertTrue(rawToGray.contains("out highp int oGray"))
+        assertTrue(rawToGray.contains("return (v - uBlackLevels) * uGain"))
+        assertTrue(rawToGray.contains("value + 0.5, -16383.0, 16383.0"))
+        assertFalse(rawToGray.contains("max(v - uBlackLevels"))
+        signedConsumers.forEach { shader ->
+            assertTrue(shader.contains("precision highp isampler2D"))
+            assertFalse(shader.contains("highp usampler2D uReference"))
+            assertFalse(shader.contains("highp usampler2D uCurrent"))
+        }
+    }
+
+    @Test
+    fun alignmentPyramidUsesOriginalSingleQuantizationFourTimesKernel() {
+        val shader = GlesMgcRawSpatialShaders.grayDownsample4
+
+        assertTrue(shader.contains("ivec2(gl_FragCoord.xy) * 4"))
+        assertTrue(shader.contains("for (int y = -3; y <= 3; ++y)"))
+        assertTrue(shader.contains("float(4 - abs(offset)) * (1.0 / 16.0)"))
+        assertTrue(shader.contains("floor(value + 0.5)"))
+        assertFalse(shader.contains("ivec2(gl_FragCoord.xy) * 2"))
+    }
+
+    @Test
+    fun bayerAlignmentUsesConvertAlignmentTileCentreTransport() {
+        val shader = GlesMgcRawSpatialShaders.convertBayerAlignment
+
+        assertTrue(shader.contains("vec2(outputTile) + vec2(0.5)"))
+        assertTrue(shader.contains("uTargetTileStride"))
+        assertTrue(shader.contains("uInterpolationFlowTolerance"))
+        assertTrue(shader.contains("vec2 flow = interpolatedFlow"))
+        assertFalse(shader.contains("uAlignmentToBayerQuads"))
     }
 }

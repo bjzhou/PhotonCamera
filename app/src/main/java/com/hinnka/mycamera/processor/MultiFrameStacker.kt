@@ -22,6 +22,31 @@ enum class MgcSpatialOutputMode {
     RGB,
 }
 
+/** Merge implementations exposed by MGC's ShotParams::merge_method_override. */
+enum class MgcMergeMethod(val mgcValue: Int) {
+    WIENER(0),
+    SABRE(1),
+    SPATIAL_BAYER(2),
+    SPATIAL_RGB(3),
+}
+
+/** User-facing RAWmax processor/output choices. */
+enum class MgcRawMaxMode {
+    SABRE,
+    SPATIAL_BAYER,
+    SPATIAL_RGB;
+
+    val outputMode: MgcSpatialOutputMode
+        get() = if (this == SPATIAL_BAYER) MgcSpatialOutputMode.BAYER else MgcSpatialOutputMode.RGB
+
+    val mergeMethod: MgcMergeMethod
+        get() = when (this) {
+            SABRE -> MgcMergeMethod.SABRE
+            SPATIAL_BAYER -> MgcMergeMethod.SPATIAL_BAYER
+            SPATIAL_RGB -> MgcMergeMethod.SPATIAL_RGB
+        }
+}
+
 /**
  * Physical storage of an opaque LinearRaw texture. RGBA16F is used only for the direct Spatial
  * default-denoise handoff; persistent render/DNG sources use RGBA16UI.
@@ -93,6 +118,18 @@ data class RawStackResult(
      * DNG write.
      */
     val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
+    /**
+     * Classic Sabre's four-channel-uniform NoiseModel coefficient scale.
+     *
+     * MGC derives this process-local value from the reference-frame green SNR, then multiplies
+     * every read/shot/quadratic coefficient in the reference NoiseModel by it before FinishRaw.
+     */
+    val mgcSabreNoiseModelScale: Float? = null,
+    /**
+     * Reference-frame SNR used by MGC FinishRaw to select luma/chroma tuning.
+     * This is the linear signal-domain SNR, not ISO or sensor gain.
+     */
+    val mgcDenoiseTuningSnr: Float? = null,
     /**
      * True only for the debug reference-only isolation path. This state is process-local and is
      * never persisted into RAW/DNG metadata.
@@ -229,6 +266,10 @@ object MultiFrameStacker {
         frames: List<RawStackFrame>,
         cfaPattern: Int,
         outputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
+        mergeMethod: MgcMergeMethod = when (outputMode) {
+            MgcSpatialOutputMode.BAYER -> MgcMergeMethod.SPATIAL_BAYER
+            MgcSpatialOutputMode.RGB -> MgcMergeMethod.SPATIAL_RGB
+        },
         outputScale: Float = 1f,
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
@@ -249,13 +290,16 @@ object MultiFrameStacker {
         val images = frames.map { it.image }
         val width = images[0].width
         val height = images[0].height
-        val effectiveOutputScale = if (outputMode == MgcSpatialOutputMode.BAYER) {
+        val effectiveOutputScale = if (
+            outputMode == MgcSpatialOutputMode.BAYER || mergeMethod == MgcMergeMethod.SABRE
+        ) {
             1f
         } else {
             MultiFrameConfig.normalizeOutputScale(outputScale)
         }
         RawStackRuntimeDebug.d(TAG) {
-            "Starting MGC Spatial ${outputMode.name} fusion for ${images.size} frames. " +
+            "Starting MGC ${if (mergeMethod == MgcMergeMethod.SABRE) "Sabre" else "Spatial ${outputMode.name}"} " +
+                "fusion for ${images.size} frames. " +
                 "Pattern=$cfaPattern outputScale=$effectiveOutputScale " +
                 "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel " +
                 "noiseProfile=${noiseProfileSelection.id} " +
@@ -279,6 +323,7 @@ object MultiFrameStacker {
             lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
             outputMode = outputMode,
+            mergeMethod = mergeMethod,
             outputScale = effectiveOutputScale,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,

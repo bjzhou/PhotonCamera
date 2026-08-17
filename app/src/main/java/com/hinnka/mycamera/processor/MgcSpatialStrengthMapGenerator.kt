@@ -12,11 +12,10 @@ internal object MgcSpatialStrengthMapGenerator {
     private const val TAG = "MgcSpatialStrength"
 
     /**
-     * Identity multiplier for pixels rejected by the temporal merge.
-     *
-     * Zero disables the downstream denoise for rejected pixels and -1 is the
-     * host-side override sentinel; neither is a valid multiplier at the lifted
-     * Halide boundary. One preserves the requested denoise strength.
+     * MGC 9.6.080.5 computes this as max(16384 / (rawMax + 1), 1). Our
+     * fixed16 boundary already occupies the normalized 16-bit working domain,
+     * so the exact result is one. This parameter only scales rejected pixels;
+     * zero values produced by the AOT strength map remain zero.
      */
     private const val REJECTED_DENOISE_MULTIPLIER = 1f
 

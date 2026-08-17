@@ -42,6 +42,41 @@ set_source_files_properties(
     OBJECT_DEPENDS "${MGC_DENOISE_CAPSULE}"
 )
 
+set(
+    MGC_SABRE_CAPSULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_sabre_resolve_capsule.bin"
+)
+set(
+    MGC_SABRE_CAPSULE_SHA256
+    "725c5ac2c2de63e7f17c8fb3516fe176d2387c6eed579da25e35df12588e0e69"
+)
+if(NOT EXISTS "${MGC_SABRE_CAPSULE}")
+    message(
+        FATAL_ERROR
+        "MGC Sabre Resolve capsule is missing; regenerate it with "
+        "scripts/research/generate_mgc_sabre_resolve_static_asm.py"
+    )
+endif()
+file(SHA256 "${MGC_SABRE_CAPSULE}" MGC_SABRE_CAPSULE_ACTUAL_SHA256)
+if(NOT MGC_SABRE_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_SABRE_CAPSULE_SHA256)
+    message(FATAL_ERROR "MGC Sabre Resolve capsule hash mismatch")
+endif()
+set(
+    MGC_SABRE_ASM
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_sabre_resolve_static.S"
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_sabre_resolve_static.S.in"
+    "${MGC_SABRE_ASM}"
+    @ONLY
+)
+set_source_files_properties(
+    "${MGC_SABRE_ASM}"
+    PROPERTIES
+    GENERATED TRUE
+    OBJECT_DEPENDS "${MGC_SABRE_CAPSULE}"
+)
+
 # 4. 添加头文件路径
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/LibRaw)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/src)
@@ -128,8 +163,10 @@ add_library(my-native-lib SHARED
     dcp_parser.cpp
     mgc_denoise_static/mgc_denoise_static.cpp
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
+    mgc_denoise_static/mgc_sabre_resolve_jni.cpp
     mgc_denoise_static/mgc_spatial_strength_jni.cpp
     "${MGC_DENOISE_ASM}"
+    "${MGC_SABRE_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
 )

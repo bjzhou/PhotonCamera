@@ -25,6 +25,7 @@ internal class GlesMgcRawFusion(
     private val lensShadingWidth: Int,
     private val lensShadingHeight: Int,
     private val outputMode: MgcSpatialOutputMode,
+    private val mergeMethod: MgcMergeMethod,
     outputScale: Float,
     private val useCurrentGlContext: Boolean,
     private val exportGpuLinearRgbSource: Boolean,
@@ -42,6 +43,23 @@ internal class GlesMgcRawFusion(
             )
             frames.forEach { it.image.close() }
             return null
+        }
+        if (mergeMethod == MgcMergeMethod.SABRE) {
+            return GlesMgcRawSabreProcessor(
+                width = width,
+                height = height,
+                cfaPattern = cfaPattern,
+                blackLevel = blackLevel,
+                whiteLevel = whiteLevel,
+                whiteBalanceGains = whiteBalanceGains,
+                noiseProfileSelection = noiseProfileSelection,
+                lensShading = lensShading,
+                lensShadingWidth = lensShadingWidth,
+                lensShadingHeight = lensShadingHeight,
+                useCurrentGlContext = useCurrentGlContext,
+                exportGpuLinearRgbSource = exportGpuLinearRgbSource,
+                gpuLinearRgbStorage = gpuLinearRgbStorage,
+            ).processFrames(frames)
         }
 
         val baseIndex = frames.indexOfFirst { it.role == RawBurstFrameRole.NORMAL }
@@ -123,6 +141,7 @@ internal class GlesMgcRawFusion(
             lensShadingWidth = lensShadingWidth,
             lensShadingHeight = lensShadingHeight,
             outputMode = outputMode,
+            mergeMethod = mergeMethod,
             outputScale = outputScale,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,

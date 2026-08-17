@@ -39,4 +39,6 @@ data class CapturedFrameMetadata(
     val gyroWindow: GyroExposureWindow?,
     val channelNoiseProfile: FloatArray? = null,
     val multiFrameCaptureRole: MultiFrameCaptureRole? = null,
+    /** Requested RAW TET in the same proportional units as [exposureProduct], when available. */
+    val desiredExposureProduct: Double? = null,
 )

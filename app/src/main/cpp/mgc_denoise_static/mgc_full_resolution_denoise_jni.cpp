@@ -792,6 +792,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         float yuv_read[3] = {};
         float yuv_shot[3] = {};
         float yuv_quadratic[3] = {};
+        float chroma_shared_shot = 0.0f;
+        float chroma_shared_quadratic = 0.0f;
         if (has_prepared_yuv_noise) {
             std::copy_n(prepared_normalized_yuv_read, 3, yuv_read);
             yuv_shot[0] = prepared_normalized_luma_shot;
@@ -799,6 +801,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             yuv_shot[1] = yuv_shot[2] = prepared_normalized_chroma_shot;
             yuv_quadratic[1] = yuv_quadratic[2] =
                 prepared_normalized_chroma_quadratic;
+            chroma_shared_shot = prepared_normalized_chroma_shot;
+            chroma_shared_quadratic = prepared_normalized_chroma_quadratic;
             __android_log_print(
                 ANDROID_LOG_INFO,
                 kLogTag,
@@ -826,24 +830,25 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                         matrix_squared * prepared_rgb_quadratic[input_channel];
                 }
             }
-            // CompleteS16's shot/quadratic ABI is scalar for chroma. A component-wise maximum
-            // is the conservative representable envelope of the analytic Cb and Cr curves.
-            yuv_shot[1] = yuv_shot[2] = std::max(yuv_shot[1], yuv_shot[2]);
-            yuv_quadratic[1] = yuv_quadratic[2] =
-                std::max(yuv_quadratic[1], yuv_quadratic[2]);
+            // CreateChromaDenoiseNoiseModelBuffers preserves all three read channels, then
+            // slices channel 0 from the shot and quadratic buffers before invoking CompleteS16.
+            // Keep the analytic Y/Cb/Cr model intact and reproduce that exact slice here.
+            chroma_shared_shot = yuv_shot[0];
+            chroma_shared_quadratic = yuv_quadratic[0];
             __android_log_print(
                 ANDROID_LOG_INFO,
                 kLogTag,
                 "MGC analytic YUV noise read=[%.6g,%.6g,%.6g] "
                 "lumaShot=%.6g lumaQuadratic=%.6g "
-                "chromaEnvelopeShot=%.6g chromaEnvelopeQuadratic=%.6g",
+                "chromaSharedChannel0Shot=%.6g "
+                "chromaSharedChannel0Quadratic=%.6g",
                 yuv_read[0],
                 yuv_read[1],
                 yuv_read[2],
                 yuv_shot[0],
                 yuv_quadratic[0],
-                yuv_shot[1],
-                yuv_quadratic[1]);
+                chroma_shared_shot,
+                chroma_shared_quadratic);
         }
         // RgbRawToYuv emits Q14 S16 samples.  Pecan's generated arithmetic
         // consumes variance = read + shot * sample + quadratic * sample^2 in
@@ -859,6 +864,20 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             q14_yuv_read[channel] = yuv_read[channel] * white_squared;
             q14_yuv_shot[channel] = yuv_shot[channel] * white;
         }
+        const float q14_chroma_shared_shot = chroma_shared_shot * white;
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            kLogTag,
+            "MGC Q14 denoise noise luma=[read=%.6g shot=%.6g quadratic=%.6g] "
+            "chroma=[read=%.6g,%.6g,%.6g sharedShot=%.6g sharedQuadratic=%.6g]",
+            q14_yuv_read[0],
+            q14_yuv_shot[0],
+            yuv_quadratic[0],
+            q14_yuv_read[0],
+            q14_yuv_read[1],
+            q14_yuv_read[2],
+            q14_chroma_shared_shot,
+            chroma_shared_quadratic);
 
         const auto rgb_to_yuv_start = StageClock::now();
         int rgb_to_yuv_result = 0;
@@ -907,8 +926,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             photon::mgc_denoise::ChromaDenoiseNoiseBuffers chroma_noise;
             if (!photon::mgc_denoise::BuildChromaNoiseBuffers(
                     q14_yuv_read,
-                    q14_yuv_shot[1],
-                    yuv_quadratic[1],
+                    q14_chroma_shared_shot,
+                    chroma_shared_quadratic,
                     prepared_chroma_correlation,
                     chroma_strength,
                     chroma_outlier,

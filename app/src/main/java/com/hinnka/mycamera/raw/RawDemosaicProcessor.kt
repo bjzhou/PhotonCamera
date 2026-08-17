@@ -35,6 +35,8 @@ import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
+import com.hinnka.mycamera.processor.MgcMergeMethod
+import com.hinnka.mycamera.processor.MgcRawProcessorPipeline
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
 import com.hinnka.mycamera.processor.RawNoiseProfileSelection
@@ -89,7 +91,8 @@ internal data class MgcSpatialGpuDenoiseResult(
 )
 
 internal enum class MgcSpatialGpuDenoiseMode {
-    DEFAULT_DENOISE,
+    SPATIAL_DEFAULT,
+    SABRE_DEFAULT,
     BYPASS_DEFAULT_DENOISE,
 }
 
@@ -249,7 +252,8 @@ class RawDemosaicProcessor {
             mgcDenoiseReadNoise = baseMetadata?.mgcDenoiseReadNoise,
             mgcDenoiseShotNoise = baseMetadata?.mgcDenoiseShotNoise,
             mgcSpatialStrengthMap = baseMetadata?.mgcSpatialStrengthMap,
-            mgcDenoiseTuningGain = baseMetadata?.mgcDenoiseTuningGain,
+            mgcSabreNoiseModelScale = baseMetadata?.mgcSabreNoiseModelScale,
+            mgcDenoiseTuningSnr = baseMetadata?.mgcDenoiseTuningSnr,
             rotation = dngRawData.rotation,
             profileGainTableMap = baseMetadata?.profileGainTableMap
         )
@@ -377,6 +381,7 @@ class RawDemosaicProcessor {
         rawMaxFrameCount: Int,
         rawMaxEnabled: Boolean,
         rawMaxSpatialOutputMode: MgcSpatialOutputMode,
+        rawMaxMergeMethod: MgcMergeMethod = MgcMergeMethod.SPATIAL_BAYER,
         rawMaxHdrCompositionEnabled: Boolean,
     ): Boolean =
         withContext(glDispatcher) {
@@ -431,13 +436,20 @@ class RawDemosaicProcessor {
                         lensShadingWidth = 0,
                         lensShadingHeight = 0,
                         outputMode = rawMaxSpatialOutputMode,
+                        mergeMethod = rawMaxMergeMethod,
                         outputScale = 1f,
                         useCurrentGlContext = true,
                         exportGpuLinearRgbSource = true,
                         gpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16F,
+                        processorPipeline = if (rawMaxMergeMethod == MgcMergeMethod.SABRE) {
+                            MgcRawProcessorPipeline.SABRE
+                        } else {
+                            MgcRawProcessorPipeline.SPATIAL
+                        },
                     ).prewarmCapturePipeline(
                         frameCount = rawMaxFrameCount,
-                        includeBento = rawMaxHdrCompositionEnabled,
+                        includeBento = rawMaxHdrCompositionEnabled &&
+                            rawMaxMergeMethod != MgcMergeMethod.SABRE,
                     )
                     true
                 }.onFailure { error ->
@@ -904,9 +916,9 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Produces normalized RGBA16UI LinearRaw while keeping the Spatial pipeline GPU-resident.
-     * Bayer input is converted to un-white-balanced camera RGB first; Spatial RGB input stays in
-     * the same camera domain. DEFAULT_DENOISE crosses the GPU boundary only through one mapped PBO
+     * Produces normalized RGBA16UI LinearRaw while keeping the MGC merge pipeline GPU-resident.
+     * Bayer input is converted to un-white-balanced camera RGB first; merged RGB input stays in
+     * the same camera domain. A default-denoise mode crosses the GPU boundary through one mapped PBO
      * while the retained CPU AOT black box runs in place, then immediately returns its RGBA16F
      * result to GPU. BYPASS_DEFAULT_DENOISE never leaves GPU.
      */
@@ -922,13 +934,13 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         sourcePixelsIncludeLensShadingCorrection: Boolean,
         applyLensShadingCorrection: Boolean,
-        mode: MgcSpatialGpuDenoiseMode = MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE,
+        mode: MgcSpatialGpuDenoiseMode = MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT,
         lumaStrengthScale: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
         chromaStrengthScale: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
     ): MgcSpatialGpuDenoiseResult? = withContext(glDispatcher) {
         val requestedLumaStrength = DenoiseStrength.clamp(lumaStrengthScale)
         val requestedChromaStrength = DenoiseStrength.clamp(chromaStrengthScale)
-        val applyDefaultDenoise = mode == MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE &&
+        val applyDefaultDenoise = mode != MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE &&
             (requestedLumaStrength > 0f || requestedChromaStrength > 0f)
         val resolvedLumaStrength = if (applyDefaultDenoise) {
             requestedLumaStrength
@@ -958,6 +970,15 @@ class RawDemosaicProcessor {
                         rawData != null -> "CPU"
                         else -> "none"
                     }}",
+            )
+            return@withContext null
+        }
+        if (mode == MgcSpatialGpuDenoiseMode.SABRE_DEFAULT &&
+            (samplesPerPixel !in 3..4 || gpuBayerSource != null)
+        ) {
+            PLog.e(
+                TAG,
+                "MGC Sabre default denoise requires the Sabre linear-RGB resolve output",
             )
             return@withContext null
         }
@@ -1003,19 +1024,19 @@ class RawDemosaicProcessor {
             }
         }
         if (!isInitialized && !initializeOnGlThread()) {
-            PLog.e(TAG, "Unable to initialize RAW context for MGC Spatial default denoise")
+            PLog.e(TAG, "Unable to initialize RAW context for MGC $mode denoise")
             return@withContext null
         }
         if (width > maxTextureSize || height > maxTextureSize) {
             PLog.e(
                 TAG,
-                "MGC Spatial default denoise input ${width}x$height exceeds " +
+                "MGC $mode denoise input ${width}x$height exceeds " +
                     "GL_MAX_TEXTURE_SIZE=$maxTextureSize",
             )
             return@withContext null
         }
         if (applyDefaultDenoise && !MgcFullResolutionDenoise.ensureInitialized(context)) {
-            PLog.e(TAG, "MGC Spatial default denoise kernels are unavailable")
+            PLog.e(TAG, "MGC $mode denoise kernels are unavailable")
             return@withContext null
         }
 
@@ -1317,12 +1338,27 @@ class RawDemosaicProcessor {
                 // Do all CPU-only setup after queuing the readback and before mapping. This lets
                 // parameter preparation overlap the GPU transfer without creating another wait.
                 val parameterStartNs = System.nanoTime()
-                val spatialDenoiseMetadata = spatialOutputNoiseMetadata(denoiseMetadata)
-                val tuningGain = metadata.mgcDenoiseTuningGain
-                    ?: (
-                        metadata.iso.toFloat() / 100f *
-                        metadata.postRawSensitivityBoost
-                        ).coerceAtLeast(0.001f)
+                val defaultDenoiseMetadata = when (mode) {
+                    MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
+                        spatialOutputNoiseMetadata(denoiseMetadata)
+                    MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
+                        sabreOutputNoiseMetadata(denoiseMetadata)
+                    MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
+                        error("Bypass mode entered the MGC default-denoise boundary")
+                }
+                val defaultDenoisePass = when (mode) {
+                    MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
+                        MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT
+                    MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
+                        MgcFullResolutionDenoise.Pass.SABRE_DEFAULT
+                    MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
+                        error("Bypass mode has no MGC full-resolution pass")
+                }
+                val tuningSnr = checkNotNull(metadata.mgcDenoiseTuningSnr?.takeIf {
+                    it.isFinite() && it >= 0f
+                }) {
+                    "MGC $mode default denoise is missing reference-frame SNR"
+                }
                 blackBoxParameterMs =
                     (System.nanoTime() - parameterStartNs) / 1_000_000L
 
@@ -1351,14 +1387,18 @@ class RawDemosaicProcessor {
                         globalOriginY = 0,
                         fullWidth = width,
                         fullHeight = height,
-                        metadata = spatialDenoiseMetadata,
-                        preparedYuvNoiseModel = demosaicNoiseTransfer,
-                        tuningGain = tuningGain,
-                        pass = MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT,
+                        metadata = defaultDenoiseMetadata,
+                        preparedYuvNoiseModel = demosaicNoiseTransfer.takeIf {
+                            mode == MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT
+                        },
+                        applyLensShadingToDenoiseStrength =
+                            mode == MgcSpatialGpuDenoiseMode.SABRE_DEFAULT,
+                        tuningSnr = tuningSnr,
+                        pass = defaultDenoisePass,
                         lumaStrengthScale = resolvedLumaStrength,
                         chromaStrengthScale = resolvedChromaStrength,
                     )
-                ) { "MGC Spatial default luma/chroma denoise failed" }
+                ) { "MGC $mode luma/chroma denoise failed" }
                 nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
 
                 GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, transferBuffer)
@@ -1392,7 +1432,7 @@ class RawDemosaicProcessor {
             } else {
                 PLog.i(
                     TAG,
-                    "MGC Spatial GPU handoff: default luma/chroma denoise bypassed",
+                    "MGC GPU handoff: default luma/chroma denoise bypassed",
                 )
             }
 
@@ -1417,15 +1457,16 @@ class RawDemosaicProcessor {
                 TAG,
                 "MGC Spatial GPU LinearRaw ready: source=$sourceLabel " +
                     "size=${width}x$height pass=${if (applyDefaultDenoise) {
-                        "SPATIAL_DEFAULT"
+                        mode.name
                     } else {
-                        "BYPASS_DEFAULT_DENOISE"
+                        MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE.name
                     }} " +
                     "luma=$resolvedLumaStrength " +
                     "chroma=$resolvedChromaStrength " +
                     "frames=${metadata.frameCount} " +
                     "readNoise=${metadata.mgcDenoiseReadNoise?.contentToString()} " +
                     "shotNoise=${metadata.mgcDenoiseShotNoise?.contentToString()} " +
+                    "sabreNoiseModelScale=${metadata.mgcSabreNoiseModelScale} " +
                     "strengthMap=${metadata.mgcSpatialStrengthMap?.let {
                         "${it.width}x${it.height}"
                     } ?: "none"} " +
@@ -2479,6 +2520,8 @@ class RawDemosaicProcessor {
                 mgcDenoiseReadNoise = null,
                 mgcDenoiseShotNoise = null,
                 mgcSpatialStrengthMap = null,
+                mgcSabreNoiseModelScale = null,
+                mgcDenoiseTuningSnr = null,
             )
             profileGainTableMap?.let {
                 PLog.d(
@@ -6805,7 +6848,10 @@ class RawDemosaicProcessor {
         readback.position(0)
 
         val nativeStartNs = System.nanoTime()
-        val tuningGain = metadata.mgcDenoiseTuningGain
+        // Persisted single-frame sources do not carry MGC's process-local mean-signal
+        // measurement. Keep the existing user-adjustment coordinate fallback separate from
+        // Spatial/Sabre defaults, which require the exact reference-frame SNR above.
+        val tuningSnr = metadata.mgcDenoiseTuningSnr
             ?: (
                 metadata.iso.toFloat() / 100.0f *
                     metadata.postRawSensitivityBoost
@@ -6821,7 +6867,7 @@ class RawDemosaicProcessor {
                 metadata = metadata,
                 preparedYuvNoiseModel = demosaicNoiseTransfer,
                 applyLensShadingToDenoiseStrength = hasValidLensShadingMap(metadata),
-                tuningGain = tuningGain,
+                tuningSnr = tuningSnr,
                 pass = MgcFullResolutionDenoise.Pass.USER_ADJUSTMENT,
                 lumaStrengthScale = lumaStrength,
                 chromaStrengthScale = chromaStrength,
@@ -8883,6 +8929,38 @@ class RawDemosaicProcessor {
                 shot[2], read[2],
             ),
             noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB,
+        )
+    }
+
+    /**
+     * Reproduces classic Sabre's MergeRaw metadata branch (libgcastartup.so+0x388396c).
+     * Sabre retains the reference-frame Bayer NoiseModel and applies the SNR-table variance
+     * reduction uniformly to every read/shot/quadratic coefficient. It does not expose Spatial
+     * correlation or propagated read/shot coefficients.
+     */
+    private fun sabreOutputNoiseMetadata(metadata: RawMetadata): RawMetadata {
+        val scale = checkNotNull(metadata.mgcSabreNoiseModelScale) {
+            "Sabre NoiseModel coefficient scale is unavailable"
+        }
+        check(scale.isFinite() && scale > 0f) {
+            "Sabre NoiseModel coefficient scale is malformed: $scale"
+        }
+        val rgbNoise = checkNotNull(
+            MgcFullResolutionDenoise.resolveUserAdjustmentCameraRgbNoise(metadata),
+        ) { "Sabre physical Bayer noise model is unavailable" }
+        PLog.i(
+            TAG,
+            "MGC Sabre default denoise noise source=reference-bayer*sabre-snr-scale " +
+                "captureFrames=${metadata.frameCount} scale=$scale " +
+                "read=${rgbNoise.read.contentToString()} " +
+                "shot=${rgbNoise.shot.contentToString()}",
+        )
+        return metadata.copy(
+            frameCount = 1,
+            mgcDenoiseCorrelation = null,
+            mgcDenoiseReadNoise = null,
+            mgcDenoiseShotNoise = null,
+            mgcSpatialStrengthMap = null,
         )
     }
 

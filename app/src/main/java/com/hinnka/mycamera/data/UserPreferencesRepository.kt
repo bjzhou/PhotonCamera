@@ -52,6 +52,7 @@ import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.mgc.PhotonLookContract
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.processor.MgcRawMaxMode
 import org.json.JSONObject
 
 /**
@@ -199,7 +200,10 @@ data class UserPreferences(
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
     val useRawMaxHdrComposition: Boolean = MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION, // RAWmax：包围曝光 HDR 融合
-    val useRawMaxSpatialRgb: Boolean = true, // RAWmax：Spatial RGB 默认开启；关闭时保留 Bayer
+    /** RAWmax processor/output selection. */
+    val rawMaxSpatialMode: MgcRawMaxMode = MgcRawMaxMode.SPATIAL_RGB,
+    /** Legacy compatibility mirror; new code should use rawMaxSpatialMode. */
+    val useRawMaxSpatialRgb: Boolean = true,
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
@@ -454,6 +458,8 @@ class UserPreferencesRepository(private val context: Context) {
             booleanPreferencesKey("use_raw_max_hdr_composition")
         private val USE_RAW_MAX_SPATIAL_RGB =
             booleanPreferencesKey("use_raw_max_spatial_rgb")
+        private val RAW_MAX_SPATIAL_MODE =
+            stringPreferencesKey("raw_max_spatial_mode")
         private val LEGACY_USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
@@ -726,7 +732,26 @@ class UserPreferencesRepository(private val context: Context) {
                 useRawMax = useRawMax,
                 useRawMaxHdrComposition = preferences[USE_RAW_MAX_HDR_COMPOSITION]
                     ?: MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION,
-                useRawMaxSpatialRgb = preferences[USE_RAW_MAX_SPATIAL_RGB] ?: true,
+                rawMaxSpatialMode = runCatching {
+                    MgcRawMaxMode.valueOf(
+                        preferences[RAW_MAX_SPATIAL_MODE]
+                            ?: if (preferences[USE_RAW_MAX_SPATIAL_RGB] == false) {
+                                MgcRawMaxMode.SPATIAL_BAYER.name
+                            } else {
+                                MgcRawMaxMode.SPATIAL_RGB.name
+                            },
+                    )
+                }.getOrDefault(MgcRawMaxMode.SPATIAL_RGB),
+                useRawMaxSpatialRgb = runCatching {
+                    MgcRawMaxMode.valueOf(
+                        preferences[RAW_MAX_SPATIAL_MODE]
+                            ?: if (preferences[USE_RAW_MAX_SPATIAL_RGB] == false) {
+                                MgcRawMaxMode.SPATIAL_BAYER.name
+                            } else {
+                                MgcRawMaxMode.SPATIAL_RGB.name
+                            },
+                    ) == MgcRawMaxMode.SPATIAL_RGB
+                }.getOrDefault(true),
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
                     ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
                     MultiFrameConfig.normalizeOutputScale(
@@ -1923,6 +1948,14 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseRawMaxSpatialRgb(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_RAW_MAX_SPATIAL_RGB] = enabled
+        }
+    }
+
+    suspend fun saveRawMaxSpatialMode(mode: MgcRawMaxMode) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_MAX_SPATIAL_MODE] = mode.name
+            // Keep older builds/preferences consumers coherent during migration.
+            preferences[USE_RAW_MAX_SPATIAL_RGB] = mode == MgcRawMaxMode.SPATIAL_RGB
         }
     }
 

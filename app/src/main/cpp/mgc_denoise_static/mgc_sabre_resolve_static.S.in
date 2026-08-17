@@ -1,0 +1,492 @@
+/* Generated mechanically from pinned MGC 9.6.080 V24 ResolveSabreHalide.
+ * Do not edit; regenerate with
+ * scripts/research/generate_mgc_sabre_resolve_static_asm.py.
+ */
+
+#if !defined(__aarch64__)
+#error "MGC Sabre Resolve static lift is arm64-only"
+#endif
+
+    .hidden photon_mgc_halide_error_5ef61ac
+    .hidden photon_mgc_halide_error_5ef6294
+    .hidden photon_mgc_halide_error_5ef636c
+    .hidden photon_mgc_halide_error_5ef63f8
+    .hidden photon_mgc_halide_error_5ef64dc
+    .hidden photon_mgc_halide_error_5ef6568
+    .hidden photon_mgc_halide_error_5ef6600
+    .hidden photon_mgc_halide_error_5ef6794
+    .hidden photon_mgc_halide_error_5ef6a74
+    .hidden photon_mgc_halide_error_5ef6a94
+    .hidden photon_mgc_halide_error_5ef6b6c
+    .hidden photon_mgc_halide_error_5ef6bd8
+    .hidden photon_mgc_halide_error_5ef6c38
+    .hidden photon_mgc_halide_do_par_for
+    .hidden photon_mgc_halide_free
+    .hidden photon_mgc_halide_malloc
+    .hidden photon_mgc_halide_trace
+
+.section .text.photon_mgc.ResolveSabreHalide,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_resolve_sabre_halide
+    .hidden photon_mgc_resolve_sabre_halide
+    .type photon_mgc_resolve_sabre_halide, %function
+photon_mgc_sabre_page_349b000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x0, 0x1b8
+photon_mgc_sabre_address_349b1b8:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x1b8, 0x1fc
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x3b4, 0x4c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x400, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x41c, 0x40
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x45c, 0x18
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x474, 0x1c4
+    adrp x4, photon_mgc_sabre_page_6b1000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x638, 0xe4
+    adrp x2, photon_mgc_sabre_page_6ba000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x71c, 0x8c8
+photon_mgc_sabre_page_349c000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xfe4, 0x1000
+photon_mgc_sabre_page_349d000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x1fe4, 0x1000
+photon_mgc_sabre_page_349e000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x2fe4, 0x48c
+    adrp x9, photon_mgc_sabre_page_6b2000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x3470, 0x8
+    adrp x9, photon_mgc_sabre_page_6b0000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x3478, 0x538
+    adrp x9, photon_mgc_sabre_page_6b2000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x39b0, 0xec
+    adrp x9, photon_mgc_sabre_page_6b0000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x3a9c, 0x1c0
+    adrp x9, photon_mgc_sabre_page_6b9000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x3c5c, 0x200
+    adrp x9, photon_mgc_sabre_page_6ba000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x3e5c, 0x170
+photon_mgc_sabre_page_349f000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x3fcc, 0x834
+    adrp x18, photon_mgc_sabre_page_6b5000
+    adrp x0, photon_mgc_sabre_page_6af000
+    adrp x1, photon_mgc_sabre_page_6b6000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x4800, 0x8
+    adrp x2, photon_mgc_sabre_page_6b1000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x4808, 0x8
+    adrp x3, photon_mgc_sabre_page_6b6000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x4810, 0x4
+    adrp x4, photon_mgc_sabre_page_6b6000
+    adrp x5, photon_mgc_sabre_page_6b9000
+    adrp x6, photon_mgc_sabre_page_6b0000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x4814, 0x5ac
+    adrp x9, photon_mgc_sabre_page_6b2000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x4dc0, 0x8
+    adrp x9, photon_mgc_sabre_page_6b0000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x4dc8, 0x1dc
+photon_mgc_sabre_page_34a0000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x4fa4, 0x364
+    adrp x9, photon_mgc_sabre_page_6b2000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x5308, 0xec
+    adrp x9, photon_mgc_sabre_page_6b0000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x53f4, 0x1d0
+    adrp x9, photon_mgc_sabre_page_6b9000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x55c4, 0x200
+    adrp x9, photon_mgc_sabre_page_6ba000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x57c4, 0x7d0
+photon_mgc_sabre_page_34a1000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x5f94, 0x1fc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x6190, 0x54
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x61e4, 0x94
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x6278, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x62c0, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x62dc, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x6314, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x6334, 0x298
+    adrp x9, photon_mgc_sabre_page_6ba000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x65cc, 0x18
+    adrp x8, photon_mgc_sabre_page_6b1000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x65e4, 0x98c
+photon_mgc_sabre_page_34a2000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x6f70, 0x1000
+photon_mgc_sabre_page_34a3000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x7f70, 0x80c
+    adrp x8, photon_mgc_sabre_page_6b2000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x877c, 0xc
+    adrp x8, photon_mgc_sabre_page_6b0000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x8788, 0x544
+    adrp x8, photon_mgc_sabre_page_6b2000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x8ccc, 0xec
+    adrp x8, photon_mgc_sabre_page_6b0000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x8db8, 0x1a8
+photon_mgc_sabre_page_34a4000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x8f60, 0x8
+    adrp x15, photon_mgc_sabre_page_6b9000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x8f68, 0x208
+    adrp x8, photon_mgc_sabre_page_6ba000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9170, 0x9d8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9b48, 0x60
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ba8, 0xa8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9c50, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9c60, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9c70, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9c7c, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9c8c, 0x4c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9cd8, 0x8
+    adrp x2, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ce0, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ce4, 0x4
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ce8, 0xc
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9cf4, 0x8
+    adrp x2, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9cfc, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d00, 0x8
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d08, 0x24
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d2c, 0x8
+    adrp x2, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d34, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d38, 0x8
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d40, 0x40
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d80, 0x1c
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9d9c, 0x3c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9dd8, 0x18
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9df0, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9e2c, 0x7c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ea8, 0x10
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9eb8, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ec0, 0x10
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ed0, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+photon_mgc_sabre_page_34a5000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9ee4, 0x1c
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9f00, 0x10
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9f10, 0x3c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9f4c, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9f60, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9f68, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9f7c, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9fa0, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9fb0, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9fd0, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9fdc, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0x9fec, 0x54
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa040, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa068, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa094, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa0b8, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa0e8, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa10c, 0x48
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa154, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa184, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa1c0, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa1e8, 0x20
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa208, 0x48
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa250, 0x4c
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa29c, 0x34
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa2d0, 0x48
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa318, 0x48
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa360, 0x4c
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa3ac, 0x50
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa3fc, 0x48
+photon_mgc_sabre_address_34a55d4:
+photon_mgc_resolve_sabre_halide:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa444, 0xcc
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa510, 0x2c0
+    adrp x15, photon_mgc_sabre_page_6b4000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa7d0, 0x30
+    adrp x15, photon_mgc_sabre_page_6b4000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa800, 0x54
+    adrp x17, photon_mgc_sabre_page_6ae000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa854, 0x2c
+    adrp x2, photon_mgc_sabre_page_6b9000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa880, 0xc4
+    adrp x17, photon_mgc_sabre_page_6aa000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xa944, 0x440
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xad84, 0x40
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xadc4, 0x4c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xae10, 0x3c
+photon_mgc_sabre_page_34a6000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xae4c, 0x4
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xae50, 0x30
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xae80, 0x2c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xaeac, 0x48
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xaef4, 0x34
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xaf28, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xaf2c, 0x28
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xaf54, 0x38
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xaf8c, 0x2c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xafb8, 0x28
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xafe0, 0x28
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb008, 0x3c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb044, 0x34
+    b photon_mgc_halide_error_5ef63f8
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb078, 0x240
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb2b8, 0x34
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb2ec, 0x28
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb314, 0x28
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb33c, 0x20
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb35c, 0x24
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb380, 0x20
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb3a0, 0x3c
+    b photon_mgc_halide_error_5ef6600
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb3dc, 0x28
+    adrp x22, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb404, 0x4
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb408, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb428, 0x8c
+    adrp x1, photon_mgc_sabre_page_6145000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb4b4, 0x1d4
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb688, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb69c, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb6bc, 0x38
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb6f4, 0x4
+    adrp x2, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb6f8, 0x40
+    b photon_mgc_halide_error_5ef61ac
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb738, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb740, 0xc
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb74c, 0x30
+    b photon_mgc_halide_error_5ef6a94
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb77c, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb784, 0x38
+    b photon_mgc_halide_error_5ef6294
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb7bc, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb7c4, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb7cc, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb7dc, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb7ec, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb7fc, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb804, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb814, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb824, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb82c, 0x34
+    b photon_mgc_halide_error_5ef6b6c
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb860, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb870, 0x3c
+    b photon_mgc_halide_error_5ef64dc
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb8ac, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb8b4, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb8bc, 0x34
+    b photon_mgc_halide_error_5ef6bd8
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb8f0, 0x4
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb8f4, 0x18
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb90c, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb91c, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb930, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb940, 0x18
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb958, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb96c, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb970, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb984, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb994, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb9a8, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb9ac, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb9c0, 0x34
+    b photon_mgc_halide_error_5ef636c
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb9f4, 0x4
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xb9f8, 0x10
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xba08, 0x38
+    b photon_mgc_halide_error_5ef6568
+    .incbin "@MGC_SABRE_CAPSULE@", 0xba40, 0x8
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xba48, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xba4c, 0x14
+    adrp x1, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xba60, 0x4
+    adrp x3, photon_mgc_sabre_page_b9b000
+    .incbin "@MGC_SABRE_CAPSULE@", 0xba64, 0x34
+    b photon_mgc_halide_error_5ef6794
+    .incbin "@MGC_SABRE_CAPSULE@", 0xba98, 0x284
+
+.section .rodata.photon_mgc.sabre_page_6aa000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6aa000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xbd1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6ae000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6ae000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xcd1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6af000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6af000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xdd1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6b0000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6b0000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xed1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6b1000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6b1000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0xfd1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6b2000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6b2000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x10d1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6b4000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6b4000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x11d1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6b5000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6b5000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x12d1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6b6000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6b6000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x13d1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6b9000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6b9000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x14d1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_6ba000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6ba000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x15d1c, 0x1000
+
+.section .rodata.photon_mgc.sabre_page_b9b000,"a",@progbits
+    .p2align 12
+photon_mgc_sabre_page_b9b000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x16d1c, 0x1000
+
+.section .data.rel.ro.photon_mgc.sabre_page_6145000,"aw",@progbits
+    .p2align 12
+photon_mgc_sabre_page_6145000:
+    .incbin "@MGC_SABRE_CAPSULE@", 0x17d1c, 0x810
+    .xword photon_mgc_sabre_address_349b1b8
+    .incbin "@MGC_SABRE_CAPSULE@", 0x1852c, 0x7e8
+
+.section .note.GNU-stack,"",@progbits

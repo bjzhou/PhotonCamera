@@ -134,8 +134,10 @@ data class RawMetadata(
     val mgcDenoiseShotNoise: FloatArray? = null,
     /** Exact process-local Q8 Spatial variance multiplier; never serialized into DNG. */
     val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
-    /** Gain coordinate used by luma_denoise_default.binarypb. */
-    val mgcDenoiseTuningGain: Float? = null,
+    /** Classic Sabre's process-local, four-channel-uniform NoiseModel coefficient scale. */
+    val mgcSabreNoiseModelScale: Float? = null,
+    /** Reference-frame SNR used by MGC FinishRaw to select luma/chroma tuning. */
+    val mgcDenoiseTuningSnr: Float? = null,
     val rotation: Int? = null,
     val profileGainTableMap: DngProfileGainTableMap? = null
 ) {
@@ -1066,7 +1068,8 @@ data class RawMetadata(
             if (!mgcDenoiseShotNoise.contentEquals(other.mgcDenoiseShotNoise)) return false
         } else if (other.mgcDenoiseShotNoise != null) return false
         if (mgcSpatialStrengthMap != other.mgcSpatialStrengthMap) return false
-        if (mgcDenoiseTuningGain != other.mgcDenoiseTuningGain) return false
+        if (mgcSabreNoiseModelScale != other.mgcSabreNoiseModelScale) return false
+        if (mgcDenoiseTuningSnr != other.mgcDenoiseTuningSnr) return false
         if (rotation != other.rotation) return false
 
         return true
@@ -1098,7 +1101,8 @@ data class RawMetadata(
         result = 31 * result + (mgcDenoiseReadNoise?.contentHashCode() ?: 0)
         result = 31 * result + (mgcDenoiseShotNoise?.contentHashCode() ?: 0)
         result = 31 * result + (mgcSpatialStrengthMap?.hashCode() ?: 0)
-        result = 31 * result + (mgcDenoiseTuningGain?.hashCode() ?: 0)
+        result = 31 * result + (mgcSabreNoiseModelScale?.hashCode() ?: 0)
+        result = 31 * result + (mgcDenoiseTuningSnr?.hashCode() ?: 0)
         result = 31 * result + (rotation ?: 0)
         return result
     }

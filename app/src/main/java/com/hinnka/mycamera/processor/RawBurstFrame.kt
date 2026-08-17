@@ -58,6 +58,8 @@ data class RawStackFrame(
     val exposureTimeNs: Long = 0L,
     val sensitivityIso: Int = 0,
     val exposureProduct: Double = 1.0,
+    /** Requested RAW TET; MGC compares this with the reference frame's actual TET. */
+    val desiredExposureProduct: Double? = null,
     val focusDistanceDiopters: Float = Float.NaN,
     val lensState: Int? = null,
     val rollingShutterSkewNs: Long? = null,

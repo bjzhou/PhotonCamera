@@ -39,6 +39,7 @@ import com.hinnka.mycamera.processor.GpuBayerSource
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
+import com.hinnka.mycamera.processor.MgcMergeMethod
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.processor.RawStackBufferLayout
@@ -3198,6 +3199,7 @@ object GalleryManager {
         rawStackFrames: List<RawStackFrame> = emptyList(),
         rawMaxHdrFusionEnabled: Boolean = true,
         rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
+        rawMaxMergeMethod: MgcMergeMethod = MgcMergeMethod.SPATIAL_BAYER,
     ) = withContext(Dispatchers.IO) {
         var stackProcessor: RawDemosaicProcessor? = null
         var gpuSourceToRelease: GpuLinearRgbSource? = null
@@ -3313,6 +3315,7 @@ object GalleryManager {
                     exportGpuLinearRgbSource = true,
                     gpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16F,
                     enableHdrFusion = rawMaxHdrFusionEnabled,
+                    mergeMethod = rawMaxMergeMethod,
                 )
             }
 
@@ -3333,7 +3336,7 @@ object GalleryManager {
                 ?: if (finalStackResult.bufferLayout == RawStackBufferLayout.LINEAR_RGB) 3 else 1
             val spatialInputRowStepSamples = finalStackResult.inputRowStepSamples
                 ?: finalStackResult.width * spatialInputSamples
-            val spatialMergeMetadata = rawMetadata.copy(
+            val mergeOutputMetadata = rawMetadata.copy(
                 width = finalStackResult.width,
                 height = finalStackResult.height,
                 blackLevel = if (finalStackResult.isNormalizedSensorData) {
@@ -3351,27 +3354,44 @@ object GalleryManager {
                 mgcDenoiseReadNoise = finalStackResult.mgcDenoiseReadNoise,
                 mgcDenoiseShotNoise = finalStackResult.mgcDenoiseShotNoise,
                 mgcSpatialStrengthMap = finalStackResult.mgcSpatialStrengthMap,
+                mgcSabreNoiseModelScale =
+                    finalStackResult.mgcSabreNoiseModelScale,
+                mgcDenoiseTuningSnr = finalStackResult.mgcDenoiseTuningSnr,
             )
-            val spatialLumaStrength = RawDenoiseDefaults.normalize(
+            val configuredRawMaxLumaStrength = RawDenoiseDefaults.normalize(
                 metadata.rawDenoiseValue ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
             )
-            val spatialChromaStrength = RawDenoiseDefaults.normalize(
+            val configuredRawMaxChromaStrength = RawDenoiseDefaults.normalize(
                 metadata.rawChromaDenoiseValue
                     ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
             )
-            val spatialDenoiseRequested =
-                spatialLumaStrength > 0f || spatialChromaStrength > 0f
-            val spatialDenoiseModelAvailable =
-                MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE &&
-                    !finalStackResult.mgcSpatialReferenceOnlyDiagnostic &&
-                    finalStackResult.mgcDenoiseCorrelation?.size == 128 &&
-                    finalStackResult.mgcDenoiseReadNoise?.size == 3 &&
-                    finalStackResult.mgcDenoiseShotNoise?.size == 3
-            if (spatialDenoiseRequested && !spatialDenoiseModelAvailable) {
+            val defaultDenoiseRequested =
+                (configuredRawMaxLumaStrength > 0f || configuredRawMaxChromaStrength > 0f)
+            val defaultDenoiseMode = when {
+                !defaultDenoiseRequested ->
+                    MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE
+                rawMaxMergeMethod == MgcMergeMethod.SABRE ->
+                    MgcSpatialGpuDenoiseMode.SABRE_DEFAULT
+                else -> MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT
+            }
+            val defaultDenoiseModelAvailable = when (defaultDenoiseMode) {
+                MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
+                    finalStackResult.mgcSabreNoiseModelScale?.let {
+                        it.isFinite() && it > 0f
+                    } == true
+                MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
+                    MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE &&
+                        !finalStackResult.mgcSpatialReferenceOnlyDiagnostic &&
+                        finalStackResult.mgcDenoiseCorrelation?.size == 128 &&
+                        finalStackResult.mgcDenoiseReadNoise?.size == 3 &&
+                        finalStackResult.mgcDenoiseShotNoise?.size == 3
+                MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE -> true
+            }
+            if (defaultDenoiseRequested && !defaultDenoiseModelAvailable) {
                 PLog.e(
                     TAG,
                     "RAW stack aborted: configured RAWmax base denoise cannot be baked " +
-                        "without a complete Spatial noise model",
+                        "without a complete ${rawMaxMergeMethod.name} noise model",
                 )
                 return@withContext
             }
@@ -3384,28 +3404,33 @@ object GalleryManager {
                 samplesPerPixel = spatialInputSamples,
                 gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
                 gpuBayerSource = finalStackResult.gpuBayerSource,
-                metadata = spatialMergeMetadata,
+                metadata = mergeOutputMetadata,
                 sourcePixelsIncludeLensShadingCorrection =
                     finalStackResult.lensShadingCorrectionApplied,
                 applyLensShadingCorrection = applyRawLensShading,
-                mode = if (spatialDenoiseRequested) {
-                    MgcSpatialGpuDenoiseMode.DEFAULT_DENOISE
+                mode = defaultDenoiseMode,
+                lumaStrengthScale = if (defaultDenoiseRequested) {
+                    configuredRawMaxLumaStrength
                 } else {
-                    MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE
+                    0f
                 },
-                lumaStrengthScale = spatialLumaStrength,
-                chromaStrengthScale = spatialChromaStrength,
+                chromaStrengthScale = if (defaultDenoiseRequested) {
+                    configuredRawMaxChromaStrength
+                } else {
+                    0f
+                },
             )
             if (defaultDenoised == null) {
                 PLog.e(
                     TAG,
-                    "RAW stack aborted: MGC Spatial processing did not produce a GPU " +
+                    "RAW stack aborted: MGC ${rawMaxMergeMethod.name} processing did not " +
+                        "produce a GPU " +
                         "LinearRaw source",
                 )
                 return@withContext
             }
             val defaultDenoisedGpuSource = defaultDenoised.gpuLinearRgbSource
-            // Spatial CFA/RGBA storage and its process-local denoise model have both been
+            // Merge storage and its process-local denoise model have both been
             // consumed. Downstream consumers keep the normalized default-denoised result on GPU.
             releaseInitialFusedBuffer()
             gpuSourceToRelease = defaultDenoisedGpuSource
@@ -3416,7 +3441,7 @@ object GalleryManager {
                 processor.releaseGpuLinearRgbSource(finalStackResult.gpuLinearRgbSource)
             }
             processor.releaseGpuBayerSource(finalStackResult.gpuBayerSource)
-            val stackedRawMetadata = spatialMergeMetadata.copy(
+            val stackedRawMetadata = mergeOutputMetadata.copy(
                 blackLevel = FloatArray(4),
                 whiteLevel = 65535f,
                 frameCount = 1,
@@ -3424,13 +3449,29 @@ object GalleryManager {
                 mgcDenoiseReadNoise = null,
                 mgcDenoiseShotNoise = null,
                 mgcSpatialStrengthMap = null,
+                mgcSabreNoiseModelScale = null,
+                mgcDenoiseTuningSnr = null,
             )
 
             val outputRawBlackBorderCrop =
                 metadata.rawBlackBorderCrop.scaledForOutput(rawStackOutputScale)
             val stackedMetadata = metadata
                 .withNormalizedRawLevelCorrectionsCleared("MGC default-denoised RAW stack")
-                .copy(rawBlackBorderCrop = outputRawBlackBorderCrop)
+                .copy(
+                    rawBlackBorderCrop = outputRawBlackBorderCrop,
+                    // These fields describe the processor-specific FinishRaw denoise already
+                    // baked into LinearRaw; the merge itself remains represented by the pixels.
+                    rawDenoiseValue = if (defaultDenoiseRequested) {
+                        configuredRawMaxLumaStrength
+                    } else {
+                        0f
+                    },
+                    rawChromaDenoiseValue = if (defaultDenoiseRequested) {
+                        configuredRawMaxChromaStrength
+                    } else {
+                        0f
+                    },
+                )
             if (outputRawBlackBorderCrop != metadata.rawBlackBorderCrop) {
                 PLog.i(
                     TAG,
@@ -4233,6 +4274,7 @@ object GalleryManager {
         rawStackFrames: List<RawStackFrame> = emptyList(),
         rawMaxHdrFusionEnabled: Boolean = true,
         rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
+        rawMaxMergeMethod: MgcMergeMethod = MgcMergeMethod.SPATIAL_BAYER,
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -4278,6 +4320,7 @@ object GalleryManager {
                     rawStackFrames,
                     rawMaxHdrFusionEnabled,
                     rawMaxSpatialOutputMode,
+                    rawMaxMergeMethod,
                 )
             }
 

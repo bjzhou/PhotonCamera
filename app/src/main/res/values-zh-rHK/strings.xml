@@ -227,6 +227,11 @@
     <string name="settings_use_raw_max">RAWmax</string>
     <string name="settings_raw_max_hdr_composition">RAWmax HDR 合成</string>
     <string name="settings_raw_max_hdr_composition_description">在 RAWmax 中使用包圍曝光進行 HDR 融合。關閉可提升處理效能。</string>
+    <string name="settings_raw_max_spatial_mode">RAWmax 融合模式</string>
+    <string name="settings_raw_max_spatial_mode_description">選擇 RAWmax 的處理器與輸出佈局。</string>
+    <string name="settings_raw_max_mode_sabre">Sabre</string>
+    <string name="settings_raw_max_mode_spatial_bayer">Spatial Bayer</string>
+    <string name="settings_raw_max_mode_spatial_rgb">Spatial RGB</string>
     <string name="settings_use_multiple_exposure">多重曝光</string>
     <string name="multiple_exposure_finish">完成</string>
     <string name="multiple_exposure_undo">復原</string>

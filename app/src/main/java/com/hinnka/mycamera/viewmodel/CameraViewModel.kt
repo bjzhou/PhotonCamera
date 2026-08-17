@@ -52,6 +52,8 @@ import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.RawBurstGyroSelector
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
+import com.hinnka.mycamera.processor.MgcMergeMethod
+import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.processor.RawmaxExposurePlanner
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
@@ -1673,6 +1675,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useRawMaxSpatialRgb: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMaxSpatialRgb }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val rawMaxSpatialMode: StateFlow<MgcRawMaxMode> = userPreferencesRepository.userPreferences
+        .map { it.rawMaxSpatialMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MgcRawMaxMode.SPATIAL_RGB)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -2757,11 +2762,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             captureHeight = captureSize.height,
                             rawMaxFrameCount = rawMaxFrameCount,
                             rawMaxEnabled = rawMaxEnabled,
-                            rawMaxSpatialOutputMode = if (prefs.useRawMaxSpatialRgb) {
-                                MgcSpatialOutputMode.RGB
-                            } else {
-                                MgcSpatialOutputMode.BAYER
-                            },
+                            rawMaxSpatialOutputMode = prefs.rawMaxSpatialMode.outputMode,
+                            rawMaxMergeMethod = prefs.rawMaxSpatialMode.mergeMethod,
                             rawMaxHdrCompositionEnabled = rawMaxHdrCompositionEnabled,
                         )
                     }.onFailure { error ->
@@ -4554,6 +4556,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setRawMaxSpatialMode(mode: MgcRawMaxMode) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawMaxSpatialMode(mode)
+        }
+    }
+
     /**
      * 设置多帧合成帧数
      */
@@ -5929,6 +5937,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             exposureProduct = metadata?.exposureProduct
                 ?: captureResult?.let(::captureExposureProduct)
                 ?: 1.0,
+            desiredExposureProduct = metadata?.desiredExposureProduct
+                ?: captureResult?.let { result ->
+                    RawExposureMath.productOrNull(
+                        result.request.get(android.hardware.camera2.CaptureRequest.SENSOR_EXPOSURE_TIME),
+                        result.request.get(android.hardware.camera2.CaptureRequest.SENSOR_SENSITIVITY),
+                    )
+                },
             focusDistanceDiopters = metadata?.focusDistanceDiopters
                 ?: captureResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
                 ?: Float.NaN,
@@ -6004,12 +6019,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            val rawSpatialOutputMode = if (
-                isRawStack && userPrefs?.useRawMaxSpatialRgb == true
-            ) {
-                MgcSpatialOutputMode.RGB
+            val rawMaxMode = userPrefs?.rawMaxSpatialMode ?: MgcRawMaxMode.SPATIAL_RGB
+            val rawSpatialOutputMode = if (isRawStack) {
+                rawMaxMode.outputMode
             } else {
                 MgcSpatialOutputMode.BAYER
+            }
+            val rawMaxMergeMethod = if (isRawStack) {
+                rawMaxMode.mergeMethod
+            } else {
+                MgcMergeMethod.SPATIAL_BAYER
             }
             val useSuperRes = useRawMax.value &&
                 (!isRawStack || rawSpatialOutputMode == MgcSpatialOutputMode.RGB)
@@ -6176,6 +6195,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     rawStackFrames = frames,
                     rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
                     rawMaxSpatialOutputMode = rawSpatialOutputMode,
+                    rawMaxMergeMethod = rawMaxMergeMethod,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")

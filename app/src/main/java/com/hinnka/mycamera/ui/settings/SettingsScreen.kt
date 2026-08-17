@@ -93,6 +93,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.processor.MgcRawMaxMode
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -304,7 +305,12 @@ fun SettingsScreen(
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useJpgMaxHdrComposition by viewModel.useJpgMaxHdrComposition.collectAsState()
     val useRawMaxHdrComposition by viewModel.useRawMaxHdrComposition.collectAsState()
-    val useRawMaxSpatialRgb by viewModel.useRawMaxSpatialRgb.collectAsState()
+    val rawMaxSpatialMode by viewModel.rawMaxSpatialMode.collectAsState()
+    val rawMaxSpatialModeOptions = listOf(
+        MgcRawMaxMode.SABRE to stringResource(R.string.settings_raw_max_mode_sabre),
+        MgcRawMaxMode.SPATIAL_BAYER to stringResource(R.string.settings_raw_max_mode_spatial_bayer),
+        MgcRawMaxMode.SPATIAL_RGB to stringResource(R.string.settings_raw_max_mode_spatial_rgb),
+    )
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
@@ -1772,16 +1778,24 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_raw_max_spatial_rgb),
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_raw_max_spatial_mode),
                             description = stringResource(
-                                R.string.settings_raw_max_spatial_rgb_description
+                                R.string.settings_raw_max_spatial_mode_description
                             ),
-                            checked = useRawMaxSpatialRgb,
-                            onCheckedChange = viewModel::setUseRawMaxSpatialRgb
+                            value = rawMaxSpatialModeOptions.first { it.first == rawMaxSpatialMode }.second,
+                            options = rawMaxSpatialModeOptions.map { it.second },
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { selectedLabel ->
+                                rawMaxSpatialModeOptions
+                                    .firstOrNull { it.second == selectedLabel }
+                                    ?.first
+                                    ?.let(viewModel::setRawMaxSpatialMode)
+                            },
                         )
 
-                        if (useRawMaxSpatialRgb) {
+                        if (rawMaxSpatialMode == MgcRawMaxMode.SPATIAL_RGB) {
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
                                 modifier = Modifier.padding(vertical = 12.dp)

@@ -16,7 +16,6 @@ constexpr char kTag[] = "PLog_MgcSpatialStrength";
 constexpr float kIdentityMultiplier = 1.0f;
 constexpr float kIdentityReadNoise = 0.0f;
 constexpr float kIdentityShotNoise = 1.0f;
-constexpr uint16_t kIdentityStrengthQ8 = 256;
 
 bool CopyFloatArray(
     JNIEnv* env,
@@ -247,21 +246,6 @@ Java_com_hinnka_mycamera_processor_MgcSpatialStrengthMapGenerator_nativeCompute(
                 rejection_height,
                 frame_count);
             return result;
-        }
-        int identity_strength_replacements = 0;
-        for (uint16_t& value : output) {
-            if (value != 0) continue;
-            value = kIdentityStrengthQ8;
-            ++identity_strength_replacements;
-        }
-        if (identity_strength_replacements > 0) {
-            __android_log_print(
-                ANDROID_LOG_WARN,
-                kTag,
-                "MGC Spatial strength replaced zero Q8 outputs with identity "
-                "count=%d identityQ8=%u",
-                identity_strength_replacements,
-                static_cast<unsigned int>(kIdentityStrengthQ8));
         }
         uint16_t minimum = std::numeric_limits<uint16_t>::max();
         uint16_t maximum = 0;

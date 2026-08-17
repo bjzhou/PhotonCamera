@@ -6,7 +6,6 @@ import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackRuntimeDebug
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
-import kotlin.math.ln
 
 /**
  * Host bridge for the non-AI MGC 9.6.080 V24 full-resolution denoise chain.
@@ -17,8 +16,9 @@ import kotlin.math.ln
  * before RunFullResolutionDenoise/Pecan.
  *
  * This class owns luma/chroma protobuf tuning selection and normalized
- * noise-model preparation. Multi-frame correlation and coefficients come
- * from the Spatial noise-model kernel's exact outputs and diagnostics. The
+ * noise-model preparation. Spatial consumes its propagated correlation/coefficient/strength
+ * outputs; classic Sabre consumes its dedicated luma tuning and scales the complete reference
+ * NoiseModel by its reference-SNR-derived variance reduction factor. The
  * native bridge converts normalized read/shot/quadratic coefficients exactly once at
  * the Q14 S16 kernel boundary.
  */
@@ -26,6 +26,8 @@ internal object MgcFullResolutionDenoise {
     private const val TAG = "MgcFullResolutionDenoise"
     private const val LUMA_TUNING_ASSET =
         "mgc_denoise/luma_denoise_default.binarypb"
+    private const val SABRE_LUMA_TUNING_ASSET =
+        "mgc_denoise/sabre_luma_denoise.binarypb"
     private const val CHROMA_TUNING_ASSET =
         "mgc_denoise/chroma_denoise.binarypb"
 
@@ -36,13 +38,14 @@ internal object MgcFullResolutionDenoise {
     )
 
     /**
-     * Spatial defaults consume the merge-propagated noise model exactly once before DNG write.
+     * Merge defaults consume their processor-specific model exactly once before DNG write.
      * User adjustment deliberately ignores Spatial merge diagnostics. When the caller supplies
      * a measured demosaic model it consumes the propagated spectrum/YUV coefficients and applies
      * LSC through the identity base-strength map; otherwise it retains the identity fallback.
      */
     enum class Pass {
         SPATIAL_DEFAULT,
+        SABRE_DEFAULT,
         USER_ADJUSTMENT,
     }
 
@@ -60,8 +63,9 @@ internal object MgcFullResolutionDenoise {
      * Noise model at MGC's white-balanced Y/Cb/Cr boundary after NoiseModel.Scale(2).
      *
      * ChromaDenoisePyramidComplete keeps per-channel read variance, but its generated ABI
-     * accepts only one shared shot/quadratic curve for Cb and Cr. Keeping that dimensionality
-     * explicit prevents the luma curve from being selected accidentally by a sliced buffer.
+     * accepts only one shared shot/quadratic curve. The measured VGN path stores its fitted
+     * shared chroma curve here; the ordinary MGC NoiseModel path instead reproduces the
+     * original builder's channel-0 slice directly in native code.
      */
     data class PreparedYuvNoiseModel(
         val normalizedRead: FloatArray,
@@ -74,7 +78,7 @@ internal object MgcFullResolutionDenoise {
     )
 
     private data class TuningPoint(
-        val gain: Float,
+        val snr: Float,
         val tuning: Tuning,
     )
 
@@ -83,6 +87,7 @@ internal object MgcFullResolutionDenoise {
     @Volatile
     private var initializationFailed = false
     private var lumaTuningPoints: List<TuningPoint> = emptyList()
+    private var sabreLumaTuningPoints: List<TuningPoint> = emptyList()
     private var chromaTuningPoints: List<TuningPoint> = emptyList()
 
     @Synchronized
@@ -93,22 +98,29 @@ internal object MgcFullResolutionDenoise {
             val assets = context.applicationContext.assets
             val lumaTuningBytes =
                 assets.open(LUMA_TUNING_ASSET).use { it.readBytes() }
+            val sabreLumaTuningBytes =
+                assets.open(SABRE_LUMA_TUNING_ASSET).use { it.readBytes() }
             val chromaTuningBytes =
                 assets.open(CHROMA_TUNING_ASSET).use { it.readBytes() }
             lumaTuningPoints = parseTuning(lumaTuningBytes)
+            sabreLumaTuningPoints = parseTuning(sabreLumaTuningBytes)
             chromaTuningPoints = parseTuning(chromaTuningBytes)
             check(lumaTuningPoints.size >= 2) {
-                "MGC luma tuning contains fewer than two gain points"
+                "MGC luma tuning contains fewer than two SNR points"
+            }
+            check(sabreLumaTuningPoints.size >= 2) {
+                "MGC Sabre luma tuning contains fewer than two SNR points"
             }
             check(chromaTuningPoints.size >= 2) {
-                "MGC chroma tuning contains fewer than two gain points"
+                "MGC chroma tuning contains fewer than two SNR points"
             }
             initialized = true
             PLog.i(
                 TAG,
                 "MGC RunFullResolutionDenoise static kernels ready: " +
-                    "lumaGains=${lumaTuningPoints.map { it.gain }} " +
-                    "chromaGains=${chromaTuningPoints.map { it.gain }}",
+                    "lumaSnr=${lumaTuningPoints.map { it.snr }} " +
+                    "sabreLumaSnr=${sabreLumaTuningPoints.map { it.snr }} " +
+                    "chromaSnr=${chromaTuningPoints.map { it.snr }}",
             )
             true
         }.onFailure { error ->
@@ -136,7 +148,7 @@ internal object MgcFullResolutionDenoise {
         metadata: RawMetadata,
         preparedYuvNoiseModel: PreparedYuvNoiseModel? = null,
         applyLensShadingToDenoiseStrength: Boolean = false,
-        tuningGain: Float,
+        tuningSnr: Float,
         pass: Pass,
         lumaStrengthScale: Float,
         chromaStrengthScale: Float,
@@ -151,6 +163,7 @@ internal object MgcFullResolutionDenoise {
             return false
         }
         val useSpatialModel = pass == Pass.SPATIAL_DEFAULT
+        val useSabreModel = pass == Pass.SABRE_DEFAULT
         if (preparedYuvNoiseModel != null &&
             (inputLayout != InputLayout.CAMERA_RGBA16F ||
                 !validPreparedYuvNoise(preparedYuvNoiseModel))
@@ -201,6 +214,7 @@ internal object MgcFullResolutionDenoise {
 
         val rgbRead: FloatArray
         val rgbShot: FloatArray
+        val sabreNoiseModelScale: Float
         if (useSpatialModel) {
             rgbRead = metadata.mgcDenoiseReadNoise?.copyOf()
                 ?: run {
@@ -222,22 +236,46 @@ internal object MgcFullResolutionDenoise {
                 )
                 return false
             }
+            sabreNoiseModelScale = 1f
         } else {
             val resolvedNoise = resolveUserAdjustmentCameraRgbNoise(metadata)
             if (resolvedNoise == null) {
                 PLog.w(TAG, "MGC denoise skipped: RAW noise profile is unavailable")
                 return false
             }
-            rgbShot = resolvedNoise.shot
-            rgbRead = resolvedNoise.read
+            sabreNoiseModelScale = if (useSabreModel) {
+                metadata.mgcSabreNoiseModelScale?.takeIf {
+                    it.isFinite() && it > 0f
+                } ?: run {
+                    PLog.e(TAG, "MGC Sabre denoise rejected missing NoiseModel scale")
+                    return false
+                }
+            } else {
+                1f
+            }
+            // MergeRaw passes the reciprocal SNR-table reduction as an equivalent sample count
+            // to NoiseModel::Average() at libgcastartup.so+0x5e97a84. Average() takes the
+            // reciprocal again, so the table reduction itself is applied uniformly to read,
+            // shot and quadratic coefficients. The physical camera model has no quadratic term.
+            rgbShot = FloatArray(3) { channel ->
+                resolvedNoise.shot[channel] * sabreNoiseModelScale
+            }
+            rgbRead = FloatArray(3) { channel ->
+                resolvedNoise.read[channel] * sabreNoiseModelScale
+            }
         }
         val useLensShadingForStrength =
-            (useSpatialModel || applyLensShadingToDenoiseStrength) &&
+            (useSpatialModel || useSabreModel || applyLensShadingToDenoiseStrength) &&
                 hasValidLensShadingMap(metadata)
         val rgbWhiteBalance = normalizedRgbWhiteBalance(metadata.whiteBalanceGains)
-        val lumaTuning = interpolateTuning(tuningGain, lumaTuningPoints)
+        val selectedLumaTuningPoints = if (useSabreModel) {
+            sabreLumaTuningPoints
+        } else {
+            lumaTuningPoints
+        }
+        val lumaTuning = interpolateTuning(tuningSnr, selectedLumaTuningPoints)
             .withStrengthScale(finiteLumaScale)
-        val chromaTuning = interpolateTuning(tuningGain, chromaTuningPoints)
+        val chromaTuning = interpolateTuning(tuningSnr, chromaTuningPoints)
             .withStrengthScale(finiteChromaScale)
         rgba16f.clear()
         val result = nativeDenoiseRgba16f(
@@ -294,12 +332,19 @@ internal object MgcFullResolutionDenoise {
             TAG,
             "MGC static denoise complete: size=${width}x$height " +
                 "origin=($globalOriginX,$globalOriginY) input=$inputLayout " +
-                "gain=$tuningGain pass=$pass " +
+                "snr=$tuningSnr pass=$pass " +
                 "luma=$lumaEnabled($finiteLumaScale) " +
                 "chroma=$chromaEnabled($finiteChromaScale) " +
                 "rgbShot=${rgbShot.contentToString()} " +
                 "rgbRead=${rgbRead.contentToString()} " +
+                "sabreNoiseModelScale=$sabreNoiseModelScale " +
                 "rgbWb=${rgbWhiteBalance.contentToString()} " +
+                "tuningInterpolation=linear " +
+                "lumaStrength=${lumaTuning.strength.contentToString()} " +
+                "lumaOutlier=${lumaTuning.outlierDistance.contentToString()} " +
+                "lumaRevert=${lumaTuning.revertFactor.contentToString()} " +
+                "chromaStrength=${chromaTuning.strength.contentToString()} " +
+                "chromaOutlier=${chromaTuning.outlierDistance.contentToString()} " +
                 "preparedYuvRead=${preparedYuvNoiseModel?.normalizedRead?.contentToString()} " +
                 "preparedLumaShot=${preparedYuvNoiseModel?.normalizedLumaShot} " +
                 "preparedLumaQuadratic=${preparedYuvNoiseModel?.normalizedLumaQuadratic} " +
@@ -409,21 +454,21 @@ internal object MgcFullResolutionDenoise {
         )
     }
 
+    /** Exact upper-bound clamp and linear SNR interpolation from libgcastartup.so+0x33ec5d4. */
     private fun interpolateTuning(
-        gain: Float,
+        snr: Float,
         points: List<TuningPoint>,
     ): Tuning {
-        val finiteGain = gain.takeIf { it.isFinite() && it > 0f }
-            ?: points.first().gain
-        val upperIndex = points.indexOfFirst { it.gain >= finiteGain }
+        val finiteSnr = snr.takeIf { it.isFinite() && it >= 0f }
+            ?: points.first().snr
+        val upperIndex = points.indexOfFirst { it.snr >= finiteSnr }
         if (upperIndex < 0) return points.last().tuning.copyArrays()
         if (upperIndex == 0) return points.first().tuning.copyArrays()
         val lower = points[upperIndex - 1]
         val upper = points[upperIndex]
-        val logLower = ln(lower.gain)
         val amount = (
-            (ln(finiteGain) - logLower) /
-                (ln(upper.gain) - logLower)
+            (finiteSnr - lower.snr) /
+                (upper.snr - lower.snr)
             ).coerceIn(0f, 1f)
         fun interpolate(
             first: FloatArray,
@@ -522,7 +567,7 @@ internal object MgcFullResolutionDenoise {
             val strength = ArrayList<Float>(5)
             val revert = ArrayList<Float>(5)
             val outlier = ArrayList<Float>(5)
-            var gain: Float? = null
+            var snr: Float? = null
             while (point.hasRemaining()) {
                 val (pointField, pointWire) = point.readTag()
                 when {
@@ -550,13 +595,13 @@ internal object MgcFullResolutionDenoise {
                     }
 
                     pointField == 2 && pointWire == 2 -> {
-                        val gainMessage = point.readMessage()
-                        while (gainMessage.hasRemaining()) {
-                            val (gainField, gainWire) = gainMessage.readTag()
-                            if (gainField == 1 && gainWire == 5) {
-                                gain = gainMessage.readFixed32Float()
+                        val snrMessage = point.readMessage()
+                        while (snrMessage.hasRemaining()) {
+                            val (snrField, snrWire) = snrMessage.readTag()
+                            if (snrField == 1 && snrWire == 5) {
+                                snr = snrMessage.readFixed32Float()
                             } else {
-                                gainMessage.skip(gainWire)
+                                snrMessage.skip(snrWire)
                             }
                         }
                     }
@@ -565,9 +610,9 @@ internal object MgcFullResolutionDenoise {
                 }
             }
             require(strength.size == 5 && revert.size == 5 && outlier.size == 5)
-            val pointGain = requireNotNull(gain)
+            val pointSnr = requireNotNull(snr)
             result += TuningPoint(
-                gain = pointGain,
+                snr = pointSnr,
                 tuning = Tuning(
                     strength.toFloatArray(),
                     revert.toFloatArray(),
@@ -575,7 +620,7 @@ internal object MgcFullResolutionDenoise {
                 ),
             )
         }
-        return result.sortedBy(TuningPoint::gain)
+        return result.sortedBy(TuningPoint::snr)
     }
 
     private external fun nativeDenoiseRgba16f(
