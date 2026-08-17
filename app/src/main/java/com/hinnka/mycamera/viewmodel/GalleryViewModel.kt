@@ -93,6 +93,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     companion object {
         private const val TAG = "GalleryViewModel"
         private const val FULL_QUALITY_PREVIEW_MAX_EDGE = 4096
+        private const val HDR_DETAIL_MAX_BITMAP_BYTES = 80L * 1024L * 1024L
     }
 
 
@@ -3037,8 +3038,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun detailCacheKey(mediaData: MediaData, metadata: MediaMetadata, showOrigin: Boolean): String {
-        return "detail_${previewCacheKey(mediaData, metadata, showOrigin)}"
+    private fun detailCacheKey(
+        mediaData: MediaData,
+        metadata: MediaMetadata,
+        showOrigin: Boolean,
+        maxEdge: Int = FULL_QUALITY_PREVIEW_MAX_EDGE,
+    ): String {
+        return "detail_${previewCacheKey(mediaData, metadata, showOrigin, maxEdge)}_edge_$maxEdge"
     }
 
     private fun shouldUseHdrDetail(metadata: MediaMetadata): Boolean {
@@ -3291,6 +3297,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun getDetailBitmap(
         photo: MediaData,
+        maxEdge: Int = FULL_QUALITY_PREVIEW_MAX_EDGE,
     ): Bitmap? {
         if (photo.isVideo) return null
         return withContext(Dispatchers.IO) {
@@ -3302,7 +3309,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: GalleryManager.loadMetadata(context, photo.id)
                         ?: MediaMetadata()
 
-                val detailCacheKey = detailCacheKey(photo, metadata, false)
+                val detailCacheKey = detailCacheKey(photo, metadata, false, maxEdge)
                 val shouldUseHdrDetail = shouldUseHdrDetail(metadata)
 
                 // HDR detail must be derived from the original render path, not bokeh.jpg,
@@ -3325,13 +3332,34 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 val detailFile = GalleryManager.getDetailHdrFile(context, photo.id)
                 if (detailFile.exists()) {
-                    val diskCached = GalleryManager.loadBitmap(context, Uri.fromFile(detailFile), preserveHdr = true)
+                    val diskCached = GalleryManager.loadBitmap(
+                        context = context,
+                        uri = Uri.fromFile(detailFile),
+                        maxEdge = maxEdge,
+                        preserveHdr = true,
+                        maxByteCount = HDR_DETAIL_MAX_BITMAP_BYTES,
+                    )
                     if (diskCached != null) {
+                        val hasGainmap = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                            diskCached.hasGainmap()
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !hasGainmap) {
+                            PLog.e(
+                                TAG,
+                                "Scaled HDR detail lost gainmap: photo=${photo.id} " +
+                                    "size=${diskCached.width}x${diskCached.height} " +
+                                    "config=${diskCached.config} bytes=${diskCached.byteCount}"
+                            )
+                            diskCached.recycle()
+                            return@withContext null
+                        }
                         detailBitmapCache.put(detailCacheKey, diskCached)
-//                            PLog.d(
-//                                TAG,
-//                                "getDetailBitmap: using disk detail HDR cache for ${photo.id}, hasGainmap=${UltraHdrWriter.hasGainmap(diskCached)}"
-//                            )
+                        PLog.d(
+                            TAG,
+                            "getDetailBitmap: loaded scaled HDR detail for ${photo.id}, " +
+                                "size=${diskCached.width}x${diskCached.height} " +
+                                "config=${diskCached.config} bytes=${diskCached.byteCount} " +
+                                "hasGainmap=$hasGainmap maxEdge=$maxEdge"
+                        )
                         return@withContext diskCached
                     }
                 }

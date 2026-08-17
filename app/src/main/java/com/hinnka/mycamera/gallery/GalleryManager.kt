@@ -5015,7 +5015,13 @@ object GalleryManager {
         }
     }
 
-    fun loadBitmap(context: Context, uri: Uri, maxEdge: Int? = null, preserveHdr: Boolean = false): Bitmap? {
+    fun loadBitmap(
+        context: Context,
+        uri: Uri,
+        maxEdge: Int? = null,
+        preserveHdr: Boolean = false,
+        maxByteCount: Long? = null,
+    ): Bitmap? {
         var infoSize: android.util.Size? = null
         var infoMimeType: String? = null
         val source = ImageDecoder.createSource(context.contentResolver, uri)
@@ -5031,18 +5037,32 @@ object GalleryManager {
                 infoSize = info.size
                 infoMimeType = info.mimeType
 
-                if (maxEdge != null) {
-                    val width = info.size.width
-                    val height = info.size.height
-
-                    if (width > maxEdge || height > maxEdge) {
-                        val scale = maxEdge.toFloat() / maxOf(width, height)
-                        decoder.setTargetSize((width * scale).toInt(), (height * scale).toInt())
-                    }
+                val target = calculateBitmapDecodeTarget(
+                    sourceWidth = info.size.width,
+                    sourceHeight = info.size.height,
+                    maxEdge = maxEdge,
+                    maxByteCount = maxByteCount,
+                    // HDR-capable hardware bitmaps may use RGBA_F16. Budget for the largest
+                    // Canvas-visible pixel format before allocating the decode target.
+                    assumedBytesPerPixel = if (preserveHdr) 8 else 4,
+                )
+                if (target.width != info.size.width || target.height != info.size.height) {
+                    decoder.setTargetSize(target.width, target.height)
                 }
             }
         }.getOrNull() ?: return null
         val decodedBitmap = bitmap.ensurePreviewCompatibleConfig(preserveHdr)
+        if (maxByteCount != null && decodedBitmap.byteCount.toLong() > maxByteCount) {
+            PLog.e(
+                TAG,
+                "Rejecting oversized decoded bitmap: uri=$uri " +
+                    "size=${decodedBitmap.width}x${decodedBitmap.height} " +
+                    "config=${decodedBitmap.config} bytes=${decodedBitmap.byteCount} " +
+                    "limit=$maxByteCount preserveHdr=$preserveHdr"
+            )
+            decodedBitmap.recycle()
+            return null
+        }
         val isDng = infoMimeType?.contains("dng", ignoreCase = true) == true
 
         if (!isDng) return decodedBitmap

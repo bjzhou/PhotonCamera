@@ -2280,6 +2280,7 @@ private fun ZoomableImage(
         )
         val refreshKey = viewModel.photoRefreshKeys[displayPhoto.id] ?: 0L
         val isSettledActive = isActive && !isScrollInProgress
+        val previewMaxEdge = if (isSettledActive) 4096 else 1024
 
         LaunchedEffect(displayPhoto.id, metadataHash, showOrigin, refreshKey, isSettledActive) {
             isLoading = bitmap == null
@@ -2287,21 +2288,21 @@ private fun ZoomableImage(
                 displayPhoto,
                 showOrigin = showOrigin,
                 ignoreDenoise = !isSettledActive,
-                maxEdge = if (isSettledActive) 4096 else 1024
+                maxEdge = previewMaxEdge
             )
             if (bitmap == null && viewModel.awaitPreparedPhotoReady(displayPhoto)) {
                 bitmap = viewModel.getPreviewBitmap(
                     displayPhoto,
                     showOrigin = showOrigin,
                     ignoreDenoise = !isSettledActive,
-                    maxEdge = if (isSettledActive) 4096 else 1024
+                    maxEdge = previewMaxEdge
                 )
             }
             colorSpace.value = bitmap?.colorSpace
             isLoading = bitmap == null
 
             if (displayPhoto.metadata?.manualHdrEffectEnabled == true && isSettledActive) {
-                hdrBitmap = viewModel.getDetailBitmap(displayPhoto)
+                hdrBitmap = viewModel.getDetailBitmap(displayPhoto, maxEdge = previewMaxEdge)
                 hdrBitmap?.let {
                     colorSpace.value = it.colorSpace
                 }
