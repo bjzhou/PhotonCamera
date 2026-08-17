@@ -332,7 +332,7 @@
     <string name="settings_isz_lens_no_physical_lens">沒有可用的后置物理鏡頭。</string>
     <string name="settings_isz_added_lenses">已新增的虛擬鏡頭</string>
     <string name="settings_isz_existing_lens_title">%1$s + ISZ %2$s</string>
-    <string name="settings_isz_existing_lens_description">%1$s · 顯示 %2$s · %3$s · 廠商 Key %4$d · %5$s</string>
+    <string name="settings_isz_existing_lens_description">%1$s · 顯示 %2$s · %3$s · %4$s · %5$s</string>
     <string name="settings_isz_lens_kind_normal">普通</string>
     <string name="settings_isz_lens_kind_macro">微距</string>
     <string name="settings_isz_add_lens_confirm">新增鏡頭</string>
