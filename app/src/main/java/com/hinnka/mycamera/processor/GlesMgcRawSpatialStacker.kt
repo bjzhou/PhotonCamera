@@ -2577,6 +2577,7 @@ internal class GlesMgcRawSpatialStacker(
             targetGridHeight,
             intArrayOf(output),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
         return Alignment(
             texture = output,
             gridWidth = targetGridWidth,
@@ -2683,6 +2684,7 @@ internal class GlesMgcRawSpatialStacker(
                 gridHeight,
                 intArrayOf(output),
             )
+            GlesGpuScheduler.yieldToUiRenderer()
             input = Alignment(
                 texture = output,
                 gridWidth = gridWidth,
@@ -3033,6 +3035,7 @@ internal class GlesMgcRawSpatialStacker(
             rejectionHeight,
             intArrayOf(reverseWeightTexture, pixelDifferenceTexture),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
     }
 
     private fun renderClippedGaussianPixelDifference(
@@ -3059,6 +3062,7 @@ internal class GlesMgcRawSpatialStacker(
             rejectionHeight,
             intArrayOf(horizontal),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
 
         GLES30.glUseProgram(clippedGaussianVerticalProgram)
         bindTexture(clippedGaussianVerticalProgram, "uInput", 0, horizontal)
@@ -3079,6 +3083,7 @@ internal class GlesMgcRawSpatialStacker(
             rejectionHeight,
             intArrayOf(output),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
     }
 
     private fun renderRejectionFilterDownsample(
@@ -3102,6 +3107,7 @@ internal class GlesMgcRawSpatialStacker(
             rejectionFilterHeight,
             intArrayOf(downsampledLuma, downsampledRejection),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
     }
 
     private fun renderFilteredRejection(
@@ -3141,6 +3147,7 @@ internal class GlesMgcRawSpatialStacker(
             rejectionFilterHeight,
             intArrayOf(output),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
     }
 
     private fun renderRejectionPostprocess(
@@ -3190,6 +3197,7 @@ internal class GlesMgcRawSpatialStacker(
             rejectionHeight,
             intArrayOf(output),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
     }
 
     private fun renderDilation(reverseWeight: Int, outputWeight: Int) {
@@ -3207,6 +3215,7 @@ internal class GlesMgcRawSpatialStacker(
             mergeWeightHeight,
             intArrayOf(outputWeight),
         )
+        GlesGpuScheduler.yieldToUiRenderer()
     }
 
     private fun renderLinearKernelMask(
@@ -5062,7 +5071,6 @@ internal class GlesMgcRawSpatialStacker(
                 targetIsFullOutput = gpuOutput != 0,
                 outputExposureScale = outputExposureScale,
             )
-            GlesGpuScheduler.yieldToUiRenderer()
             if (cpuOutput != null) {
                 readRgbTile(
                     texture = cpuOutputTexture,
