@@ -38,6 +38,7 @@ import java.nio.ShortBuffer
 object RawProcessor {
 
     private const val TAG = "RawProcessor"
+    private val BLACK_LEVEL_OVERRIDE_MODES = setOf("0", "16", "64", "256", "512", "Custom")
 
     enum class RawBufferValueDomain {
         SENSOR,
@@ -62,6 +63,9 @@ object RawProcessor {
             FloatArray(defaultBlackLevel.size.coerceAtLeast(4)) { level }
         } ?: defaultBlackLevel.copyOf()
     }
+
+    fun isBlackLevelOverrideMode(blackLevelMode: String?): Boolean =
+        blackLevelMode in BLACK_LEVEL_OVERRIDE_MODES
 
     fun resolveCfaPatternForMode(defaultCfaPattern: Int, cfaCorrectionMode: String?): Int {
         return RawCfaCorrection.resolveCfaPattern(defaultCfaPattern, cfaCorrectionMode)

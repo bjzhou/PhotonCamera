@@ -41,4 +41,6 @@ data class CapturedFrameMetadata(
     val multiFrameCaptureRole: MultiFrameCaptureRole? = null,
     /** Requested RAW TET in the same proportional units as [exposureProduct], when available. */
     val desiredExposureProduct: Double? = null,
+    /** Camera2 dynamic black levels in 2x2 CFA position order: (0,0), (1,0), (0,1), (1,1). */
+    val dynamicBlackLevelByCfaPosition: FloatArray? = null,
 )

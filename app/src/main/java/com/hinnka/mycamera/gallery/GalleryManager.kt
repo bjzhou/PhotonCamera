@@ -3275,7 +3275,14 @@ object GalleryManager {
             val effectiveRawStackFrames = if (rawStackFrames.size == images.size &&
                 rawStackFrames.indices.all { rawStackFrames[it].image === images[it] }
             ) {
-                rawStackFrames
+                if (!RawProcessor.isBlackLevelOverrideMode(metadata.rawBlackLevelMode)) {
+                    rawStackFrames
+                } else {
+                    // A configured override is authoritative for every frame in the burst.
+                    rawStackFrames.map { frame ->
+                        frame.copy(dynamicBlackLevelByCfaPosition = null)
+                    }
+                }
             } else {
                 images.mapIndexed { index, image ->
                     RawStackFrame(

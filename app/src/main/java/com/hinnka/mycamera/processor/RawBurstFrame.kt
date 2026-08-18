@@ -65,6 +65,8 @@ data class RawStackFrame(
     val rollingShutterSkewNs: Long? = null,
     val gyroWindow: GyroExposureWindow? = null,
     val channelNoiseProfile: FloatArray? = null,
+    /** Camera2 dynamic black levels in 2x2 CFA position order. */
+    val dynamicBlackLevelByCfaPosition: FloatArray? = null,
     val role: RawBurstFrameRole = RawBurstFrameRole.NORMAL,
     val preAlignmentToReference: RawFramePreAlignment? = null,
 )

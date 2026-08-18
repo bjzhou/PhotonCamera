@@ -209,6 +209,7 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     private data class FrameCalibration(
+        val blackLevels: FloatArray,
         val gains: FloatArray,
         val blackTerms: FloatArray,
         val bayerPhaseGains: FloatArray,
@@ -391,12 +392,6 @@ internal class GlesMgcRawSpatialStacker(
         (SABRE_RESOLVE_INPUT_WHITE_LEVEL / (sensorWhiteLevel + 1f)).toInt(),
         1,
     ).toFloat()
-    private val sabreResolveFinalBlackLevel = floatArrayOf(
-        canonicalBlackLevel[0] * sabreResolveRawScale,
-        0.5f * (canonicalBlackLevel[1] + canonicalBlackLevel[2]) *
-            sabreResolveRawScale,
-        canonicalBlackLevel[3] * sabreResolveRawScale,
-    )
     private val sabreResolveFinalGains = cameraDomainScale.copyOf()
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -512,6 +507,15 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     fun processFrames(frames: List<RawStackFrame>): RawStackResult? {
+        if (frames.isNotEmpty()) {
+            PLog.i(
+                TAG,
+                "MGC RAW black levels master=${canonicalBlackLevel.contentToString()} " +
+                    "perFrame=${frames.map { frame ->
+                        canonicalBlackLevelForFrame(frame).contentToString()
+                    }}",
+            )
+        }
         if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
             return processSabreFrames(frames)
         }
@@ -1450,6 +1454,7 @@ internal class GlesMgcRawSpatialStacker(
                                     renderAlignedLongFrameClippingMask(
                                         rawTexture = temporalRaw,
                                         flowTexture = prepared.flowTexture,
+                                        calibration = prepared.calibration,
                                     )
                                 PLog.d(
                                     TAG,
@@ -2039,6 +2044,8 @@ internal class GlesMgcRawSpatialStacker(
                 exposureScale = 1f,
                 kernelTuning = kernelTuning,
             )
+            val sabreResolveFinalBlackLevel =
+                sabreResolveBlackLevel(referenceCalibration.blackLevels)
             PLog.i(
                 SABRE_TAG,
                 "MGC Sabre NoiseModel meanSignal=${kernelTuning.referenceSignal} " +
@@ -3070,22 +3077,23 @@ internal class GlesMgcRawSpatialStacker(
         exposureScale: Float,
         kernelTuning: BayerKernelTuning,
     ): FrameCalibration {
+        val frameBlackLevel = canonicalBlackLevelForFrame(frame)
         val gains = FloatArray(4)
         val blackTerms = FloatArray(4)
         for (channel in 0 until 4) {
-            val range = max(sensorWhiteLevel - canonicalBlackLevel[channel], 1f)
+            val range = max(sensorWhiteLevel - frameBlackLevel[channel], 1f)
             gains[channel] =
                 calculationWhiteBalance[channel] * exposureScale / range
-            blackTerms[channel] = -canonicalBlackLevel[channel] * gains[channel]
+            blackTerms[channel] = -frameBlackLevel[channel] * gains[channel]
         }
         val bayerPhaseGains = FloatArray(4)
         val bayerPhaseBlackTerms = FloatArray(4)
         for (phase in 0 until 4) {
             val canonicalChannel = canonicalChannelAtPhase(phase)
-            val range = max(sensorWhiteLevel - canonicalBlackLevel[canonicalChannel], 1f)
+            val range = max(sensorWhiteLevel - frameBlackLevel[canonicalChannel], 1f)
             bayerPhaseGains[phase] = exposureScale / range
             bayerPhaseBlackTerms[phase] =
-                -canonicalBlackLevel[canonicalChannel] * bayerPhaseGains[phase]
+                -frameBlackLevel[canonicalChannel] * bayerPhaseGains[phase]
         }
 
         val frameNoiseModel = noiseModelForFrame(frame)
@@ -3102,7 +3110,7 @@ internal class GlesMgcRawSpatialStacker(
             shot[channel] = normalizedShot * relativeGain
             read[channel] = normalizedRead *
                 relativeGain * relativeGain
-            val sensorRange = max(sensorWhiteLevel - canonicalBlackLevel[channel], 1f)
+            val sensorRange = max(sensorWhiteLevel - frameBlackLevel[channel], 1f)
             unblockerShot[channel] = normalizedShot * sensorRange
             unblockerRead[channel] = normalizedRead * sensorRange * sensorRange
         }
@@ -3141,6 +3149,7 @@ internal class GlesMgcRawSpatialStacker(
             SPATIAL_IDENTITY_MULTIPLIER
         }
         return FrameCalibration(
+            blackLevels = frameBlackLevel,
             gains = gains,
             blackTerms = blackTerms,
             bayerPhaseGains = bayerPhaseGains,
@@ -3166,12 +3175,39 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
+    private fun canonicalBlackLevelForFrame(frame: RawStackFrame): FloatArray {
+        val positional = frame.dynamicBlackLevelByCfaPosition
+            ?.takeIf { values ->
+                values.size >= 4 && (0 until 4).all { index ->
+                    val value = values[index]
+                    value.isFinite() && value >= 0f && value < sensorWhiteLevel
+                }
+            }
+            ?: return canonicalBlackLevel.copyOf()
+        return FloatArray(4).also { canonical ->
+            for (phase in 0 until 4) {
+                canonical[canonicalChannelAtPhase(phase)] = positional[phase]
+            }
+        }
+    }
+
+    private fun sabreResolveBlackLevel(referenceBlackLevel: FloatArray): FloatArray =
+        floatArrayOf(
+            referenceBlackLevel[0] * sabreResolveRawScale,
+            0.5f * (referenceBlackLevel[1] + referenceBlackLevel[2]) *
+                sabreResolveRawScale,
+            referenceBlackLevel[3] * sabreResolveRawScale,
+        )
+
     private fun createBayerKernelTuning(
         frame: RawStackFrame,
         image: SafeImage,
         frameCount: Int,
     ): BayerKernelTuning {
-        val referenceSignal = estimateReferenceGreenSignal(image)
+        val referenceSignal = estimateReferenceGreenSignal(
+            image = image,
+            blackLevel = canonicalBlackLevelForFrame(frame),
+        )
         val noiseModel = noiseModelForFrame(frame)
         val shotNoise = noiseModel.normalizedShotNoiseForShader(cfaPattern)
         val readNoise = noiseModel.normalizedReadNoiseForShader(cfaPattern)
@@ -3198,7 +3234,10 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
-    private fun estimateReferenceGreenSignal(image: SafeImage): Float {
+    private fun estimateReferenceGreenSignal(
+        image: SafeImage,
+        blackLevel: FloatArray,
+    ): Float {
         val plane = image.planes.firstOrNull() ?: return 0f
         if (
             plane.pixelStride != RAW_BYTES_PER_PIXEL ||
@@ -3223,7 +3262,7 @@ internal class GlesMgcRawSpatialStacker(
             else -> 0 // GRBG/GBRG
         }
         val greenChannel = canonicalChannelAtPhase(firstRowGreenPhase)
-        val black = canonicalBlackLevel[greenChannel]
+        val black = blackLevel[greenChannel]
         val range = sensorWhiteLevel - black
         if (!black.isFinite() || !range.isFinite() || range <= 0f) return 0f
 
@@ -3347,7 +3386,7 @@ internal class GlesMgcRawSpatialStacker(
         uniform2i(rawToGrayProgram, "uRawSize", width, height)
         uniform2i(rawToGrayProgram, "uGraySize", finestWidth, finestHeight)
         uniform1i(rawToGrayProgram, "uCfaPattern", cfaPattern)
-        uniform4fv(rawToGrayProgram, "uBlackLevels", canonicalBlackLevel)
+        uniform4fv(rawToGrayProgram, "uBlackLevels", calibration.blackLevels)
         uniform1f(rawToGrayProgram, "uGain", calibration.alignmentGain)
         draw(rawToGrayProgram, finestWidth, finestHeight, intArrayOf(firstTexture))
         levels += TextureLevel(
@@ -4022,7 +4061,7 @@ internal class GlesMgcRawSpatialStacker(
         uniform1f(
             unblockerProgram,
             "uBlackLevelGreen",
-            0.5f * (canonicalBlackLevel[1] + canonicalBlackLevel[2]),
+            0.5f * (calibration.blackLevels[1] + calibration.blackLevels[2]),
         )
         val greenShot = 0.25f * (
             calibration.unblockerShotNoise[1] + calibration.unblockerShotNoise[2]
@@ -4665,6 +4704,7 @@ internal class GlesMgcRawSpatialStacker(
     private fun renderAlignedLongFrameClippingMask(
         rawTexture: Int,
         flowTexture: Int,
+        calibration: FrameCalibration,
     ): Int {
         check(alignedRawClippingMaskProgram != 0) {
             "Aligned RAW clipping-mask program is not initialized"
@@ -4676,7 +4716,7 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_NEAREST,
         )
         val phaseClippingLevels = FloatArray(4) { phase ->
-            val blackLevel = canonicalBlackLevel[canonicalChannelAtPhase(phase)]
+            val blackLevel = calibration.blackLevels[canonicalChannelAtPhase(phase)]
             blackLevel +
                 (sensorWhiteLevel - blackLevel) * LONG_FRAME_RAW_CLIPPING_THRESHOLD
         }

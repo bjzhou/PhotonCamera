@@ -643,6 +643,51 @@ static void mapLibRawBlackLevelsForGpu(LibRaw &rawProcessor, int cfaPattern,
   }
 }
 
+static bool mapDngTagBlackLevelsForGpu(const DngRawTagInfo &rawTags,
+                                       int cfaPattern,
+                                       float exportedRggb[4]) {
+  if (rawTags.blackLevel.empty())
+    return false;
+
+  const bool hasRepeatDimensions =
+      rawTags.blackRepeatRows > 0 && rawTags.blackRepeatCols > 0;
+  const int inferredSide = rawTags.blackLevel.size() >= 4 ? 2 : 1;
+  const int rows = hasRepeatDimensions ? rawTags.blackRepeatRows : inferredSide;
+  const int cols = hasRepeatDimensions ? rawTags.blackRepeatCols : inferredSide;
+  const size_t patternCount = static_cast<size_t>(rows) * cols;
+  if (rawTags.blackLevel.size() < patternCount)
+    return false;
+
+  double sums[4] = {};
+  int counts[4] = {};
+  for (int row = 0; row < rows; ++row) {
+    for (int col = 0; col < cols; ++col) {
+      const double value = rawTags.blackLevel[static_cast<size_t>(row) * cols + col];
+      if (!std::isfinite(value))
+        return false;
+      const int channel = cfaPattern >= 4
+                              ? quadChannelIndexForPattern(cfaPattern, col, row)
+                              : bayerBlackLevelIndexForPattern(cfaPattern, col, row);
+      if (channel < 0 || channel >= 4)
+        return false;
+      sums[channel] += value;
+      counts[channel]++;
+    }
+  }
+
+  if (patternCount == 1) {
+    for (int channel = 0; channel < 4; ++channel)
+      exportedRggb[channel] = static_cast<float>(sums[0]);
+    return true;
+  }
+  for (int channel = 0; channel < 4; ++channel) {
+    if (counts[channel] <= 0)
+      return false;
+    exportedRggb[channel] = static_cast<float>(sums[channel] / counts[channel]);
+  }
+  return true;
+}
+
 static bool applyDngBlackLevelDeltas(LibRaw &rawProcessor,
                                      const DngRawTagInfo &rawTags) {
   if (rawTags.blackDeltaH.empty() && rawTags.blackDeltaV.empty()) {
@@ -3111,6 +3156,15 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     mapLibRawBlackLevelsForGpu(RawProcessor, cfaPattern, left, top,
                                librawBlackLevels, activeBlackLevels,
                                exportedBlackLevels);
+    // The TIFF tag parser retains rational BlackLevel values while LibRaw's legacy
+    // color.black/cblack fields truncate them to integer RAW codes. Export the precise base tag
+    // when no deltas exist, or after the deltas have been removed from the pixels above.
+    const bool hasBlackLevelDeltas = !dngRawTagInfo.blackDeltaH.empty() ||
+                                     !dngRawTagInfo.blackDeltaV.empty();
+    if (!hasBlackLevelDeltas || blackDeltaApplied) {
+      mapDngTagBlackLevelsForGpu(dngRawTagInfo, cfaPattern,
+                                 exportedBlackLevels);
+    }
   }
   const double blackPreview0 = !dngRawTagInfo.blackLevel.empty()
                                    ? dngRawTagInfo.blackLevel[0]

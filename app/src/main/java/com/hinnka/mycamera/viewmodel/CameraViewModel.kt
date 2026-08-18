@@ -5958,6 +5958,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ?: captureResult?.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
             gyroWindow = metadata?.gyroWindow,
             channelNoiseProfile = metadata?.channelNoiseProfile,
+            dynamicBlackLevelByCfaPosition = metadata
+                ?.dynamicBlackLevelByCfaPosition
+                ?.copyOf()
+                ?: captureResult
+                    ?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+                    ?.takeIf { it.size >= 4 }
+                    ?.copyOf(4),
             role = when (
                 metadata?.multiFrameCaptureRole
                     ?: (captureResult?.request?.tag as? MultiFrameCaptureRole)

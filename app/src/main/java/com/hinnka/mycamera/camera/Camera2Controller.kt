@@ -483,6 +483,10 @@ class Camera2Controller(private val context: Context) {
             channelNoiseProfile = channelNoiseProfile,
             multiFrameCaptureRole = result.request.tag as? MultiFrameCaptureRole,
             desiredExposureProduct = desiredExposureProduct,
+            dynamicBlackLevelByCfaPosition = result
+                .get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+                ?.takeIf { it.size >= 4 }
+                ?.copyOf(4),
         )
     }
 
@@ -7927,6 +7931,11 @@ class Camera2Controller(private val context: Context) {
                         ?: captureChannelNoiseProfile(frameResult),
                     multiFrameCaptureRole = frozenMetadata?.multiFrameCaptureRole
                         ?: (frameResult.request.tag as? MultiFrameCaptureRole),
+                    dynamicBlackLevelByCfaPosition = frameResult
+                        .get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+                        ?.takeIf { it.size >= 4 }
+                        ?.copyOf(4)
+                        ?: frozenMetadata?.dynamicBlackLevelByCfaPosition?.copyOf(),
                 )
             } else {
                 null
