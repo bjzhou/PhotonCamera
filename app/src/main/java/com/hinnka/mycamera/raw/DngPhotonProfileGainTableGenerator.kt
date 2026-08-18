@@ -172,10 +172,9 @@ internal data class PhotonLocalToneMappingParameters(
     val localLaplacianRangeSigma: Float = ln(1.5).toFloat(),
     val localLaplacianDetailExponent: Float = 1f,
     val localLaplacianIntensityLevels: Int = 64,
-    val localLaplacianEdgeSlope: Float = 0.5f,
     val percentileClip: Float = 0.005f,
     val targetDynamicRange: Float = 100f,
-    val preToneMapExposureBoostEv: Float = 0.7f,
+    val preToneMapExposureBoostEv: Float = 0.3f,
     val bilateralSpatialBinSize: Int = 16,
     val bilateralRangeSigma: Float = 1f / 12f,
     val bilateralGuideCurveAlpha: Float = 0.8f,
@@ -185,7 +184,6 @@ internal data class PhotonLocalToneMappingParameters(
         require(localLaplacianRangeSigma.isFinite() && localLaplacianRangeSigma > 0f)
         require(localLaplacianDetailExponent.isFinite() && localLaplacianDetailExponent > 0f)
         require(localLaplacianIntensityLevels >= 2)
-        require(localLaplacianEdgeSlope.isFinite() && localLaplacianEdgeSlope > 0f)
         require(percentileClip.isFinite() && percentileClip in 0f..<0.5f)
         require(targetDynamicRange.isFinite() && targetDynamicRange > 1f)
         require(preToneMapExposureBoostEv.isFinite())

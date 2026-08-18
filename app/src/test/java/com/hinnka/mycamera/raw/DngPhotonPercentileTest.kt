@@ -30,7 +30,6 @@ class DngPhotonPercentileTest {
             exposureGain = 2.3f,
             parameters = PhotonLocalToneMappingParameters(
                 localLaplacianDetailExponent = 1f,
-                localLaplacianEdgeSlope = 1f,
                 targetDynamicRange = 1_000_000f,
             ),
         )

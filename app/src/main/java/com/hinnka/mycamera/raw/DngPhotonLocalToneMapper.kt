@@ -12,6 +12,7 @@ package com.hinnka.mycamera.raw
  * docs/third-party/local-tone-mapping and docs/photon-local-tone-mapping.md.
  */
 
+import android.util.Log
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -136,7 +137,17 @@ internal object DngPhotonLocalToneMapper {
             logMinimum = min(logMinimum, logValue)
             logMaximum = max(logMaximum, logValue)
         }
-        val edgeSlope = parameters.localLaplacianEdgeSlope
+        val sortedInput = exposedInput.copyOf().also { it.sort() }
+        val inputLower = percentile(sortedInput, parameters.percentileClip)
+            .coerceAtLeast(SOURCE_EPSILON)
+        val inputUpper = percentile(sortedInput, 1f - parameters.percentileClip)
+            .coerceAtLeast(inputLower)
+        val edgeSlope = localLaplacianEdgeSlope(
+            inputLower = inputLower,
+            inputUpper = inputUpper,
+            targetDynamicRange = parameters.targetDynamicRange,
+        )
+        PLog.d(TAG, "localLaplacianToneMap: edgeSlope=$edgeSlope")
         val logRange = logMaximum - logMinimum
         if (!logRange.isFinite() || logRange <= CURVE_EPS) {
             return PhotonLocalToneMapResult(
@@ -745,6 +756,20 @@ internal object DngPhotonLocalToneMapper {
         val lower = floor(position).toInt()
         val upper = min(lower + 1, sorted.lastIndex)
         return lerp(sorted[lower], sorted[upper], (position - lower).toFloat())
+    }
+
+    internal fun localLaplacianEdgeSlope(
+        inputLower: Float,
+        inputUpper: Float,
+        targetDynamicRange: Float,
+    ): Float {
+        val targetLogDynamicRange = ln(targetDynamicRange.toDouble()).toFloat()
+        val inputLogDynamicRange = ln((inputUpper / inputLower).toDouble()).toFloat()
+        return if (!inputLogDynamicRange.isFinite() || inputLogDynamicRange <= CURVE_EPS) {
+            1f
+        } else {
+            min(1f, targetLogDynamicRange / inputLogDynamicRange * 0.8f)
+        }
     }
 
     internal fun outputPercentileExponent(

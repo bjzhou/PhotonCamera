@@ -4724,7 +4724,74 @@ class RawDemosaicProcessor {
             val histogramBinCount =
                 DngPhotonLocalToneMapGpuShaders.HISTOGRAM_BIN_COUNT
             allocate(buffers[histogramBuffer], histogramBinCount * Int.SIZE_BYTES)
-            val edgeSlope = parameters.localLaplacianEdgeSlope
+
+            uploadTwoInts(
+                buffers[histogramRangeBuffer],
+                -1,
+                0,
+            )
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.FILTERED_LOG_RANGE)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[gaussianBuffer])
+            bindStorage(1, buffers[sourceRangeBuffer])
+            bindStorage(2, buffers[histogramRangeBuffer])
+            uniform1i(activeProgram, "uCount", sampleCount)
+            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
+            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
+            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
+            storageBarrier()
+            val inputRange = readUintStorageBuffer(
+                bufferId = buffers[histogramRangeBuffer],
+                intCount = 2,
+                label = "Photon input-log range",
+            ) ?: return null
+            val inputMinimumLog = orderedBitsToFloat(inputRange[0])
+            val inputMaximumLog = orderedBitsToFloat(inputRange[1])
+            if (!inputMinimumLog.isFinite() || !inputMaximumLog.isFinite() ||
+                inputMaximumLog < inputMinimumLog
+            ) {
+                PLog.e(
+                    TAG,
+                    "Photon input-log range invalid: $inputMinimumLog..$inputMaximumLog",
+                )
+                return null
+            }
+
+            clearUintBuffer(buffers[histogramBuffer], histogramBinCount)
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.LOG_HISTOGRAM)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[gaussianBuffer])
+            bindStorage(1, buffers[sourceRangeBuffer])
+            bindStorage(2, buffers[histogramRangeBuffer])
+            bindStorage(3, buffers[histogramBuffer])
+            uniform1i(activeProgram, "uCount", sampleCount)
+            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
+            uniform1i(activeProgram, "uBinCount", histogramBinCount)
+            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
+            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
+            storageBarrier()
+            val inputHistogram = readUintStorageBuffer(
+                bufferId = buffers[histogramBuffer],
+                intCount = histogramBinCount,
+                label = "Photon input-log histogram",
+            ) ?: return null
+            val inputDistribution = summarizePhotonLogHistogram(
+                histogram = inputHistogram,
+                rangeMinimum = inputMinimumLog,
+                rangeMaximum = inputMaximumLog,
+                percentileClip = parameters.percentileClip,
+                expectedSampleCount = sampleCount,
+                label = "input",
+            ) ?: return null
+            val inputLower = inputDistribution.lower
+                .coerceAtLeast(DngPhotonLocalToneMapper.SOURCE_EPSILON)
+            val inputUpper = inputDistribution.upper.coerceAtLeast(inputLower)
+            val edgeSlope = DngPhotonLocalToneMapper.localLaplacianEdgeSlope(
+                inputLower = inputLower,
+                inputUpper = inputUpper,
+                targetDynamicRange = parameters.targetDynamicRange,
+            )
+            PLog.d(TAG, "localLaplacianToneMap: edgeSlope=$edgeSlope")
 
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.DOWNSAMPLE)
             GLES31.glUseProgram(activeProgram)
