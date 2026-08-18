@@ -12679,8 +12679,10 @@ class RawDemosaicProcessor {
     ) {
         val mgcSnr = metadata.mgcSharpenTuningSnr
         val mgcAttenuation = metadata.mgcSharpenAttenuationScale
+        val sliderValue = RawSharpeningDefaults.normalize(sharpeningValue)
+        val algorithmStrength = RawSharpeningDefaults.toAlgorithmStrength(sliderValue)
         if (mgcSnr == null && mgcAttenuation == null) {
-            renderSharpenPass(metadata, sharpeningValue, inputTextureId)
+            renderSharpenPass(metadata, algorithmStrength, inputTextureId)
             return
         }
         checkNotNull(mgcSnr?.takeIf { it.isFinite() && it > 0f }) {
@@ -12689,18 +12691,18 @@ class RawDemosaicProcessor {
         checkNotNull(mgcAttenuation?.takeIf { it.isFinite() && it >= 0f }) {
             "MGC sharpen attenuation is missing or invalid"
         }
-        val sliderScale = sharpeningValue.coerceIn(0f, 1f)
-        if (sliderScale <= 0f) {
+        if (algorithmStrength <= 0f) {
             renderSharpenPass(metadata, 0f, inputTextureId)
             return
         }
-        val effectiveAttenuation = mgcAttenuation * sliderScale
+        val effectiveAttenuation = mgcAttenuation * algorithmStrength
         renderMgcSharpenPass(
             metadata = metadata,
             inputTextureId = inputTextureId,
             snr = mgcSnr,
             runtimeAttenuation = mgcAttenuation,
-            sliderScale = sliderScale,
+            sliderValue = sliderValue,
+            algorithmStrength = algorithmStrength,
             effectiveAttenuation = effectiveAttenuation,
         )
     }
@@ -12715,7 +12717,8 @@ class RawDemosaicProcessor {
         inputTextureId: Int,
         snr: Float,
         runtimeAttenuation: Float,
-        sliderScale: Float,
+        sliderValue: Float,
+        algorithmStrength: Float,
         effectiveAttenuation: Float,
     ) {
         check(inputTextureId == combinedTextureId) {
@@ -12767,7 +12770,8 @@ class RawDemosaicProcessor {
                 TAG,
                 "MGC final sharpen replaced legacy USM size=${metadata.width}x${metadata.height} " +
                     "snr=$snr runtimeAttenuation=$runtimeAttenuation " +
-                    "slider=$sliderScale effectiveAttenuation=$effectiveAttenuation",
+                    "slider=$sliderValue algorithmStrength=$algorithmStrength " +
+                    "effectiveAttenuation=$effectiveAttenuation",
             )
         } finally {
             LargeDirectBuffer.free(rgba)
@@ -12794,7 +12798,7 @@ class RawDemosaicProcessor {
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(sharpenProgram, "uSharpening"),
-            sharpeningValue.coerceIn(0f, 1f)
+            sharpeningValue.coerceIn(0f, RawSharpeningDefaults.MAX_ALGORITHM_STRENGTH)
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(sharpenProgram, "uRadius"),

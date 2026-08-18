@@ -1756,7 +1756,8 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_raw_max_hdr_composition),
                             description = stringResource(R.string.settings_raw_max_hdr_composition_description),
                             checked = useRawMaxHdrComposition,
-                            onCheckedChange = viewModel::setUseRawMaxHdrComposition
+                            onCheckedChange = viewModel::setUseRawMaxHdrComposition,
+                            enabled = rawMaxSpatialMode != MgcRawMaxMode.SABRE,
                         )
 
                         if (isHdrSettingsSupported) {
@@ -3434,12 +3435,13 @@ fun SwitchSettingItem(
     description: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
             .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -3447,7 +3449,7 @@ fun SwitchSettingItem(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                color = Color.White,
+                color = Color.White.copy(alpha = if (enabled) 1f else 0.38f),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Normal
             )
@@ -3455,7 +3457,7 @@ fun SwitchSettingItem(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = description,
-                    color = Color.White.copy(alpha = 0.6f),
+                    color = Color.White.copy(alpha = if (enabled) 0.6f else 0.38f),
                     fontSize = 13.sp,
                     lineHeight = 18.sp
                 )
@@ -3467,6 +3469,7 @@ fun SwitchSettingItem(
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
                 checkedTrackColor = Color(0xFFFF6B35),

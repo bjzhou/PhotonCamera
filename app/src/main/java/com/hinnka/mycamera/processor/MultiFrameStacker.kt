@@ -36,6 +36,10 @@ enum class MgcRawMaxMode {
     SPATIAL_BAYER,
     SPATIAL_RGB;
 
+    companion object {
+        val DEFAULT: MgcRawMaxMode = SABRE
+    }
+
     val outputMode: MgcSpatialOutputMode
         get() = if (this == SPATIAL_BAYER) MgcSpatialOutputMode.BAYER else MgcSpatialOutputMode.RGB
 

@@ -1677,7 +1677,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val rawMaxSpatialMode: StateFlow<MgcRawMaxMode> = userPreferencesRepository.userPreferences
         .map { it.rawMaxSpatialMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, MgcRawMaxMode.SPATIAL_RGB)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MgcRawMaxMode.DEFAULT)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -1909,7 +1909,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val chronologicalFrames = pendingRawStackFrames
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
-                    val rawMaxHdrFusionEnabled = state.value.isRawMaxHdrEnabled
+                    val rawMaxHdrFusionEnabled =
+                        state.value.isRawMaxHdrEnabled &&
+                            rawMaxSpatialMode.value != MgcRawMaxMode.SABRE
                     viewModelScope.launch {
                         val exposurePlan = RawmaxExposurePlanner.plan(
                             exposureProducts = chronologicalFrames.map { it.frame.exposureProduct },
@@ -4544,7 +4546,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setUseRawMaxHdrComposition(enabled: Boolean) {
-        cameraController.setUseRawMaxHdrComposition(enabled)
+        val effectiveEnabled = enabled && rawMaxSpatialMode.value != MgcRawMaxMode.SABRE
+        cameraController.setUseRawMaxHdrComposition(effectiveEnabled)
         viewModelScope.launch {
             userPreferencesRepository.saveUseRawMaxHdrComposition(enabled)
         }
@@ -4557,6 +4560,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setRawMaxSpatialMode(mode: MgcRawMaxMode) {
+        if (mode == MgcRawMaxMode.SABRE) {
+            cameraController.setUseRawMaxHdrComposition(false)
+        }
         viewModelScope.launch {
             userPreferencesRepository.saveRawMaxSpatialMode(mode)
         }
@@ -6019,7 +6025,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            val rawMaxMode = userPrefs?.rawMaxSpatialMode ?: MgcRawMaxMode.SPATIAL_RGB
+            val rawMaxMode = userPrefs?.rawMaxSpatialMode ?: MgcRawMaxMode.DEFAULT
             val rawSpatialOutputMode = if (isRawStack) {
                 rawMaxMode.outputMode
             } else {

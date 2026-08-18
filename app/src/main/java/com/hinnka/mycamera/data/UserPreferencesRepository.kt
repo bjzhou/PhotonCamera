@@ -201,9 +201,9 @@ data class UserPreferences(
     val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
     val useRawMaxHdrComposition: Boolean = MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION, // RAWmax：包围曝光 HDR 融合
     /** RAWmax processor/output selection. */
-    val rawMaxSpatialMode: MgcRawMaxMode = MgcRawMaxMode.SPATIAL_RGB,
+    val rawMaxSpatialMode: MgcRawMaxMode = MgcRawMaxMode.DEFAULT,
     /** Legacy compatibility mirror; new code should use rawMaxSpatialMode. */
-    val useRawMaxSpatialRgb: Boolean = true,
+    val useRawMaxSpatialRgb: Boolean = false,
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
@@ -575,6 +575,19 @@ class UserPreferencesRepository(private val context: Context) {
             val useHeicExport = preferences[USE_HEIC_EXPORT] ?: false
             val useJpeg444Export =
                 (preferences[USE_JPEG_444_EXPORT] ?: false) && !useHeicExport
+            val rawMaxSpatialMode = runCatching {
+                val persistedMode = preferences[RAW_MAX_SPATIAL_MODE]
+                    ?: when (preferences[USE_RAW_MAX_SPATIAL_RGB]) {
+                        true -> MgcRawMaxMode.SPATIAL_RGB.name
+                        false -> MgcRawMaxMode.SPATIAL_BAYER.name
+                        null -> MgcRawMaxMode.DEFAULT.name
+                    }
+                MgcRawMaxMode.valueOf(persistedMode)
+            }.getOrDefault(MgcRawMaxMode.DEFAULT)
+            val useRawMaxHdrComposition =
+                rawMaxSpatialMode != MgcRawMaxMode.SABRE &&
+                    (preferences[USE_RAW_MAX_HDR_COMPOSITION]
+                        ?: MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION)
             UserPreferences(
                 captureMode = CaptureMode.valueOf(preferences[CAPTURE_MODE] ?: CaptureMode.PHOTO.name),
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
@@ -730,28 +743,9 @@ class UserPreferencesRepository(private val context: Context) {
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useRawMax = useRawMax,
-                useRawMaxHdrComposition = preferences[USE_RAW_MAX_HDR_COMPOSITION]
-                    ?: MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION,
-                rawMaxSpatialMode = runCatching {
-                    MgcRawMaxMode.valueOf(
-                        preferences[RAW_MAX_SPATIAL_MODE]
-                            ?: if (preferences[USE_RAW_MAX_SPATIAL_RGB] == false) {
-                                MgcRawMaxMode.SPATIAL_BAYER.name
-                            } else {
-                                MgcRawMaxMode.SPATIAL_RGB.name
-                            },
-                    )
-                }.getOrDefault(MgcRawMaxMode.SPATIAL_RGB),
-                useRawMaxSpatialRgb = runCatching {
-                    MgcRawMaxMode.valueOf(
-                        preferences[RAW_MAX_SPATIAL_MODE]
-                            ?: if (preferences[USE_RAW_MAX_SPATIAL_RGB] == false) {
-                                MgcRawMaxMode.SPATIAL_BAYER.name
-                            } else {
-                                MgcRawMaxMode.SPATIAL_RGB.name
-                            },
-                    ) == MgcRawMaxMode.SPATIAL_RGB
-                }.getOrDefault(true),
+                useRawMaxHdrComposition = useRawMaxHdrComposition,
+                rawMaxSpatialMode = rawMaxSpatialMode,
+                useRawMaxSpatialRgb = rawMaxSpatialMode == MgcRawMaxMode.SPATIAL_RGB,
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
                     ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
                     MultiFrameConfig.normalizeOutputScale(
