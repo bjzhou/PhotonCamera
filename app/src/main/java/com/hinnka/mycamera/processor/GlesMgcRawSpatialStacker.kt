@@ -668,6 +668,11 @@ internal class GlesMgcRawSpatialStacker(
                 image = images.first(),
                 frameCount = frames.size,
             )
+            val finishRawSharpenAttenuationScale =
+                MgcSabreResolveTuning.demosaicSharpness(
+                    desiredExposureProduct = frames.first().desiredExposureProduct,
+                    actualExposureProduct = frames.first().exposureProduct,
+                )
             val perFrameCamera2Profiles = resolvedNoiseModels.count {
                 it.source == RawNoiseModelSource.CAMERA2_PER_FRAME
             }
@@ -1860,6 +1865,8 @@ internal class GlesMgcRawSpatialStacker(
                     ::mapSpatialStrengthToOutputCoordinates,
                 ),
                 mgcDenoiseTuningSnr = bayerKernelTuning.referenceSnr,
+                mgcSharpenTuningSnr = bayerKernelTuning.referenceSnr,
+                mgcSharpenAttenuationScale = finishRawSharpenAttenuationScale,
                 mgcSpatialReferenceOnlyDiagnostic = referenceOnly,
             )
         } catch (error: Exception) {
@@ -2314,6 +2321,8 @@ internal class GlesMgcRawSpatialStacker(
                 mergedFrameCount = frames.size,
                 mgcSabreNoiseModelScale = sabreNoiseModelScale,
                 mgcDenoiseTuningSnr = kernelTuning.referenceSnr,
+                mgcSharpenTuningSnr = kernelTuning.referenceSnr,
+                mgcSharpenAttenuationScale = sabreResolveParameters.demosaicSharpness,
             )
         } catch (error: Exception) {
             PLog.e(SABRE_TAG, "MGC Sabre merge failed", error)

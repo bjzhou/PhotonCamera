@@ -130,6 +130,10 @@ data class RawStackResult(
      * This is the linear signal-domain SNR, not ISO or sensor gain.
      */
     val mgcDenoiseTuningSnr: Float? = null,
+    /** Reference-frame SNR used by MGC FinishRaw to select the sharpen curves. */
+    val mgcSharpenTuningSnr: Float? = null,
+    /** Exact FinishRaw sharpen_attenuation_scale generated from the reference-frame TET. */
+    val mgcSharpenAttenuationScale: Float? = null,
     /**
      * True only for the debug reference-only isolation path. This state is process-local and is
      * never persisted into RAW/DNG metadata.

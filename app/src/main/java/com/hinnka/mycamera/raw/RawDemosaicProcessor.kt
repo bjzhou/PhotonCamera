@@ -254,6 +254,8 @@ class RawDemosaicProcessor {
             mgcSpatialStrengthMap = baseMetadata?.mgcSpatialStrengthMap,
             mgcSabreNoiseModelScale = baseMetadata?.mgcSabreNoiseModelScale,
             mgcDenoiseTuningSnr = baseMetadata?.mgcDenoiseTuningSnr,
+            mgcSharpenTuningSnr = baseMetadata?.mgcSharpenTuningSnr,
+            mgcSharpenAttenuationScale = baseMetadata?.mgcSharpenAttenuationScale,
             rotation = dngRawData.rotation,
             profileGainTableMap = baseMetadata?.profileGainTableMap
         )
@@ -302,6 +304,10 @@ class RawDemosaicProcessor {
             (VGN_NOISE_CALIBRATION_SIZE - VGN_NOISE_ANALYSIS_SIZE) / 2
         private const val VGN_NOISE_SPECTRUM_BINS = 128
         private const val VGN_NOISE_REFERENCE_SIGNAL = 0.18f
+        private const val MGC_SIGNAL_LINEAR_HISTOGRAM_BITS = 10
+        private const val MGC_SIGNAL_LINEAR_HISTOGRAM_BINS =
+            1 shl MGC_SIGNAL_LINEAR_HISTOGRAM_BITS
+        private const val MGC_SIGNAL_ROW_STEP = 8
         private val VGN_NOISE_MODEL_SIGNALS = floatArrayOf(0.04f, 0.18f, 0.50f)
         // Must remain bit-exact with mgc_full_resolution_denoise_jni.cpp.
         private val MGC_DENOISE_RGB_TO_YUV = floatArrayOf(
@@ -932,6 +938,7 @@ class RawDemosaicProcessor {
         gpuLinearRgbSource: GpuLinearRgbSource?,
         gpuBayerSource: GpuBayerSource?,
         metadata: RawMetadata,
+        outputScale: Float,
         sourcePixelsIncludeLensShadingCorrection: Boolean,
         applyLensShadingCorrection: Boolean,
         mode: MgcSpatialGpuDenoiseMode = MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT,
@@ -1387,6 +1394,7 @@ class RawDemosaicProcessor {
                         globalOriginY = 0,
                         fullWidth = width,
                         fullHeight = height,
+                        outputScale = outputScale,
                         metadata = defaultDenoiseMetadata,
                         preparedYuvNoiseModel = demosaicNoiseTransfer.takeIf {
                             mode == MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT
@@ -1456,7 +1464,8 @@ class RawDemosaicProcessor {
             PLog.i(
                 TAG,
                 "MGC Spatial GPU LinearRaw ready: source=$sourceLabel " +
-                    "size=${width}x$height pass=${if (applyDefaultDenoise) {
+                    "size=${width}x$height outputScale=$outputScale " +
+                    "pass=${if (applyDefaultDenoise) {
                         mode.name
                     } else {
                         MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE.name
@@ -2152,6 +2161,8 @@ class RawDemosaicProcessor {
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
         sharpeningValue: Float = 0f,
+        processLocalMgcSharpenTuningSnr: Float? = null,
+        processLocalMgcSharpenAttenuationScale: Float? = null,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -2194,6 +2205,9 @@ class RawDemosaicProcessor {
                 rawWhiteLevelMode = rawWhiteLevelMode,
                 rawCustomWhiteLevel = rawCustomWhiteLevel,
                 sharpeningValue = sharpeningValue,
+                processLocalMgcSharpenTuningSnr = processLocalMgcSharpenTuningSnr,
+                processLocalMgcSharpenAttenuationScale =
+                    processLocalMgcSharpenAttenuationScale,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
@@ -2392,6 +2406,8 @@ class RawDemosaicProcessor {
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
         sharpeningValue: Float = 0f,
+        processLocalMgcSharpenTuningSnr: Float? = null,
+        processLocalMgcSharpenAttenuationScale: Float? = null,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -2522,6 +2538,9 @@ class RawDemosaicProcessor {
                 mgcSpatialStrengthMap = null,
                 mgcSabreNoiseModelScale = null,
                 mgcDenoiseTuningSnr = null,
+                mgcSharpenTuningSnr = processLocalMgcSharpenTuningSnr,
+                mgcSharpenAttenuationScale =
+                    processLocalMgcSharpenAttenuationScale,
             )
             profileGainTableMap?.let {
                 PLog.d(
@@ -2547,6 +2566,11 @@ class RawDemosaicProcessor {
             ContentRepository.getInstance(context.applicationContext)
                 .rawNoiseProfileManager
                 .resolveSelection(rawNoiseProfileId),
+        )
+        actualMetadata = actualMetadata?.withMgcSharpenTuning(
+            rawData = actualRawData,
+            rowStride = actualRowStride,
+            samplesPerPixel = actualSamplesPerPixel,
         )
 
         if ((actualRawData == null && borrowedGpuSource == null) || actualMetadata == null) {
@@ -3432,7 +3456,7 @@ class RawDemosaicProcessor {
             // 6. 第三步：锐化 (Sharpen Pass)
             setupSharpenFramebuffer(actualWidth, actualHeight)
             val sharpenStart = System.currentTimeMillis()
-            renderSharpenPass(actualMetadata, sharpeningValue, combinedTextureId)
+            renderFinalSharpenPass(actualMetadata, sharpeningValue, combinedTextureId)
             PLog.d(TAG, "Sharpen Pass took: ${System.currentTimeMillis() - sharpenStart}ms")
             // combinedTextureId 已被 sharpenPass 消费，提前释放
             if (combinedTextureId != 0) {
@@ -3877,7 +3901,7 @@ class RawDemosaicProcessor {
                     return null
                 }
                 setupSharpenFramebuffer(workWidth, workHeight)
-                renderSharpenPass(
+                renderFinalSharpenPass(
                     metadata = config.metadata.copy(width = workWidth, height = workHeight),
                     sharpeningValue = config.sharpeningValue,
                     inputTextureId = combinedTextureId,
@@ -12499,6 +12523,257 @@ class RawDemosaicProcessor {
     /**
      * Sharpen Pass
      */
+    private fun RawMetadata.withMgcSharpenTuning(
+        rawData: ByteBuffer?,
+        rowStride: Int,
+        samplesPerPixel: Int,
+    ): RawMetadata {
+        if (mgcSharpenTuningSnr != null && mgcSharpenAttenuationScale != null) {
+            return this
+        }
+        val source = rawData ?: return this
+        val signal = estimateMgcReferenceSignal(
+            rawData = source,
+            rowStride = rowStride,
+            samplesPerPixel = samplesPerPixel,
+        ) ?: return this
+        val noiseModel = when (noiseProfileLayout) {
+            RawNoiseProfileLayout.CAMERA2_CFA ->
+                RawNoiseModel.fromCamera2NoiseProfile(channelNoiseProfile)
+            RawNoiseProfileLayout.CANONICAL_BAYER -> {
+                val shot = FloatArray(4) { channel ->
+                    channelNoiseProfile.getOrElse(channel * 2) { 0f }
+                }
+                val read = FloatArray(4) { channel ->
+                    channelNoiseProfile.getOrElse(channel * 2 + 1) { 0f }
+                }
+                RawNoiseModel.fromCanonicalBayerChannels(shot, read)
+            }
+            RawNoiseProfileLayout.DNG_RGB ->
+                RawNoiseModel.fromDngNoiseProfile(channelNoiseProfile)
+            RawNoiseProfileLayout.NONE -> RawNoiseModel.EMPTY
+        }
+        val shot = noiseModel.normalizedShotNoiseForShader(cfaPattern)
+        val read = noiseModel.normalizedReadNoiseForShader(cfaPattern)
+        val greenShot = 0.5f * (shot[1] + shot[2])
+        val greenRead = 0.5f * (read[1] + read[2])
+        val variance = greenShot * signal + greenRead
+        val snr = if (variance.isFinite() && variance > 1e-12f) {
+            signal / sqrt(variance)
+        } else {
+            Float.NaN
+        }
+        if (!snr.isFinite() || snr <= 0f) {
+            PLog.w(
+                TAG,
+                "MGC single-frame sharpen tuning unavailable: signal=$signal " +
+                    "greenShot=$greenShot greenRead=$greenRead layout=$noiseProfileLayout",
+            )
+            return this
+        }
+        PLog.i(
+            TAG,
+            "MGC single-frame sharpen tuning signal=$signal snr=$snr " +
+                "greenShot=$greenShot greenRead=$greenRead attenuation=1.0",
+        )
+        return copy(
+            mgcSharpenTuningSnr = snr,
+            // A single frame has identical requested/reference TET, so MGC's
+            // min(FinalTet / referenceActualTet, 1) evaluates to one.
+            mgcSharpenAttenuationScale = 1f,
+        )
+    }
+
+    private fun RawMetadata.estimateMgcReferenceSignal(
+        rawData: ByteBuffer,
+        rowStride: Int,
+        samplesPerPixel: Int,
+    ): Float? {
+        if (width <= 0 || height <= 0 || samplesPerPixel !in 1..4) return null
+        val pixelStride = samplesPerPixel * Short.SIZE_BYTES
+        if (rowStride < width * pixelStride) return null
+        val cropLeft = (width / 8) and -4
+        val cropRight = ((width * 7) / 8) and -4
+        val cropTop = (height / 8) and -2
+        val cropBottom = ((height * 7) / 8) and -2
+        if (cropRight <= cropLeft || cropBottom <= cropTop) return null
+
+        val phaseToCanonical = when (cfaPattern.mod(4)) {
+            1 -> intArrayOf(1, 0, 3, 2)
+            2 -> intArrayOf(2, 3, 0, 1)
+            3 -> intArrayOf(3, 2, 1, 0)
+            else -> intArrayOf(0, 1, 2, 3)
+        }
+        val firstRowGreenPhase = when (cfaPattern.mod(4)) {
+            0, 3 -> 1
+            else -> 0
+        }
+        val greenChannel = if (samplesPerPixel == 1) {
+            phaseToCanonical[firstRowGreenPhase]
+        } else {
+            1
+        }
+        val black = blackLevel.getOrElse(greenChannel) {
+            blackLevel.firstOrNull() ?: 0f
+        }
+        val range = whiteLevel - black
+        if (!black.isFinite() || !range.isFinite() || range <= 0f) return null
+
+        val white = whiteLevel.toInt().coerceAtLeast(0)
+        val histogramShift = run {
+            val tail = white - MGC_SIGNAL_LINEAR_HISTOGRAM_BINS
+            if (tail < MGC_SIGNAL_LINEAR_HISTOGRAM_BINS) {
+                0
+            } else {
+                Int.SIZE_BITS - Integer.numberOfLeadingZeros(
+                    tail ushr MGC_SIGNAL_LINEAR_HISTOGRAM_BITS,
+                )
+            }
+        }
+        val quantizationWidth = 1 shl histogramShift
+        val quantizationHalf = quantizationWidth / 2
+        fun histogramBinCenter(raw: Int): Int {
+            if (histogramShift == 0 || raw < MGC_SIGNAL_LINEAR_HISTOGRAM_BINS) {
+                return raw
+            }
+            val bucket = (raw - MGC_SIGNAL_LINEAR_HISTOGRAM_BINS) shr histogramShift
+            return MGC_SIGNAL_LINEAR_HISTOGRAM_BINS +
+                (bucket shl histogramShift) + quantizationHalf
+        }
+
+        val buffer = rawData.duplicate().order(ByteOrder.nativeOrder())
+        val bufferStart = buffer.position()
+        val componentOffset = if (samplesPerPixel == 1) 0 else Short.SIZE_BYTES
+        var sqrtSignalSum = 0.0
+        var sampleCount = 0
+        var y = cropTop
+        while (y < cropBottom) {
+            var x = if (samplesPerPixel == 1) {
+                cropLeft + (firstRowGreenPhase and 1)
+            } else {
+                cropLeft
+            }
+            while (x < cropRight) {
+                val offset = bufferStart + y * rowStride + x * pixelStride + componentOffset
+                if (offset >= bufferStart && offset + 1 < buffer.limit()) {
+                    val raw = buffer.getShort(offset).toInt() and 0xffff
+                    val stabilizedSignal = max(histogramBinCenter(raw) - black, 0f)
+                    sqrtSignalSum += sqrt(stabilizedSignal.toDouble())
+                    sampleCount += 1
+                }
+                x += 2
+            }
+            y += MGC_SIGNAL_ROW_STEP
+        }
+        if (sampleCount <= 0) return null
+        val meanSqrtSignal = sqrtSignalSum / sampleCount.toDouble()
+        return ((meanSqrtSignal * meanSqrtSignal) / range.toDouble())
+            .toFloat()
+            .takeIf { it.isFinite() && it >= 0f }
+    }
+
+    private fun renderFinalSharpenPass(
+        metadata: RawMetadata,
+        sharpeningValue: Float,
+        inputTextureId: Int,
+    ) {
+        val mgcSnr = metadata.mgcSharpenTuningSnr
+        val mgcAttenuation = metadata.mgcSharpenAttenuationScale
+        if (mgcSnr == null && mgcAttenuation == null) {
+            renderSharpenPass(metadata, sharpeningValue, inputTextureId)
+            return
+        }
+        checkNotNull(mgcSnr?.takeIf { it.isFinite() && it > 0f }) {
+            "MGC sharpen tuning SNR is missing or invalid"
+        }
+        checkNotNull(mgcAttenuation?.takeIf { it.isFinite() && it >= 0f }) {
+            "MGC sharpen attenuation is missing or invalid"
+        }
+        val sliderScale = sharpeningValue.coerceIn(0f, 1f)
+        if (sliderScale <= 0f) {
+            renderSharpenPass(metadata, 0f, inputTextureId)
+            return
+        }
+        val effectiveAttenuation = mgcAttenuation * sliderScale
+        renderMgcSharpenPass(
+            metadata = metadata,
+            inputTextureId = inputTextureId,
+            snr = mgcSnr,
+            runtimeAttenuation = mgcAttenuation,
+            sliderScale = sliderScale,
+            effectiveAttenuation = effectiveAttenuation,
+        )
+    }
+
+    /**
+     * Replaces the legacy 5x5 USM for process-local MGC output. The readback adapter preserves
+     * the already-rendered RGBA values and invokes the lifted FinishRaw SharpenTo16Bit kernel;
+     * no tone, gamma, white-balance, denoise or color-rendering operation is added here.
+     */
+    private fun renderMgcSharpenPass(
+        metadata: RawMetadata,
+        inputTextureId: Int,
+        snr: Float,
+        runtimeAttenuation: Float,
+        sliderScale: Float,
+        effectiveAttenuation: Float,
+    ) {
+        check(inputTextureId == combinedTextureId) {
+            "MGC sharpen source is not the Combined Pass texture"
+        }
+        val byteCount = metadata.width.toLong() * metadata.height * 4L
+        val rgba = checkNotNull(
+            LargeDirectBuffer.allocate(byteCount, "MGC final sharpen RGBA8"),
+        ) { "Unable to allocate MGC final sharpen readback" }
+        try {
+            rgba.clear()
+            rgba.limit(byteCount.toInt())
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, combinedFramebufferId)
+            GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+            GLES30.glReadPixels(
+                0,
+                0,
+                metadata.width,
+                metadata.height,
+                GLES30.GL_RGBA,
+                GLES30.GL_UNSIGNED_BYTE,
+                rgba,
+            )
+            checkGlError("MGC sharpen RGBA8 readback")
+            rgba.position(0)
+            MgcSharpen.sharpenRgba8(
+                rgba = rgba,
+                width = metadata.width,
+                height = metadata.height,
+                snr = snr,
+                sharpenAttenuationScale = effectiveAttenuation,
+            )
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sharpenTextureId)
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+                0,
+                metadata.width,
+                metadata.height,
+                GLES30.GL_RGBA,
+                GLES30.GL_UNSIGNED_BYTE,
+                rgba,
+            )
+            checkGlError("MGC sharpen RGBA8 upload")
+            PLog.i(
+                TAG,
+                "MGC final sharpen replaced legacy USM size=${metadata.width}x${metadata.height} " +
+                    "snr=$snr runtimeAttenuation=$runtimeAttenuation " +
+                    "slider=$sliderScale effectiveAttenuation=$effectiveAttenuation",
+            )
+        } finally {
+            LargeDirectBuffer.free(rgba)
+        }
+    }
+
     private fun renderSharpenPass(
         metadata: RawMetadata,
         sharpeningValue: Float,

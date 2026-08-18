@@ -1,0 +1,589 @@
+/* Generated mechanically from pinned MGC 9.6.080 V24 SharpenTo16BitHalide.
+ * Do not edit; regenerate with
+ * scripts/research/generate_mgc_sharpen_static_asm.py.
+ */
+
+#if !defined(__aarch64__)
+#error "MGC GuidedUpsample sharpen static lift is arm64-only"
+#endif
+
+    .hidden photon_mgc_halide_error_5ef61ac
+    .hidden photon_mgc_halide_error_5ef6294
+    .hidden photon_mgc_halide_error_5ef636c
+    .hidden photon_mgc_halide_error_5ef63f8
+    .hidden photon_mgc_halide_error_5ef64dc
+    .hidden photon_mgc_halide_error_5ef6568
+    .hidden photon_mgc_halide_error_5ef6600
+    .hidden photon_mgc_halide_error_5ef6794
+    .hidden photon_mgc_halide_error_5ef6a74
+    .hidden photon_mgc_halide_error_5ef6a94
+    .hidden photon_mgc_halide_error_5ef6b6c
+    .hidden photon_mgc_halide_error_5ef6bd8
+    .hidden photon_mgc_halide_error_5ef6c38
+    .hidden photon_mgc_halide_do_par_for
+    .hidden photon_mgc_halide_free
+    .hidden photon_mgc_halide_malloc
+    .hidden photon_mgc_halide_trace
+
+.section .text.photon_mgc.SharpenTo16BitHalide,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_sharpen_to_16_bit_halide
+    .hidden photon_mgc_sharpen_to_16_bit_halide
+    .type photon_mgc_sharpen_to_16_bit_halide, %function
+photon_mgc_sharpen_page_4b77000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x0, 0xf20
+photon_mgc_sharpen_address_4b77f20:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xf20, 0xe0
+photon_mgc_sharpen_page_4b78000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1000, 0x130
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1130, 0x3c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x116c, 0x230
+    adrp x13, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x139c, 0x8
+    adrp x13, photon_mgc_sharpen_page_6b2000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13a4, 0x330
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x16d4, 0x51c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1bf0, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1c28, 0x2e0
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1f08, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1f50, 0x8c
+photon_mgc_sharpen_page_4b79000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1fdc, 0x1000
+photon_mgc_sharpen_page_4b7a000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x2fdc, 0x1000
+photon_mgc_sharpen_page_4b7b000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x3fdc, 0xa34
+    adrp x11, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x4a10, 0x8
+    adrp x11, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x4a18, 0x5bc
+photon_mgc_sharpen_page_4b7c000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x4fd4, 0x210
+    adrp x15, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x51e4, 0x120
+    adrp x15, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x5304, 0x120
+    adrp x15, photon_mgc_sharpen_page_6a9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x5424, 0x40c
+    adrp x11, photon_mgc_sharpen_page_6a9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x5830, 0x6c
+    adrp x11, photon_mgc_sharpen_page_6bc000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x589c, 0x8
+    adrp x11, photon_mgc_sharpen_page_6b9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x58a4, 0x718
+photon_mgc_sharpen_page_4b7d000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x5fbc, 0xbfc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x6bb8, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x6be8, 0x30
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x6c18, 0xc8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x6ce0, 0x3c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x6d1c, 0x28c
+photon_mgc_sharpen_page_4b7e000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x6fa8, 0x54
+    adrp x16, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x6ffc, 0x10
+    adrp x14, photon_mgc_sharpen_page_6b2000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x700c, 0x628
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x7634, 0x968
+photon_mgc_sharpen_page_4b7f000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x7f9c, 0x34
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x7fd0, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x8004, 0x300
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x8304, 0x54
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x8358, 0xc34
+photon_mgc_sharpen_page_4b80000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x8f8c, 0x1000
+photon_mgc_sharpen_page_4b81000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x9f8c, 0x1000
+photon_mgc_sharpen_page_4b82000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xaf8c, 0x1000
+photon_mgc_sharpen_page_4b83000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xbf8c, 0x1000
+photon_mgc_sharpen_page_4b84000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xcf8c, 0x1000
+photon_mgc_sharpen_page_4b85000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xdf8c, 0xb4c
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xead8, 0x4
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xeadc, 0x4a8
+photon_mgc_sharpen_page_4b86000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xef84, 0x370
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xf2f4, 0x114
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xf408, 0x118
+    adrp x8, photon_mgc_sharpen_page_6a9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xf520, 0x3c4
+    adrp x9, photon_mgc_sharpen_page_6a9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xf8e4, 0x94
+    adrp x9, photon_mgc_sharpen_page_6bc000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xf978, 0x8
+    adrp x9, photon_mgc_sharpen_page_6b9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xf980, 0x5ec
+photon_mgc_sharpen_page_4b87000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0xff6c, 0x1000
+photon_mgc_sharpen_page_4b88000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x10f6c, 0x150
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x110bc, 0x8
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x110c4, 0x7b8
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1187c, 0x120
+    adrp x8, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1199c, 0x120
+    adrp x8, photon_mgc_sharpen_page_6a9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x11abc, 0x440
+    adrp x8, photon_mgc_sharpen_page_6a9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x11efc, 0x58
+photon_mgc_sharpen_page_4b89000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x11f54, 0x14
+    adrp x8, photon_mgc_sharpen_page_6bc000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x11f68, 0x8
+    adrp x8, photon_mgc_sharpen_page_6b9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x11f70, 0xfdc
+photon_mgc_sharpen_page_4b8a000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x12f4c, 0x350
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1329c, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x132c4, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x132fc, 0xd8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x133d4, 0x3c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13410, 0x8
+    adrp x2, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13418, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1341c, 0x4
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13420, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13428, 0x8
+    adrp x2, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13430, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13434, 0x4
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13438, 0x24
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1345c, 0x8
+    adrp x2, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13464, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13468, 0x4
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1346c, 0x24
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13490, 0x28
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x134b8, 0x34
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x134ec, 0x18
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13504, 0x8
+    adrp x2, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1350c, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13510, 0x4
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13514, 0x1c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13530, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13544, 0x38
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1357c, 0x1c
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13598, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x135a0, 0xc
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x135ac, 0x1c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x135c8, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x135d8, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13614, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13640, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1366c, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13698, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x136c4, 0x4c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13710, 0x1c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1372c, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13740, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13760, 0x1c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1377c, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13790, 0x48
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x137d8, 0x18
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x137f0, 0xc
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x137fc, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13804, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13818, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1383c, 0x1c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13858, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1386c, 0x40
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x138ac, 0x3c
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x138e8, 0x40
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13928, 0x3c
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13964, 0x34
+photon_mgc_sharpen_address_4b8ab24:
+photon_mgc_sharpen_to_16_bit_halide:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13998, 0xb8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13a50, 0x20
+    adrp x16, photon_mgc_sharpen_page_6ad000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13a70, 0x1b0
+    adrp x8, photon_mgc_sharpen_page_6ae000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13c20, 0x10
+    adrp x11, photon_mgc_sharpen_page_6b0000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13c30, 0x60
+    adrp x10, photon_mgc_sharpen_page_6a9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13c90, 0x44
+    adrp x10, photon_mgc_sharpen_page_6a7000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13cd4, 0x158
+    adrp x13, photon_mgc_sharpen_page_6ad000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13e2c, 0x18
+    adrp x13, photon_mgc_sharpen_page_6b6000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13e44, 0x10
+photon_mgc_sharpen_page_4b8b000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13e54, 0x34
+    adrp x10, photon_mgc_sharpen_page_6aa000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13e88, 0x64
+    adrp x13, photon_mgc_sharpen_page_6b9000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13eec, 0x8
+    adrp x13, photon_mgc_sharpen_page_6b5000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13ef4, 0x8
+    adrp x13, photon_mgc_sharpen_page_6af000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13efc, 0x4
+    adrp x13, photon_mgc_sharpen_page_6b1000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13f00, 0xb0
+    adrp x13, photon_mgc_sharpen_page_6b4000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x13fb0, 0x4ec
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1449c, 0x3c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x144d8, 0x34
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1450c, 0x3c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14548, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1454c, 0x28
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14574, 0x2c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x145a0, 0x2c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x145cc, 0x40
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1460c, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14610, 0x2c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1463c, 0x34
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14670, 0x34
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x146a4, 0x40
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x146e4, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x146e8, 0x28
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14710, 0x28
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14738, 0x30
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14768, 0x308
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14a70, 0x3c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14aac, 0x30
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14adc, 0x2c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14b08, 0x24
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14b2c, 0x2c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14b58, 0x24
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14b7c, 0x2c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14ba8, 0x30
+    adrp x26, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14bd8, 0x4
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14bdc, 0x24
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14c00, 0x1c8
+photon_mgc_sharpen_page_4b8c000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x14dc8, 0x3b0
+    adrp x16, photon_mgc_sharpen_page_6ac000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15178, 0x7c
+    adrp x1, photon_mgc_sharpen_page_614f000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x151f4, 0x30
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15224, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15238, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15258, 0x34
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1528c, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15294, 0xc
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x152a0, 0x30
+    b photon_mgc_halide_error_5ef6a94
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x152d0, 0x4
+    adrp x2, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x152d4, 0x40
+    b photon_mgc_halide_error_5ef61ac
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15314, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15324, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15338, 0xc
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15344, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15354, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15364, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15374, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1537c, 0x34
+    b photon_mgc_halide_error_5ef6b6c
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x153b0, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x153c0, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x153d0, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x153e4, 0x3c
+    b photon_mgc_halide_error_5ef6600
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15420, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15430, 0x3c
+    b photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1546c, 0xc
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15478, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1548c, 0x20
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x154ac, 0x20
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x154cc, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x154d0, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x154e4, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x154f8, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15508, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1551c, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15520, 0x20
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15540, 0x34
+    b photon_mgc_halide_error_5ef6294
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15574, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1557c, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15590, 0x24
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x155b4, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x155c8, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x155dc, 0xc
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x155e8, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x155ec, 0x18
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15604, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15608, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1561c, 0x34
+    b photon_mgc_halide_error_5ef636c
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15650, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15660, 0x20
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15680, 0x34
+    b photon_mgc_halide_error_5ef6568
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x156b4, 0xc
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x156c0, 0x18
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x156d8, 0x18
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x156f0, 0x44
+    b photon_mgc_halide_error_5ef63f8
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15734, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1573c, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15740, 0x14
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15754, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15758, 0x10
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15768, 0x4
+    adrp x3, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1576c, 0x38
+    b photon_mgc_halide_error_5ef6794
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x157a4, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x157ac, 0x8
+    adrp x1, photon_mgc_sharpen_page_d5d000
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x157b4, 0x34
+    b photon_mgc_halide_error_5ef6bd8
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x157e8, 0x4c8
+
+.section .rodata.photon_mgc.sharpen_page_6a7000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6a7000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x15cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6a9000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6a9000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x16cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6aa000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6aa000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x17cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6ac000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6ac000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x18cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6ad000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6ad000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x19cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6ae000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6ae000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1acb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6af000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6af000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1bcb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6b0000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6b0000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1ccb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6b1000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6b1000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1dcb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6b2000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6b2000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1ecb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6b4000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6b4000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x1fcb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6b5000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6b5000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x20cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6b6000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6b6000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x21cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6b9000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6b9000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x22cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_6bc000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_6bc000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x23cb0, 0x1000
+
+.section .rodata.photon_mgc.sharpen_page_d5d000,"a",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_d5d000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x24cb0, 0x1000
+
+.section .data.rel.ro.photon_mgc.sharpen_page_614f000,"aw",@progbits
+    .p2align 12
+photon_mgc_sharpen_page_614f000:
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x25cb0, 0xeb0
+    .xword photon_mgc_sharpen_address_4b77f20
+    .incbin "@MGC_SHARPEN_CAPSULE@", 0x26b60, 0x148
+
+.section .note.GNU-stack,"",@progbits

@@ -3357,6 +3357,9 @@ object GalleryManager {
                 mgcSabreNoiseModelScale =
                     finalStackResult.mgcSabreNoiseModelScale,
                 mgcDenoiseTuningSnr = finalStackResult.mgcDenoiseTuningSnr,
+                mgcSharpenTuningSnr = finalStackResult.mgcSharpenTuningSnr,
+                mgcSharpenAttenuationScale =
+                    finalStackResult.mgcSharpenAttenuationScale,
             )
             val configuredRawMaxLumaStrength = RawDenoiseDefaults.normalize(
                 metadata.rawDenoiseValue ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
@@ -3405,6 +3408,7 @@ object GalleryManager {
                 gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
                 gpuBayerSource = finalStackResult.gpuBayerSource,
                 metadata = mergeOutputMetadata,
+                outputScale = rawStackOutputScale,
                 sourcePixelsIncludeLensShadingCorrection =
                     finalStackResult.lensShadingCorrectionApplied,
                 applyLensShadingCorrection = applyRawLensShading,
@@ -3595,6 +3599,10 @@ object GalleryManager {
                     rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                     rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
                     sharpeningValue = rawSharpening,
+                    processLocalMgcSharpenTuningSnr =
+                        finalStackResult.mgcSharpenTuningSnr,
+                    processLocalMgcSharpenAttenuationScale =
+                        finalStackResult.mgcSharpenAttenuationScale,
                     denoiseValue = rawNoiseReduction,
                     chromaDenoiseValue = rawChromaNoiseReduction,
                     rawDcpId = updatedMetadata.rawDcpId,

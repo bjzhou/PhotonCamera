@@ -138,6 +138,10 @@ data class RawMetadata(
     val mgcSabreNoiseModelScale: Float? = null,
     /** Reference-frame SNR used by MGC FinishRaw to select luma/chroma tuning. */
     val mgcDenoiseTuningSnr: Float? = null,
+    /** Reference-frame SNR used by MGC FinishRaw to select the sharpen curves. */
+    val mgcSharpenTuningSnr: Float? = null,
+    /** Exact FinishRaw sharpen_attenuation_scale generated from the reference-frame TET. */
+    val mgcSharpenAttenuationScale: Float? = null,
     val rotation: Int? = null,
     val profileGainTableMap: DngProfileGainTableMap? = null
 ) {
@@ -1070,6 +1074,8 @@ data class RawMetadata(
         if (mgcSpatialStrengthMap != other.mgcSpatialStrengthMap) return false
         if (mgcSabreNoiseModelScale != other.mgcSabreNoiseModelScale) return false
         if (mgcDenoiseTuningSnr != other.mgcDenoiseTuningSnr) return false
+        if (mgcSharpenTuningSnr != other.mgcSharpenTuningSnr) return false
+        if (mgcSharpenAttenuationScale != other.mgcSharpenAttenuationScale) return false
         if (rotation != other.rotation) return false
 
         return true
@@ -1103,6 +1109,8 @@ data class RawMetadata(
         result = 31 * result + (mgcSpatialStrengthMap?.hashCode() ?: 0)
         result = 31 * result + (mgcSabreNoiseModelScale?.hashCode() ?: 0)
         result = 31 * result + (mgcDenoiseTuningSnr?.hashCode() ?: 0)
+        result = 31 * result + (mgcSharpenTuningSnr?.hashCode() ?: 0)
+        result = 31 * result + (mgcSharpenAttenuationScale?.hashCode() ?: 0)
         result = 31 * result + (rotation ?: 0)
         return result
     }

@@ -143,6 +143,7 @@ internal object MgcFullResolutionDenoise {
         globalOriginY: Int,
         fullWidth: Int,
         fullHeight: Int,
+        outputScale: Float = 1f,
         inputLayout: InputLayout = InputLayout.CAMERA_RGBA16F,
         applyLensShadingInBayerAot: Boolean = false,
         metadata: RawMetadata,
@@ -158,6 +159,7 @@ internal object MgcFullResolutionDenoise {
         val lumaEnabled = finiteLumaScale > 0f
         val chromaEnabled = finiteChromaScale > 0f
         if (!initialized || !rgba16f.isDirect || width <= 0 || height <= 0 ||
+            !outputScale.isFinite() || outputScale <= 0f ||
             (!lumaEnabled && !chromaEnabled)
         ) {
             return false
@@ -277,6 +279,12 @@ internal object MgcFullResolutionDenoise {
             .withStrengthScale(finiteLumaScale)
         val chromaTuning = interpolateTuning(tuningSnr, chromaTuningPoints)
             .withStrengthScale(finiteChromaScale)
+        // MGC process_raw enables MeasureMoire only for a standard Bayer
+        // capture at exact 1x output. The AOT consumes RawToYuv's Y plane, so
+        // this remains valid when the current handoff already contains RGB.
+        val measureMoireEnabled = chromaEnabled &&
+            metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
+            outputScale == 1f
         rgba16f.clear()
         val result = nativeDenoiseRgba16f(
             rgbaBuffer = rgba16f,
@@ -288,6 +296,7 @@ internal object MgcFullResolutionDenoise {
             fullHeight = fullHeight,
             inputIsBayer = inputLayout == InputLayout.NORMALIZED_BAYER16,
             cfaPattern = metadata.cfaPattern,
+            measureMoireEnabled = measureMoireEnabled,
             applyLensShadingInBayerAot = applyLensShadingInBayerAot,
             lensShading = metadata.lensShadingMap.takeIf { useLensShadingForStrength },
             lensWidth = if (useLensShadingForStrength) metadata.lensShadingMapWidth else 0,
@@ -324,7 +333,8 @@ internal object MgcFullResolutionDenoise {
                     "result=0x${result.toString(16)} size=${width}x$height " +
                     "origin=($globalOriginX,$globalOriginY) " +
                     "input=$inputLayout " +
-                    "luma=$lumaEnabled chroma=$chromaEnabled",
+                    "luma=$lumaEnabled chroma=$chromaEnabled " +
+                    "measureMoire=$measureMoireEnabled outputScale=$outputScale",
             )
             return false
         }
@@ -335,6 +345,7 @@ internal object MgcFullResolutionDenoise {
                 "snr=$tuningSnr pass=$pass " +
                 "luma=$lumaEnabled($finiteLumaScale) " +
                 "chroma=$chromaEnabled($finiteChromaScale) " +
+                "measureMoire=$measureMoireEnabled outputScale=$outputScale " +
                 "rgbShot=${rgbShot.contentToString()} " +
                 "rgbRead=${rgbRead.contentToString()} " +
                 "sabreNoiseModelScale=$sabreNoiseModelScale " +
@@ -633,6 +644,7 @@ internal object MgcFullResolutionDenoise {
         fullHeight: Int,
         inputIsBayer: Boolean,
         cfaPattern: Int,
+        measureMoireEnabled: Boolean,
         applyLensShadingInBayerAot: Boolean,
         lensShading: FloatArray?,
         lensWidth: Int,

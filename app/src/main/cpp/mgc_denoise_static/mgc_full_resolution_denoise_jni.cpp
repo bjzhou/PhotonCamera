@@ -203,6 +203,77 @@ void LogDenoiseDiagnostics(
         static_cast<long long>(delta[0].sample_count));
 }
 
+void LogMeasureMoireDiagnostics(
+    const uint16_t* input,
+    const uint16_t* output,
+    size_t plane_size) {
+    std::array<uint16_t, 3> input_min = {
+        std::numeric_limits<uint16_t>::max(),
+        std::numeric_limits<uint16_t>::max(),
+        std::numeric_limits<uint16_t>::max(),
+    };
+    std::array<uint16_t, 3> input_max = {};
+    std::array<uint16_t, 3> output_min = input_min;
+    std::array<uint16_t, 3> output_max = {};
+    std::array<uint64_t, 3> input_sum = {};
+    std::array<uint64_t, 3> output_sum = {};
+    std::array<size_t, 3> changed = {};
+    for (int channel = 0; channel < 3; ++channel) {
+        const size_t plane_offset =
+            static_cast<size_t>(channel) * plane_size;
+        for (size_t index = 0; index < plane_size; ++index) {
+            const uint16_t input_value = input[plane_offset + index];
+            const uint16_t output_value = output[plane_offset + index];
+            input_min[channel] = std::min(input_min[channel], input_value);
+            input_max[channel] = std::max(input_max[channel], input_value);
+            output_min[channel] = std::min(output_min[channel], output_value);
+            output_max[channel] = std::max(output_max[channel], output_value);
+            input_sum[channel] += input_value;
+            output_sum[channel] += output_value;
+            if (input_value != output_value) ++changed[channel];
+        }
+    }
+    const auto mean = [plane_size](uint64_t sum) {
+        return plane_size > 0
+            ? static_cast<double>(sum) / static_cast<double>(plane_size)
+            : 0.0;
+    };
+    const auto changed_percent = [plane_size](size_t count) {
+        return plane_size > 0
+            ? 100.0 * static_cast<double>(count) /
+                static_cast<double>(plane_size)
+            : 0.0;
+    };
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        kLogTag,
+        "MGC MeasureMoire strengthQ8 "
+        "in=[%u..%u/%.2f,%u..%u/%.2f,%u..%u/%.2f] "
+        "out=[%u..%u/%.2f,%u..%u/%.2f,%u..%u/%.2f] "
+        "changed=[%.1f%%,%.1f%%,%.1f%%]",
+        input_min[0],
+        input_max[0],
+        mean(input_sum[0]),
+        input_min[1],
+        input_max[1],
+        mean(input_sum[1]),
+        input_min[2],
+        input_max[2],
+        mean(input_sum[2]),
+        output_min[0],
+        output_max[0],
+        mean(output_sum[0]),
+        output_min[1],
+        output_max[1],
+        mean(output_sum[1]),
+        output_min[2],
+        output_max[2],
+        mean(output_sum[2]),
+        changed_percent(changed[0]),
+        changed_percent(changed[1]),
+        changed_percent(changed[2]));
+}
+
 void LogPecanInputs(
     const float normalized_yuv_read[3],
     const float normalized_yuv_shot[3],
@@ -314,6 +385,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     jint full_height,
     jboolean input_is_bayer,
     jint cfa_pattern,
+    jboolean measure_moire_enabled,
     jboolean apply_lens_shading_in_bayer_aot,
     jfloatArray lens_shading,
     jint lens_width,
@@ -343,6 +415,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     const bool run_chroma = chroma_enabled == JNI_TRUE;
     const bool run_diagnostics = diagnostics_enabled == JNI_TRUE;
     const bool bayer_input = input_is_bayer == JNI_TRUE;
+    const bool run_measure_moire = measure_moire_enabled == JNI_TRUE;
     const bool apply_bayer_lens_shading =
         apply_lens_shading_in_bayer_aot == JNI_TRUE;
     if (rgba_buffer == nullptr || width <= 0 || height <= 0 ||
@@ -351,6 +424,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         global_origin_x + width > full_width ||
         global_origin_y + height > full_height ||
         (bayer_input && (cfa_pattern < 0 || cfa_pattern > 3)) ||
+        (run_measure_moire &&
+         (!run_chroma || cfa_pattern < 0 || cfa_pattern > 3)) ||
         (apply_bayer_lens_shading && !bayer_input) ||
         (!run_luma && !run_chroma)) {
         return -1;
@@ -460,6 +535,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     int64_t allocation_ms = 0;
     int64_t input_pack_ms = 0;
     int64_t strength_ms = 0;
+    int64_t demoire_ms = 0;
     int64_t rgb_to_yuv_ms = 0;
     int64_t chroma_ms = 0;
     int64_t pecan_ms = 0;
@@ -513,11 +589,13 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                             const int plane = position_y * 2 + position_x;
                             const uint16_t normalized_u16 = rgba[
                                 static_cast<size_t>(source_y) * width + source_x];
+                            const uint16_t normalized_q14 =
+                                static_cast<uint16_t>(std::lround(
+                                    static_cast<double>(normalized_u16) *
+                                    16384.0 / 65535.0));
                             packed_bayer[
                                 static_cast<size_t>(plane) * packed_plane_size +
-                                packed_index] = static_cast<uint16_t>(std::lround(
-                                    static_cast<double>(normalized_u16) * 16384.0 /
-                                    65535.0));
+                                packed_index] = normalized_q14;
                         }
                     }
                 }
@@ -921,6 +999,37 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         }
         rgb_to_yuv_ms = elapsed_ms(rgb_to_yuv_start);
 
+        // MGC invokes MeasureMoire after RawToYuv and passes a channel-0 slice
+        // of linear_yuv. The lifted AOT contract therefore sees one planar
+        // S16/Q14 Y channel, not the Bayer mosaic. Its output replaces only
+        // the strength map supplied to ChromaDenoise; Pecan keeps strength.
+        std::vector<uint16_t> demoire_strength;
+        const uint16_t* chroma_strength_q8 = strength.data();
+        if (run_measure_moire) {
+            const auto demoire_start = StageClock::now();
+            demoire_strength.resize(strength_count * 3);
+            const int demoire_result =
+                photon::mgc_denoise::RunMeasureMoireS16(
+                    planar_b.get(),
+                    padded_width,
+                    padded_height,
+                    strength.data(),
+                    strength_width,
+                    strength_height,
+                    demoire_strength.data());
+            if (demoire_result != 0) {
+                return LogStageFailure("measure_moire", demoire_result);
+            }
+            if (run_diagnostics) {
+                LogMeasureMoireDiagnostics(
+                    strength.data(),
+                    demoire_strength.data(),
+                    strength_count);
+            }
+            chroma_strength_q8 = demoire_strength.data();
+            demoire_ms = elapsed_ms(demoire_start);
+        }
+
         if (run_chroma) {
             const auto chroma_start = StageClock::now();
             photon::mgc_denoise::ChromaDenoiseNoiseBuffers chroma_noise;
@@ -939,7 +1048,7 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                     planar_b.get(),
                     padded_width,
                     padded_height,
-                    strength.data(),
+                    chroma_strength_q8,
                     strength_width,
                     strength_height,
                     chroma_noise,
@@ -1012,6 +1121,12 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             diagnostics_ms = elapsed_ms(diagnostics_start);
         }
 
+        // This JNI boundary returns linear camera RGB to Photon. MGC invokes
+        // SharpenTo16Bit only later, after ProcessLowFrequency has converted
+        // linear Q14 YUV into FinishRaw's tone-mapped U12 domain and
+        // GuidedUpsample has restored the output resolution. Calling that
+        // kernel here would clamp Q14 samples at 4095 and corrupt exposure and
+        // saturation, so the matching operation at this boundary is YuvToRgb.
         const auto yuv_to_rgb_start = StageClock::now();
         const int yuv_to_rgb_result =
             photon::mgc_denoise::RunYuvToRgb(
@@ -1051,12 +1166,13 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             ANDROID_LOG_INFO,
             kLogTag,
             "MGC denoise stages hostWorkers=%d allocation=%lldms inputPack=%lldms strength=%lldms "
-            "rgbToYuv=%lldms chroma=%lldms pecan=%lldms diagnostics=%lldms "
+            "demoire=%lldms rgbToYuv=%lldms chroma=%lldms pecan=%lldms diagnostics=%lldms "
             "yuvToRgb=%lldms outputPack=%lldms total=%lldms",
             host_worker_count,
             static_cast<long long>(allocation_ms),
             static_cast<long long>(input_pack_ms),
             static_cast<long long>(strength_ms),
+            static_cast<long long>(demoire_ms),
             static_cast<long long>(rgb_to_yuv_ms),
             static_cast<long long>(chroma_ms),
             static_cast<long long>(pecan_ms),
