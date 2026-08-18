@@ -121,7 +121,7 @@ Java_com_hinnka_mycamera_processor_MgcSabreResolver_nativeResolve(
         width <= 0 || height <= 0 || mgc_pattern == 0 ||
         demosaic_white_level <= 0 ||
         demosaic_white_level > std::numeric_limits<int16_t>::max() ||
-        !std::isfinite(output_white_level) || output_white_level <= 0.0f ||
+        !std::isfinite(output_white_level) || output_white_level < 0.0f ||
         !std::isfinite(demosaic_blend_scale) ||
         !std::isfinite(demosaic_blend_bias) ||
         !std::isfinite(demosaic_sharpness_scale)) {
