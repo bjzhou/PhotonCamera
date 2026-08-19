@@ -49,6 +49,22 @@ class GlesMgcRawSpatialShadersTest {
     }
 
     @Test
+    fun filteredRgb16UsesComputeForTheFirstFloatConversion() {
+        val shader = GlesMgcRawSpatialShaders.copyRgb16ToFloat
+
+        assertEquals(
+            GlesComputeWorkGroup.Size(x = 8, y = 8, z = 1),
+            GlesComputeWorkGroup.declaredSize(shader),
+        )
+        GlesComputeWorkGroup.requireBaselineCompatible(shader, "MGC_RGB_CHROMA_TO_FLOAT")
+        assertTrue(shader.contains("readonly uniform highp uimage2D uRgb16"))
+        assertTrue(shader.contains("writeonly uniform highp image2D uRgb16f"))
+        assertTrue(shader.contains("uvec3 encoded = imageLoad(uRgb16, p).rgb"))
+        assertFalse(shader.contains("usampler2D"))
+        assertFalse(shader.contains("texelFetch"))
+    }
+
+    @Test
     fun rgbOpponentInterpolationIsGuidedByTheSameGreenReconstruction() {
         val merge = GlesMgcRawSpatialShaders.mergeRgb
 

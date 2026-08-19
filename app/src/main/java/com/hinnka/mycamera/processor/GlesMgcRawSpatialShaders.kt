@@ -1467,54 +1467,26 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    /** Float variant used only for the direct CPU black-box boundary. */
-    val normalizeRgbFloat = """
-        #version 300 es
+    /**
+     * First integer-to-float conversion stays in compute image load/store. Some Mali drivers
+     * incorrectly lower the equivalent fragment-sampler uint16 conversion to FP16.
+     */
+    val copyRgb16ToFloat = """
+        #version 310 es
         precision highp float;
         precision highp int;
-        uniform sampler2D uColorAndRWeight;
-        uniform sampler2D uGbWeights;
-        uniform sampler2D uLensShading;
-        uniform ivec2 uAccumulatorSize;
-        uniform ivec2 uTargetOrigin;
-        uniform ivec2 uOutputOrigin;
-        uniform ivec2 uOutputSize;
-        uniform vec3 uCameraDomainScale;
-        uniform float uOutputExposureScale;
-        uniform int uUseLensShading;
-        layout(location = 0) out highp vec4 oRgb16f;
+        precision highp uimage2D;
+        precision highp image2D;
+        layout(local_size_x = 8, local_size_y = 8) in;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uRgb16;
+        layout(rgba16f, binding = 1) writeonly uniform highp image2D uRgb16f;
+        uniform ivec2 uImageSize;
 
         void main() {
-            ivec2 local = ivec2(gl_FragCoord.xy) - uTargetOrigin;
-            if (any(lessThan(local, ivec2(0))) || any(greaterThanEqual(local, uAccumulatorSize))) {
-                oRgb16f = vec4(0.0, 0.0, 0.0, 1.0);
-                return;
-            }
-            vec4 colorAndR = texelFetch(uColorAndRWeight, local, 0);
-            vec2 gbWeights = texelFetch(uGbWeights, local, 0).rg;
-            vec3 semantic = colorAndR.rgb / max(
-                vec3(colorAndR.a, gbWeights.x, gbWeights.y),
-                vec3(1.0e-8)
-            );
-            vec3 rgb = vec3(
-                semantic.r + semantic.g,
-                semantic.r,
-                semantic.r + semantic.b
-            );
-            ivec2 outputPixel = local + uOutputOrigin;
-            if (uUseLensShading != 0) {
-                vec2 uv = (vec2(outputPixel) + vec2(0.5)) / vec2(uOutputSize);
-                vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
-                rgb *= vec3(shading.r, 0.5 * (shading.g + shading.b), shading.a);
-            }
-            vec3 normalized = clamp(
-                rgb * uCameraDomainScale * uOutputExposureScale,
-                vec3(0.0),
-                vec3(1.0)
-            );
-            // Preserve the former RGBA16UI contract before storing the transient half-float.
-            normalized = round(normalized * 65535.0) / 65535.0;
-            oRgb16f = vec4(normalized, 1.0);
+            ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+            if (any(greaterThanEqual(p, uImageSize))) return;
+            uvec3 encoded = imageLoad(uRgb16, p).rgb;
+            imageStore(uRgb16f, p, vec4(vec3(encoded) * (1.0 / 65535.0), 1.0));
         }
     """.trimIndent()
 
