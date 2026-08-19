@@ -1972,6 +1972,9 @@ internal class GlesMgcRawSpatialStacker(
         var sabreAccumulatedReadback: ByteBuffer? = null
         var sabreResolvedRgb: ByteBuffer? = null
         var exportedTexture = 0
+        var postprocessedUi = 0
+        var exportedCompletionTimeline: GpuStackCompletionTimeline? = null
+        val completionRecorder = GlesGpuCompletion.StackTimelineRecorder()
         var returned = false
         val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(SABRE_TAG)
         val processStartNs = System.nanoTime()
@@ -2296,42 +2299,77 @@ internal class GlesMgcRawSpatialStacker(
             uploadSabreResolvedRgb16Planar(sabreResolvedRgb, nativeResolvedPlanes)
             LargeDirectBuffer.free(sabreResolvedRgb)
             sabreResolvedRgb = null
+            releaseSabreMergePhaseTextures(nativeResolvedPlanes)
             val lensShadingTexture = createLensShadingTexture()
-            val resolved = createTexture(
-                width,
-                height,
-                if (exportGpuLinearRgbSource &&
-                    gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16F
-                ) {
-                    GLES30.GL_RGBA16F
-                } else {
-                    GLES30.GL_RGBA16UI
-                },
-                GLES30.GL_NEAREST,
-            )
+            val fullOutput = MgcSpatialRgbRect(0, 0, width, height)
+            val fullOutputTile = MgcSpatialRgbTile(index = 0, outputCore = fullOutput)
+            val chromaPostprocessor = checkNotNull(rgbChromaPostprocessor) {
+                "MGC Sabre VGN color noise/IIR postprocessor is not initialized"
+            }
+            chromaPostprocessor.initStorage(listOf(fullOutputTile))
             renderSabreOutputTransform(
                 resolvedRgbPlanes = nativeResolvedPlanes,
                 lensShadingTexture = lensShadingTexture,
                 finalBlackLevel = sabreResolveFinalBlackLevel,
                 demosaicWhiteLevel = demosaicWhiteLevel.toFloat(),
-                output = resolved,
+                output = chromaPostprocessor.normalizationTargetTexture(),
             )
-            if (useCurrentGlContext && exportGpuLinearRgbSource) {
-                GLES30.glFlush()
-                exportedTexture = resolved
-                check(textures.remove(resolved)) {
-                    "Exported Sabre RGB texture is not owned by the processor"
-                }
-                textureSpecs.remove(resolved)
-            } else {
-                cpuOutput = readSabreRgb16(resolved)
+            chromaPostprocessor.markTileWritten(fullOutputTile)
+            if (!exportGpuLinearRgbSource) {
+                val outputBytes = width.toLong() * height * 3L * Short.SIZE_BYTES
+                cpuOutput = LargeDirectBuffer.allocate(outputBytes, "MGC Sabre VGN RGB16 output")
+                    ?.order(ByteOrder.nativeOrder()) ?: error(
+                    "Unable to allocate MGC Sabre VGN RGB16 output",
+                )
             }
-            checkGlError("MGC Sabre resolve")
+            GlesGpuScheduler.memoryBarrier()
+            val chromaResult = chromaPostprocessor.process(
+                obtainOutputBuffer = { checkNotNull(cpuOutput) },
+                deferFullSizeReadback = exportGpuLinearRgbSource,
+                onFinalSubmitted = if (exportGpuLinearRgbSource) {
+                    { completionRecorder.mark(GpuStackCompletionStage.CHROMA_POSTPROCESS) }
+                } else {
+                    null
+                },
+            )
+            postprocessedUi = chromaResult.exportedTextureId
+            if (exportGpuLinearRgbSource) {
+                check(postprocessedUi != 0) {
+                    "MGC Sabre VGN color noise/IIR did not export its filtered texture"
+                }
+                exportedTexture = if (gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16UI) {
+                    postprocessedUi.also { postprocessedUi = 0 }
+                } else {
+                    createTexture(
+                        width,
+                        height,
+                        GLES30.GL_RGBA16F,
+                        GLES30.GL_NEAREST,
+                    ).also { target ->
+                        renderRgb16ToFloat(
+                            source = postprocessedUi,
+                            target = target,
+                            imageWidth = width,
+                            imageHeight = height,
+                        )
+                        GLES30.glDeleteTextures(1, intArrayOf(postprocessedUi), 0)
+                        postprocessedUi = 0
+                    }
+                }
+                completionRecorder.mark(GpuStackCompletionStage.FINAL_EXPORT)
+                exportedCompletionTimeline = completionRecorder.finish()
+                if (textures.remove(exportedTexture)) {
+                    textureSpecs.remove(exportedTexture)
+                }
+            }
+            checkGlError("MGC Sabre Resolve/VGN color noise")
             returned = true
             PLog.i(
                 SABRE_TAG,
                 "MGC Sabre complete frames=${frames.size} output=${width}x$height " +
                     "result=${if (exportedTexture != 0) gpuLinearRgbStorage.name + "_GPU" else "RGB16_CPU"} " +
+                    "colorNoiseIir=${chromaResult.chromaSubmissionMs}ms " +
+                    "chromaFinal=${chromaResult.finalSubmissionMs}ms " +
                     "total=${elapsedMs(processStartNs)}ms",
             )
             RawStackResult(
@@ -2350,6 +2388,7 @@ internal class GlesMgcRawSpatialStacker(
                         width = width,
                         height = height,
                         samplesPerPixel = 4,
+                        stackCompletionTimeline = exportedCompletionTimeline,
                         storage = gpuLinearRgbStorage,
                     )
                 },
@@ -2361,6 +2400,7 @@ internal class GlesMgcRawSpatialStacker(
                 mgcSharpenAttenuationScale = sabreResolveParameters.demosaicSharpness,
             )
         } catch (error: Exception) {
+            completionRecorder.releasePending()
             PLog.e(SABRE_TAG, "MGC Sabre merge failed", error)
             null
         } finally {
@@ -2370,7 +2410,11 @@ internal class GlesMgcRawSpatialStacker(
             LargeDirectBuffer.free(sabreAccumulatedReadback)
             LargeDirectBuffer.free(sabreResolvedRgb)
             if (!returned) {
+                exportedCompletionTimeline?.releasePending()
                 LargeDirectBuffer.free(cpuOutput)
+                if (postprocessedUi != 0) {
+                    GLES30.glDeleteTextures(1, intArrayOf(postprocessedUi), 0)
+                }
                 if (exportedTexture != 0) {
                     GLES30.glDeleteTextures(1, intArrayOf(exportedTexture), 0)
                 }
@@ -2769,62 +2813,10 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
-    private fun readSabreRgb16(texture: Int): ByteBuffer {
-        val outputBytes = width.toLong() * height * 3L * Short.SIZE_BYTES
-        val output = checkNotNull(
-            LargeDirectBuffer.allocate(outputBytes, "MGC Sabre RGB16 output"),
-        ) { "Unable to allocate MGC Sabre RGB16 output" }
-        val rowsPerBand = minOf(SABRE_READBACK_ROWS, height)
-        val readback = checkNotNull(
-            LargeDirectBuffer.allocate(
-                width.toLong() * rowsPerBand * 4L * Short.SIZE_BYTES,
-                "MGC Sabre RGB16 readback band",
-            ),
-        ) { "Unable to allocate MGC Sabre RGB16 readback band" }
-        try {
-            bindRenderTargets(intArrayOf(texture), "MGC Sabre RGB16 readback")
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
-            var y = 0
-            while (y < height) {
-                val rows = minOf(rowsPerBand, height - y)
-                readback.clear()
-                readback.limit(width * rows * 4 * Short.SIZE_BYTES)
-                GLES30.glReadPixels(
-                    0,
-                    y,
-                    width,
-                    rows,
-                    GLES30.GL_RGBA_INTEGER,
-                    GLES30.GL_UNSIGNED_SHORT,
-                    readback,
-                )
-                val source = readback.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
-                for (row in 0 until rows) {
-                    for (x in 0 until width) {
-                        val sourceIndex = (row * width + x) * 4
-                        val destinationIndex = ((y + row) * width + x) * 3 * Short.SIZE_BYTES
-                        output.putShort(destinationIndex, source.get(sourceIndex))
-                        output.putShort(destinationIndex + Short.SIZE_BYTES, source.get(sourceIndex + 1))
-                        output.putShort(destinationIndex + 2 * Short.SIZE_BYTES, source.get(sourceIndex + 2))
-                    }
-                }
-                y += rows
-            }
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            checkGlError("read MGC Sabre RGB16")
-            output.position(0)
-            output.limit(output.capacity())
-            return output
-        } catch (error: Exception) {
-            LargeDirectBuffer.free(output)
-            throw error
-        } finally {
-            LargeDirectBuffer.free(readback)
-        }
-    }
-
     private fun initSabrePrograms() {
+        check(supportsComputePrograms) {
+            "MGC Sabre VGN color noise/IIR requires the GLES 3.1 compute baseline"
+        }
         sabreExtractBayerProgram = linkProgram(
             GlesMgcRawSabreShaders.extractBayer,
             "mgc_sabre_extract_bayer",
@@ -2881,17 +2873,25 @@ internal class GlesMgcRawSpatialStacker(
             "mgc_sabre_dehomogenize",
         )
         sabreOutputTransformProgram = linkProgram(
-            if (exportGpuLinearRgbSource && gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16F) {
-                GlesMgcRawSabreShaders.outputTransformFloat
-            } else {
-                GlesMgcRawSabreShaders.outputTransformUint16
-            },
-            if (exportGpuLinearRgbSource && gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16F) {
-                "mgc_sabre_output_transform_rgba16f"
-            } else {
-                "mgc_sabre_output_transform_rgba16ui"
-            },
+            GlesMgcRawSabreShaders.outputTransformUint16,
+            "mgc_sabre_output_transform_rgba16ui",
         )
+        if (exportGpuLinearRgbSource &&
+            gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16F
+        ) {
+            copyRgb16ToFloatProgram = linkComputeProgram(
+                GlesMgcRawSpatialShaders.copyRgb16ToFloat,
+                "mgc_sabre_chroma_to_rgba16f",
+            )
+        }
+        // ResolveSabre stays on its native full-resolution grid. Feed its normalized camera RGB
+        // into the same VGN color-noise/IIR implementation used by Spatial RGB before exporting
+        // the texture to the common MGC default-denoise boundary.
+        rgbChromaPostprocessor = createRgbChromaPostprocessor(
+            imageWidth = width,
+            imageHeight = height,
+            iirOutputScale = 1f,
+        ).also { it.initPrograms() }
     }
 
     private fun initPrograms(
@@ -3090,12 +3090,16 @@ internal class GlesMgcRawSpatialStacker(
         }
     }
 
-    private fun createRgbChromaPostprocessor(): GlesMgcSpatialRgbChromaPostprocessor {
+    private fun createRgbChromaPostprocessor(
+        imageWidth: Int = outputWidth,
+        imageHeight: Int = outputHeight,
+        iirOutputScale: Float = normalizedOutputScale,
+    ): GlesMgcSpatialRgbChromaPostprocessor {
         return GlesMgcSpatialRgbChromaPostprocessor(
-            imageWidth = outputWidth,
-            imageHeight = outputHeight,
+            imageWidth = imageWidth,
+            imageHeight = imageHeight,
             calculationWbGains = calculationWhiteBalance,
-            outputScale = normalizedOutputScale,
+            outputScale = iirOutputScale,
             exportFullSizeTexture = exportGpuLinearRgbSource,
             backend = object : GlesMgcSpatialRgbChromaPostprocessor.Backend {
                 override fun linkComputeProgram(source: String, name: String): Int =
@@ -7391,12 +7395,17 @@ internal class GlesMgcRawSpatialStacker(
         checkGlError("MGC Spatial RGB normalize tile $outputCore")
     }
 
-    private fun renderRgb16ToFloat(source: Int, target: Int) {
+    private fun renderRgb16ToFloat(
+        source: Int,
+        target: Int,
+        imageWidth: Int = outputWidth,
+        imageHeight: Int = outputHeight,
+    ) {
         check(copyRgb16ToFloatProgram != 0) {
             "MGC Spatial RGB16-to-float program is not initialized"
         }
         GLES31.glUseProgram(copyRgb16ToFloatProgram)
-        uniform2i(copyRgb16ToFloatProgram, "uImageSize", outputWidth, outputHeight)
+        uniform2i(copyRgb16ToFloatProgram, "uImageSize", imageWidth, imageHeight)
         GLES31.glBindImageTexture(
             0,
             source,
@@ -7416,8 +7425,8 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_RGBA16F,
         )
         GLES31.glDispatchCompute(
-            GlesComputeWorkGroup.imageGroupCount(outputWidth),
-            GlesComputeWorkGroup.imageGroupCount(outputHeight),
+            GlesComputeWorkGroup.imageGroupCount(imageWidth),
+            GlesComputeWorkGroup.imageGroupCount(imageHeight),
             1,
         )
         GlesGpuScheduler.memoryBarrier()
@@ -7988,6 +7997,36 @@ internal class GlesMgcRawSpatialStacker(
         }
     }
 
+    /**
+     * ResolveSabre's accumulated-color readback has already completed every merge-stage draw.
+     * Retire that arena before allocating the three full-resolution RGBA16UI VGN IIR surfaces;
+     * only the freshly uploaded planar Resolve result crosses this phase boundary.
+     */
+    private fun releaseSabreMergePhaseTextures(retainedTextures: IntArray) {
+        val retained = retainedTextures.toHashSet()
+        check(retained.isNotEmpty() && retained.all(textures::contains)) {
+            "Sabre Resolve phase must retain its uploaded RGB planes"
+        }
+        detachRenderTargets()
+        val beforeBytes = estimatedOwnedTextureBytes()
+        val toDelete = textures.filterNot(retained::contains).toIntArray()
+        val releasedBytes = estimatedTextureBytes(toDelete)
+        if (toDelete.isNotEmpty()) {
+            GLES30.glDeleteTextures(toDelete.size, toDelete, 0)
+            toDelete.forEach { texture ->
+                check(textures.remove(texture))
+                textureSpecs.remove(texture)
+            }
+        }
+        checkGlError("release MGC Sabre merge texture arena")
+        PLog.i(
+            SABRE_TAG,
+            "MGC Sabre merge arena released textures=${toDelete.size} " +
+                "releasedBytes=$releasedBytes retainedBytes=${estimatedOwnedTextureBytes()} " +
+                "beforeBytes=$beforeBytes",
+        )
+    }
+
     private fun draw(
         program: Int,
         viewportWidth: Int,
@@ -8216,6 +8255,7 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_R16I,
             GLES30.GL_R16UI -> 2
             GLES30.GL_R32F,
+            GLES30.GL_RG16F,
             GLES30.GL_RGB10_A2 -> 4
             GLES30.GL_RGB16UI -> 6
             GLES30.GL_RGBA16F,
@@ -8697,7 +8737,6 @@ internal class GlesMgcRawSpatialStacker(
 
         const val TAG = "GlesMgcRawSpatial"
         const val SABRE_TAG = "GlesMgcRawSabre"
-        const val SABRE_READBACK_ROWS = 64
         // MGC 9.6.080 SabreKernelParams defaults. BuildSabreKernelParamsForSnr tunes only the
         // first six floats; these two Resolve interpolation endpoints remain 3 and 4. The
         // original wrapper converts them to scale=-range*frameCount and bias=end/range.
