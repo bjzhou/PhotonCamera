@@ -8,10 +8,10 @@ import com.hinnka.mycamera.utils.PLog
  * MGC 9.6.080 V24's libgcastartup.
  *
  * MGC selects a non-ultrashort base frame before SpatialMergeProcessor::Run. Photon preserves that
- * contract using the capture roles: normal frames and valid long bracketed frames enter regular
- * SpatialMerge, while the single lowest-TET ultrashort frame enters Bento's clipped-highlight path.
- * Output selection only changes the final RAW-domain reconstruction; frame admission, alignment,
- * rejection and Bento remain shared MGC stages.
+ * contract with MGC's RAW-content sharpness objective: reference candidacy and merge admission are
+ * separate, so choosing a base never removes another normal frame from the stack. Valid long
+ * bracketed frames enter regular SpatialMerge, while the single lowest-TET ultrashort frame enters
+ * Bento's clipped-highlight path.
  */
 internal class GlesMgcRawFusion(
     private val width: Int,
@@ -44,6 +44,60 @@ internal class GlesMgcRawFusion(
             frames.forEach { it.image.close() }
             return null
         }
+        val normalIndicesBeforeSelection = frames.indices.filter { index ->
+            frames[index].role == RawBurstFrameRole.NORMAL
+        }
+        if (normalIndicesBeforeSelection.isEmpty()) {
+            PLog.e(TAG, "MGC Spatial ${outputMode.name} merge has no NORMAL reference candidate")
+            frames.forEach { it.image.close() }
+            return null
+        }
+        val baseFrameSelection = if (normalIndicesBeforeSelection.size == 1) {
+            GlesMgcRawBaseFrameSelection(
+                referenceIndex = normalIndicesBeforeSelection.single(),
+                candidateIndices = normalIndicesBeforeSelection.toIntArray(),
+                prunedLatestIndex = null,
+                measurements = emptyMap(),
+            )
+        } else {
+            GlesMgcRawBaseFrameSelector(
+                width = width,
+                height = height,
+                cfaPattern = cfaPattern,
+                canonicalBlackLevel = blackLevel,
+                whiteLevel = whiteLevel,
+                noiseProfileSelection = noiseProfileSelection,
+                useCurrentGlContext = useCurrentGlContext,
+            ).select(
+                frames = frames,
+            )
+        }
+        if (baseFrameSelection == null) {
+            PLog.e(TAG, "MGC Spatial ${outputMode.name} RAW-content base-frame selection failed")
+            frames.forEach { it.image.close() }
+            return null
+        }
+        val selectedBaseIndex = baseFrameSelection.referenceIndex
+        val referenceFirstFrames = if (selectedBaseIndex == 0) {
+            frames
+        } else {
+            buildList(frames.size) {
+                add(frames[selectedBaseIndex])
+                frames.indices.forEach { index ->
+                    if (index != selectedBaseIndex) add(frames[index])
+                }
+            }
+        }
+        PLog.i(
+            TAG,
+            "MGC Spatial ${outputMode.name} baseFrame=" +
+                "${frames[selectedBaseIndex].frameNumber} source=" +
+                if (normalIndicesBeforeSelection.size == 1) {
+                    "single_normal"
+                } else {
+                    "gles_raw_sharpness"
+                },
+        )
         if (mergeMethod == MgcMergeMethod.SABRE) {
             return GlesMgcRawSabreProcessor(
                 width = width,
@@ -59,33 +113,35 @@ internal class GlesMgcRawFusion(
                 useCurrentGlContext = useCurrentGlContext,
                 exportGpuLinearRgbSource = exportGpuLinearRgbSource,
                 gpuLinearRgbStorage = gpuLinearRgbStorage,
-            ).processFrames(frames)
+            ).processFrames(referenceFirstFrames)
         }
 
-        val baseIndex = frames.indexOfFirst { it.role == RawBurstFrameRole.NORMAL }
+        val baseIndex = referenceFirstFrames.indexOfFirst { it.role == RawBurstFrameRole.NORMAL }
         if (baseIndex < 0) {
             PLog.e(TAG, "MGC Spatial ${outputMode.name} merge has no non-ultrashort NORMAL base frame")
-            frames.forEach { it.image.close() }
+            referenceFirstFrames.forEach { it.image.close() }
             return null
         }
-        val baseExposure = strictExposureProduct(frames[baseIndex])
-        val normalIndices = frames.indices.filter { index ->
-            frames[index].role == RawBurstFrameRole.NORMAL
+        val baseExposure = strictExposureProduct(referenceFirstFrames[baseIndex])
+        val normalIndices = referenceFirstFrames.indices.filter { index ->
+            referenceFirstFrames[index].role == RawBurstFrameRole.NORMAL
         }
-        val longIndices = frames.indices.filter { index ->
-            val frame = frames[index]
+        val longIndices = referenceFirstFrames.indices.filter { index ->
+            val frame = referenceFirstFrames[index]
             frame.role == RawBurstFrameRole.SHADOW_LONG &&
                 baseExposure != null &&
                 strictExposureProduct(frame)?.let { it > baseExposure } == true
         }
-        val taggedShortIndices = frames.indices.filter { index ->
-            frames[index].role == RawBurstFrameRole.HIGHLIGHT_SHORT
+        val taggedShortIndices = referenceFirstFrames.indices.filter { index ->
+            referenceFirstFrames[index].role == RawBurstFrameRole.HIGHLIGHT_SHORT
         }
         val shortIndex = taggedShortIndices.singleOrNull()?.takeIf { index ->
-            val shortExposure = strictExposureProduct(frames[index]) ?: return@takeIf false
+            val shortExposure = strictExposureProduct(referenceFirstFrames[index])
+                ?: return@takeIf false
             val comparisonIndices = normalIndices + longIndices
             comparisonIndices.all { otherIndex ->
-                strictExposureProduct(frames[otherIndex])?.let { shortExposure < it } == true
+                strictExposureProduct(referenceFirstFrames[otherIndex])
+                    ?.let { shortExposure < it } == true
             }
         }
 
@@ -96,8 +152,8 @@ internal class GlesMgcRawFusion(
             shortIndex?.let(::add)
         }
         val acceptedIndexSet = acceptedIndices.toSet()
-        val excludedIndices = frames.indices.filterNot(acceptedIndexSet::contains)
-        excludedIndices.forEach { frames[it].image.close() }
+        val excludedIndices = referenceFirstFrames.indices.filterNot(acceptedIndexSet::contains)
+        excludedIndices.forEach { referenceFirstFrames[it].image.close() }
 
         if (taggedShortIndices.isNotEmpty() && shortIndex == null) {
             PLog.w(
@@ -106,8 +162,8 @@ internal class GlesMgcRawFusion(
                     "than every accepted merge frame; tagged=${taggedShortIndices.size}",
             )
         }
-        val invalidLongCount = frames.indices.count { index ->
-            frames[index].role == RawBurstFrameRole.SHADOW_LONG && index !in longIndices
+        val invalidLongCount = referenceFirstFrames.indices.count { index ->
+            referenceFirstFrames[index].role == RawBurstFrameRole.SHADOW_LONG && index !in longIndices
         }
         if (invalidLongCount > 0) {
             PLog.w(
@@ -116,14 +172,15 @@ internal class GlesMgcRawFusion(
                     "requires referenceTET/longTET < 1.0",
             )
         }
-        val scheduledFrames = acceptedIndices.map(frames::get)
+        val scheduledFrames = acceptedIndices.map(referenceFirstFrames::get)
         val shortRatio = shortIndex?.let { index ->
-            val shortExposure = checkNotNull(strictExposureProduct(frames[index]))
+            val shortExposure = checkNotNull(strictExposureProduct(referenceFirstFrames[index]))
             checkNotNull(baseExposure) / shortExposure
         }
         PLog.i(
             TAG,
-            "MGC Spatial ${outputMode.name} schedule baseFrame=${frames[baseIndex].frameNumber} " +
+            "MGC Spatial ${outputMode.name} schedule " +
+                "baseFrame=${referenceFirstFrames[baseIndex].frameNumber} " +
                 "normal=${normalIndices.size} long=${longIndices.size} " +
                 "ultrashort=${if (shortIndex != null) 1 else 0} " +
                 "shortRatio=${shortRatio ?: "none"} excluded=${excludedIndices.size} " +

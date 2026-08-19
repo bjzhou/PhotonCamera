@@ -50,7 +50,6 @@ import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.processor.RawBurstFrameRole
-import com.hinnka.mycamera.processor.RawBurstGyroSelector
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MgcMergeMethod
 import com.hinnka.mycamera.processor.MgcRawMaxMode
@@ -1927,35 +1926,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         exposurePlan.excludedIndices.forEach { excludedIndex ->
                             chronologicalFrames[excludedIndex].frame.image.close()
                         }
-                        val gyroSelection = withContext(Dispatchers.Default) {
-                            RawBurstGyroSelector.select(normalFrames.map { it.frame })
-                        }
-                        gyroSelection.rejectedIndices.forEach { rejectedIndex ->
-                            normalFrames[rejectedIndex].frame.image.close()
-                        }
-                        val gyroOrderedFrames = gyroSelection.orderedAcceptedIndices.map { index ->
-                            normalFrames[index]
-                        }
+                        val isRawStack = normalFrames.firstOrNull()?.frame?.image?.format
+                            ?.let(::isRawCaptureFormat) == true
                         // Geometry is planned by the Radiance stacker's coarse temporal-flow graph.
                         // Running a second exhaustive RAW proxy registration here blocks the
                         // post-capture path on CPU and duplicates the GLES registration work.
-                        val orderedNormalFrames = gyroOrderedFrames
+                        val orderedNormalFrames = normalFrames
                         val orderedFrames = orderedNormalFrames + auxiliaryFrames
+                        val referencePlanLog = if (isRawStack) {
+                            "deferred_mgc_gles, reference=pending, "
+                        } else {
+                            "chronological, reference=0, "
+                        }
                         PLog.i(
                             TAG,
-                            "RAW burst plan: referenceSource=gyro, " +
-                                "reference=${gyroSelection.referenceOriginalIndex}, " +
+                            "RAW burst plan: referenceSource=$referencePlanLog" +
                                 "accepted=${orderedFrames.size}, " +
                                 "normal=${orderedNormalFrames.size}, " +
                                 "short=${if (exposurePlan.shortIndex != null) 1 else 0}, " +
                                 "long=${exposurePlan.longIndices.size}, " +
                                 "exposureRejected=${exposurePlan.excludedIndices.joinToString()}, " +
-                                "gyroRejected=${gyroSelection.rejectedIndices.joinToString()}, " +
                                 "geometry=GLES_TEMPORAL_GRAPH, " +
                                 "costMs=${SystemClock.elapsedRealtime() - burstPlanningStartedAtMs}",
                         )
-                        val isRawStack = orderedNormalFrames.firstOrNull()?.frame?.image?.format
-                            ?.let(::isRawCaptureFormat) == true
                         val processingFrames = if (isRawStack) {
                             orderedFrames
                         } else {
