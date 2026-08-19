@@ -78,14 +78,36 @@ class BokehShadersTest {
             "reverse smoothstep has undefined GLSL results",
             bokehShader.contains("smoothstep(1.0, 0.88"),
         )
-        assertTrue(compactHighlightShader.contains("darkDirectionRatio"))
+        assertTrue(compactHighlightShader.contains("PROBE_DIRECTIONS[16]"))
+        assertTrue(compactHighlightShader.contains("if (centerLuma <="))
+        assertTrue(compactHighlightShader.contains("if (ringLuma > centerLuma) return -1"))
+        assertTrue(compactHighlightShader.contains("allRingSamplesAreDarker"))
+        assertTrue(compactHighlightShader.contains("nearRingRadius"))
+        assertTrue(compactHighlightShader.contains("middleRingRadius"))
+        assertTrue(compactHighlightShader.contains("farRingRadius"))
+        assertTrue(compactHighlightShader.contains("if (ringResult != 1)"))
+        assertTrue(compactHighlightShader.contains("A complete ring cannot be observed"))
+        assertTrue(
+            compactHighlightShader.contains(
+                "MIN_HIGHLIGHT_CORE_RADIUS_PIXELS = 2.5"
+            )
+        )
+        assertTrue(
+            compactHighlightShader.contains(
+                "MIN_HIGHLIGHT_CORE_DIRECTION_COUNT = 12.0"
+            )
+        )
+        assertTrue(compactHighlightShader.contains("coreBrightnessThreshold"))
+        assertTrue(compactHighlightShader.contains("brightCoreSampleCount"))
+        assertFalse(compactHighlightShader.contains("darkerDirectionCount"))
+        assertFalse(compactHighlightShader.contains("darkDirectionRatio"))
         assertTrue(compactHighlightShader.contains("mediumHighlightGate"))
         assertTrue(compactHighlightShader.contains("strongPointGate"))
         assertTrue(compactHighlightShader.contains("smoothstep(0.18, 0.50, centerLuma)"))
         assertTrue(compactHighlightShader.contains("smoothstep(0.65, 0.90, centerLuma)"))
         assertFalse(compactHighlightShader.contains("smoothstep(0.07, 0.26, centerLuma)"))
-        assertTrue(compactHighlightShader.contains("innerProbeRadius"))
-        assertTrue(compactHighlightShader.contains("outerProbeRadius"))
+        assertTrue(compactHighlightShader.contains("ringProbeRadius"))
+        assertTrue(compactHighlightShader.contains("maxRingLuma"))
         assertTrue(compactHighlightShader.contains("relativeContrast"))
         assertTrue(compactHighlightShader.contains("neighborhoodContrastGate"))
         assertTrue(

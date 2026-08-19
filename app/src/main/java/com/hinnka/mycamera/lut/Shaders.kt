@@ -667,9 +667,8 @@ object Shaders {
     /**
      * 提取适合重建为弥散圆的紧凑高光。
      *
-     * 使用两圈探针寻找点光源外侧的局部背景，因此输入中已经存在一定直径的真实散景
-     * 仍能被完整提取。判定以相对局部对比为主；大块天空、窗户等连续高亮区域内部
-     * 不具备足够多的较暗方向，不会进入光斑重建通道。
+     * 使用由近到远的完整环形探针验证中心是严格局部亮点。选中的圆环上任一方向
+     * 不暗于中心都会拒绝；多尺度半径则允许探针越过较宽的光源亮区。
      */
     val COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER = """
         #version 300 es
@@ -689,19 +688,25 @@ object Shaders {
         uniform int uLinearInput;
 
         const float LENS_GAMMA = 2.2;
-        const vec2 PROBE_DIRECTIONS[12] = vec2[](
+        const float MIN_HIGHLIGHT_CORE_RADIUS_PIXELS = 2.5;
+        const float MIN_HIGHLIGHT_CORE_DIRECTION_COUNT = 12.0;
+        const vec2 PROBE_DIRECTIONS[16] = vec2[](
             vec2( 1.0,  0.0),
-            vec2(-1.0,  0.0),
-            vec2( 0.0,  1.0),
-            vec2( 0.0, -1.0),
+            vec2( 0.92387953,  0.38268343),
             vec2( 0.70710678,  0.70710678),
+            vec2( 0.38268343,  0.92387953),
+            vec2( 0.0,  1.0),
+            vec2(-0.38268343,  0.92387953),
             vec2(-0.70710678,  0.70710678),
-            vec2( 0.70710678, -0.70710678),
+            vec2(-0.92387953,  0.38268343),
+            vec2(-1.0,  0.0),
+            vec2(-0.92387953, -0.38268343),
             vec2(-0.70710678, -0.70710678),
-            vec2( 0.86602540,  0.5),
-            vec2(-0.86602540,  0.5),
-            vec2( 0.86602540, -0.5),
-            vec2(-0.86602540, -0.5)
+            vec2(-0.38268343, -0.92387953),
+            vec2( 0.0, -1.0),
+            vec2( 0.38268343, -0.92387953),
+            vec2( 0.70710678, -0.70710678),
+            vec2( 0.92387953, -0.38268343)
         );
 
         vec3 toLinear(vec3 color) {
@@ -723,6 +728,50 @@ object Shaders {
             );
         }
 
+        int evaluateDarkRing(
+            vec2 centerUV,
+            float centerLuma,
+            float ringProbeRadius,
+            out vec3 surroundLinear,
+            out float maxRingLuma,
+            out vec2 ringBrightnessMoment
+        ) {
+            surroundLinear = vec3(0.0);
+            maxRingLuma = 0.0;
+            ringBrightnessMoment = vec2(0.0);
+
+            vec2 ringUvExtent = ringProbeRadius * uTexelSize;
+            if (any(lessThan(centerUV - ringUvExtent, vec2(0.0))) ||
+                any(greaterThan(centerUV + ringUvExtent, vec2(1.0)))) {
+                // A complete ring cannot be observed at the image boundary.
+                return 0;
+            }
+
+            bool allRingSamplesAreDarker = true;
+            for (int i = 0; i < 16; i++) {
+                vec2 ringUV = centerUV +
+                    PROBE_DIRECTIONS[i] * ringProbeRadius * uTexelSize;
+                vec3 ringLinear = toLinear(
+                    textureLod(uInputTexture, ringUV, 0.0).rgb
+                );
+                float ringLuma = luminance(ringLinear);
+
+                // A brighter sample proves this fragment is not the peak.
+                // Equal clipped samples may belong to a broad light source, so
+                // let a larger ring try to reach its darker perimeter.
+                if (ringLuma > centerLuma) return -1;
+                if (ringLuma >= centerLuma) {
+                    allRingSamplesAreDarker = false;
+                }
+
+                surroundLinear += ringLinear;
+                maxRingLuma = max(maxRingLuma, ringLuma);
+                ringBrightnessMoment += PROBE_DIRECTIONS[i] * ringLuma;
+            }
+            surroundLinear *= 1.0 / 16.0;
+            return allRingSamplesAreDarker ? 1 : 0;
+        }
+
         void main() {
             vec2 depthUV = clamp(
                 (uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy,
@@ -737,56 +786,87 @@ object Shaders {
 
             vec3 centerLinear = toLinear(textureLod(uInputTexture, vTexCoord, 0.0).rgb);
             float centerLuma = luminance(centerLinear);
-            float innerProbeRadius = clamp(coc * 0.70, 5.0, 32.0);
-            float outerProbeRadius = clamp(
+            if (centerLuma <= 0.24) {
+                fragColor = vec4(0.0);
+                return;
+            }
+
+            vec3 surroundLinear = vec3(0.0);
+            float maxRingLuma = 0.0;
+            vec2 ringBrightnessMoment = vec2(0.0);
+
+            float nearRingRadius = clamp(coc * 0.70, 5.0, 32.0);
+            float middleRingRadius = clamp(
+                max(coc * 1.40, uMaxBlurRadius * 0.40),
+                10.0,
+                64.0
+            );
+            float farRingRadius = clamp(
                 max(coc * 2.40, uMaxBlurRadius * 0.80),
                 16.0,
                 128.0
             );
 
-            vec3 surroundLinear = vec3(0.0);
-            float darkerDirectionCount = 0.0;
-            float maxInnerLuma = 0.0;
-            float innerLumaSum = 0.0;
-            vec2 innerBrightnessMoment = vec2(0.0);
-            for (int i = 0; i < 12; i++) {
-                vec2 innerUV = clamp(
-                    vTexCoord + PROBE_DIRECTIONS[i] * innerProbeRadius * uTexelSize,
-                    0.0,
-                    1.0
-                );
-                vec2 outerUV = clamp(
-                    vTexCoord + PROBE_DIRECTIONS[i] * outerProbeRadius * uTexelSize,
-                    0.0,
-                    1.0
-                );
-                vec3 innerLinear = toLinear(textureLod(uInputTexture, innerUV, 0.0).rgb);
-                vec3 outerLinear = toLinear(textureLod(uInputTexture, outerUV, 0.0).rgb);
-                float innerLuma = luminance(innerLinear);
-                float outerLuma = luminance(outerLinear);
-                maxInnerLuma = max(maxInnerLuma, innerLuma);
-                innerLumaSum += innerLuma;
-                innerBrightnessMoment += PROBE_DIRECTIONS[i] * innerLuma;
-
-                vec3 neighborLinear = innerLuma < outerLuma
-                    ? innerLinear
-                    : outerLinear;
-                float neighborLuma = luminance(neighborLinear);
-                surroundLinear += neighborLinear;
-
-                float darkerThreshold = centerLuma * 0.90 - 0.008;
-                darkerDirectionCount += 1.0 - smoothstep(
-                    darkerThreshold,
-                    darkerThreshold + 0.035,
-                    neighborLuma
+            int ringResult = evaluateDarkRing(
+                vTexCoord,
+                centerLuma,
+                nearRingRadius,
+                surroundLinear,
+                maxRingLuma,
+                ringBrightnessMoment
+            );
+            if (ringResult == 0) {
+                ringResult = evaluateDarkRing(
+                    vTexCoord,
+                    centerLuma,
+                    middleRingRadius,
+                    surroundLinear,
+                    maxRingLuma,
+                    ringBrightnessMoment
                 );
             }
-            surroundLinear *= 1.0 / 12.0;
+            if (ringResult == 0) {
+                ringResult = evaluateDarkRing(
+                    vTexCoord,
+                    centerLuma,
+                    farRingRadius,
+                    surroundLinear,
+                    maxRingLuma,
+                    ringBrightnessMoment
+                );
+            }
+            if (ringResult != 1) {
+                fragColor = vec4(0.0);
+                return;
+            }
 
-            float contrast = max(centerLuma - luminance(surroundLinear), 0.0);
+            // Validate source footprint in the input image, independently from
+            // the compact classifier response area. A single hot/bright pixel
+            // has a dark core neighborhood and must never become a bokeh disc.
+            float surroundLuma = luminance(surroundLinear);
+            float coreBrightnessThreshold = mix(
+                surroundLuma,
+                centerLuma,
+                0.35
+            );
+            float brightCoreSampleCount = 0.0;
+            for (int i = 0; i < 16; i++) {
+                vec2 coreUV = vTexCoord + PROBE_DIRECTIONS[i]
+                    * MIN_HIGHLIGHT_CORE_RADIUS_PIXELS * uTexelSize;
+                float coreLuma = luminance(toLinear(
+                    textureLod(uInputTexture, coreUV, 0.0).rgb
+                ));
+                if (coreLuma >= coreBrightnessThreshold) {
+                    brightCoreSampleCount += 1.0;
+                }
+            }
+            if (brightCoreSampleCount < MIN_HIGHLIGHT_CORE_DIRECTION_COUNT) {
+                fragColor = vec4(0.0);
+                return;
+            }
+
+            float contrast = max(centerLuma - surroundLuma, 0.0);
             float relativeContrast = contrast / max(centerLuma, 0.06);
-            float darkDirectionRatio = darkerDirectionCount / 12.0;
-            float meanInnerLuma = innerLumaSum / 12.0;
             float neighborhoodContrastGate = smoothstep(
                 uMinNeighborhoodLumaDifference,
                 uMinNeighborhoodLumaDifference + 0.04,
@@ -794,20 +874,12 @@ object Shaders {
             );
 
             // Brightness and local contrast decide whether a response can be a
-            // highlight. Isolation is confidence only: making it a hard gate
-            // deletes every source inside a dense cluster before CPU spacing can
-            // retain its strongest representative centers.
-            float isolationConfidence = mix(
-                0.55,
-                1.0,
-                smoothstep(0.28, 0.82, darkDirectionRatio)
-            );
+            // highlight after the complete dark-ring invariant has passed.
             float mediumHighlightGate = smoothstep(0.18, 0.50, centerLuma)
                 * max(
                     smoothstep(0.06, 0.18, contrast),
                     smoothstep(0.18, 0.38, relativeContrast)
-                )
-                * isolationConfidence;
+                );
 
             // Strong point lights use a higher absolute floor. Their local
             // contrast may be slightly lower after sensor clipping.
@@ -815,17 +887,16 @@ object Shaders {
                 * max(
                     smoothstep(0.04, 0.14, contrast),
                     smoothstep(0.12, 0.30, relativeContrast)
-                )
-                * isolationConfidence;
+                );
 
             // Non-maximum suppression for an already-soft highlight disc.
             // Off-center pixels see a brighter inner-ring sample toward the
             // same light source and are rejected. The directional moment also
             // suppresses asymmetric fragments, leaving one compact center
             // region instead of many overlapping PSF emitters.
-            float peakDominance = centerLuma - maxInnerLuma;
-            float localMaximumGate = smoothstep(-0.01, 0.05, peakDominance);
-            float normalizedMoment = length(innerBrightnessMoment / 12.0)
+            float peakDominance = centerLuma - maxRingLuma;
+            float localMaximumGate = smoothstep(0.0, 0.05, peakDominance);
+            float normalizedMoment = length(ringBrightnessMoment / 16.0)
                 / max(centerLuma, 0.06);
             float centerednessGate = 1.0 - smoothstep(
                 0.05,
@@ -838,26 +909,13 @@ object Shaders {
                 strongPointGate
             );
 
-            // An existing optical bokeh disc has a broad, symmetric bright
-            // interior instead of a sharp peak. Its inner ring remains bright
-            // while the outer probe reaches darker background. Admit this
-            // coherent shape without weakening point-source NMS; continuous
-            // bright regions still fail the dark-surround requirement.
-            float innerDiscRatio = meanInnerLuma / max(centerLuma, 0.06);
-            float existingDiscGate = smoothstep(0.35, 0.70, innerDiscRatio)
-                * smoothstep(0.60, 0.82, darkDirectionRatio);
-            // Asymmetry lowers point confidence but is not a veto: adjacent
-            // lights distort the moment precisely in the dense regions handled
-            // by brightness-priority spatial thinning. Existing discs retain the
-            // stricter symmetry requirement.
+            // Asymmetry lowers confidence but is not a veto: the hard ring test
+            // above already rejects any candidate whose ring reaches the center
+            // brightness, while CPU spacing handles neighboring valid lights.
             float pointShapeGate = localMaximumGate
                 * mix(0.35, 1.0, centerednessGate);
-            float centerShapeGate = max(
-                pointShapeGate,
-                existingDiscGate * centerednessGate
-            );
             float compactHighlight = highlightGate
-                * centerShapeGate
+                * pointShapeGate
                 * neighborhoodContrastGate;
 
             vec3 residual = max(centerLinear - surroundLinear, vec3(0.0));

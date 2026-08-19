@@ -29,9 +29,7 @@ class OglBokehProcessor {
         private const val MIN_HIGHLIGHT_SUBJECT_DEPTH_GAP = 0.4f // X
         private const val MAX_HIGHLIGHT_BACKGROUND_DEPTH = 0.2f // Y
         private const val HIGHLIGHT_CLASSIFICATION_F_NUMBER = 2.8f
-        // Tunable highlight-quality gates. Radius is measured in original-image
-        // pixels; luminance difference is measured in linear RGB.
-        private const val MIN_HIGHLIGHT_COMPONENT_RADIUS_PIXELS = 12.0f
+        // Tunable highlight-quality gate measured in linear RGB.
         private const val MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE = 0.1f
         private const val HIGHLIGHT_MIN_CENTER_SPACING_SCALE = 0.9f
         private const val HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE = 0.5f
@@ -56,7 +54,6 @@ class OglBokehProcessor {
         val highlights: List<AnalyticHighlight>,
         val eligibleCandidateCount: Int,
         val depthGateRejectedCount: Int,
-        val undersizedComponentCount: Int,
         val preExistingBokehCount: Int,
         val densitySuppressedCount: Int,
     )
@@ -306,11 +303,9 @@ class OglBokehProcessor {
             PLog.d(
                 TAG,
                 "Analytic bokeh highlights: fNumber=$aperture, " +
-                    "minRadius=$MIN_HIGHLIGHT_COMPONENT_RADIUS_PIXELS, " +
                     "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
                     "candidates=${analyticHighlights.eligibleCandidateCount}, " +
                     "depthGateRejected=${analyticHighlights.depthGateRejectedCount}, " +
-                    "undersized=${analyticHighlights.undersizedComponentCount}, " +
                     "preExisting=${analyticHighlights.preExistingBokehCount}, " +
                     "densitySuppressed=${analyticHighlights.densitySuppressedCount}, " +
                     "accepted=${analyticHighlights.highlights.size}"
@@ -667,7 +662,6 @@ class OglBokehProcessor {
             )
             val candidates = ArrayList<AnalyticHighlightCandidate>()
             var depthGateRejectedCount = 0
-            var undersizedComponentCount = 0
 
             fun cellKey(x: Int, y: Int): Long =
                 (x.toLong() shl 32) xor (y.toLong() and 0xffffffffL)
@@ -750,9 +744,6 @@ class OglBokehProcessor {
                 componentPixels[tail++] = startIndex
                 activeMask[startIndex] = 0
 
-                var weightedX = 0.0
-                var weightedY = 0.0
-                var totalWeight = 0.0
                 var bestPeak: ComponentPeak? = null
                 var componentMinX = startIndex % width
                 var componentMaxX = componentMinX
@@ -770,10 +761,6 @@ class OglBokehProcessor {
                     componentMaxY = maxOf(componentMaxY, y)
 
                     val peak = readPeak(index)
-                    val centerWeight = maxOf(peak.score, peak.alpha * 0.0001f).toDouble()
-                    weightedX += x.toDouble() * centerWeight
-                    weightedY += y.toDouble() * centerWeight
-                    totalWeight += centerWeight
                     val previousBestPeak = bestPeak
                     if (previousBestPeak == null || peak.score > previousBestPeak.score) {
                         bestPeak = peak
@@ -810,17 +797,13 @@ class OglBokehProcessor {
                 }
 
                 val strongestPeak = bestPeak ?: continue
-                if (totalWeight <= 0.0 || strongestPeak.score <= 0.0f) continue
+                if (strongestPeak.score <= 0.0f) continue
 
                 val componentAreaInOriginalPixels = tail.toFloat() *
                     originalPixelsPerWorkingX * originalPixelsPerWorkingY
                 val componentRadiusInOriginalPixels = sqrt(
                     componentAreaInOriginalPixels / Math.PI.toFloat()
                 )
-                if (componentRadiusInOriginalPixels < MIN_HIGHLIGHT_COMPONENT_RADIUS_PIXELS) {
-                    undersizedComponentCount++
-                    continue
-                }
                 val componentWidth = componentMaxX - componentMinX + 1
                 val componentHeight = componentMaxY - componentMinY + 1
                 val componentFillRatio = tail.toFloat() /
@@ -842,9 +825,12 @@ class OglBokehProcessor {
                         componentAspectRatio >= MIN_PREEXISTING_BOKEH_ASPECT_RATIO
 
                 if (isPreExistingBokeh) {
+                    // Keep the final center on a pixel that passed the shader's
+                    // complete dark-ring test. A component centroid can fall on
+                    // an unclassified pixel and would break that invariant.
                     addCandidate(
-                        centerX = (weightedX / totalWeight).toFloat(),
-                        centerY = (weightedY / totalWeight).toFloat(),
+                        centerX = (strongestPeak.pixelIndex % width).toFloat(),
+                        centerY = (strongestPeak.pixelIndex / width).toFloat(),
                         peak = strongestPeak,
                         isPreExistingBokeh = true,
                     )
@@ -889,7 +875,6 @@ class OglBokehProcessor {
                 highlights = highlights,
                 eligibleCandidateCount = candidates.size,
                 depthGateRejectedCount = depthGateRejectedCount,
-                undersizedComponentCount = undersizedComponentCount,
                 preExistingBokehCount = preExistingBokehCount,
                 densitySuppressedCount = densitySuppressedCount,
             )
