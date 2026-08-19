@@ -985,13 +985,6 @@ internal class GlesMgcRawSpatialStacker(
                     )
                     bentoAlignSubmitNs = System.nanoTime() - alignmentStartNs
                     val postAlignStartNs = System.nanoTime()
-                    val flow = createTexture(
-                        rejectionWidth,
-                        rejectionHeight,
-                        GLES30.GL_RGBA16F,
-                        GLES30.GL_LINEAR,
-                    )
-                    renderConvertedAlignment(alignment, flow)
                     val bayerAlignment = createTexture(
                         bayerAlignmentWidth,
                         bayerAlignmentHeight,
@@ -999,6 +992,13 @@ internal class GlesMgcRawSpatialStacker(
                         GLES30.GL_NEAREST,
                     )
                     renderBayerAlignment(alignment, bayerAlignment)
+                    val flow = createTexture(
+                        rejectionWidth,
+                        rejectionHeight,
+                        GLES30.GL_RGBA16F,
+                        GLES30.GL_LINEAR,
+                    )
+                    renderMergeDomainFlow(bayerAlignment, flow)
                     val tilingMask = renderFindBlockTiles(
                         baseRaw = referenceRaw,
                         ultrashortRaw = bentoRaw,
@@ -3965,6 +3965,57 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
+    /**
+     * Expands the exact 8x8-Bayer-quad alignment consumed by the spatial merge into the
+     * per-Bayer-quad flow domain consumed by rejection.
+     *
+     * Re-expanding the finest LK grid here is not equivalent: its 32-quad interpolation boundary
+     * can accept a moving-object edge that the merge's 8-quad interpolation later keeps
+     * discontinuous. Rejection would then validate one warp while merge samples another, leaving
+     * high temporal weight on the rectangular pieces visible around moving subjects.
+     */
+    private fun renderMergeDomainFlow(bayerAlignment: Int, output: Int) {
+        GLES30.glUseProgram(convertAlignmentProgram)
+        bindTexture(convertAlignmentProgram, "uAlignment", 0, bayerAlignment)
+        uniform2i(
+            convertAlignmentProgram,
+            "uGridSize",
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+        )
+        uniform2i(
+            convertAlignmentProgram,
+            "uOutputSize",
+            rejectionWidth,
+            rejectionHeight,
+        )
+        uniform1f(
+            convertAlignmentProgram,
+            "uTileStride",
+            (MERGE_BAYER_RAW_TILE_SIZE / 2).toFloat(),
+        )
+        uniform1f(convertAlignmentProgram, "uAlignmentScale", 1f)
+        uniform1f(convertAlignmentProgram, "uOutputToAlignmentScale", 1f)
+        uniform1f(convertAlignmentProgram, "uGridMin", 0f)
+        uniform1f(
+            convertAlignmentProgram,
+            "uInterpolationFlowTolerance",
+            SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
+        )
+        uniform2f(
+            convertAlignmentProgram,
+            "uFlowNormalizationSize",
+            rejectionWidth.toFloat(),
+            rejectionHeight.toFloat(),
+        )
+        draw(
+            convertAlignmentProgram,
+            rejectionWidth,
+            rejectionHeight,
+            intArrayOf(output),
+        )
+    }
+
     private fun renderBayerAlignment(alignment: Alignment, output: Int) {
         require(
             alignment.gridWidth > 0 &&
@@ -4515,13 +4566,6 @@ internal class GlesMgcRawSpatialStacker(
         )
         val alignmentNs = System.nanoTime() - alignmentStartNs
         val flowStartNs = System.nanoTime()
-        val flow = createTexture(
-            rejectionWidth,
-            rejectionHeight,
-            GLES30.GL_RGBA16F,
-            GLES30.GL_LINEAR,
-        )
-        renderConvertedAlignment(alignment, flow)
         val bayerAlignment = createTexture(
             bayerAlignmentWidth,
             bayerAlignmentHeight,
@@ -4529,6 +4573,13 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_NEAREST,
         )
         renderBayerAlignment(alignment, bayerAlignment)
+        val flow = createTexture(
+            rejectionWidth,
+            rejectionHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+        renderMergeDomainFlow(bayerAlignment, flow)
         val flowNs = System.nanoTime() - flowStartNs
         val rejectionStartNs = System.nanoTime()
         val unblockerWidth = ceilDiv(width, UNBLOCKER_FULLRES_TILE_SIZE * 2)

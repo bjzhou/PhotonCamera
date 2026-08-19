@@ -768,7 +768,7 @@ internal object DngPhotonLocalToneMapper {
         return if (!inputLogDynamicRange.isFinite() || inputLogDynamicRange <= CURVE_EPS) {
             1f
         } else {
-            min(1f, targetLogDynamicRange / inputLogDynamicRange * 0.8f)
+            min(1f, targetLogDynamicRange / inputLogDynamicRange)
         }
     }
 

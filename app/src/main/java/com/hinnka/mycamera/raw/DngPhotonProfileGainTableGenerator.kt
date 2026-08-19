@@ -174,7 +174,7 @@ internal data class PhotonLocalToneMappingParameters(
     val localLaplacianIntensityLevels: Int = 64,
     val percentileClip: Float = 0.005f,
     val targetDynamicRange: Float = 100f,
-    val preToneMapExposureBoostEv: Float = 0.3f,
+    val preToneMapExposureBoostEv: Float = 0.35f,
     val bilateralSpatialBinSize: Int = 16,
     val bilateralRangeSigma: Float = 1f / 12f,
     val bilateralGuideCurveAlpha: Float = 0.8f,
