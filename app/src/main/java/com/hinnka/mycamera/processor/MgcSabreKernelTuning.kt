@@ -18,6 +18,7 @@ internal object MgcSabreKernelTuning {
         val gradientTransition: Float,
         val anisotropyScale: Float,
         val coherenceScale: Float,
+        val useBlackTermForReferenceColorSentinel: Boolean,
         val demosaicBlendStart: Float = 3f,
         val demosaicBlendEnd: Float = 4f,
         val covarianceMinR: Float = 0.3671880066f,
@@ -76,6 +77,10 @@ internal object MgcSabreKernelTuning {
             ),
             anisotropyScale = interpolate(effectiveSnr, 16f to 3f),
             coherenceScale = interpolate(effectiveSnr, 16f to 1.5f),
+            // MergeRaw stores reference_snr <= 10 in Sabre params at
+            // libgcastartup.so 0x348b7b8..0x348b7e0. GuideImage later selects the numeric
+            // force-reference sentinel from black_terms.w or gains.w with that flag.
+            useBlackTermForReferenceColorSentinel = finiteSnr <= 10f,
         )
     }
 

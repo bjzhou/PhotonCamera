@@ -2453,10 +2453,10 @@ internal class GlesMgcRawSpatialStacker(
         uniform4f(
             program,
             "uFrameBorderPadded",
-            SABRE_KERNEL_BORDER_PIXELS / width,
-            SABRE_KERNEL_BORDER_PIXELS / height,
-            1f - SABRE_KERNEL_BORDER_PIXELS / width,
-            1f - SABRE_KERNEL_BORDER_PIXELS / height,
+            SABRE_GUIDE_BORDER_PIXELS / width,
+            SABRE_GUIDE_BORDER_PIXELS / height,
+            1f - SABRE_GUIDE_BORDER_PIXELS / width,
+            1f - SABRE_GUIDE_BORDER_PIXELS / height,
         )
         uniform1i(program, "uCfaPattern", cfaPattern)
         uniform4fv(program, "uGains", calibration.gains)
@@ -2479,7 +2479,13 @@ internal class GlesMgcRawSpatialStacker(
             covariancePackScale(kernelParameters.covarianceMinB, kernelParameters.covarianceMaxB),
         )
         uniform1f(program, "uGreenClippingPoint", calibration.greenClippingPoint)
-        uniform1f(program, "uForceReferenceColorRgb", 0f)
+        val forceReferenceColorSentinel =
+            if (kernelParameters.useBlackTermForReferenceColorSentinel) {
+                calibration.blackTerms[3]
+            } else {
+                calibration.gains[3]
+            }
+        uniform1f(program, "uForceReferenceColorRgb", forceReferenceColorSentinel)
         draw(program, guideWidth, guideHeight, intArrayOf(guide, covariance))
     }
 
@@ -2506,10 +2512,10 @@ internal class GlesMgcRawSpatialStacker(
         uniform4f(
             program,
             "uFrameBorderPadded",
-            SABRE_KERNEL_BORDER_PIXELS / width,
-            SABRE_KERNEL_BORDER_PIXELS / height,
-            1f - SABRE_KERNEL_BORDER_PIXELS / width,
-            1f - SABRE_KERNEL_BORDER_PIXELS / height,
+            SABRE_SAMPLE_BORDER_PIXELS / width,
+            SABRE_SAMPLE_BORDER_PIXELS / height,
+            1f - SABRE_SAMPLE_BORDER_PIXELS / width,
+            1f - SABRE_SAMPLE_BORDER_PIXELS / height,
         )
         uniform4f(program, "uFlowScaleOffset", 1f, 1f, 0f, 0f)
         uniform2f(program, "uUnblockerScale", 1f, 1f)
@@ -2520,9 +2526,13 @@ internal class GlesMgcRawSpatialStacker(
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_RGB,
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_GREEN,
         )
-        val flowVariationThreshold =
-            MgcSabreRejectionTuning.flowVariationThreshold(guideWidth)
-        uniform1f(program, "uUnblockerReductionThreshold", flowVariationThreshold)
+        val flowVariationThresholds =
+            MgcSabreRejectionTuning.flowVariationThresholds(guideWidth)
+        uniform1f(
+            program,
+            "uUnblockerReductionThreshold",
+            flowVariationThresholds.unblockerReduction,
+        )
         uniform1f(
             program,
             "uExtraMotionRobustnessBoost",
@@ -2533,7 +2543,11 @@ internal class GlesMgcRawSpatialStacker(
             "uMotionRobustnessBoostVarianceThreshold",
             MgcSabreRejectionTuning.MOTION_ROBUSTNESS_VARIANCE_THRESHOLD,
         )
-        uniform1f(program, "uExtraMotionRobustnessMotionThreshold", flowVariationThreshold)
+        uniform1f(
+            program,
+            "uExtraMotionRobustnessMotionThreshold",
+            flowVariationThresholds.extraMotionRobustness,
+        )
         draw(program, guideWidth, guideHeight, intArrayOf(reverseWeight, pixelDifference))
     }
 
@@ -2599,10 +2613,10 @@ internal class GlesMgcRawSpatialStacker(
         uniform4f(
             program,
             "uFrameBorderPadded",
-            SABRE_KERNEL_BORDER_PIXELS / width,
-            SABRE_KERNEL_BORDER_PIXELS / height,
-            1f - SABRE_KERNEL_BORDER_PIXELS / width,
-            1f - SABRE_KERNEL_BORDER_PIXELS / height,
+            SABRE_SAMPLE_BORDER_PIXELS / width,
+            SABRE_SAMPLE_BORDER_PIXELS / height,
+            1f - SABRE_SAMPLE_BORDER_PIXELS / width,
+            1f - SABRE_SAMPLE_BORDER_PIXELS / height,
         )
         uniform1i(program, "uCfaPattern", cfaPattern)
         uniform1i(program, "uUseFrameWeight", if (useFrameWeight) 1 else 0)
@@ -4254,8 +4268,8 @@ internal class GlesMgcRawSpatialStacker(
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_RGB,
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_GREEN,
         )
-        val flowVariationThreshold =
-            MgcSabreRejectionTuning.flowVariationThreshold(guideWidth)
+        val flowVariationThresholds =
+            MgcSabreRejectionTuning.flowVariationThresholds(guideWidth)
         val diagnosticMode = RawStackRuntimeDebug.mgcSpatialDiagnosticMode
         val unblockerReductionThreshold =
             if (
@@ -4264,13 +4278,13 @@ internal class GlesMgcRawSpatialStacker(
             ) {
                 Float.MAX_VALUE
             } else {
-                flowVariationThreshold
+                flowVariationThresholds.unblockerReduction
             }
         val motionPriorThreshold =
             if (diagnosticMode == MgcSpatialDiagnosticMode.MAIN_REJECTION_ONLY) {
                 Float.MAX_VALUE
             } else {
-                flowVariationThreshold
+                flowVariationThresholds.extraMotionRobustness
             }
         uniform1f(
             rejectionProgram,
@@ -8796,7 +8810,10 @@ internal class GlesMgcRawSpatialStacker(
         const val SABRE_DEMOSAIC_BLEND_START = 3f
         const val SABRE_DEMOSAIC_BLEND_END = 4f
         const val SABRE_RESOLVE_INPUT_WHITE_LEVEL = 16384f
-        const val SABRE_KERNEL_BORDER_PIXELS = 1.5f
+        // Classic Bayer bounds generated by MergeRaw at libgcastartup.so 0x34942f4..0x3494360.
+        // Guide/covariance has a wider filter footprint than rejection and RBF merge sampling.
+        const val SABRE_GUIDE_BORDER_PIXELS = 2.5f
+        const val SABRE_SAMPLE_BORDER_PIXELS = 1.5f
         const val SABRE_SIGNAL_LINEAR_HISTOGRAM_BITS = 10
         const val SABRE_SIGNAL_LINEAR_HISTOGRAM_BINS = 1 shl SABRE_SIGNAL_LINEAR_HISTOGRAM_BITS
         const val SABRE_SIGNAL_ROW_STEP = 8

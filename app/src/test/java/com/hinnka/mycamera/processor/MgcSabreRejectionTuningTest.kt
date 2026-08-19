@@ -5,16 +5,22 @@ import org.junit.Test
 
 class MgcSabreRejectionTuningTest {
     @Test
-    fun flowVariationThresholdUsesOriginalGuideWidthNormalization() {
+    fun flowVariationThresholdsUseOriginalGuideWidthNormalizationAndMotionScale() {
+        val reference = MgcSabreRejectionTuning.flowVariationThresholds(2016)
         assertEquals(
             1e-4f,
-            MgcSabreRejectionTuning.flowVariationThreshold(2016),
+            reference.unblockerReduction,
             0f,
         )
         assertEquals(
-            2016f / 2040f * 1e-4f,
-            MgcSabreRejectionTuning.flowVariationThreshold(2040),
-            0f,
+            1e-4f * 0.7f,
+            reference.extraMotionRobustness,
+            1e-12f,
         )
+
+        val scaled = MgcSabreRejectionTuning.flowVariationThresholds(2040)
+        val expectedBase = 2016f / 2040f * 1e-4f
+        assertEquals(expectedBase, scaled.unblockerReduction, 0f)
+        assertEquals(expectedBase * 0.7f, scaled.extraMotionRobustness, 1e-12f)
     }
 }
