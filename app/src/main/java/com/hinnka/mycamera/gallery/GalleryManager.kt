@@ -1124,7 +1124,8 @@ object GalleryManager {
         destination: PhotoExportDestination,
         collectionUri: Uri,
         displayName: String,
-        mimeType: String
+        mimeType: String,
+        dateTaken: Long?,
     ): Uri? {
         return if (destination.savePath == PhotoSavePath.EXTERNAL_TREE) {
             createPhotoExportTreeUri(context, destination.treeUri, displayName, mimeType)
@@ -1134,8 +1135,38 @@ object GalleryManager {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                dateTaken?.let { put(MediaStore.MediaColumns.DATE_TAKEN, it) }
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             context.contentResolver.insert(collectionUri, contentValues)
+        }
+    }
+
+    private fun publishPhotoExportUri(
+        context: Context,
+        destination: PhotoExportDestination,
+        uri: Uri,
+    ): Boolean {
+        if (destination.savePath == PhotoSavePath.EXTERNAL_TREE) return true
+
+        return try {
+            val updatedRows = context.contentResolver.update(
+                uri,
+                ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                },
+                null,
+                null,
+            )
+            if (updatedRows <= 0) {
+                PLog.e(TAG, "Failed to publish MediaStore export: no row updated for $uri")
+                false
+            } else {
+                true
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to publish MediaStore export: $uri", e)
+            false
         }
     }
 
@@ -1191,11 +1222,25 @@ object GalleryManager {
         collectionUri: Uri,
         displayName: String,
         mimeType: String,
-        sourceFile: File
+        sourceFile: File,
+        dateTaken: Long?,
     ): Uri? {
-        if (!sourceFile.exists() || sourceFile.length() <= 0L) return null
-        val uri = createPhotoExportUri(context, destination, collectionUri, displayName, mimeType)
-            ?: return null
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) {
+            PLog.e(TAG, "Cannot export missing or empty file: ${sourceFile.absolutePath}")
+            return null
+        }
+        val uri = createPhotoExportUri(
+            context = context,
+            destination = destination,
+            collectionUri = collectionUri,
+            displayName = displayName,
+            mimeType = mimeType,
+            dateTaken = dateTaken,
+        )
+            ?: run {
+                PLog.e(TAG, "Failed to create export URI for $displayName")
+                return null
+            }
         val written = writeToPhotoExportUri(context, uri) { output ->
             sourceFile.inputStream().use { input ->
                 input.copyTo(output)
@@ -1205,6 +1250,11 @@ object GalleryManager {
             discardPhotoExportUri(context, uri)
             return null
         }
+        if (!publishPhotoExportUri(context, destination, uri)) {
+            discardPhotoExportUri(context, uri)
+            return null
+        }
+        PLog.d(TAG, "Published photo export: uri=$uri, mimeType=$mimeType, bytes=${sourceFile.length()}")
         return uri
     }
 
@@ -1214,10 +1264,21 @@ object GalleryManager {
         collectionUri: Uri,
         displayName: String,
         mimeType: String,
-        data: ByteArray
+        data: ByteArray,
+        dateTaken: Long?,
     ): Uri? {
-        val uri = createPhotoExportUri(context, destination, collectionUri, displayName, mimeType)
-            ?: return null
+        val uri = createPhotoExportUri(
+            context = context,
+            destination = destination,
+            collectionUri = collectionUri,
+            displayName = displayName,
+            mimeType = mimeType,
+            dateTaken = dateTaken,
+        )
+            ?: run {
+                PLog.e(TAG, "Failed to create export URI for $displayName")
+                return null
+            }
         val written = writeToPhotoExportUri(context, uri) { output ->
             output.write(data)
         }
@@ -1225,6 +1286,11 @@ object GalleryManager {
             discardPhotoExportUri(context, uri)
             return null
         }
+        if (!publishPhotoExportUri(context, destination, uri)) {
+            discardPhotoExportUri(context, uri)
+            return null
+        }
+        PLog.d(TAG, "Published photo export: uri=$uri, mimeType=$mimeType, bytes=${data.size}")
         return uri
     }
 
@@ -1528,7 +1594,8 @@ object GalleryManager {
                             collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                             displayName = filename,
                             mimeType = "image/jpeg",
-                            sourceFile = photoExportFile
+                            sourceFile = photoExportFile,
+                            dateTaken = date,
                         )
 
                         if (exportedPhotoUri != null && Build.MANUFACTURER.lowercase().contains("vivo")) {
@@ -1542,7 +1609,8 @@ object GalleryManager {
                                         collectionUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                                         displayName = videoFilename,
                                         mimeType = "video/mp4",
-                                        sourceFile = tempMotionVideoFile
+                                        sourceFile = tempMotionVideoFile,
+                                        dateTaken = date,
                                     )?.let { videoUri ->
                                         updateMetadata(context, id) { current ->
                                             current.copy(
@@ -1568,7 +1636,8 @@ object GalleryManager {
                         collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                         displayName = filename,
                         mimeType = "image/jpeg",
-                        sourceFile = tempExportFile
+                        sourceFile = tempExportFile,
+                        dateTaken = date,
                     )
                 }
 
@@ -1636,7 +1705,8 @@ object GalleryManager {
                 collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 displayName = filename,
                 mimeType = "image/jpeg",
-                sourceFile = tempExportFile
+                sourceFile = tempExportFile,
+                dateTaken = date,
             ) ?: return false
 
             updateMetadata(context, id) { current ->
@@ -1724,7 +1794,8 @@ object GalleryManager {
                 collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 displayName = filename,
                 mimeType = mimeType,
-                sourceFile = encodedFile
+                sourceFile = encodedFile,
+                dateTaken = date,
             )
             val uri = exportedUri ?: run {
                 photoDir.deleteRecursively()
@@ -1800,13 +1871,15 @@ object GalleryManager {
             if (!encoded) return false
 
             val filename = "$baseFilename.$extension"
+            val dateTaken = metadata.dateTaken ?: System.currentTimeMillis()
             val uri = exportFileToConfiguredPhotoStorage(
                 context = context,
                 destination = destination,
                 collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 displayName = filename,
                 mimeType = mimeType,
-                sourceFile = tempExportFile
+                sourceFile = tempExportFile,
+                dateTaken = dateTaken,
             ) ?: return false
 
             updateMetadata(context, id) { current ->
@@ -1824,11 +1897,17 @@ object GalleryManager {
         }
     }
 
-    suspend fun exportDng(context: Context, photoId: String, data: ByteArray, metadata: MediaMetadata) =
+    suspend fun exportDng(
+        context: Context,
+        photoId: String,
+        data: ByteArray,
+        metadata: MediaMetadata,
+    ): Boolean =
         withContext(Dispatchers.IO) {
             try {
+                val dateTaken = metadata.dateTaken ?: System.currentTimeMillis()
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-                    .format(Date())
+                    .format(Date(dateTaken))
                 val dngFilename = "PhotonCamera_${timestamp}.dng"
                 val destination = resolvePhotoExportDestination(context)
                 val uri = exportBytesToConfiguredPhotoStorage(
@@ -1837,34 +1916,41 @@ object GalleryManager {
                     collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                     displayName = dngFilename,
                     mimeType = "image/x-adobe-dng",
-                    data = data
-                )
+                    data = data,
+                    dateTaken = dateTaken,
+                ) ?: return@withContext false
 
-                uri?.let {
-                    PLog.d(TAG, "DNG exported: $uri")
+                PLog.d(TAG, "DNG exported: $uri")
 
-                    updateMetadata(context, photoId) { current ->
-                        current.copy(
-                            exportedUris = current.exportedUris + uri.toString()
-                        )
-                    }
-                    PLog.d(TAG, "Exported URI saved: $uri")
+                updateMetadata(context, photoId) { current ->
+                    current.copy(
+                        exportedUris = current.exportedUris + uri.toString()
+                    )
                 }
+                PLog.d(TAG, "Exported URI saved: $uri")
+                true
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to export DNG", e)
+                false
             }
         }
 
-    suspend fun exportDng(context: Context, photoId: String, sourceFile: File, metadata: MediaMetadata) =
+    suspend fun exportDng(
+        context: Context,
+        photoId: String,
+        sourceFile: File,
+        metadata: MediaMetadata,
+    ): Boolean =
         withContext(Dispatchers.IO) {
             try {
                 if (!sourceFile.exists() || sourceFile.length() <= 0L) {
                     PLog.w(TAG, "Skipping DNG export because source file is missing or empty: ${sourceFile.absolutePath}")
-                    return@withContext
+                    return@withContext false
                 }
 
+                val dateTaken = metadata.dateTaken ?: System.currentTimeMillis()
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-                    .format(Date())
+                    .format(Date(dateTaken))
                 val dngFilename = "PhotonCamera_${timestamp}.dng"
                 val destination = resolvePhotoExportDestination(context)
                 val uri = exportFileToConfiguredPhotoStorage(
@@ -1873,21 +1959,22 @@ object GalleryManager {
                     collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                     displayName = dngFilename,
                     mimeType = "image/x-adobe-dng",
-                    sourceFile = sourceFile
-                )
+                    sourceFile = sourceFile,
+                    dateTaken = dateTaken,
+                ) ?: return@withContext false
 
-                uri?.let {
-                    PLog.d(TAG, "DNG exported from file: $uri")
+                PLog.d(TAG, "DNG exported from file: $uri")
 
-                    updateMetadata(context, photoId) { current ->
-                        current.copy(
-                            exportedUris = current.exportedUris + uri.toString()
-                        )
-                    }
-                    PLog.d(TAG, "Exported URI saved: $uri")
+                updateMetadata(context, photoId) { current ->
+                    current.copy(
+                        exportedUris = current.exportedUris + uri.toString()
+                    )
                 }
+                PLog.d(TAG, "Exported URI saved: $uri")
+                true
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to export DNG", e)
+                false
             }
         }
 
@@ -2363,7 +2450,9 @@ object GalleryManager {
                     tempDngFile.delete()
                 }
                 if (shouldAutoSave && exportDngWithRawExport) {
-                    exportDng(context, photoId, dngFile, metadata)
+                    if (!exportDng(context, photoId, dngFile, metadata)) {
+                        PLog.e(TAG, "RAW DNG auto-export failed for photo $photoId")
+                    }
                 }
                 return true
             }
@@ -2572,7 +2661,7 @@ object GalleryManager {
             }
             updateThumbnail(context, photoId, photoProcessor, updatedMetadata, bitmap)
             if (shouldAutoSave) {
-                exportPhoto(
+                val jpegExported = exportPhoto(
                     context,
                     photoId,
                     bitmap,
@@ -2585,6 +2674,9 @@ object GalleryManager {
                     preparedUltraHdrSource = preparedUltraHdrSource,
                     preparedGainmapResult = preparedGainmapResult
                 )
+                if (!jpegExported) {
+                    PLog.e(TAG, "RAW JPEG auto-export failed for photo $photoId")
+                }
             }
             preparedUltraHdrSource?.hdrReference?.bitmap?.let {
                 if (!it.isRecycled) {
@@ -3844,7 +3936,7 @@ object GalleryManager {
             updateThumbnail(context, photoId, photoProcessor, updatedMetadata, bitmap)
             // Auto Save
             if (shouldAutoSave) {
-                exportPhoto(
+                val jpegExported = exportPhoto(
                     context,
                     photoId,
                     bitmap,
@@ -3857,6 +3949,9 @@ object GalleryManager {
                     preparedUltraHdrSource = preparedUltraHdrSource,
                     preparedGainmapResult = preparedGainmapResult
                 )
+                if (!jpegExported) {
+                    PLog.e(TAG, "Stacked RAW JPEG auto-export failed for photo $photoId")
+                }
             }
             preparedUltraHdrSource?.hdrReference?.bitmap?.let {
                 if (!it.isRecycled) {
@@ -4220,7 +4315,9 @@ object GalleryManager {
         }
 
         if (shouldAutoSave && exportDngWithRawExport) {
-            exportDng(context, photoId, dngFile, metadata)
+            if (!exportDng(context, photoId, dngFile, metadata)) {
+                PLog.e(TAG, "Stacked RAW DNG auto-export failed for photo $photoId")
+            }
         }
 
         return true
