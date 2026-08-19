@@ -475,6 +475,12 @@ class RealtimeVideoRenderer(
             params.gradingMidtoneAmount,
             params.gradingHighlightAmount,
         )
+        GLES30.glUniform3f(
+            locations.uGradingLuminancesLocation,
+            params.gradingShadowLuminance,
+            params.gradingMidtoneLuminance,
+            params.gradingHighlightLuminance,
+        )
         GLES30.glUniform1f(locations.uGradingBalanceLocation, params.gradingBalance)
         GLES30.glUniform1f(locations.uGradingBlendingLocation, params.gradingBlending)
         ColorRecipeGl.bindLchAdjustments(

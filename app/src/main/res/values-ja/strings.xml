@@ -188,6 +188,7 @@
     <string name="recipe_color_style">スタイル</string>
     <string name="recipe_color_grading">グレーディング</string>
     <string name="recipe_grading_midtones">中間調</string>
+    <string name="recipe_grading_luminance">輝度</string>
     <string name="recipe_grading_balance">バランス</string>
     <string name="recipe_grading_blending">ブレンド</string>
     <string name="recipe_tab_light">ライト</string>

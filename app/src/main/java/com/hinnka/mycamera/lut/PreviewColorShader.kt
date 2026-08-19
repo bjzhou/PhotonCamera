@@ -67,6 +67,7 @@ internal object PreviewColorShader {
             uniform float uAspectRatio;
             uniform vec3 uGradingHues;
             uniform vec3 uGradingAmounts;
+            uniform vec3 uGradingLuminances;
             uniform float uGradingBalance;
             uniform float uGradingBlending;
             uniform mat3 uPrimaryCalibrationMatrix;
@@ -264,6 +265,7 @@ internal object PreviewColorShader {
                         color.rgb,
                         uGradingHues,
                         uGradingAmounts,
+                        uGradingLuminances,
                         uGradingBalance,
                         uGradingBlending,
                         W

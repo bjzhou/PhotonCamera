@@ -188,6 +188,7 @@
     <string name="recipe_color_style">Stil</string>
     <string name="recipe_color_grading">Grading</string>
     <string name="recipe_grading_midtones">Mitteltöne</string>
+    <string name="recipe_grading_luminance">Luminanz</string>
     <string name="recipe_grading_balance">Balance</string>
     <string name="recipe_grading_blending">Übergang</string>
     <string name="recipe_tab_light">Licht</string>

@@ -43,7 +43,7 @@ enum class CurveChannel(val label: String, val color: Color) {
  * 仿 Camera Raw 的曲线编辑面板
  *
  * 支持：
- * - 4 通道切换：Master (W)、R、G、B
+ * - Master (W)、R、G、B 多通道同时显示，当前激活通道用于编辑
  * - 拖动控制点
  * - 点击空白区域添加控制点
  * - 双击控制点删除
@@ -55,71 +55,116 @@ fun CurveEditorPanel(
     imageHistogram: ImageHistogram? = null,
     modifier: Modifier = Modifier
 ) {
-    var selectedChannel by remember { mutableStateOf(CurveChannel.MASTER) }
+    var activeChannel by remember { mutableStateOf(CurveChannel.MASTER) }
+    var visibleChannels by remember { mutableStateOf(CurveChannel.entries.toSet()) }
 
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 通道选择器
-            Column(
-                modifier = Modifier.width(40.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                CurveChannel.entries.forEach { channel ->
-                    val isSelected = selectedChannel == channel
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(
-                                if (isSelected) channel.color.copy(alpha = 0.25f)
-                                else Color.Transparent
-                            )
-                            .clickable { selectedChannel = channel },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = channel.label,
-                            color = if (isSelected) channel.color else channel.color.copy(alpha = 0.45f),
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        val currentPoints = currentParams.getCurvePoints(activeChannel)
+        val inactiveCurves = visibleChannels
+            .asSequence()
+            .filter { it != activeChannel }
+            .map { channel ->
+                DisplayCurve(
+                    points = currentParams.getCurvePoints(channel) ?: identityPoints(),
+                    color = channel.color,
+                )
             }
+            .toList()
 
-            // 曲线编辑画布
-            val currentPoints = currentParams.getCurvePoints(selectedChannel)
-
+        key(activeChannel) {
             CurveCanvas(
                 points = currentPoints ?: identityPoints(),
-                curveColor = selectedChannel.color,
-                histogram = imageHistogram?.binsFor(selectedChannel),
+                curveColor = activeChannel.color,
+                inactiveCurves = inactiveCurves,
+                histogram = imageHistogram?.binsFor(activeChannel),
                 onPointsChange = { newPoints ->
-                    val arr = if (newPoints.size <= 4 && CurveUtils.isIdentityCurve(newPoints)) null else newPoints
-                    onCurveChange(selectedChannel, arr)
+                    val arr = if (
+                        newPoints.size <= 4 && CurveUtils.isIdentityCurve(newPoints)
+                    ) {
+                        null
+                    } else {
+                        newPoints
+                    }
+                    onCurveChange(activeChannel, arr)
                 },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth(),
             )
+        }
+
+        // 参考移动端修图应用，通道放到大画布下方，不再挤占横向编辑空间。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CurveChannel.entries.forEach { channel ->
+                val isVisible = channel in visibleChannels
+                val isActive = activeChannel == channel
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            when {
+                                isActive -> channel.color.copy(alpha = 0.28f)
+                                isVisible -> channel.color.copy(alpha = 0.12f)
+                                else -> Color.Transparent
+                            }
+                        )
+                        .clickable {
+                            when {
+                                !isVisible -> {
+                                    visibleChannels = visibleChannels + channel
+                                    activeChannel = channel
+                                }
+                                !isActive -> activeChannel = channel
+                                visibleChannels.size > 1 -> {
+                                    visibleChannels = visibleChannels - channel
+                                    activeChannel = visibleChannels.first()
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = channel.label,
+                        color = if (isVisible) {
+                            channel.color
+                        } else {
+                            channel.color.copy(alpha = 0.45f)
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                    )
+                }
+            }
         }
     }
 }
+
+private data class DisplayCurve(
+    val points: FloatArray,
+    val color: Color,
+)
 
 @Composable
 private fun CurveCanvas(
     points: FloatArray,
     curveColor: Color,
+    inactiveCurves: List<DisplayCurve>,
     histogram: IntArray?,
     onPointsChange: (FloatArray) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
-    val hitThresholdPx = with(density) { 24.dp.toPx() }
-    val graphInsetPx = with(density) { 18.dp.toPx() }
+    val hitThresholdPx = with(density) { 30.dp.toPx() }
+    val graphInsetPx = with(density) { 16.dp.toPx() }
 
     // 内部拖动状态；pointerInput key 使用 state 对象引用（稳定）
     val controlPointsState = remember { mutableStateOf(parsePoints(points)) }
@@ -140,7 +185,7 @@ private fun CurveCanvas(
     var lastTapTime by remember { mutableLongStateOf(0L) }
     var lastTapIndex by remember { mutableIntStateOf(-1) }
 
-    Box(modifier = modifier.padding(horizontal = 40.dp, vertical = 16.dp)) {
+    Box(modifier = modifier.padding(vertical = 4.dp)) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
@@ -180,7 +225,8 @@ private fun CurveCanvas(
                                 // 拖动控制点
                                 // Issue 2/3: 所有点（含端点）均可在 x/y 自由移动；
                                 // 用相邻点夹紧代替排序，避免 index 跳变导致的抖动。
-                                var dragIdx = nearIdx
+                                val dragIdx = nearIdx
+                                val dragOrigin = controlPointsState.value[dragIdx]
                                 drag@ while (true) {
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.id == down.id }
@@ -188,8 +234,13 @@ private fun CurveCanvas(
                                     change.consume()
 
                                     val current = controlPointsState.value
-                                    val rawX = normalizeCurveX(change.position.x, size, graphInsetPx)
-                                    val ny = normalizeCurveY(change.position.y, size, graphInsetPx)
+                                    val (rawX, ny) = curvePointAfterDrag(
+                                        origin = dragOrigin,
+                                        pointerStart = downPos,
+                                        pointerPosition = change.position,
+                                        size = size,
+                                        graphInset = graphInsetPx,
+                                    )
 
                                     // x 轴：由相邻点边界夹紧，不排序——消除抖动
                                     val nx = safeCoerceX(rawX, dragIdx, current)
@@ -208,6 +259,7 @@ private fun CurveCanvas(
                                 var dragIdx = -1
                                 var newPointAdded = false
                                 var upPos = downPos
+                                var newPointOrigin = Pair(0f, 0f)
 
                                 tap@ while (true) {
                                     val event = awaitPointerEvent()
@@ -226,13 +278,19 @@ private fun CurveCanvas(
                                         val withNew = (controlPointsState.value + newPt).sortedBy { it.first }
                                         controlPointsState.value = withNew
                                         dragIdx = withNew.indexOf(newPt)
+                                        newPointOrigin = newPt
                                         newPointAdded = true
                                     }
 
                                     if (newPointAdded && dragIdx >= 0) {
                                         val current = controlPointsState.value
-                                        val rawX = normalizeCurveX(change.position.x, size, graphInsetPx)
-                                        val ny = normalizeCurveY(change.position.y, size, graphInsetPx)
+                                        val (rawX, ny) = curvePointAfterDrag(
+                                            origin = newPointOrigin,
+                                            pointerStart = downPos,
+                                            pointerPosition = change.position,
+                                            size = size,
+                                            graphInset = graphInsetPx,
+                                        )
                                         val nx = safeCoerceX(rawX, dragIdx, current)
                                         val updated = current.toMutableList()
                                         updated[dragIdx] = Pair(nx, ny)
@@ -262,6 +320,7 @@ private fun CurveCanvas(
             drawCurveCanvas(
                 controlPoints = controlPoints,
                 curveColor = curveColor,
+                inactiveCurves = inactiveCurves,
                 histogram = histogram,
                 canvasSize = size,
                 graphInset = graphInsetPx
@@ -273,6 +332,7 @@ private fun CurveCanvas(
 private fun DrawScope.drawCurveCanvas(
     controlPoints: List<Pair<Float, Float>>,
     curveColor: Color,
+    inactiveCurves: List<DisplayCurve>,
     histogram: IntArray?,
     canvasSize: Size,
     graphInset: Float
@@ -325,29 +385,34 @@ private fun DrawScope.drawCurveCanvas(
         pathEffect = dashEffect
     )
 
-    // 评估曲线并绘制
-    val pts = FloatArray(controlPoints.size * 2) { i ->
+    // 先画非激活通道，再画当前编辑通道，避免控制点被覆盖。
+    inactiveCurves.forEach { curve ->
+        drawEvaluatedCurve(
+            points = curve.points,
+            color = curve.color.copy(alpha = 0.72f),
+            left = left,
+            top = top,
+            width = w,
+            height = h,
+            strokeWidth = 1.5f,
+        )
+    }
+    val activePoints = FloatArray(controlPoints.size * 2) { i ->
         if (i % 2 == 0) controlPoints[i / 2].first else controlPoints[i / 2].second
     }
-    val lut = CurveUtils.evaluateCurve(pts)
-
-    val curvePath = Path()
-    var firstPoint = true
-    for (i in 0 until CurveUtils.LUT_SIZE) {
-        val cx = left + i / (CurveUtils.LUT_SIZE - 1f) * w
-        val cy = top + (1f - lut[i]) * h
-        if (firstPoint) {
-            curvePath.moveTo(cx, cy)
-            firstPoint = false
-        } else {
-            curvePath.lineTo(cx, cy)
-        }
-    }
-    drawPath(curvePath, curveColor, style = Stroke(width = 2f, cap = StrokeCap.Round))
+    drawEvaluatedCurve(
+        points = activePoints,
+        color = curveColor,
+        left = left,
+        top = top,
+        width = w,
+        height = h,
+        strokeWidth = 2f,
+    )
 
     // 控制点
-    val pointRadius = 5.dp.toPx()
-    val pointBorderWidth = 1.5f
+    val pointRadius = 7.5.dp.toPx()
+    val pointBorderWidth = 2.dp.toPx()
     for ((px, py) in controlPoints) {
         val cx = left + px * w
         val cy = top + (1f - py) * h
@@ -360,6 +425,25 @@ private fun DrawScope.drawCurveCanvas(
         )
         drawCircle(curveColor.copy(alpha = 0.7f), radius = pointRadius - pointBorderWidth - 1f, center = Offset(cx, cy))
     }
+}
+
+private fun DrawScope.drawEvaluatedCurve(
+    points: FloatArray,
+    color: Color,
+    left: Float,
+    top: Float,
+    width: Float,
+    height: Float,
+    strokeWidth: Float,
+) {
+    val lut = CurveUtils.evaluateCurve(points)
+    val path = Path()
+    for (index in 0 until CurveUtils.LUT_SIZE) {
+        val x = left + index / (CurveUtils.LUT_SIZE - 1f) * width
+        val y = top + (1f - lut[index]) * height
+        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    drawPath(path, color, style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
 }
 
 private fun DrawScope.drawImageHistogram(
@@ -451,6 +535,22 @@ private fun normalizeCurveY(
     return (1f - (y - graphInset) / graphHeight).coerceIn(0f, 1f)
 }
 
+private fun curvePointAfterDrag(
+    origin: Pair<Float, Float>,
+    pointerStart: Offset,
+    pointerPosition: Offset,
+    size: androidx.compose.ui.unit.IntSize,
+    graphInset: Float,
+): Pair<Float, Float> {
+    val graphWidth = (size.width - graphInset * 2f).coerceAtLeast(1f)
+    val graphHeight = (size.height - graphInset * 2f).coerceAtLeast(1f)
+    val delta = pointerPosition - pointerStart
+    return Pair(
+        origin.first + delta.x / graphWidth * CURVE_DRAG_SENSITIVITY,
+        (origin.second - delta.y / graphHeight * CURVE_DRAG_SENSITIVITY).coerceIn(0f, 1f),
+    )
+}
+
 /** 查找最近控制点的索引，超过阈值则返回 -1 */
 private fun findNearestIndex(
     points: List<Pair<Float, Float>>,
@@ -482,3 +582,5 @@ fun ColorRecipeParams.getCurvePoints(channel: CurveChannel): FloatArray? = when 
     CurveChannel.GREEN -> greenCurvePoints
     CurveChannel.BLUE -> blueCurvePoints
 }
+
+private const val CURVE_DRAG_SENSITIVITY = 0.55f

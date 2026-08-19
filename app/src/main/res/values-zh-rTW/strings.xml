@@ -510,6 +510,7 @@
     <string name="recipe_color_style">風格</string>
     <string name="recipe_color_grading">色彩分級</string>
     <string name="recipe_grading_midtones">中間調</string>
+    <string name="recipe_grading_luminance">明亮度</string>
     <string name="recipe_grading_balance">平衡</string>
     <string name="recipe_grading_blending">過渡</string>
     <string name="recipe_tab_lch">LCH</string>

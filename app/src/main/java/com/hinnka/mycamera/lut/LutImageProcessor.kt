@@ -1136,6 +1136,12 @@ class LutImageProcessor(context: Context? = null) {
                 effectiveRecipeParams.gradingMidtoneAmount,
                 effectiveRecipeParams.gradingHighlightAmount
             )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(program, "uGradingLuminances"),
+                effectiveRecipeParams.gradingShadowLuminance,
+                effectiveRecipeParams.gradingMidtoneLuminance,
+                effectiveRecipeParams.gradingHighlightLuminance,
+            )
             GLES30.glUniform1f(
                 GLES30.glGetUniformLocation(program, "uGradingBalance"),
                 effectiveRecipeParams.gradingBalance
@@ -3880,6 +3886,7 @@ class LutImageProcessor(context: Context? = null) {
             uniform float uAspectRatio;   // 图像长宽比
             uniform vec3 uGradingHues;
             uniform vec3 uGradingAmounts;
+            uniform vec3 uGradingLuminances;
             uniform float uGradingBalance;
             uniform float uGradingBlending;
             
@@ -4116,6 +4123,7 @@ class LutImageProcessor(context: Context? = null) {
                         color.rgb,
                         uGradingHues,
                         uGradingAmounts,
+                        uGradingLuminances,
                         uGradingBalance,
                         uGradingBlending,
                         (uInputColorSpace == 1)

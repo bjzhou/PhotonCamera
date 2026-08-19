@@ -233,10 +233,13 @@ class CameraPresetJsonCodecTest {
                   "flash": 0.15,
                   "gradingShadowHue": 0.08,
                   "gradingShadowAmount": 0.22,
+                  "gradingShadowLuminance": -0.11,
                   "gradingMidtoneHue": 0.31,
                   "gradingMidtoneAmount": 0.44,
+                  "gradingMidtoneLuminance": 0.09,
                   "gradingHighlightHue": 0.58,
                   "gradingHighlightAmount": 0.66,
+                  "gradingHighlightLuminance": 0.17,
                   "gradingBalance": -0.18,
                   "gradingBlending": 0.72,
                   "unknownColorField": 10
@@ -286,10 +289,13 @@ class CameraPresetJsonCodecTest {
         assertEquals(0.15f, preset.colorRecipe.flash, 0.0001f)
         assertEquals(0.08f, preset.colorRecipe.gradingShadowHue, 0.0001f)
         assertEquals(0.22f, preset.colorRecipe.gradingShadowAmount, 0.0001f)
+        assertEquals(-0.11f, preset.colorRecipe.gradingShadowLuminance, 0.0001f)
         assertEquals(0.31f, preset.colorRecipe.gradingMidtoneHue, 0.0001f)
         assertEquals(0.44f, preset.colorRecipe.gradingMidtoneAmount, 0.0001f)
+        assertEquals(0.09f, preset.colorRecipe.gradingMidtoneLuminance, 0.0001f)
         assertEquals(0.58f, preset.colorRecipe.gradingHighlightHue, 0.0001f)
         assertEquals(0.66f, preset.colorRecipe.gradingHighlightAmount, 0.0001f)
+        assertEquals(0.17f, preset.colorRecipe.gradingHighlightLuminance, 0.0001f)
         assertEquals(-0.18f, preset.colorRecipe.gradingBalance, 0.0001f)
         assertEquals(0.72f, preset.colorRecipe.gradingBlending, 0.0001f)
         assertEquals(-0.2f, preset.effects.vignette, 0.0001f)

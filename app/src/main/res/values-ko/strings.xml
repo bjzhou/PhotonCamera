@@ -189,6 +189,7 @@
     <string name="recipe_color_style">스타일</string>
     <string name="recipe_color_grading">그레이딩</string>
     <string name="recipe_grading_midtones">중간톤</string>
+    <string name="recipe_grading_luminance">휘도</string>
     <string name="recipe_grading_balance">밸런스</string>
     <string name="recipe_grading_blending">블렌딩</string>
     <string name="recipe_tab_light">빛</string>

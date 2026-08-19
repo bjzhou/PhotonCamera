@@ -188,6 +188,7 @@
     <string name="recipe_color_style">Gaya</string>
     <string name="recipe_color_grading">Gradasi</string>
     <string name="recipe_grading_midtones">Nada Tengah</string>
+    <string name="recipe_grading_luminance">Luminans</string>
     <string name="recipe_grading_balance">Keseimbangan</string>
     <string name="recipe_grading_blending">Transisi</string>
     <string name="recipe_tab_light">Cahaya</string>

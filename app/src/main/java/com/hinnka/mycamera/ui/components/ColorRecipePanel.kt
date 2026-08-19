@@ -603,10 +603,13 @@ private fun ColorRecipeParams.resetColorGrading(): ColorRecipeParams {
     return copy(
         gradingShadowHue = 0f,
         gradingShadowAmount = 0f,
+        gradingShadowLuminance = 0f,
         gradingMidtoneHue = 0f,
         gradingMidtoneAmount = 0f,
+        gradingMidtoneLuminance = 0f,
         gradingHighlightHue = 0f,
         gradingHighlightAmount = 0f,
+        gradingHighlightLuminance = 0f,
         gradingBalance = 0f,
         gradingBlending = 0.5f,
     )

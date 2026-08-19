@@ -58,6 +58,7 @@ private enum class GradingRange {
 private data class GradingSelection(
     val hue: Float,
     val amount: Float,
+    val luminance: Float,
 )
 
 private val GradingAccent = Color(0xFFB3E5FC)
@@ -83,51 +84,73 @@ fun ColorGradingPanel(
         verticalArrangement = Arrangement.spacedBy(7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
-                .padding(3.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.04f)),
         ) {
-            GradingRange.entries.forEach { range ->
-                val selection = currentParams.selectionFor(range)
-                val isSelected = range == selectedRange
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(
-                            if (isSelected) Color.White.copy(alpha = 0.14f) else Color.Transparent
-                        )
-                        .clickable { selectedRange = range }
-                        .padding(vertical = 7.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                GradingRange.entries.forEach { range ->
+                    val selection = currentParams.selectionFor(range)
+                    val isSelected = range == selectedRange
+                    Row(
                         modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
                             .background(
-                                if (selection.amount > 0.001f) {
-                                    gradingColor(selection.hue, selection.amount)
+                                if (isSelected) {
+                                    Color.White.copy(alpha = 0.14f)
                                 } else {
-                                    Color.White.copy(alpha = 0.22f)
+                                    Color.Transparent
                                 }
                             )
-                    )
-                    Text(
-                        text = rangeLabels.getValue(range),
-                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.55f),
-                        fontSize = 10.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(start = 5.dp),
-                        maxLines = 1,
-                    )
+                            .clickable { selectedRange = range }
+                            .padding(vertical = 7.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (selection.amount > 0.001f) {
+                                        gradingColor(selection.hue, selection.amount)
+                                    } else {
+                                        Color.White.copy(alpha = 0.22f)
+                                    }
+                                )
+                        )
+                        Text(
+                            text = rangeLabels.getValue(range),
+                            color = if (isSelected) {
+                                Color.White
+                            } else {
+                                Color.White.copy(alpha = 0.55f)
+                            },
+                            fontSize = 10.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(start = 5.dp),
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
+
+            GradingTonePreview(
+                params = currentParams,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(3.dp),
+            )
         }
 
         GradingColorWheel(
@@ -140,7 +163,7 @@ fun ColorGradingPanel(
             onReset = {
                 onParamsChange(currentParams.withSelection(selectedRange, 0f, 0f))
             },
-            modifier = Modifier.size(148.dp),
+            modifier = Modifier.size(184.dp),
         )
 
         Text(
@@ -152,11 +175,17 @@ fun ColorGradingPanel(
             fontFamily = FontFamily.Monospace,
         )
 
-        GradingTonePreview(
-            params = currentParams,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(14.dp),
+        GradingSliderRow(
+            label = stringResource(R.string.recipe_grading_luminance),
+            value = selected.luminance,
+            valueRange = -1f..1f,
+            defaultValue = 0f,
+            valueText = formatSignedPercent(selected.luminance),
+            onValueChange = {
+                onParamsChange(
+                    currentParams.withLuminance(selectedRange, it.coerceIn(-1f, 1f))
+                )
+            },
         )
 
         GradingSliderRow(
@@ -192,6 +221,7 @@ private fun GradingColorWheel(
     modifier: Modifier = Modifier,
 ) {
     val currentHue by rememberUpdatedState(hue.coerceIn(0f, 1f))
+    val currentAmount by rememberUpdatedState(amount.coerceIn(0f, 1f))
     val currentOnSelectionChange by rememberUpdatedState(onSelectionChange)
     val currentOnReset by rememberUpdatedState(onReset)
 
@@ -203,9 +233,19 @@ private fun GradingColorWheel(
             .pointerInput(Unit) {
                 fun update(position: Offset) {
                     val center = Offset(size.width / 2f, size.height / 2f)
+                    val radius = (
+                        minOf(size.width, size.height) / 2f - 8.dp.toPx()
+                    ).coerceAtLeast(1f)
+                    val markerAngle = currentHue * PI.toFloat() * 2f - PI.toFloat() / 2f
+                    val markerCenter = Offset(
+                        center.x + cos(markerAngle) * currentAmount * radius,
+                        center.y + sin(markerAngle) * currentAmount * radius,
+                    )
+                    if ((position - markerCenter).getDistance() <= 24.dp.toPx()) {
+                        return
+                    }
                     val dx = position.x - center.x
                     val dy = position.y - center.y
-                    val radius = (minOf(size.width, size.height) / 2f - 8.dp.toPx()).coerceAtLeast(1f)
                     val nextAmount = (sqrt(dx * dx + dy * dy) / radius).coerceIn(0f, 1f)
                     val rawAngle = atan2(dy, dx) + PI.toFloat() / 2f
                     val normalizedHue = (
@@ -221,22 +261,51 @@ private fun GradingColorWheel(
                 )
             }
             .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val dx = change.position.x - center.x
-                    val dy = change.position.y - center.y
-                    val radius = (minOf(size.width, size.height) / 2f - 8.dp.toPx()).coerceAtLeast(1f)
-                    val nextAmount = (sqrt(dx * dx + dy * dy) / radius).coerceIn(0f, 1f)
-                    val rawAngle = atan2(dy, dx) + PI.toFloat() / 2f
-                    val normalizedHue = (
-                        rawAngle / (PI.toFloat() * 2f) + 1f
-                    ) % 1f
-                    currentOnSelectionChange(
-                        if (nextAmount < 0.02f) currentHue else normalizedHue,
-                        nextAmount,
-                    )
-                }
+                var pointerStart = Offset.Zero
+                var selectionStart = Offset.Zero
+                detectDragGestures(
+                    onDragStart = { position ->
+                        pointerStart = position
+                        val center = Offset(size.width / 2f, size.height / 2f)
+                        val radius = (
+                            minOf(size.width, size.height) / 2f - 8.dp.toPx()
+                        ).coerceAtLeast(1f)
+                        val angle = currentHue * PI.toFloat() * 2f - PI.toFloat() / 2f
+                        val currentSelection = Offset(
+                            cos(angle) * currentAmount * radius,
+                            sin(angle) * currentAmount * radius,
+                        )
+                        val pointerSelection = position - center
+                        selectionStart = if (
+                            (pointerSelection - currentSelection).getDistance() <= 24.dp.toPx()
+                        ) {
+                            currentSelection
+                        } else {
+                            pointerSelection
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        val radius = (
+                            minOf(size.width, size.height) / 2f - 8.dp.toPx()
+                        ).coerceAtLeast(1f)
+                        val pointerDelta = change.position - pointerStart
+                        val nextVector = selectionStart + pointerDelta
+                        val nextAmount = (
+                            sqrt(
+                                nextVector.x * nextVector.x + nextVector.y * nextVector.y
+                            ) / radius
+                        ).coerceIn(0f, 1f)
+                        val rawAngle = atan2(nextVector.y, nextVector.x) + PI.toFloat() / 2f
+                        val normalizedHue = (
+                            rawAngle / (PI.toFloat() * 2f) + 1f
+                        ) % 1f
+                        currentOnSelectionChange(
+                            if (nextAmount < 0.02f) currentHue else normalizedHue,
+                            nextAmount,
+                        )
+                    },
+                )
             }
     ) {
         val inset = 8.dp.toPx()
@@ -296,17 +365,17 @@ private fun GradingColorWheel(
         )
         drawCircle(
             color = Color.Black.copy(alpha = 0.38f),
-            radius = 10.dp.toPx(),
+            radius = 12.dp.toPx(),
             center = markerCenter,
         )
         drawCircle(
             color = Color.White,
-            radius = 7.5.dp.toPx(),
+            radius = 9.dp.toPx(),
             center = markerCenter,
         )
         drawCircle(
             color = gradingColor(hue, amount),
-            radius = 5.5.dp.toPx(),
+            radius = 6.5.dp.toPx(),
             center = markerCenter,
         )
     }
@@ -320,16 +389,19 @@ private fun GradingTonePreview(
     val shadow = previewToneColor(
         hue = params.gradingShadowHue,
         amount = params.gradingShadowAmount,
+        luminance = params.gradingShadowLuminance,
         neutral = 0.18f,
     )
     val midtone = previewToneColor(
         hue = params.gradingMidtoneHue,
         amount = params.gradingMidtoneAmount,
+        luminance = params.gradingMidtoneLuminance,
         neutral = 0.50f,
     )
     val highlight = previewToneColor(
         hue = params.gradingHighlightHue,
         amount = params.gradingHighlightAmount,
+        luminance = params.gradingHighlightLuminance,
         neutral = 0.84f,
     )
     val center = (0.5f - params.gradingBalance.coerceIn(-1f, 1f) * 0.22f)
@@ -425,9 +497,21 @@ private fun GradingSliderRow(
 
 private fun ColorRecipeParams.selectionFor(range: GradingRange): GradingSelection {
     return when (range) {
-        GradingRange.SHADOWS -> GradingSelection(gradingShadowHue, gradingShadowAmount)
-        GradingRange.MIDTONES -> GradingSelection(gradingMidtoneHue, gradingMidtoneAmount)
-        GradingRange.HIGHLIGHTS -> GradingSelection(gradingHighlightHue, gradingHighlightAmount)
+        GradingRange.SHADOWS -> GradingSelection(
+            gradingShadowHue,
+            gradingShadowAmount,
+            gradingShadowLuminance,
+        )
+        GradingRange.MIDTONES -> GradingSelection(
+            gradingMidtoneHue,
+            gradingMidtoneAmount,
+            gradingMidtoneLuminance,
+        )
+        GradingRange.HIGHLIGHTS -> GradingSelection(
+            gradingHighlightHue,
+            gradingHighlightAmount,
+            gradingHighlightLuminance,
+        )
     }
 }
 
@@ -454,6 +538,18 @@ private fun ColorRecipeParams.withSelection(
     }
 }
 
+private fun ColorRecipeParams.withLuminance(
+    range: GradingRange,
+    luminance: Float,
+): ColorRecipeParams {
+    val safeLuminance = luminance.coerceIn(-1f, 1f)
+    return when (range) {
+        GradingRange.SHADOWS -> copy(gradingShadowLuminance = safeLuminance)
+        GradingRange.MIDTONES -> copy(gradingMidtoneLuminance = safeLuminance)
+        GradingRange.HIGHLIGHTS -> copy(gradingHighlightLuminance = safeLuminance)
+    }
+}
+
 private fun gradingColor(hue: Float, amount: Float): Color {
     return if (amount <= 0.001f) {
         Color.White
@@ -466,13 +562,29 @@ private fun gradingColor(hue: Float, amount: Float): Color {
     }
 }
 
-private fun previewToneColor(hue: Float, amount: Float, neutral: Float): Color {
+private fun previewToneColor(
+    hue: Float,
+    amount: Float,
+    luminance: Float,
+    neutral: Float,
+): Color {
     val base = Color(neutral, neutral, neutral, 1f)
     val tint = Color.hsv(hue.coerceIn(0f, 1f) * 360f, 0.72f, 1f)
-    return lerp(base, tint, amount.coerceIn(0f, 1f) * 0.55f)
+    val safeAmount = amount.coerceIn(0f, 1f)
+    val graded = lerp(base, tint, safeAmount * 0.55f)
+    val luminanceShift = neutral * safeAmount *
+        luminance.coerceIn(-1f, 1f) * GRADING_LUMINANCE_PREVIEW_STRENGTH
+    return Color(
+        red = (graded.red + luminanceShift).coerceIn(0f, 1f),
+        green = (graded.green + luminanceShift).coerceIn(0f, 1f),
+        blue = (graded.blue + luminanceShift).coerceIn(0f, 1f),
+        alpha = 1f,
+    )
 }
 
 private fun formatSignedPercent(value: Float): String {
     val percent = (value.coerceIn(-1f, 1f) * 100f).roundToInt()
     return if (percent > 0) "+$percent" else percent.toString()
 }
+
+private const val GRADING_LUMINANCE_PREVIEW_STRENGTH = 0.17f

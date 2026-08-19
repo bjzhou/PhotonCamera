@@ -439,10 +439,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile var primaryBlueLightness: Float = 0f
     @Volatile var gradingShadowHue: Float = 0f
     @Volatile var gradingShadowAmount: Float = 0f
+    @Volatile var gradingShadowLuminance: Float = 0f
     @Volatile var gradingMidtoneHue: Float = 0f
     @Volatile var gradingMidtoneAmount: Float = 0f
+    @Volatile var gradingMidtoneLuminance: Float = 0f
     @Volatile var gradingHighlightHue: Float = 0f
     @Volatile var gradingHighlightAmount: Float = 0f
+    @Volatile var gradingHighlightLuminance: Float = 0f
     @Volatile var gradingBalance: Float = 0f
     @Volatile var gradingBlending: Float = 0.5f
 
@@ -1462,6 +1465,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 params.gradingShadowAmount,
                 params.gradingMidtoneAmount,
                 params.gradingHighlightAmount
+            )
+            GLES30.glUniform3f(
+                locations.uGradingLuminancesLocation,
+                params.gradingShadowLuminance,
+                params.gradingMidtoneLuminance,
+                params.gradingHighlightLuminance,
             )
             GLES30.glUniform1f(locations.uGradingBalanceLocation, params.gradingBalance)
             GLES30.glUniform1f(locations.uGradingBlendingLocation, params.gradingBlending)
@@ -4143,10 +4152,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             primaryBlueLightness = primaryBlueLightness,
             gradingShadowHue = gradingShadowHue,
             gradingShadowAmount = gradingShadowAmount,
+            gradingShadowLuminance = gradingShadowLuminance,
             gradingMidtoneHue = gradingMidtoneHue,
             gradingMidtoneAmount = gradingMidtoneAmount,
+            gradingMidtoneLuminance = gradingMidtoneLuminance,
             gradingHighlightHue = gradingHighlightHue,
             gradingHighlightAmount = gradingHighlightAmount,
+            gradingHighlightLuminance = gradingHighlightLuminance,
             gradingBalance = gradingBalance,
             gradingBlending = gradingBlending,
         )
@@ -4203,10 +4215,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         primaryBlueLightness = params.primaryBlueLightness
         gradingShadowHue = params.gradingShadowHue
         gradingShadowAmount = params.gradingShadowAmount
+        gradingShadowLuminance = params.gradingShadowLuminance
         gradingMidtoneHue = params.gradingMidtoneHue
         gradingMidtoneAmount = params.gradingMidtoneAmount
+        gradingMidtoneLuminance = params.gradingMidtoneLuminance
         gradingHighlightHue = params.gradingHighlightHue
         gradingHighlightAmount = params.gradingHighlightAmount
+        gradingHighlightLuminance = params.gradingHighlightLuminance
         gradingBalance = params.gradingBalance
         gradingBlending = params.gradingBlending
         val lch = ColorRecipeGl.lchAdjustments(params)

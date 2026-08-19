@@ -118,6 +118,7 @@ private class VideoLutShaderProgram(
             uniform float uAspectRatio;   // 图像长宽比
             uniform vec3 uGradingHues;
             uniform vec3 uGradingAmounts;
+            uniform vec3 uGradingLuminances;
             uniform float uGradingBalance;
             uniform float uGradingBlending;
             
@@ -595,6 +596,7 @@ private class VideoLutShaderProgram(
                         color.rgb,
                         uGradingHues,
                         uGradingAmounts,
+                        uGradingLuminances,
                         uGradingBalance,
                         uGradingBlending,
                         (uInputColorSpace == 1)
@@ -932,6 +934,12 @@ private class VideoLutShaderProgram(
                 currentRecipeParams.gradingShadowAmount,
                 currentRecipeParams.gradingMidtoneAmount,
                 currentRecipeParams.gradingHighlightAmount
+            )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(programId, "uGradingLuminances"),
+                currentRecipeParams.gradingShadowLuminance,
+                currentRecipeParams.gradingMidtoneLuminance,
+                currentRecipeParams.gradingHighlightLuminance,
             )
             GLES30.glUniform1f(
                 GLES30.glGetUniformLocation(programId, "uGradingBalance"),

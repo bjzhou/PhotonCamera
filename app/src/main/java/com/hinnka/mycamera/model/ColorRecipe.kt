@@ -77,10 +77,13 @@ data class ColorRecipeParams(
     val primaryBlueLightness: Float = 0f,
     val gradingShadowHue: Float = 0f,          // 0.0 ~ 1.0
     val gradingShadowAmount: Float = 0f,       // 0.0 ~ 1.0
+    val gradingShadowLuminance: Float = 0f,    // -1.0 ~ 1.0
     val gradingMidtoneHue: Float = 0f,         // 0.0 ~ 1.0
     val gradingMidtoneAmount: Float = 0f,      // 0.0 ~ 1.0
+    val gradingMidtoneLuminance: Float = 0f,   // -1.0 ~ 1.0
     val gradingHighlightHue: Float = 0f,       // 0.0 ~ 1.0
     val gradingHighlightAmount: Float = 0f,    // 0.0 ~ 1.0
+    val gradingHighlightLuminance: Float = 0f, // -1.0 ~ 1.0
     val gradingBalance: Float = 0f,            // -1.0 ~ 1.0
     val gradingBlending: Float = 0.5f,         // 0.0 ~ 1.0
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
@@ -159,10 +162,13 @@ data class ColorRecipeParams(
                 primaryBlueLightness == 0f &&
                 gradingShadowHue == 0f &&
                 gradingShadowAmount == 0f &&
+                gradingShadowLuminance == 0f &&
                 gradingMidtoneHue == 0f &&
                 gradingMidtoneAmount == 0f &&
+                gradingMidtoneLuminance == 0f &&
                 gradingHighlightHue == 0f &&
                 gradingHighlightAmount == 0f &&
+                gradingHighlightLuminance == 0f &&
                 gradingBalance == 0f &&
                 gradingBlending == 0.5f &&
                 remarks.isNullOrEmpty() &&
@@ -240,10 +246,13 @@ data class ColorRecipeParams(
                 primaryBlueLightness == other.primaryBlueLightness &&
                 gradingShadowHue == other.gradingShadowHue &&
                 gradingShadowAmount == other.gradingShadowAmount &&
+                gradingShadowLuminance == other.gradingShadowLuminance &&
                 gradingMidtoneHue == other.gradingMidtoneHue &&
                 gradingMidtoneAmount == other.gradingMidtoneAmount &&
+                gradingMidtoneLuminance == other.gradingMidtoneLuminance &&
                 gradingHighlightHue == other.gradingHighlightHue &&
                 gradingHighlightAmount == other.gradingHighlightAmount &&
+                gradingHighlightLuminance == other.gradingHighlightLuminance &&
                 gradingBalance == other.gradingBalance &&
                 gradingBlending == other.gradingBlending &&
                 lutIntensity == other.lutIntensity &&

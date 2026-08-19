@@ -226,10 +226,22 @@ internal object CameraPresetJsonCodec {
             primaryBlueLightness = obj.float("primaryBlueLightness", default.primaryBlueLightness),
             gradingShadowHue = obj.float("gradingShadowHue", default.gradingShadowHue),
             gradingShadowAmount = obj.float("gradingShadowAmount", default.gradingShadowAmount),
+            gradingShadowLuminance = obj.float(
+                "gradingShadowLuminance",
+                default.gradingShadowLuminance,
+            ),
             gradingMidtoneHue = obj.float("gradingMidtoneHue", default.gradingMidtoneHue),
             gradingMidtoneAmount = obj.float("gradingMidtoneAmount", default.gradingMidtoneAmount),
+            gradingMidtoneLuminance = obj.float(
+                "gradingMidtoneLuminance",
+                default.gradingMidtoneLuminance,
+            ),
             gradingHighlightHue = obj.float("gradingHighlightHue", default.gradingHighlightHue),
             gradingHighlightAmount = obj.float("gradingHighlightAmount", default.gradingHighlightAmount),
+            gradingHighlightLuminance = obj.float(
+                "gradingHighlightLuminance",
+                default.gradingHighlightLuminance,
+            ),
             gradingBalance = obj.float("gradingBalance", default.gradingBalance),
             gradingBlending = obj.float("gradingBlending", default.gradingBlending),
             lutIntensity = obj.float("lutIntensity", default.lutIntensity),

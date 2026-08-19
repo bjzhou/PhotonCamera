@@ -542,6 +542,7 @@
     <string name="recipe_color_style">Style</string>
     <string name="recipe_color_grading">Grading</string>
     <string name="recipe_grading_midtones">Midtones</string>
+    <string name="recipe_grading_luminance">Luminance</string>
     <string name="recipe_grading_balance">Balance</string>
     <string name="recipe_grading_blending">Blending</string>
     <string name="recipe_tab_lch">LCH</string>

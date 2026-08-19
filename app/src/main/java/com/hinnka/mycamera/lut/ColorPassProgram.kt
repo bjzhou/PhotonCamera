@@ -47,6 +47,7 @@ internal data class ColorPassLocations(
     val uAspectRatioLocation: Int,
     val uGradingHuesLocation: Int,
     val uGradingAmountsLocation: Int,
+    val uGradingLuminancesLocation: Int,
     val uGradingBalanceLocation: Int,
     val uGradingBlendingLocation: Int,
     val uLchHueAdjustmentsLocation: Int,
@@ -148,6 +149,10 @@ internal class PreviewColorProgramCache {
             uAspectRatioLocation = GLES30.glGetUniformLocation(program, "uAspectRatio"),
             uGradingHuesLocation = GLES30.glGetUniformLocation(program, "uGradingHues"),
             uGradingAmountsLocation = GLES30.glGetUniformLocation(program, "uGradingAmounts"),
+            uGradingLuminancesLocation = GLES30.glGetUniformLocation(
+                program,
+                "uGradingLuminances",
+            ),
             uGradingBalanceLocation = GLES30.glGetUniformLocation(program, "uGradingBalance"),
             uGradingBlendingLocation = GLES30.glGetUniformLocation(program, "uGradingBlending"),
             uLchHueAdjustmentsLocation = GLES30.glGetUniformLocation(program, "uLchHueAdjustments"),
