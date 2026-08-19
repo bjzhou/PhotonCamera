@@ -355,7 +355,8 @@ internal class GlesMgcRawSpatialStacker(
     } else {
         height
     }
-    private val sensorWhiteLevel = max(1, whiteLevel).toFloat()
+    private val sensorWhiteLevelCode = max(1, whiteLevel)
+    private val sensorWhiteLevel = sensorWhiteLevelCode.toFloat()
     // RawMetadata has already converted positional Camera2 black levels to R, Gr, Gb, B.
     private val canonicalBlackLevel = FloatArray(4) { channel ->
         blackLevel.getOrElse(channel) { blackLevel.firstOrNull() ?: 0f }
@@ -5892,6 +5893,7 @@ internal class GlesMgcRawSpatialStacker(
                 rejectionWidth = capture.rejectionWidth,
                 rejectionHeight = capture.rejectionHeight,
                 frameCount = capture.frameCount,
+                whiteLevel = sensorWhiteLevelCode,
                 inputReadNoise = capture.inputReadNoise,
                 inputShotNoise = capture.inputShotNoise,
                 frameWeights = capture.frameWeights,

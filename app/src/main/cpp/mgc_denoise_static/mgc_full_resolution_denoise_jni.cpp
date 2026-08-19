@@ -896,16 +896,31 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 yuv_quadratic[1]);
         } else {
             for (int output_channel = 0; output_channel < 3; ++output_channel) {
+                float row_sum = 0.0f;
                 for (int input_channel = 0; input_channel < 3; ++input_channel) {
                     const float matrix_value =
                         rgb_to_yuv[output_channel * 3 + input_channel];
                     const float matrix_squared = matrix_value * matrix_value;
+                    row_sum += matrix_value;
                     yuv_read[output_channel] +=
                         matrix_squared * prepared_rgb_read[input_channel];
                     yuv_shot[output_channel] +=
                         matrix_squared * prepared_rgb_shot[input_channel];
                     yuv_quadratic[output_channel] +=
                         matrix_squared * prepared_rgb_quadratic[input_channel];
+                }
+                // NoiseModel::Transform at 0x5e985d8 keeps read variance in
+                // the matrix output domain, but normalizes the signal-dependent
+                // coefficients by the row's signal scale. Zero-sum chroma rows
+                // therefore have no independent shot/quadratic coefficient.
+                const float absolute_row_sum = std::abs(row_sum);
+                if (absolute_row_sum < 1.0e-6f) {
+                    yuv_shot[output_channel] = 0.0f;
+                    yuv_quadratic[output_channel] = 0.0f;
+                } else {
+                    yuv_shot[output_channel] /= absolute_row_sum;
+                    yuv_quadratic[output_channel] /=
+                        absolute_row_sum * absolute_row_sum;
                 }
             }
             // CreateChromaDenoiseNoiseModelBuffers preserves all three read channels, then
