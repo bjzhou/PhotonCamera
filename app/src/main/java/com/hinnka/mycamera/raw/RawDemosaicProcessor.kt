@@ -294,10 +294,14 @@ class RawDemosaicProcessor {
         // three one-pixel neighborhoods before the final ROI crop. Keep the offset a
         // multiple of four so the packed RGBA Bayer layout remains aligned.
         private const val VGN_WORK_HALO = 20
+        // Phocus' color-noise control is an integer level. Level 50 selects 4LP table entry
+        // min(level, 40) + 4 = 44 for pass 1 and entry min(level, 74) - 30 = 20 for pass 3.
+        // It is also above the native level-35 gate, so the complete IIR2 pass 1/2/3 chain runs.
+        private const val VGN_COLOR_NOISE_LEVEL = 50
         private const val VGN_DISPATCH_UBO_SLOT_COUNT = 2
         private const val VGN_PASS_WINDOW_SIZE = 2
         // The calibration field contains a 128x128 analysis core plus enough support for
-        // VGN's 20-pixel demosaic halo on every side.
+        // VGN's 20-pixel halo and the complete color-noise IIR chain on every side.
         private const val VGN_NOISE_CALIBRATION_SIZE = 256
         private const val VGN_NOISE_ANALYSIS_SIZE = 128
         private const val VGN_NOISE_ANALYSIS_ORIGIN =
@@ -8295,6 +8299,57 @@ class RawDemosaicProcessor {
         putInt(0)
     }
 
+    private data class VgnIirCoefficients(
+        val a10: FloatArray,
+        val b10: FloatArray,
+        val aDyn1: FloatArray,
+        val bDyn1: FloatArray,
+        val aDyn2: FloatArray,
+        val bDyn2: FloatArray,
+    )
+
+    // Exact coefficient rows selected by CDemosaicFilter::FilterResultGpu for color-noise
+    // level 50. a10/b10 is GetIIRFilter2LPCoefFloat(14); the two dynamic sections are the
+    // cascaded biquads returned by GetIIRFilter4LPCoefFloat(44) and (20), respectively.
+    private val vgnIirPass1Coefficients = VgnIirCoefficients(
+        a10 = floatArrayOf(0.0674552768f, 0.134910554f, 0.0674552768f, 0f),
+        b10 = floatArrayOf(1f, -1.14298046f, 0.412801594f, 0f),
+        aDyn1 = floatArrayOf(0.00580812711f, 0.0116162542f, 0.00580812711f, 0f),
+        bDyn1 = floatArrayOf(1f, -1.86380053f, 0.887032986f, 0f),
+        aDyn2 = floatArrayOf(0.00537849404f, 0.0107569881f, 0.00537849404f, 0f),
+        bDyn2 = floatArrayOf(1f, -1.72593343f, 0.747447371f, 0f),
+    )
+
+    private val vgnIirPass3Coefficients = VgnIirCoefficients(
+        a10 = vgnIirPass1Coefficients.a10,
+        b10 = vgnIirPass1Coefficients.b10,
+        aDyn1 = floatArrayOf(0.0331984349f, 0.0663968697f, 0.0331984349f, 0f),
+        bDyn1 = floatArrayOf(1f, -1.61172712f, 0.744520843f, 0f),
+        aDyn2 = floatArrayOf(0.0281187538f, 0.0562375076f, 0.0281187538f, 0f),
+        bDyn2 = floatArrayOf(1f, -1.36511719f, 0.47759226f, 0f),
+    )
+
+    private fun vgnIirUbo(
+        width: Int,
+        height: Int,
+        direction: Int,
+        axis: Int,
+        coefficients: VgnIirCoefficients,
+    ): ByteBuffer {
+        return vgnUbo(112) {
+            for (value in coefficients.a10) putFloat(value)
+            for (value in coefficients.b10) putFloat(value)
+            for (value in coefficients.aDyn1) putFloat(value)
+            for (value in coefficients.bDyn1) putFloat(value)
+            for (value in coefficients.aDyn2) putFloat(value)
+            for (value in coefficients.bDyn2) putFloat(value)
+            putInt(width)
+            putInt(height)
+            putInt(direction)
+            putInt(axis)
+        }
+    }
+
     private fun dispatchVgnPass(
         programIndex: Int,
         groupCountX: Int,
@@ -8357,6 +8412,33 @@ class RawDemosaicProcessor {
             GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, uboBinding, 0)
         }
         passWindow.endPass()
+    }
+
+    private fun runVgnIirPass(
+        programIndex: Int,
+        source: Int,
+        destination: Int,
+        uboId: Int,
+        width: Int,
+        height: Int,
+        direction: Int,
+        axis: Int,
+        coefficients: VgnIirCoefficients,
+        label: String,
+    ) {
+        val groupsX = if (axis == 0) 1 else width
+        val groupsY = if (axis == 0) height else 1
+        dispatchVgnPass(
+            programIndex = programIndex,
+            groupCountX = groupsX,
+            groupCountY = groupsY,
+            label = label,
+            uboId = uboId,
+            uboBinding = 2,
+            ubo = vgnIirUbo(width, height, direction, axis, coefficients),
+            VgnImageBinding(0, source, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+            VgnImageBinding(1, destination, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+        )
     }
 
     private fun unbindVgnImages() {
@@ -8910,23 +8992,213 @@ class RawDemosaicProcessor {
                 VgnImageBinding(1, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
             )
 
-            // These three color-noise passes are VGN's required four-phase chroma
-            // reconstruction, not the optional IIR denoise formerly applied afterwards.
+            val full3 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 3")
+
             dispatchVgnPass(
-                VgnShaders.PROGRAM_COLOR_NOISE_3,
-                groupsOutputX,
-                groupsOutputY,
-                "color reconstruction 3 RGB",
+                VgnShaders.PROGRAM_COLOR_NOISE_3_YCCD,
+                groupsWorkX,
+                groupsWorkY,
+                "color reconstruction 3 YCCD",
+                nextVgnUboId(),
+                4,
+                vgnBoundsUbo(12, 12, workWidth - 12, workHeight - 12),
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(2, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(3, full3, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_IIR2_1_INIT,
+                1,
+                workHeight,
+                "IIR2 pass 1 horizontal forward",
                 nextVgnUboId(),
                 3,
+                vgnIirUbo(workWidth, workHeight, 0, 0, vgnIirPass1Coefficients),
+                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_1,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                0,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 1 horizontal reverse",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_1,
+                full3,
+                full2,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 1 vertical forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_1,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 1 vertical reverse",
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_CALCULATE_COLOR_NOISE_ERROR,
+                groupsWorkX,
+                groupsWorkY,
+                "calculate color noise error",
+                nextVgnUboId(),
+                images = arrayOf(
+                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                ),
+            )
+
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                0,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 horizontal forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full3,
+                full2,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                0,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 horizontal reverse",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 vertical forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full3,
+                full2,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 vertical reverse",
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_FILTER,
+                groupsWorkX,
+                groupsWorkY,
+                "color noise filter",
+                nextVgnUboId(),
+                images = arrayOf(
+                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(2, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                ),
+            )
+
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full1,
+                full0,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                0,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 horizontal forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full0,
+                full1,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                0,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 horizontal reverse",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full1,
+                full0,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                1,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 vertical forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full0,
+                full1,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                1,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 vertical reverse",
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_YUV_TO_RGB,
+                groupsOutputX,
+                groupsOutputY,
+                "YUV to RGB",
+                nextVgnUboId(),
+                2,
                 vgnUbo(32) {
                     putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
                     putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
                 },
                 VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(2, linearOutputTextureId, GLES31.GL_WRITE_ONLY,
-                    GLES30.GL_RGBA16F),
+                VgnImageBinding(
+                    1,
+                    linearOutputTextureId,
+                    GLES31.GL_WRITE_ONLY,
+                    GLES30.GL_RGBA16F,
+                ),
             )
 
             passWindow.beginPass(
@@ -8967,7 +9239,7 @@ class RawDemosaicProcessor {
                 "Standard Bayer VGN complete: size=${width}x$height work=${workWidth}x$workHeight " +
                     "roi=$roiLeft,$roiTop,$roiRight,$roiBottom cfa=${metadata.cfaPattern} " +
                     "stdDev=$standardDeviation edgeThreshold=$edgeThreshold " +
-                    "vngThreshold=$vngThreshold internalDenoise=disabled " +
+                    "vngThreshold=$vngThreshold colorNoiseLevel=$VGN_COLOR_NOISE_LEVEL " +
                     "gpuSliced=true tookMs=${(System.nanoTime() - demosaicStartNs) / 1_000_000} " +
                     "calculationWb=${calculationGains.contentToString()} " +
                     "lsc=${lensShadingLogString(metadata)}",

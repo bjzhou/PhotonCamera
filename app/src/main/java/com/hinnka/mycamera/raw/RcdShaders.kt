@@ -3517,7 +3517,15 @@ void main() {
     const val PROGRAM_COLOR_NOISE_1 = 9
     const val PROGRAM_COLOR_NOISE_2 = 10
     const val PROGRAM_COLOR_NOISE_3 = 11
-    const val PROGRAM_COMPOSITE = 12
+    const val PROGRAM_IIR2_1_INIT = 12
+    const val PROGRAM_IIR2_1 = 13
+    const val PROGRAM_COLOR_NOISE_3_YCCD = 14
+    const val PROGRAM_CALCULATE_COLOR_NOISE_ERROR = 15
+    const val PROGRAM_IIR2_2 = 16
+    const val PROGRAM_COLOR_NOISE_FILTER = 17
+    const val PROGRAM_IIR2_3 = 18
+    const val PROGRAM_YUV_TO_RGB = 19
+    const val PROGRAM_COMPOSITE = 20
 
     val PROGRAM_SOURCES = arrayOf(
         "prepare_packed_raw" to PREPARE_PACKED_RAW,
@@ -3532,6 +3540,14 @@ void main() {
         "color_noise_1" to COLOR_NOISE_PASS_1,
         "color_noise_2" to COLOR_NOISE_PASS_2,
         "color_noise_3" to COLOR_NOISE_PASS_3,
+        "iir2_1_init" to IIR2_PASS_1_INIT,
+        "iir2_1" to IIR2_PASS_1,
+        "color_noise_3_yccd" to COLOR_NOISE_PASS_3_YCCD,
+        "calculate_color_noise_error" to CALCULATE_COLOR_NOISE_ERROR,
+        "iir2_2" to IIR2_PASS_2,
+        "color_noise_filter" to COLOR_NOISE_FILTER,
+        "iir2_3" to IIR2_PASS_3,
+        "yuv_to_rgb" to YUV_TO_RGB,
         "composite_camera_rgb" to COMPOSITE_CAMERA_RGB,
     )
 
