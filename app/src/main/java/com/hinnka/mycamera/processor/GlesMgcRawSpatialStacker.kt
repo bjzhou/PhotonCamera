@@ -140,7 +140,10 @@ internal class GlesMgcRawSpatialStacker(
         val opponentWeightAccumulator: Int,
         val chromaGuideTexture: Int,
         val drawBands: List<MgcSpatialRgbTile>,
+        val rawSlots: IntArray,
+        val passWindow: GlesGpuScheduler.PassWindow,
         val projectedGpuBytes: Long,
+        var nextRawSlot: Int,
         var contributedFrames: Int = 0,
         var rawUploadCount: Int = 0,
         var rawUploadBytes: Long = 0L,
@@ -1255,6 +1258,7 @@ internal class GlesMgcRawSpatialStacker(
                 outputMode == MgcSpatialOutputMode.RGB
             ) {
                 onlineRgbAccumulator = createOnlineRgbAccumulator(
+                    reusableRawTexture = currentRaw,
                     diagnosticCapture = strengthCapture,
                 )?.also { online ->
                     online.rawUploadCount = 1 + if (evaluateBentoCandidate) 1 else 0
@@ -1267,6 +1271,7 @@ internal class GlesMgcRawSpatialStacker(
             fun submitOrRetainRgbFrame(
                 frame: RgbMergeFrame,
                 rawTexture: Int,
+                label: String,
             ) {
                 val online = onlineRgbAccumulator
                 if (online != null) {
@@ -1274,6 +1279,7 @@ internal class GlesMgcRawSpatialStacker(
                         accumulator = online,
                         frame = frame,
                         rawTexture = rawTexture,
+                        label = label,
                     )
                 } else {
                     rgbMergeFrames += frame
@@ -1308,6 +1314,7 @@ internal class GlesMgcRawSpatialStacker(
                             useFrameWeight = true,
                         ),
                         rawTexture = referenceRaw,
+                        label = "reference",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1348,6 +1355,7 @@ internal class GlesMgcRawSpatialStacker(
                             useFrameWeight = true,
                         ),
                         rawTexture = bentoRaw,
+                        label = "bento",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1386,6 +1394,7 @@ internal class GlesMgcRawSpatialStacker(
                             useFrameWeight = false,
                         ),
                         rawTexture = referenceRaw,
+                        label = "reference",
                     )
                 }
                 strengthCapture?.let { capture ->
@@ -1416,15 +1425,29 @@ internal class GlesMgcRawSpatialStacker(
                 beginTemporalScratchFrame()
                 try {
                     val online = onlineRgbAccumulator
-                    val temporalRaw = currentRaw.also { texture ->
+                    val temporalRaw = if (online != null) {
+                        val slot = online.nextRawSlot
+                        val texture = online.rawSlots[slot]
+                        online.nextRawSlot = (slot + 1) % online.rawSlots.size
+                        online.passWindow.awaitResources(
+                            label = "MGC RGB RAW slot $slot upload frame $index",
+                            resources = longArrayOf(
+                                GlesGpuScheduler.textureResource(texture),
+                            ),
+                        )
                         val uploadStartNs = System.nanoTime()
                         uploadRaw(images[index], texture, "frame $index")
                         uploadCallNs = System.nanoTime() - uploadStartNs
-                        if (online != null) {
-                            online.rawUploadNs += uploadCallNs
-                            online.rawUploadCount += 1
-                            online.rawUploadBytes +=
-                                width.toLong() * height * RAW_BYTES_PER_PIXEL
+                        online.rawUploadNs += uploadCallNs
+                        online.rawUploadCount += 1
+                        online.rawUploadBytes +=
+                            width.toLong() * height * RAW_BYTES_PER_PIXEL
+                        texture
+                    } else {
+                        currentRaw.also { texture ->
+                            val uploadStartNs = System.nanoTime()
+                            uploadRaw(images[index], texture, "frame $index")
+                            uploadCallNs = System.nanoTime() - uploadStartNs
                         }
                     }
                     val prepareStartNs = System.nanoTime()
@@ -1513,6 +1536,7 @@ internal class GlesMgcRawSpatialStacker(
                                     useFrameWeight = true,
                                 ),
                                 rawTexture = temporalRaw,
+                                label = "frame $index",
                             )
                         } else {
                             val retainedAlignment = copyPersistentTexture(
@@ -1632,6 +1656,7 @@ internal class GlesMgcRawSpatialStacker(
                     persistentTextures = retainedTemporalTextures,
                     strengthCapture = readyStrengthCapture,
                 )
+                online?.passWindow?.clearAfterCheckpoint()
                 val preparedStrengthAtlases = readyStrengthCapture?.let { capture ->
                     materializeRgbStrengthAtlases(capture).also { prepared ->
                         strengthAlignmentHostBuffer = prepared.first.cpuBuffer
@@ -1677,10 +1702,10 @@ internal class GlesMgcRawSpatialStacker(
                             else -> "streamed-band"
                         }} " +
                         "rawWindowSlots=${when {
-                            online != null -> 1
+                            online != null -> online.rawSlots.size
                             else -> RGB_RAW_WINDOW_SLOTS
                         }} " +
-                        "maxInFlight=${if (online != null) 1 else RGB_MAX_IN_FLIGHT_PASSES}",
+                        "maxInFlight=$RGB_MAX_IN_FLIGHT_PASSES",
                 )
             } else {
                 val bayer16 = renderBayer16(
@@ -1875,6 +1900,7 @@ internal class GlesMgcRawSpatialStacker(
                 mgcSpatialReferenceOnlyDiagnostic = referenceOnly,
             )
         } catch (error: Exception) {
+            onlineRgbAccumulator?.passWindow?.drain("MGC Spatial merge failure")
             PLog.e(TAG, "MGC Spatial ${outputMode.name} merge failed", error)
             null
         } finally {
@@ -6034,6 +6060,7 @@ internal class GlesMgcRawSpatialStacker(
      * overlaps temporal scratch, while the two additive accumulators span both phases.
      */
     private fun createOnlineRgbAccumulator(
+        reusableRawTexture: Int,
         diagnosticCapture: StrengthCapture?,
     ): OnlineRgbAccumulator? {
         check(outputMode == MgcSpatialOutputMode.RGB)
@@ -6054,7 +6081,7 @@ internal class GlesMgcRawSpatialStacker(
             RGB_TEXTURE_BUDGET_RESERVE_BYTES,
             rawBytes * 2L,
         )
-        val temporalProjectedBytes = estimatedOwnedTextureBytes() +
+        val temporalProjectedBytes = estimatedOwnedTextureBytes() + rawBytes +
             accumulatorBytes + chromaGuideBytes + temporalScratchReserveBytes
         val finalProjectedBytes = accumulatorBytes + outputStorageBytes +
             diagnosticTextureBytes + diagnosticPboBytes + RGB_TEXTURE_BUDGET_RESERVE_BYTES
@@ -6070,6 +6097,12 @@ internal class GlesMgcRawSpatialStacker(
             return null
         }
 
+        val secondRawTexture = createTexture(
+            width,
+            height,
+            GLES30.GL_R16UI,
+            GLES30.GL_NEAREST,
+        )
         val chromaGuideTexture = createTexture(
             width,
             height,
@@ -6108,7 +6141,7 @@ internal class GlesMgcRawSpatialStacker(
         PLog.i(
             TAG,
             "MGC Spatial RGB online accumulator selected bands=${drawBands.size} " +
-                "drawBandHeight=$RGB_ONLINE_DRAW_BAND_HEIGHT rawSlots=1 " +
+                "drawBandHeight=$RGB_ONLINE_DRAW_BAND_HEIGHT rawSlots=2 " +
                 "textureBytes=${estimatedOwnedTextureBytes()} " +
                 "temporalProjectedBytes=$temporalProjectedBytes " +
                 "finalProjectedBytes=$finalProjectedBytes " +
@@ -6119,7 +6152,14 @@ internal class GlesMgcRawSpatialStacker(
             opponentWeightAccumulator = opponentWeightAccumulator,
             chromaGuideTexture = chromaGuideTexture,
             drawBands = drawBands,
+            rawSlots = intArrayOf(reusableRawTexture, secondRawTexture),
+            passWindow = GlesGpuScheduler.PassWindow(
+                tag = TAG,
+                maxInFlight = RGB_MAX_IN_FLIGHT_PASSES,
+            ),
             projectedGpuBytes = projectedGpuBytes,
+            // Slot zero may still contain the evaluated Bento frame. Start with the new slot.
+            nextRawSlot = 1,
         )
     }
 
@@ -6127,7 +6167,9 @@ internal class GlesMgcRawSpatialStacker(
         accumulator: OnlineRgbAccumulator,
         frame: RgbMergeFrame,
         rawTexture: Int,
+        label: String,
     ) {
+        val rawResource = GlesGpuScheduler.textureResource(rawTexture)
         val fullRaw = MgcSpatialRgbRect(0, 0, width, height)
         renderRgbChromaGuide(
             frame = frame,
@@ -6137,17 +6179,25 @@ internal class GlesMgcRawSpatialStacker(
             outputTexture = accumulator.chromaGuideTexture,
         )
         accumulator.drawBands.forEach { band ->
-            renderRgbFrameContribution(
-                frame = frame,
-                rawTexture = rawTexture,
-                rawTextureOrigin = fullRaw,
-                sourceRegion = fullRaw,
-                outputCores = listOf(band.outputCore),
-                chromaGuideRegionTexture = accumulator.chromaGuideTexture,
-                semanticAccumulator = accumulator.semanticAccumulator,
-                opponentWeightAccumulator = accumulator.opponentWeightAccumulator,
-                accumulatorIsFullOutput = true,
+            accumulator.passWindow.beginPass(
+                label = "MGC RGB online $label band ${band.index}",
+                reads = longArrayOf(rawResource),
             )
+            try {
+                renderRgbFrameContribution(
+                    frame = frame,
+                    rawTexture = rawTexture,
+                    rawTextureOrigin = fullRaw,
+                    sourceRegion = fullRaw,
+                    outputCores = listOf(band.outputCore),
+                    chromaGuideRegionTexture = accumulator.chromaGuideTexture,
+                    semanticAccumulator = accumulator.semanticAccumulator,
+                    opponentWeightAccumulator = accumulator.opponentWeightAccumulator,
+                    accumulatorIsFullOutput = true,
+                )
+            } finally {
+                accumulator.passWindow.endPass()
+            }
         }
         accumulator.contributedFrames += 1
     }
