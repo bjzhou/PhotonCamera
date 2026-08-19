@@ -28,7 +28,7 @@ class RawHncsShadersTest {
 
     @Test
     fun hncsShaderKeepsFilmCurveBeforeGammaAndOmitsHighlightStrength() {
-        val shader = RawShaders.combinedFragmentShaderFor(
+        val shader = RawEngineTonePass.combinedFragmentShaderFor(
             colorEngine = RawRenderingEngine.HncsCcm,
             includeShadowsHighlights = false,
         )
@@ -56,7 +56,7 @@ class RawHncsShadersTest {
 
     @Test
     fun naturalLightStandardOutputEncodesLinearRgbExactlyOnce() {
-        val shader = RawSrgbPassShaders.FRAGMENT_SHADER
+        val shader = RawSrgbPass.FRAGMENT_SHADER
 
         assertTrue(shader.contains("vec3 color = texture(uInputTexture, vTexCoord).rgb;"))
         assertTrue(shader.contains("fragColor = vec4(linearToSrgb(color), 1.0);"))
@@ -83,16 +83,16 @@ class RawHncsShadersTest {
         assumeTrue("Android NDK glslc is unavailable", validator != null)
 
         val shaders = listOf(
-            RawShaders.combinedFragmentShaderFor(
+            RawEngineTonePass.combinedFragmentShaderFor(
                 colorEngine = RawRenderingEngine.HncsCcm,
                 includeShadowsHighlights = false,
             ),
-            RawShaders.combinedFragmentShaderFor(
+            RawEngineTonePass.combinedFragmentShaderFor(
                 colorEngine = RawRenderingEngine.HncsLut,
                 includeShadowsHighlights = true,
             ),
             HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER,
-            RawSrgbPassShaders.FRAGMENT_SHADER,
+            RawSrgbPass.FRAGMENT_SHADER,
         )
         shaders.forEachIndexed { index, shader ->
             val sourceFile = File.createTempFile("raw-hncs-$index-", ".frag")

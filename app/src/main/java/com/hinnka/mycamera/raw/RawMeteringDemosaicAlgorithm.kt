@@ -1,5 +1,11 @@
 package com.hinnka.mycamera.raw
 
+import android.opengl.GLES30
+import android.opengl.GLES31
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.processor.GlesGpuScheduler
+import com.hinnka.mycamera.utils.PLog
+
 /**
  * Capture-metering RAW preparation.
  *
@@ -124,4 +130,136 @@ internal object RawMeteringDemosaicShaders {
             imageStore(uOutput, outputCoord, vec4(max(cameraRgb, vec3(0.0)), 1.0));
         }
     """.trimIndent()
+}
+
+/** Single-pass half-resolution Bayer demosaic used only by capture metering. */
+internal class RawMeteringDemosaicAlgorithm {
+    data class Input(
+        val rawTextureId: Int,
+        val outputTextureId: Int,
+        val width: Int,
+        val height: Int,
+        val cfaPattern: Int,
+        val blackLevel: FloatArray,
+        val whiteLevel: Float,
+        val bindLensShading: (programId: Int) -> Unit,
+    )
+
+    data class Output(
+        val textureId: Int,
+        val width: Int,
+        val height: Int,
+    )
+
+    private var program = 0
+
+    fun initialize(): Boolean {
+        if (program == 0) {
+            program = RawGlesProgram.compileCompute(
+                RawMeteringDemosaicShaders.HALF_RESOLUTION,
+                "RAW_METERING_HALF_RESOLUTION",
+            )
+        }
+        return program != 0
+    }
+
+    fun execute(input: Input): Output? {
+        if (!initialize()) return null
+        require(input.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR) {
+            "Half-resolution metering requires a standard 2x2 Bayer CFA"
+        }
+        require(input.blackLevel.size >= 4) { "RAW metering requires four black levels" }
+
+        val outputWidth = (input.width + 1) / 2
+        val outputHeight = (input.height + 1) / 2
+        val startedAt = System.nanoTime()
+        try {
+            GLES31.glUseProgram(program)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RAW_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, input.rawTextureId)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(program, "uRawTexture"),
+                RAW_TEXTURE_UNIT,
+            )
+            input.bindLensShading(program)
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(program, "uImageSize"),
+                input.width,
+                input.height,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(program, "uOutputSize"),
+                outputWidth,
+                outputHeight,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(program, "uCfaPattern"),
+                input.cfaPattern,
+            )
+            GLES31.glUniform4fv(
+                GLES31.glGetUniformLocation(program, "uBlackLevel"),
+                1,
+                input.blackLevel,
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(program, "uWhiteLevel"),
+                input.whiteLevel,
+            )
+            GLES31.glBindImageTexture(
+                0,
+                input.outputTextureId,
+                0,
+                false,
+                0,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+            GLES31.glDispatchCompute(
+                GlesComputeWorkGroup.imageGroupCount(outputWidth),
+                GlesComputeWorkGroup.imageGroupCount(outputHeight),
+                1,
+            )
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                    GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+            )
+            RawGlesProgram.logErrors("RAW metering half-resolution demosaic")
+            GlesGpuScheduler.waitForGpuCheckpoint(TAG, "half-resolution demosaic")
+            PLog.d(
+                TAG,
+                "complete: source=${input.width}x${input.height} " +
+                    "output=${outputWidth}x$outputHeight cfa=${input.cfaPattern} " +
+                    "tookMs=${(System.nanoTime() - startedAt) / 1_000_000}",
+            )
+            return Output(input.outputTextureId, outputWidth, outputHeight)
+        } finally {
+            GLES31.glBindImageTexture(
+                0,
+                0,
+                0,
+                false,
+                0,
+                GLES31.GL_READ_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LENS_SHADING_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RAW_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+        }
+    }
+
+    fun release() {
+        if (program != 0) {
+            GLES31.glDeleteProgram(program)
+            program = 0
+        }
+    }
+
+    private companion object {
+        const val TAG = "RawMeteringDemosaic"
+        const val RAW_TEXTURE_UNIT = 0
+        const val LENS_SHADING_TEXTURE_UNIT = 1
+    }
 }

@@ -14,8 +14,9 @@ import com.hinnka.mycamera.raw.HncsNaturalLightGl
 import com.hinnka.mycamera.raw.HncsNaturalLightOutputPassShaders
 import com.hinnka.mycamera.raw.RawProfileExposureGl
 import com.hinnka.mycamera.raw.RawRenderingEngine
-import com.hinnka.mycamera.raw.RawShaders
-import com.hinnka.mycamera.raw.RawSrgbPassShaders
+import com.hinnka.mycamera.raw.RawEngineTonePass
+import com.hinnka.mycamera.raw.RawFullscreenQuad
+import com.hinnka.mycamera.raw.RawSrgbPass
 import com.hinnka.mycamera.raw.RawToneMappingGl
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
@@ -1049,10 +1050,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private fun getOrCreateRawPreviewCombinedProgram(engine: RawRenderingEngine): Int {
         val cached = rawPreviewCombinedPrograms[engine.ordinal]
         if (cached != 0) return cached
-        val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, RawShaders.VERTEX_SHADER)
+        val vertexShader = GlUtils.compileShader(
+            GLES30.GL_VERTEX_SHADER,
+            RawFullscreenQuad.VERTEX_SHADER,
+        )
         val fragmentShader = GlUtils.compileShader(
             GLES30.GL_FRAGMENT_SHADER,
-            RawShaders.combinedFragmentShaderFor(engine, includeShadowsHighlights = false)
+            RawEngineTonePass.combinedFragmentShaderFor(engine, includeShadowsHighlights = false)
         )
         if (vertexShader == 0 || fragmentShader == 0) {
             if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
@@ -1070,7 +1074,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (rawPreviewHncsOutputProgramId != 0) return rawPreviewHncsOutputProgramId
         val vertexShader = GlUtils.compileShader(
             GLES30.GL_VERTEX_SHADER,
-            RawShaders.VERTEX_SHADER,
+            RawFullscreenQuad.VERTEX_SHADER,
         )
         val fragmentShader = GlUtils.compileShader(
             GLES30.GL_FRAGMENT_SHADER,
@@ -1091,11 +1095,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (rawPreviewSrgbOutputProgramId != 0) return rawPreviewSrgbOutputProgramId
         val vertexShader = GlUtils.compileShader(
             GLES30.GL_VERTEX_SHADER,
-            RawShaders.VERTEX_SHADER,
+            RawFullscreenQuad.VERTEX_SHADER,
         )
         val fragmentShader = GlUtils.compileShader(
             GLES30.GL_FRAGMENT_SHADER,
-            RawSrgbPassShaders.FRAGMENT_SHADER,
+            RawSrgbPass.FRAGMENT_SHADER,
         )
         if (vertexShader == 0 || fragmentShader == 0) {
             if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)

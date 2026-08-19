@@ -1,5 +1,10 @@
 package com.hinnka.mycamera.raw
 
+import android.opengl.GLES30
+import android.opengl.GLES31
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.utils.PLog
+
 /**
  * Expanded Bayer 4x4/8x8 CFA demosaic shaders.
  *
@@ -460,4 +465,279 @@ object QuadBayerShaders {
             imageStore(uOutputImage, coord, color);
         }
     """.trimIndent()
+}
+
+/**
+ * Complete expanded/Quad Bayer demosaic algorithm.
+ *
+ * Its five compute passes are intentionally kept together: they share one SSBO layout and none
+ * of the intermediate representations is a supported pipeline boundary.
+ */
+internal class QuadBayerDemosaicAlgorithm {
+    data class Input(
+        val rawTextureId: Int,
+        val outputTextureId: Int,
+        val width: Int,
+        val height: Int,
+        val cfaPattern: Int,
+        val blackLevel: FloatArray,
+        val whiteLevel: Float,
+        val metadataWhiteBalanceGains: FloatArray,
+        val calculationWhiteBalanceGains: FloatArray,
+        val expandedBlockSize: Int,
+        val highlightReconstructionEnabled: Boolean,
+        val globalOriginX: Int,
+        val globalOriginY: Int,
+        val lensShadingDescription: String,
+        val bindLensShading: (programId: Int, globalOriginX: Int, globalOriginY: Int) -> Unit,
+    )
+
+    data class Output(
+        val textureId: Int,
+        val width: Int,
+        val height: Int,
+    )
+
+    private var populateProgram = 0
+    private var greenProgram = 0
+    private var chromaProgram = 0
+    private var refineProgram = 0
+    private var writeOutputProgram = 0
+
+    fun initialize(): Boolean {
+        val startedAt = System.currentTimeMillis()
+        if (populateProgram == 0) {
+            populateProgram = RawGlesProgram.compileCompute(
+                QuadBayerShaders.POPULATE,
+                "QUAD_BAYER_POPULATE",
+            )
+        }
+        if (greenProgram == 0) {
+            greenProgram = RawGlesProgram.compileCompute(
+                QuadBayerShaders.GREEN,
+                "QUAD_BAYER_GREEN",
+            )
+        }
+        if (chromaProgram == 0) {
+            chromaProgram = RawGlesProgram.compileCompute(
+                QuadBayerShaders.CHROMA,
+                "QUAD_BAYER_CHROMA",
+            )
+        }
+        if (refineProgram == 0) {
+            refineProgram = RawGlesProgram.compileCompute(
+                QuadBayerShaders.REFINE,
+                "QUAD_BAYER_REFINE",
+            )
+        }
+        if (writeOutputProgram == 0) {
+            writeOutputProgram = RawGlesProgram.compileCompute(
+                QuadBayerShaders.WRITE_OUTPUT,
+                "QUAD_BAYER_WRITE_OUTPUT",
+            )
+        }
+        val ready = populateProgram != 0 && greenProgram != 0 && chromaProgram != 0 &&
+            refineProgram != 0 && writeOutputProgram != 0
+        PLog.d(
+            TAG,
+            "programs ready=$ready, took=${System.currentTimeMillis() - startedAt}ms",
+        )
+        return ready
+    }
+
+    fun execute(input: Input): Output? {
+        if (!initialize()) return null
+        require(input.blackLevel.size >= 4) { "Quad Bayer requires four black levels" }
+        require(input.calculationWhiteBalanceGains.size >= 4) {
+            "Quad Bayer requires four calculation white-balance gains"
+        }
+
+        val buffers = IntArray(6)
+        GLES31.glGenBuffers(buffers.size, buffers, 0)
+        val bufferSize = input.width * input.height * 4 + SSBO_EXTRA_MARGIN_BYTES
+        try {
+            buffers.forEachIndexed { binding, bufferId ->
+                GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
+                GLES31.glBufferData(
+                    GLES31.GL_SHADER_STORAGE_BUFFER,
+                    bufferSize,
+                    null,
+                    GLES31.GL_DYNAMIC_DRAW,
+                )
+                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, binding, bufferId)
+            }
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+
+            runPopulate(input)
+            runImagePass(greenProgram, "Green", input, includeCfaPattern = true)
+            runImagePass(chromaProgram, "Chroma", input, includeCfaPattern = true)
+            runImagePass(refineProgram, "Refine", input, includeCfaPattern = true)
+            runWriteOutput(input)
+            GLES30.glFinish()
+            return Output(input.outputTextureId, input.width, input.height)
+        } finally {
+            GLES31.glBindImageTexture(
+                OUTPUT_IMAGE_UNIT,
+                0,
+                0,
+                false,
+                0,
+                GLES31.GL_WRITE_ONLY,
+                GLES31.GL_RGBA16F,
+            )
+            GLES31.glDeleteBuffers(buffers.size, buffers, 0)
+            buffers.indices.forEach { binding ->
+                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, binding, 0)
+            }
+        }
+    }
+
+    fun release() {
+        intArrayOf(
+            populateProgram,
+            greenProgram,
+            chromaProgram,
+            refineProgram,
+            writeOutputProgram,
+        ).forEach { program ->
+            if (program != 0) GLES31.glDeleteProgram(program)
+        }
+        populateProgram = 0
+        greenProgram = 0
+        chromaProgram = 0
+        refineProgram = 0
+        writeOutputProgram = 0
+    }
+
+    private fun runPopulate(input: Input) {
+        GLES31.glUseProgram(populateProgram)
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RAW_TEXTURE_UNIT)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, input.rawTextureId)
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(populateProgram, "uRawTexture"),
+            RAW_TEXTURE_UNIT,
+        )
+        input.bindLensShading(
+            populateProgram,
+            input.globalOriginX,
+            input.globalOriginY,
+        )
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(populateProgram, "uImageSize"),
+            input.width,
+            input.height,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(populateProgram, "uCfaPattern"),
+            input.cfaPattern,
+        )
+        GLES31.glUniform4fv(
+            GLES31.glGetUniformLocation(populateProgram, "uBlackLevel"),
+            1,
+            input.blackLevel,
+            0,
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(populateProgram, "uWhiteLevel"),
+            input.whiteLevel,
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(populateProgram, "uHighlightClipThreshold"),
+            RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD,
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(populateProgram, "uHighlightCeiling"),
+            RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(populateProgram, "uHighlightReconstructionEnabled"),
+            if (input.highlightReconstructionEnabled) 1 else 0,
+        )
+        GLES31.glUniform4fv(
+            GLES31.glGetUniformLocation(populateProgram, "uWhiteBalanceGains"),
+            1,
+            input.calculationWhiteBalanceGains,
+            0,
+        )
+        PLog.d(
+            TAG,
+            "populate: cfa=${input.cfaPattern} " +
+                "block=${input.expandedBlockSize}x${input.expandedBlockSize} " +
+                "black=${input.blackLevel.contentToString()} white=${input.whiteLevel} " +
+                "metadataWb=${input.metadataWhiteBalanceGains.contentToString()} " +
+                "calculationWb=${input.calculationWhiteBalanceGains.contentToString()} " +
+                "lsc=${input.lensShadingDescription} " +
+                "highlightReconstruction=${input.highlightReconstructionEnabled}",
+        )
+        dispatchImage(input.width, input.height, "Populate")
+    }
+
+    private fun runImagePass(
+        program: Int,
+        label: String,
+        input: Input,
+        includeCfaPattern: Boolean,
+    ) {
+        GLES31.glUseProgram(program)
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(program, "uImageSize"),
+            input.width,
+            input.height,
+        )
+        if (includeCfaPattern) {
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(program, "uCfaPattern"),
+                input.cfaPattern,
+            )
+        }
+        dispatchImage(input.width, input.height, label)
+    }
+
+    private fun runWriteOutput(input: Input) {
+        GLES31.glUseProgram(writeOutputProgram)
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(writeOutputProgram, "uImageSize"),
+            input.width,
+            input.height,
+        )
+        GLES31.glUniform3f(
+            GLES31.glGetUniformLocation(writeOutputProgram, "uCalculationGains"),
+            input.calculationWhiteBalanceGains[0],
+            1f,
+            input.calculationWhiteBalanceGains[3],
+        )
+        GLES31.glBindImageTexture(
+            OUTPUT_IMAGE_UNIT,
+            input.outputTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES31.GL_RGBA16F,
+        )
+        GLES31.glDispatchCompute(
+            GlesComputeWorkGroup.imageGroupCount(input.width),
+            GlesComputeWorkGroup.imageGroupCount(input.height),
+            1,
+        )
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+        RawGlesProgram.logErrors("$TAG WriteOutput")
+    }
+
+    private fun dispatchImage(width: Int, height: Int, label: String) {
+        GLES31.glDispatchCompute(
+            GlesComputeWorkGroup.imageGroupCount(width),
+            GlesComputeWorkGroup.imageGroupCount(height),
+            1,
+        )
+        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+        RawGlesProgram.logErrors("$TAG $label")
+    }
+
+    private companion object {
+        const val TAG = "QuadBayerDemosaic"
+        const val RAW_TEXTURE_UNIT = 0
+        const val OUTPUT_IMAGE_UNIT = 0
+        const val SSBO_EXTRA_MARGIN_BYTES = 1024 * 1024
+    }
 }

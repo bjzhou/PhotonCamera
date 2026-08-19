@@ -21,8 +21,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
-import com.hinnka.mycamera.lut.ChromaDenoiseShaders
-import com.hinnka.mycamera.lut.ShadowsHighlightsShader
+import com.hinnka.mycamera.lut.ChromaDenoiseAlgorithm
 import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
@@ -55,8 +54,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.FloatBuffer
-import java.nio.ShortBuffer
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.PI
@@ -111,11 +108,6 @@ private data class DemosaicNoiseTransferCacheKey(
     val normalizedRgbReadBits: List<Int>,
     val normalizedRgbShotBits: List<Int>,
     val calculationWbBits: List<Int>,
-)
-
-private data class GpuPhotonGainCurves(
-    val gains: FloatArray,
-    val textureId: Int,
 )
 
 private enum class DemosaicNoiseComponent {
@@ -290,16 +282,6 @@ class RawDemosaicProcessor {
         private const val LINEAR_RAW_RGB_EXPANSION_ROWS = 128
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MIN_WB_GAIN = 1e-3f
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MAX_WB_GAIN = 64.0f
-        // PASS_3 needs 16 pixels, and the following color-noise stages consume another
-        // three one-pixel neighborhoods before the final ROI crop. Keep the offset a
-        // multiple of four so the packed RGBA Bayer layout remains aligned.
-        private const val VGN_WORK_HALO = 20
-        // Phocus' color-noise control is an integer level. Level 50 selects 4LP table entry
-        // min(level, 40) + 4 = 44 for pass 1 and entry min(level, 74) - 30 = 20 for pass 3.
-        // It is also above the native level-35 gate, so the complete IIR2 pass 1/2/3 chain runs.
-        private const val VGN_COLOR_NOISE_LEVEL = 50
-        private const val VGN_DISPATCH_UBO_SLOT_COUNT = 2
-        private const val VGN_PASS_WINDOW_SIZE = 2
         // The calibration field contains a 128x128 analysis core plus enough support for
         // VGN's 20-pixel halo and the complete color-noise IIR chain on every side.
         private const val VGN_NOISE_CALIBRATION_SIZE = 256
@@ -337,16 +319,6 @@ class RawDemosaicProcessor {
         private const val FILMIC_DEFAULT_CONTRAST = 1.433801098f
         private const val FILMIC_LATITUDE = 0.0001f
         private const val FILMIC_SAFETY_MARGIN = 0.01f
-        private const val DARKTABLE_FILMIC_HR_RECONSTRUCT_THRESHOLD_EV = 0f
-        private const val DARKTABLE_FILMIC_HR_RECONSTRUCT_FEATHER_EV = 3f
-        private const val DARKTABLE_FILMIC_HR_NOISE_LEVEL = 0.2f
-        private const val DARKTABLE_FILMIC_HR_GAMMA = 0.5f
-        private const val DARKTABLE_FILMIC_HR_GAMMA_COMP = 0.5f
-        private const val DARKTABLE_FILMIC_HR_BETA = 1f
-        private const val DARKTABLE_FILMIC_HR_BETA_COMP = 0f
-        private const val DARKTABLE_FILMIC_HR_DELTA = 1f
-        private const val DARKTABLE_FILMIC_HR_HIGH_QUALITY_ITERATIONS = 1
-        private const val DENOISE_PROFILE_GLES31_MIN_SSBO_BYTES = 128L * 1024L * 1024L
         private val BRADFORD_D65_TO_D50 = floatArrayOf(
             1.0478112f, 0.0228866f, -0.0501270f,
             0.0295424f, 0.9904844f, -0.0170491f,
@@ -425,7 +397,7 @@ class RawDemosaicProcessor {
             }.getOrDefault(false)
             currentCoroutineContext().ensureActive()
             val photonHdrReady = if (photonHdrEnabled) {
-                pgtmCellSamplesProgram != 0 && pgtmPhotonPrograms.all { it != 0 }
+                profileGainTableAlgorithm.initialize()
             } else {
                 true
             }
@@ -1562,55 +1534,35 @@ class RawDemosaicProcessor {
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
 
-    // GL 资源
-    private val engineTonePrograms = IntArray(RawRenderingEngine.entries.size)
-    private var hncsOutputLinearProgram = 0
-    private var adjustmentProgram = 0
-    private var srgbProgram = 0
-    private var sharpenProgram = 0
-    private var passthroughProgram = 0
-    private var hdrReferenceProgram = 0
-    private var chromaDenoiseGuideProgram = 0
-    private var chromaDenoiseProgram = 0
-    private var loggedShadowsHighlightsUniforms = false
+    // Fullscreen passes own their shader programs and lifecycle.
+    private val fullscreenQuad = RawFullscreenQuad()
+    private val chromaDenoiseAlgorithm = ChromaDenoiseAlgorithm(fullscreenQuad)
+    private val denoiseProfileAlgorithm = DenoiseProfileAlgorithm()
+    private val profileGainTableAlgorithm = DngPhotonProfileGainTableAlgorithm()
+    private val filmicHighlightReconstructionAlgorithm =
+        DarktableFilmicHighlightReconstructionAlgorithm(fullscreenQuad)
+    private val dcpTextureResources = DcpTextureResources()
+    private val curveTextureResources = RawCurveTextureResources()
+    private val engineTonePass = RawEngineTonePass(
+        fullscreenQuad,
+        dcpTextureResources,
+        curveTextureResources,
+    )
+    private val hncsOutputLinearPass = HncsOutputLinearPass(fullscreenQuad)
+    private val adjustmentPass = RawAdjustmentPass(fullscreenQuad)
+    private val srgbPass = RawSrgbPass(fullscreenQuad)
+    private val sharpenPass = RawSharpenPass(fullscreenQuad)
+    private val outputPass = RawOutputPass(fullscreenQuad)
+    private val linearUintToFloatPass = RawLinearUintToFloatPass()
+    private val linearRgbExpandPass = RawLinearRgbExpandPass()
+    private val linearFloatToUintPass = RawLinearFloatToUintPass()
+    private val warpRectilinearPass = RawWarpRectilinearPass(fullscreenQuad)
+    private val linearRcdPass = RawLinearRcdPass(fullscreenQuad)
+    private val hdrReferencePass = RawHdrReferencePass(fullscreenQuad)
+    private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
+    private val quadBayerDemosaicAlgorithm = QuadBayerDemosaicAlgorithm()
+    private val vgnDemosaicAlgorithm = VgnDemosaicAlgorithm()
 
-    // RCD Compute Shader Programs
-    private var rcdPopulateProgram = 0
-    private var rcdStep1Program = 0
-    private var rcdStep2Program = 0
-    private var rcdStep3Program = 0
-    private var rcdStep40Program = 0
-    private var rcdStep41Program = 0
-    private var rcdStep42Program = 0
-    private var rcdStep43Program = 0
-    private var rcdWriteOutputProgram = 0
-    private val vgnPrograms = IntArray(VgnShaders.PROGRAM_SOURCES.size)
-    private var rawHotPixelDetectProgram = 0
-    private var rawHotPixelRepairProgram = 0
-    private var activeVgnPassWindow: GlesGpuScheduler.PassWindow? = null
-    private var quadPopulateProgram = 0
-    private var quadGreenProgram = 0
-    private var quadChromaProgram = 0
-    private var quadRefineProgram = 0
-    private var quadWriteOutputProgram = 0
-    private var pgtmCellSamplesProgram = 0
-    private val pgtmPhotonPrograms =
-        IntArray(DngPhotonLocalToneMapGpuShaders.Pass.entries.size)
-    private var meteringHalfResolutionProgram = 0
-    private var linearRcdProgram = 0
-    private var warpRectilinearProgram = 0
-    private var linearRawRgbProgram = 0
-    private var linearRawFloatToUintProgram = 0
-    private var linearRawRgbExpandProgram = 0
-    private var filmicHrMaskProgram = 0
-    private var filmicHrInpaintNoiseProgram = 0
-    private var filmicHrInitReconstructProgram = 0
-    private var filmicHrBsplineProgram = 0
-    private var filmicHrHighFrequencyProgram = 0
-    private var filmicHrWaveletsReconstructProgram = 0
-    private var filmicHrComputeNormsProgram = 0
-    private var filmicHrComputeRatiosProgram = 0
-    private var filmicHrRestoreRatiosProgram = 0
     private var rawTextureId = 0
     private var rawTileTextureWidth = 0
     private var rawTileTextureHeight = 0
@@ -1663,52 +1615,12 @@ class RawDemosaicProcessor {
     private var userAdjustmentNoiseTransferCacheKey: DemosaicNoiseTransferCacheKey? = null
     private var userAdjustmentNoiseTransferCacheValue: DemosaicNoiseTransfer? = null
 
-    private var curveTextureId = 0
-    private var dcpToneCurveTextureId = 0
-    private var dcpHueSatTextureId = 0
-    private var dcpHueSatTextureSource: DcpHueSatMap? = null
-    private var dcpLookTableTextureId = 0
-    private var spectralFilmTextureId = 0
-    private var spectralFilmTextureKey: String? = null
-    private var hncsColorMapTextureId = 0
-    private var hncsCurveTextureId = 0
-    private var hncsColorMapTextureKey: String? = null
-    private var hncsCurveTextureKey: String? = null
-    private var dummyDcp3DTextureId = 0
-    private var dummyDcpToneCurveTextureId = 0
-
-    // darktable denoiseprofile 降噪资源
-    private var denoisePreconditionV2Program = 0
-    private var denoiseNlmInitProgram = 0
-    private var denoiseNlmFusedAccuProgram = 0
-    private var denoiseNlmFinishProgram = 0
-
     // denoiseprofile 中间纹理: ping-pong (RGBA16F)
     private var gfTexId = intArrayOf(0, 0)
     private var gfFboId = intArrayOf(0, 0)
     private var gfWidth = 0
     private var gfHeight = 0
 
-    private var filmicHrWidth = 0
-    private var filmicHrHeight = 0
-    private var filmicHrMaskTextureId = 0
-    private var filmicHrMaskFramebufferId = 0
-    private var filmicHrWorkingTextureId = 0
-    private var filmicHrWorkingFramebufferId = 0
-    private var filmicHrTempTextureId = 0
-    private var filmicHrTempFramebufferId = 0
-    private var filmicHrLfEvenTextureId = 0
-    private var filmicHrLfEvenFramebufferId = 0
-    private var filmicHrLfOddTextureId = 0
-    private var filmicHrLfOddFramebufferId = 0
-    private var filmicHrHighFrequencyTextureId = 0
-    private var filmicHrHighFrequencyFramebufferId = 0
-    private var filmicHrHighFrequencyRgbTextureId = 0
-    private var filmicHrHighFrequencyRgbFramebufferId = 0
-    private var filmicHrNormsTextureId = 0
-    private var filmicHrNormsFramebufferId = 0
-    private val filmicHrReconstructedTextureIds = intArrayOf(0, 0)
-    private val filmicHrReconstructedFramebufferIds = intArrayOf(0, 0)
 
     suspend fun prewarmDepthEstimator(context: Context) = withContext(Dispatchers.Default) {
         val start = System.currentTimeMillis()
@@ -1716,22 +1628,10 @@ class RawDemosaicProcessor {
         PLog.d(TAG, "RAW DepthEstimator prewarmed, took=${System.currentTimeMillis() - start}ms")
     }
 
-    private var denoiseNlmU2BufferId = 0
-    private var denoiseNlmBufferWidth = 0
-    private var denoiseNlmBufferRows = 0
-    private var denoiseNlmMaxSsboBytes = 0L
-
-    // 缓冲区
-    private var vertexBuffer: FloatBuffer? = null
-    private var texCoordBuffer: FloatBuffer? = null
-    private var indexBuffer: ShortBuffer? = null
     private var pboId = 0
 
     private var lensShadingTextureId = 0
     private var dummyShadingTextureId = 0
-
-    private val defaultUsmRadius = RawShaders.DEFAULT_USM_RADIUS
-    private val defaultUsmThreshold = RawShaders.DEFAULT_USM_THRESHOLD
 
     data class SceneStats(
         val exposureGain: Float,
@@ -3449,7 +3349,7 @@ class RawDemosaicProcessor {
                 )
             } finally {
                 if (colorEngine == RawRenderingEngine.DarktableFilmic) {
-                    releaseDarktableFilmicHighlightReconstructionFramebuffers()
+                    filmicHighlightReconstructionAlgorithm.releaseFramebuffers()
                 }
             }
             if (!combinedRendered) {
@@ -3708,7 +3608,7 @@ class RawDemosaicProcessor {
         val userAdjustmentDenoiseEnabled =
             (config.denoiseValue ?: 0f) > 0f || (config.chromaDenoiseValue ?: 0f) > 0f
         try {
-            vgnTileTexturePoolingEnabled = true
+            vgnDemosaicAlgorithm.setTileTexturePoolingEnabled(true)
             setupOutputFramebuffer(maximumOutputWidth, maximumOutputHeight)
 
             for (tile in config.tiles) {
@@ -4079,8 +3979,7 @@ class RawDemosaicProcessor {
     }
 
     private fun releaseTiledRenderFramebuffers() {
-        vgnTileTexturePoolingEnabled = false
-        releaseVgnTileTexturePool()
+        vgnDemosaicAlgorithm.setTileTexturePoolingEnabled(false)
         if (rawTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
             rawTextureId = 0
@@ -4109,7 +4008,6 @@ class RawDemosaicProcessor {
         demosaicHeight = 0
 
         releaseDenoiseProfileFramebuffers()
-        releaseDenoiseProfileAccumulator()
         releaseHdrReferenceFramebuffer()
 
         if (combinedTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(combinedTextureId), 0)
@@ -4180,1357 +4078,58 @@ class RawDemosaicProcessor {
         hueSatMapSupportsOverrange: Boolean,
         warpRectilinear: FloatArray? = null,
     ): DngProfileGainTableMap? {
-        val streamingInput = streamingRawData != null
-        if ((!streamingInput && rawTextureId == 0) ||
-            (streamingInput && streamingRowStride <= 0) ||
-            width <= 0 || height <= 0 ||
-            rawTextureWidth <= 0 || rawTextureHeight <= 0 || metadata.whiteLevel <= 0f
-        ) {
-            PLog.e(
-                TAG,
-                "GPU RAW PGTM input invalid: texture=$rawTextureId streaming=$streamingInput " +
-                    "size=${width}x$height " +
-                    "source=${rawTextureWidth}x$rawTextureHeight white=${metadata.whiteLevel}",
-            )
-            return null
-        }
-        val photonProgramsReady = pgtmPhotonPrograms.all { it != 0 }
-        if (pgtmCellSamplesProgram == 0 || !photonProgramsReady) {
-            PLog.e(
-                TAG,
-                "GPU RAW PGTM programs unavailable: samples=$pgtmCellSamplesProgram " +
-                    "photonProgramsReady=$photonProgramsReady",
-            )
-            return null
-        }
-        val safeStatsBounds = sanitizePgtmStatsBounds(
-            statsBounds,
-            rawTextureWidth,
-            rawTextureHeight,
-        ) ?: run {
-            PLog.e(
-                TAG,
-                "GPU RAW PGTM stats bounds invalid: source=${rawTextureWidth}x$rawTextureHeight " +
-                    "bounds=$statsBounds",
-            )
-            return null
-        }
-        val gridSize = DngPhotonProfileGainTableGenerator.gridSizeFor(width, height)
-        val gridWidth = gridSize.getOrElse(0) { 0 }
-        val gridHeight = gridSize.getOrElse(1) { 0 }
-        if (gridWidth <= 0 || gridHeight <= 0) return null
-        val activeWarpParameters = ArrayList<Float>()
-        warpRectilinear
-            ?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }
-            ?.let { warps ->
-                for (offset in warps.indices step 8) {
-                    val parameters = warps.copyOfRange(offset, offset + 8)
-                    if (isNoOpWarpRectilinear(parameters)) continue
-                    parameters.forEach { activeWarpParameters += it }
-                }
-        }
-
-        val cellCount = gridWidth * gridHeight
-        val sampleFloatCount = cellCount * DngPhotonLocalToneMapper.SAMPLES_PER_CELL
-        val streamingTiles = if (streamingInput) {
-            RawTilePlanner.plan(
-                sourceWidth = rawTextureWidth,
-                sourceHeight = rawTextureHeight,
-                outputSourceBounds = RawTileRect(0, 0, rawTextureWidth, rawTextureHeight),
-                rotation = 0,
-                coreEdgePx = RAW_TILE_CORE_EDGE_PX,
-                supportPx = 2,
-                cfaPeriod = RawCfaCorrection.repeatPatternDim(metadata.cfaPattern)[0],
-            )
-        } else {
-            emptyList()
-        }
-        val bufferIds = IntArray(2)
-        val totalStartNs = System.nanoTime()
-        GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
-        try {
-            val sampleBufferId = bufferIds[0]
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, sampleBufferId)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                sampleFloatCount * Float.SIZE_BYTES,
-                null,
-                GLES31.GL_DYNAMIC_READ,
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, sampleBufferId)
-
-            val warpBufferId = bufferIds[1]
-            val warpBuffer = ByteBuffer.allocateDirect(
-                max(activeWarpParameters.size, 1) * Float.SIZE_BYTES
-            )
-                .order(ByteOrder.nativeOrder())
-                .asFloatBuffer()
-            if (activeWarpParameters.isEmpty()) {
-                warpBuffer.put(0f)
-            } else {
-                activeWarpParameters.forEach { warpBuffer.put(it) }
-            }
-            warpBuffer.position(0)
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, warpBufferId)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                max(activeWarpParameters.size, 1) * Float.SIZE_BYTES,
-                warpBuffer,
-                GLES31.GL_STATIC_DRAW,
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, warpBufferId)
-
-            GLES31.glUseProgram(pgtmCellSamplesProgram)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uRawTexture"),
-                RCD_RAW_TEXTURE_UNIT,
-            )
-            // PGTM is later applied to the demosaicked camera-linear image, whose RAW samples
-            // already include lens-shading correction. Build its samples in the same domain;
-            // otherwise the local map reintroduces lens vignetting into already-corrected flats.
-            bindLensShadingForProgram(pgtmCellSamplesProgram, metadata)
-            val activeHueSatMap = hueSatMap?.takeIf { it.isValid }
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
-            val hueSatTextureId = activeHueSatMap?.let { map ->
-                ensureDcpHueSatTexture(map)
-            } ?: ensureDummyDcp3DTexture()
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, hueSatTextureId)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatMap"),
-                LINEAR_DCP_HUE_SAT_TEXTURE_UNIT,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatEnabled"),
-                if (activeHueSatMap != null) 1 else 0,
-            )
-            GLES31.glUniform3i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatDivisions"),
-                activeHueSatMap?.hueDivisions ?: 1,
-                activeHueSatMap?.satDivisions ?: 1,
-                activeHueSatMap?.valueDivisions ?: 1,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatEncoding"),
-                activeHueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatSupportOverrange"),
-                if (hueSatMapSupportsOverrange) 1 else 0,
-            )
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uImageSize"),
-                rawTextureWidth,
-                rawTextureHeight,
-            )
-            GLES31.glUniform4i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uStatsBounds"),
-                safeStatsBounds.left,
-                safeStatsBounds.top,
-                safeStatsBounds.right,
-                safeStatsBounds.bottom,
-            )
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uGridSize"),
-                gridWidth,
-                gridHeight,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uSamplesPerPixel"),
-                samplesPerPixel.coerceAtLeast(1),
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uCfaPattern"),
-                metadata.cfaPattern,
-            )
-            val blackLevel4 = FloatArray(4) { index ->
-                metadata.blackLevel.getOrElse(index) {
-                    metadata.blackLevel.firstOrNull() ?: 0f
-                }
-            }
-            GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uBlackLevel"),
-                1,
-                blackLevel4,
-                0,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uWhiteLevel"),
-                metadata.whiteLevel,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uWarpCount"),
-                activeWarpParameters.size / 8,
-            )
-            val safeColorCorrectionMatrix = colorCorrectionMatrix.takeIf { matrix ->
-                matrix.size >= 9 && matrix.take(9).all { it.isFinite() }
-            } ?: floatArrayOf(
-                1f, 0f, 0f,
-                0f, 1f, 0f,
-                0f, 0f, 1f,
-            )
-            GLES31.glUniformMatrix3fv(
-                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uColorCorrectionMatrix"),
-                1,
-                false,
-                transposeMatrix3x3(safeColorCorrectionMatrix),
-                0,
-            )
-            val samplesGpuStartNs = System.nanoTime()
-            if (streamingInput) {
-                val source = requireNotNull(streamingRawData)
-                streamingTiles.forEachIndexed { tileIndex, tile ->
-                    val working = tile.sourceWorking
-                    uploadRawTextureRegion(
-                        buffer = source,
-                        rowStride = streamingRowStride,
-                        region = working,
-                        samplesPerPixel = samplesPerPixel,
-                    )
-                    GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-                    GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, this.rawTextureId)
-                    GLES31.glUniform2i(
-                        GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uRawTextureOrigin"),
-                        working.left,
-                        working.top,
-                    )
-                    GLES31.glUniform4i(
-                        GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uSampleSourceBounds"),
-                        tile.sourceCore.left,
-                        tile.sourceCore.top,
-                        tile.sourceCore.right,
-                        tile.sourceCore.bottom,
-                    )
-                    GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
-                    if (tileIndex < streamingTiles.lastIndex) {
-                        // The next CPU upload overwrites this same texture. A fence is the
-                        // ownership boundary required before reusing that storage while the
-                        // previous compute dispatch may still be reading it.
-                        GlesGpuCompletion.awaitSubmittedWork(
-                            label = "PGTM sample tile ${tile.index}",
-                            checkGlError = ::checkGlError,
-                        )
-                        GlesGpuScheduler.yieldToUiRenderer()
-                    }
-                }
-            } else {
-                GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-                GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
-                GLES31.glUniform2i(
-                    GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uRawTextureOrigin"),
-                    0,
-                    0,
+        val streamingUploader = streamingRawData?.let {
+            DngPhotonProfileGainTableAlgorithm.StreamingRawUploader {
+                    buffer,
+                    rowStride,
+                    region,
+                    inputSamplesPerPixel,
+                ->
+                uploadRawTextureRegion(
+                    buffer = buffer,
+                    rowStride = rowStride,
+                    region = region,
+                    samplesPerPixel = inputSamplesPerPixel,
                 )
-                GLES31.glUniform4i(
-                    GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uSampleSourceBounds"),
-                    0,
-                    0,
-                    rawTextureWidth,
-                    rawTextureHeight,
-                )
-                GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
+                this.rawTextureId
             }
-            GLES31.glMemoryBarrier(
-                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
-            )
-            checkGlError("generateProfileGainTableMapOnGpu sample dispatch")
-            val samplesGpuReadyNs = System.nanoTime()
-
-            val plan = DngPhotonProfileGainTableGenerator.plan(
+        }
+        return profileGainTableAlgorithm.execute(
+            DngPhotonProfileGainTableAlgorithm.Input(
+                rawTextureId = rawTextureId,
+                streamingRawData = streamingRawData,
+                streamingRowStride = streamingRowStride,
                 width = width,
                 height = height,
+                rawTextureWidth = rawTextureWidth,
+                rawTextureHeight = rawTextureHeight,
+                samplesPerPixel = samplesPerPixel,
+                metadata = metadata,
+                statsBounds = statsBounds,
                 baselineExposureEv = baselineExposureEv,
-                diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
-                samplingArea = PhotonPgtmSamplingArea(
-                    originH = safeStatsBounds.left.toDouble() / rawTextureWidth,
-                    originV = safeStatsBounds.top.toDouble() / rawTextureHeight,
-                    extentH = safeStatsBounds.width().toDouble() / rawTextureWidth,
-                    extentV = safeStatsBounds.height().toDouble() / rawTextureHeight,
-                ),
-            ) ?: return null
-            val planReadyNs = System.nanoTime()
-            if (plan.cellCount != cellCount) {
-                PLog.e(
-                    TAG,
-                    "GPU RAW PGTM plan count=${plan.cellCount}, expected=$cellCount",
-                )
-                return null
-            }
-
-            val localToneMapGpuStartNs = System.nanoTime()
-            val generated = generatePhotonProfileGainCurvesOnGpu(
-                plan = plan,
-                sampleBufferId = sampleBufferId,
-            ) ?: return null
-            val localToneMapGpuReadyNs = System.nanoTime()
-            val map =
-                DngPhotonProfileGainTableGenerator.mapFromGpuGains(plan, generated.gains)
-                    ?: run {
-                        GLES30.glDeleteTextures(1, intArrayOf(generated.textureId), 0)
-                        return null
+                colorCorrectionMatrix = colorCorrectionMatrix,
+                hueSatMap = hueSatMap,
+                hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
+                warpRectilinear = warpRectilinear,
+                lensShadingDescription = lensShadingLogString(metadata),
+                bindLensShading = { program ->
+                    bindLensShadingForProgram(program, metadata)
+                },
+                ensureHueSatTexture = dcpTextureResources::ensureHueSatTexture,
+                ensureDummyHueSatTexture = dcpTextureResources::ensureDummyTexture,
+                installProfileGainTableTexture = ::installProfileGainTableTexture,
+                isNoOpWarp = ::isNoOpWarpRectilinear,
+                streamingRawUploader = streamingUploader,
+                releaseStreamingRawTexture = {
+                    if (this.rawTextureId != 0) {
+                        GLES30.glDeleteTextures(1, intArrayOf(this.rawTextureId), 0)
+                        this.rawTextureId = 0
+                        rawTileTextureWidth = 0
+                        rawTileTextureHeight = 0
                     }
-            installProfileGainTableTexture(map, generated.textureId)
-            val photonPlan = plan.photonPlan
-            val photonPreToneMapGain = photonPlan.exposureGain *
-                2.0f.pow(photonPlan.parameters.preToneMapExposureBoostEv)
-            PLog.d(
-                TAG,
-                "GPU Photon HDR prepared: size=${width}x$height " +
-                    "source=${rawTextureWidth}x$rawTextureHeight " +
-                    "streaming=$streamingInput sampleTiles=${streamingTiles.size} " +
-                    "statsBounds=$safeStatsBounds " +
-                    "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
-                    "lsc=${lensShadingLogString(metadata)} " +
-                    "warpCount=${activeWarpParameters.size / 8} " +
-                    "photonGuide=paperIntensity " +
-                    "hueSatOverrange=$hueSatMapSupportsOverrange " +
-                    "photonBaselineGain=${photonPlan.exposureGain} " +
-                    "photonPreToneMapGain=$photonPreToneMapGain " +
-                    "photonLlfLevels=${photonPlan.parameters.localLaplacianIntensityLevels} " +
-                    "photonRangeSigma=${photonPlan.parameters.localLaplacianRangeSigma} " +
-                    "photonBguRangeSigma=${photonPlan.parameters.bilateralRangeSigma} " +
-                    "samplesGpuMs=${(samplesGpuReadyNs - samplesGpuStartNs) / 1_000_000.0} " +
-                    "planCpuMs=${(planReadyNs - samplesGpuReadyNs) / 1_000_000.0} " +
-                    "localToneMapGpuMs=" +
-                    "${(localToneMapGpuReadyNs - localToneMapGpuStartNs) / 1_000_000.0} " +
-                    "totalMs=${(localToneMapGpuReadyNs - totalStartNs) / 1_000_000.0}",
-            )
-            return map
-        } catch (error: Exception) {
-            PLog.e(TAG, "GPU RAW PGTM preparation failed", error)
-            return null
-        } finally {
-            GLES31.glUseProgram(0)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, 0)
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_LENS_SHADING_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
-            GLES31.glDeleteBuffers(bufferIds.size, bufferIds, 0)
-            if (streamingInput && this.rawTextureId != 0) {
-                GLES31.glDeleteTextures(1, intArrayOf(this.rawTextureId), 0)
-                this.rawTextureId = 0
-                rawTileTextureWidth = 0
-                rawTileTextureHeight = 0
-            }
-        }
-    }
-
-    private fun generatePhotonProfileGainCurvesOnGpu(
-        plan: PhotonProfileGainTablePlan,
-        sampleBufferId: Int,
-    ): GpuPhotonGainCurves? {
-        val photonPlan = plan.photonPlan
-        val parameters = photonPlan.parameters
-        val preToneMapExposureGain = photonPlan.exposureGain *
-            2.0f.pow(parameters.preToneMapExposureBoostEv)
-        val gridWidth = plan.grid.mapPointsH
-        val gridHeight = plan.grid.mapPointsV
-        val sampleWidth = gridWidth * DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
-        val sampleHeight = gridHeight * DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
-        val sampleCount = sampleWidth * sampleHeight
-        val pyramid = PhotonGpuPyramidLayout.create(sampleWidth, sampleHeight)
-        val rangeBinCount = (1f / parameters.bilateralRangeSigma).roundToInt()
-        val rangePlaneCount = rangeBinCount + 2
-        val extendedGridWidth =
-            gridWidth + 2 * DngPhotonLocalToneMapGpuShaders.BGU_FILTER_RADIUS
-        val extendedGridHeight =
-            gridHeight + 2 * DngPhotonLocalToneMapGpuShaders.BGU_FILTER_RADIUS
-        val componentCount = DngPhotonLocalToneMapGpuShaders.BGU_COMPONENT_COUNT
-        val histogramItemCount = rangePlaneCount * componentCount
-        check(
-            histogramItemCount <=
-                DngPhotonLocalToneMapGpuShaders.BGU_HISTOGRAM_LOCAL_SIZE
-        ) {
-            "Photon BGU histogram requires $histogramItemCount lanes for " +
-                "$rangePlaneCount planes x $componentCount components, but shader provides " +
-                "${DngPhotonLocalToneMapGpuShaders.BGU_HISTOGRAM_LOCAL_SIZE}"
-        }
-        val extendedBguFloatCount =
-            extendedGridWidth * extendedGridHeight * rangePlaneCount * componentCount
-        val yBlurFloatCount =
-            extendedGridWidth * gridHeight * rangePlaneCount * componentCount
-        val fittedBguFloatCount =
-            gridWidth * gridHeight * rangePlaneCount * componentCount
-        val coefficientCount = gridWidth * gridHeight * rangePlaneCount
-        val gainFloatCount = plan.cellCount * plan.pointCount
-
-        val sourceBuffer = 0
-        val gaussianBuffer = 1
-        val remappedBuffer = 2
-        val laplacianBuffer = 3
-        val reconstructedBuffer = 4
-        val sourceRangeBuffer = 5
-        val histogramRangeBuffer = 6
-        val histogramBuffer = 7
-        val targetBuffer = 8
-        val bguBufferA = 9
-        val bguBufferB = 10
-        val buffers = IntArray(11)
-        val uniformLocations = HashMap<Int, MutableMap<String, Int>>()
-        var generatedTextureId = 0
-
-        fun program(pass: DngPhotonLocalToneMapGpuShaders.Pass): Int =
-            pgtmPhotonPrograms[pass.ordinal]
-
-        fun bindStorage(binding: Int, bufferId: Int) {
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, binding, bufferId)
-        }
-
-        fun allocate(bufferId: Int, byteCount: Int, usage: Int = GLES31.GL_DYNAMIC_DRAW) {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                byteCount,
-                null,
-                usage,
-            )
-        }
-
-        fun uploadTwoInts(bufferId: Int, first: Int, second: Int) {
-            val values = ByteBuffer.allocateDirect(2 * Int.SIZE_BYTES)
-                .order(ByteOrder.nativeOrder())
-            values.putInt(first)
-            values.putInt(second)
-            values.position(0)
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                2 * Int.SIZE_BYTES,
-                values,
-                GLES31.GL_DYNAMIC_DRAW,
-            )
-        }
-
-        fun uniformLocation(activeProgram: Int, name: String): Int {
-            val locations = uniformLocations.getOrPut(activeProgram) { HashMap() }
-            return locations.getOrPut(name) {
-                GLES31.glGetUniformLocation(activeProgram, name)
-            }
-        }
-
-        fun uniform1i(activeProgram: Int, name: String, value: Int) {
-            GLES31.glUniform1i(uniformLocation(activeProgram, name), value)
-        }
-
-        fun uniform1f(activeProgram: Int, name: String, value: Float) {
-            GLES31.glUniform1f(uniformLocation(activeProgram, name), value)
-        }
-
-        fun uniform2i(activeProgram: Int, name: String, x: Int, y: Int) {
-            GLES31.glUniform2i(uniformLocation(activeProgram, name), x, y)
-        }
-
-        fun dispatch1d(count: Int, localSize: Int) {
-            GLES31.glDispatchCompute((count + localSize - 1) / localSize, 1, 1)
-        }
-
-        fun dispatch2d(width: Int, height: Int, localWidth: Int, localHeight: Int) {
-            GLES31.glDispatchCompute(
-                (width + localWidth - 1) / localWidth,
-                (height + localHeight - 1) / localHeight,
-                1,
-            )
-        }
-
-        fun storageBarrier() {
-            GLES31.glMemoryBarrier(
-                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
-                    GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
-            )
-        }
-
-        fun clearUintBuffer(bufferId: Int, count: Int, value: Int = 0) {
-            val activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.CLEAR_UINT)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, bufferId)
-            uniform1i(activeProgram, "uCount", count)
-            GLES30.glUniform1ui(
-                uniformLocation(activeProgram, "uValue"),
-                value,
-            )
-            dispatch1d(count, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-        }
-
-        GLES31.glGenBuffers(buffers.size, buffers, 0)
-        try {
-            allocate(buffers[sourceBuffer], sampleCount * Float.SIZE_BYTES)
-            allocate(buffers[gaussianBuffer], pyramid.floatCount * Float.SIZE_BYTES)
-            allocate(buffers[remappedBuffer], pyramid.floatCount * Float.SIZE_BYTES)
-            allocate(buffers[laplacianBuffer], pyramid.floatCount * Float.SIZE_BYTES)
-            allocate(buffers[reconstructedBuffer], pyramid.floatCount * Float.SIZE_BYTES)
-            allocate(buffers[targetBuffer], sampleCount * Float.SIZE_BYTES)
-            uploadTwoInts(
-                buffers[sourceRangeBuffer],
-                Float.MAX_VALUE.toRawBits(),
-                0f.toRawBits(),
-            )
-
-            var activeProgram =
-                program(DngPhotonLocalToneMapGpuShaders.Pass.PREPARE_SOURCE)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, sampleBufferId)
-            bindStorage(1, buffers[sourceBuffer])
-            bindStorage(2, buffers[sourceRangeBuffer])
-            uniform2i(activeProgram, "uGridSize", gridWidth, gridHeight)
-            uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
-            dispatch2d(sampleWidth, sampleHeight, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
-            storageBarrier()
-
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.NORMALIZE_LOG)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[sourceBuffer])
-            bindStorage(1, buffers[sourceRangeBuffer])
-            bindStorage(2, buffers[gaussianBuffer])
-            uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
-            uniform1i(activeProgram, "uOutputOffset", pyramid.levels.first().offset)
-            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-            dispatch2d(sampleWidth, sampleHeight, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
-            storageBarrier()
-
-            val sourceRange = readUintStorageBuffer(
-                bufferId = buffers[sourceRangeBuffer],
-                intCount = 2,
-                label = "Photon source range",
-            ) ?: return null
-            val sourceMinimum = Float.fromBits(sourceRange[0])
-            val sourceMaximum = Float.fromBits(sourceRange[1])
-            if (!sourceMinimum.isFinite() || !sourceMaximum.isFinite() ||
-                sourceMinimum < 0f || sourceMaximum < sourceMinimum
-            ) {
-                PLog.e(
-                    TAG,
-                    "Photon source range invalid: $sourceMinimum..$sourceMaximum",
-                )
-                return null
-            }
-            val sourceMinimumLog = ln(
-                preToneMapExposureGain * sourceMinimum +
-                    DngPhotonLocalToneMapper.SOURCE_EPSILON
-            )
-            val sourceMaximumLog = ln(
-                preToneMapExposureGain * sourceMaximum +
-                    DngPhotonLocalToneMapper.SOURCE_EPSILON
-            )
-            if (!sourceMinimumLog.isFinite() || !sourceMaximumLog.isFinite() ||
-                sourceMaximumLog < sourceMinimumLog
-            ) {
-                PLog.e(
-                    TAG,
-                    "Photon source-log range invalid: $sourceMinimumLog..$sourceMaximumLog",
-                )
-                return null
-            }
-            val histogramBinCount =
-                DngPhotonLocalToneMapGpuShaders.HISTOGRAM_BIN_COUNT
-            allocate(buffers[histogramBuffer], histogramBinCount * Int.SIZE_BYTES)
-
-            uploadTwoInts(
-                buffers[histogramRangeBuffer],
-                -1,
-                0,
-            )
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.FILTERED_LOG_RANGE)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[gaussianBuffer])
-            bindStorage(1, buffers[sourceRangeBuffer])
-            bindStorage(2, buffers[histogramRangeBuffer])
-            uniform1i(activeProgram, "uCount", sampleCount)
-            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
-            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-            val inputRange = readUintStorageBuffer(
-                bufferId = buffers[histogramRangeBuffer],
-                intCount = 2,
-                label = "Photon input-log range",
-            ) ?: return null
-            val inputMinimumLog = orderedBitsToFloat(inputRange[0])
-            val inputMaximumLog = orderedBitsToFloat(inputRange[1])
-            if (!inputMinimumLog.isFinite() || !inputMaximumLog.isFinite() ||
-                inputMaximumLog < inputMinimumLog
-            ) {
-                PLog.e(
-                    TAG,
-                    "Photon input-log range invalid: $inputMinimumLog..$inputMaximumLog",
-                )
-                return null
-            }
-
-            clearUintBuffer(buffers[histogramBuffer], histogramBinCount)
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.LOG_HISTOGRAM)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[gaussianBuffer])
-            bindStorage(1, buffers[sourceRangeBuffer])
-            bindStorage(2, buffers[histogramRangeBuffer])
-            bindStorage(3, buffers[histogramBuffer])
-            uniform1i(activeProgram, "uCount", sampleCount)
-            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
-            uniform1i(activeProgram, "uBinCount", histogramBinCount)
-            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-            val inputHistogram = readUintStorageBuffer(
-                bufferId = buffers[histogramBuffer],
-                intCount = histogramBinCount,
-                label = "Photon input-log histogram",
-            ) ?: return null
-            val inputDistribution = summarizePhotonLogHistogram(
-                histogram = inputHistogram,
-                rangeMinimum = inputMinimumLog,
-                rangeMaximum = inputMaximumLog,
-                percentileClip = parameters.percentileClip,
-                expectedSampleCount = sampleCount,
-                label = "input",
-            ) ?: return null
-            val inputLower = inputDistribution.lower
-                .coerceAtLeast(DngPhotonLocalToneMapper.SOURCE_EPSILON)
-            val inputUpper = inputDistribution.upper.coerceAtLeast(inputLower)
-            val edgeSlope = DngPhotonLocalToneMapper.localLaplacianEdgeSlope(
-                inputLower = inputLower,
-                inputUpper = inputUpper,
-                targetDynamicRange = parameters.targetDynamicRange,
-            )
-            PLog.d(TAG, "localLaplacianToneMap: edgeSlope=$edgeSlope")
-
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.DOWNSAMPLE)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[gaussianBuffer])
-            bindStorage(1, buffers[gaussianBuffer])
-            for (levelIndex in 1 until pyramid.levels.size) {
-                val sourceLevel = pyramid.levels[levelIndex - 1]
-                val destinationLevel = pyramid.levels[levelIndex]
-                uniform2i(
-                    activeProgram,
-                    "uSourceSize",
-                    sourceLevel.width,
-                    sourceLevel.height,
-                )
-                uniform2i(
-                    activeProgram,
-                    "uDestinationSize",
-                    destinationLevel.width,
-                    destinationLevel.height,
-                )
-                uniform1i(activeProgram, "uSourceOffset", sourceLevel.offset)
-                uniform1i(activeProgram, "uDestinationOffset", destinationLevel.offset)
-                dispatch2d(
-                    destinationLevel.width,
-                    destinationLevel.height,
-                    GlesComputeWorkGroup.IMAGE_TILE_SIZE,
-                    GlesComputeWorkGroup.IMAGE_TILE_SIZE,
-                )
-                storageBarrier()
-            }
-
-            clearUintBuffer(
-                bufferId = buffers[laplacianBuffer],
-                count = pyramid.floatCount,
-            )
-            val intensityLevels = parameters.localLaplacianIntensityLevels
-            val intensityStep = 1f / (intensityLevels - 1)
-            repeat(intensityLevels) { referenceIndex ->
-                val reference = referenceIndex * intensityStep
-                activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.REMAP)
-                GLES31.glUseProgram(activeProgram)
-                bindStorage(0, buffers[gaussianBuffer])
-                bindStorage(1, buffers[remappedBuffer])
-                bindStorage(2, buffers[sourceRangeBuffer])
-                uniform1i(activeProgram, "uCount", sampleCount)
-                uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
-                uniform1i(
-                    activeProgram,
-                    "uDestinationOffset",
-                    pyramid.levels.first().offset,
-                )
-                uniform1f(activeProgram, "uReference", reference)
-                uniform1f(
-                    activeProgram,
-                    "uRangeSigma",
-                    parameters.localLaplacianRangeSigma,
-                )
-                uniform1f(
-                    activeProgram,
-                    "uDetailExponent",
-                    parameters.localLaplacianDetailExponent,
-                )
-                uniform1f(activeProgram, "uEdgeSlope", edgeSlope)
-                uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-                dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
-                storageBarrier()
-
-                activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.DOWNSAMPLE)
-                GLES31.glUseProgram(activeProgram)
-                bindStorage(0, buffers[remappedBuffer])
-                bindStorage(1, buffers[remappedBuffer])
-                for (levelIndex in 1 until pyramid.levels.size) {
-                    val sourceLevel = pyramid.levels[levelIndex - 1]
-                    val destinationLevel = pyramid.levels[levelIndex]
-                    uniform2i(
-                        activeProgram,
-                        "uSourceSize",
-                        sourceLevel.width,
-                        sourceLevel.height,
-                    )
-                    uniform2i(
-                        activeProgram,
-                        "uDestinationSize",
-                        destinationLevel.width,
-                        destinationLevel.height,
-                    )
-                    uniform1i(activeProgram, "uSourceOffset", sourceLevel.offset)
-                    uniform1i(
-                        activeProgram,
-                        "uDestinationOffset",
-                        destinationLevel.offset,
-                    )
-                    dispatch2d(
-                        destinationLevel.width,
-                        destinationLevel.height,
-                        GlesComputeWorkGroup.IMAGE_TILE_SIZE,
-                        GlesComputeWorkGroup.IMAGE_TILE_SIZE,
-                    )
-                    storageBarrier()
-                }
-
-                activeProgram = program(
-                    DngPhotonLocalToneMapGpuShaders.Pass.ACCUMULATE_LAPLACIAN
-                )
-                GLES31.glUseProgram(activeProgram)
-                bindStorage(0, buffers[gaussianBuffer])
-                bindStorage(1, buffers[remappedBuffer])
-                bindStorage(2, buffers[laplacianBuffer])
-                for (levelIndex in 0 until pyramid.levels.lastIndex) {
-                    val currentLevel = pyramid.levels[levelIndex]
-                    val nextLevel = pyramid.levels[levelIndex + 1]
-                    uniform2i(
-                        activeProgram,
-                        "uCurrentSize",
-                        currentLevel.width,
-                        currentLevel.height,
-                    )
-                    uniform2i(
-                        activeProgram,
-                        "uNextSize",
-                        nextLevel.width,
-                        nextLevel.height,
-                    )
-                    uniform1i(activeProgram, "uGuideOffset", currentLevel.offset)
-                    uniform1i(activeProgram, "uCurrentOffset", currentLevel.offset)
-                    uniform1i(activeProgram, "uNextOffset", nextLevel.offset)
-                    uniform1i(activeProgram, "uOutputOffset", currentLevel.offset)
-                    uniform1f(activeProgram, "uReference", reference)
-                    uniform1f(activeProgram, "uIntensityStep", intensityStep)
-                    dispatch2d(currentLevel.width, currentLevel.height, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
-                }
-                storageBarrier()
-            }
-
-            val coarsestLevel = pyramid.levels.last()
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.COPY_RANGE)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[gaussianBuffer])
-            bindStorage(1, buffers[reconstructedBuffer])
-            uniform1i(activeProgram, "uCount", coarsestLevel.size)
-            uniform1i(activeProgram, "uSourceOffset", coarsestLevel.offset)
-            uniform1i(activeProgram, "uDestinationOffset", coarsestLevel.offset)
-            dispatch1d(coarsestLevel.size, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.RECONSTRUCT)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[laplacianBuffer])
-            bindStorage(1, buffers[reconstructedBuffer])
-            for (levelIndex in pyramid.levels.lastIndex - 1 downTo 0) {
-                val currentLevel = pyramid.levels[levelIndex]
-                val nextLevel = pyramid.levels[levelIndex + 1]
-                uniform2i(
-                    activeProgram,
-                    "uCurrentSize",
-                    currentLevel.width,
-                    currentLevel.height,
-                )
-                uniform2i(
-                    activeProgram,
-                    "uNextSize",
-                    nextLevel.width,
-                    nextLevel.height,
-                )
-                uniform1i(activeProgram, "uLaplacianOffset", currentLevel.offset)
-                uniform1i(activeProgram, "uCurrentOffset", currentLevel.offset)
-                uniform1i(activeProgram, "uNextOffset", nextLevel.offset)
-                dispatch2d(currentLevel.width, currentLevel.height, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
-                storageBarrier()
-            }
-
-            uploadTwoInts(
-                buffers[histogramRangeBuffer],
-                -1,
-                0,
-            )
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.FILTERED_LOG_RANGE)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[reconstructedBuffer])
-            bindStorage(1, buffers[sourceRangeBuffer])
-            bindStorage(2, buffers[histogramRangeBuffer])
-            uniform1i(activeProgram, "uCount", sampleCount)
-            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
-            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-            val filteredRange = readUintStorageBuffer(
-                bufferId = buffers[histogramRangeBuffer],
-                intCount = 2,
-                label = "Photon filtered-log range",
-            ) ?: return null
-            val filteredMinimumLog = orderedBitsToFloat(filteredRange[0])
-            val filteredMaximumLog = orderedBitsToFloat(filteredRange[1])
-            if (!filteredMinimumLog.isFinite() || !filteredMaximumLog.isFinite() ||
-                filteredMaximumLog < filteredMinimumLog
-            ) {
-                PLog.e(
-                    TAG,
-                    "Photon filtered-log range invalid: " +
-                        "$filteredMinimumLog..$filteredMaximumLog",
-                )
-                return null
-            }
-
-            clearUintBuffer(buffers[histogramBuffer], histogramBinCount)
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.LOG_HISTOGRAM)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[reconstructedBuffer])
-            bindStorage(1, buffers[sourceRangeBuffer])
-            bindStorage(2, buffers[histogramRangeBuffer])
-            bindStorage(3, buffers[histogramBuffer])
-            uniform1i(activeProgram, "uCount", sampleCount)
-            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
-            uniform1i(activeProgram, "uBinCount", histogramBinCount)
-            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-            val filteredHistogram = readUintStorageBuffer(
-                bufferId = buffers[histogramBuffer],
-                intCount = histogramBinCount,
-                label = "Photon filtered-log histogram",
-            ) ?: return null
-            val filteredDistribution = summarizePhotonLogHistogram(
-                histogram = filteredHistogram,
-                rangeMinimum = filteredMinimumLog,
-                rangeMaximum = filteredMaximumLog,
-                percentileClip = parameters.percentileClip,
-                expectedSampleCount = sampleCount,
-                label = "filtered",
-            ) ?: return null
-            val outputExponent = DngPhotonLocalToneMapper.outputPercentileExponent(
-                filteredLower = filteredDistribution.lower,
-                filteredUpper = filteredDistribution.upper,
-                exposureGain = preToneMapExposureGain,
-                targetDynamicRange = parameters.targetDynamicRange,
-            )
-            val outputUpper = DngPhotonLocalToneMapper.outputUpperPercentile(
-                filteredUpper = filteredDistribution.upper,
-                outputExponent = outputExponent,
-            )
-
-            PLog.d(
-                TAG,
-                "Photon PGTM adaptation: sourceLog=$sourceMinimumLog..$sourceMaximumLog " +
-                    "filteredLog=$filteredMinimumLog..$filteredMaximumLog " +
-                    "filteredPercentiles=${filteredDistribution.lower}.." +
-                    "${filteredDistribution.upper} outputExponent=$outputExponent " +
-                    "outputUpper=$outputUpper " +
-                    "edgeSlope=$edgeSlope " +
-                    "preToneMapExposureBoostEv=${parameters.preToneMapExposureBoostEv} " +
-                    "preToneMapExposureGain=$preToneMapExposureGain",
-            )
-
-            activeProgram = program(
-                DngPhotonLocalToneMapGpuShaders.Pass.FINALIZE_SDR_TARGET
-            )
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[reconstructedBuffer])
-            bindStorage(1, buffers[sourceRangeBuffer])
-            bindStorage(2, buffers[targetBuffer])
-            uniform1i(activeProgram, "uCount", sampleCount)
-            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
-            uniform1f(
-                activeProgram,
-                "uPreToneMapExposureGain",
-                preToneMapExposureGain,
-            )
-            uniform1f(activeProgram, "uFilteredUpper", filteredDistribution.upper)
-            uniform1f(activeProgram, "uOutputExponent", outputExponent)
-            uniform1f(activeProgram, "uOutputUpper", outputUpper)
-            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-
-            allocate(buffers[bguBufferA], extendedBguFloatCount * Float.SIZE_BYTES)
-            allocate(buffers[bguBufferB], extendedBguFloatCount * Float.SIZE_BYTES)
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_HISTOGRAM)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[sourceBuffer])
-            bindStorage(1, buffers[targetBuffer])
-            bindStorage(2, buffers[bguBufferA])
-            uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
-            uniform2i(
-                activeProgram,
-                "uExtendedGridSize",
-                extendedGridWidth,
-                extendedGridHeight,
-            )
-            uniform1i(activeProgram, "uRangeBinCount", rangeBinCount)
-            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
-            uniform1f(
-                activeProgram,
-                "uGuideAlpha",
-                parameters.bilateralGuideCurveAlpha,
-            )
-            GLES31.glDispatchCompute(extendedGridWidth, extendedGridHeight, 1)
-            storageBarrier()
-
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_Z)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[bguBufferA])
-            bindStorage(1, buffers[bguBufferB])
-            uniform2i(
-                activeProgram,
-                "uGridSize",
-                extendedGridWidth,
-                extendedGridHeight,
-            )
-            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
-            uniform1i(activeProgram, "uElementCount", extendedBguFloatCount)
-            dispatch1d(extendedBguFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_Y)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[bguBufferB])
-            bindStorage(1, buffers[bguBufferA])
-            uniform2i(
-                activeProgram,
-                "uExtendedGridSize",
-                extendedGridWidth,
-                extendedGridHeight,
-            )
-            uniform1i(activeProgram, "uOutputHeight", gridHeight)
-            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
-            uniform1i(activeProgram, "uElementCount", yBlurFloatCount)
-            dispatch1d(yBlurFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_X)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[bguBufferA])
-            bindStorage(1, buffers[bguBufferB])
-            uniform2i(activeProgram, "uOutputGridSize", gridWidth, gridHeight)
-            uniform1i(activeProgram, "uInputWidth", extendedGridWidth)
-            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
-            uniform1i(activeProgram, "uElementCount", fittedBguFloatCount)
-            dispatch1d(fittedBguFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_SOLVE)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[bguBufferB])
-            bindStorage(1, buffers[bguBufferA])
-            uniform1i(activeProgram, "uCoefficientCount", coefficientCount)
-            uniform1f(
-                activeProgram,
-                "uRegularization",
-                parameters.bilateralRegularization,
-            )
-            uniform1f(
-                activeProgram,
-                "uIdentitySlope",
-                1f,
-            )
-            dispatch1d(coefficientCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            storageBarrier()
-
-            allocate(
-                buffers[bguBufferB],
-                gainFloatCount * Float.SIZE_BYTES,
-                GLES31.GL_DYNAMIC_READ,
-            )
-            val gainTextures = IntArray(1)
-            GLES30.glGenTextures(1, gainTextures, 0)
-            generatedTextureId = gainTextures[0]
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, generatedTextureId)
-            GLES30.glTexStorage2D(
-                GLES30.GL_TEXTURE_2D,
-                1,
-                GLES30.GL_R32F,
-                plan.pointCount,
-                plan.cellCount,
-            )
-            GLES30.glTexParameteri(
-                GLES30.GL_TEXTURE_2D,
-                GLES30.GL_TEXTURE_MIN_FILTER,
-                GLES30.GL_NEAREST,
-            )
-            GLES30.glTexParameteri(
-                GLES30.GL_TEXTURE_2D,
-                GLES30.GL_TEXTURE_MAG_FILTER,
-                GLES30.GL_NEAREST,
-            )
-            GLES30.glTexParameteri(
-                GLES30.GL_TEXTURE_2D,
-                GLES30.GL_TEXTURE_WRAP_S,
-                GLES30.GL_CLAMP_TO_EDGE,
-            )
-            GLES30.glTexParameteri(
-                GLES30.GL_TEXTURE_2D,
-                GLES30.GL_TEXTURE_WRAP_T,
-                GLES30.GL_CLAMP_TO_EDGE,
-            )
-            GLES31.glBindImageTexture(
-                0,
-                generatedTextureId,
-                0,
-                false,
-                0,
-                GLES31.GL_WRITE_ONLY,
-                GLES30.GL_R32F,
-            )
-            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.GAIN_CURVES)
-            GLES31.glUseProgram(activeProgram)
-            bindStorage(0, buffers[bguBufferA])
-            bindStorage(1, buffers[bguBufferB])
-            uniform1i(activeProgram, "uCellCount", plan.cellCount)
-            uniform1i(activeProgram, "uPointCount", plan.pointCount)
-            uniform1i(activeProgram, "uRangeBinCount", rangeBinCount)
-            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
-            uniform1f(
-                activeProgram,
-                "uGuideAlpha",
-                parameters.bilateralGuideCurveAlpha,
-            )
-            uniform1f(activeProgram, "uMinTableGain", photonPlan.minTableGain)
-            uniform1f(activeProgram, "uMaxTableGain", photonPlan.maxTableGain)
-            val diagnosticMode = when (plan.diagnosticBand?.mode) {
-                DngPhotonProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
-                DngPhotonProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
-                null -> -1
-            }
-            uniform1i(activeProgram, "uDiagnosticMode", diagnosticMode)
-            uniform1f(
-                activeProgram,
-                "uDiagnosticStart",
-                plan.diagnosticBand?.start ?: 0f,
-            )
-            uniform1f(
-                activeProgram,
-                "uDiagnosticEnd",
-                plan.diagnosticBand?.end ?: 1f,
-            )
-            uniform1f(
-                activeProgram,
-                "uDiagnosticFeather",
-                plan.diagnosticBand?.feather ?: 0f,
-            )
-            dispatch1d(gainFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
-            GLES31.glMemoryBarrier(
-                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
-                    GLES31.GL_BUFFER_UPDATE_BARRIER_BIT or
-                    GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                    GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-            )
-
-            checkGlError("generatePhotonProfileGainCurvesOnGpu")
-            val gains = readFloatStorageBuffer(
-                bufferId = buffers[bguBufferB],
-                floatCount = gainFloatCount,
-                label = "Photon PGTM gain curves",
-            ) ?: return null
-            if (plan.diagnosticBand != null) {
-                PLog.d(TAG, summarizePhotonGainCurves(plan, gains))
-            }
-            val result = GpuPhotonGainCurves(
-                gains = gains,
-                textureId = generatedTextureId,
-            )
-            generatedTextureId = 0
-            return result
-        } finally {
-            GLES31.glUseProgram(0)
-            GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_R32F)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-            repeat(4) { binding ->
-                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, binding, 0)
-            }
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-            GLES31.glDeleteBuffers(buffers.size, buffers, 0)
-            if (generatedTextureId != 0) {
-                GLES30.glDeleteTextures(1, intArrayOf(generatedTextureId), 0)
-            }
-        }
-    }
-
-    /**
-     * Diagnoses the actual GPU-authored DNG table. Output reversals identify an intensity contour;
-     * adjacent range/spatial gain ratios distinguish that from a misplaced spatial grid.
-     */
-    private fun summarizePhotonGainCurves(
-        plan: PhotonProfileGainTablePlan,
-        gains: FloatArray,
-    ): String {
-        val photonPlan = plan.photonPlan
-        val pointCount = plan.pointCount
-        val gridWidth = plan.grid.mapPointsH
-        val gridHeight = plan.grid.mapPointsV
-        val firstVisiblePoint = max(1, ceil(0.02f * pointCount).toInt())
-        var gainMinimum = Float.POSITIVE_INFINITY
-        var gainMaximum = Float.NEGATIVE_INFINITY
-        var reversalCount = 0
-        var worstOutputDrop = 0f
-        var worstOutputDropCell = -1
-        var worstOutputDropPoint = -1
-        var maximumRangeGainRatio = 1f
-        var maximumRangeGainCell = -1
-        var maximumRangeGainPoint = -1
-        var maximumSpatialGainRatio = 1f
-        var maximumSpatialGainCell = -1
-        var maximumSpatialGainPoint = -1
-
-        fun gainRatio(first: Float, second: Float): Float {
-            val low = min(first, second).coerceAtLeast(1e-12f)
-            return max(first, second) / low
-        }
-
-        repeat(plan.cellCount) { cell ->
-            val curveOffset = cell * pointCount
-            var previousOutput = 0f
-            for (point in 0 until pointCount) {
-                val gain = gains[curveOffset + point]
-                gainMinimum = min(gainMinimum, gain)
-                gainMaximum = max(gainMaximum, gain)
-                val sourceInput = when (point) {
-                    0 -> 0f
-                    pointCount - 1 -> 1f
-                    else -> point.toFloat() / pointCount
-                }
-                val output = photonPlan.exposureGain * sourceInput * gain
-                if (point > 0 && output < previousOutput) {
-                    reversalCount++
-                    val drop = previousOutput - output
-                    if (drop > worstOutputDrop) {
-                        worstOutputDrop = drop
-                        worstOutputDropCell = cell
-                        worstOutputDropPoint = point
-                    }
-                }
-                if (point >= firstVisiblePoint) {
-                    val previousGain = gains[curveOffset + point - 1]
-                    val ratio = gainRatio(previousGain, gain)
-                    if (ratio > maximumRangeGainRatio) {
-                        maximumRangeGainRatio = ratio
-                        maximumRangeGainCell = cell
-                        maximumRangeGainPoint = point
-                    }
-                }
-                previousOutput = output
-            }
-        }
-
-        repeat(gridHeight) { y ->
-            repeat(gridWidth) { x ->
-                val cell = y * gridWidth + x
-                for (point in firstVisiblePoint until pointCount) {
-                    val gain = gains[cell * pointCount + point]
-                    if (x > 0) {
-                        val ratio = gainRatio(
-                            gain,
-                            gains[(cell - 1) * pointCount + point],
-                        )
-                        if (ratio > maximumSpatialGainRatio) {
-                            maximumSpatialGainRatio = ratio
-                            maximumSpatialGainCell = cell
-                            maximumSpatialGainPoint = point
-                        }
-                    }
-                    if (y > 0) {
-                        val ratio = gainRatio(
-                            gain,
-                            gains[(cell - gridWidth) * pointCount + point],
-                        )
-                        if (ratio > maximumSpatialGainRatio) {
-                            maximumSpatialGainRatio = ratio
-                            maximumSpatialGainCell = cell
-                            maximumSpatialGainPoint = point
-                        }
-                    }
-                }
-            }
-        }
-
-        fun ratioToEv(ratio: Float): Float =
-            (ln(ratio.coerceAtLeast(1f).toDouble()) / ln(2.0)).toFloat()
-
-        return "Photon PGTM curve diagnostics: gain=$gainMinimum..$gainMaximum " +
-            "outputReversals=$reversalCount worstOutputDrop=$worstOutputDrop " +
-            "atCell=$worstOutputDropCell point=$worstOutputDropPoint " +
-            "maxRangeGainStep=${ratioToEv(maximumRangeGainRatio)}EV " +
-            "atCell=$maximumRangeGainCell point=$maximumRangeGainPoint " +
-            "maxSpatialNeighborStep=${ratioToEv(maximumSpatialGainRatio)}EV " +
-            "atCell=$maximumSpatialGainCell point=$maximumSpatialGainPoint"
-    }
-
-    private data class PhotonLinearHistogramDistribution(
-        val lower: Float,
-        val median: Float,
-        val upper: Float,
-    )
-
-    private fun summarizePhotonLogHistogram(
-        histogram: IntArray,
-        rangeMinimum: Float,
-        rangeMaximum: Float,
-        percentileClip: Float,
-        expectedSampleCount: Int,
-        label: String,
-    ): PhotonLinearHistogramDistribution? {
-        if (histogram.isEmpty() ||
-            !rangeMinimum.isFinite() ||
-            !rangeMaximum.isFinite() ||
-            rangeMaximum < rangeMinimum
-        ) {
-            PLog.e(TAG, "Photon $label histogram range invalid: $rangeMinimum..$rangeMaximum")
-            return null
-        }
-        val sampleCount = histogram.sumOf { it.toLong() and 0xffff_ffffL }
-        if (sampleCount != expectedSampleCount.toLong()) {
-            PLog.e(
-                TAG,
-                "Photon $label histogram count=$sampleCount expected=$expectedSampleCount",
-            )
-            return null
-        }
-
-        fun valueAtRank(rank: Long): Float {
-            var cumulative = 0L
-            val boundedRank = rank.coerceIn(0L, sampleCount - 1L)
-            for (bin in histogram.indices) {
-                cumulative += histogram[bin].toLong() and 0xffff_ffffL
-                if (cumulative <= boundedRank) continue
-                if (bin == 0) return rangeMinimum
-                if (bin == histogram.lastIndex) return rangeMaximum
-                val coordinate = (bin + 0.5f) / (histogram.size - 1f)
-                return rangeMinimum + coordinate * (rangeMaximum - rangeMinimum)
-            }
-            return rangeMaximum
-        }
-
-        fun percentileLinear(quantile: Float): Float {
-            if (sampleCount <= 1L) {
-                return (exp(rangeMinimum.toDouble()) -
-                    DngPhotonLocalToneMapper.SOURCE_EPSILON).coerceAtLeast(0.0).toFloat()
-            }
-            // MATLAB prctile's default convention assigns sorted sample k to
-            // probability (k - 0.5) / N (Hyndman-Fan type 5).
-            val position = (
-                quantile.coerceIn(0f, 1f).toDouble() * sampleCount.toDouble() - 0.5
-                ).coerceIn(0.0, (sampleCount - 1L).toDouble())
-            val lowerRank = floor(position).toLong()
-            val upperRank = min(lowerRank + 1L, sampleCount - 1L)
-            val lowerValue = valueAtRank(lowerRank)
-            val upperValue = valueAtRank(upperRank)
-            val amount = position - lowerRank
-            // lapfilter.m calls from_domain() before prctile, so interpolate epsilon-free
-            // radiance rather than log-radiance.
-            val liftedRadiance = exp(lowerValue.toDouble()) +
-                (exp(upperValue.toDouble()) - exp(lowerValue.toDouble())) * amount
-            return (liftedRadiance - DngPhotonLocalToneMapper.SOURCE_EPSILON)
-                .coerceAtLeast(0.0)
-                .toFloat()
-        }
-
-        return PhotonLinearHistogramDistribution(
-            lower = percentileLinear(percentileClip),
-            median = percentileLinear(0.5f),
-            upper = percentileLinear(1f - percentileClip),
-        )
-    }
-
-    private fun orderedBitsToFloat(ordered: Int): Float {
-        val bits = if ((ordered and Int.MIN_VALUE) != 0) {
-            ordered xor Int.MIN_VALUE
-        } else {
-            ordered.inv()
-        }
-        return Float.fromBits(bits)
-    }
-
-    private fun readUintStorageBuffer(
-        bufferId: Int,
-        intCount: Int,
-        label: String,
-    ): IntArray? {
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
-        val byteCount = intCount * Int.SIZE_BYTES
-        val mapped = GLES31.glMapBufferRange(
-            GLES31.GL_SHADER_STORAGE_BUFFER,
-            0,
-            byteCount,
-            GLES31.GL_MAP_READ_BIT,
-        ) ?: run {
-            PLog.e(TAG, "$label buffer map failed")
-            return null
-        }
-        return try {
-            val byteBuffer = mapped as? ByteBuffer ?: run {
-                PLog.e(TAG, "$label mapped buffer is not a ByteBuffer")
-                return null
-            }
-            IntArray(intCount).also { values ->
-                byteBuffer.order(ByteOrder.nativeOrder()).asIntBuffer().get(values)
-            }
-        } finally {
-            GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
-        }
-    }
-
-    private fun readFloatStorageBuffer(
-        bufferId: Int,
-        floatCount: Int,
-        label: String,
-    ): FloatArray? {
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
-        val byteCount = floatCount * Float.SIZE_BYTES
-        val mapped = GLES31.glMapBufferRange(
-            GLES31.GL_SHADER_STORAGE_BUFFER,
-            0,
-            byteCount,
-            GLES31.GL_MAP_READ_BIT,
-        ) ?: run {
-            PLog.e(TAG, "$label buffer map failed")
-            return null
-        }
-        return try {
-            val byteBuffer = mapped as? ByteBuffer ?: run {
-                PLog.e(TAG, "$label mapped buffer is not a ByteBuffer")
-                return null
-            }
-            FloatArray(floatCount).also { values ->
-                byteBuffer.order(ByteOrder.nativeOrder()).asFloatBuffer().get(values)
-            }
-        } finally {
-            GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
-        }
-    }
-
-    private fun sanitizePgtmStatsBounds(bounds: Rect?, width: Int, height: Int): Rect? {
-        val imageBounds = Rect(0, 0, width, height)
-        if (bounds == null) return imageBounds
-        if (bounds.isEmpty) return null
-        return Rect(bounds).takeIf {
-            it.intersect(imageBounds) && it.width() >= 2 && it.height() >= 2
-        }
+                },
+            ),
+        )?.map
     }
 
     private fun calculateOutputSourceBounds(
@@ -5687,28 +4286,31 @@ class RawDemosaicProcessor {
 
             // 初始化着色器和缓冲区
             initShaderProgram()
-            if (sharpenProgram == 0 || passthroughProgram == 0 ||
-                chromaDenoiseGuideProgram == 0 || chromaDenoiseProgram == 0 ||
-                pgtmCellSamplesProgram == 0 || pgtmPhotonPrograms.any { it == 0 } ||
-                meteringHalfResolutionProgram == 0 ||
-                linearRcdProgram == 0 || linearRawRgbProgram == 0 ||
-                linearRawFloatToUintProgram == 0 || linearRawRgbExpandProgram == 0
+            val sharpenReady = sharpenPass.initialize()
+            val outputReady = outputPass.initialize()
+            val meteringReady = meteringDemosaicAlgorithm.initialize()
+            val chromaDenoiseReady = chromaDenoiseAlgorithm.initialize()
+            val pgtmReady = profileGainTableAlgorithm.initialize()
+            if (!sharpenReady || !outputReady ||
+                !chromaDenoiseReady ||
+                !pgtmReady ||
+                !meteringReady ||
+                !linearRcdPass.isReady || !linearUintToFloatPass.isReady ||
+                !linearFloatToUintPass.isReady || !linearRgbExpandPass.isReady
             ) {
                 PLog.e(
                     TAG, "Critical shader programs failed to compile or link. " +
-                            "sharpen=$sharpenProgram pass=$passthroughProgram " +
-                            "chromaGuide=$chromaDenoiseGuideProgram " +
-                            "chromaDenoise=$chromaDenoiseProgram " +
-                            "pgtmSamples=$pgtmCellSamplesProgram " +
-                            "pgtmPassesReady=${pgtmPhotonPrograms.all { it != 0 }} " +
-                            "meteringHalf=$meteringHalfResolutionProgram " +
-                            "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram " +
-                            "linearRawFloatToUint=$linearRawFloatToUintProgram " +
-                            "linearRawRgbExpand=$linearRawRgbExpandProgram"
+                            "sharpenReady=$sharpenReady outputReady=$outputReady " +
+                            "chromaDenoiseReady=$chromaDenoiseReady " +
+                            "pgtmReady=$pgtmReady " +
+                            "meteringHalfReady=$meteringReady " +
+                            "linearRcd=${linearRcdPass.isReady} " +
+                            "linearRawUintToFloat=${linearUintToFloatPass.isReady} " +
+                            "linearRawFloatToUint=${linearFloatToUintPass.isReady} " +
+                            "linearRawRgbExpand=${linearRgbExpandPass.isReady}"
                 )
                 return false
             }
-            initBuffers()
 
             // 创建静默遮挡图
             dummyShadingTextureId = createDummyShadingTexture()
@@ -5724,986 +4326,95 @@ class RawDemosaicProcessor {
     }
 
     private fun initShaderProgram() {
-        val vShader = compileShader(
-            GLES30.GL_VERTEX_SHADER,
-            RawShaders.VERTEX_SHADER,
-            "rawVertex"
-        )
-
-        // 1. DHT Multi-Pass Programs (替代旧的单 pass AHD)
-        // initDhtPrograms(vShader)
-
-        val fShaderHdrReference =
-            compileShader(
-                GLES30.GL_FRAGMENT_SHADER,
-                RawHdrReferenceShaders.FRAGMENT_SHADER,
-                "hdrReferenceFragment"
-            )
-        if (vShader != 0 && fShaderHdrReference != 0) {
-            hdrReferenceProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(hdrReferenceProgram, vShader)
-            GLES30.glAttachShader(hdrReferenceProgram, fShaderHdrReference)
-            val linkStart = System.currentTimeMillis()
-            GLES30.glLinkProgram(hdrReferenceProgram)
-            if (!logProgramLinkResult(hdrReferenceProgram, "hdrReferenceProgram", linkStart)) {
-                hdrReferenceProgram = 0
-            }
-
-            GLES30.glDeleteShader(fShaderHdrReference)
-        }
-
-        // 2.2 Sharpen Program
-        val fShaderSharpen =
-            compileShader(
-                GLES30.GL_FRAGMENT_SHADER,
-                RawShaders.SHARPEN_FRAGMENT_SHADER,
-                "sharpenFragment"
-            )
-        if (vShader != 0 && fShaderSharpen != 0) {
-            sharpenProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(sharpenProgram, vShader)
-            GLES30.glAttachShader(sharpenProgram, fShaderSharpen)
-            val linkStart = System.currentTimeMillis()
-            GLES30.glLinkProgram(sharpenProgram)
-            if (!logProgramLinkResult(sharpenProgram, "sharpenProgram", linkStart)) {
-                sharpenProgram = 0
-            }
-
-            GLES30.glDeleteShader(fShaderSharpen)
-        }
-
-        // 2.75 RAW 默认色度降噪 Programs
-        val fShaderChromaDenoiseGuide =
-            compileShader(
-                GLES30.GL_FRAGMENT_SHADER,
-                ChromaDenoiseShaders.PASS_EDGE_GUIDE,
-                "rawChromaDenoiseGuideFragment"
-            )
-        if (vShader != 0 && fShaderChromaDenoiseGuide != 0) {
-            chromaDenoiseGuideProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(chromaDenoiseGuideProgram, vShader)
-            GLES30.glAttachShader(chromaDenoiseGuideProgram, fShaderChromaDenoiseGuide)
-            val linkStart = System.currentTimeMillis()
-            GLES30.glLinkProgram(chromaDenoiseGuideProgram)
-            if (!logProgramLinkResult(
-                    chromaDenoiseGuideProgram,
-                    "rawChromaDenoiseGuideProgram",
-                    linkStart
-                )
-            ) {
-                chromaDenoiseGuideProgram = 0
-            }
-            GLES30.glDeleteShader(fShaderChromaDenoiseGuide)
-        }
-
-        val fShaderChromaDenoise =
-            compileShader(
-                GLES30.GL_FRAGMENT_SHADER,
-                ChromaDenoiseShaders.PASS_CHROMA_DENOISE,
-                "rawChromaDenoiseFragment"
-            )
-        if (vShader != 0 && fShaderChromaDenoise != 0) {
-            chromaDenoiseProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(chromaDenoiseProgram, vShader)
-            GLES30.glAttachShader(chromaDenoiseProgram, fShaderChromaDenoise)
-            val linkStart = System.currentTimeMillis()
-            GLES30.glLinkProgram(chromaDenoiseProgram)
-            if (!logProgramLinkResult(chromaDenoiseProgram, "rawChromaDenoiseProgram", linkStart)) {
-                chromaDenoiseProgram = 0
-            }
-
-            GLES30.glDeleteShader(fShaderChromaDenoise)
-        }
-
-        // 3. Passthrough Program
-        val fShaderPass =
-            compileShader(
-                GLES30.GL_FRAGMENT_SHADER,
-                RawShaders.PASSTHROUGH_FRAGMENT_SHADER,
-                "passthroughFragment"
-            )
-        if (vShader != 0 && fShaderPass != 0) {
-            passthroughProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(passthroughProgram, vShader)
-            GLES30.glAttachShader(passthroughProgram, fShaderPass)
-            val linkStart = System.currentTimeMillis()
-            GLES30.glLinkProgram(passthroughProgram)
-            if (!logProgramLinkResult(passthroughProgram, "passthroughProgram", linkStart)) {
-                passthroughProgram = 0
-            }
-
-            GLES30.glDeleteShader(fShaderPass)
-        }
-
+        hdrReferencePass.initialize()
+        chromaDenoiseAlgorithm.initialize()
         // LinearRaw/Profile programs are common to both CFA and pre-demosaiced inputs.
         // Expensive CFA demosaic programs are compiled only if a CFA input actually needs them.
-        initLinearRawPrograms(vShader)
-
-        GLES30.glDeleteShader(vShader)
-        PLog.d(
-            TAG,
-            "Shader programs created: passthrough=$passthroughProgram " +
-                "meteringHalf=$meteringHalfResolutionProgram",
-        )
+        initLinearRawPrograms()
+        PLog.d(TAG, "Common RAW shader programs created")
     }
 
-    private fun getOrCreateEngineToneProgram(colorEngine: RawRenderingEngine): Int {
-        val cachedProgram = engineTonePrograms[colorEngine.ordinal]
-        if (cachedProgram != 0) return cachedProgram
-
-        val vShader = compileShader(
-            GLES30.GL_VERTEX_SHADER,
-            RawShaders.VERTEX_SHADER,
-            "engineTone${colorEngine.name}Vertex"
-        )
-        val fragmentSource = RawEngineTonePassShaders.fragmentShaderFor(colorEngine)
-        val fShader = compileShader(
-            GLES30.GL_FRAGMENT_SHADER,
-            fragmentSource,
-            "engineTone${colorEngine.name}Fragment"
-        )
-        if (vShader == 0 || fShader == 0) {
-            if (vShader != 0) GLES30.glDeleteShader(vShader)
-            if (fShader != 0) GLES30.glDeleteShader(fShader)
-            return 0
-        }
-
-        val program = GLES30.glCreateProgram()
-        GLES30.glAttachShader(program, vShader)
-        GLES30.glAttachShader(program, fShader)
-        val linkStart = System.currentTimeMillis()
-        GLES30.glLinkProgram(program)
-        val linked = logProgramLinkResult(
-            program,
-            "engineTone${colorEngine.name}Program",
-            linkStart
-        )
-        GLES30.glDeleteShader(vShader)
-        GLES30.glDeleteShader(fShader)
-        if (!linked) return 0
-
-        engineTonePrograms[colorEngine.ordinal] = program
-        return program
-    }
-
-    private fun getOrCreateAdjustmentProgram(): Int {
-        if (adjustmentProgram != 0) return adjustmentProgram
-        val vShader = compileShader(GLES30.GL_VERTEX_SHADER, RawShaders.VERTEX_SHADER, "adjustmentVertex")
-        adjustmentProgram = linkFragmentProgram(
-            vShader,
-            RawAdjustmentPassShaders.FRAGMENT_SHADER,
-            "rawAdjustment"
-        )
-        if (vShader != 0) GLES30.glDeleteShader(vShader)
-        return adjustmentProgram
-    }
-
-    private fun getOrCreateHncsOutputLinearProgram(): Int {
-        if (hncsOutputLinearProgram != 0) return hncsOutputLinearProgram
-        val vShader = compileShader(
-            GLES30.GL_VERTEX_SHADER,
-            RawShaders.VERTEX_SHADER,
-            "hncsOutputLinearVertex"
-        )
-        hncsOutputLinearProgram = linkFragmentProgram(
-            vShader,
-            HncsOutputLinearPassShaders.FRAGMENT_SHADER,
-            "hncsOutputLinear"
-        )
-        if (vShader != 0) GLES30.glDeleteShader(vShader)
-        return hncsOutputLinearProgram
-    }
-
-    private fun getOrCreateSrgbProgram(): Int {
-        if (srgbProgram != 0) return srgbProgram
-        val vShader = compileShader(GLES30.GL_VERTEX_SHADER, RawShaders.VERTEX_SHADER, "srgbVertex")
-        srgbProgram = linkFragmentProgram(
-            vShader,
-            RawSrgbPassShaders.FRAGMENT_SHADER,
-            "rawSrgb"
-        )
-        if (vShader != 0) GLES30.glDeleteShader(vShader)
-        return srgbProgram
-    }
-
-    private val FRAGMENT_SHADER_LINEAR_RCD = """
-        #version 300 es
-        precision highp float;
-        precision highp sampler3D;
-        
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-        
-        uniform sampler2D uDemosaickedTexture;
-        uniform sampler3D uLinearDcpHueSatMap;
-        uniform mat3 uColorCorrectionMatrix;
-        uniform vec3 uCameraWhite;
-        uniform float uExposureGain;
-        uniform int uHncsCameraDomainEnabled;
-        uniform vec3 uHncsCameraDomainGain;
-        uniform float uHncsInputEV;
-        uniform float uHncsHrTrunc;
-        uniform float uHncsHrMax;
-        uniform int uClampProfileRgb;
-        uniform int uHueSatSupportOverrange;
-        uniform int uLinearDcpHueSatEnabled;
-        uniform ivec3 uLinearDcpHueSatDivisions;
-        uniform int uLinearDcpHueSatEncoding;
-
-        ${DcpHueSatMapGl.SHADER_FUNCTIONS}
-        
-        void main() {
-            vec3 rgb = texture(uDemosaickedTexture, vTexCoord).rgb;
-            if (uHncsCameraDomainEnabled != 0) {
-                rgb *= uHncsCameraDomainGain;
-                rgb /= uHncsHrTrunc;
-                rgb = clamp(rgb, vec3(0.0), vec3(uHncsHrMax));
-                rgb *= uHncsInputEV;
-            }
-            if (uClampProfileRgb != 0) {
-                rgb = min(rgb, max(uCameraWhite, vec3(0.001)));
-            }
-            rgb = uColorCorrectionMatrix * rgb;
-            if (uClampProfileRgb != 0) {
-                // dng_reference::RefBaselineABCtoRGB pins RIMM before Hue/Sat Map and PGTM.
-                rgb = clamp(rgb, vec3(0.0), vec3(1.0));
-            }
-            if (uLinearDcpHueSatEnabled != 0) {
-                rgb = dngApplyHueSatMap(
-                    rgb,
-                    uLinearDcpHueSatMap,
-                    uLinearDcpHueSatDivisions,
-                    uLinearDcpHueSatEncoding,
-                    uHueSatSupportOverrange != 0
-                );
-            }
-            rgb *= uExposureGain;
-            fragColor = vec4(rgb, 1.0);
-        }
-    """.trimIndent()
-
-    private val COMPUTE_SHADER_LINEAR_RAW_RGB = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        precision highp image2D;
-        precision highp uimage2D;
-
-        layout(local_size_x = 8, local_size_y = 8) in;
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uLinearRawInput;
-        layout(rgba16f, binding = 1) writeonly uniform highp image2D uLinearRawOutput;
-        uniform int uOutputY;
-        uniform int uRowCount;
-
-        void main() {
-            ivec2 position = ivec2(gl_GlobalInvocationID.xy);
-            ivec2 inputSize = imageSize(uLinearRawInput);
-            ivec2 outputPosition = ivec2(position.x, position.y + uOutputY);
-            ivec2 outputSize = imageSize(uLinearRawOutput);
-            if (position.x >= inputSize.x || position.y >= uRowCount ||
-                any(greaterThanEqual(outputPosition, outputSize))) return;
-            uvec4 sample16 = imageLoad(uLinearRawInput, position);
-            imageStore(uLinearRawOutput, outputPosition, vec4(sample16) / 65535.0);
-        }
-    """.trimIndent()
-
-    /**
-     * Returns the CPU AOT denoiser's RGBA16F output to the normalized LinearRaw texture
-     * contract without another CPU packing pass. floor(x + 0.5) matches the positive-domain
-     * lround() used by DirectBufferPixelPacker.
-     */
-    private val COMPUTE_SHADER_LINEAR_RAW_FLOAT_TO_UINT = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        precision highp image2D;
-        precision highp uimage2D;
-
-        layout(local_size_x = 8, local_size_y = 8) in;
-        layout(rgba16f, binding = 0) readonly uniform highp image2D uLinearRawInput;
-        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uLinearRawOutput;
-
-        void main() {
-            ivec2 position = ivec2(gl_GlobalInvocationID.xy);
-            ivec2 size = imageSize(uLinearRawInput);
-            if (any(greaterThanEqual(position, size))) return;
-            vec4 normalized = clamp(imageLoad(uLinearRawInput, position), 0.0, 1.0);
-            imageStore(
-                uLinearRawOutput,
-                position,
-                uvec4(floor(normalized * 65535.0 + 0.5))
-            );
-        }
-    """.trimIndent()
-
-    /**
-     * RGB16UI cannot be bound to a GLSL image because ES exposes no rgb16ui image qualifier.
-     * Expand a bounded strip into RGBA16UI using integer-only texture fetches, then let the
-     * Phocus image-load shader perform the only integer-to-float conversion.
-     */
-    private val COMPUTE_SHADER_LINEAR_RAW_RGB_EXPAND = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        precision highp usampler2D;
-        precision highp uimage2D;
-
-        layout(local_size_x = 8, local_size_y = 8) in;
-        uniform highp usampler2D uLinearRawRgbInput;
-        layout(rgba16ui, binding = 0) writeonly uniform highp uimage2D uLinearRawRgbaOutput;
-        uniform int uSourceY;
-        uniform int uRowCount;
-
-        void main() {
-            ivec2 position = ivec2(gl_GlobalInvocationID.xy);
-            ivec2 inputSize = textureSize(uLinearRawRgbInput, 0);
-            if (position.x >= inputSize.x || position.y >= uRowCount) return;
-            ivec2 sourcePosition = ivec2(position.x, position.y + uSourceY);
-            uvec3 rgb = texelFetch(uLinearRawRgbInput, sourcePosition, 0).rgb;
-            imageStore(uLinearRawRgbaOutput, position, uvec4(rgb, 65535u));
-        }
-    """.trimIndent()
-
-    private val WARP_RECTILINEAR_FRAGMENT_SHADER = """
-        #version 300 es
-        precision highp float;
-
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-
-        uniform sampler2D uSourceTexture;
-        uniform vec2 uImageSize;
-        uniform vec4 uRadial;
-        uniform vec2 uTangential;
-        uniform vec2 uCenter;
-
-        float bicubicWeight(float x) {
-            const float A = -0.75;
-            x = abs(x);
-            if (x >= 2.0) return 0.0;
-            if (x >= 1.0) return ((A * x - 5.0 * A) * x + 8.0 * A) * x - 4.0 * A;
-            return ((A + 2.0) * x - (A + 3.0)) * x * x + 1.0;
-        }
-
-        vec4 sampleDngBicubic(vec2 sourcePixel) {
-            ivec2 imageMax = ivec2(uImageSize) - ivec2(1);
-            sourcePixel = clamp(sourcePixel, vec2(0.0), uImageSize - vec2(1.0));
-            vec2 base = floor(sourcePixel);
-            // dng_filter_warp uses a 32-entry fractional weight table.
-            vec2 fraction = floor((sourcePixel - base) * 32.0) * (1.0 / 32.0);
-            vec4 total = vec4(0.0);
-            float totalWeight = 0.0;
-            for (int y = -1; y <= 2; ++y) {
-                float wy = bicubicWeight(float(y) - fraction.y);
-                for (int x = -1; x <= 2; ++x) {
-                    float weight = bicubicWeight(float(x) - fraction.x) * wy;
-                    ivec2 pixel = clamp(ivec2(base) + ivec2(x, y), ivec2(0), imageMax);
-                    total += texelFetch(uSourceTexture, pixel, 0) * weight;
-                    totalWeight += weight;
-                }
-            }
-            return total / max(totalWeight, 1e-8);
-        }
-
-        void main() {
-            vec2 centerPx = uCenter * uImageSize;
-            // DNG pixel centers are integer coordinates; fragment centers are n + 0.5.
-            vec2 dstPx = gl_FragCoord.xy - vec2(0.5);
-            vec2 diff = dstPx - centerPx;
-            vec2 farthest = max(centerPx, uImageSize - centerPx);
-            float normRadius = max(length(farthest), 1.0);
-            vec2 normalized = diff / normRadius;
-            float r2 = min(dot(normalized, normalized), 1.0);
-            float ratio = uRadial.x + uRadial.y * r2 +
-                uRadial.z * r2 * r2 + uRadial.w * r2 * r2 * r2;
-            float dh = normalized.x;
-            float dv = normalized.y;
-            vec2 tangent = vec2(
-                uTangential.y * (r2 + 2.0 * dh * dh) + 2.0 * uTangential.x * dh * dv,
-                uTangential.x * (r2 + 2.0 * dv * dv) + 2.0 * uTangential.y * dh * dv
-            );
-            vec2 srcPx = centerPx + normRadius * (normalized * ratio + tangent);
-            fragColor = sampleDngBicubic(srcPx);
-        }
-    """.trimIndent()
-
-    private fun initLinearRawPrograms(vShader: Int) {
-        pgtmCellSamplesProgram = compileComputeProgram(
-            DngPhotonProfileGainTableInputShader.CELL_SAMPLES,
-            "DNG_PGTM_CELL_SAMPLES",
-        )
-        DngPhotonLocalToneMapGpuShaders.sources.forEachIndexed { index, source ->
-            val pass = DngPhotonLocalToneMapGpuShaders.Pass.entries[index]
-            pgtmPhotonPrograms[index] = compileComputeProgram(
-                source,
-                "DNG_PHOTON_PGTM_${pass.name}",
-            )
-        }
-        meteringHalfResolutionProgram = compileComputeProgram(
-            RawMeteringDemosaicShaders.HALF_RESOLUTION,
-            "RAW_METERING_HALF_RESOLUTION",
-        )
-        val fShaderLinearRcd = compileShader(
-            GLES30.GL_FRAGMENT_SHADER,
-            FRAGMENT_SHADER_LINEAR_RCD,
-            "linearRcdFragment"
-        )
-        if (vShader != 0 && fShaderLinearRcd != 0) {
-            linearRcdProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(linearRcdProgram, vShader)
-            GLES30.glAttachShader(linearRcdProgram, fShaderLinearRcd)
-            val linkStart = System.currentTimeMillis()
-            GLES30.glLinkProgram(linearRcdProgram)
-            if (!logProgramLinkResult(linearRcdProgram, "linearRcdProgram", linkStart)) {
-                linearRcdProgram = 0
-            }
-            GLES30.glDeleteShader(fShaderLinearRcd)
-        }
-        linearRawRgbProgram = compileComputeProgram(
-            COMPUTE_SHADER_LINEAR_RAW_RGB,
-            "LinearRawRgbToFloat"
-        )
-        linearRawFloatToUintProgram = compileComputeProgram(
-            COMPUTE_SHADER_LINEAR_RAW_FLOAT_TO_UINT,
-            "LinearRawFloatToUint"
-        )
-        linearRawRgbExpandProgram = compileComputeProgram(
-            COMPUTE_SHADER_LINEAR_RAW_RGB_EXPAND,
-            "LinearRawRgbExpand"
-        )
-        warpRectilinearProgram = linkFragmentProgram(
-            vShader,
-            WARP_RECTILINEAR_FRAGMENT_SHADER,
-            "warpRectilinear"
-        )
-    }
-
-    private fun ensureStandardBayerRcdPrograms(): Boolean {
-        if (rcdPopulateProgram != 0 && rcdStep1Program != 0 && rcdStep2Program != 0 &&
-            rcdStep3Program != 0 && rcdStep40Program != 0 && rcdStep41Program != 0 &&
-            rcdStep42Program != 0 && rcdStep43Program != 0 && rcdWriteOutputProgram != 0
-        ) {
-            return true
-        }
-        val start = System.currentTimeMillis()
-        if (rcdPopulateProgram == 0) {
-            rcdPopulateProgram = compileComputeProgram(RcdShaders.POPULATE, "POPULATE")
-        }
-        if (rcdStep1Program == 0) {
-            rcdStep1Program = compileComputeProgram(RcdShaders.STEP_1, "STEP_1")
-        }
-        if (rcdStep2Program == 0) {
-            rcdStep2Program = compileComputeProgram(RcdShaders.STEP_2, "STEP_2")
-        }
-        if (rcdStep3Program == 0) {
-            rcdStep3Program = compileComputeProgram(RcdShaders.STEP_3, "STEP_3")
-        }
-        if (rcdStep40Program == 0) {
-            rcdStep40Program = compileComputeProgram(RcdShaders.STEP_4_0, "STEP_4_0")
-        }
-        if (rcdStep41Program == 0) {
-            rcdStep41Program = compileComputeProgram(RcdShaders.STEP_4_1, "STEP_4_1")
-        }
-        if (rcdStep42Program == 0) {
-            rcdStep42Program = compileComputeProgram(RcdShaders.STEP_4_2, "STEP_4_2")
-        }
-        if (rcdStep43Program == 0) {
-            rcdStep43Program = compileComputeProgram(RcdShaders.STEP_4_3, "STEP_4_3")
-        }
-        if (rcdWriteOutputProgram == 0) {
-            rcdWriteOutputProgram = compileComputeProgram(RcdShaders.WRITE_OUTPUT, "WRITE_OUTPUT")
-        }
-        val ready = rcdPopulateProgram != 0 && rcdStep1Program != 0 && rcdStep2Program != 0 &&
-            rcdStep3Program != 0 && rcdStep40Program != 0 && rcdStep41Program != 0 &&
-            rcdStep42Program != 0 && rcdStep43Program != 0 && rcdWriteOutputProgram != 0
-        PLog.d(TAG, "Standard Bayer RCD programs ready=$ready, took=${System.currentTimeMillis() - start}ms")
-        return ready
+    private fun initLinearRawPrograms() {
+        profileGainTableAlgorithm.initialize()
+        meteringDemosaicAlgorithm.initialize()
+        linearRcdPass.initialize()
+        linearUintToFloatPass.initialize()
+        linearFloatToUintPass.initialize()
+        linearRgbExpandPass.initialize()
+        warpRectilinearPass.initialize()
     }
 
     private fun ensureVgnPrograms(): Boolean {
-        if (vgnPrograms.all { it != 0 } &&
-            rawHotPixelDetectProgram != 0 && rawHotPixelRepairProgram != 0
-        ) {
-            return true
-        }
-        val start = System.currentTimeMillis()
-        VgnShaders.PROGRAM_SOURCES.forEachIndexed { index, (label, source) ->
-            if (vgnPrograms[index] == 0) {
-                vgnPrograms[index] = compileComputeProgram(
-                    source,
-                    "VGN_${label.uppercase(Locale.ROOT)}",
-                )
-            }
-        }
-        if (rawHotPixelDetectProgram == 0) {
-            rawHotPixelDetectProgram = compileComputeProgram(
-                RawHotPixelShaders.DETECT,
-                "RAW_HOT_PIXEL_DETECT",
-            )
-        }
-        if (rawHotPixelRepairProgram == 0) {
-            rawHotPixelRepairProgram = compileComputeProgram(
-                RawHotPixelShaders.REPAIR,
-                "RAW_HOT_PIXEL_REPAIR",
-            )
-        }
-        val ready = vgnPrograms.all { it != 0 } &&
-            rawHotPixelDetectProgram != 0 && rawHotPixelRepairProgram != 0
-        PLog.d(
-            TAG,
-            "VGN and RAW hot-pixel programs ready=$ready, " +
-                "took=${System.currentTimeMillis() - start}ms",
-        )
-        return ready
+        return vgnDemosaicAlgorithm.initialize()
     }
 
     private fun ensureQuadBayerPrograms(): Boolean {
-        if (quadPopulateProgram != 0 && quadGreenProgram != 0 && quadChromaProgram != 0 &&
-            quadRefineProgram != 0 && quadWriteOutputProgram != 0
-        ) {
-            return true
-        }
-        val start = System.currentTimeMillis()
-        if (quadPopulateProgram == 0) {
-            quadPopulateProgram = compileComputeProgram(QuadBayerShaders.POPULATE, "QUAD_POPULATE")
-        }
-        if (quadGreenProgram == 0) {
-            quadGreenProgram = compileComputeProgram(QuadBayerShaders.GREEN, "QUAD_GREEN")
-        }
-        if (quadChromaProgram == 0) {
-            quadChromaProgram = compileComputeProgram(QuadBayerShaders.CHROMA, "QUAD_CHROMA")
-        }
-        if (quadRefineProgram == 0) {
-            quadRefineProgram = compileComputeProgram(QuadBayerShaders.REFINE, "QUAD_REFINE")
-        }
-        if (quadWriteOutputProgram == 0) {
-            quadWriteOutputProgram = compileComputeProgram(QuadBayerShaders.WRITE_OUTPUT, "QUAD_WRITE_OUTPUT")
-        }
-        val ready = quadPopulateProgram != 0 && quadGreenProgram != 0 && quadChromaProgram != 0 &&
-            quadRefineProgram != 0 && quadWriteOutputProgram != 0
-        PLog.d(TAG, "Quad Bayer programs ready=$ready, took=${System.currentTimeMillis() - start}ms")
-        return ready
-    }
-
-    private fun linkFragmentProgram(
-        vShader: Int,
-        fragmentSource: String,
-        name: String,
-    ): Int {
-        val fShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource, "${name}Fragment")
-        if (vShader == 0 || fShader == 0) {
-            if (fShader != 0) GLES30.glDeleteShader(fShader)
-            return 0
-        }
-        val program = GLES30.glCreateProgram()
-        GLES30.glAttachShader(program, vShader)
-        GLES30.glAttachShader(program, fShader)
-        val linkStart = System.currentTimeMillis()
-        GLES30.glLinkProgram(program)
-        if (!logProgramLinkResult(program, "${name}Program", linkStart)) {
-            GLES30.glDeleteShader(fShader)
-            return 0
-        }
-        GLES30.glDeleteShader(fShader)
-        return program
-    }
-
-    private fun ensureDarktableFilmicHighlightReconstructionPrograms(): Boolean {
-        if (filmicHrMaskProgram != 0 &&
-            filmicHrInpaintNoiseProgram != 0 &&
-            filmicHrInitReconstructProgram != 0 &&
-            filmicHrBsplineProgram != 0 &&
-            filmicHrHighFrequencyProgram != 0 &&
-            filmicHrWaveletsReconstructProgram != 0 &&
-            filmicHrComputeNormsProgram != 0 &&
-            filmicHrComputeRatiosProgram != 0 &&
-            filmicHrRestoreRatiosProgram != 0
-        ) {
-            return true
-        }
-
-        releaseDarktableFilmicHighlightReconstructionPrograms()
-        val vShader = compileShader(
-            GLES30.GL_VERTEX_SHADER,
-            RawShaders.VERTEX_SHADER,
-            "darktableFilmicHrVertex"
-        )
-        if (vShader == 0) return false
-
-        filmicHrMaskProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.MASK_FRAGMENT_SHADER,
-            "darktableFilmicHrMask"
-        )
-        filmicHrInpaintNoiseProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.INPAINT_NOISE_FRAGMENT_SHADER,
-            "darktableFilmicHrInpaintNoise"
-        )
-        filmicHrInitReconstructProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.INIT_RECONSTRUCT_FRAGMENT_SHADER,
-            "darktableFilmicHrInitReconstruct"
-        )
-        filmicHrBsplineProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.BSPLINE_FRAGMENT_SHADER,
-            "darktableFilmicHrBspline"
-        )
-        filmicHrHighFrequencyProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.HIGH_FREQUENCY_FRAGMENT_SHADER,
-            "darktableFilmicHrHighFrequency"
-        )
-        filmicHrWaveletsReconstructProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.WAVELETS_RECONSTRUCT_FRAGMENT_SHADER,
-            "darktableFilmicHrWaveletsReconstruct"
-        )
-        filmicHrComputeNormsProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.COMPUTE_NORMS_FRAGMENT_SHADER,
-            "darktableFilmicHrComputeNorms"
-        )
-        filmicHrComputeRatiosProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.COMPUTE_RATIOS_FRAGMENT_SHADER,
-            "darktableFilmicHrComputeRatios"
-        )
-        filmicHrRestoreRatiosProgram = linkFragmentProgram(
-            vShader,
-            DarktableFilmicHighlightReconstructionShaders.RESTORE_RATIOS_FRAGMENT_SHADER,
-            "darktableFilmicHrRestoreRatios"
-        )
-        GLES30.glDeleteShader(vShader)
-
-        val ok = filmicHrMaskProgram != 0 &&
-            filmicHrInpaintNoiseProgram != 0 &&
-            filmicHrInitReconstructProgram != 0 &&
-            filmicHrBsplineProgram != 0 &&
-            filmicHrHighFrequencyProgram != 0 &&
-            filmicHrWaveletsReconstructProgram != 0 &&
-            filmicHrComputeNormsProgram != 0 &&
-            filmicHrComputeRatiosProgram != 0 &&
-            filmicHrRestoreRatiosProgram != 0
-        if (!ok) {
-            releaseDarktableFilmicHighlightReconstructionPrograms()
-        }
-        return ok
-    }
-
-    private fun releaseDarktableFilmicHighlightReconstructionPrograms() {
-        if (filmicHrMaskProgram != 0) GLES30.glDeleteProgram(filmicHrMaskProgram)
-        if (filmicHrInpaintNoiseProgram != 0) GLES30.glDeleteProgram(filmicHrInpaintNoiseProgram)
-        if (filmicHrInitReconstructProgram != 0) GLES30.glDeleteProgram(filmicHrInitReconstructProgram)
-        if (filmicHrBsplineProgram != 0) GLES30.glDeleteProgram(filmicHrBsplineProgram)
-        if (filmicHrHighFrequencyProgram != 0) GLES30.glDeleteProgram(filmicHrHighFrequencyProgram)
-        if (filmicHrWaveletsReconstructProgram != 0) GLES30.glDeleteProgram(filmicHrWaveletsReconstructProgram)
-        if (filmicHrComputeNormsProgram != 0) GLES30.glDeleteProgram(filmicHrComputeNormsProgram)
-        if (filmicHrComputeRatiosProgram != 0) GLES30.glDeleteProgram(filmicHrComputeRatiosProgram)
-        if (filmicHrRestoreRatiosProgram != 0) GLES30.glDeleteProgram(filmicHrRestoreRatiosProgram)
-        filmicHrMaskProgram = 0
-        filmicHrInpaintNoiseProgram = 0
-        filmicHrInitReconstructProgram = 0
-        filmicHrBsplineProgram = 0
-        filmicHrHighFrequencyProgram = 0
-        filmicHrWaveletsReconstructProgram = 0
-        filmicHrComputeNormsProgram = 0
-        filmicHrComputeRatiosProgram = 0
-        filmicHrRestoreRatiosProgram = 0
-    }
-
-    private fun compileComputeProgram(source: String, name: String): Int {
-        GlesComputeWorkGroup.requireBaselineCompatible(source, name)
-        val compileStart = System.currentTimeMillis()
-        val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)
-        GLES31.glShaderSource(shader, source)
-        GLES31.glCompileShader(shader)
-
-        val compiled = IntArray(1)
-        GLES31.glGetShaderiv(shader, GLES31.GL_COMPILE_STATUS, compiled, 0)
-        if (compiled[0] == 0) {
-            val error = GLES31.glGetShaderInfoLog(shader)
-            PLog.e(
-                TAG,
-                "Compute Shader $name compilation failed after " +
-                    "${System.currentTimeMillis() - compileStart}ms, chars=${source.length}: $error"
-            )
-            GLES31.glDeleteShader(shader)
-            return 0
-        }
-        val compileEnd = System.currentTimeMillis()
-        if (compileEnd - compileStart > 100) {
-            PLog.d(
-                TAG,
-                "Compute Shader $name compile ok, chars=${source.length}, " +
-                        "took=${System.currentTimeMillis() - compileStart}ms"
-            )
-        }
-
-        val program = GLES31.glCreateProgram()
-        GLES31.glAttachShader(program, shader)
-        val linkStart = System.currentTimeMillis()
-        GLES31.glLinkProgram(program)
-
-        val linked = IntArray(1)
-        GLES31.glGetProgramiv(program, GLES31.GL_LINK_STATUS, linked, 0)
-        if (linked[0] == 0) {
-            val error = GLES31.glGetProgramInfoLog(program)
-            PLog.e(
-                TAG,
-                "Compute Program $name linking failed after " +
-                    "${System.currentTimeMillis() - linkStart}ms: $error"
-            )
-            GLES31.glDeleteProgram(program)
-            GLES31.glDeleteShader(shader)
-            return 0
-        }
-
-        GLES31.glDeleteShader(shader)
-        val end = System.currentTimeMillis()
-        if (end - linkStart > 100) {
-            PLog.d(
-                TAG,
-                "Compute Program $name created: $program, linkTook=${end - linkStart}ms"
-            )
-        }
-        return program
-    }
-
-    private fun compileShader(type: Int, source: String, name: String = "shader"): Int {
-        val compileStart = System.currentTimeMillis()
-        val shader = GLES30.glCreateShader(type)
-        GLES30.glShaderSource(shader, source)
-        GLES30.glCompileShader(shader)
-
-        val compiled = IntArray(1)
-        GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, compiled, 0)
-        if (compiled[0] == 0) {
-            val error = GLES30.glGetShaderInfoLog(shader)
-            PLog.e(
-                TAG,
-                "Shader $name compilation failed after " +
-                    "${System.currentTimeMillis() - compileStart}ms, type=$type, chars=${source.length}: $error"
-            )
-            GLES30.glDeleteShader(shader)
-            return 0
-        }
-        val end = System.currentTimeMillis()
-        if (end - compileStart > 100) {
-            PLog.d(
-                TAG,
-                "Shader $name compile ok, type=$type, chars=${source.length}, " +
-                        "took=${end - compileStart}ms"
-            )
-        }
-        return shader
-    }
-
-    private fun initBuffers() {
-        vertexBuffer = ByteBuffer.allocateDirect(RawShaders.FULL_QUAD_VERTICES.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-            .put(RawShaders.FULL_QUAD_VERTICES)
-        vertexBuffer?.position(0)
-
-        texCoordBuffer = ByteBuffer.allocateDirect(RawShaders.TEXTURE_COORDS.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-            .put(RawShaders.TEXTURE_COORDS)
-        texCoordBuffer?.position(0)
-
-        indexBuffer = ByteBuffer.allocateDirect(RawShaders.DRAW_ORDER.size * 2)
-            .order(ByteOrder.nativeOrder())
-            .asShortBuffer()
-            .put(RawShaders.DRAW_ORDER)
-        indexBuffer?.position(0)
+        return quadBayerDemosaicAlgorithm.initialize()
     }
 
     /**
      * 初始化 darktable denoiseprofile compute 着色器。
      */
-    private fun ensureLegacyDenoiseProfilePrograms(): Boolean {
-        if (isDenoiseProfileReady()) return true
-        denoisePreconditionV2Program = compileComputeProgram(
-            DenoiseProfileShaders.PRECONDITION_V2,
-            "DenoiseProfile_Precondition_V2"
-        )
-        denoiseNlmInitProgram =
-            compileComputeProgram(DenoiseProfileShaders.INIT, "DenoiseProfile_NLM_Init")
-        denoiseNlmFusedAccuProgram =
-            compileComputeProgram(DenoiseProfileShaders.FUSED_ACCU, "DenoiseProfile_NLM_FusedAccu")
-        denoiseNlmFinishProgram =
-            compileComputeProgram(DenoiseProfileShaders.FINISH_V2, "DenoiseProfile_NLM_FinishV2")
-
-        PLog.d(
-            TAG,
-            "Legacy DenoiseProfile fallback programs: preRgb=$denoisePreconditionV2Program " +
-                    "init=$denoiseNlmInitProgram fusedAccu=$denoiseNlmFusedAccuProgram " +
-                    "finish=$denoiseNlmFinishProgram"
-        )
-        return isDenoiseProfileReady()
-    }
-
     private fun setupNLMFramebuffers(
         width: Int,
         height: Int,
-        setupLegacyAccumulator: Boolean = true,
+        @Suppress("UNUSED_PARAMETER") setupLegacyAccumulator: Boolean = false,
     ) {
-        if (gfWidth == width && gfHeight == height && gfTexId[0] != 0) {
-            if (setupLegacyAccumulator) {
-                setupDenoiseProfileResources(width, height)
-            }
-            return
-        }
+        if (gfWidth == width && gfHeight == height && gfTexId[0] != 0) return
+        releaseDenoiseProfileFramebuffers()
         gfWidth = width
         gfHeight = height
-
-        // 清理旧资源
-        for (i in 0..1) {
-            if (gfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(gfTexId[i]), 0)
-            if (gfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[i]), 0)
-        }
-
-        // 创建双缓冲 (RGBA16F) 用于 denoiseprofile 中间 pass
-        for (i in 0..1) {
-            val t = IntArray(1)
-            val f = IntArray(1)
-            GLES30.glGenTextures(1, t, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA16F, width, height)
+        for (index in 0..1) {
+            val textures = IntArray(1)
+            val framebuffers = IntArray(1)
+            GLES30.glGenTextures(1, textures, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[0])
+            GLES30.glTexStorage2D(
+                GLES30.GL_TEXTURE_2D,
+                1,
+                GLES30.GL_RGBA16F,
+                width,
+                height,
+            )
             GLES30.glTexParameteri(
                 GLES30.GL_TEXTURE_2D,
                 GLES30.GL_TEXTURE_MIN_FILTER,
-                GLES30.GL_NEAREST
+                GLES30.GL_NEAREST,
             )
             GLES30.glTexParameteri(
                 GLES30.GL_TEXTURE_2D,
                 GLES30.GL_TEXTURE_MAG_FILTER,
-                GLES30.GL_NEAREST
+                GLES30.GL_NEAREST,
             )
             GLES30.glTexParameteri(
                 GLES30.GL_TEXTURE_2D,
                 GLES30.GL_TEXTURE_WRAP_S,
-                GLES30.GL_CLAMP_TO_EDGE
+                GLES30.GL_CLAMP_TO_EDGE,
             )
             GLES30.glTexParameteri(
                 GLES30.GL_TEXTURE_2D,
                 GLES30.GL_TEXTURE_WRAP_T,
-                GLES30.GL_CLAMP_TO_EDGE
+                GLES30.GL_CLAMP_TO_EDGE,
             )
-            GLES30.glGenFramebuffers(1, f, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+            GLES30.glGenFramebuffers(1, framebuffers, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffers[0])
             GLES30.glFramebufferTexture2D(
                 GLES30.GL_FRAMEBUFFER,
                 GLES30.GL_COLOR_ATTACHMENT0,
                 GLES30.GL_TEXTURE_2D,
-                t[0],
-                0
+                textures[0],
+                0,
             )
-            val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-            if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                PLog.e(TAG, "DenoiseProfile ping-pong FBO $i incomplete: $status")
+            check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
+                GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                "RAW denoise scratch framebuffer $index is incomplete"
             }
-            gfTexId[i] = t[0]; gfFboId[i] = f[0]
+            gfTexId[index] = textures[0]
+            gfFboId[index] = framebuffers[0]
         }
-        checkGlError("setup DenoiseProfile textures")
-        if (setupLegacyAccumulator) {
-            setupDenoiseProfileResources(width, height)
-            checkGlError("setup DenoiseProfile resources")
-        }
-    }
-
-    private fun setupDenoiseProfileResources(width: Int, height: Int) {
-        val maxSsboBytes = queryDenoiseProfileMaxSsboBytes()
-        val plannedRows = DenoiseProfileStripePlanner.capacityRows(width, height, maxSsboBytes)
-        if (plannedRows <= 0) {
-            PLog.e(
-                TAG,
-                "DenoiseProfile cannot fit one accumulator row: width=$width " +
-                    "GL_MAX_SHADER_STORAGE_BLOCK_SIZE=$maxSsboBytes"
-            )
-            releaseDenoiseProfileAccumulator()
-            return
-        }
-        if (denoiseNlmBufferWidth == width && denoiseNlmBufferRows > 0 &&
-            denoiseNlmU2BufferId != 0
-        ) return
-
-        releaseDenoiseProfileAccumulator()
-
-        val buffers = IntArray(1)
-        GLES31.glGenBuffers(buffers.size, buffers, 0)
-        denoiseNlmU2BufferId = buffers[0]
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, denoiseNlmU2BufferId)
-        checkGlError("before DenoiseProfile accumulator allocation")
-
-        var capacityRows = plannedRows
-        while (capacityRows > 0) {
-            val byteCount = DenoiseProfileStripePlanner.requiredBytes(width, capacityRows)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                byteCount.toInt(),
-                null,
-                GLES31.GL_DYNAMIC_DRAW
-            )
-            val allocationError = GLES30.glGetError()
-            if (allocationError == GLES30.GL_NO_ERROR) {
-                denoiseNlmBufferWidth = width
-                denoiseNlmBufferRows = capacityRows
-                PLog.i(
-                    TAG,
-                    "DenoiseProfile accumulator stripe=${width}x$capacityRows " +
-                        "bytes=$byteCount maxSsbo=$maxSsboBytes"
-                )
-                break
-            }
-
-            PLog.w(
-                TAG,
-                "DenoiseProfile accumulator ${width}x$capacityRows allocation failed: " +
-                    "bytes=$byteCount glError=$allocationError"
-            )
-            capacityRows = nextSmallerDenoiseProfileStripeRows(capacityRows)
-        }
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-        if (denoiseNlmBufferRows == 0) {
-            releaseDenoiseProfileAccumulator()
-        }
-    }
-
-    private fun queryDenoiseProfileMaxSsboBytes(): Long {
-        if (denoiseNlmMaxSsboBytes > 0L) return denoiseNlmMaxSsboBytes
-        val value = LongArray(1)
-        GLES30.glGetInteger64v(GLES31.GL_MAX_SHADER_STORAGE_BLOCK_SIZE, value, 0)
-        val queryError = GLES30.glGetError()
-        denoiseNlmMaxSsboBytes = if (queryError == GLES30.GL_NO_ERROR && value[0] > 0L) {
-            value[0]
-        } else {
-            PLog.w(
-                TAG,
-                "Failed to query GL_MAX_SHADER_STORAGE_BLOCK_SIZE: " +
-                    "value=${value[0]} glError=$queryError; using GLES 3.1 minimum"
-            )
-            DENOISE_PROFILE_GLES31_MIN_SSBO_BYTES
-        }
-        return denoiseNlmMaxSsboBytes
-    }
-
-    private fun nextSmallerDenoiseProfileStripeRows(currentRows: Int): Int {
-        if (currentRows <= 1) return 0
-        val half = currentRows / 2
-        val workgroupRows = DenoiseProfileShaders.IMAGE_LOCAL_Y
-        return if (half >= workgroupRows) half - half % workgroupRows else half
-    }
-
-    private fun releaseDenoiseProfileAccumulator() {
-        if (denoiseNlmU2BufferId != 0) {
-            GLES31.glDeleteBuffers(1, intArrayOf(denoiseNlmU2BufferId), 0)
-            denoiseNlmU2BufferId = 0
-        }
-        denoiseNlmBufferWidth = 0
-        denoiseNlmBufferRows = 0
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        checkGlError("setup RAW denoise scratch textures")
     }
 
     private fun releaseDenoiseProfileFramebuffers() {
@@ -6729,135 +4440,38 @@ class RawDemosaicProcessor {
         chromaDenoiseValue: Float?,
     ): Int {
         val strength = DenoiseStrength.clamp(chromaDenoiseValue)
-        if (strength <= 0f || width * height < 2) {
+        if (strength <= 0f || width * height < 2) return sourceTextureId
+        if (linearOutputFramebufferId == 0 || linearOutputTextureId == 0) {
+            PLog.w(TAG, "RAW chroma denoise target is unavailable")
             return sourceTextureId
         }
 
-        if (chromaDenoiseGuideProgram == 0 || chromaDenoiseProgram == 0 ||
-            linearOutputFramebufferId == 0 || linearOutputTextureId == 0
-        ) {
-            PLog.w(
-                TAG,
-                "RAW chroma denoise program not initialized, falling back to source"
-            )
-            return sourceTextureId
-        }
-
+        setupNLMFramebuffers(width, height, setupLegacyAccumulator = false)
         val profileGain =
-            (metadata.iso / 100.0f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
-        val noiseModel = resolveChromaDenoiseNoiseModel(metadata, profileGain)
-        val h = ChromaDenoiseDefaults.noiseBandwidth(strength)
-        val edgeGuidanceRelaxation =
-            ChromaDenoiseDefaults.edgeGuidanceRelaxation(strength)
-        setupNLMFramebuffers(
-            width,
-            height,
-            setupLegacyAccumulator = false,
-        )
-        renderChromaDenoiseLuminanceGuide(sourceTextureId, width, height)
-        val guideTextureId = gfTexId[0]
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-
-        GLES30.glUseProgram(chromaDenoiseProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, linearOutputFramebufferId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(chromaDenoiseProgram, "uInputTexture"), 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, guideTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uGuideTexture"),
-            1
-        )
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uTexelSize"),
-            1.0f / width,
-            1.0f / height
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uOutputStrength"),
-            ChromaDenoiseDefaults.outputStrength(strength)
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uEdgeGuidanceRelaxation"),
-            edgeGuidanceRelaxation
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uCameraRgbInput"),
-            1
-        )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(chromaDenoiseProgram, "uH"), h)
-        GLES30.glUniform4f(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uNoiseModelRB"),
-            noiseModel.redSlope,
-            noiseModel.redOffset,
-            noiseModel.blueSlope,
-            noiseModel.blueOffset
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uNoiseModelG"),
-            noiseModel.greenSlope,
-            noiseModel.greenOffset
-        )
-        drawQuad(chromaDenoiseProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("RAW chroma denoise")
-
-        PLog.d(
-            TAG,
-            "RAW chroma denoise before luma: strength=$strength h=$h " +
-                "edgeGuidanceRelaxation=$edgeGuidanceRelaxation " +
-                "red=(${noiseModel.redSlope}, ${noiseModel.redOffset}) " +
-                "green=(${noiseModel.greenSlope}, ${noiseModel.greenOffset}) " +
-                "blue=(${noiseModel.blueSlope}, ${noiseModel.blueOffset})"
-        )
-        return linearOutputTextureId
-    }
-
-    private fun renderChromaDenoiseLuminanceGuide(
-        sourceTextureId: Int,
-        width: Int,
-        height: Int,
-    ) {
-        GLES30.glUseProgram(chromaDenoiseGuideProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, gfFboId[0])
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(chromaDenoiseGuideProgram, "uInputTexture"),
-            0
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(chromaDenoiseGuideProgram, "uTexelSize"),
-            1.0f / width,
-            1.0f / height
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(chromaDenoiseGuideProgram, "uCameraRgbInput"),
-            1
-        )
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(chromaDenoiseGuideProgram, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        drawQuad(chromaDenoiseGuideProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("RAW chroma denoise luminance guide")
+            (metadata.iso / 100f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
+        val noise = resolveChromaDenoiseNoiseModel(metadata, profileGain)
+        val output = chromaDenoiseAlgorithm.execute(
+            ChromaDenoiseAlgorithm.Input(
+                sourceTextureId = sourceTextureId,
+                guideFramebufferId = gfFboId[0],
+                guideTextureId = gfTexId[0],
+                outputFramebufferId = linearOutputFramebufferId,
+                outputTextureId = linearOutputTextureId,
+                width = width,
+                height = height,
+                strength = strength,
+                cameraRgbInput = true,
+                noiseModel = ChromaDenoiseAlgorithm.NoiseModel(
+                    redSlope = noise.redSlope,
+                    redOffset = noise.redOffset,
+                    greenSlope = noise.greenSlope,
+                    greenOffset = noise.greenOffset,
+                    blueSlope = noise.blueSlope,
+                    blueOffset = noise.blueOffset,
+                ),
+            ),
+        ) ?: return sourceTextureId
+        return output.textureId
     }
 
     /**
@@ -7034,334 +4648,23 @@ class RawDemosaicProcessor {
         denoiseValue: Float?,
     ): Int {
         val strength = DenoiseStrength.clamp(denoiseValue)
-        if (strength <= 0f || width * height < 2) {
-            return sourceTextureId
-        }
-        val params = buildDenoiseProfileParams(metadata, strength)
-
-        setupNLMFramebuffers(width, height)
-
-        if (!ensureLegacyDenoiseProfilePrograms()) {
-            PLog.w(TAG, "DenoiseProfile programs not initialized, falling back to source")
-            return sourceTextureId
-        }
-
-        PLog.d(
-            TAG,
-            "DenoiseProfile NLM: strength=${params.strength} a=${params.a} b=${params.b} " +
-                    "shadows=${params.shadows} bias=${params.bias} patch=${params.patchRadius} " +
-                    "search=${params.searchRadius} fineNoise=${params.expectedFineDistance} " +
-                    "guideNoise=${params.expectedGuideDistance} bandwidth=${params.inverseBandwidth} " +
-                    "guideWeight=${params.coarseGuideWeight} center=${params.centralPixelWeight} " +
-                    "greenNoise=true adaptiveWb=${params.adaptiveWb.contentToString()} " +
-                    "signalScale=${params.signalScale.contentToString()}"
-        )
-
-        dispatchDenoisePreconditionV2(sourceTextureId, gfTexId[0], width, height, params)
-        dispatchDenoiseNlm(sourceTextureId, gfTexId[0], gfTexId[1], width, height, params)
-        checkGlError("renderDenoiseProfile")
-        return gfTexId[1]
-    }
-
-    private data class DenoiseProfileParams(
-        val strength: Float,
-        val a: Float,
-        val b: Float,
-        val shadows: Float,
-        val bias: Float,
-        val scale: Float,
-        val patchRadius: Int,
-        val searchRadius: Int,
-        val expectedFineDistance: Float,
-        val expectedGuideDistance: Float,
-        val inverseBandwidth: Float,
-        val coarseGuideWeight: Float,
-        val centralPixelWeight: Float,
-        val p: FloatArray,
-        val adaptiveWb: FloatArray,
-        val signalScale: FloatArray,
-        val aa: FloatArray,
-        val bb: FloatArray
-    )
-
-    private fun isDenoiseProfileReady(): Boolean {
-        return denoisePreconditionV2Program != 0 &&
-                denoiseNlmInitProgram != 0 &&
-                denoiseNlmFusedAccuProgram != 0 &&
-                denoiseNlmFinishProgram != 0 &&
-                denoiseNlmU2BufferId != 0 &&
-                denoiseNlmBufferRows > 0
-    }
-
-    private fun buildDenoiseProfileParams(
-        metadata: RawMetadata,
-        strengthValue: Float
-    ): DenoiseProfileParams {
+        if (strength <= 0f || width * height < 2) return sourceTextureId
         val profileGain =
-            (metadata.iso / 100.0f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
-        val (noiseA, noiseB) = resolveDenoiseProfileNoiseModel(metadata, profileGain)
-        val strength = DenoiseStrength.clamp(strengthValue)
-        val varianceScale = DenoiseStrength.noiseVarianceScale(strength)
-        val a = (noiseA * varianceScale).coerceAtLeast(1e-10f)
-        val b = (noiseB * varianceScale).coerceAtLeast(1e-10f)
-        val scale = 1.0f
-        val shadows = inferDenoiseProfileShadows(a)
-        val bias = DenoiseProfileShaders.BLACK_PRESERVING_BIAS
-        val adaptiveWb = computeDenoiseProfileWb(metadata)
-        val p = floatArrayOf(
-            max(shadows + 0.1f * ln(scale / adaptiveWb[0]), 0.0f),
-            max(shadows + 0.1f * ln(scale / adaptiveWb[1]), 0.0f),
-            max(shadows + 0.1f * ln(scale / adaptiveWb[2]), 0.0f),
-            1.0f
-        )
-        val compensateP = 0.05f / 0.05f.pow(shadows)
-        val patchRadius = DenoiseProfileShaders.PATCH_RADIUS
-        val searchRadius = DenoiseProfileShaders.SEARCH_RADIUS
-        val weightTuning = DenoiseProfileNlmConfig.weightTuning(patchRadius)
-        val centralPixelWeight = 0.1f * scale
-        val signalScale = floatArrayOf(
-            scale,
-            scale,
-            scale,
-            1.0f
-        )
-        val aa = floatArrayOf(a * compensateP, a * compensateP, a * compensateP, 1.0f)
-        val bb = floatArrayOf(b, b, b, 1.0f)
-
-        return DenoiseProfileParams(
-            strength = strength,
-            a = a,
-            b = b,
-            shadows = shadows,
-            bias = bias,
-            scale = scale,
-            patchRadius = patchRadius,
-            searchRadius = searchRadius,
-            expectedFineDistance = weightTuning.expectedFineDistance,
-            expectedGuideDistance = weightTuning.expectedGuideDistance,
-            inverseBandwidth = weightTuning.inverseBandwidth,
-            coarseGuideWeight = weightTuning.coarseGuideWeight,
-            centralPixelWeight = centralPixelWeight,
-            p = p,
-            adaptiveWb = adaptiveWb,
-            signalScale = signalScale,
-            aa = aa,
-            bb = bb
-        )
-    }
-
-    private fun inferDenoiseProfileShadows(a: Float): Float {
-        return max(0.1f - 0.1f * ln(a), 0.7f).coerceAtMost(1.8f)
-    }
-
-    private fun computeDenoiseProfileWb(metadata: RawMetadata): FloatArray {
-        val normalized = demosaicCalculationWbGains(metadata)
-        return floatArrayOf(normalized[0], 1f, normalized[3])
-    }
-
-    private fun dispatchDenoisePreconditionV2(
-        sourceTextureId: Int,
-        outputTextureId: Int,
-        width: Int,
-        height: Int,
-        params: DenoiseProfileParams
-    ) {
-        val program = denoisePreconditionV2Program
-        GLES31.glUseProgram(program)
-        bindComputeSampler(program, "uInput", 0, sourceTextureId)
-        GLES31.glBindImageTexture(
-            1,
-            outputTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16F
-        )
-        setDenoiseCommonUniforms(program, width, height, params)
-        dispatchDenoiseImage(width, height, "DenoiseProfile NLM precondition")
-    }
-
-    private fun dispatchDenoiseNlm(
-        originalTextureId: Int,
-        preconditionedTextureId: Int,
-        outputTextureId: Int,
-        width: Int,
-        height: Int,
-        params: DenoiseProfileParams
-    ) {
-        val stripes = DenoiseProfileStripePlanner.plan(height, denoiseNlmBufferRows)
-        for (stripe in stripes) {
-            dispatchDenoiseNlmInit(width, height, stripe)
-
-            for (offset in DenoiseProfileNlmConfig.searchOffsets) {
-                dispatchDenoiseNlmFusedAccumulate(
-                    preconditionedTextureId,
-                    width,
-                    height,
-                    stripe,
-                    offset.x,
-                    offset.y,
-                    params
-                )
-            }
-
-            dispatchDenoiseNlmFinish(
-                originalTextureId,
-                outputTextureId,
-                width,
-                height,
-                stripe,
-                params
-            )
-            GlesGpuScheduler.yieldToUiRenderer()
-        }
-    }
-
-    private fun dispatchDenoiseNlmInit(
-        width: Int,
-        height: Int,
-        stripe: DenoiseProfileStripe,
-    ) {
-        GLES31.glUseProgram(denoiseNlmInitProgram)
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, denoiseNlmU2BufferId)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmInitProgram, "uImageSize"), width, height)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(denoiseNlmInitProgram, "uStripeRowCount"),
-            stripe.rowCount
-        )
-        dispatchDenoiseImage(
-            width,
-            stripe.rowCount,
-            "DenoiseProfile NLM init row=${stripe.rowOffset}"
-        )
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-    }
-
-    private fun dispatchDenoiseNlmFusedAccumulate(
-        inputTextureId: Int,
-        width: Int,
-        height: Int,
-        stripe: DenoiseProfileStripe,
-        qx: Int,
-        qy: Int,
-        params: DenoiseProfileParams
-    ) {
-        GLES31.glUseProgram(denoiseNlmFusedAccuProgram)
-        bindComputeSampler(denoiseNlmFusedAccuProgram, "uInput", 0, inputTextureId)
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, denoiseNlmU2BufferId)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uImageSize"), width, height)
-        setDenoiseStripeUniforms(denoiseNlmFusedAccuProgram, stripe)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uQ"), qx, qy)
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uExpectedFineDistance"),
-            params.expectedFineDistance
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uExpectedGuideDistance"),
-            params.expectedGuideDistance
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uInverseBandwidth"),
-            params.inverseBandwidth
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uCoarseGuideWeight"),
-            params.coarseGuideWeight
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uCentralPixelWeight"),
-            params.centralPixelWeight
-        )
-        dispatchDenoiseImage(
-            width,
-            stripe.rowCount,
-            "DenoiseProfile NLM fused accu row=${stripe.rowOffset} q=($qx,$qy)"
-        )
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-    }
-
-    private fun dispatchDenoiseNlmFinish(
-        originalTextureId: Int,
-        outputTextureId: Int,
-        width: Int,
-        height: Int,
-        stripe: DenoiseProfileStripe,
-        params: DenoiseProfileParams
-    ) {
-        val program = denoiseNlmFinishProgram
-        GLES31.glUseProgram(program)
-        bindComputeSampler(program, "uInput", 0, originalTextureId)
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, denoiseNlmU2BufferId)
-        GLES31.glBindImageTexture(
-            1,
-            outputTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16F
-        )
-        setDenoiseCommonUniforms(program, width, height, params)
-        setDenoiseStripeUniforms(program, stripe)
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uBias"),
-            params.bias - 0.5f * ln(params.scale)
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uDenoiseMix"),
-            DenoiseStrength.outputMix(params.strength)
-        )
-        dispatchDenoiseImage(
-            width,
-            stripe.rowCount,
-            "DenoiseProfile NLM finish row=${stripe.rowOffset}"
-        )
-    }
-
-    private fun setDenoiseStripeUniforms(program: Int, stripe: DenoiseProfileStripe) {
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(program, "uStripeRowOffset"),
-            stripe.rowOffset
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(program, "uStripeRowCount"),
-            stripe.rowCount
-        )
-    }
-
-    private fun setDenoiseCommonUniforms(
-        program: Int,
-        width: Int,
-        height: Int,
-        params: DenoiseProfileParams
-    ) {
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(program, "uImageSize"), width, height)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uA"), 1, params.aa, 0)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uP"), 1, params.p, 0)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uB"), 1, params.bb, 0)
-        GLES31.glUniform4fv(
-            GLES31.glGetUniformLocation(program, "uSignalScale"),
-            1,
-            params.signalScale,
-            0
-        )
-    }
-
-    private fun bindComputeSampler(program: Int, name: String, unit: Int, textureId: Int) {
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + unit)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, textureId)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, name), unit)
-    }
-
-    private fun dispatchDenoiseImage(width: Int, height: Int, tag: String) {
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                    GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
-                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT
-        )
-        checkGlError(tag)
+            (metadata.iso / 100f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
+        val (noiseSlope, noiseOffset) =
+            resolveDenoiseProfileNoiseModel(metadata, profileGain)
+        val wb = demosaicCalculationWbGains(metadata)
+        return denoiseProfileAlgorithm.execute(
+            DenoiseProfileAlgorithm.Input(
+                sourceTextureId = sourceTextureId,
+                width = width,
+                height = height,
+                strength = strength,
+                noiseSlope = noiseSlope,
+                noiseOffset = noiseOffset,
+                adaptiveWhiteBalance = floatArrayOf(wb[0], 1f, wb[3]),
+            ),
+        )?.textureId ?: sourceTextureId
     }
 
     private fun renderPassthroughToTexture(
@@ -7370,22 +4673,15 @@ class RawDemosaicProcessor {
         height: Int,
         framebufferId: Int
     ) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glUseProgram(passthroughProgram)
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(passthroughProgram, "uTexture"), 0)
-        drawQuad(passthroughProgram)
+        checkNotNull(
+            outputPass.copy(
+                textureId = sourceTextureId,
+                targetFramebufferId = framebufferId,
+                targetTextureId = 0,
+                width = width,
+                height = height,
+            ),
+        ) { "RAW passthrough copy failed" }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGlError("DenoiseProfile passthrough")
     }
@@ -7397,47 +4693,16 @@ class RawDemosaicProcessor {
         height: Int,
         parameters: FloatArray,
     ): Boolean {
-        if (warpRectilinearProgram == 0 || parameters.size != 8) return false
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glUseProgram(warpRectilinearProgram)
-        val textureMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(textureMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(warpRectilinearProgram, "uTexMatrix"),
-            1,
-            false,
-            textureMatrix,
-            0,
-        )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(warpRectilinearProgram, "uSourceTexture"),
-            0
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(warpRectilinearProgram, "uImageSize"),
-            width.toFloat(),
-            height.toFloat()
-        )
-        GLES30.glUniform4f(
-            GLES30.glGetUniformLocation(warpRectilinearProgram, "uRadial"),
-            parameters[0], parameters[1], parameters[2], parameters[3]
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(warpRectilinearProgram, "uTangential"),
-            parameters[4], parameters[5]
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(warpRectilinearProgram, "uCenter"),
-            parameters[6], parameters[7]
-        )
-        drawQuad(warpRectilinearProgram)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("WarpRectilinearPass")
-        return true
+        return warpRectilinearPass.render(
+            RawWarpRectilinearPass.Input(
+                textureId = sourceTextureId,
+                targetFramebufferId = targetFramebufferId,
+                targetTextureId = linearOutputTextureId,
+                width = width,
+                height = height,
+                parameters = parameters,
+            ),
+        ) != null
     }
 
     private fun isNoOpWarpRectilinear(parameters: FloatArray): Boolean {
@@ -7762,17 +5027,19 @@ class RawDemosaicProcessor {
             "LinearRaw rendering requires RGB or RGBA, got $sourceSamplesPerPixel samples"
         }
         if (sourceSamplesPerPixel == 4) {
-            dispatchLinearRawUint16ToFloat(
-                sourceTextureId = sourceTextureId,
-                targetTextureId = targetTextureId,
-                outputY = 0,
-                rowCount = height,
-                width = width,
-            )
-            finishLinearRawUint16ToFloat(
-                "LinearRaw RGBA16UI to RGBA16F ${width}x$height",
-                waitForCpuReuse = false,
-            )
+            checkNotNull(
+                linearUintToFloatPass.render(
+                    RawLinearUintToFloatPass.Input(
+                        textureId = sourceTextureId,
+                        targetTextureId = targetTextureId,
+                        outputY = 0,
+                        rowCount = height,
+                        width = width,
+                        waitForCpuReuse = false,
+                        label = "LinearRaw RGBA16UI to RGBA16F ${width}x$height",
+                    ),
+                ),
+            ) { "Linear RAW uint-to-float pass failed" }
             return
         }
 
@@ -7813,25 +5080,31 @@ class RawDemosaicProcessor {
             var sourceY = 0
             while (sourceY < height) {
                 val rowCount = minOf(expansionHeight, height - sourceY)
-                dispatchLinearRawRgbExpansion(
-                    sourceTextureId = sourceTextureId,
-                    targetTextureId = expandedTextureId,
-                    sourceY = sourceY,
-                    rowCount = rowCount,
-                    width = width,
-                )
-                GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
-                dispatchLinearRawUint16ToFloat(
-                    sourceTextureId = expandedTextureId,
-                    targetTextureId = targetTextureId,
-                    outputY = sourceY,
-                    rowCount = rowCount,
-                    width = width,
-                )
-                finishLinearRawUint16ToFloat(
-                    "LinearRaw RGB16UI to RGBA16F rows=$sourceY..${sourceY + rowCount}",
-                    waitForCpuReuse = true,
-                )
+                checkNotNull(
+                    linearRgbExpandPass.render(
+                        RawLinearRgbExpandPass.Input(
+                            textureId = sourceTextureId,
+                            targetTextureId = expandedTextureId,
+                            sourceY = sourceY,
+                            rowCount = rowCount,
+                            width = width,
+                        ),
+                    ),
+                ) { "Linear RAW RGB expansion pass failed" }
+                checkNotNull(
+                    linearUintToFloatPass.render(
+                        RawLinearUintToFloatPass.Input(
+                            textureId = expandedTextureId,
+                            targetTextureId = targetTextureId,
+                            outputY = sourceY,
+                            rowCount = rowCount,
+                            width = width,
+                            waitForCpuReuse = true,
+                            label =
+                                "LinearRaw RGB16UI to RGBA16F rows=$sourceY..${sourceY + rowCount}",
+                        ),
+                    ),
+                ) { "Linear RAW uint-to-float pass failed" }
                 sourceY += rowCount
             }
         } finally {
@@ -7847,110 +5120,6 @@ class RawDemosaicProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
             GLES30.glDeleteTextures(1, expandedTexture, 0)
         }
-    }
-
-    private fun dispatchLinearRawRgbExpansion(
-        sourceTextureId: Int,
-        targetTextureId: Int,
-        sourceY: Int,
-        rowCount: Int,
-        width: Int,
-    ) {
-        GLES31.glUseProgram(linearRawRgbExpandProgram)
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, sourceTextureId)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(linearRawRgbExpandProgram, "uLinearRawRgbInput"),
-            0,
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(linearRawRgbExpandProgram, "uSourceY"),
-            sourceY,
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(linearRawRgbExpandProgram, "uRowCount"),
-            rowCount,
-        )
-        GLES31.glBindImageTexture(
-            0,
-            targetTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16UI,
-        )
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(rowCount), 1)
-    }
-
-    private fun dispatchLinearRawUint16ToFloat(
-        sourceTextureId: Int,
-        targetTextureId: Int,
-        outputY: Int,
-        rowCount: Int,
-        width: Int,
-    ) {
-        GLES31.glUseProgram(linearRawRgbProgram)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(linearRawRgbProgram, "uOutputY"),
-            outputY,
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(linearRawRgbProgram, "uRowCount"),
-            rowCount,
-        )
-        GLES31.glBindImageTexture(
-            0,
-            sourceTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_READ_ONLY,
-            GLES31.GL_RGBA16UI
-        )
-        GLES31.glBindImageTexture(
-            1,
-            targetTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16F
-        )
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(rowCount), 1)
-    }
-
-    private fun finishLinearRawUint16ToFloat(
-        label: String,
-        waitForCpuReuse: Boolean,
-    ) {
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
-                GLES31.GL_FRAMEBUFFER_BARRIER_BIT
-        )
-        GLES31.glBindImageTexture(
-            0,
-            0,
-            0,
-            false,
-            0,
-            GLES31.GL_READ_ONLY,
-            GLES31.GL_RGBA16UI
-        )
-        GLES31.glBindImageTexture(
-            1,
-            0,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16F
-        )
-        checkGlError(label)
-        if (!waitForCpuReuse) return
-        val startNs = System.nanoTime()
-        GlesGpuScheduler.waitForGpuCheckpoint(TAG, label)
     }
 
     private fun createNormalizedLinearRawTexture(width: Int, height: Int): Int {
@@ -7996,54 +5165,16 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
     ) {
-        GLES31.glUseProgram(linearRawFloatToUintProgram)
-        GLES31.glBindImageTexture(
-            0,
-            sourceTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_READ_ONLY,
-            GLES31.GL_RGBA16F,
-        )
-        GLES31.glBindImageTexture(
-            1,
-            targetTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16UI,
-        )
-        GLES31.glDispatchCompute(
-            GlesComputeWorkGroup.imageGroupCount(width),
-            GlesComputeWorkGroup.imageGroupCount(height),
-            1,
-        )
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
-                GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
-        )
-        GLES31.glBindImageTexture(
-            0,
-            0,
-            0,
-            false,
-            0,
-            GLES31.GL_READ_ONLY,
-            GLES31.GL_RGBA16F,
-        )
-        GLES31.glBindImageTexture(
-            1,
-            0,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16UI,
-        )
-        checkGlError("LinearRaw RGBA16F to RGBA16UI ${width}x$height")
+        checkNotNull(
+            linearFloatToUintPass.render(
+                RawLinearFloatToUintPass.Input(
+                    textureId = sourceTextureId,
+                    targetTextureId = targetTextureId,
+                    width = width,
+                    height = height,
+                ),
+            ),
+        ) { "Linear RAW float-to-uint pass failed" }
     }
 
     internal fun createFramebufferForTexture(textureId: Int, label: String): Int {
@@ -8196,1069 +5327,7 @@ class RawDemosaicProcessor {
         }
     }
 
-    private data class VgnImageBinding(
-        val unit: Int,
-        val texture: Int,
-        val access: Int,
-        val format: Int,
-    )
 
-    private data class VgnTextureKey(
-        val internalFormat: Int,
-        val width: Int,
-        val height: Int,
-    )
-
-    private var vgnTileTexturePoolingEnabled = false
-    private val vgnTileAvailableTextures = mutableMapOf<VgnTextureKey, ArrayDeque<Int>>()
-    private val vgnTileTextureKeys = mutableMapOf<Int, VgnTextureKey>()
-
-    private fun obtainVgnTexture(
-        internalFormat: Int,
-        width: Int,
-        height: Int,
-        label: String,
-    ): Int {
-        val key = VgnTextureKey(internalFormat, width, height)
-        if (vgnTileTexturePoolingEnabled) {
-            vgnTileAvailableTextures[key]?.removeLastOrNull()?.let { return it }
-        }
-        return createVgnTexture(internalFormat, width, height, label).also { texture ->
-            if (vgnTileTexturePoolingEnabled) {
-                vgnTileTextureKeys[texture] = key
-            }
-        }
-    }
-
-    private fun recycleVgnTexture(texture: Int) {
-        val key = vgnTileTextureKeys[texture]
-        if (vgnTileTexturePoolingEnabled && key != null) {
-            vgnTileAvailableTextures.getOrPut(key, ::ArrayDeque).addLast(texture)
-        } else {
-            GLES30.glDeleteTextures(1, intArrayOf(texture), 0)
-            vgnTileTextureKeys.remove(texture)
-        }
-    }
-
-    private fun releaseVgnTileTexturePool() {
-        if (vgnTileTextureKeys.isNotEmpty()) {
-            val textures = vgnTileTextureKeys.keys.toIntArray()
-            GLES30.glDeleteTextures(textures.size, textures, 0)
-        }
-        vgnTileTextureKeys.clear()
-        vgnTileAvailableTextures.clear()
-    }
-
-    private fun createVgnTexture(internalFormat: Int, width: Int, height: Int, label: String): Int {
-        require(width > 0 && height > 0) { "Invalid VGN texture size for $label: ${width}x$height" }
-        val ids = IntArray(1)
-        GLES30.glGenTextures(1, ids, 0)
-        check(ids[0] != 0) { "Failed to allocate VGN texture for $label" }
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
-        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, internalFormat, width, height)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        checkGlError("VGN allocate $label ${width}x$height")
-        return ids[0]
-    }
-
-    private fun vgnUbo(capacity: Int, writer: ByteBuffer.() -> Unit): ByteBuffer {
-        val buffer = ByteBuffer.allocateDirect(capacity).order(ByteOrder.nativeOrder())
-        buffer.writer()
-        buffer.limit(buffer.position())
-        buffer.position(0)
-        return buffer
-    }
-
-    private fun vgnBoundsUbo(left: Int, top: Int, right: Int, bottom: Int): ByteBuffer =
-        vgnUbo(16) {
-            putInt(left)
-            putInt(top)
-            putInt(right)
-            putInt(bottom)
-        }
-
-    private fun vgnThresholdBoundsUbo(
-        left: Int,
-        top: Int,
-        right: Int,
-        bottom: Int,
-        edgeThreshold: Int,
-        vngThreshold: Int,
-    ): ByteBuffer = vgnUbo(32) {
-        putInt(left)
-        putInt(top)
-        putInt(right)
-        putInt(bottom)
-        putInt(edgeThreshold)
-        putInt(vngThreshold)
-        putInt(0)
-        putInt(0)
-    }
-
-    private data class VgnIirCoefficients(
-        val a10: FloatArray,
-        val b10: FloatArray,
-        val aDyn1: FloatArray,
-        val bDyn1: FloatArray,
-        val aDyn2: FloatArray,
-        val bDyn2: FloatArray,
-    )
-
-    // Exact coefficient rows selected by CDemosaicFilter::FilterResultGpu for color-noise
-    // level 50. a10/b10 is GetIIRFilter2LPCoefFloat(14); the two dynamic sections are the
-    // cascaded biquads returned by GetIIRFilter4LPCoefFloat(44) and (20), respectively.
-    private val vgnIirPass1Coefficients = VgnIirCoefficients(
-        a10 = floatArrayOf(0.0674552768f, 0.134910554f, 0.0674552768f, 0f),
-        b10 = floatArrayOf(1f, -1.14298046f, 0.412801594f, 0f),
-        aDyn1 = floatArrayOf(0.00580812711f, 0.0116162542f, 0.00580812711f, 0f),
-        bDyn1 = floatArrayOf(1f, -1.86380053f, 0.887032986f, 0f),
-        aDyn2 = floatArrayOf(0.00537849404f, 0.0107569881f, 0.00537849404f, 0f),
-        bDyn2 = floatArrayOf(1f, -1.72593343f, 0.747447371f, 0f),
-    )
-
-    private val vgnIirPass3Coefficients = VgnIirCoefficients(
-        a10 = vgnIirPass1Coefficients.a10,
-        b10 = vgnIirPass1Coefficients.b10,
-        aDyn1 = floatArrayOf(0.0331984349f, 0.0663968697f, 0.0331984349f, 0f),
-        bDyn1 = floatArrayOf(1f, -1.61172712f, 0.744520843f, 0f),
-        aDyn2 = floatArrayOf(0.0281187538f, 0.0562375076f, 0.0281187538f, 0f),
-        bDyn2 = floatArrayOf(1f, -1.36511719f, 0.47759226f, 0f),
-    )
-
-    private fun vgnIirUbo(
-        width: Int,
-        height: Int,
-        direction: Int,
-        axis: Int,
-        coefficients: VgnIirCoefficients,
-    ): ByteBuffer {
-        return vgnUbo(112) {
-            for (value in coefficients.a10) putFloat(value)
-            for (value in coefficients.b10) putFloat(value)
-            for (value in coefficients.aDyn1) putFloat(value)
-            for (value in coefficients.bDyn1) putFloat(value)
-            for (value in coefficients.aDyn2) putFloat(value)
-            for (value in coefficients.bDyn2) putFloat(value)
-            putInt(width)
-            putInt(height)
-            putInt(direction)
-            putInt(axis)
-        }
-    }
-
-    private fun dispatchVgnPass(
-        programIndex: Int,
-        groupCountX: Int,
-        groupCountY: Int,
-        label: String,
-        uboId: Int,
-        uboBinding: Int? = null,
-        ubo: ByteBuffer? = null,
-        vararg images: VgnImageBinding,
-    ) {
-        val passWindow = checkNotNull(activeVgnPassWindow) {
-            "VGN pass window is unavailable for $label"
-        }
-        val imageReads = images
-            .filter { it.access != GLES31.GL_WRITE_ONLY }
-            .map { GlesGpuScheduler.textureResource(it.texture) }
-        val imageWrites = images
-            .filter { it.access != GLES31.GL_READ_ONLY }
-            .map { GlesGpuScheduler.textureResource(it.texture) }
-        val uboResource = if (uboBinding != null && ubo != null) {
-            GlesGpuScheduler.bufferResource(uboId)
-        } else {
-            0L
-        }
-        passWindow.beginPass(
-            label,
-            reads = (imageReads + uboResource).filter { it != 0L }.toLongArray(),
-            writes = (imageWrites + uboResource).filter { it != 0L }.toLongArray(),
-        )
-        val program = vgnPrograms[programIndex]
-        check(program != 0) { "VGN program unavailable: $label" }
-        GLES31.glUseProgram(program)
-        for (image in images) {
-            GLES31.glBindImageTexture(
-                image.unit,
-                image.texture,
-                0,
-                false,
-                0,
-                image.access,
-                image.format,
-            )
-        }
-        if (uboBinding != null && ubo != null) {
-            GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, uboId)
-            GLES31.glBufferData(
-                GLES31.GL_UNIFORM_BUFFER,
-                ubo.remaining(),
-                ubo,
-                GLES31.GL_DYNAMIC_DRAW,
-            )
-            GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, uboBinding, uboId)
-            GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, 0)
-        }
-        GLES31.glDispatchCompute(groupCountX.coerceAtLeast(1), groupCountY.coerceAtLeast(1), 1)
-        GlesGpuScheduler.memoryBarrier()
-        checkGlError("VGN $label")
-        unbindVgnImages()
-        if (uboBinding != null) {
-            GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, uboBinding, 0)
-        }
-        passWindow.endPass()
-    }
-
-    private fun runVgnIirPass(
-        programIndex: Int,
-        source: Int,
-        destination: Int,
-        uboId: Int,
-        width: Int,
-        height: Int,
-        direction: Int,
-        axis: Int,
-        coefficients: VgnIirCoefficients,
-        label: String,
-    ) {
-        val groupsX = if (axis == 0) 1 else width
-        val groupsY = if (axis == 0) height else 1
-        dispatchVgnPass(
-            programIndex = programIndex,
-            groupCountX = groupsX,
-            groupCountY = groupsY,
-            label = label,
-            uboId = uboId,
-            uboBinding = 2,
-            ubo = vgnIirUbo(width, height, direction, axis, coefficients),
-            VgnImageBinding(0, source, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-            VgnImageBinding(1, destination, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-        )
-    }
-
-    private fun unbindVgnImages() {
-        for (unit in 0..5) {
-            GLES31.glBindImageTexture(
-                unit,
-                0,
-                0,
-                false,
-                0,
-                GLES31.GL_READ_ONLY,
-                GLES30.GL_RGBA16F,
-            )
-        }
-    }
-
-    /**
-     * Detects and repairs sparse positive RAW impulses before any normalization, lens shading,
-     * white balance, or demosaic operation. The input texture remains untouched because the
-     * repair needs a stable same-CFA neighborhood for every invocation.
-     */
-    private fun dispatchRawHotPixelCorrection(
-        metadata: RawMetadata,
-        width: Int,
-        height: Int,
-        globalOriginX: Int,
-        globalOriginY: Int,
-        sourceTexture: Int,
-        maskTexture: Int,
-        repairedTexture: Int,
-        passWindow: GlesGpuScheduler.PassWindow,
-    ) {
-        check(rawHotPixelDetectProgram != 0 && rawHotPixelRepairProgram != 0) {
-            "RAW hot-pixel programs are unavailable"
-        }
-        val blackLevel4 = FloatArray(4) { index ->
-            metadata.blackLevel.getOrElse(index) {
-                metadata.blackLevel.firstOrNull() ?: 0f
-            }.coerceAtLeast(0f)
-        }
-        val noise = resolveChromaDenoiseNoiseModel(metadata, 1f)
-        val noiseSlope = floatArrayOf(noise.redSlope, noise.greenSlope, noise.blueSlope)
-        val noiseOffset = floatArrayOf(noise.redOffset, noise.greenOffset, noise.blueOffset)
-        val packedRawWidth = (width + 3) / 4
-        val groupCountX = GlesComputeWorkGroup.imageGroupCount(packedRawWidth)
-        val groupCountY = GlesComputeWorkGroup.imageGroupCount(height)
-
-        fun bindCommonUniforms(program: Int) {
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(program, "uImageSize"),
-                width,
-                height,
-            )
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(program, "uGlobalOrigin"),
-                globalOriginX,
-                globalOriginY,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(program, "uCfaPattern"),
-                metadata.cfaPattern,
-            )
-            GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(program, "uBlackLevel"),
-                1,
-                blackLevel4,
-                0,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(program, "uWhiteLevel"),
-                metadata.whiteLevel,
-            )
-            GLES31.glUniform3fv(
-                GLES31.glGetUniformLocation(program, "uNoiseSlope"),
-                1,
-                noiseSlope,
-                0,
-            )
-            GLES31.glUniform3fv(
-                GLES31.glGetUniformLocation(program, "uNoiseOffset"),
-                1,
-                noiseOffset,
-                0,
-            )
-        }
-
-        fun bindRawSampler(program: Int) {
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, sourceTexture)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(program, "uRawTexture"),
-                RCD_RAW_TEXTURE_UNIT,
-            )
-        }
-
-        passWindow.beginPass(
-            "RAW hot-pixel detection",
-            reads = longArrayOf(GlesGpuScheduler.textureResource(sourceTexture)),
-            writes = longArrayOf(GlesGpuScheduler.textureResource(maskTexture)),
-        )
-        GLES31.glUseProgram(rawHotPixelDetectProgram)
-        bindCommonUniforms(rawHotPixelDetectProgram)
-        bindRawSampler(rawHotPixelDetectProgram)
-        GLES31.glBindImageTexture(
-            0,
-            maskTexture,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES30.GL_RGBA8UI,
-        )
-        GLES31.glDispatchCompute(groupCountX, groupCountY, 1)
-        GlesGpuScheduler.memoryBarrier()
-        checkGlError("RAW hot-pixel detection")
-        unbindVgnImages()
-        passWindow.endPass()
-
-        passWindow.beginPass(
-            "RAW hot-pixel repair",
-            reads = longArrayOf(
-                GlesGpuScheduler.textureResource(sourceTexture),
-                GlesGpuScheduler.textureResource(maskTexture),
-            ),
-            writes = longArrayOf(GlesGpuScheduler.textureResource(repairedTexture)),
-        )
-        GLES31.glUseProgram(rawHotPixelRepairProgram)
-        bindCommonUniforms(rawHotPixelRepairProgram)
-        bindRawSampler(rawHotPixelRepairProgram)
-        GLES31.glBindImageTexture(
-            0,
-            maskTexture,
-            0,
-            false,
-            0,
-            GLES31.GL_READ_ONLY,
-            GLES30.GL_RGBA8UI,
-        )
-        GLES31.glBindImageTexture(
-            1,
-            repairedTexture,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES30.GL_RGBA16UI,
-        )
-        GLES31.glDispatchCompute(groupCountX, groupCountY, 1)
-        GlesGpuScheduler.memoryBarrier()
-        checkGlError("RAW hot-pixel repair")
-        unbindVgnImages()
-        passWindow.endPass()
-
-        PLog.d(
-            TAG,
-            "RAW hot-pixel correction submitted: size=${width}x$height " +
-                "origin=$globalOriginX,$globalOriginY cfa=${metadata.cfaPattern} " +
-                "frameCount=${metadata.frameCount} slope=${noiseSlope.contentToString()} " +
-                "offset=${noiseOffset.contentToString()}",
-        )
-    }
-
-    /**
-     * Packed standard-Bayer VGN demosaic shared by single-frame RAW and Spatial Bayer.
-     *
-     * PREPARE_PACKED_RAW applies black normalization, CFA-aware LSC and calculation WB exactly
-     * once. COMPOSITE_CAMERA_RGB removes only the calculation WB, preserving the camera-RGB
-     * contract (LSC applied, WB unapplied) required by MGC full-resolution denoise and Linear DNG.
-     */
-    private fun runStandardBayerVgnDemosaic(
-        metadata: RawMetadata,
-        width: Int,
-        height: Int,
-        highlightReconstructionEnabled: Boolean,
-        globalOriginX: Int = 0,
-        globalOriginY: Int = 0,
-    ) {
-        val demosaicStartNs = System.nanoTime()
-        require(metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR) {
-            "VGN requires a standard 2x2 Bayer CFA, got ${metadata.cfaPattern}"
-        }
-        require(width >= 64 && height >= 64) {
-            "VGN input is too small for the 16-pixel reference halo: ${width}x$height"
-        }
-
-        val phaseX = if (metadata.cfaPattern == RawMetadata.CFA_GRBG ||
-            metadata.cfaPattern == RawMetadata.CFA_BGGR
-        ) 1 else 0
-        val phaseY = if (metadata.cfaPattern == RawMetadata.CFA_GBRG ||
-            metadata.cfaPattern == RawMetadata.CFA_BGGR
-        ) 1 else 0
-        // The reference shaders operate on a canonical RGGB work domain. Offsetting the
-        // photo ROI by the source CFA phase preserves that parity without translating the
-        // finished RGB image. The surrounding pixels are edge-extended support data only.
-        val roiLeft = VGN_WORK_HALO + phaseX
-        val roiTop = VGN_WORK_HALO + phaseY
-        val roiRight = roiLeft + width
-        val roiBottom = roiTop + height
-        val packedWidth = (roiRight + VGN_WORK_HALO + 3) / 4
-        val workWidth = packedWidth * 4
-        val workHeight = ((roiBottom + VGN_WORK_HALO + 1) / 2) * 2
-        val halfHeight = workHeight / 2
-        val groupsPackedX = GlesComputeWorkGroup.imageGroupCount(packedWidth)
-        val groupsWorkX = GlesComputeWorkGroup.imageGroupCount(workWidth)
-        val groupsWorkY = GlesComputeWorkGroup.imageGroupCount(workHeight)
-        val groupsHalfHeight = GlesComputeWorkGroup.imageGroupCount(halfHeight)
-        val groupsOutputX = GlesComputeWorkGroup.imageGroupCount(width)
-        val groupsOutputY = GlesComputeWorkGroup.imageGroupCount(height)
-        val calculationGains = demosaicCalculationWbGains(metadata)
-        val blackLevel4 = FloatArray(4) { index ->
-            metadata.blackLevel.getOrElse(index) { metadata.blackLevel.firstOrNull() ?: 0f }
-                .coerceAtLeast(0f)
-        }
-        val (_, noiseOffset) = resolveDenoiseProfileNoiseModel(metadata, 1f)
-        // Phocus feeds PASS_0A2 with black/read-noise deviation, not the total noise at
-        // middle grey. Its GetInterpolateThresholds() then clamps blackStd / demosaicGain
-        // to [1, 100] and derives the two direction thresholds as 50/gain and 400/gain.
-        // PREPARE_PACKED_RAW already normalizes the sensor range and applies the calculation
-        // neutral, so the corresponding demosaic gain in this work domain is exactly 1.
-        val standardDeviation =
-            (sqrt(noiseOffset.coerceAtLeast(1e-10f)) * 65535f).coerceIn(1f, 100f)
-        val edgeThreshold = 50
-        val vngThreshold = 400
-        val liveTextures = linkedSetOf<Int>()
-        fun allocate(format: Int, textureWidth: Int, textureHeight: Int, label: String): Int =
-            obtainVgnTexture(format, textureWidth, textureHeight, label).also(liveTextures::add)
-        fun releaseTexture(texture: Int) {
-            if (liveTextures.remove(texture)) {
-                recycleVgnTexture(texture)
-            }
-        }
-
-        val uboIds = IntArray(VGN_DISPATCH_UBO_SLOT_COUNT)
-        GLES31.glGenBuffers(uboIds.size, uboIds, 0)
-        check(uboIds.all { it != 0 }) { "Failed to allocate VGN dispatch UBO ring" }
-        var nextUboIndex = 0
-        fun nextVgnUboId(): Int {
-            val uboId = uboIds[nextUboIndex % uboIds.size]
-            nextUboIndex += 1
-            return uboId
-        }
-        check(activeVgnPassWindow == null) { "Nested VGN pass windows are unsupported" }
-        val passWindow = GlesGpuScheduler.PassWindow(TAG, VGN_PASS_WINDOW_SIZE)
-        activeVgnPassWindow = passWindow
-
-        try {
-            val sourcePackedWidth = (width + 3) / 4
-            val hotPixelMask = allocate(
-                GLES30.GL_RGBA8UI,
-                sourcePackedWidth,
-                height,
-                "hot-pixel mask",
-            )
-            val repairedRaw = allocate(
-                GLES30.GL_RGBA16UI,
-                sourcePackedWidth,
-                height,
-                "hot-pixel repaired RAW",
-            )
-            unbindVgnImages()
-            for (binding in 2..5) {
-                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
-            }
-            dispatchRawHotPixelCorrection(
-                metadata = metadata,
-                width = width,
-                height = height,
-                globalOriginX = globalOriginX,
-                globalOriginY = globalOriginY,
-                sourceTexture = rawTextureId,
-                maskTexture = hotPixelMask,
-                repairedTexture = repairedRaw,
-                passWindow = passWindow,
-            )
-            passWindow.awaitResources(
-                "release RAW hot-pixel mask",
-                longArrayOf(GlesGpuScheduler.textureResource(hotPixelMask)),
-            )
-            releaseTexture(hotPixelMask)
-
-            val packedFloat = allocate(GLES30.GL_RGBA16F, packedWidth, workHeight, "packed float")
-            val packedBayer = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed Bayer")
-            val packedSmooth = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed smooth")
-            val scaleTexture = allocate(GLES30.GL_RGBA16F, workWidth, halfHeight, "scale")
-            val medianTexture = allocate(GLES30.GL_RGBA16F, packedWidth, halfHeight, "median")
-            val edgeTexture = allocate(GLES30.GL_RGBA16I, packedWidth, workHeight, "edge")
-            val full0 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 0")
-            val full1 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 1")
-
-            passWindow.beginPass(
-                "prepare packed RAW",
-                reads = longArrayOf(
-                    GlesGpuScheduler.textureResource(repairedRaw),
-                    GlesGpuScheduler.textureResource(lensShadingTextureId),
-                ),
-                writes = longArrayOf(GlesGpuScheduler.textureResource(packedFloat)),
-            )
-            val prepareProgram = vgnPrograms[VgnShaders.PROGRAM_PREPARE]
-            GLES31.glUseProgram(prepareProgram)
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, repairedRaw)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(prepareProgram, "uRawTexture"),
-                RCD_RAW_TEXTURE_UNIT,
-            )
-            bindLensShadingForProgram(
-                program = prepareProgram,
-                metadata = metadata,
-                globalOriginX = globalOriginX,
-                globalOriginY = globalOriginY,
-            )
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(prepareProgram, "uImageSize"), width, height)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(prepareProgram, "uFullImageSize"),
-                metadata.width,
-                metadata.height,
-            )
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(prepareProgram, "uGlobalOrigin"),
-                globalOriginX,
-                globalOriginY,
-            )
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(prepareProgram, "uPackedSize"),
-                packedWidth,
-                workHeight,
-            )
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(prepareProgram, "uSourceOffset"),
-                roiLeft,
-                roiTop,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(prepareProgram, "uCfaPattern"),
-                metadata.cfaPattern,
-            )
-            GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(prepareProgram, "uBlackLevel"),
-                1,
-                blackLevel4,
-                0,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(prepareProgram, "uWhiteLevel"),
-                metadata.whiteLevel,
-            )
-            GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(prepareProgram, "uCalculationGains"),
-                1,
-                calculationGains,
-                0,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(prepareProgram, "uHighlightClipThreshold"),
-                RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(prepareProgram, "uHighlightCeiling"),
-                RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(prepareProgram, "uHighlightReconstructionEnabled"),
-                if (highlightReconstructionEnabled) 1 else 0,
-            )
-            GLES31.glBindImageTexture(
-                0,
-                packedFloat,
-                0,
-                false,
-                0,
-                GLES31.GL_WRITE_ONLY,
-                GLES30.GL_RGBA16F,
-            )
-            GLES31.glDispatchCompute(groupsPackedX, groupsWorkY, 1)
-            GlesGpuScheduler.memoryBarrier()
-            checkGlError("VGN prepare packed RAW")
-            unbindVgnImages()
-            passWindow.endPass()
-            passWindow.awaitResources(
-                "release RAW hot-pixel intermediates",
-                longArrayOf(
-                    GlesGpuScheduler.textureResource(repairedRaw),
-                ),
-            )
-            releaseTexture(repairedRaw)
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_NEUTRAL,
-                groupsPackedX,
-                groupsWorkY,
-                "neutral",
-                nextVgnUboId(),
-                2,
-                vgnUbo(48) {
-                    putInt(0); putInt(0); putInt(packedWidth); putInt(workHeight)
-                    putInt(4096); putInt(4096); putInt(4096); putInt(0)
-                    putInt(12); putInt(0); putInt(0); putInt(0)
-                },
-                VgnImageBinding(0, packedFloat, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
-                VgnImageBinding(1, packedBayer, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_0A1,
-                groupsPackedX,
-                groupsWorkY,
-                "pass 0A1",
-                nextVgnUboId(),
-                2,
-                vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
-                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, packedSmooth, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_0A2,
-                groupsWorkX,
-                groupsHalfHeight,
-                "pass 0A2",
-                nextVgnUboId(),
-                2,
-                vgnUbo(32) {
-                    putInt(0); putInt(1); putInt(packedWidth - 1); putInt((workHeight - 2) / 2)
-                    putFloat(standardDeviation); putFloat(0f); putFloat(0f); putFloat(0f)
-                },
-                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, scaleTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_0B,
-                groupsPackedX,
-                groupsHalfHeight,
-                "pass 0B",
-                nextVgnUboId(),
-                2,
-                vgnBoundsUbo(1, 0, packedWidth - 1, workHeight - 4),
-                VgnImageBinding(0, scaleTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
-                VgnImageBinding(1, medianTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_0C,
-                groupsPackedX,
-                groupsWorkY,
-                "pass 0C",
-                nextVgnUboId(),
-                2,
-                vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
-                VgnImageBinding(0, packedSmooth, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, edgeTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16I),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_1,
-                groupsWorkX,
-                groupsWorkY,
-                "pass 1",
-                nextVgnUboId(),
-                5,
-                vgnThresholdBoundsUbo(
-                    12,
-                    12,
-                    workWidth - 12,
-                    workHeight - 12,
-                    edgeThreshold,
-                    vngThreshold,
-                ),
-                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, edgeTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16I),
-                VgnImageBinding(2, scaleTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
-                VgnImageBinding(3, medianTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
-                VgnImageBinding(4, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_2,
-                groupsWorkX,
-                groupsWorkY,
-                "pass 2",
-                nextVgnUboId(),
-                2,
-                vgnBoundsUbo(13, 13, workWidth - 13, workHeight - 13),
-                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_3,
-                groupsWorkX,
-                groupsWorkY,
-                "pass 3",
-                nextVgnUboId(),
-                4,
-                vgnThresholdBoundsUbo(
-                    16,
-                    16,
-                    workWidth - 16,
-                    workHeight - 16,
-                    edgeThreshold,
-                    vngThreshold,
-                ),
-                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(2, edgeTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16I),
-                VgnImageBinding(3, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            unbindVgnImages()
-            passWindow.awaitResources(
-                "release packed VGN intermediates",
-                longArrayOf(
-                    GlesGpuScheduler.textureResource(packedFloat),
-                    GlesGpuScheduler.textureResource(packedSmooth),
-                    GlesGpuScheduler.textureResource(scaleTexture),
-                    GlesGpuScheduler.textureResource(medianTexture),
-                    GlesGpuScheduler.textureResource(edgeTexture),
-                    GlesGpuScheduler.textureResource(packedBayer),
-                ),
-            )
-            releaseTexture(packedFloat)
-            releaseTexture(packedSmooth)
-            releaseTexture(scaleTexture)
-            releaseTexture(medianTexture)
-            releaseTexture(edgeTexture)
-            releaseTexture(packedBayer)
-
-            val full2 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 2")
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_COLOR_NOISE_1,
-                groupsWorkX,
-                groupsWorkY,
-                "color reconstruction 1",
-                nextVgnUboId(),
-                2,
-                vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
-                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_COLOR_NOISE_2,
-                groupsWorkX,
-                groupsWorkY,
-                "color reconstruction 2",
-                nextVgnUboId(),
-                2,
-                vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
-                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            val full3 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 3")
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_COLOR_NOISE_3_YCCD,
-                groupsWorkX,
-                groupsWorkY,
-                "color reconstruction 3 YCCD",
-                nextVgnUboId(),
-                4,
-                vgnBoundsUbo(12, 12, workWidth - 12, workHeight - 12),
-                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(2, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(3, full3, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_IIR2_1_INIT,
-                1,
-                workHeight,
-                "IIR2 pass 1 horizontal forward",
-                nextVgnUboId(),
-                3,
-                vgnIirUbo(workWidth, workHeight, 0, 0, vgnIirPass1Coefficients),
-                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_1,
-                full2,
-                full3,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                1,
-                0,
-                vgnIirPass1Coefficients,
-                "IIR2 pass 1 horizontal reverse",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_1,
-                full3,
-                full2,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                0,
-                1,
-                vgnIirPass1Coefficients,
-                "IIR2 pass 1 vertical forward",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_1,
-                full2,
-                full3,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                1,
-                1,
-                vgnIirPass1Coefficients,
-                "IIR2 pass 1 vertical reverse",
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_CALCULATE_COLOR_NOISE_ERROR,
-                groupsWorkX,
-                groupsWorkY,
-                "calculate color noise error",
-                nextVgnUboId(),
-                images = arrayOf(
-                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                ),
-            )
-
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_2,
-                full2,
-                full3,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                0,
-                0,
-                vgnIirPass1Coefficients,
-                "IIR2 pass 2 horizontal forward",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_2,
-                full3,
-                full2,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                1,
-                0,
-                vgnIirPass1Coefficients,
-                "IIR2 pass 2 horizontal reverse",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_2,
-                full2,
-                full3,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                0,
-                1,
-                vgnIirPass1Coefficients,
-                "IIR2 pass 2 vertical forward",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_2,
-                full3,
-                full2,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                1,
-                1,
-                vgnIirPass1Coefficients,
-                "IIR2 pass 2 vertical reverse",
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_COLOR_NOISE_FILTER,
-                groupsWorkX,
-                groupsWorkY,
-                "color noise filter",
-                nextVgnUboId(),
-                images = arrayOf(
-                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
-                    VgnImageBinding(2, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                ),
-            )
-
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_3,
-                full1,
-                full0,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                0,
-                0,
-                vgnIirPass3Coefficients,
-                "IIR2 pass 3 horizontal forward",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_3,
-                full0,
-                full1,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                1,
-                0,
-                vgnIirPass3Coefficients,
-                "IIR2 pass 3 horizontal reverse",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_3,
-                full1,
-                full0,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                0,
-                1,
-                vgnIirPass3Coefficients,
-                "IIR2 pass 3 vertical forward",
-            )
-            runVgnIirPass(
-                VgnShaders.PROGRAM_IIR2_3,
-                full0,
-                full1,
-                nextVgnUboId(),
-                workWidth,
-                workHeight,
-                1,
-                1,
-                vgnIirPass3Coefficients,
-                "IIR2 pass 3 vertical reverse",
-            )
-
-            dispatchVgnPass(
-                VgnShaders.PROGRAM_YUV_TO_RGB,
-                groupsOutputX,
-                groupsOutputY,
-                "YUV to RGB",
-                nextVgnUboId(),
-                2,
-                vgnUbo(32) {
-                    putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
-                    putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
-                },
-                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
-                VgnImageBinding(
-                    1,
-                    linearOutputTextureId,
-                    GLES31.GL_WRITE_ONLY,
-                    GLES30.GL_RGBA16F,
-                ),
-            )
-
-            passWindow.beginPass(
-                "composite camera RGB",
-                reads = longArrayOf(
-                    GlesGpuScheduler.textureResource(linearOutputTextureId),
-                ),
-                writes = longArrayOf(
-                    GlesGpuScheduler.textureResource(demosaicTextureId),
-                ),
-            )
-            val compositeProgram = vgnPrograms[VgnShaders.PROGRAM_COMPOSITE]
-            GLES31.glUseProgram(compositeProgram)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(compositeProgram, "uImageSize"),
-                width,
-                height,
-            )
-            GLES31.glUniform3f(
-                GLES31.glGetUniformLocation(compositeProgram, "uCalculationGains"),
-                calculationGains[0],
-                1f,
-                calculationGains[3],
-            )
-            GLES31.glBindImageTexture(0, linearOutputTextureId, 0, false, 0,
-                GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F)
-            GLES31.glBindImageTexture(1, demosaicTextureId, 0, false, 0,
-                GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
-            GLES31.glDispatchCompute(groupsOutputX, groupsOutputY, 1)
-            GlesGpuScheduler.memoryBarrier()
-            checkGlError("VGN composite camera RGB")
-            unbindVgnImages()
-            passWindow.endPass()
-            passWindow.drain("VGN camera RGB handoff")
-
-            PLog.d(
-                TAG,
-                "Standard Bayer VGN complete: size=${width}x$height work=${workWidth}x$workHeight " +
-                    "roi=$roiLeft,$roiTop,$roiRight,$roiBottom cfa=${metadata.cfaPattern} " +
-                    "stdDev=$standardDeviation edgeThreshold=$edgeThreshold " +
-                    "vngThreshold=$vngThreshold colorNoiseLevel=$VGN_COLOR_NOISE_LEVEL " +
-                    "gpuSliced=true tookMs=${(System.nanoTime() - demosaicStartNs) / 1_000_000} " +
-                    "calculationWb=${calculationGains.contentToString()} " +
-                    "lsc=${lensShadingLogString(metadata)}",
-            )
-        } finally {
-            passWindow.drain("VGN resource release")
-            activeVgnPassWindow = null
-            unbindVgnImages()
-            for (binding in 0..5) {
-                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
-            }
-            GLES31.glDeleteBuffers(uboIds.size, uboIds, 0)
-            if (liveTextures.isNotEmpty()) {
-                liveTextures.forEach(::recycleVgnTexture)
-                liveTextures.clear()
-            }
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        }
-    }
 
     /**
      * Exposes Spatial AOT's already propagated output model as the noise profile of the one
@@ -9874,264 +5943,82 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
     ) {
-        require(meteringHalfResolutionProgram != 0) {
-            "RAW metering half-resolution program is unavailable"
-        }
-        require(metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR) {
-            "Half-resolution metering requires a standard 2x2 Bayer CFA"
-        }
         val outputWidth = (width + 1) / 2
         val outputHeight = (height + 1) / 2
         check(demosaicWidth == outputWidth && demosaicHeight == outputHeight) {
             "RAW metering target mismatch: ${demosaicWidth}x$demosaicHeight, " +
                 "expected=${outputWidth}x$outputHeight"
         }
-        val startNs = System.nanoTime()
         val blackLevel4 = FloatArray(4) { index ->
             metadata.blackLevel.getOrElse(index) {
                 metadata.blackLevel.firstOrNull() ?: 0f
             }.coerceAtLeast(0f)
         }
-        GLES31.glUseProgram(meteringHalfResolutionProgram)
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uRawTexture"),
-            RCD_RAW_TEXTURE_UNIT,
-        )
-        bindLensShadingForProgram(meteringHalfResolutionProgram, metadata)
-        GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uImageSize"),
-            width,
-            height,
-        )
-        GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uOutputSize"),
-            outputWidth,
-            outputHeight,
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uCfaPattern"),
-            metadata.cfaPattern,
-        )
-        GLES31.glUniform4fv(
-            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uBlackLevel"),
-            1,
-            blackLevel4,
-            0,
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uWhiteLevel"),
-            metadata.whiteLevel,
-        )
-        GLES31.glBindImageTexture(
-            0,
-            demosaicTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES30.GL_RGBA16F,
-        )
-        GLES31.glDispatchCompute(
-            GlesComputeWorkGroup.imageGroupCount(outputWidth),
-            GlesComputeWorkGroup.imageGroupCount(outputHeight),
-            1,
-        )
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-        )
-        checkGlError("RAW metering half-resolution demosaic")
-        GlesGpuScheduler.waitForGpuCheckpoint(TAG, "RAW metering half-resolution demosaic")
-        GLES31.glBindImageTexture(
-            0,
-            0,
-            0,
-            false,
-            0,
-            GLES31.GL_READ_ONLY,
-            GLES30.GL_RGBA16F,
-        )
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_LENS_SHADING_TEXTURE_UNIT)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
-        PLog.d(
-            TAG,
-            "RAW metering half-resolution demosaic complete: " +
-                "source=${width}x$height output=${outputWidth}x$outputHeight " +
-                "cfa=${metadata.cfaPattern} tookMs=" +
-                "${(System.nanoTime() - startNs) / 1_000_000}",
-        )
+        checkNotNull(
+            meteringDemosaicAlgorithm.execute(
+                RawMeteringDemosaicAlgorithm.Input(
+                    rawTextureId = rawTextureId,
+                    outputTextureId = demosaicTextureId,
+                    width = width,
+                    height = height,
+                    cfaPattern = metadata.cfaPattern,
+                    blackLevel = blackLevel4,
+                    whiteLevel = metadata.whiteLevel,
+                    bindLensShading = { program ->
+                        bindLensShadingForProgram(program, metadata)
+                    },
+                ),
+            )
+        ) { "RAW metering half-resolution program is unavailable" }
     }
 
-    private fun runStandardBayerRcdDemosaic(
+    private fun runStandardBayerVgnDemosaic(
         metadata: RawMetadata,
         width: Int,
         height: Int,
+        highlightReconstructionEnabled: Boolean,
         globalOriginX: Int = 0,
         globalOriginY: Int = 0,
     ) {
-        val ssboIds = IntArray(9)
-        GLES31.glGenBuffers(9, ssboIds, 0)
-        val extraMargin = 1024 * 1024
-        val fullSize = width * height * 4 + extraMargin
-        for (i in 0 until 9) {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, ssboIds[i])
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                fullSize,
-                null,
-                GLES31.GL_DYNAMIC_DRAW
+        val hotPixelNoise = resolveChromaDenoiseNoiseModel(metadata, 1f)
+        val (_, denoiseReadNoiseOffset) = resolveDenoiseProfileNoiseModel(metadata, 1f)
+        checkNotNull(
+            vgnDemosaicAlgorithm.execute(
+                VgnDemosaicAlgorithm.Input(
+                    metadata = metadata,
+                    rawTextureId = rawTextureId,
+                    linearOutputTextureId = linearOutputTextureId,
+                    outputTextureId = demosaicTextureId,
+                    lensShadingTextureId = lensShadingTextureId,
+                    width = width,
+                    height = height,
+                    highlightReconstructionEnabled = highlightReconstructionEnabled,
+                    globalOriginX = globalOriginX,
+                    globalOriginY = globalOriginY,
+                    calculationWhiteBalanceGains = demosaicCalculationWbGains(metadata),
+                    denoiseReadNoiseOffset = denoiseReadNoiseOffset,
+                    hotPixelNoiseSlope = floatArrayOf(
+                        hotPixelNoise.redSlope,
+                        hotPixelNoise.greenSlope,
+                        hotPixelNoise.blueSlope,
+                    ),
+                    hotPixelNoiseOffset = floatArrayOf(
+                        hotPixelNoise.redOffset,
+                        hotPixelNoise.greenOffset,
+                        hotPixelNoise.blueOffset,
+                    ),
+                    lensShadingDescription = lensShadingLogString(metadata),
+                    bindLensShading = { program, originX, originY ->
+                        bindLensShadingForProgram(
+                            program = program,
+                            metadata = metadata,
+                            globalOriginX = originX,
+                            globalOriginY = originY,
+                        )
+                    },
+                ),
             )
-            if (i < 8) {
-                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, i, ssboIds[i])
-            }
-        }
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-
-        val blackLevel4 = FloatArray(4) { idx ->
-            metadata.blackLevel.getOrElse(idx) {
-                metadata.blackLevel.firstOrNull() ?: 0f
-            }.coerceAtLeast(0f)
-        }
-        val metadataWbGains = metadata.whiteBalanceGains
-        val calculationWbGains = demosaicCalculationWbGains(metadata)
-        val lscSize = lensShadingLogString(metadata)
-
-        try {
-            GLES31.glUseProgram(rcdPopulateProgram)
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uRawTexture"),
-                RCD_RAW_TEXTURE_UNIT
-            )
-            bindLensShadingForRcdPopulate(
-                metadata = metadata,
-                globalOriginX = globalOriginX,
-                globalOriginY = globalOriginY,
-            )
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdPopulateProgram, "uImageSize"), width, height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdPopulateProgram, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glUniform4fv(GLES31.glGetUniformLocation(rcdPopulateProgram, "uBlackLevel"), 1, blackLevel4, 0)
-            GLES31.glUniform1f(GLES31.glGetUniformLocation(rcdPopulateProgram, "uWhiteLevel"), metadata.whiteLevel)
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightClipThreshold"),
-                RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightCeiling"),
-                RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightReconstructionEnabled"),
-                1
-            )
-            GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uWhiteBalanceGains"),
-                1,
-                calculationWbGains,
-                0
-            )
-            PLog.d(
-                TAG,
-                "Linear RCD populate: cfa=${metadata.cfaPattern} black=${blackLevel4.contentToString()} " +
-                    "white=${metadata.whiteLevel} metadataWb=${metadataWbGains.contentToString()} " +
-                    "calculationWb=${calculationWbGains.contentToString()} lsc=$lscSize"
-            )
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Populate")
-
-            GLES31.glUseProgram(rcdStep1Program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep1Program, "uImageSize"), width, height)
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Step 1")
-
-            GLES31.glUseProgram(rcdStep2Program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep2Program, "uImageSize"), width, height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep2Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Step 2")
-
-            GLES31.glUseProgram(rcdStep3Program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep3Program, "uImageSize"), width, height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep3Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Step 3")
-
-            GLES31.glUseProgram(rcdStep40Program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep40Program, "uImageSize"), width, height)
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Step 4_0")
-
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, RCD_PQ_WRITE_BINDING, ssboIds[8])
-            GLES31.glUseProgram(rcdStep41Program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep41Program, "uImageSize"), width, height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep41Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Step 4_1")
-
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, RCD_PQ_READ_BINDING, ssboIds[8])
-            GLES31.glUseProgram(rcdStep42Program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep42Program, "uImageSize"), width, height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep42Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Step 4_2")
-
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, RCD_VH_DIR_BINDING, ssboIds[4])
-            GLES31.glUseProgram(rcdStep43Program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep43Program, "uImageSize"), width, height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep43Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("Linear RCD Step 4_3")
-
-            GLES31.glUseProgram(rcdWriteOutputProgram)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uImageSize"), width, height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glUniform3f(
-                GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCalculationGains"),
-                calculationWbGains[0],
-                1f,
-                calculationWbGains[3]
-            )
-            GLES31.glBindImageTexture(
-                RCD_OUTPUT_IMAGE_UNIT,
-                demosaicTextureId,
-                0,
-                false,
-                0,
-                GLES31.GL_WRITE_ONLY,
-                GLES31.GL_RGBA16F
-            )
-            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
-            checkGlError("Linear RCD Write Output")
-            GLES31.glBindImageTexture(
-                RCD_OUTPUT_IMAGE_UNIT,
-                0,
-                0,
-                false,
-                0,
-                GLES31.GL_WRITE_ONLY,
-                GLES31.GL_RGBA16F
-            )
-            GLES30.glFinish()
-        } finally {
-            GLES31.glDeleteBuffers(9, ssboIds, 0)
-            for (i in 0 until 8) {
-                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, i, 0)
-            }
-        }
+        ) { "Standard Bayer VGN demosaic programs are unavailable" }
     }
 
     private fun runQuadBayerDemosaic(
@@ -10142,179 +6029,41 @@ class RawDemosaicProcessor {
         globalOriginX: Int = 0,
         globalOriginY: Int = 0,
     ) {
-        val ssboIds = IntArray(6)
-        GLES31.glGenBuffers(6, ssboIds, 0)
-        val extraMargin = 1024 * 1024
-        val fullSize = width * height * 4 + extraMargin
-        for (i in 0 until 6) {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, ssboIds[i])
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                fullSize,
-                null,
-                GLES31.GL_DYNAMIC_DRAW
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, i, ssboIds[i])
-        }
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-
-        val blackLevel4 = FloatArray(4) { idx ->
-            metadata.blackLevel.getOrElse(idx) {
+        val blackLevel4 = FloatArray(4) { index ->
+            metadata.blackLevel.getOrElse(index) {
                 metadata.blackLevel.firstOrNull() ?: 0f
             }.coerceAtLeast(0f)
         }
-        val metadataWbGains = metadata.whiteBalanceGains
-        val calculationWbGains = demosaicCalculationWbGains(metadata)
-        val lscSize = lensShadingLogString(metadata)
-        val expandedBlockSize = RawCfaCorrection.expandedBayerBlockSize(metadata.cfaPattern)
-
-        GLES31.glUseProgram(quadPopulateProgram)
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uRawTexture"),
-            RCD_RAW_TEXTURE_UNIT
-        )
-        bindLensShadingForProgram(
-            program = quadPopulateProgram,
-            metadata = metadata,
-            globalOriginX = globalOriginX,
-            globalOriginY = globalOriginY,
-        )
-        GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uImageSize"),
-            width,
-            height
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uCfaPattern"),
-            metadata.cfaPattern
-        )
-        GLES31.glUniform4fv(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uBlackLevel"),
-            1,
-            blackLevel4,
-            0
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uWhiteLevel"),
-            metadata.whiteLevel
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uHighlightClipThreshold"),
-            RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uHighlightCeiling"),
-            RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uHighlightReconstructionEnabled"),
-            if (highlightReconstructionEnabled) 1 else 0
-        )
-        GLES31.glUniform4fv(
-            GLES31.glGetUniformLocation(quadPopulateProgram, "uWhiteBalanceGains"),
-            1,
-            calculationWbGains,
-            0
-        )
-        PLog.d(
-            TAG,
-            "Expanded Bayer populate: cfa=${metadata.cfaPattern} block=${expandedBlockSize}x$expandedBlockSize " +
-                    "black=${blackLevel4.contentToString()} " +
-                    "white=${metadata.whiteLevel} metadataWb=${metadataWbGains.contentToString()} " +
-                    "calculationWb=${calculationWbGains.contentToString()} lsc=$lscSize " +
-                    "highlightReconstruction=$highlightReconstructionEnabled " +
-                    "highlightThreshold=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD} " +
-                    "highlightCeiling=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING}"
-        )
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-        checkGlError("Quad Bayer Populate")
-
-        GLES31.glUseProgram(quadGreenProgram)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(quadGreenProgram, "uImageSize"), width, height)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(quadGreenProgram, "uCfaPattern"),
-            metadata.cfaPattern
-        )
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-        checkGlError("Quad Bayer Green")
-
-        GLES31.glUseProgram(quadChromaProgram)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(quadChromaProgram, "uImageSize"), width, height)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(quadChromaProgram, "uCfaPattern"),
-            metadata.cfaPattern
-        )
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-        checkGlError("Quad Bayer Chroma")
-
-        GLES31.glUseProgram(quadRefineProgram)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(quadRefineProgram, "uImageSize"), width, height)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(quadRefineProgram, "uCfaPattern"),
-            metadata.cfaPattern
-        )
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-        checkGlError("Quad Bayer Refine")
-
-        GLES31.glUseProgram(quadWriteOutputProgram)
-        GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(quadWriteOutputProgram, "uImageSize"),
-            width,
-            height
-        )
-        GLES31.glUniform3f(
-            GLES31.glGetUniformLocation(quadWriteOutputProgram, "uCalculationGains"),
-            calculationWbGains[0],
-            1f,
-            calculationWbGains[3]
-        )
-        GLES31.glBindImageTexture(
-            RCD_OUTPUT_IMAGE_UNIT,
-            demosaicTextureId,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16F
-        )
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
-        checkGlError("Quad Bayer Write Output")
-
-        GLES31.glBindImageTexture(
-            RCD_OUTPUT_IMAGE_UNIT,
-            0,
-            0,
-            false,
-            0,
-            GLES31.GL_WRITE_ONLY,
-            GLES31.GL_RGBA16F
-        )
-
-        GLES30.glFinish()
-        GLES31.glDeleteBuffers(6, ssboIds, 0)
-        for (i in 0 until 6) {
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, i, 0)
-        }
-    }
-
-    private fun bindLensShadingForRcdPopulate(
-        metadata: RawMetadata,
-        globalOriginX: Int = 0,
-        globalOriginY: Int = 0,
-    ) {
-        bindLensShadingForProgram(
-            program = rcdPopulateProgram,
-            metadata = metadata,
-            globalOriginX = globalOriginX,
-            globalOriginY = globalOriginY,
-        )
+        checkNotNull(
+            quadBayerDemosaicAlgorithm.execute(
+                QuadBayerDemosaicAlgorithm.Input(
+                    rawTextureId = rawTextureId,
+                    outputTextureId = demosaicTextureId,
+                    width = width,
+                    height = height,
+                    cfaPattern = metadata.cfaPattern,
+                    blackLevel = blackLevel4,
+                    whiteLevel = metadata.whiteLevel,
+                    metadataWhiteBalanceGains = metadata.whiteBalanceGains,
+                    calculationWhiteBalanceGains = demosaicCalculationWbGains(metadata),
+                    expandedBlockSize = RawCfaCorrection.expandedBayerBlockSize(
+                        metadata.cfaPattern,
+                    ),
+                    highlightReconstructionEnabled = highlightReconstructionEnabled,
+                    globalOriginX = globalOriginX,
+                    globalOriginY = globalOriginY,
+                    lensShadingDescription = lensShadingLogString(metadata),
+                    bindLensShading = { program, originX, originY ->
+                        bindLensShadingForProgram(
+                            program = program,
+                            metadata = metadata,
+                            globalOriginX = originX,
+                            globalOriginY = originY,
+                        )
+                    },
+                ),
+            )
+        ) { "Quad Bayer demosaic programs are unavailable" }
     }
 
     private fun bindLensShadingForProgram(
@@ -10562,115 +6311,6 @@ class RawDemosaicProcessor {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         checkGlError("setupFullResFramebuffer Double Buffered")
-    }
-
-    private fun setupDarktableFilmicHighlightReconstructionFramebuffers(width: Int, height: Int) {
-        if (filmicHrWidth == width && filmicHrHeight == height &&
-            filmicHrMaskFramebufferId != 0 && filmicHrWorkingFramebufferId != 0 &&
-            filmicHrReconstructedFramebufferIds.all { it != 0 }
-        ) {
-            return
-        }
-
-        releaseDarktableFilmicHighlightReconstructionFramebuffers()
-        filmicHrWidth = width
-        filmicHrHeight = height
-
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_R16F, "filmicHrMask").also {
-            filmicHrMaskTextureId = it.first
-            filmicHrMaskFramebufferId = it.second
-        }
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_RGBA16F, "filmicHrWorking").also {
-            filmicHrWorkingTextureId = it.first
-            filmicHrWorkingFramebufferId = it.second
-        }
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_RGBA16F, "filmicHrTemp").also {
-            filmicHrTempTextureId = it.first
-            filmicHrTempFramebufferId = it.second
-        }
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_RGBA16F, "filmicHrLfEven").also {
-            filmicHrLfEvenTextureId = it.first
-            filmicHrLfEvenFramebufferId = it.second
-        }
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_RGBA16F, "filmicHrLfOdd").also {
-            filmicHrLfOddTextureId = it.first
-            filmicHrLfOddFramebufferId = it.second
-        }
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_RGBA16F, "filmicHrHighFrequency").also {
-            filmicHrHighFrequencyTextureId = it.first
-            filmicHrHighFrequencyFramebufferId = it.second
-        }
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_RGBA16F, "filmicHrHighFrequencyRgb").also {
-            filmicHrHighFrequencyRgbTextureId = it.first
-            filmicHrHighFrequencyRgbFramebufferId = it.second
-        }
-        createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_R16F, "filmicHrNorms").also {
-            filmicHrNormsTextureId = it.first
-            filmicHrNormsFramebufferId = it.second
-        }
-        for (i in filmicHrReconstructedTextureIds.indices) {
-            createFilmicHrTextureAndFramebuffer(width, height, GLES30.GL_RGBA16F, "filmicHrReconstructed$i").also {
-                filmicHrReconstructedTextureIds[i] = it.first
-                filmicHrReconstructedFramebufferIds[i] = it.second
-            }
-        }
-        checkGlError("setupDarktableFilmicHighlightReconstructionFramebuffers")
-    }
-
-    private fun createFilmicHrTextureAndFramebuffer(
-        width: Int,
-        height: Int,
-        internalFormat: Int,
-        label: String,
-    ): Pair<Int, Int> {
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        val textureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
-        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, internalFormat, width, height)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        return textureId to createFramebufferForTexture(textureId, label)
-    }
-
-    private fun releaseDarktableFilmicHighlightReconstructionFramebuffers() {
-        deleteTextureAndFramebuffer(filmicHrMaskTextureId, filmicHrMaskFramebufferId)
-        deleteTextureAndFramebuffer(filmicHrWorkingTextureId, filmicHrWorkingFramebufferId)
-        deleteTextureAndFramebuffer(filmicHrTempTextureId, filmicHrTempFramebufferId)
-        deleteTextureAndFramebuffer(filmicHrLfEvenTextureId, filmicHrLfEvenFramebufferId)
-        deleteTextureAndFramebuffer(filmicHrLfOddTextureId, filmicHrLfOddFramebufferId)
-        deleteTextureAndFramebuffer(filmicHrHighFrequencyTextureId, filmicHrHighFrequencyFramebufferId)
-        deleteTextureAndFramebuffer(filmicHrHighFrequencyRgbTextureId, filmicHrHighFrequencyRgbFramebufferId)
-        deleteTextureAndFramebuffer(filmicHrNormsTextureId, filmicHrNormsFramebufferId)
-        for (i in filmicHrReconstructedTextureIds.indices) {
-            deleteTextureAndFramebuffer(
-                filmicHrReconstructedTextureIds[i],
-                filmicHrReconstructedFramebufferIds[i]
-            )
-            filmicHrReconstructedTextureIds[i] = 0
-            filmicHrReconstructedFramebufferIds[i] = 0
-        }
-        filmicHrMaskTextureId = 0
-        filmicHrMaskFramebufferId = 0
-        filmicHrWorkingTextureId = 0
-        filmicHrWorkingFramebufferId = 0
-        filmicHrTempTextureId = 0
-        filmicHrTempFramebufferId = 0
-        filmicHrLfEvenTextureId = 0
-        filmicHrLfEvenFramebufferId = 0
-        filmicHrLfOddTextureId = 0
-        filmicHrLfOddFramebufferId = 0
-        filmicHrHighFrequencyTextureId = 0
-        filmicHrHighFrequencyFramebufferId = 0
-        filmicHrHighFrequencyRgbTextureId = 0
-        filmicHrHighFrequencyRgbFramebufferId = 0
-        filmicHrNormsTextureId = 0
-        filmicHrNormsFramebufferId = 0
-        filmicHrWidth = 0
-        filmicHrHeight = 0
     }
 
     private fun setupCombinedFramebuffer(width: Int, height: Int) {
@@ -11084,625 +6724,6 @@ class RawDemosaicProcessor {
         )
     }
 
-    private fun uploadCurveTexture(curveLut: FloatArray) {
-        if (curveTextureId == 0) {
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            curveTextureId = textures[0]
-        }
-
-        val buffer = ByteBuffer.allocateDirect(curveLut.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(curveLut)
-        buffer.position(0)
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R16F,
-            curveLut.size, 1, 0, GLES30.GL_RED, GLES30.GL_FLOAT, buffer
-        )
-    }
-
-    private fun uploadDcpToneCurveTexture(curveLut: FloatArray) {
-        if (dcpToneCurveTextureId == 0) {
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            dcpToneCurveTextureId = textures[0]
-        }
-
-        val buffer = ByteBuffer.allocateDirect(curveLut.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(curveLut)
-        buffer.position(0)
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, dcpToneCurveTextureId)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R16F,
-            curveLut.size, 1, 0, GLES30.GL_RED, GLES30.GL_FLOAT, buffer
-        )
-        checkGlError("uploadDcpToneCurveTexture")
-    }
-
-    private fun ensureDummyDcp3DTexture(): Int {
-        if (dummyDcp3DTextureId != 0) return dummyDcp3DTextureId
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        dummyDcp3DTextureId = textures[0]
-        val buffer = ByteBuffer.allocateDirect(4 * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(floatArrayOf(0f, 1f, 1f, 1f))
-        buffer.position(0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyDcp3DTextureId)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_MIN_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_MAG_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_R,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexImage3D(
-            GLES30.GL_TEXTURE_3D,
-            0,
-            GLES30.GL_RGBA16F,
-            1,
-            1,
-            1,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_FLOAT,
-            buffer
-        )
-        checkGlError("ensureDummyDcp3DTexture")
-        return dummyDcp3DTextureId
-    }
-
-    private fun ensureDummyDcpToneCurveTexture(): Int {
-        if (dummyDcpToneCurveTextureId != 0) return dummyDcpToneCurveTextureId
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        dummyDcpToneCurveTextureId = textures[0]
-        val buffer = ByteBuffer.allocateDirect(4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(floatArrayOf(0f))
-        buffer.position(0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, dummyDcpToneCurveTextureId)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_MIN_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_MAG_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_R16F,
-            1,
-            1,
-            0,
-            GLES30.GL_RED,
-            GLES30.GL_FLOAT,
-            buffer
-        )
-        checkGlError("ensureDummyDcpToneCurveTexture")
-        return dummyDcpToneCurveTextureId
-    }
-
-    private fun uploadDcp3DTexture(
-        textureIdProvider: () -> Int,
-        assignTextureId: (Int) -> Unit,
-        table: DcpHueSatMap
-    ): Int {
-        var textureId = textureIdProvider()
-        if (textureId == 0) {
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            textureId = textures[0]
-            assignTextureId(textureId)
-        }
-
-        val rgbaValues =
-            FloatArray(table.hueDivisions * table.satDivisions * table.valueDivisions * 4)
-        var srcIndex = 0
-        var dstIndex = 0
-        while (srcIndex < table.values.size && dstIndex < rgbaValues.size) {
-            rgbaValues[dstIndex++] = table.values[srcIndex++]
-            rgbaValues[dstIndex++] = table.values[srcIndex++]
-            rgbaValues[dstIndex++] = table.values[srcIndex++]
-            rgbaValues[dstIndex++] = 1.0f
-        }
-
-        val buffer = ByteBuffer.allocateDirect(rgbaValues.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(rgbaValues)
-        buffer.position(0)
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_MIN_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_MAG_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_R,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexImage3D(
-            GLES30.GL_TEXTURE_3D,
-            0,
-            GLES30.GL_RGBA16F,
-            table.satDivisions,
-            table.hueDivisions,
-            table.valueDivisions,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_FLOAT,
-            buffer
-        )
-        checkGlError("uploadDcp3DTexture")
-        return textureId
-    }
-
-    private fun ensureDcpHueSatTexture(table: DcpHueSatMap): Int {
-        if (dcpHueSatTextureId != 0 && dcpHueSatTextureSource === table) {
-            return dcpHueSatTextureId
-        }
-        val textureId = uploadDcp3DTexture(
-            textureIdProvider = { dcpHueSatTextureId },
-            assignTextureId = { dcpHueSatTextureId = it },
-            table = table,
-        )
-        dcpHueSatTextureSource = table
-        return textureId
-    }
-
-    private fun bindDcpCombinedResources(
-        program: Int,
-        dcpRenderPlan: DcpRenderPlan?,
-        applyHueSatMap: Boolean,
-    ) {
-        val hueSatMap = dcpRenderPlan?.hueSatMap?.takeIf { applyHueSatMap && it.isValid }
-        val lookTable = dcpRenderPlan?.lookTable?.takeIf { it.isValid }
-
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uDcpHueSatTexture"), 2)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uDcpLookTableTexture"), 3)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uDcpHueSatEnabled"),
-            if (hueSatMap != null) 1 else 0
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uDcpLookTableEnabled"),
-            if (lookTable != null) 1 else 0
-        )
-
-        if (hueSatMap != null) {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            val textureId = ensureDcpHueSatTexture(hueSatMap)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
-            GLES30.glUniform3i(
-                GLES30.glGetUniformLocation(program, "uDcpHueSatDivisions"),
-                hueSatMap.hueDivisions,
-                hueSatMap.satDivisions,
-                hueSatMap.valueDivisions
-            )
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(program, "uDcpHueSatEncoding"),
-                hueSatMap.encoding
-            )
-        } else {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, ensureDummyDcp3DTexture())
-            GLES30.glUniform3i(
-                GLES30.glGetUniformLocation(program, "uDcpHueSatDivisions"),
-                1,
-                1,
-                1
-            )
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(program, "uDcpHueSatEncoding"),
-                DcpHueSatMap.ENCODING_LINEAR
-            )
-        }
-
-        if (lookTable != null) {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-            val textureId = uploadDcp3DTexture(
-                { dcpLookTableTextureId },
-                { dcpLookTableTextureId = it },
-                lookTable
-            )
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
-            GLES30.glUniform3i(
-                GLES30.glGetUniformLocation(program, "uDcpLookTableDivisions"),
-                lookTable.hueDivisions,
-                lookTable.satDivisions,
-                lookTable.valueDivisions
-            )
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(program, "uDcpLookTableEncoding"),
-                lookTable.encoding
-            )
-        } else {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, ensureDummyDcp3DTexture())
-            GLES30.glUniform3i(
-                GLES30.glGetUniformLocation(program, "uDcpLookTableDivisions"),
-                1,
-                1,
-                1
-            )
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(program, "uDcpLookTableEncoding"),
-                DcpHueSatMap.ENCODING_LINEAR
-            )
-        }
-        checkGlError("bindDcpCombinedResources")
-    }
-
-    private fun bindProfileExposureUniforms(program: Int, exposure: ProfileExposureUniforms) {
-        RawProfileExposureGl.bindUniforms(program, exposure)
-        checkGlError("bindProfileExposureUniforms")
-    }
-
-    private fun bindProfileExposureLinearGainUniform(program: Int, exposure: ProfileExposureUniforms) {
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uProfileExposureLinearGain"),
-            exposure.linearGain
-        )
-        checkGlError("bindProfileExposureLinearGainUniform")
-    }
-
-    private fun uploadSpectralFilmTexture(lut: SpectralFilmLut): Int {
-        val key = "${lut.sourceKey}:${lut.size}:${lut.values.size}"
-        if (spectralFilmTextureId == 0) {
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            spectralFilmTextureId = textures[0]
-            spectralFilmTextureKey = null
-        }
-        if (spectralFilmTextureKey == key) {
-            return spectralFilmTextureId
-        }
-
-        val buffer = ByteBuffer.allocateDirect(lut.values.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(lut.values)
-        buffer.position(0)
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, spectralFilmTextureId)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_3D,
-            GLES30.GL_TEXTURE_WRAP_R,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexImage3D(
-            GLES30.GL_TEXTURE_3D,
-            0,
-            GLES30.GL_RGBA16F,
-            lut.size,
-            lut.size,
-            lut.size,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_FLOAT,
-            buffer
-        )
-        spectralFilmTextureKey = key
-        PLog.d(
-            TAG,
-            "Uploaded spectral film LUT: ${lut.name}, type=${lut.type}, refLight=${lut.referenceIlluminant}, viewLight=${lut.viewingIlluminant}"
-        )
-        checkGlError("uploadSpectralFilmTexture")
-        return spectralFilmTextureId
-    }
-
-    private fun bindSpectralFilmCombinedResource(program: Int, lut: SpectralFilmLut?) {
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSpectralFilmTexture"), 6)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uSpectralFilmSize"),
-            lut?.size ?: 1
-        )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
-        if (lut != null) {
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, uploadSpectralFilmTexture(lut))
-        } else {
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, ensureDummyDcp3DTexture())
-        }
-        checkGlError("bindSpectralFilmCombinedResource")
-    }
-
-    private fun uploadHncsRgbaTexture(
-        existingTextureId: Int,
-        width: Int,
-        height: Int,
-        values: FloatArray
-    ): Int {
-        require(width > 0 && height > 0 && values.size == width * height * 4) {
-            "Invalid HNCS RGBA texture payload: ${width}x$height values=${values.size}"
-        }
-        val textureId = if (existingTextureId != 0) {
-            existingTextureId
-        } else {
-            IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
-        }
-        val buffer = ByteBuffer.allocateDirect(values.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-            .apply {
-                put(values)
-                position(0)
-            }
-        // Resource creation must never inherit GL_TEXTURE0 from the image-input binding.
-        // On the first HNCS render this upload otherwise replaces uInputTexture with the
-        // 256x256 film-curve texture; cached renders then behave differently.
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_MIN_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_MAG_FILTER,
-            GLES30.GL_NEAREST
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_RGBA16F,
-            width,
-            height,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_FLOAT,
-            buffer
-        )
-        checkGlError("uploadHncsRgbaTexture")
-        return textureId
-    }
-
-    private fun ensureHncsTextures(renderPlan: HncsRenderPlan) {
-        val filmCurveKey = buildString {
-            append(renderPlan.filmCurveAssetPath)
-            append('|')
-            append(renderPlan.filmCurveAssetSha256)
-        }
-        var uploaded = false
-        if (hncsCurveTextureKey != filmCurveKey || hncsCurveTextureId == 0) {
-            hncsCurveTextureId = uploadHncsRgbaTexture(
-                existingTextureId = hncsCurveTextureId,
-                width = HncsProfileManager.CURVE_TEXTURE_EDGE,
-                height = HncsProfileManager.CURVE_TEXTURE_EDGE,
-                values = renderPlan.filmCurveTexture
-            )
-            hncsCurveTextureKey = filmCurveKey
-            uploaded = true
-        }
-        renderPlan.colorMap?.takeIf(HncsColorMap::isValid)?.let { colorMap ->
-            if (hncsColorMapTextureKey != renderPlan.sourceKey ||
-                hncsColorMapTextureId == 0
-            ) {
-                val rgba = FloatArray(colorMap.width * colorMap.height * 4)
-                var sourceIndex = 0
-                var targetIndex = 0
-                while (sourceIndex < colorMap.values.size) {
-                    rgba[targetIndex++] = colorMap.values[sourceIndex++]
-                    rgba[targetIndex++] = colorMap.values[sourceIndex++]
-                    rgba[targetIndex++] = 0f
-                    rgba[targetIndex++] = 1f
-                }
-                hncsColorMapTextureId = uploadHncsRgbaTexture(
-                    existingTextureId = hncsColorMapTextureId,
-                    width = colorMap.width,
-                    height = colorMap.height,
-                    values = rgba
-                )
-                hncsColorMapTextureKey = renderPlan.sourceKey
-                uploaded = true
-            }
-        }
-        if (uploaded) {
-            PLog.d(
-                TAG,
-                "HNCS resources uploaded: profile=${renderPlan.profileId} " +
-                    "map=${renderPlan.colorMap?.let { "${it.width}x${it.height}" } ?: "none"} " +
-                    "curves=${HncsProfileManager.CURVE_SAMPLE_COUNT}"
-            )
-        }
-    }
-
-    private fun bindHncsCombinedResources(
-        program: Int,
-        renderPlan: HncsRenderPlan,
-        applyColorMap: Boolean
-    ) {
-        ensureHncsTextures(renderPlan)
-        val colorMap = renderPlan.colorMap?.takeIf {
-            applyColorMap && it.isValid && hncsColorMapTextureId != 0
-        }
-        require(!applyColorMap || colorMap != null) {
-            "HNCS LUT branch requires an uploaded, validated color map"
-        }
-        require(hncsCurveTextureId != 0) {
-            "HNCS film curve texture was not uploaded"
-        }
-
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHncsColorMapTexture"), 2)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHncsCurveTexture"), 3)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-        GLES30.glBindTexture(
-            GLES30.GL_TEXTURE_2D,
-            if (colorMap != null) hncsColorMapTextureId else hncsCurveTextureId
-        )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hncsCurveTextureId)
-
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uHncsColorMapEnabled"),
-            if (colorMap != null) 1 else 0
-        )
-        GLES30.glUniform2i(
-            GLES30.glGetUniformLocation(program, "uHncsColorMapSize"),
-            colorMap?.width ?: 1,
-            colorMap?.height ?: 1
-        )
-        GLES30.glUniform3f(
-            GLES30.glGetUniformLocation(program, "uHncsColorMapGrid"),
-            colorMap?.cbStart ?: 0f,
-            colorMap?.crStart ?: 0f,
-            colorMap?.divFactor ?: 1f
-        )
-
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uHncsRgbToYcc"),
-            1,
-            false,
-            transposeMatrix3x3(renderPlan.rgbToYccMatrix),
-            0
-        )
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uHncsYccToRgb"),
-            1,
-            false,
-            transposeMatrix3x3(renderPlan.yccToRgbMatrix),
-            0
-        )
-        GLES30.glUniform2fv(
-            GLES30.glGetUniformLocation(program, "uHncsGrayThresholds"),
-            1,
-            renderPlan.colorCorrection.grayThresholds,
-            0
-        )
-        GLES30.glUniform4fv(
-            GLES30.glGetUniformLocation(program, "uHncsLowLightDesaturation"),
-            1,
-            renderPlan.colorCorrection.lowLightDesaturation,
-            0
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uHncsFilmCurveGain"),
-            renderPlan.filmCurveGain
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uHncsGammaFilterEnabled"),
-            if (renderPlan.gamma.filterEnabled) 1 else 0
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uHncsGamma"),
-            renderPlan.gamma.gamma
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uHncsHdrMaxGain"),
-            renderPlan.gamma.hdrMaxGain
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uHncsHdrRgbLimit"),
-            renderPlan.gamma.hdrRgbLimit
-        )
-        checkGlError("bindHncsCombinedResources")
-    }
-
     /**
      * RAW tone processing coordinator.
      *
@@ -11829,34 +6850,21 @@ class RawDemosaicProcessor {
         viewportWidth: Int,
         viewportHeight: Int,
     ): Boolean {
-        val program = getOrCreateHncsOutputLinearProgram()
-        if (program == 0) {
-            PLog.e(TAG, "Unable to create HNCS colorspaceconvert program")
-            return false
+        val targetTextureId = when (targetFramebufferId) {
+            adjustmentFramebufferId -> adjustmentTextureId
+            engineToneFramebufferId -> engineToneTextureId
+            else -> 0
         }
-
-        GLES30.glUseProgram(program)
-        checkGlError("renderHncsOutputLinearPass glUseProgram")
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
-        checkGlError("renderHncsOutputLinearPass glBindFramebuffer")
-        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uHncsToLinearOutput"),
-            1,
-            false,
-            transposeMatrix3x3(outputTransform),
-            0,
-        )
-        bindIdentityTexMatrix(program)
-
-        drawQuad(program)
-        checkGlError("renderHncsOutputLinearPass")
-        return true
+        return hncsOutputLinearPass.render(
+            HncsOutputLinearPass.Input(
+                textureId = inputTextureId,
+                targetFramebufferId = targetFramebufferId,
+                targetTextureId = targetTextureId,
+                outputTransform = outputTransform,
+                width = viewportWidth,
+                height = viewportHeight,
+            ),
+        ) != null
     }
 
     private fun renderEngineTonePass(
@@ -11880,111 +6888,43 @@ class RawDemosaicProcessor {
         viewportWidth: Int,
         viewportHeight: Int
     ): Boolean {
-        val program = getOrCreateEngineToneProgram(colorEngine)
-        if (program == 0) {
-            PLog.e(TAG, "Unable to create engine tone program for colorEngine=$colorEngine")
-            return false
-        }
-
-        GLES30.glUseProgram(program)
-        checkGlError("renderEngineTonePass glUseProgram")
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, engineToneFramebufferId)
-        checkGlError("renderEngineTonePass glBindFramebuffer")
-
-        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        checkGlError("renderEngineTonePass clear")
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
-
-        bindRawToneMappingUniforms(program, rawToneMappingParameters)
-        checkGlError("renderEngineTonePass base uniforms")
-
-        when (colorEngine) {
-            RawRenderingEngine.AdobeCurve -> {
-                bindDcpCombinedResources(program, dcpRenderPlan, applyDcpHueSatMap)
-                bindProfileExposureUniforms(program, profileExposureUniforms)
-                val baseCurve = dcpRenderPlan?.toneCurveLut ?: ACR3Curve.samples()
-                bindCurveCombinedResource(program, baseCurve)
-            }
-
-            RawRenderingEngine.AgX -> bindProfileExposureLinearGainUniform(
-                program,
-                profileExposureUniforms
-            )
-
-            RawRenderingEngine.Spektrafilm -> {
-                bindProfileExposureLinearGainUniform(program, profileExposureUniforms)
-                bindSpectralFilmCombinedResource(program, spectralFilmLut)
-            }
-
-            RawRenderingEngine.DarktableSigmoid,
-            RawRenderingEngine.DarktableFilmic -> bindProfileExposureLinearGainUniform(
-                program,
-                profileExposureUniforms
-            )
-
-            RawRenderingEngine.HncsCcm,
-            RawRenderingEngine.HncsLut -> {
-                bindProfileExposureLinearGainUniform(program, profileExposureUniforms)
-                val renderPlan = requireNotNull(hncsRenderPlan) {
-                    "HNCS engine requires a validated render plan"
-                }
-                bindHncsCombinedResources(
-                    program = program,
-                    renderPlan = renderPlan,
-                    applyColorMap = colorEngine.usesHncsColorMap
-                )
-            }
-        }
-
-        if (metadata != null) {
-            bindProfileGainTableMap(
-                program = program,
-                metadata = metadata,
-                applyProfileGainTableMap = applyProfileGainTableMap,
-                profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
-            )
-        } else {
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uProfileGainEnabled"), 0)
-        }
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(program, "uGlobalUvOrigin"),
-            globalOriginX.toFloat() / fullImageWidth.coerceAtLeast(1),
-            globalOriginY.toFloat() / fullImageHeight.coerceAtLeast(1),
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(program, "uGlobalUvScale"),
-            viewportWidth.toFloat() / fullImageWidth.coerceAtLeast(1),
-            viewportHeight.toFloat() / fullImageHeight.coerceAtLeast(1),
-        )
-
-        if (!colorEngine.isHncs) {
-            GLES30.glUniformMatrix3fv(
-                GLES30.glGetUniformLocation(program, "uOutputTransform"),
-                1,
-                false,
-                transposeMatrix3x3(outputTransform),
-                0,
-            )
-        }
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uProfileToEngineTransform"),
-            1, false, transposeMatrix3x3(profileToEngineTransform), 0
-        )
-        bindIdentityTexMatrix(program)
-        // Resource upload/binding helpers are allowed to change the active texture unit.
-        // Re-establish the image-input contract immediately before drawing so the first
-        // render and cached renders sample the same texture.
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
-        checkGlError("renderEngineTonePass matrices")
-        drawQuad(program)
-        checkGlError("renderEngineTonePass")
-        return true
+        return engineTonePass.render(
+            RawEngineTonePass.Input(
+                textureId = inputTextureId,
+                targetFramebufferId = engineToneFramebufferId,
+                targetTextureId = engineToneTextureId,
+                colorEngine = colorEngine,
+                profileToEngineTransform = profileToEngineTransform,
+                outputTransform = outputTransform,
+                globalOriginX = globalOriginX,
+                globalOriginY = globalOriginY,
+                fullImageWidth = fullImageWidth,
+                fullImageHeight = fullImageHeight,
+                width = viewportWidth,
+                height = viewportHeight,
+                toneMappingParameters = rawToneMappingParameters,
+                profileExposure = profileExposureUniforms,
+                dcpRenderPlan = dcpRenderPlan,
+                applyDcpHueSatMap = applyDcpHueSatMap,
+                spectralFilmLut = spectralFilmLut,
+                hncsRenderPlan = hncsRenderPlan,
+                bindProfileGainTable = { program ->
+                    if (metadata != null) {
+                        bindProfileGainTableMap(
+                            program = program,
+                            metadata = metadata,
+                            applyProfileGainTableMap = applyProfileGainTableMap,
+                            profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
+                        )
+                    } else {
+                        GLES30.glUniform1i(
+                            GLES30.glGetUniformLocation(program, "uProfileGainEnabled"),
+                            0,
+                        )
+                    }
+                },
+            ),
+        ) != null
     }
 
     private fun needsAdjustmentPass(
@@ -12007,38 +6947,24 @@ class RawDemosaicProcessor {
         viewportWidth: Int,
         viewportHeight: Int
     ): Boolean {
-        val program = getOrCreateAdjustmentProgram()
-        if (program == 0) {
-            PLog.e(TAG, "Unable to create RAW adjustment program")
-            return false
+        val targetTextureId = when (targetFramebufferId) {
+            adjustmentFramebufferId -> adjustmentTextureId
+            engineToneFramebufferId -> engineToneTextureId
+            else -> 0
         }
-
-        GLES30.glUseProgram(program)
-        checkGlError("renderAdjustmentPass glUseProgram")
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
-        checkGlError("renderAdjustmentPass glBindFramebuffer")
-        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(program, "uTexelSize"),
-            1.0f / maxOf(1, viewportWidth).toFloat(),
-            1.0f / maxOf(1, viewportHeight).toFloat()
-        )
-        bindShadowsHighlightsUniforms(program, shadowsHighlightsParams)
-        bindBlacksWhitesUniforms(
-            program = program,
-            blacks = rawBlacksAdjustment,
-            whites = rawWhitesAdjustment
-        )
-        bindIdentityTexMatrix(program)
-
-        drawQuad(program)
-        checkGlError("renderAdjustmentPass")
-        return true
+        return adjustmentPass.render(
+            RawAdjustmentPass.Input(
+                textureId = inputTextureId,
+                targetFramebufferId = targetFramebufferId,
+                targetTextureId = targetTextureId,
+                width = viewportWidth,
+                height = viewportHeight,
+                highlights = shadowsHighlightsParams.highlights,
+                shadows = shadowsHighlightsParams.shadows,
+                blacks = rawBlacksAdjustment,
+                whites = rawWhitesAdjustment,
+            ),
+        ) != null
     }
 
     private fun renderSrgbPass(
@@ -12046,58 +6972,15 @@ class RawDemosaicProcessor {
         viewportWidth: Int,
         viewportHeight: Int
     ): Boolean {
-        val program = getOrCreateSrgbProgram()
-        if (program == 0) {
-            PLog.e(TAG, "Unable to create RAW sRGB program")
-            return false
-        }
-
-        GLES30.glUseProgram(program)
-        checkGlError("renderSrgbPass glUseProgram")
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, combinedFramebufferId)
-        checkGlError("renderSrgbPass glBindFramebuffer")
-        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
-        bindIdentityTexMatrix(program)
-
-        drawQuad(program)
-        checkGlError("renderSrgbPass")
-        return true
-    }
-
-    private fun bindIdentityTexMatrix(program: Int) {
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(program, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-    }
-
-    private fun bindCurveCombinedResource(program: Int, baseCurve: FloatArray) {
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        uploadCurveTexture(baseCurve)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveTexture"), 1)
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uCurveSize"),
-            baseCurve.size.toFloat()
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uCurveEnabled"),
-            1
-        )
-    }
-
-    private fun bindRawToneMappingUniforms(program: Int, params: RawToneMappingParameters) {
-        RawToneMappingGl.bindRawToneMappingUniforms(program, params)
+        return srgbPass.render(
+            RawSrgbPass.Input(
+                textureId = inputTextureId,
+                targetFramebufferId = combinedFramebufferId,
+                targetTextureId = combinedTextureId,
+                width = viewportWidth,
+                height = viewportHeight,
+            ),
+        ) != null
     }
 
     private fun renderDarktableFilmicHighlightReconstruction(
@@ -12111,360 +6994,45 @@ class RawDemosaicProcessor {
         applyProfileGainTableMap: Boolean,
         profileBaselineExposureOffsetEv: Float,
     ): Int {
-        if (!ensureDarktableFilmicHighlightReconstructionPrograms()) {
-            PLog.e(TAG, "Darktable Filmic highlight reconstruction programs unavailable")
-            return 0
-        }
-
-        setupDarktableFilmicHighlightReconstructionFramebuffers(width, height)
-
-        val normalizedTone = rawToneMappingParameters.normalized()
-        val reconstructThreshold = max(
-            2.0f.pow(
-                normalizedTone.filmicWhiteRelativeExposure +
-                    DARKTABLE_FILMIC_HR_RECONSTRUCT_THRESHOLD_EV
-            ) * FILMIC_GREY_SOURCE,
-            1e-8f
-        )
-        val reconstructFeather = 2.0f.pow(12f / DARKTABLE_FILMIC_HR_RECONSTRUCT_FEATHER_EV)
-        val normalize = reconstructFeather / reconstructThreshold
-        val scales = darktableFilmicHighlightScaleCount(width, height)
-
-        PLog.d(
-            TAG,
-            "Darktable Filmic highlight reconstruction: ${width}x$height " +
-                "scales=$scales whiteSourceEv=${normalizedTone.filmicWhiteRelativeExposure} " +
-                "threshold=$reconstructThreshold exposureEv=${profileExposureUniforms.exposureEv} " +
-                "exposureGain=${profileExposureUniforms.linearGain} " +
-                "feather=$reconstructFeather"
-        )
-
-        renderFilmicHrPass(
-            program = filmicHrMaskProgram,
-            framebufferId = filmicHrMaskFramebufferId,
-            width = width,
-            height = height,
-            label = "darktableFilmicHrMask"
-        ) { program ->
-            bindFilmicHrTexture(program, "uInputTexture", 0, sourceTextureId)
-            bindFilmicHrPreparedInputUniforms(
-                program = program,
-                exposure = profileExposureUniforms,
-                profileToEngineTransform = profileToEngineTransform,
-                metadata = metadata,
-                applyProfileGainTableMap = applyProfileGainTableMap,
-                profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
-            )
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uNormalize"), normalize)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFeathering"), reconstructFeather)
-        }
-
-        renderFilmicHrPass(
-            program = filmicHrInpaintNoiseProgram,
-            framebufferId = filmicHrWorkingFramebufferId,
-            width = width,
-            height = height,
-            label = "darktableFilmicHrInpaintNoise"
-        ) { program ->
-            bindFilmicHrTexture(program, "uInputTexture", 0, sourceTextureId)
-            bindFilmicHrTexture(program, "uMaskTexture", 1, filmicHrMaskTextureId)
-            bindFilmicHrPreparedInputUniforms(
-                program = program,
-                exposure = profileExposureUniforms,
-                profileToEngineTransform = profileToEngineTransform,
-                metadata = metadata,
-                applyProfileGainTableMap = applyProfileGainTableMap,
-                profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
-            )
-            GLES30.glUniform1f(
-                GLES30.glGetUniformLocation(program, "uNoiseLevel"),
-                DARKTABLE_FILMIC_HR_NOISE_LEVEL
-            )
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uThreshold"), reconstructThreshold)
-        }
-
-        var reconstructedTextureId = reconstructDarktableFilmicHighlightsWavelets(
-            inputTextureId = filmicHrWorkingTextureId,
-            width = width,
-            height = height,
-            scales = scales,
-            variant = DarktableFilmicHighlightReconstructionShaders.RECONSTRUCT_RGB
-        )
-
-        repeat(DARKTABLE_FILMIC_HR_HIGH_QUALITY_ITERATIONS) {
-            renderFilmicHrPass(
-                program = filmicHrComputeNormsProgram,
-                framebufferId = filmicHrNormsFramebufferId,
+        return filmicHighlightReconstructionAlgorithm.execute(
+            DarktableFilmicHighlightReconstructionAlgorithm.Input(
+                sourceTextureId = sourceTextureId,
                 width = width,
                 height = height,
-                label = "darktableFilmicHrComputeNorms"
-            ) { program ->
-                bindFilmicHrTexture(program, "uInputTexture", 0, reconstructedTextureId)
-            }
-            renderFilmicHrPass(
-                program = filmicHrComputeRatiosProgram,
-                framebufferId = filmicHrWorkingFramebufferId,
-                width = width,
-                height = height,
-                label = "darktableFilmicHrComputeRatios"
-            ) { program ->
-                bindFilmicHrTexture(program, "uInputTexture", 0, reconstructedTextureId)
-                bindFilmicHrTexture(program, "uNormsTexture", 1, filmicHrNormsTextureId)
-            }
-            reconstructedTextureId = reconstructDarktableFilmicHighlightsWavelets(
-                inputTextureId = filmicHrWorkingTextureId,
-                width = width,
-                height = height,
-                scales = scales,
-                variant = DarktableFilmicHighlightReconstructionShaders.RECONSTRUCT_RATIOS
-            )
-            reconstructedTextureId = restoreDarktableFilmicHighlightRatios(
-                ratiosTextureId = reconstructedTextureId,
-                width = width,
-                height = height
-            )
-        }
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("renderDarktableFilmicHighlightReconstruction")
-        return reconstructedTextureId
-    }
-
-    private fun darktableFilmicHighlightScaleCount(width: Int, height: Int): Int {
-        val size = max(width, height).coerceAtLeast(1).toDouble()
-        val filterSize = DarktableFilmicHighlightReconstructionShaders.BSPLINE_FSIZE.toDouble()
-        val argument = (2.0 * size / ((filterSize - 1.0) * filterSize)) - 1.0
-        val scales = floor(ln(max(argument, 1.0)) / ln(2.0)).toInt()
-        return scales.coerceIn(1, DarktableFilmicHighlightReconstructionShaders.MAX_NUM_SCALES)
-    }
-
-    private fun reconstructDarktableFilmicHighlightsWavelets(
-        inputTextureId: Int,
-        width: Int,
-        height: Int,
-        scales: Int,
-        variant: Int,
-    ): Int {
-        renderFilmicHrPass(
-            program = filmicHrInitReconstructProgram,
-            framebufferId = filmicHrReconstructedFramebufferIds[0],
-            width = width,
-            height = height,
-            label = "darktableFilmicHrInitReconstruct"
-        ) { program ->
-            bindFilmicHrTexture(program, "uInputTexture", 0, inputTextureId)
-            bindFilmicHrTexture(program, "uMaskTexture", 1, filmicHrMaskTextureId)
-        }
-
-        var reconstructedReadIndex = 0
-        var previousLowFrequencyTextureId = 0
-        for (scale in 0 until scales) {
-            val detailTextureId = if (scale == 0) inputTextureId else previousLowFrequencyTextureId
-            val lowFrequencyTextureId = if (scale % 2 == 0) {
-                filmicHrLfOddTextureId
-            } else {
-                filmicHrLfEvenTextureId
-            }
-            val lowFrequencyFramebufferId = if (scale % 2 == 0) {
-                filmicHrLfOddFramebufferId
-            } else {
-                filmicHrLfEvenFramebufferId
-            }
-            val mult = 1 shl scale
-
-            renderDarktableFilmicBsplineBlur(
-                inputTextureId = detailTextureId,
-                outputFramebufferId = lowFrequencyFramebufferId,
-                width = width,
-                height = height,
-                mult = mult,
-                label = "darktableFilmicHrLfScale$scale"
-            )
-            renderFilmicHrPass(
-                program = filmicHrHighFrequencyProgram,
-                framebufferId = filmicHrHighFrequencyFramebufferId,
-                width = width,
-                height = height,
-                label = "darktableFilmicHrHighFrequency$scale"
-            ) { program ->
-                bindFilmicHrTexture(program, "uDetailTexture", 0, detailTextureId)
-                bindFilmicHrTexture(program, "uLowFrequencyTexture", 1, lowFrequencyTextureId)
-            }
-            renderDarktableFilmicBsplineBlur(
-                inputTextureId = filmicHrHighFrequencyTextureId,
-                outputFramebufferId = filmicHrHighFrequencyRgbFramebufferId,
-                width = width,
-                height = height,
-                mult = 1,
-                label = "darktableFilmicHrHighFrequencyRgb$scale"
-            )
-
-            val reconstructedWriteIndex = 1 - reconstructedReadIndex
-            renderFilmicHrPass(
-                program = filmicHrWaveletsReconstructProgram,
-                framebufferId = filmicHrReconstructedFramebufferIds[reconstructedWriteIndex],
-                width = width,
-                height = height,
-                label = "darktableFilmicHrWaveletsReconstruct$scale"
-            ) { program ->
-                bindFilmicHrTexture(program, "uHighFrequencyTexture", 0, filmicHrHighFrequencyRgbTextureId)
-                bindFilmicHrTexture(program, "uLowFrequencyTexture", 1, lowFrequencyTextureId)
-                bindFilmicHrTexture(program, "uTextureTexture", 2, filmicHrHighFrequencyTextureId)
-                bindFilmicHrTexture(program, "uMaskTexture", 3, filmicHrMaskTextureId)
-                bindFilmicHrTexture(
-                    program,
-                    "uReconstructedTexture",
-                    4,
-                    filmicHrReconstructedTextureIds[reconstructedReadIndex]
-                )
-                GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uGamma"), DARKTABLE_FILMIC_HR_GAMMA)
-                GLES30.glUniform1f(
-                    GLES30.glGetUniformLocation(program, "uGammaComp"),
-                    DARKTABLE_FILMIC_HR_GAMMA_COMP
-                )
-                GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBeta"), DARKTABLE_FILMIC_HR_BETA)
-                GLES30.glUniform1f(
-                    GLES30.glGetUniformLocation(program, "uBetaComp"),
-                    DARKTABLE_FILMIC_HR_BETA_COMP
-                )
-                GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uDelta"), DARKTABLE_FILMIC_HR_DELTA)
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uScaleIndex"), scale)
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uScaleCount"), scales)
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uVariant"), variant)
-            }
-
-            reconstructedReadIndex = reconstructedWriteIndex
-            previousLowFrequencyTextureId = lowFrequencyTextureId
-        }
-
-        return filmicHrReconstructedTextureIds[reconstructedReadIndex]
-    }
-
-    private fun renderDarktableFilmicBsplineBlur(
-        inputTextureId: Int,
-        outputFramebufferId: Int,
-        width: Int,
-        height: Int,
-        mult: Int,
-        label: String,
-    ) {
-        renderFilmicHrPass(
-            program = filmicHrBsplineProgram,
-            framebufferId = filmicHrTempFramebufferId,
-            width = width,
-            height = height,
-            label = "$label-vertical"
-        ) { program ->
-            bindFilmicHrTexture(program, "uInputTexture", 0, inputTextureId)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uWidth"), width)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHeight"), height)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uMult"), mult)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uDirection"), 0)
-        }
-        renderFilmicHrPass(
-            program = filmicHrBsplineProgram,
-            framebufferId = outputFramebufferId,
-            width = width,
-            height = height,
-            label = "$label-horizontal"
-        ) { program ->
-            bindFilmicHrTexture(program, "uInputTexture", 0, filmicHrTempTextureId)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uWidth"), width)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHeight"), height)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uMult"), mult)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uDirection"), 1)
-        }
-    }
-
-    private fun restoreDarktableFilmicHighlightRatios(
-        ratiosTextureId: Int,
-        width: Int,
-        height: Int,
-    ): Int {
-        val outputIndex = if (ratiosTextureId == filmicHrReconstructedTextureIds[0]) 1 else 0
-        renderFilmicHrPass(
-            program = filmicHrRestoreRatiosProgram,
-            framebufferId = filmicHrReconstructedFramebufferIds[outputIndex],
-            width = width,
-            height = height,
-            label = "darktableFilmicHrRestoreRatios"
-        ) { program ->
-            bindFilmicHrTexture(program, "uRatiosTexture", 0, ratiosTextureId)
-            bindFilmicHrTexture(program, "uNormsTexture", 1, filmicHrNormsTextureId)
-        }
-        return filmicHrReconstructedTextureIds[outputIndex]
-    }
-
-    private fun renderFilmicHrPass(
-        program: Int,
-        framebufferId: Int,
-        width: Int,
-        height: Int,
-        label: String,
-        bindUniforms: (Int) -> Unit,
-    ) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
-        GLES30.glDrawBuffers(1, intArrayOf(GLES30.GL_COLOR_ATTACHMENT0), 0)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glDisable(GLES30.GL_BLEND)
-        GLES30.glUseProgram(program)
-
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(program, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        bindUniforms(program)
-        drawQuad(program)
-        GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
-        checkGlError(label)
-    }
-
-    private fun bindFilmicHrTexture(program: Int, name: String, unit: Int, textureId: Int) {
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, name), unit)
-    }
-
-    private fun bindFilmicHrPreparedInputUniforms(
-        program: Int,
-        exposure: ProfileExposureUniforms,
-        profileToEngineTransform: FloatArray,
-        metadata: RawMetadata,
-        applyProfileGainTableMap: Boolean,
-        profileBaselineExposureOffsetEv: Float,
-    ) {
-        bindProfileGainTableMap(
-            program = program,
-            metadata = metadata,
-            applyProfileGainTableMap = applyProfileGainTableMap,
-            profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(program, "uGlobalUvOrigin"),
-            0f,
-            0f,
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(program, "uGlobalUvScale"),
-            1f,
-            1f,
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uProfileExposureLinearGain"),
-            exposure.linearGain
-        )
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uProfileToEngineTransform"),
-            1,
-            false,
-            transposeMatrix3x3(profileToEngineTransform),
-            0
-        )
+                rawToneMappingParameters = rawToneMappingParameters,
+                profileExposureEv = profileExposureUniforms.exposureEv,
+                profileExposureLinearGain = profileExposureUniforms.linearGain,
+                bindPreparedInput = { program ->
+                    bindProfileGainTableMap(
+                        program = program,
+                        metadata = metadata,
+                        applyProfileGainTableMap = applyProfileGainTableMap,
+                        profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
+                    )
+                    GLES30.glUniform2f(
+                        GLES30.glGetUniformLocation(program, "uGlobalUvOrigin"),
+                        0f,
+                        0f,
+                    )
+                    GLES30.glUniform2f(
+                        GLES30.glGetUniformLocation(program, "uGlobalUvScale"),
+                        1f,
+                        1f,
+                    )
+                    GLES30.glUniform1f(
+                        GLES30.glGetUniformLocation(program, "uProfileExposureLinearGain"),
+                        profileExposureUniforms.linearGain,
+                    )
+                    GLES30.glUniformMatrix3fv(
+                        GLES30.glGetUniformLocation(program, "uProfileToEngineTransform"),
+                        1,
+                        false,
+                        transposeMatrix3x3(profileToEngineTransform),
+                        0,
+                    )
+                },
+            ),
+        )?.textureId ?: 0
     }
 
     private fun computeFilmicToneCurveUniforms(params: RawToneMappingParameters): FilmicToneCurveUniforms {
@@ -12641,62 +7209,6 @@ class RawDemosaicProcessor {
         return result
     }
 
-    private fun bindShadowsHighlightsUniforms(program: Int, params: ShadowsHighlightsParams) {
-        val highlightsLocation = GLES30.glGetUniformLocation(program, "uHighlights")
-        val shadowsLocation = GLES30.glGetUniformLocation(program, "uShadows")
-        ShadowsHighlightsShader.bindUniformLocations(
-            highlightsLocation = highlightsLocation,
-            shadowsLocation = shadowsLocation,
-            highlights = params.highlights,
-            shadows = params.shadows
-        )
-        if (!loggedShadowsHighlightsUniforms) {
-            loggedShadowsHighlightsUniforms = true
-            PLog.d(
-                TAG,
-                "RAW Shadows/Highlights uniforms: " +
-                    "uHighlightsLoc=$highlightsLocation uShadowsLoc=$shadowsLocation " +
-                    "highlights=${params.highlights} shadows=${params.shadows}"
-            )
-        }
-    }
-
-    private fun bindBlacksWhitesUniforms(program: Int, blacks: Float, whites: Float) {
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uBlacks"),
-            blacks.coerceIn(-1f, 1f)
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uWhites"),
-            whites.coerceIn(-1f, 1f)
-        )
-    }
-
-    private fun logProgramLinkResult(
-        program: Int,
-        name: String,
-        linkStart: Long = System.currentTimeMillis()
-    ): Boolean {
-        if (program == 0) {
-            PLog.e(TAG, "$name creation failed")
-            return false
-        }
-        val linked = IntArray(1)
-        GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, linked, 0)
-        if (linked[0] == 0) {
-            PLog.e(
-                TAG,
-                "$name link failed after ${System.currentTimeMillis() - linkStart}ms: " +
-                    GLES30.glGetProgramInfoLog(program)
-            )
-            GLES30.glDeleteProgram(program)
-            return false
-        } else {
-            PLog.d(TAG, "$name link ok, took=${System.currentTimeMillis() - linkStart}ms")
-            return true
-        }
-    }
-
     private fun computeWorkingToOutputTransform(
         workingSpace: ColorSpace,
         outputSpace: ColorSpace
@@ -12808,55 +7320,28 @@ class RawDemosaicProcessor {
         viewportWidth: Int = metadata.width,
         viewportHeight: Int = metadata.height,
     ) {
-        GLES30.glUseProgram(hdrReferenceProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdrReferenceFramebufferId)
-        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdrReferenceProgram, "uInputTexture"), 0)
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uCameraToProfile"),
-            1,
-            false,
-            transposeMatrix3x3(colorCorrectionMatrix),
-            0,
-        )
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uProfileToLinearSrgb"),
-            1,
-            false,
-            transposeMatrix3x3(profileToLinearSrgb),
-            0,
-        )
         val safeCameraWhite = sanitizeCameraWhite(cameraWhite)
-        GLES30.glUniform3f(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uCameraWhite"),
-            safeCameraWhite[0],
-            safeCameraWhite[1],
-            safeCameraWhite[2],
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uExposureGain"),
-            RawHdrReferenceMath.exposureGain(
-                baselineExposureEv = metadata.baselineExposure,
-                rawExposureCompensationEv = rawExposureCompensation,
-            ),
-        )
         val acr3Curve = ACR3Curve.samples()
-        bindCurveCombinedResource(hdrReferenceProgram, acr3Curve)
-        bindLinearDcpHueSatMap(hdrReferenceProgram, hueSatMap)
-
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uTexMatrix"),
-            1, false, identityMatrix, 0
-        )
-
-        drawQuad(hdrReferenceProgram)
-        checkGlError("renderHdrReferencePass")
+        checkNotNull(
+            hdrReferencePass.render(
+                RawHdrReferencePass.Input(
+                    textureId = inputTextureId,
+                    targetFramebufferId = hdrReferenceFramebufferId,
+                    targetTextureId = hdrReferenceTextureId,
+                    width = viewportWidth,
+                    height = viewportHeight,
+                    cameraToProfile = colorCorrectionMatrix,
+                    profileToLinearSrgb = profileToLinearSrgb,
+                    cameraWhite = safeCameraWhite,
+                    exposureGain = RawHdrReferenceMath.exposureGain(
+                        baselineExposureEv = metadata.baselineExposure,
+                        rawExposureCompensationEv = rawExposureCompensation,
+                    ),
+                    bindCurve = { program -> curveTextureResources.bind(program, acr3Curve) },
+                    bindHueSatMap = { program -> bindLinearDcpHueSatMap(program, hueSatMap) },
+                ),
+            ),
+        ) { "RAW HDR reference pass failed" }
     }
 
     /**
@@ -13122,41 +7607,18 @@ class RawDemosaicProcessor {
         sharpeningValue: Float,
         inputTextureId: Int
     ) {
-        GLES30.glUseProgram(sharpenProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sharpenFramebufferId)
-        GLES30.glViewport(0, 0, metadata.width, metadata.height)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(sharpenProgram, "uInputTexture"), 0)
-
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(sharpenProgram, "uTexelSize"),
-            1.0f / metadata.width, 1.0f / metadata.height
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(sharpenProgram, "uSharpening"),
-            sharpeningValue.coerceIn(0f, RawSharpeningDefaults.MAX_ALGORITHM_STRENGTH)
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(sharpenProgram, "uRadius"),
-            defaultUsmRadius
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(sharpenProgram, "uThreshold"),
-            defaultUsmThreshold
-        )
-
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(sharpenProgram, "uTexMatrix"),
-            1, false, identityMatrix, 0
-        )
-
-        drawQuad(sharpenProgram)
-        checkGlError("renderSharpenPass")
+        checkNotNull(
+            sharpenPass.render(
+                RawSharpenPass.Input(
+                    textureId = inputTextureId,
+                    targetFramebufferId = sharpenFramebufferId,
+                    targetTextureId = sharpenTextureId,
+                    width = metadata.width,
+                    height = metadata.height,
+                    strength = sharpeningValue,
+                ),
+            ),
+        ) { "RAW sharpen pass failed" }
     }
 
     private fun resolveRawDcpRenderPlan(
@@ -13424,16 +7886,6 @@ class RawDemosaicProcessor {
         hncsCameraDomainGains: FloatArray? = null,
         label: String
     ) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
-        checkGlError("$label setup framebuffer")
-
-        GLES30.glUseProgram(linearRcdProgram)
-        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(linearRcdProgram, "uDemosaickedTexture"), 0)
-
         val hncsCameraDomain = hncsCameraDomainGains?.let { gains ->
             HncsCameraDomain.resolve(
                 compositeCameraToWorkingMatrix = colorCorrectionMatrix,
@@ -13446,23 +7898,7 @@ class RawDemosaicProcessor {
                 additionalExposureEv = rawExposureCompensation,
             )
         }
-        val transposedCCM = transposeMatrix3x3(
-            hncsCameraDomain?.cameraToWorkingMatrix ?: colorCorrectionMatrix
-        )
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uColorCorrectionMatrix"),
-            1,
-            false,
-            transposedCCM,
-            0
-        )
         val linearCameraWhite = sanitizeCameraWhite(cameraWhite)
-        GLES30.glUniform3f(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uCameraWhite"),
-            linearCameraWhite[0],
-            linearCameraWhite[1],
-            linearCameraWhite[2]
-        )
         val exposureGain = computeLinearExposureGain(
             metadata,
             rawExposureCompensation = if (hncsCameraDomain == null) {
@@ -13472,53 +7908,29 @@ class RawDemosaicProcessor {
             },
             applyDngBaselineExposure = hncsCameraDomain == null && applyDngBaselineExposure
         )
-        bindLinearDcpHueSatMap(
-            program = linearRcdProgram,
-            hueSatMap = hueSatMap,
-        )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(linearRcdProgram, "uExposureGain"), exposureGain)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsCameraDomainEnabled"),
-            if (hncsCameraDomain != null) 1 else 0
-        )
-        GLES30.glUniform3fv(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsCameraDomainGain"),
-            1,
-            hncsCameraDomain?.normalizedGain ?: floatArrayOf(1f, 1f, 1f),
-            0
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsInputEV"),
-            hncsCameraDomain?.inputEv ?: 1f
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsHrTrunc"),
-            hncsCameraDomain?.hrTrunc ?: 1f
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsHrMax"),
-            hncsCameraDomain?.hrMax ?: 1f
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uClampProfileRgb"),
-            if (clampProfileRgb) 1 else 0
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uHueSatSupportOverrange"),
-            if (hueSatMapSupportsOverrange) 1 else 0
-        )
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-
-        drawQuad(linearRcdProgram)
-        checkGlError("$label drawQuad")
+        checkNotNull(
+            linearRcdPass.render(
+                RawLinearRcdPass.Input(
+                    textureId = sourceTextureId,
+                    targetFramebufferId = targetFramebufferId,
+                    targetTextureId = 0,
+                    width = viewportWidth,
+                    height = viewportHeight,
+                    colorCorrectionMatrix =
+                        hncsCameraDomain?.cameraToWorkingMatrix ?: colorCorrectionMatrix,
+                    cameraWhite = linearCameraWhite,
+                    exposureGain = exposureGain,
+                    hncsCameraDomainGain = hncsCameraDomain?.normalizedGain,
+                    hncsInputEv = hncsCameraDomain?.inputEv ?: 1f,
+                    hncsHighlightTruncation = hncsCameraDomain?.hrTrunc ?: 1f,
+                    hncsHighlightMaximum = hncsCameraDomain?.hrMax ?: 1f,
+                    clampProfileRgb = clampProfileRgb,
+                    hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
+                    bindHueSatMap = { program -> bindLinearDcpHueSatMap(program, hueSatMap) },
+                    label = label,
+                ),
+            ),
+        ) { "$label failed" }
     }
 
     private fun bindLinearDcpHueSatMap(
@@ -13542,8 +7954,8 @@ class RawDemosaicProcessor {
         )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
         val textureId = activeMap?.let { map ->
-            ensureDcpHueSatTexture(map)
-        } ?: ensureDummyDcp3DTexture()
+            dcpTextureResources.ensureHueSatTexture(map)
+        } ?: dcpTextureResources.ensureDummyTexture()
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
         GLES30.glUniform1i(
             GLES30.glGetUniformLocation(program, "uLinearDcpHueSatMap"),
@@ -14060,55 +8472,20 @@ class RawDemosaicProcessor {
         targetHeight: Int,
         rotation: Int
     ): Boolean {
-        if (passthroughProgram == 0 || srgbExposurePreviewFramebufferId == 0) {
-            PLog.e(
-                TAG,
-                "RAW exposure preview crop unavailable: program=$passthroughProgram " +
-                    "fbo=$srgbExposurePreviewFramebufferId"
-            )
-            return false
-        }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, srgbExposurePreviewFramebufferId)
-        GLES30.glViewport(0, 0, targetWidth, targetHeight)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        GLES30.glUseProgram(passthroughProgram)
-
-        val isSwapped = rotation == 90 || rotation == 270
-        val cropW: Float
-        val cropH: Float
-        val cropCenterX: Float
-        val cropCenterY: Float
-        if (isSwapped) {
-            cropW = bounds.height().toFloat()
-            cropH = bounds.width().toFloat()
-            cropCenterX = bounds.top + bounds.height() / 2f
-            cropCenterY = bounds.left + bounds.width() / 2f
-        } else {
-            cropW = bounds.width().toFloat()
-            cropH = bounds.height().toFloat()
-            cropCenterX = bounds.centerX().toFloat()
-            cropCenterY = bounds.centerY().toFloat()
-        }
-
-        val texMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(texMatrix, 0)
-        GlMatrix.translateM(texMatrix, 0, cropCenterX / sourceWidth, cropCenterY / sourceHeight, 0f)
-        GlMatrix.scaleM(texMatrix, 0, cropW / sourceWidth, cropH / sourceHeight, 1.0f)
-        GlMatrix.rotateM(texMatrix, 0, -rotation.toFloat(), 0f, 0f, 1f)
-        GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix"),
-            1,
-            false,
-            texMatrix,
-            0
-        )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(passthroughProgram, "uTexture"), 0)
-        drawQuad(passthroughProgram)
-        checkGlError("RAW exposure preview crop pass")
-        return true
+        if (srgbExposurePreviewFramebufferId == 0) return false
+        return outputPass.render(
+            RawOutputPass.Input(
+                textureId = sourceTextureId,
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                rotation = rotation,
+                bounds = bounds,
+                targetFramebufferId = srgbExposurePreviewFramebufferId,
+                targetTextureId = srgbExposurePreviewTextureId,
+                targetWidth = targetWidth,
+                targetHeight = targetHeight,
+            ),
+        ) != null
     }
 
     private fun readExposurePreviewFrame(
@@ -14179,66 +8556,19 @@ class RawDemosaicProcessor {
         bounds: Rect,
         sourceTextureId: Int
     ) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glViewport(0, 0, bounds.width(), bounds.height())
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        GLES30.glUseProgram(passthroughProgram)
-        val isSwapped = rotation == 90 || rotation == 270
-        val cropW: Float
-        val cropH: Float
-        val cropCenterX: Float
-        val cropCenterY: Float
-        if (isSwapped) {
-            cropW = bounds.height().toFloat()
-            cropH = bounds.width().toFloat()
-            cropCenterX = (bounds.top + bounds.height() / 2f)
-            cropCenterY = (bounds.left + bounds.width() / 2f)
-        } else {
-            cropW = bounds.width().toFloat()
-            cropH = bounds.height().toFloat()
-            cropCenterX = bounds.centerX().toFloat()
-            cropCenterY = bounds.centerY().toFloat()
-        }
-        val texMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(texMatrix, 0)
-        GlMatrix.translateM(texMatrix, 0, cropCenterX / width, cropCenterY / height, 0f)
-        GlMatrix.scaleM(texMatrix, 0, cropW / width, cropH / height, 1.0f)
-        GlMatrix.rotateM(texMatrix, 0, -rotation.toFloat(), 0f, 0f, 1f)
-        GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix"),
-            1, false, texMatrix, 0
-        )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(passthroughProgram, "uTexture"), 0)
-        drawQuad(passthroughProgram)
-        checkGlError("renderOutputPass")
-    }
-
-    private fun drawQuad(program: Int) {
-        val positionHandle = GLES30.glGetAttribLocation(program, "aPosition")
-        val texCoordHandle = GLES30.glGetAttribLocation(program, "aTexCoord")
-        if (positionHandle >= 0) {
-            vertexBuffer?.let {
-                GLES30.glEnableVertexAttribArray(positionHandle)
-                it.position(0)
-                GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, it)
-            }
-        }
-        if (texCoordHandle >= 0) {
-            texCoordBuffer?.let {
-                GLES30.glEnableVertexAttribArray(texCoordHandle)
-                it.position(0)
-                GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, it)
-            }
-        }
-        indexBuffer?.let {
-            it.position(0)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, it)
-        }
-        if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
-        if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
+        checkNotNull(
+            outputPass.render(
+                RawOutputPass.Input(
+                    textureId = sourceTextureId,
+                    sourceWidth = width,
+                    sourceHeight = height,
+                    rotation = rotation,
+                    bounds = bounds,
+                    targetFramebufferId = outputFramebufferId,
+                    targetTextureId = outputTextureId,
+                ),
+            ),
+        ) { "RAW output pass failed" }
     }
 
     /**
@@ -14430,81 +8760,27 @@ class RawDemosaicProcessor {
 
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
 
-        for (i in engineTonePrograms.indices) {
-            if (engineTonePrograms[i] != 0) {
-                GLES30.glDeleteProgram(engineTonePrograms[i])
-                engineTonePrograms[i] = 0
-            }
-        }
-        if (hncsOutputLinearProgram != 0) {
-            GLES30.glDeleteProgram(hncsOutputLinearProgram)
-            hncsOutputLinearProgram = 0
-        }
-        if (adjustmentProgram != 0) GLES30.glDeleteProgram(adjustmentProgram)
-        if (srgbProgram != 0) GLES30.glDeleteProgram(srgbProgram)
-        if (sharpenProgram != 0) GLES30.glDeleteProgram(sharpenProgram)
-        if (passthroughProgram != 0) GLES30.glDeleteProgram(passthroughProgram)
-        if (hdrReferenceProgram != 0) GLES30.glDeleteProgram(hdrReferenceProgram)
-        if (chromaDenoiseGuideProgram != 0) GLES30.glDeleteProgram(chromaDenoiseGuideProgram)
-        if (chromaDenoiseProgram != 0) GLES30.glDeleteProgram(chromaDenoiseProgram)
-        releaseDarktableFilmicHighlightReconstructionPrograms()
+        engineTonePass.release()
+        hncsOutputLinearPass.release()
+        adjustmentPass.release()
+        srgbPass.release()
+        sharpenPass.release()
+        outputPass.release()
+        hdrReferencePass.release()
+        chromaDenoiseAlgorithm.release()
+        filmicHighlightReconstructionAlgorithm.release()
 
-        // RCD Compute Programs
-        if (rcdPopulateProgram != 0) GLES31.glDeleteProgram(rcdPopulateProgram)
-        if (rcdStep1Program != 0) GLES31.glDeleteProgram(rcdStep1Program)
-        if (rcdStep2Program != 0) GLES31.glDeleteProgram(rcdStep2Program)
-        if (rcdStep3Program != 0) GLES31.glDeleteProgram(rcdStep3Program)
-        if (rcdStep40Program != 0) GLES31.glDeleteProgram(rcdStep40Program)
-        if (rcdStep41Program != 0) GLES31.glDeleteProgram(rcdStep41Program)
-        if (rcdStep42Program != 0) GLES31.glDeleteProgram(rcdStep42Program)
-        if (rcdStep43Program != 0) GLES31.glDeleteProgram(rcdStep43Program)
-        if (rcdWriteOutputProgram != 0) GLES31.glDeleteProgram(rcdWriteOutputProgram)
-        vgnPrograms.forEachIndexed { index, program ->
-            if (program != 0) GLES31.glDeleteProgram(program)
-            vgnPrograms[index] = 0
-        }
-        if (rawHotPixelDetectProgram != 0) {
-            GLES31.glDeleteProgram(rawHotPixelDetectProgram)
-            rawHotPixelDetectProgram = 0
-        }
-        if (rawHotPixelRepairProgram != 0) {
-            GLES31.glDeleteProgram(rawHotPixelRepairProgram)
-            rawHotPixelRepairProgram = 0
-        }
-        if (quadPopulateProgram != 0) GLES31.glDeleteProgram(quadPopulateProgram)
-        if (quadGreenProgram != 0) GLES31.glDeleteProgram(quadGreenProgram)
-        if (quadChromaProgram != 0) GLES31.glDeleteProgram(quadChromaProgram)
-        if (quadRefineProgram != 0) GLES31.glDeleteProgram(quadRefineProgram)
-        if (quadWriteOutputProgram != 0) GLES31.glDeleteProgram(quadWriteOutputProgram)
-        if (pgtmCellSamplesProgram != 0) {
-            GLES31.glDeleteProgram(pgtmCellSamplesProgram)
-            pgtmCellSamplesProgram = 0
-        }
-        pgtmPhotonPrograms.forEachIndexed { index, program ->
-            if (program != 0) GLES31.glDeleteProgram(program)
-            pgtmPhotonPrograms[index] = 0
-        }
-        if (meteringHalfResolutionProgram != 0) {
-            GLES31.glDeleteProgram(meteringHalfResolutionProgram)
-            meteringHalfResolutionProgram = 0
-        }
-        if (linearRcdProgram != 0) GLES31.glDeleteProgram(linearRcdProgram)
-        if (warpRectilinearProgram != 0) GLES31.glDeleteProgram(warpRectilinearProgram)
-        if (linearRawRgbProgram != 0) GLES31.glDeleteProgram(linearRawRgbProgram)
-        if (linearRawFloatToUintProgram != 0) {
-            GLES31.glDeleteProgram(linearRawFloatToUintProgram)
-        }
-        if (linearRawRgbExpandProgram != 0) GLES31.glDeleteProgram(linearRawRgbExpandProgram)
-        // darktable denoiseprofile compute programs
-        if (denoisePreconditionV2Program != 0) GLES31.glDeleteProgram(denoisePreconditionV2Program)
-        if (denoiseNlmInitProgram != 0) GLES31.glDeleteProgram(denoiseNlmInitProgram)
-        if (denoiseNlmFusedAccuProgram != 0) GLES31.glDeleteProgram(denoiseNlmFusedAccuProgram)
-        if (denoiseNlmFinishProgram != 0) GLES31.glDeleteProgram(denoiseNlmFinishProgram)
-        // denoiseprofile textures and FBOs
+        vgnDemosaicAlgorithm.release()
+        quadBayerDemosaicAlgorithm.release()
+        profileGainTableAlgorithm.release()
+        meteringDemosaicAlgorithm.release()
+        linearRcdPass.release()
+        warpRectilinearPass.release()
+        linearUintToFloatPass.release()
+        linearFloatToUintPass.release()
+        linearRgbExpandPass.release()
+        denoiseProfileAlgorithm.release()
         releaseDenoiseProfileFramebuffers()
-        releaseDenoiseProfileAccumulator()
-        denoiseNlmMaxSsboBytes = 0L
-        releaseDarktableFilmicHighlightReconstructionFramebuffers()
 
         if (exportedStackTextureIds.isNotEmpty()) {
             if (rawTextureId in exportedStackTextureIds) {
@@ -14587,40 +8863,6 @@ class RawDemosaicProcessor {
         if (sharpenFramebufferId != 0) GLES30.glDeleteFramebuffers(
             1,
             intArrayOf(sharpenFramebufferId),
-            0
-        )
-        if (curveTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(curveTextureId), 0)
-        if (dcpToneCurveTextureId != 0) GLES30.glDeleteTextures(
-            1,
-            intArrayOf(dcpToneCurveTextureId),
-            0
-        )
-        if (dcpHueSatTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(dcpHueSatTextureId), 0)
-        dcpHueSatTextureSource = null
-        if (dcpLookTableTextureId != 0) GLES30.glDeleteTextures(
-            1,
-            intArrayOf(dcpLookTableTextureId),
-            0
-        )
-        if (spectralFilmTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(spectralFilmTextureId), 0)
-            spectralFilmTextureId = 0
-            spectralFilmTextureKey = null
-        }
-        if (hncsColorMapTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(hncsColorMapTextureId), 0)
-            hncsColorMapTextureId = 0
-        }
-        if (hncsCurveTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(hncsCurveTextureId), 0)
-            hncsCurveTextureId = 0
-        }
-        hncsColorMapTextureKey = null
-        hncsCurveTextureKey = null
-        if (dummyDcp3DTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(dummyDcp3DTextureId), 0)
-        if (dummyDcpToneCurveTextureId != 0) GLES30.glDeleteTextures(
-            1,
-            intArrayOf(dummyDcpToneCurveTextureId),
             0
         )
         if (outputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)

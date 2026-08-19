@@ -23,8 +23,10 @@ import com.hinnka.mycamera.raw.HncsNaturalLightGl
 import com.hinnka.mycamera.raw.HncsNaturalLightOutputPassShaders
 import com.hinnka.mycamera.raw.RawProfileExposureGl
 import com.hinnka.mycamera.raw.RawRenderingEngine
-import com.hinnka.mycamera.raw.RawShaders
-import com.hinnka.mycamera.raw.RawSrgbPassShaders
+import com.hinnka.mycamera.raw.RawEngineTonePass
+import com.hinnka.mycamera.raw.RawFullscreenQuad
+import com.hinnka.mycamera.raw.RawSharpenPass
+import com.hinnka.mycamera.raw.RawSrgbPass
 import com.hinnka.mycamera.raw.RawToneMappingGl
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.utils.LargeDirectBuffer
@@ -1523,10 +1525,10 @@ class LutImageProcessor(context: Context? = null) {
     private fun getOrCreateNaturalLightProgram(engine: RawRenderingEngine): Int {
         val cached = naturalLightPrograms[engine.ordinal]
         if (cached != 0) return cached
-        val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, RawShaders.VERTEX_SHADER)
+        val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, RawFullscreenQuad.VERTEX_SHADER)
         val fragmentShader = compileShader(
             GLES30.GL_FRAGMENT_SHADER,
-            RawShaders.combinedFragmentShaderFor(engine, includeShadowsHighlights = false)
+            RawEngineTonePass.combinedFragmentShaderFor(engine, includeShadowsHighlights = false)
         )
         if (vertexShader == 0 || fragmentShader == 0) {
             if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
@@ -1553,7 +1555,7 @@ class LutImageProcessor(context: Context? = null) {
     private fun getOrCreateNaturalLightHncsOutputProgram(): Int {
         if (naturalLightHncsOutputProgram != 0) return naturalLightHncsOutputProgram
         naturalLightHncsOutputProgram = createFragmentProgram(
-            RawShaders.VERTEX_SHADER,
+            RawFullscreenQuad.VERTEX_SHADER,
             HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER,
             "NaturalLight_HncsOutput",
         )
@@ -1563,8 +1565,8 @@ class LutImageProcessor(context: Context? = null) {
     private fun getOrCreateNaturalLightSrgbOutputProgram(): Int {
         if (naturalLightSrgbOutputProgram != 0) return naturalLightSrgbOutputProgram
         naturalLightSrgbOutputProgram = createFragmentProgram(
-            RawShaders.VERTEX_SHADER,
-            RawSrgbPassShaders.FRAGMENT_SHADER,
+            RawFullscreenQuad.VERTEX_SHADER,
+            RawSrgbPass.FRAGMENT_SHADER,
             "NaturalLight_SrgbOutput",
         )
         return naturalLightSrgbOutputProgram
@@ -2045,7 +2047,11 @@ class LutImageProcessor(context: Context? = null) {
         naturalLightSrgbToLinearProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, SRGB_TO_LINEAR_SHADER, "NaturalLight_SrgbToLinear")
         bitmapChromaDenoiseGuideProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_EDGE_GUIDE, "BitmapChromaDenoise_EdgeGuide")
         bitmapChromaDenoiseProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_CHROMA_DENOISE, "BitmapChromaDenoise_MultiScale")
-        lutSharpenProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, RawShaders.SHARPEN_FRAGMENT_SHADER, "LutSharpen")
+        lutSharpenProgram = createFragmentProgram(
+            IMAGE_VERTEX_SHADER,
+            RawSharpenPass.FRAGMENT_SHADER,
+            "LutSharpen",
+        )
         PLog.d(
             TAG,
             "Bitmap denoiseprofile programs initialized: pre=$bitmapDenoisePreconditionProgram " +
@@ -2449,11 +2455,11 @@ class LutImageProcessor(context: Context? = null) {
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(lutSharpenProgram, "uRadius"),
-            RawShaders.DEFAULT_USM_RADIUS
+            RawSharpenPass.DEFAULT_RADIUS
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(lutSharpenProgram, "uThreshold"),
-            RawShaders.DEFAULT_USM_THRESHOLD
+            RawSharpenPass.DEFAULT_THRESHOLD
         )
         GLES30.glUniformMatrix4fv(
             GLES30.glGetUniformLocation(lutSharpenProgram, "uMVPMatrix"),

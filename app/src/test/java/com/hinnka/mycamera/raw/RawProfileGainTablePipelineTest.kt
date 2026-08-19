@@ -8,7 +8,7 @@ class RawProfileGainTablePipelineTest {
     @Test
     fun everyEngineAppliesProfileGainBeforeExposurePreparation() {
         RawRenderingEngine.entries.forEach { engine ->
-            val shader = RawEngineTonePassShaders.fragmentShaderFor(engine)
+            val shader = RawEngineTonePass.fragmentShaderFor(engine)
             val gain = shader.lastIndexOf("profileColor = applyProfileGainTableMap(profileColor);")
             val exposure = shader.lastIndexOf("prepareProfileGainInput(profileColor)")
             val tone = shader.lastIndexOf("applyEngineTone(color)")

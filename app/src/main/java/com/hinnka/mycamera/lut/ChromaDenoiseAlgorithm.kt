@@ -1,5 +1,11 @@
 package com.hinnka.mycamera.lut
 
+import android.opengl.GLES30
+import android.opengl.Matrix
+import com.hinnka.mycamera.raw.RawFullscreenQuad
+import com.hinnka.mycamera.raw.RawGlesProgram
+import com.hinnka.mycamera.utils.PLog
+
 /**
  * Shared multi-scale edge-guided chroma denoise shader.
  *
@@ -289,4 +295,157 @@ object ChromaDenoiseShaders {
             fragColor = vec4(filterSpaceToRgb(centerValue), source.a);
         }
     """.trimIndent()
+}
+
+/** Complete edge-guide + chroma-filter algorithm shared by RAW and bitmap pipelines. */
+internal class ChromaDenoiseAlgorithm(
+    private val quad: RawFullscreenQuad,
+) {
+    data class NoiseModel(
+        val redSlope: Float,
+        val redOffset: Float,
+        val greenSlope: Float,
+        val greenOffset: Float,
+        val blueSlope: Float,
+        val blueOffset: Float,
+    )
+
+    data class Input(
+        val sourceTextureId: Int,
+        val guideFramebufferId: Int,
+        val guideTextureId: Int,
+        val outputFramebufferId: Int,
+        val outputTextureId: Int,
+        val width: Int,
+        val height: Int,
+        val strength: Float,
+        val cameraRgbInput: Boolean,
+        val noiseModel: NoiseModel,
+    )
+
+    data class Output(val textureId: Int, val width: Int, val height: Int)
+
+    private var guideProgram = 0
+    private var filterProgram = 0
+
+    fun initialize(): Boolean {
+        if (guideProgram == 0) {
+            guideProgram = quad.createProgram(
+                ChromaDenoiseShaders.PASS_EDGE_GUIDE,
+                "ChromaDenoiseEdgeGuide",
+            )
+        }
+        if (filterProgram == 0) {
+            filterProgram = quad.createProgram(
+                ChromaDenoiseShaders.PASS_CHROMA_DENOISE,
+                "ChromaDenoiseFilter",
+            )
+        }
+        return guideProgram != 0 && filterProgram != 0
+    }
+
+    fun execute(input: Input): Output? {
+        if (!initialize()) return null
+        require(input.width > 0 && input.height > 0)
+        renderGuide(input)
+        renderFilter(input)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        RawGlesProgram.logErrors("ChromaDenoiseAlgorithm")
+        PLog.d(
+            TAG,
+            "complete: size=${input.width}x${input.height} strength=${input.strength} " +
+                "cameraRgb=${input.cameraRgbInput}",
+        )
+        return Output(input.outputTextureId, input.width, input.height)
+    }
+
+    fun release() {
+        if (guideProgram != 0) GLES30.glDeleteProgram(guideProgram)
+        if (filterProgram != 0) GLES30.glDeleteProgram(filterProgram)
+        guideProgram = 0
+        filterProgram = 0
+    }
+
+    private fun renderGuide(input: Input) {
+        GLES30.glUseProgram(guideProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, input.guideFramebufferId)
+        GLES30.glViewport(0, 0, input.width, input.height)
+        bindTexture(guideProgram, "uInputTexture", 0, input.sourceTextureId)
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(guideProgram, "uTexelSize"),
+            1f / input.width,
+            1f / input.height,
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(guideProgram, "uCameraRgbInput"),
+            if (input.cameraRgbInput) 1 else 0,
+        )
+        bindIdentityTextureMatrix(guideProgram)
+        quad.draw(guideProgram)
+    }
+
+    private fun renderFilter(input: Input) {
+        GLES30.glUseProgram(filterProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, input.outputFramebufferId)
+        GLES30.glViewport(0, 0, input.width, input.height)
+        bindTexture(filterProgram, "uInputTexture", 0, input.sourceTextureId)
+        bindTexture(filterProgram, "uGuideTexture", 1, input.guideTextureId)
+        bindIdentityTextureMatrix(filterProgram)
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(filterProgram, "uTexelSize"),
+            1f / input.width,
+            1f / input.height,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(filterProgram, "uOutputStrength"),
+            ChromaDenoiseDefaults.outputStrength(input.strength),
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(filterProgram, "uEdgeGuidanceRelaxation"),
+            ChromaDenoiseDefaults.edgeGuidanceRelaxation(input.strength),
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(filterProgram, "uCameraRgbInput"),
+            if (input.cameraRgbInput) 1 else 0,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(filterProgram, "uH"),
+            ChromaDenoiseDefaults.noiseBandwidth(input.strength),
+        )
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(filterProgram, "uNoiseModelRB"),
+            input.noiseModel.redSlope,
+            input.noiseModel.redOffset,
+            input.noiseModel.blueSlope,
+            input.noiseModel.blueOffset,
+        )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(filterProgram, "uNoiseModelG"),
+            input.noiseModel.greenSlope,
+            input.noiseModel.greenOffset,
+        )
+        quad.draw(filterProgram)
+    }
+
+    private fun bindTexture(program: Int, uniform: String, unit: Int, textureId: Int) {
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, uniform), unit)
+    }
+
+    private fun bindIdentityTextureMatrix(program: Int) {
+        val identity = FloatArray(16)
+        Matrix.setIdentityM(identity, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(program, "uTexMatrix"),
+            1,
+            false,
+            identity,
+            0,
+        )
+    }
+
+    private companion object {
+        const val TAG = "ChromaDenoise"
+    }
 }

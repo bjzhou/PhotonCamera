@@ -1,5 +1,11 @@
 package com.hinnka.mycamera.raw
 
+import android.opengl.GLES30
+import android.opengl.GLES31
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.processor.GlesGpuScheduler
+import com.hinnka.mycamera.utils.PLog
+
 /**
  * RAW-domain hot-pixel detection and repair for standard 2x2 Bayer mosaics.
  *
@@ -337,4 +343,196 @@ internal object RawHotPixelShaders {
             imageStore(uRepairedRawTexture, packedCoord, repaired);
         }
     """.trimIndent()
+}
+
+/** Two-pass RAW-domain hot-pixel detection and repair algorithm. */
+internal class RawHotPixelCorrectionAlgorithm {
+    data class Input(
+        val sourceTextureId: Int,
+        val maskTextureId: Int,
+        val repairedTextureId: Int,
+        val width: Int,
+        val height: Int,
+        val globalOriginX: Int,
+        val globalOriginY: Int,
+        val cfaPattern: Int,
+        val blackLevel: FloatArray,
+        val whiteLevel: Float,
+        val noiseSlope: FloatArray,
+        val noiseOffset: FloatArray,
+        val frameCount: Int,
+        val passWindow: GlesGpuScheduler.PassWindow,
+    )
+
+    data class Output(val textureId: Int, val width: Int, val height: Int)
+
+    private var detectProgram = 0
+    private var repairProgram = 0
+
+    fun initialize(): Boolean {
+        if (detectProgram == 0) {
+            detectProgram = RawGlesProgram.compileCompute(
+                RawHotPixelShaders.DETECT,
+                "RAW_HOT_PIXEL_DETECT",
+            )
+        }
+        if (repairProgram == 0) {
+            repairProgram = RawGlesProgram.compileCompute(
+                RawHotPixelShaders.REPAIR,
+                "RAW_HOT_PIXEL_REPAIR",
+            )
+        }
+        return detectProgram != 0 && repairProgram != 0
+    }
+
+    fun execute(input: Input): Output? {
+        if (!initialize()) return null
+        require(input.blackLevel.size >= 4)
+        require(input.noiseSlope.size >= 3 && input.noiseOffset.size >= 3)
+        val packedWidth = (input.width + 3) / 4
+        val groupsX = GlesComputeWorkGroup.imageGroupCount(packedWidth)
+        val groupsY = GlesComputeWorkGroup.imageGroupCount(input.height)
+
+        input.passWindow.beginPass(
+            "RAW hot-pixel detection",
+            reads = longArrayOf(GlesGpuScheduler.textureResource(input.sourceTextureId)),
+            writes = longArrayOf(GlesGpuScheduler.textureResource(input.maskTextureId)),
+        )
+        GLES31.glUseProgram(detectProgram)
+        bindCommonUniforms(detectProgram, input)
+        bindRawSampler(detectProgram, input.sourceTextureId)
+        GLES31.glBindImageTexture(
+            0,
+            input.maskTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA8UI,
+        )
+        GLES31.glDispatchCompute(groupsX, groupsY, 1)
+        GlesGpuScheduler.memoryBarrier()
+        RawGlesProgram.logErrors("RAW hot-pixel detection")
+        unbindImages()
+        input.passWindow.endPass()
+
+        input.passWindow.beginPass(
+            "RAW hot-pixel repair",
+            reads = longArrayOf(
+                GlesGpuScheduler.textureResource(input.sourceTextureId),
+                GlesGpuScheduler.textureResource(input.maskTextureId),
+            ),
+            writes = longArrayOf(GlesGpuScheduler.textureResource(input.repairedTextureId)),
+        )
+        GLES31.glUseProgram(repairProgram)
+        bindCommonUniforms(repairProgram, input)
+        bindRawSampler(repairProgram, input.sourceTextureId)
+        GLES31.glBindImageTexture(
+            0,
+            input.maskTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_READ_ONLY,
+            GLES30.GL_RGBA8UI,
+        )
+        GLES31.glBindImageTexture(
+            1,
+            input.repairedTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA16UI,
+        )
+        GLES31.glDispatchCompute(groupsX, groupsY, 1)
+        GlesGpuScheduler.memoryBarrier()
+        RawGlesProgram.logErrors("RAW hot-pixel repair")
+        unbindImages()
+        input.passWindow.endPass()
+
+        PLog.d(
+            TAG,
+            "submitted: size=${input.width}x${input.height} " +
+                "origin=${input.globalOriginX},${input.globalOriginY} " +
+                "cfa=${input.cfaPattern} frameCount=${input.frameCount} " +
+                "slope=${input.noiseSlope.contentToString()} " +
+                "offset=${input.noiseOffset.contentToString()}",
+        )
+        return Output(input.repairedTextureId, input.width, input.height)
+    }
+
+    fun release() {
+        if (detectProgram != 0) GLES31.glDeleteProgram(detectProgram)
+        if (repairProgram != 0) GLES31.glDeleteProgram(repairProgram)
+        detectProgram = 0
+        repairProgram = 0
+    }
+
+    private fun bindCommonUniforms(program: Int, input: Input) {
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(program, "uImageSize"),
+            input.width,
+            input.height,
+        )
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(program, "uGlobalOrigin"),
+            input.globalOriginX,
+            input.globalOriginY,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(program, "uCfaPattern"),
+            input.cfaPattern,
+        )
+        GLES31.glUniform4fv(
+            GLES31.glGetUniformLocation(program, "uBlackLevel"),
+            1,
+            input.blackLevel,
+            0,
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(program, "uWhiteLevel"),
+            input.whiteLevel,
+        )
+        GLES31.glUniform3fv(
+            GLES31.glGetUniformLocation(program, "uNoiseSlope"),
+            1,
+            input.noiseSlope,
+            0,
+        )
+        GLES31.glUniform3fv(
+            GLES31.glGetUniformLocation(program, "uNoiseOffset"),
+            1,
+            input.noiseOffset,
+            0,
+        )
+    }
+
+    private fun bindRawSampler(program: Int, sourceTextureId: Int) {
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RAW_TEXTURE_UNIT)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, sourceTextureId)
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(program, "uRawTexture"),
+            RAW_TEXTURE_UNIT,
+        )
+    }
+
+    private fun unbindImages() {
+        for (unit in 0..1) {
+            GLES31.glBindImageTexture(
+                unit,
+                0,
+                0,
+                false,
+                0,
+                GLES31.GL_READ_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+        }
+    }
+
+    private companion object {
+        const val TAG = "RawHotPixelCorrection"
+        const val RAW_TEXTURE_UNIT = 0
+    }
 }

@@ -1,948 +1,19 @@
 package com.hinnka.mycamera.raw
 
-/**
- * GPU RCD 解马赛克计算着色器库 (1:1 高保真直接移植版)
- *
- * 逐行平移自 darktable 的 demosaic_rcd.cl 核心算子
- * 使用 SSBO (Shader Storage Buffer Object) 在全局显存中共享像素差分与梯度状态，
- * 彻底避免手写算法简化引起的图像拉链与边缘杂色！
- */
-object RcdShaders {
-
-    /** RCD 主体算子不写入可靠结果的照片外圈宽度。 */
-    const val OUTPUT_MARGIN = 9
-
-    /** PPG 最深的递归邻域半径，用于验证条带是否包含完整输入。 */
-    const val PPG_RADIUS = 4
-
-    /** 区域调用方在输出采样范围之外至少保留的 RCD 输入像素数。 */
-    const val REGION_HALO_PX = OUTPUT_MARGIN + 1
-
-    const val HIGHLIGHT_RECONSTRUCTION_THRESHOLD = 0.985f
-    const val HIGHLIGHT_RECONSTRUCTION_CEILING = 8.0f
-
-    /**
-     * RCD 四周统一使用的 PPG 内核。
-     *
-     * 嵌入该内核的 shader 必须先提供 `rawAt(ivec2)` 与 `colorAt(ivec2)`；两者负责
-     * 把虚拟照片坐标映射到实际 CFA 存储。这样完整图与条带图共享同一份 PPG 数学实现，
-     * 只有坐标映射不同。
-     */
-    private val PPG_KERNEL = """
-        float ppgGreenAt(ivec2 coord) {
-            // Keep the virtual coordinate so recursive PPG estimates use the neighbourhood
-            // around that reflected photosite, rather than shifting the kernel into the image.
-            ivec2 center = coord;
-
-            int ownColor = colorAt(center);
-            float pc = rawAt(center);
-            if (ownColor == GREEN) {
-                return max(0.0, pc);
-            }
-
-            float pym = rawAt(center + ivec2(0, -1));
-            float pym2 = rawAt(center + ivec2(0, -2));
-            float pym3 = rawAt(center + ivec2(0, -3));
-            float pyM = rawAt(center + ivec2(0, 1));
-            float pyM2 = rawAt(center + ivec2(0, 2));
-            float pyM3 = rawAt(center + ivec2(0, 3));
-            float pxm = rawAt(center + ivec2(-1, 0));
-            float pxm2 = rawAt(center + ivec2(-2, 0));
-            float pxm3 = rawAt(center + ivec2(-3, 0));
-            float pxM = rawAt(center + ivec2(1, 0));
-            float pxM2 = rawAt(center + ivec2(2, 0));
-            float pxM3 = rawAt(center + ivec2(3, 0));
-
-            float guessx = (pxm + pc + pxM) * 2.0 - pxM2 - pxm2;
-            float diffx = (abs(pxm2 - pc) + abs(pxM2 - pc) + abs(pxm - pxM)) * 3.0 +
-                (abs(pxM3 - pxM) + abs(pxm3 - pxm)) * 2.0;
-            float guessy = (pym + pc + pyM) * 2.0 - pyM2 - pym2;
-            float diffy = (abs(pym2 - pc) + abs(pyM2 - pc) + abs(pym - pyM)) * 3.0 +
-                (abs(pyM3 - pyM) + abs(pym3 - pym)) * 2.0;
-
-            float green;
-            if (diffx > diffy) {
-                green = clamp(guessy * 0.25, min(pym, pyM), max(pym, pyM));
-            } else {
-                green = clamp(guessx * 0.25, min(pxm, pxM), max(pxm, pxM));
-            }
-            return max(0.0, green);
-        }
-
-        vec3 ppgColorAt(ivec2 coord) {
-            ivec2 center = coord;
-
-            int ownColor = colorAt(center);
-            float pc = max(0.0, rawAt(center));
-            float green = ppgGreenAt(center);
-            vec3 color = vec3(0.0, green, 0.0);
-
-            if (ownColor == RED) {
-                color.r = pc;
-                ivec2 nw = center + ivec2(-1, -1);
-                ivec2 ne = center + ivec2(1, -1);
-                ivec2 sw = center + ivec2(-1, 1);
-                ivec2 se = center + ivec2(1, 1);
-                float diff1 = abs(rawAt(nw) - rawAt(se)) +
-                    abs(ppgGreenAt(nw) - green) + abs(ppgGreenAt(se) - green);
-                float guess1 = rawAt(nw) + rawAt(se) + 2.0 * green -
-                    ppgGreenAt(nw) - ppgGreenAt(se);
-                float diff2 = abs(rawAt(ne) - rawAt(sw)) +
-                    abs(ppgGreenAt(ne) - green) + abs(ppgGreenAt(sw) - green);
-                float guess2 = rawAt(ne) + rawAt(sw) + 2.0 * green -
-                    ppgGreenAt(ne) - ppgGreenAt(sw);
-                if (diff1 > diff2) {
-                    color.b = guess2 * 0.5;
-                } else if (diff1 < diff2) {
-                    color.b = guess1 * 0.5;
-                } else {
-                    color.b = (guess1 + guess2) * 0.25;
-                }
-            } else if (ownColor == BLUE) {
-                color.b = pc;
-                ivec2 nw = center + ivec2(-1, -1);
-                ivec2 ne = center + ivec2(1, -1);
-                ivec2 sw = center + ivec2(-1, 1);
-                ivec2 se = center + ivec2(1, 1);
-                float diff1 = abs(rawAt(nw) - rawAt(se)) +
-                    abs(ppgGreenAt(nw) - green) + abs(ppgGreenAt(se) - green);
-                float guess1 = rawAt(nw) + rawAt(se) + 2.0 * green -
-                    ppgGreenAt(nw) - ppgGreenAt(se);
-                float diff2 = abs(rawAt(ne) - rawAt(sw)) +
-                    abs(ppgGreenAt(ne) - green) + abs(ppgGreenAt(sw) - green);
-                float guess2 = rawAt(ne) + rawAt(sw) + 2.0 * green -
-                    ppgGreenAt(ne) - ppgGreenAt(sw);
-                if (diff1 > diff2) {
-                    color.r = guess2 * 0.5;
-                } else if (diff1 < diff2) {
-                    color.r = guess1 * 0.5;
-                } else {
-                    color.r = (guess1 + guess2) * 0.25;
-                }
-            } else {
-                color.g = pc;
-                if (colorAt(center + ivec2(1, 0)) == RED) {
-                    color.b = (rawAt(center + ivec2(0, -1)) + rawAt(center + ivec2(0, 1)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(0, -1)) -
-                        ppgGreenAt(center + ivec2(0, 1))) * 0.5;
-                    color.r = (rawAt(center + ivec2(-1, 0)) + rawAt(center + ivec2(1, 0)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(-1, 0)) -
-                        ppgGreenAt(center + ivec2(1, 0))) * 0.5;
-                } else {
-                    color.r = (rawAt(center + ivec2(0, -1)) + rawAt(center + ivec2(0, 1)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(0, -1)) -
-                        ppgGreenAt(center + ivec2(0, 1))) * 0.5;
-                    color.b = (rawAt(center + ivec2(-1, 0)) + rawAt(center + ivec2(1, 0)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(-1, 0)) -
-                        ppgGreenAt(center + ivec2(1, 0))) * 0.5;
-                }
-            }
-
-            return max(color, vec3(0.0));
-        }
-    """.trimIndent()
-
-    /**
-     * 1. 初始化与归一化片元导入 (rcd_populate.comp)
-     */
-    val POPULATE = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout (binding = 0) uniform highp usampler2D uRawTexture; // 单通道 R16UI 原始图像
-        layout (binding = 1) uniform highp sampler2D uLensShadingMap; // R, Gr, Gb, B 增益图
-
-        layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; }; // R
-        layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; }; // G
-        layout(std430, binding = 3) buffer RGB2_Buf   { float rgb2[]; }; // B
-
-        uniform ivec2 uImageSize;
-        uniform ivec2 uFullImageSize;
-        uniform ivec2 uGlobalOrigin;
-        uniform int uCfaPattern;
-        uniform vec4 uBlackLevel; // R, Gr, Gb, B 或 [0,1,2,3] 四通道黑电平
-        uniform float uWhiteLevel;
-        // R, G, G, B relative gains used only to condition RCD calculations.
-        // WRITE_OUTPUT removes them again, so the externally visible result remains camera RGB.
-        uniform vec4 uWhiteBalanceGains;
-        uniform float uHighlightClipThreshold;
-        uniform float uHighlightCeiling;
-        uniform bool uHighlightReconstructionEnabled;
-        uniform bool uLensShadingEnabled;
-        uniform bool uLensShadingUsesDngGrid;
-        uniform vec2 uLensShadingMapSize;
-        uniform vec4 uLensShadingGrid; // originH, originV, spacingH, spacingV
-        uniform vec2 uLensShadingBoundsOrigin;
-        uniform vec2 uLensShadingBoundsSize;
-
-        #define RED 0
-        #define GREEN 1
-        #define BLUE 2
-
-        int getBayerColor(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1;
-                else return (c == 0) ? 1 : 2;
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0;
-                else return (c == 0) ? 2 : 1;
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 1 : 2;
-                else return (c == 0) ? 0 : 1;
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 2 : 1;
-                else return (c == 0) ? 1 : 0;
-            }
-        }
-
-        int getBlackLevelIndex(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1; // R, Gr
-                else return (c == 0) ? 2 : 3;        // Gb, B
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0; // Gr, R
-                else return (c == 0) ? 3 : 2;        // B, Gb
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 2 : 3; // Gb, B
-                else return (c == 0) ? 0 : 1;        // R, Gr
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 3 : 2; // B, Gb
-                else return (c == 0) ? 1 : 0;        // Gr, R
-            }
-        }
-
-        ivec2 clampCoord(ivec2 coord) {
-            return clamp(coord, ivec2(0), uImageSize - ivec2(1));
-        }
-
-        int getLensShadingIndex(int channelIndex, ivec2 coord) {
-            if (uLensShadingUsesDngGrid || channelIndex == 0 || channelIndex == 3) {
-                return channelIndex;
-            }
-            return ((coord.y & 1) == 0) ? 1 : 2;
-        }
-
-        float getLensShadingGain(int channelIndex, ivec2 coord) {
-            if (!uLensShadingEnabled) {
-                return 1.0;
-            }
-            ivec2 globalCoord = coord + uGlobalOrigin;
-            vec2 norm = (vec2(globalCoord) + vec2(0.5)) / vec2(uFullImageSize);
-            vec2 uv = norm;
-            if (uLensShadingUsesDngGrid) {
-                vec2 boundsSize = max(uLensShadingBoundsSize, vec2(1.0));
-                norm = (vec2(globalCoord) + vec2(0.5) - uLensShadingBoundsOrigin) / boundsSize;
-                vec2 origin = uLensShadingGrid.xy;
-                vec2 spacing = max(uLensShadingGrid.zw, vec2(1e-8));
-                vec2 mapIndex = (norm - origin) / spacing;
-                uv = (mapIndex + vec2(0.5)) / max(uLensShadingMapSize, vec2(1.0));
-            }
-            vec4 gains = texture(uLensShadingMap, uv);
-            return max(gains[getLensShadingIndex(channelIndex, coord)], 0.0);
-        }
-
-        float readSensorNormalized(ivec2 coord, int channelIndex) {
-            ivec2 sampleCoord = clampCoord(coord);
-            uint rawVal = texelFetch(uRawTexture, sampleCoord, 0).r;
-            float bl = uBlackLevel[channelIndex];
-            float wl = max(uWhiteLevel, bl + 1.0);
-            return max(float(rawVal) - bl, 0.0) / max(wl - bl, 1.0);
-        }
-
-        float calculationSampleAt(ivec2 coord, int channelIndex) {
-            ivec2 sampleCoord = clampCoord(coord);
-            float sensor = readSensorNormalized(sampleCoord, channelIndex);
-            float linear = sensor * getLensShadingGain(channelIndex, sampleCoord) *
-                max(uWhiteBalanceGains[channelIndex], 1e-6);
-            return min(max(linear, 0.0), uHighlightCeiling);
-        }
-
-        // Both ordinary interpolation and clipped-site estimation stay in the same
-        // white-balanced calculation domain. Output conversion is deliberately deferred.
-        float estimateOpposedLinear(ivec2 coord, int color, float fallback) {
-            float sumRed = 0.0;
-            float sumGreen = 0.0;
-            float sumBlue = 0.0;
-            float countRed = 0.0;
-            float countGreen = 0.0;
-            float countBlue = 0.0;
-
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    ivec2 sampleCoord = clampCoord(coord + ivec2(dx, dy));
-                    int sampleColor = getBayerColor(uCfaPattern, sampleCoord.x, sampleCoord.y);
-                    int channelIndex = getBlackLevelIndex(uCfaPattern, sampleCoord.x, sampleCoord.y);
-                    float balanced = calculationSampleAt(sampleCoord, channelIndex);
-
-                    if (sampleColor == RED) {
-                        sumRed += balanced;
-                        countRed += 1.0;
-                    } else if (sampleColor == GREEN) {
-                        sumGreen += balanced;
-                        countGreen += 1.0;
-                    } else {
-                        sumBlue += balanced;
-                        countBlue += 1.0;
-                    }
-                }
-            }
-
-            const float power = 3.0;
-            float rootRed = pow(max(sumRed / max(countRed, 1.0), 0.0), 1.0 / power);
-            float rootGreen = pow(max(sumGreen / max(countGreen, 1.0), 0.0), 1.0 / power);
-            float rootBlue = pow(max(sumBlue / max(countBlue, 1.0), 0.0), 1.0 / power);
-
-            float opposedRoot;
-            if (color == RED) {
-                opposedRoot = 0.5 * (rootGreen + rootBlue);
-            } else if (color == GREEN) {
-                opposedRoot = 0.5 * (rootRed + rootBlue);
-            } else {
-                opposedRoot = 0.5 * (rootRed + rootGreen);
-            }
-
-            float reconstructed = pow(max(opposedRoot, 0.0), power);
-            return max(reconstructed, fallback);
-        }
-
-        float reconstructHighlightSample(ivec2 coord, int channelIndex, int color, float sensor, float linear) {
-            if (!uHighlightReconstructionEnabled) {
-                return min(max(linear, 0.0), uHighlightCeiling);
-            }
-
-            float clipMask = smoothstep(uHighlightClipThreshold, 1.0, sensor);
-            if (clipMask <= 0.0) {
-                return min(max(linear, 0.0), uHighlightCeiling);
-            }
-
-            float reconstructed = estimateOpposedLinear(coord, color, linear);
-            return min(mix(linear, reconstructed, clipMask), uHighlightCeiling);
-        }
-
-        void main() {
-            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-            if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
-
-            int idx = coord.y * uImageSize.x + coord.x;
-
-            int blIdx = getBlackLevelIndex(uCfaPattern, coord.x, coord.y);
-            int color = getBayerColor(uCfaPattern, coord.x, coord.y);
-            float sensor = readSensorNormalized(coord, blIdx);
-            float linear = calculationSampleAt(coord, blIdx);
-            float val = reconstructHighlightSample(coord, blIdx, color, sensor, linear);
-
-            cfa[idx] = val;
-
-            if (color == RED) {
-                rgb0[idx] = val;
-                rgb1[idx] = 0.0;
-                rgb2[idx] = 0.0;
-            } else if (color == GREEN) {
-                rgb0[idx] = 0.0;
-                rgb1[idx] = val;
-                rgb2[idx] = 0.0;
-            } else { // BLUE
-                rgb0[idx] = 0.0;
-                rgb1[idx] = 0.0;
-                rgb2[idx] = val;
-            }
-        }
-    """.trimIndent()
-
-    /**
-     * 2. 共享内存梯度估计与水平/垂直选择 (rcd_step_1.comp)
-     */
-    val STEP_1 = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 4) buffer VH_Dir_Buf { float VH_dir[]; };
-
-        uniform ivec2 uImageSize;
-
-        #define epssq 1e-10f
-
-        // 8x8 output tile plus a four-pixel halo on every edge.
-        shared float sh_buffer[256]; // 16 * 16
-
-        float fsquare(float x) {
-            return x * x;
-        }
-
-        float rcd_vdiff_local(int offset, int stride) {
-            float val = sh_buffer[offset - 3 * stride] - sh_buffer[offset - stride] - sh_buffer[offset + stride] + sh_buffer[offset + 3 * stride] 
-                        - 3.0f * (sh_buffer[offset - 2 * stride] + sh_buffer[offset + 2 * stride]) + 6.0f * sh_buffer[offset];
-            return fsquare(val);
-        }
-
-        float rcd_hdiff_local(int offset) {
-            float val = sh_buffer[offset - 3] - sh_buffer[offset - 1] - sh_buffer[offset + 1] + sh_buffer[offset + 3]
-                        - 3.0f * (sh_buffer[offset - 2] + sh_buffer[offset + 2]) + 6.0f * sh_buffer[offset];
-            return fsquare(val);
-        }
-
-        void main() {
-            int xlsz = 8;
-            int ylsz = 8;
-            int xlid = int(gl_LocalInvocationID.x);
-            int ylid = int(gl_LocalInvocationID.y);
-            int xgid = int(gl_WorkGroupID.x);
-            int ygid = int(gl_WorkGroupID.y);
-            int l = ylid * xlsz + xlid;
-            int lsz = xlsz * ylsz; // 64
-            int stride = 16;
-            int maxbuf = 256;
-            int xul = xgid * xlsz - 2;
-            int yul = ygid * ylsz - 2;
-
-            for (int n = 0; n <= maxbuf / lsz; n++) {
-                int bufidx = n * lsz + l;
-                if (bufidx >= maxbuf) continue;
-                int xx = clamp(xul + bufidx % stride, 0, uImageSize.x - 1);
-                int yy = clamp(yul + bufidx / stride, 0, uImageSize.y - 1);
-                sh_buffer[bufidx] = cfa[yy * uImageSize.x + xx];
-            }
-
-            memoryBarrierShared();
-            barrier();
-
-            int col = 2 + int(gl_GlobalInvocationID.x);
-            int row = 2 + int(gl_GlobalInvocationID.y);
-            if (row >= uImageSize.y - 2 || col >= uImageSize.x - 2) return;
-
-            int idx = row * uImageSize.x + col;
-            int buf_offset = (ylid + 4) * stride + (xlid + 4);
-
-            float V_Stat = max(epssq, rcd_vdiff_local(buf_offset - stride, stride)
-                                      + rcd_vdiff_local(buf_offset, stride)
-                                      + rcd_vdiff_local(buf_offset + stride, stride));
-            float H_Stat = max(epssq, rcd_hdiff_local(buf_offset - 1)
-                                      + rcd_hdiff_local(buf_offset)
-                                      + rcd_hdiff_local(buf_offset + 1));
-            VH_dir[idx] = V_Stat / (V_Stat + H_Stat);
-        }
-    """.trimIndent()
-
-    /**
-     * 3. 邻域低通滤波 LPF (rcd_step_2.comp)
-     */
-    val STEP_2 = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 0) buffer CFA_Buf { float cfa[]; };
-        layout(std430, binding = 5) buffer LPF_Buf { float lpf[]; };
-
-        uniform ivec2 uImageSize;
-        uniform int uCfaPattern;
-
-        int getBayerColor(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1;
-                else return (c == 0) ? 1 : 2;
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0;
-                else return (c == 0) ? 2 : 1;
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 1 : 2;
-                else return (c == 0) ? 0 : 1;
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 2 : 1;
-                else return (c == 0) ? 1 : 0;
-            }
-        }
-
-        void main() {
-            int row = 2 + int(gl_GlobalInvocationID.y);
-            int col = 2 + (getBayerColor(uCfaPattern, 0, row) & 1) + 2 * int(gl_GlobalInvocationID.x);
-            if (col >= uImageSize.x - 2 || row >= uImageSize.y - 2) return;
-
-            int idx = row * uImageSize.x + col;
-            int w = uImageSize.x;
-
-            lpf[idx / 2] = cfa[idx]
-               + 0.5f * (cfa[idx - w] + cfa[idx + w] + cfa[idx - 1] + cfa[idx + 1])
-               + 0.25f * (cfa[idx - w - 1] + cfa[idx - w + 1] + cfa[idx + w - 1] + cfa[idx + w + 1]);
-        }
-    """.trimIndent()
-
-    /**
-     * 4. 绿色通道在红蓝 CFA 位置插值 (rcd_step_3.comp)
-     */
-    val STEP_3 = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; };
-        layout(std430, binding = 4) buffer VH_Dir_Buf { float VH_dir[]; };
-        layout(std430, binding = 5) buffer LPF_Buf    { float lpf[]; };
-
-        uniform ivec2 uImageSize;
-        uniform int uCfaPattern;
-
-        #define eps 1e-5f
-
-        int getBayerColor(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1;
-                else return (c == 0) ? 1 : 2;
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0;
-                else return (c == 0) ? 2 : 1;
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 1 : 2;
-                else return (c == 0) ? 0 : 1;
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 2 : 1;
-                else return (c == 0) ? 1 : 0;
-            }
-        }
-
-        void main() {
-            int row = 4 + int(gl_GlobalInvocationID.y);
-            int col = 4 + (getBayerColor(uCfaPattern, 0, row) & 1) + 2 * int(gl_GlobalInvocationID.x);
-            if (col >= uImageSize.x - 5 || row >= uImageSize.y - 5) return;
-
-            int w = uImageSize.x;
-            int idx = row * w + col;
-            int lidx = idx / 2;
-            int w2 = 2 * w;
-            int w3 = 3 * w;
-            int w4 = 4 * w;
-
-            float VH_Central_Value   = VH_dir[idx];
-            float VH_Neighbourhood_Value = 0.25f * (VH_dir[idx - w - 1] + VH_dir[idx - w + 1] + VH_dir[idx + w - 1] + VH_dir[idx + w + 1]);
-            float VH_Disc = (abs(0.5f - VH_Central_Value) < abs(0.5f - VH_Neighbourhood_Value)) ? VH_Neighbourhood_Value : VH_Central_Value;
-
-            float cfai = cfa[idx];
-            float N_Grad = eps + abs(cfa[idx - w] - cfa[idx + w]) + abs(cfai - cfa[idx - w2]) + abs(cfa[idx - w] - cfa[idx - w3]) + abs(cfa[idx - w2] - cfa[idx - w4]);
-            float S_Grad = eps + abs(cfa[idx + w] - cfa[idx - w]) + abs(cfai - cfa[idx + w2]) + abs(cfa[idx + w] - cfa[idx + w3]) + abs(cfa[idx + w2] - cfa[idx + w4]);
-            float W_Grad = eps + abs(cfa[idx - 1] - cfa[idx + 1]) + abs(cfai - cfa[idx - 2]) + abs(cfa[idx - 1] - cfa[idx - 3]) + abs(cfa[idx - 2] - cfa[idx - 4]);
-            float E_Grad = eps + abs(cfa[idx + 1] - cfa[idx - 1]) + abs(cfai - cfa[idx + 2]) + abs(cfa[idx + 1] - cfa[idx + 3]) + abs(cfa[idx + 2] - cfa[idx + 4]);
-
-            float lfpi = lpf[lidx];
-            float N_Est = cfa[idx - w] * (lfpi + lfpi) / (eps + lfpi + lpf[lidx - w]);
-            float S_Est = cfa[idx + w] * (lfpi + lfpi) / (eps + lfpi + lpf[lidx + w]);
-            float W_Est = cfa[idx - 1] * (lfpi + lfpi) / (eps + lfpi + lpf[lidx - 1]);
-            float E_Est = cfa[idx + 1] * (lfpi + lfpi) / (eps + lfpi + lpf[lidx + 1]);
-
-            float V_Est = (S_Grad * N_Est + N_Grad * S_Est) / (N_Grad + S_Grad);
-            float H_Est = (W_Grad * E_Est + E_Grad * W_Est) / (E_Grad + W_Grad);
-
-            rgb1[idx] = mix(V_Est, H_Est, clamp(VH_Disc, 0.0, 1.0));
-        }
-    """.trimIndent()
-
-    /**
-     * 5. 对角线差分计算 (rcd_step_4_0.comp)
-     */
-    val STEP_4_0 = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 6) buffer P_Diff_Buf { float p_diff[]; };
-        layout(std430, binding = 7) buffer Q_Diff_Buf { float q_diff[]; };
-
-        uniform ivec2 uImageSize;
-
-        float fsquare(float x) {
-            return x * x;
-        }
-
-        void main() {
-            int row = 3 + int(gl_GlobalInvocationID.y);
-            int col = 3 + 2 * int(gl_GlobalInvocationID.x);
-            if (col >= uImageSize.x - 4 || row >= uImageSize.y - 4) return;
-
-            int w = uImageSize.x;
-            int idx = row * w + col;
-            int idx2 = idx / 2;
-            int w2 = 2 * w;
-            int w3 = 3 * w;
-
-            p_diff[idx2] = fsquare((cfa[idx - w3 - 3] - cfa[idx - w - 1] - cfa[idx + w + 1] + cfa[idx + w3 + 3]) - 3.0f * (cfa[idx - w2 - 2] + cfa[idx + w2 + 2]) + 6.0f * cfa[idx]);
-            q_diff[idx2] = fsquare((cfa[idx - w3 + 3] - cfa[idx - w + 1] - cfa[idx + w - 1] + cfa[idx + w3 - 3]) - 3.0f * (cfa[idx - w2 + 2] + cfa[idx + w2 - 2]) + 6.0f * cfa[idx]);
-        }
-    """.trimIndent()
-
-    /**
-     * 6. 对角线方向选择强弱度 (rcd_step_4_1.comp)
-     */
-    val STEP_4_1 = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 6) buffer P_Diff_Buf { float p_diff[]; };
-        layout(std430, binding = 7) buffer Q_Diff_Buf { float q_diff[]; };
-        layout(std430, binding = 5) buffer PQ_Dir_Buf { float PQ_dir[]; };
-
-        uniform ivec2 uImageSize;
-        uniform int uCfaPattern;
-
-        #define epssq 1e-10f
-
-        int getBayerColor(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1;
-                else return (c == 0) ? 1 : 2;
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0;
-                else return (c == 0) ? 2 : 1;
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 1 : 2;
-                else return (c == 0) ? 0 : 1;
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 2 : 1;
-                else return (c == 0) ? 1 : 0;
-            }
-        }
-
-        void main() {
-            int row = 2 + int(gl_GlobalInvocationID.y);
-            int col = 2 + (getBayerColor(uCfaPattern, 0, row) & 1) + 2 * int(gl_GlobalInvocationID.x);
-            if (col >= uImageSize.x - 3 || row >= uImageSize.y - 3) return;
-
-            int w = uImageSize.x;
-            int idx = row * w + col;
-            int idx2 = idx / 2;
-            int idx3 = (idx - w - 1) / 2;
-            int idx4 = (idx + w - 1) / 2;
-
-            float P_Stat = max(epssq, p_diff[idx3]     + p_diff[idx2] + p_diff[idx4 + 1]);
-            float Q_Stat = max(epssq, q_diff[idx3 + 1] + q_diff[idx2] + q_diff[idx4]);
-            PQ_dir[idx2] = P_Stat / (P_Stat + Q_Stat);
-        }
-    """.trimIndent()
-
-    /**
-     * 7. 红蓝通道在红蓝 CFA 位置根据对角线插值 (rcd_step_4_2.comp)
-     */
-    val STEP_4_2 = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; }; // R
-        layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; }; // G
-        layout(std430, binding = 3) buffer RGB2_Buf   { float rgb2[]; }; // B
-        layout(std430, binding = 4) buffer PQ_Dir_Buf { float PQ_dir[]; };
-
-        uniform ivec2 uImageSize;
-        uniform int uCfaPattern;
-
-        #define eps 1e-5f
-        #define RED 0
-        #define GREEN 1
-        #define BLUE 2
-
-        int getBayerColor(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1;
-                else return (c == 0) ? 1 : 2;
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0;
-                else return (c == 0) ? 2 : 1;
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 1 : 2;
-                else return (c == 0) ? 0 : 1;
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 2 : 1;
-                else return (c == 0) ? 1 : 0;
-            }
-        }
-
-        void main() {
-            int row = 4 + int(gl_GlobalInvocationID.y);
-            int col = 4 + (getBayerColor(uCfaPattern, 0, row) & 1) + 2 * int(gl_GlobalInvocationID.x);
-            if (col >= uImageSize.x - 4 || row >= uImageSize.y - 4) return;
-
-            int w = uImageSize.x;
-            int idx = row * w + col;
-            int pqidx = idx / 2;
-            int pqidx2 = (idx - w - 1) / 2;
-            int pqidx3 = (idx + w - 1) / 2;
-            int w2 = 2 * w;
-            int w3 = 3 * w;
-
-            int targetColor = 2 - getBayerColor(uCfaPattern, col, row);
-
-            float PQ_Central_Value   = PQ_dir[pqidx];
-            float PQ_Neighbourhood_Value = 0.25f * (PQ_dir[pqidx2] + PQ_dir[pqidx2 + 1] + PQ_dir[pqidx3] + PQ_dir[pqidx3 + 1]);
-            float PQ_Disc = (abs(0.5f - PQ_Central_Value) < abs(0.5f - PQ_Neighbourhood_Value)) ? PQ_Neighbourhood_Value : PQ_Central_Value;
-
-            float PQ_Disc_Clamped = clamp(PQ_Disc, 0.0f, 1.0f);
-
-            if (targetColor == RED) {
-                float NW_Grad = eps + abs(rgb0[idx - w - 1] - rgb0[idx + w + 1]) + abs(rgb0[idx - w - 1] - rgb0[idx - w3 - 3]) + abs(rgb1[idx] - rgb1[idx - w2 - 2]);
-                float NE_Grad = eps + abs(rgb0[idx - w + 1] - rgb0[idx + w - 1]) + abs(rgb0[idx - w + 1] - rgb0[idx - w3 + 3]) + abs(rgb1[idx] - rgb1[idx - w2 + 2]);
-                float SW_Grad = eps + abs(rgb0[idx - w + 1] - rgb0[idx + w - 1]) + abs(rgb0[idx + w - 1] - rgb0[idx + w3 - 3]) + abs(rgb1[idx] - rgb1[idx + w2 - 2]);
-                float SE_Grad = eps + abs(rgb0[idx - w - 1] - rgb0[idx + w + 1]) + abs(rgb0[idx + w + 1] - rgb0[idx + w3 + 3]) + abs(rgb1[idx] - rgb1[idx + w2 + 2]);
-
-                float NW_Est = rgb0[idx - w - 1] - rgb1[idx - w - 1];
-                float NE_Est = rgb0[idx - w + 1] - rgb1[idx - w + 1];
-                float SW_Est = rgb0[idx + w - 1] - rgb1[idx + w - 1];
-                float SE_Est = rgb0[idx + w + 1] - rgb1[idx + w + 1];
-
-                float P_Est = (NW_Grad * SE_Est + SE_Grad * NW_Est) / (NW_Grad + SE_Grad);
-                float Q_Est = (NE_Grad * SW_Est + SW_Grad * NE_Est) / (NE_Grad + SW_Grad);
-
-                rgb0[idx] = rgb1[idx] + mix(P_Est, Q_Est, PQ_Disc_Clamped);
-            } else if (targetColor == BLUE) {
-                float NW_Grad = eps + abs(rgb2[idx - w - 1] - rgb2[idx + w + 1]) + abs(rgb2[idx - w - 1] - rgb2[idx - w3 - 3]) + abs(rgb1[idx] - rgb1[idx - w2 - 2]);
-                float NE_Grad = eps + abs(rgb2[idx - w + 1] - rgb2[idx + w - 1]) + abs(rgb2[idx - w + 1] - rgb2[idx - w3 + 3]) + abs(rgb1[idx] - rgb1[idx - w2 + 2]);
-                float SW_Grad = eps + abs(rgb2[idx - w + 1] - rgb2[idx + w - 1]) + abs(rgb2[idx + w - 1] - rgb2[idx + w3 - 3]) + abs(rgb1[idx] - rgb1[idx + w2 - 2]);
-                float SE_Grad = eps + abs(rgb2[idx - w - 1] - rgb2[idx + w + 1]) + abs(rgb2[idx + w + 1] - rgb2[idx + w3 + 3]) + abs(rgb1[idx] - rgb1[idx + w2 + 2]);
-
-                float NW_Est = rgb2[idx - w - 1] - rgb1[idx - w - 1];
-                float NE_Est = rgb2[idx - w + 1] - rgb1[idx - w + 1];
-                float SW_Est = rgb2[idx + w - 1] - rgb1[idx + w - 1];
-                float SE_Est = rgb2[idx + w + 1] - rgb1[idx + w + 1];
-
-                float P_Est = (NW_Grad * SE_Est + SE_Grad * NW_Est) / (NW_Grad + SE_Grad);
-                float Q_Est = (NE_Grad * SW_Est + SW_Grad * NE_Est) / (NE_Grad + SW_Grad);
-
-                rgb2[idx] = rgb1[idx] + mix(P_Est, Q_Est, PQ_Disc_Clamped);
-            }
-        }
-    """.trimIndent()
-
-    /**
-     * 8. 红蓝通道在 G CFA 位置插值 (rcd_step_4_3.comp)
-     */
-    val STEP_4_3 = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; }; // R
-        layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; }; // G
-        layout(std430, binding = 3) buffer RGB2_Buf   { float rgb2[]; }; // B
-        layout(std430, binding = 4) buffer VH_Dir_Buf { float VH_dir[]; };
-
-        uniform ivec2 uImageSize;
-        uniform int uCfaPattern;
-
-        #define eps 1e-5f
-
-        int getBayerColor(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1;
-                else return (c == 0) ? 1 : 2;
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0;
-                else return (c == 0) ? 2 : 1;
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 1 : 2;
-                else return (c == 0) ? 0 : 1;
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 2 : 1;
-                else return (c == 0) ? 1 : 0;
-            }
-        }
-
-        void main() {
-            int row = 4 + int(gl_GlobalInvocationID.y);
-            int col = 4 + (getBayerColor(uCfaPattern, 1, row) & 1) + 2 * int(gl_GlobalInvocationID.x);
-            if (col >= uImageSize.x - 4 || row >= uImageSize.y - 4) return;
-
-            int w = uImageSize.x;
-            int idx = row * w + col;
-            int w2 = 2 * w;
-            int w3 = 3 * w;
-
-            float VH_Central_Value   = VH_dir[idx];
-            float VH_Neighbourhood_Value = 0.25f * (VH_dir[idx - w - 1] + VH_dir[idx - w + 1] + VH_dir[idx + w - 1] + VH_dir[idx + w + 1]);
-            float VH_Disc = (abs(0.5f - VH_Central_Value) < abs(0.5f - VH_Neighbourhood_Value)) ? VH_Neighbourhood_Value : VH_Central_Value;
-
-            float VH_Disc_Clamped = clamp(VH_Disc, 0.0f, 1.0f);
-
-            float rgbi1 = rgb1[idx];
-            float N1 = eps + abs(rgbi1 - rgb1[idx - w2]);
-            float S1 = eps + abs(rgbi1 - rgb1[idx + w2]);
-            float W1 = eps + abs(rgbi1 - rgb1[idx - 2]);
-            float E1 = eps + abs(rgbi1 - rgb1[idx + 2]);
-
-            float rgb1mw1 = rgb1[idx - w];
-            float rgb1pw1 = rgb1[idx + w];
-            float rgb1m1 =  rgb1[idx - 1];
-            float rgb1p1 =  rgb1[idx + 1];
-
-            // 1. 红色通道插值
-            {
-                float SNabs = abs(rgb0[idx - w] - rgb0[idx + w]);
-                float EWabs = abs(rgb0[idx - 1] - rgb0[idx + 1]);
-
-                float N_Grad = N1 + SNabs + abs(rgb0[idx - w] - rgb0[idx - w3]);
-                float S_Grad = S1 + SNabs + abs(rgb0[idx + w] - rgb0[idx + w3]);
-                float W_Grad = W1 + EWabs + abs(rgb0[idx - 1] - rgb0[idx - 3]);
-                float E_Grad = E1 + EWabs + abs(rgb0[idx + 1] - rgb0[idx + 3]);
-
-                float N_Est = rgb0[idx - w] - rgb1mw1;
-                float S_Est = rgb0[idx + w] - rgb1pw1;
-                float W_Est = rgb0[idx - 1] - rgb1m1;
-                float E_Est = rgb0[idx + 1] - rgb1p1;
-
-                float V_Est = (N_Grad * S_Est + S_Grad * N_Est) / (N_Grad + S_Grad);
-                float H_Est = (E_Grad * W_Est + W_Grad * E_Est) / (E_Grad + W_Grad);
-
-                rgb0[idx] = rgb1[idx] + mix(V_Est, H_Est, VH_Disc_Clamped);
-            }
-
-            // 2. 蓝色通道插值
-            {
-                float SNabs = abs(rgb2[idx - w] - rgb2[idx + w]);
-                float EWabs = abs(rgb2[idx - 1] - rgb2[idx + 1]);
-
-                float N_Grad = N1 + SNabs + abs(rgb2[idx - w] - rgb2[idx - w3]);
-                float S_Grad = S1 + SNabs + abs(rgb2[idx + w] - rgb2[idx + w3]);
-                float W_Grad = W1 + EWabs + abs(rgb2[idx - 1] - rgb2[idx - 3]);
-                float E_Grad = E1 + EWabs + abs(rgb2[idx + 1] - rgb2[idx + 3]);
-
-                float N_Est = rgb2[idx - w] - rgb1mw1;
-                float S_Est = rgb2[idx + w] - rgb1pw1;
-                float W_Est = rgb2[idx - 1] - rgb1m1;
-                float E_Est = rgb2[idx + 1] - rgb1p1;
-
-                float V_Est = (N_Grad * S_Est + S_Grad * N_Est) / (N_Grad + S_Grad);
-                float H_Est = (E_Grad * W_Est + W_Grad * E_Est) / (E_Grad + W_Grad);
-
-                rgb2[idx] = rgb1[idx] + mix(V_Est, H_Est, VH_Disc_Clamped);
-            }
-        }
-    """.trimIndent()
-
-    /**
-     * 9. 合并 RGB 重建结果写出到 RGBA16F 纹理 (rcd_write_output.comp)。
-     * 照片真实外圈始终由这里内置的 PPG 处理，调用方不能关闭或遗漏。
-     */
-    val WRITE_OUTPUT = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        layout (local_size_x = 8, local_size_y = 8) in;
-
-        layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; };
-        layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; };
-        layout(std430, binding = 3) buffer RGB2_Buf   { float rgb2[]; };
-        layout (rgba16f, binding = 0) writeonly uniform highp image2D uOutputImage;
-
-        uniform ivec2 uImageSize;
-        uniform int uCfaPattern;
-        uniform vec3 uCalculationGains;
-
-        #define RED 0
-        #define GREEN 1
-        #define BLUE 2
-        const int RCD_OUTPUT_MARGIN = $OUTPUT_MARGIN;
-
-        int getBayerColor(int cfaPattern, int col, int row) {
-            int r = row % 2;
-            int c = col % 2;
-            if (cfaPattern == 0) {
-                if (r == 0) return (c == 0) ? RED : GREEN;
-                return (c == 0) ? GREEN : BLUE;
-            } else if (cfaPattern == 1) {
-                if (r == 0) return (c == 0) ? GREEN : RED;
-                return (c == 0) ? BLUE : GREEN;
-            } else if (cfaPattern == 2) {
-                if (r == 0) return (c == 0) ? GREEN : BLUE;
-                return (c == 0) ? RED : GREEN;
-            }
-            if (r == 0) return (c == 0) ? BLUE : GREEN;
-            return (c == 0) ? GREEN : RED;
-        }
-
-        int mirrorIndex(int value, int size) {
-            if (size <= 1) return 0;
-            int period = 2 * (size - 1);
-            int wrapped = value % period;
-            if (wrapped < 0) wrapped += period;
-            return (wrapped < size) ? wrapped : period - wrapped;
-        }
-
-        ivec2 mirrorCoord(ivec2 coord) {
-            return ivec2(
-                mirrorIndex(coord.x, uImageSize.x),
-                mirrorIndex(coord.y, uImageSize.y)
-            );
-        }
-
-        int indexAt(ivec2 coord) {
-            ivec2 safe = mirrorCoord(coord);
-            return safe.y * uImageSize.x + safe.x;
-        }
-
-        int colorAt(ivec2 coord) {
-            ivec2 safe = mirrorCoord(coord);
-            return getBayerColor(uCfaPattern, safe.x, safe.y);
-        }
-
-        float rawAt(ivec2 coord) {
-            return cfa[indexAt(coord)];
-        }
-
-        $PPG_KERNEL
-
-        void main() {
-            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-            if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
-
-            vec3 color;
-            if (coord.x >= RCD_OUTPUT_MARGIN && coord.x < uImageSize.x - RCD_OUTPUT_MARGIN &&
-                coord.y >= RCD_OUTPUT_MARGIN && coord.y < uImageSize.y - RCD_OUTPUT_MARGIN) {
-                int idx = coord.y * uImageSize.x + coord.x;
-                color = max(vec3(rgb0[idx], rgb1[idx], rgb2[idx]), vec3(0.0));
-            } else {
-                color = ppgColorAt(coord);
-            }
-
-            color /= max(uCalculationGains, vec3(1e-6));
-            imageStore(uOutputImage, coord, vec4(color, 1.0));
-        }
-    """.trimIndent()
-}
+import android.opengl.GLES30
+import android.opengl.GLES31
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.processor.GlesGpuScheduler
+import com.hinnka.mycamera.utils.PLog
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.math.sqrt
 
 /**
  * Full packed-Bayer VGN demosaic and colour-noise pipeline.
  *
- * The arithmetic shaders are kept in the same pass boundaries and image formats as the
- * interoperability reference under research/phocus_glsl/02_demosaic. Android-specific RAW
- * preparation and final CFA-phase composition live beside these constants below.
+ * The arithmetic shaders keep the interoperability-reference pass boundaries and image formats;
+ * their intermediate images are internal implementation details of this algorithm.
  */
 object VgnShaders {
 
@@ -3551,4 +2622,1002 @@ void main() {
         "composite_camera_rgb" to COMPOSITE_CAMERA_RGB,
     )
 
+}
+
+internal class VgnDemosaicAlgorithm {
+    data class Input(
+        val metadata: RawMetadata,
+        val rawTextureId: Int,
+        val linearOutputTextureId: Int,
+        val outputTextureId: Int,
+        val lensShadingTextureId: Int,
+        val width: Int,
+        val height: Int,
+        val highlightReconstructionEnabled: Boolean,
+        val globalOriginX: Int,
+        val globalOriginY: Int,
+        val calculationWhiteBalanceGains: FloatArray,
+        val denoiseReadNoiseOffset: Float,
+        val hotPixelNoiseSlope: FloatArray,
+        val hotPixelNoiseOffset: FloatArray,
+        val lensShadingDescription: String,
+        val bindLensShading: (programId: Int, globalOriginX: Int, globalOriginY: Int) -> Unit,
+    )
+
+    data class Output(val textureId: Int, val width: Int, val height: Int)
+
+    private val programs = IntArray(VgnShaders.PROGRAM_SOURCES.size)
+    private val hotPixelCorrection = RawHotPixelCorrectionAlgorithm()
+    private var activeVgnPassWindow: GlesGpuScheduler.PassWindow? = null
+
+    fun initialize(): Boolean {
+        VgnShaders.PROGRAM_SOURCES.forEachIndexed { index, (label, source) ->
+            if (programs[index] == 0) {
+                programs[index] = RawGlesProgram.compileCompute(
+                    source,
+                    "VGN_${label.uppercase(java.util.Locale.ROOT)}",
+                )
+            }
+        }
+        return programs.all { it != 0 } && hotPixelCorrection.initialize()
+    }
+
+    fun execute(input: Input): Output? {
+        if (!initialize()) return null
+        run(input)
+        return Output(input.outputTextureId, input.width, input.height)
+    }
+
+    fun setTileTexturePoolingEnabled(enabled: Boolean) {
+        vgnTileTexturePoolingEnabled = enabled
+        if (!enabled) releaseVgnTileTexturePool()
+    }
+
+    fun release() {
+        programs.forEachIndexed { index, program ->
+            if (program != 0) GLES31.glDeleteProgram(program)
+            programs[index] = 0
+        }
+        hotPixelCorrection.release()
+        releaseVgnTileTexturePool()
+    }
+
+    private data class VgnImageBinding(
+        val unit: Int,
+        val texture: Int,
+        val access: Int,
+        val format: Int,
+    )
+
+    private data class VgnTextureKey(
+        val internalFormat: Int,
+        val width: Int,
+        val height: Int,
+    )
+
+    private var vgnTileTexturePoolingEnabled = false
+    private val vgnTileAvailableTextures = mutableMapOf<VgnTextureKey, ArrayDeque<Int>>()
+    private val vgnTileTextureKeys = mutableMapOf<Int, VgnTextureKey>()
+
+    private fun obtainVgnTexture(
+        internalFormat: Int,
+        width: Int,
+        height: Int,
+        label: String,
+    ): Int {
+        val key = VgnTextureKey(internalFormat, width, height)
+        if (vgnTileTexturePoolingEnabled) {
+            vgnTileAvailableTextures[key]?.removeLastOrNull()?.let { return it }
+        }
+        return createVgnTexture(internalFormat, width, height, label).also { texture ->
+            if (vgnTileTexturePoolingEnabled) {
+                vgnTileTextureKeys[texture] = key
+            }
+        }
+    }
+
+    private fun recycleVgnTexture(texture: Int) {
+        val key = vgnTileTextureKeys[texture]
+        if (vgnTileTexturePoolingEnabled && key != null) {
+            vgnTileAvailableTextures.getOrPut(key, ::ArrayDeque).addLast(texture)
+        } else {
+            GLES30.glDeleteTextures(1, intArrayOf(texture), 0)
+            vgnTileTextureKeys.remove(texture)
+        }
+    }
+
+    private fun releaseVgnTileTexturePool() {
+        if (vgnTileTextureKeys.isNotEmpty()) {
+            val textures = vgnTileTextureKeys.keys.toIntArray()
+            GLES30.glDeleteTextures(textures.size, textures, 0)
+        }
+        vgnTileTextureKeys.clear()
+        vgnTileAvailableTextures.clear()
+    }
+
+    private fun createVgnTexture(internalFormat: Int, width: Int, height: Int, label: String): Int {
+        require(width > 0 && height > 0) { "Invalid VGN texture size for $label: ${width}x$height" }
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        check(ids[0] != 0) { "Failed to allocate VGN texture for $label" }
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, internalFormat, width, height)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        RawGlesProgram.logErrors("VGN allocate $label ${width}x$height")
+        return ids[0]
+    }
+
+    private fun vgnUbo(capacity: Int, writer: ByteBuffer.() -> Unit): ByteBuffer {
+        val buffer = ByteBuffer.allocateDirect(capacity).order(ByteOrder.nativeOrder())
+        buffer.writer()
+        buffer.limit(buffer.position())
+        buffer.position(0)
+        return buffer
+    }
+
+    private fun vgnBoundsUbo(left: Int, top: Int, right: Int, bottom: Int): ByteBuffer =
+        vgnUbo(16) {
+            putInt(left)
+            putInt(top)
+            putInt(right)
+            putInt(bottom)
+        }
+
+    private fun vgnThresholdBoundsUbo(
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        edgeThreshold: Int,
+        vngThreshold: Int,
+    ): ByteBuffer = vgnUbo(32) {
+        putInt(left)
+        putInt(top)
+        putInt(right)
+        putInt(bottom)
+        putInt(edgeThreshold)
+        putInt(vngThreshold)
+        putInt(0)
+        putInt(0)
+    }
+
+    private data class VgnIirCoefficients(
+        val a10: FloatArray,
+        val b10: FloatArray,
+        val aDyn1: FloatArray,
+        val bDyn1: FloatArray,
+        val aDyn2: FloatArray,
+        val bDyn2: FloatArray,
+    )
+
+    // Exact coefficient rows selected by CDemosaicFilter::FilterResultGpu for color-noise
+    // level 50. a10/b10 is GetIIRFilter2LPCoefFloat(14); the two dynamic sections are the
+    // cascaded biquads returned by GetIIRFilter4LPCoefFloat(44) and (20), respectively.
+    private val vgnIirPass1Coefficients = VgnIirCoefficients(
+        a10 = floatArrayOf(0.0674552768f, 0.134910554f, 0.0674552768f, 0f),
+        b10 = floatArrayOf(1f, -1.14298046f, 0.412801594f, 0f),
+        aDyn1 = floatArrayOf(0.00580812711f, 0.0116162542f, 0.00580812711f, 0f),
+        bDyn1 = floatArrayOf(1f, -1.86380053f, 0.887032986f, 0f),
+        aDyn2 = floatArrayOf(0.00537849404f, 0.0107569881f, 0.00537849404f, 0f),
+        bDyn2 = floatArrayOf(1f, -1.72593343f, 0.747447371f, 0f),
+    )
+
+    private val vgnIirPass3Coefficients = VgnIirCoefficients(
+        a10 = vgnIirPass1Coefficients.a10,
+        b10 = vgnIirPass1Coefficients.b10,
+        aDyn1 = floatArrayOf(0.0331984349f, 0.0663968697f, 0.0331984349f, 0f),
+        bDyn1 = floatArrayOf(1f, -1.61172712f, 0.744520843f, 0f),
+        aDyn2 = floatArrayOf(0.0281187538f, 0.0562375076f, 0.0281187538f, 0f),
+        bDyn2 = floatArrayOf(1f, -1.36511719f, 0.47759226f, 0f),
+    )
+
+    private fun vgnIirUbo(
+        width: Int,
+        height: Int,
+        direction: Int,
+        axis: Int,
+        coefficients: VgnIirCoefficients,
+    ): ByteBuffer {
+        return vgnUbo(112) {
+            for (value in coefficients.a10) putFloat(value)
+            for (value in coefficients.b10) putFloat(value)
+            for (value in coefficients.aDyn1) putFloat(value)
+            for (value in coefficients.bDyn1) putFloat(value)
+            for (value in coefficients.aDyn2) putFloat(value)
+            for (value in coefficients.bDyn2) putFloat(value)
+            putInt(width)
+            putInt(height)
+            putInt(direction)
+            putInt(axis)
+        }
+    }
+
+    private fun dispatchVgnPass(
+        programIndex: Int,
+        groupCountX: Int,
+        groupCountY: Int,
+        label: String,
+        uboId: Int,
+        uboBinding: Int? = null,
+        ubo: ByteBuffer? = null,
+        vararg images: VgnImageBinding,
+    ) {
+        val passWindow = checkNotNull(activeVgnPassWindow) {
+            "VGN pass window is unavailable for $label"
+        }
+        val imageReads = images
+            .filter { it.access != GLES31.GL_WRITE_ONLY }
+            .map { GlesGpuScheduler.textureResource(it.texture) }
+        val imageWrites = images
+            .filter { it.access != GLES31.GL_READ_ONLY }
+            .map { GlesGpuScheduler.textureResource(it.texture) }
+        val uboResource = if (uboBinding != null && ubo != null) {
+            GlesGpuScheduler.bufferResource(uboId)
+        } else {
+            0L
+        }
+        passWindow.beginPass(
+            label,
+            reads = (imageReads + uboResource).filter { it != 0L }.toLongArray(),
+            writes = (imageWrites + uboResource).filter { it != 0L }.toLongArray(),
+        )
+        val program = programs[programIndex]
+        check(program != 0) { "VGN program unavailable: $label" }
+        GLES31.glUseProgram(program)
+        for (image in images) {
+            GLES31.glBindImageTexture(
+                image.unit,
+                image.texture,
+                0,
+                false,
+                0,
+                image.access,
+                image.format,
+            )
+        }
+        if (uboBinding != null && ubo != null) {
+            GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, uboId)
+            GLES31.glBufferData(
+                GLES31.GL_UNIFORM_BUFFER,
+                ubo.remaining(),
+                ubo,
+                GLES31.GL_DYNAMIC_DRAW,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, uboBinding, uboId)
+            GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, 0)
+        }
+        GLES31.glDispatchCompute(groupCountX.coerceAtLeast(1), groupCountY.coerceAtLeast(1), 1)
+        GlesGpuScheduler.memoryBarrier()
+        RawGlesProgram.logErrors("VGN $label")
+        unbindVgnImages()
+        if (uboBinding != null) {
+            GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, uboBinding, 0)
+        }
+        passWindow.endPass()
+    }
+
+    private fun runVgnIirPass(
+        programIndex: Int,
+        source: Int,
+        destination: Int,
+        uboId: Int,
+        width: Int,
+        height: Int,
+        direction: Int,
+        axis: Int,
+        coefficients: VgnIirCoefficients,
+        label: String,
+    ) {
+        val groupsX = if (axis == 0) 1 else width
+        val groupsY = if (axis == 0) height else 1
+        dispatchVgnPass(
+            programIndex = programIndex,
+            groupCountX = groupsX,
+            groupCountY = groupsY,
+            label = label,
+            uboId = uboId,
+            uboBinding = 2,
+            ubo = vgnIirUbo(width, height, direction, axis, coefficients),
+            VgnImageBinding(0, source, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+            VgnImageBinding(1, destination, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+        )
+    }
+
+    private fun unbindVgnImages() {
+        for (unit in 0..5) {
+            GLES31.glBindImageTexture(
+                unit,
+                0,
+                0,
+                false,
+                0,
+                GLES31.GL_READ_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+        }
+    }
+
+    /**
+     * Detects and repairs sparse positive RAW impulses before any normalization, lens shading,
+     * white balance, or demosaic operation. The input texture remains untouched because the
+     * repair needs a stable same-CFA neighborhood for every invocation.
+     */
+    /**
+     * Packed standard-Bayer VGN demosaic shared by single-frame RAW and Spatial Bayer.
+     *
+     * PREPARE_PACKED_RAW applies black normalization, CFA-aware LSC and calculation WB exactly
+     * once. COMPOSITE_CAMERA_RGB removes only the calculation WB, preserving the camera-RGB
+     * contract (LSC applied, WB unapplied) required by MGC full-resolution denoise and Linear DNG.
+     */
+    private fun run(input: Input) {
+        val metadata = input.metadata
+        val width = input.width
+        val height = input.height
+        val highlightReconstructionEnabled = input.highlightReconstructionEnabled
+        val globalOriginX = input.globalOriginX
+        val globalOriginY = input.globalOriginY
+        val demosaicStartNs = System.nanoTime()
+        require(metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR) {
+            "VGN requires a standard 2x2 Bayer CFA, got ${metadata.cfaPattern}"
+        }
+        require(width >= 64 && height >= 64) {
+            "VGN input is too small for the 16-pixel reference halo: ${width}x$height"
+        }
+
+        val phaseX = if (metadata.cfaPattern == RawMetadata.CFA_GRBG ||
+            metadata.cfaPattern == RawMetadata.CFA_BGGR
+        ) 1 else 0
+        val phaseY = if (metadata.cfaPattern == RawMetadata.CFA_GBRG ||
+            metadata.cfaPattern == RawMetadata.CFA_BGGR
+        ) 1 else 0
+        // The reference shaders operate on a canonical RGGB work domain. Offsetting the
+        // photo ROI by the source CFA phase preserves that parity without translating the
+        // finished RGB image. The surrounding pixels are edge-extended support data only.
+        val roiLeft = WORK_HALO + phaseX
+        val roiTop = WORK_HALO + phaseY
+        val roiRight = roiLeft + width
+        val roiBottom = roiTop + height
+        val packedWidth = (roiRight + WORK_HALO + 3) / 4
+        val workWidth = packedWidth * 4
+        val workHeight = ((roiBottom + WORK_HALO + 1) / 2) * 2
+        val halfHeight = workHeight / 2
+        val groupsPackedX = GlesComputeWorkGroup.imageGroupCount(packedWidth)
+        val groupsWorkX = GlesComputeWorkGroup.imageGroupCount(workWidth)
+        val groupsWorkY = GlesComputeWorkGroup.imageGroupCount(workHeight)
+        val groupsHalfHeight = GlesComputeWorkGroup.imageGroupCount(halfHeight)
+        val groupsOutputX = GlesComputeWorkGroup.imageGroupCount(width)
+        val groupsOutputY = GlesComputeWorkGroup.imageGroupCount(height)
+        val calculationGains = input.calculationWhiteBalanceGains
+        val blackLevel4 = FloatArray(4) { index ->
+            metadata.blackLevel.getOrElse(index) { metadata.blackLevel.firstOrNull() ?: 0f }
+                .coerceAtLeast(0f)
+        }
+        val noiseOffset = input.denoiseReadNoiseOffset
+        // Phocus feeds PASS_0A2 with black/read-noise deviation, not the total noise at
+        // middle grey. Its GetInterpolateThresholds() then clamps blackStd / demosaicGain
+        // to [1, 100] and derives the two direction thresholds as 50/gain and 400/gain.
+        // PREPARE_PACKED_RAW already normalizes the sensor range and applies the calculation
+        // neutral, so the corresponding demosaic gain in this work domain is exactly 1.
+        val standardDeviation =
+            (sqrt(noiseOffset.coerceAtLeast(1e-10f)) * 65535f).coerceIn(1f, 100f)
+        val edgeThreshold = 50
+        val vngThreshold = 400
+        val liveTextures = linkedSetOf<Int>()
+        fun allocate(format: Int, textureWidth: Int, textureHeight: Int, label: String): Int =
+            obtainVgnTexture(format, textureWidth, textureHeight, label).also(liveTextures::add)
+        fun releaseTexture(texture: Int) {
+            if (liveTextures.remove(texture)) {
+                recycleVgnTexture(texture)
+            }
+        }
+
+        val uboIds = IntArray(DISPATCH_UBO_SLOT_COUNT)
+        GLES31.glGenBuffers(uboIds.size, uboIds, 0)
+        check(uboIds.all { it != 0 }) { "Failed to allocate VGN dispatch UBO ring" }
+        var nextUboIndex = 0
+        fun nextVgnUboId(): Int {
+            val uboId = uboIds[nextUboIndex % uboIds.size]
+            nextUboIndex += 1
+            return uboId
+        }
+        check(activeVgnPassWindow == null) { "Nested VGN pass windows are unsupported" }
+        val passWindow = GlesGpuScheduler.PassWindow(TAG, PASS_WINDOW_SIZE)
+        activeVgnPassWindow = passWindow
+
+        try {
+            val sourcePackedWidth = (width + 3) / 4
+            val hotPixelMask = allocate(
+                GLES30.GL_RGBA8UI,
+                sourcePackedWidth,
+                height,
+                "hot-pixel mask",
+            )
+            val repairedRaw = allocate(
+                GLES30.GL_RGBA16UI,
+                sourcePackedWidth,
+                height,
+                "hot-pixel repaired RAW",
+            )
+            unbindVgnImages()
+            for (binding in 2..5) {
+                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
+            }
+            checkNotNull(
+                hotPixelCorrection.execute(
+                    RawHotPixelCorrectionAlgorithm.Input(
+                        sourceTextureId = input.rawTextureId,
+                        maskTextureId = hotPixelMask,
+                        repairedTextureId = repairedRaw,
+                        width = width,
+                        height = height,
+                        globalOriginX = globalOriginX,
+                        globalOriginY = globalOriginY,
+                        cfaPattern = metadata.cfaPattern,
+                        blackLevel = blackLevel4,
+                        whiteLevel = metadata.whiteLevel,
+                        noiseSlope = input.hotPixelNoiseSlope,
+                        noiseOffset = input.hotPixelNoiseOffset,
+                        frameCount = metadata.frameCount,
+                        passWindow = passWindow,
+                    ),
+                ),
+            ) { "RAW hot-pixel correction programs are unavailable" }
+            passWindow.awaitResources(
+                "release RAW hot-pixel mask",
+                longArrayOf(GlesGpuScheduler.textureResource(hotPixelMask)),
+            )
+            releaseTexture(hotPixelMask)
+
+            val packedFloat = allocate(GLES30.GL_RGBA16F, packedWidth, workHeight, "packed float")
+            val packedBayer = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed Bayer")
+            val packedSmooth = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed smooth")
+            val scaleTexture = allocate(GLES30.GL_RGBA16F, workWidth, halfHeight, "scale")
+            val medianTexture = allocate(GLES30.GL_RGBA16F, packedWidth, halfHeight, "median")
+            val edgeTexture = allocate(GLES30.GL_RGBA16I, packedWidth, workHeight, "edge")
+            val full0 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 0")
+            val full1 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 1")
+
+            passWindow.beginPass(
+                "prepare packed RAW",
+                reads = longArrayOf(
+                    GlesGpuScheduler.textureResource(repairedRaw),
+                    GlesGpuScheduler.textureResource(input.lensShadingTextureId),
+                ),
+                writes = longArrayOf(GlesGpuScheduler.textureResource(packedFloat)),
+            )
+            val prepareProgram = programs[VgnShaders.PROGRAM_PREPARE]
+            GLES31.glUseProgram(prepareProgram)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RAW_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, repairedRaw)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(prepareProgram, "uRawTexture"),
+                RAW_TEXTURE_UNIT,
+            )
+            input.bindLensShading(
+                prepareProgram,
+                globalOriginX,
+                globalOriginY,
+            )
+            GLES31.glUniform2i(GLES31.glGetUniformLocation(prepareProgram, "uImageSize"), width, height)
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(prepareProgram, "uFullImageSize"),
+                metadata.width,
+                metadata.height,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(prepareProgram, "uGlobalOrigin"),
+                globalOriginX,
+                globalOriginY,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(prepareProgram, "uPackedSize"),
+                packedWidth,
+                workHeight,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(prepareProgram, "uSourceOffset"),
+                roiLeft,
+                roiTop,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(prepareProgram, "uCfaPattern"),
+                metadata.cfaPattern,
+            )
+            GLES31.glUniform4fv(
+                GLES31.glGetUniformLocation(prepareProgram, "uBlackLevel"),
+                1,
+                blackLevel4,
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(prepareProgram, "uWhiteLevel"),
+                metadata.whiteLevel,
+            )
+            GLES31.glUniform4fv(
+                GLES31.glGetUniformLocation(prepareProgram, "uCalculationGains"),
+                1,
+                calculationGains,
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(prepareProgram, "uHighlightClipThreshold"),
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(prepareProgram, "uHighlightCeiling"),
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(prepareProgram, "uHighlightReconstructionEnabled"),
+                if (highlightReconstructionEnabled) 1 else 0,
+            )
+            GLES31.glBindImageTexture(
+                0,
+                packedFloat,
+                0,
+                false,
+                0,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+            GLES31.glDispatchCompute(groupsPackedX, groupsWorkY, 1)
+            GlesGpuScheduler.memoryBarrier()
+            RawGlesProgram.logErrors("VGN prepare packed RAW")
+            unbindVgnImages()
+            passWindow.endPass()
+            passWindow.awaitResources(
+                "release RAW hot-pixel intermediates",
+                longArrayOf(
+                    GlesGpuScheduler.textureResource(repairedRaw),
+                ),
+            )
+            releaseTexture(repairedRaw)
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_NEUTRAL,
+                groupsPackedX,
+                groupsWorkY,
+                "neutral",
+                nextVgnUboId(),
+                2,
+                vgnUbo(48) {
+                    putInt(0); putInt(0); putInt(packedWidth); putInt(workHeight)
+                    putInt(4096); putInt(4096); putInt(4096); putInt(0)
+                    putInt(12); putInt(0); putInt(0); putInt(0)
+                },
+                VgnImageBinding(0, packedFloat, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(1, packedBayer, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0A1,
+                groupsPackedX,
+                groupsWorkY,
+                "pass 0A1",
+                nextVgnUboId(),
+                2,
+                vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
+                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, packedSmooth, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0A2,
+                groupsWorkX,
+                groupsHalfHeight,
+                "pass 0A2",
+                nextVgnUboId(),
+                2,
+                vgnUbo(32) {
+                    putInt(0); putInt(1); putInt(packedWidth - 1); putInt((workHeight - 2) / 2)
+                    putFloat(standardDeviation); putFloat(0f); putFloat(0f); putFloat(0f)
+                },
+                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, scaleTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0B,
+                groupsPackedX,
+                groupsHalfHeight,
+                "pass 0B",
+                nextVgnUboId(),
+                2,
+                vgnBoundsUbo(1, 0, packedWidth - 1, workHeight - 4),
+                VgnImageBinding(0, scaleTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(1, medianTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0C,
+                groupsPackedX,
+                groupsWorkY,
+                "pass 0C",
+                nextVgnUboId(),
+                2,
+                vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
+                VgnImageBinding(0, packedSmooth, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, edgeTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16I),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_1,
+                groupsWorkX,
+                groupsWorkY,
+                "pass 1",
+                nextVgnUboId(),
+                5,
+                vgnThresholdBoundsUbo(
+                    12,
+                    12,
+                    workWidth - 12,
+                    workHeight - 12,
+                    edgeThreshold,
+                    vngThreshold,
+                ),
+                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, edgeTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16I),
+                VgnImageBinding(2, scaleTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(3, medianTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(4, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_2,
+                groupsWorkX,
+                groupsWorkY,
+                "pass 2",
+                nextVgnUboId(),
+                2,
+                vgnBoundsUbo(13, 13, workWidth - 13, workHeight - 13),
+                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_3,
+                groupsWorkX,
+                groupsWorkY,
+                "pass 3",
+                nextVgnUboId(),
+                4,
+                vgnThresholdBoundsUbo(
+                    16,
+                    16,
+                    workWidth - 16,
+                    workHeight - 16,
+                    edgeThreshold,
+                    vngThreshold,
+                ),
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(2, edgeTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16I),
+                VgnImageBinding(3, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            unbindVgnImages()
+            passWindow.awaitResources(
+                "release packed VGN intermediates",
+                longArrayOf(
+                    GlesGpuScheduler.textureResource(packedFloat),
+                    GlesGpuScheduler.textureResource(packedSmooth),
+                    GlesGpuScheduler.textureResource(scaleTexture),
+                    GlesGpuScheduler.textureResource(medianTexture),
+                    GlesGpuScheduler.textureResource(edgeTexture),
+                    GlesGpuScheduler.textureResource(packedBayer),
+                ),
+            )
+            releaseTexture(packedFloat)
+            releaseTexture(packedSmooth)
+            releaseTexture(scaleTexture)
+            releaseTexture(medianTexture)
+            releaseTexture(edgeTexture)
+            releaseTexture(packedBayer)
+
+            val full2 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 2")
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_1,
+                groupsWorkX,
+                groupsWorkY,
+                "color reconstruction 1",
+                nextVgnUboId(),
+                2,
+                vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
+                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_2,
+                groupsWorkX,
+                groupsWorkY,
+                "color reconstruction 2",
+                nextVgnUboId(),
+                2,
+                vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            val full3 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 3")
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_3_YCCD,
+                groupsWorkX,
+                groupsWorkY,
+                "color reconstruction 3 YCCD",
+                nextVgnUboId(),
+                4,
+                vgnBoundsUbo(12, 12, workWidth - 12, workHeight - 12),
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(2, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(3, full3, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_IIR2_1_INIT,
+                1,
+                workHeight,
+                "IIR2 pass 1 horizontal forward",
+                nextVgnUboId(),
+                3,
+                vgnIirUbo(workWidth, workHeight, 0, 0, vgnIirPass1Coefficients),
+                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_1,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                0,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 1 horizontal reverse",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_1,
+                full3,
+                full2,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 1 vertical forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_1,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 1 vertical reverse",
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_CALCULATE_COLOR_NOISE_ERROR,
+                groupsWorkX,
+                groupsWorkY,
+                "calculate color noise error",
+                nextVgnUboId(),
+                images = arrayOf(
+                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                ),
+            )
+
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                0,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 horizontal forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full3,
+                full2,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                0,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 horizontal reverse",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full2,
+                full3,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 vertical forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_2,
+                full3,
+                full2,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                1,
+                vgnIirPass1Coefficients,
+                "IIR2 pass 2 vertical reverse",
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_FILTER,
+                groupsWorkX,
+                groupsWorkY,
+                "color noise filter",
+                nextVgnUboId(),
+                images = arrayOf(
+                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(2, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                ),
+            )
+
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full1,
+                full0,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                0,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 horizontal forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full0,
+                full1,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                0,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 horizontal reverse",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full1,
+                full0,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                0,
+                1,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 vertical forward",
+            )
+            runVgnIirPass(
+                VgnShaders.PROGRAM_IIR2_3,
+                full0,
+                full1,
+                nextVgnUboId(),
+                workWidth,
+                workHeight,
+                1,
+                1,
+                vgnIirPass3Coefficients,
+                "IIR2 pass 3 vertical reverse",
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_YUV_TO_RGB,
+                groupsOutputX,
+                groupsOutputY,
+                "YUV to RGB",
+                nextVgnUboId(),
+                2,
+                vgnUbo(32) {
+                    putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
+                    putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
+                },
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(
+                    1,
+                    input.linearOutputTextureId,
+                    GLES31.GL_WRITE_ONLY,
+                    GLES30.GL_RGBA16F,
+                ),
+            )
+
+            passWindow.beginPass(
+                "composite camera RGB",
+                reads = longArrayOf(
+                    GlesGpuScheduler.textureResource(input.linearOutputTextureId),
+                ),
+                writes = longArrayOf(
+                    GlesGpuScheduler.textureResource(input.outputTextureId),
+                ),
+            )
+            val compositeProgram = programs[VgnShaders.PROGRAM_COMPOSITE]
+            GLES31.glUseProgram(compositeProgram)
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(compositeProgram, "uImageSize"),
+                width,
+                height,
+            )
+            GLES31.glUniform3f(
+                GLES31.glGetUniformLocation(compositeProgram, "uCalculationGains"),
+                calculationGains[0],
+                1f,
+                calculationGains[3],
+            )
+            GLES31.glBindImageTexture(0, input.linearOutputTextureId, 0, false, 0,
+                GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F)
+            GLES31.glBindImageTexture(1, input.outputTextureId, 0, false, 0,
+                GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+            GLES31.glDispatchCompute(groupsOutputX, groupsOutputY, 1)
+            GlesGpuScheduler.memoryBarrier()
+            RawGlesProgram.logErrors("VGN composite camera RGB")
+            unbindVgnImages()
+            passWindow.endPass()
+            passWindow.drain("VGN camera RGB handoff")
+
+            PLog.d(
+                TAG,
+                "Standard Bayer VGN complete: size=${width}x$height work=${workWidth}x$workHeight " +
+                    "roi=$roiLeft,$roiTop,$roiRight,$roiBottom cfa=${metadata.cfaPattern} " +
+                    "stdDev=$standardDeviation edgeThreshold=$edgeThreshold " +
+                    "vngThreshold=$vngThreshold colorNoiseLevel=$COLOR_NOISE_LEVEL " +
+                    "gpuSliced=true tookMs=${(System.nanoTime() - demosaicStartNs) / 1_000_000} " +
+                    "calculationWb=${calculationGains.contentToString()} " +
+                    "lsc=${input.lensShadingDescription}",
+            )
+        } finally {
+            passWindow.drain("VGN resource release")
+            activeVgnPassWindow = null
+            unbindVgnImages()
+            for (binding in 0..5) {
+                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
+            }
+            GLES31.glDeleteBuffers(uboIds.size, uboIds, 0)
+            if (liveTextures.isNotEmpty()) {
+                liveTextures.forEach(::recycleVgnTexture)
+                liveTextures.clear()
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        }
+    }
+
+    private companion object {
+        const val TAG = "VgnDemosaic"
+        const val RAW_TEXTURE_UNIT = 0
+        const val WORK_HALO = 20
+        const val COLOR_NOISE_LEVEL = 50
+        const val DISPATCH_UBO_SLOT_COUNT = 2
+        const val PASS_WINDOW_SIZE = 2
+    }
 }
