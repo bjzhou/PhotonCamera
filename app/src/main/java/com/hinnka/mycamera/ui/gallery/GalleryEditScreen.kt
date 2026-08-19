@@ -743,8 +743,12 @@ fun GalleryEditScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(isZoomed, currentPhoto.isVideo) {
-                        if (!isZoomed && !currentPhoto.isVideo) {
+                    .pointerInput(isZoomed, currentPhoto.isVideo, editTab) {
+                        if (
+                            !isZoomed &&
+                            !currentPhoto.isVideo &&
+                            editTab != EDIT_TAB_CROP
+                        ) {
                             var totalDrag = 0f
                             detectHorizontalDragGestures(
                                 onDragEnd = {
@@ -930,9 +934,10 @@ fun GalleryEditScreen(
                     CropOverlay(
                         bitmap = cropPreviewBitmap,
                         cropRect = editCropRect ?: cropBounds,
-                        cropBounds = cropBounds,
                         cropAspectRatio = cropAspectRatio,
                         straightenDegrees = editStraightenDegrees,
+                        geometrySourceWidth = straightenSourceWidth,
+                        geometrySourceHeight = straightenSourceHeight,
                         onCropRectChanged = { rect -> viewModel.setCropRect(rect) },
                         aspectOption = editCropAspectOption,
                         contentPadding = 28.dp,

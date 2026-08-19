@@ -127,6 +127,75 @@ class PostEditGeometryTest {
     }
 
     @Test
+    fun maximumSquareCropCanMoveAlongLandscapeImage() {
+        val crop = PostEditGeometry.straightenSafeNormalizedBoundsForAspect(
+            width = 4000,
+            height = 3000,
+            straightenDegrees = 0f,
+            pixelAspect = 1f
+        )
+
+        val translated = PostEditGeometry.translateNormalizedCropBoundsWithinStraightenedSource(
+            rect = crop,
+            deltaX = 0.5f,
+            deltaY = 0.25f,
+            width = 4000,
+            height = 3000,
+            straightenDegrees = 0f
+        )
+
+        assertEquals(crop.right - crop.left, translated.right - translated.left, 0.0001f)
+        assertEquals(crop.bottom - crop.top, translated.bottom - translated.top, 0.0001f)
+        assertTrue(translated.left + translated.right > crop.left + crop.right)
+        assertEquals(1f, translated.right, 0.0001f)
+        assertEquals(crop.top + crop.bottom, translated.top + translated.bottom, 0.0001f)
+    }
+
+    @Test
+    fun translatedCropStaysInsideStraightenedSource() {
+        val maximalCrop = PostEditGeometry.straightenSafeNormalizedBoundsForAspect(
+            width = 4000,
+            height = 3000,
+            straightenDegrees = 27f,
+            pixelAspect = 1f
+        )
+        val maximalCenterX = (maximalCrop.left + maximalCrop.right) / 2f
+        val maximalCenterY = (maximalCrop.top + maximalCrop.bottom) / 2f
+        val scaledHalfWidth = (maximalCrop.right - maximalCrop.left) * 0.35f
+        val scaledHalfHeight = (maximalCrop.bottom - maximalCrop.top) * 0.35f
+        val crop = PostEditGeometry.NormalizedBounds(
+            maximalCenterX - scaledHalfWidth,
+            maximalCenterY - scaledHalfHeight,
+            maximalCenterX + scaledHalfWidth,
+            maximalCenterY + scaledHalfHeight
+        )
+
+        val translated = PostEditGeometry.translateNormalizedCropBoundsWithinStraightenedSource(
+            rect = crop,
+            deltaX = 0.6f,
+            deltaY = -0.4f,
+            width = 4000,
+            height = 3000,
+            straightenDegrees = 27f
+        )
+
+        assertEquals(crop.right - crop.left, translated.right - translated.left, 0.0001f)
+        assertEquals(crop.bottom - crop.top, translated.bottom - translated.top, 0.0001f)
+        assertTrue(
+            PostEditGeometry.isNormalizedCropBoundsInsideStraightenedSource(
+                translated,
+                width = 4000,
+                height = 3000,
+                straightenDegrees = 27f
+            )
+        )
+        assertTrue(
+            translated.left + translated.right != crop.left + crop.right ||
+                translated.top + translated.bottom != crop.top + crop.bottom
+        )
+    }
+
+    @Test
     fun remappingFullCropOutAndBackDoesNotAccumulateShrinkage() {
         val straightened = PostEditGeometry.remapNormalizedCropBoundsForStraighten(
             rect = PostEditGeometry.NormalizedBounds(0f, 0f, 1f, 1f),

@@ -101,6 +101,239 @@ object PostEditGeometry {
         return RectF(bounds.left, bounds.top, bounds.right, bounds.bottom)
     }
 
+    /**
+     * Translates [rect] by a normalized output-space delta while keeping every crop corner inside
+     * the rotated source image. The crop size is preserved. Clamping in source-space lets the crop
+     * continue moving along a valid edge instead of stopping both axes when only one axis reaches
+     * the image boundary.
+     */
+    fun translateCropRectWithinStraightenedSource(
+        rect: RectF,
+        deltaX: Float,
+        deltaY: Float,
+        width: Int,
+        height: Int,
+        straightenDegrees: Float
+    ): RectF {
+        val translated = translateNormalizedCropBoundsWithinStraightenedSource(
+            rect = NormalizedBounds(rect.left, rect.top, rect.right, rect.bottom),
+            deltaX = deltaX,
+            deltaY = deltaY,
+            width = width,
+            height = height,
+            straightenDegrees = straightenDegrees
+        )
+        return RectF(translated.left, translated.top, translated.right, translated.bottom)
+    }
+
+    internal fun translateNormalizedCropBoundsWithinStraightenedSource(
+        rect: NormalizedBounds,
+        deltaX: Float,
+        deltaY: Float,
+        width: Int,
+        height: Int,
+        straightenDegrees: Float
+    ): NormalizedBounds {
+        if (width <= 0 || height <= 0) return rect
+
+        val normalizedRect = normalizedToUnitBounds(
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom
+        ) ?: return rect
+        val angle = Math.toRadians(normalizeStraightenDegrees(straightenDegrees).toDouble())
+        val cosine = cos(angle)
+        val sine = sin(angle)
+        val absoluteCosine = abs(cosine)
+        val absoluteSine = abs(sine)
+        val outputWidth = width * absoluteCosine + height * absoluteSine
+        val outputHeight = width * absoluteSine + height * absoluteCosine
+        val normalizedCropWidth = normalizedRect.right - normalizedRect.left
+        val normalizedCropHeight = normalizedRect.bottom - normalizedRect.top
+        val cropHalfWidth = normalizedCropWidth * outputWidth / 2.0
+        val cropHalfHeight = normalizedCropHeight * outputHeight / 2.0
+        val sourceInset = if (abs(angle) < STRAIGHTEN_EPSILON) 0.0 else SAFE_CROP_INSET_PX
+        val maxSourceCenterX = (
+            width / 2.0 - sourceInset -
+                absoluteCosine * cropHalfWidth - absoluteSine * cropHalfHeight
+            ).coerceAtLeast(0.0)
+        val maxSourceCenterY = (
+            height / 2.0 - sourceInset -
+                absoluteSine * cropHalfWidth - absoluteCosine * cropHalfHeight
+            ).coerceAtLeast(0.0)
+
+        val currentCenterX = (normalizedRect.left + normalizedRect.right) / 2f
+        val currentCenterY = (normalizedRect.top + normalizedRect.bottom) / 2f
+        val desiredOutputCenterX = (
+            currentCenterX + deltaX - 0.5f
+            ) * outputWidth
+        val desiredOutputCenterY = (
+            currentCenterY + deltaY - 0.5f
+            ) * outputHeight
+        val desiredSourceCenterX =
+            cosine * desiredOutputCenterX + sine * desiredOutputCenterY
+        val desiredSourceCenterY =
+            -sine * desiredOutputCenterX + cosine * desiredOutputCenterY
+        val sourceCenterX = desiredSourceCenterX.coerceIn(
+            -maxSourceCenterX,
+            maxSourceCenterX
+        )
+        val sourceCenterY = desiredSourceCenterY.coerceIn(
+            -maxSourceCenterY,
+            maxSourceCenterY
+        )
+        val outputCenterX = cosine * sourceCenterX - sine * sourceCenterY
+        val outputCenterY = sine * sourceCenterX + cosine * sourceCenterY
+        val normalizedCenterX = (outputCenterX / outputWidth + 0.5).toFloat()
+        val normalizedCenterY = (outputCenterY / outputHeight + 0.5).toFloat()
+        val halfWidth = normalizedCropWidth / 2f
+        val halfHeight = normalizedCropHeight / 2f
+
+        return NormalizedBounds(
+            left = normalizedCenterX - halfWidth,
+            top = normalizedCenterY - halfHeight,
+            right = normalizedCenterX + halfWidth,
+            bottom = normalizedCenterY + halfHeight
+        )
+    }
+
+    /**
+     * Restricts a resize from [current] toward [proposed] to the last rectangle whose corners are
+     * all backed by source pixels. The valid crop set is convex, so interpolation finds the
+     * boundary without snapping a translated crop back to a centered safe rectangle.
+     */
+    fun clampCropRectChangeToStraightenedSource(
+        current: RectF,
+        proposed: RectF,
+        width: Int,
+        height: Int,
+        straightenDegrees: Float
+    ): RectF {
+        val constrained = clampNormalizedCropBoundsChangeToStraightenedSource(
+            current = NormalizedBounds(current.left, current.top, current.right, current.bottom),
+            proposed = NormalizedBounds(
+                proposed.left,
+                proposed.top,
+                proposed.right,
+                proposed.bottom
+            ),
+            width = width,
+            height = height,
+            straightenDegrees = straightenDegrees
+        )
+        return RectF(constrained.left, constrained.top, constrained.right, constrained.bottom)
+    }
+
+    internal fun clampNormalizedCropBoundsChangeToStraightenedSource(
+        current: NormalizedBounds,
+        proposed: NormalizedBounds,
+        width: Int,
+        height: Int,
+        straightenDegrees: Float
+    ): NormalizedBounds {
+        if (isNormalizedCropBoundsInsideStraightenedSource(
+                proposed,
+                width,
+                height,
+                straightenDegrees
+            )
+        ) {
+            return proposed
+        }
+        if (!isNormalizedCropBoundsInsideStraightenedSource(
+                current,
+                width,
+                height,
+                straightenDegrees
+            )
+        ) {
+            return current
+        }
+
+        var validFraction = 0f
+        var invalidFraction = 1f
+        repeat(CROP_CLAMP_ITERATIONS) {
+            val candidateFraction = (validFraction + invalidFraction) / 2f
+            val candidate = NormalizedBounds(
+                lerp(current.left, proposed.left, candidateFraction),
+                lerp(current.top, proposed.top, candidateFraction),
+                lerp(current.right, proposed.right, candidateFraction),
+                lerp(current.bottom, proposed.bottom, candidateFraction)
+            )
+            if (isNormalizedCropBoundsInsideStraightenedSource(
+                    candidate,
+                    width,
+                    height,
+                    straightenDegrees
+                )
+            ) {
+                validFraction = candidateFraction
+            } else {
+                invalidFraction = candidateFraction
+            }
+        }
+
+        return NormalizedBounds(
+            lerp(current.left, proposed.left, validFraction),
+            lerp(current.top, proposed.top, validFraction),
+            lerp(current.right, proposed.right, validFraction),
+            lerp(current.bottom, proposed.bottom, validFraction)
+        )
+    }
+
+    internal fun isCropRectInsideStraightenedSource(
+        rect: RectF,
+        width: Int,
+        height: Int,
+        straightenDegrees: Float
+    ): Boolean = isNormalizedCropBoundsInsideStraightenedSource(
+        rect = NormalizedBounds(rect.left, rect.top, rect.right, rect.bottom),
+        width = width,
+        height = height,
+        straightenDegrees = straightenDegrees
+    )
+
+    internal fun isNormalizedCropBoundsInsideStraightenedSource(
+        rect: NormalizedBounds,
+        width: Int,
+        height: Int,
+        straightenDegrees: Float
+    ): Boolean {
+        if (width <= 0 || height <= 0) return false
+        val normalizedRect = normalizedToUnitBounds(
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom
+        ) ?: return false
+        val angle = Math.toRadians(normalizeStraightenDegrees(straightenDegrees).toDouble())
+        val cosine = cos(angle)
+        val sine = sin(angle)
+        val absoluteCosine = abs(cosine)
+        val absoluteSine = abs(sine)
+        val outputWidth = width * absoluteCosine + height * absoluteSine
+        val outputHeight = width * absoluteSine + height * absoluteCosine
+        val sourceInset = if (abs(angle) < STRAIGHTEN_EPSILON) 0.0 else SAFE_CROP_INSET_PX
+        val sourceHalfWidth = width / 2.0 - sourceInset
+        val sourceHalfHeight = height / 2.0 - sourceInset
+        val corners = arrayOf(
+            normalizedRect.left to normalizedRect.top,
+            normalizedRect.right to normalizedRect.top,
+            normalizedRect.left to normalizedRect.bottom,
+            normalizedRect.right to normalizedRect.bottom
+        )
+
+        return corners.all { (normalizedX, normalizedY) ->
+            val outputX = (normalizedX - 0.5f) * outputWidth
+            val outputY = (normalizedY - 0.5f) * outputHeight
+            val sourceX = cosine * outputX + sine * outputY
+            val sourceY = -sine * outputX + cosine * outputY
+            abs(sourceX) <= sourceHalfWidth + CROP_CONSTRAINT_EPSILON_PX &&
+                abs(sourceY) <= sourceHalfHeight + CROP_CONSTRAINT_EPSILON_PX
+        }
+    }
+
     internal fun straightenSafeNormalizedBounds(
         width: Int,
         height: Int,
@@ -390,6 +623,38 @@ object PostEditGeometry {
         return (width * cosine + height * sine) to (width * sine + height * cosine)
     }
 
+    private fun normalizedToUnitBounds(
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float
+    ): NormalizedBounds? {
+        if (!left.isFinite() || !top.isFinite() || !right.isFinite() || !bottom.isFinite()) {
+            return null
+        }
+        val normalizedLeft = min(left, right)
+        val normalizedTop = min(top, bottom)
+        val normalizedRight = max(left, right)
+        val normalizedBottom = max(top, bottom)
+        if (
+            normalizedLeft < 0f || normalizedTop < 0f ||
+            normalizedRight > 1f || normalizedBottom > 1f ||
+            normalizedRight <= normalizedLeft || normalizedBottom <= normalizedTop
+        ) {
+            return null
+        }
+        return NormalizedBounds(
+            normalizedLeft,
+            normalizedTop,
+            normalizedRight,
+            normalizedBottom
+        )
+    }
+
+    private fun lerp(start: Float, end: Float, fraction: Float): Float {
+        return start + (end - start) * fraction
+    }
+
     private fun largestInnerRect(
         width: Double,
         height: Double,
@@ -427,5 +692,7 @@ object PostEditGeometry {
 
     private val FULL_BOUNDS = NormalizedBounds(0f, 0f, 1f, 1f)
     private const val SAFE_CROP_INSET_PX = 2.0
+    private const val CROP_CONSTRAINT_EPSILON_PX = 0.01
+    private const val CROP_CLAMP_ITERATIONS = 24
     private const val STRAIGHTEN_EPSILON = 1e-7
 }

@@ -503,9 +503,10 @@ private fun CropAspectOptionItem(
 fun CropOverlay(
     bitmap: Bitmap?,
     cropRect: RectF,
-    cropBounds: RectF = RectF(0f, 0f, 1f, 1f),
     cropAspectRatio: Float? = null,
     straightenDegrees: Float = 0f,
+    geometrySourceWidth: Int? = null,
+    geometrySourceHeight: Int? = null,
     onCropRectChanged: (RectF) -> Unit,
     aspectOption: CropAspectOption,
     contentPadding: Dp = 0.dp,
@@ -515,6 +516,8 @@ fun CropOverlay(
 
     val sourceImageWidth = bitmap.width.toFloat()
     val sourceImageHeight = bitmap.height.toFloat()
+    val cropSourceWidth = geometrySourceWidth?.takeIf { it > 0 } ?: bitmap.width
+    val cropSourceHeight = geometrySourceHeight?.takeIf { it > 0 } ?: bitmap.height
     val normalizedStraightenDegrees = PostEditGeometry.normalizeStraightenDegrees(straightenDegrees)
     val straightenedImageSize = remember(bitmap.width, bitmap.height, normalizedStraightenDegrees) {
         PostEditGeometry.straightenedDimensions(
@@ -525,29 +528,32 @@ fun CropOverlay(
     }
     val imageWidth = straightenedImageSize.first.toFloat()
     val imageHeight = straightenedImageSize.second.toFloat()
+    val cropGeometrySize = remember(
+        cropSourceWidth,
+        cropSourceHeight,
+        normalizedStraightenDegrees
+    ) {
+        PostEditGeometry.straightenedDimensions(
+            cropSourceWidth,
+            cropSourceHeight,
+            normalizedStraightenDegrees
+        )
+    }
     val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
     val density = LocalDensity.current
     val contentPaddingPx = with(density) { contentPadding.toPx() }
+    val handleTouchSlopPx = with(density) { 24.dp.toPx() }
 
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var dragHandle by remember { mutableStateOf<DragHandle?>(null) }
-    
-    val safeBounds = remember(
-        cropBounds.left,
-        cropBounds.top,
-        cropBounds.right,
-        cropBounds.bottom
-    ) {
-        normalizeCropRect(cropBounds, minSize = 0.001f)
-    }
+
     val safeCropRect = remember(
         cropRect.left,
         cropRect.top,
         cropRect.right,
-        cropRect.bottom,
-        safeBounds
+        cropRect.bottom
     ) {
-        cropRect.coerceInside(safeBounds)
+        normalizeCropRect(cropRect, minSize = 0.001f)
     }
     val currentCropRect by rememberUpdatedState(safeCropRect)
 
@@ -604,7 +610,15 @@ fun CropOverlay(
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(imageDisplayRect, aspectOption, safeBounds, cropAspectRatio) {
+                    .pointerInput(
+                        imageDisplayRect,
+                        aspectOption,
+                        cropAspectRatio,
+                        normalizedStraightenDegrees,
+                        cropSourceWidth,
+                        cropSourceHeight,
+                        handleTouchSlopPx
+                    ) {
                         detectDragGestures(
                             onDragStart = { offset ->
                                 // 转换触摸坐标到归一化坐标
@@ -613,32 +627,57 @@ fun CropOverlay(
 
                                 // 判断拖拽哪个手柄
                                 dragHandle = detectDragHandle(
-                                    normalizedX, normalizedY, currentCropRect,
-                                    handleSize = 80f / imageDisplayRect.width
+                                    x = normalizedX,
+                                    y = normalizedY,
+                                    rect = currentCropRect,
+                                    horizontalSlop = handleTouchSlopPx / imageDisplayRect.width,
+                                    verticalSlop = handleTouchSlopPx / imageDisplayRect.height
                                 )
                             },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val handle = dragHandle ?: return@detectDragGestures
 
-                                val dx = dragAmount.x / imageDisplayRect.width / safeBounds.width()
-                                val dy = dragAmount.y / imageDisplayRect.height / safeBounds.height()
-                                val localCropRect = currentCropRect.toLocal(safeBounds)
-
-                                val newRect = moveCropRect(
-                                    localCropRect,
-                                    handle,
-                                    dx,
-                                    dy,
-                                    cropAspectRatio
-                                        ?: aspectOption.getAspectRatioValue(bitmap.width, bitmap.height),
-                                    imageWidth * safeBounds.width() /
-                                        (imageHeight * safeBounds.height())
-                                ).fromLocal(safeBounds)
+                                val dx = dragAmount.x / imageDisplayRect.width
+                                val dy = dragAmount.y / imageDisplayRect.height
+                                val newRect = if (handle == DragHandle.CENTER) {
+                                    PostEditGeometry.translateCropRectWithinStraightenedSource(
+                                        rect = currentCropRect,
+                                        deltaX = dx,
+                                        deltaY = dy,
+                                        width = cropSourceWidth,
+                                        height = cropSourceHeight,
+                                        straightenDegrees = normalizedStraightenDegrees
+                                    )
+                                } else {
+                                    val proposedRect = moveCropRect(
+                                        rect = currentCropRect,
+                                        handle = handle,
+                                        dx = dx,
+                                        dy = dy,
+                                        fixedAspect = cropAspectRatio
+                                            ?: aspectOption.getAspectRatioValue(
+                                                bitmap.width,
+                                                bitmap.height
+                                            ),
+                                        imageAspect = cropGeometrySize.first.toFloat() /
+                                            cropGeometrySize.second
+                                    )
+                                    PostEditGeometry.clampCropRectChangeToStraightenedSource(
+                                        current = currentCropRect,
+                                        proposed = proposedRect,
+                                        width = cropSourceWidth,
+                                        height = cropSourceHeight,
+                                        straightenDegrees = normalizedStraightenDegrees
+                                    )
+                                }
 
                                 onCropRectChanged(newRect)
                             },
                             onDragEnd = {
+                                dragHandle = null
+                            },
+                            onDragCancel = {
                                 dragHandle = null
                             }
                         )
@@ -648,29 +687,6 @@ fun CropOverlay(
             }
         }
     }
-}
-
-private fun RectF.toLocal(bounds: RectF): RectF = RectF(
-    (left - bounds.left) / bounds.width(),
-    (top - bounds.top) / bounds.height(),
-    (right - bounds.left) / bounds.width(),
-    (bottom - bounds.top) / bounds.height()
-)
-
-private fun RectF.fromLocal(bounds: RectF): RectF = RectF(
-    bounds.left + left * bounds.width(),
-    bounds.top + top * bounds.height(),
-    bounds.left + right * bounds.width(),
-    bounds.top + bottom * bounds.height()
-)
-
-private fun RectF.coerceInside(bounds: RectF): RectF {
-    val left = min(left, right).coerceIn(bounds.left, bounds.right)
-    val top = min(top, bottom).coerceIn(bounds.top, bounds.bottom)
-    val right = max(this.left, this.right).coerceIn(bounds.left, bounds.right)
-    val bottom = max(this.top, this.bottom).coerceIn(bounds.top, bounds.bottom)
-    if (right <= left || bottom <= top) return RectF(bounds)
-    return RectF(left, top, right, bottom)
 }
 
 /**
@@ -722,29 +738,32 @@ private fun calculateImageDisplayRect(
 private fun detectDragHandle(
     x: Float, y: Float,
     rect: RectF,
-    handleSize: Float
+    horizontalSlop: Float,
+    verticalSlop: Float
 ): DragHandle? {
-    val cornerThreshold = handleSize * 2.0f
+    // Keep a center region even for a small crop. Otherwise overlapping corner/edge hit targets
+    // make it impossible to select the move gesture.
+    val xThreshold = min(horizontalSlop, rect.width() / 3f)
+    val yThreshold = min(verticalSlop, rect.height() / 3f)
 
     // 四角
-    if (abs(x - rect.left) < cornerThreshold && abs(y - rect.top) < cornerThreshold)
+    if (abs(x - rect.left) <= xThreshold && abs(y - rect.top) <= yThreshold)
         return DragHandle.TOP_LEFT
-    if (abs(x - rect.right) < cornerThreshold && abs(y - rect.top) < cornerThreshold)
+    if (abs(x - rect.right) <= xThreshold && abs(y - rect.top) <= yThreshold)
         return DragHandle.TOP_RIGHT
-    if (abs(x - rect.left) < cornerThreshold && abs(y - rect.bottom) < cornerThreshold)
+    if (abs(x - rect.left) <= xThreshold && abs(y - rect.bottom) <= yThreshold)
         return DragHandle.BOTTOM_LEFT
-    if (abs(x - rect.right) < cornerThreshold && abs(y - rect.bottom) < cornerThreshold)
+    if (abs(x - rect.right) <= xThreshold && abs(y - rect.bottom) <= yThreshold)
         return DragHandle.BOTTOM_RIGHT
 
     // 四边
-    val edgeThreshold = handleSize
-    if (abs(y - rect.top) < edgeThreshold && x > rect.left && x < rect.right)
+    if (abs(y - rect.top) <= yThreshold && x > rect.left && x < rect.right)
         return DragHandle.TOP
-    if (abs(y - rect.bottom) < edgeThreshold && x > rect.left && x < rect.right)
+    if (abs(y - rect.bottom) <= yThreshold && x > rect.left && x < rect.right)
         return DragHandle.BOTTOM
-    if (abs(x - rect.left) < edgeThreshold && y > rect.top && y < rect.bottom)
+    if (abs(x - rect.left) <= xThreshold && y > rect.top && y < rect.bottom)
         return DragHandle.LEFT
-    if (abs(x - rect.right) < edgeThreshold && y > rect.top && y < rect.bottom)
+    if (abs(x - rect.right) <= xThreshold && y > rect.top && y < rect.bottom)
         return DragHandle.RIGHT
 
     // 内部 → 平移
