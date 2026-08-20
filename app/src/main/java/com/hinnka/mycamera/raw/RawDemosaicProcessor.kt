@@ -1340,7 +1340,7 @@ class RawDemosaicProcessor {
                 val tuningSnr = checkNotNull(metadata.mgcDenoiseTuningSnr?.takeIf {
                     it.isFinite() && it >= 0f
                 }) {
-                    "MGC $mode default denoise is missing reference-frame SNR"
+                    "MGC $mode default denoise is missing output-frame SNR"
                 }
                 blackBoxParameterMs =
                     (System.nanoTime() - parameterStartNs) / 1_000_000L
@@ -2471,7 +2471,7 @@ class RawDemosaicProcessor {
                 .rawNoiseProfileManager
                 .resolveSelection(rawNoiseProfileId),
         )
-        actualMetadata = actualMetadata?.withMgcSharpenTuning(
+        actualMetadata = actualMetadata?.withMgcRenderTuning(
             rawData = actualRawData,
             rowStride = actualRowStride,
             samplesPerPixel = actualSamplesPerPixel,
@@ -4557,14 +4557,20 @@ class RawDemosaicProcessor {
         readback.position(0)
 
         val nativeStartNs = System.nanoTime()
-        // Persisted single-frame sources do not carry MGC's process-local mean-signal
-        // measurement. Keep the existing user-adjustment coordinate fallback separate from
-        // Spatial/Sabre defaults, which require the exact reference-frame SNR above.
-        val tuningSnr = metadata.mgcDenoiseTuningSnr
-            ?: (
+        // Ordinary CFA RAW sources receive a measured single-frame SNR in withMgcRenderTuning().
+        // Keep the legacy coordinate only for editing sources whose layout/noise profile cannot
+        // produce that physical measurement; Spatial/Sabre defaults never enter this fallback.
+        val tuningSnr = metadata.mgcDenoiseTuningSnr ?: (
                 metadata.iso.toFloat() / 100.0f *
                     metadata.postRawSensitivityBoost
-                ).coerceAtLeast(0.001f)
+                ).coerceAtLeast(0.001f).also { fallbackSnr ->
+                PLog.w(
+                    TAG,
+                    "MGC USER_ADJUSTMENT uses legacy tuning coordinate: " +
+                        "layout=${metadata.noiseProfileLayout} iso=${metadata.iso} " +
+                        "postRawBoost=${metadata.postRawSensitivityBoost} snr=$fallbackSnr",
+                )
+            }
         if (!MgcFullResolutionDenoise.denoise(
                 rgba16f = readback,
                 width = width,
@@ -7345,14 +7351,20 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Sharpen Pass
+     * Measures the render source once for MGC's single-frame FinishRaw tuning. CFA sources use
+     * that physical SNR for both luma/chroma denoise and sharpen; a process-local merged LinearRaw
+     * already carries its own sharpen tuning and has baked its default denoise before DNG write.
      */
-    private fun RawMetadata.withMgcSharpenTuning(
+    private fun RawMetadata.withMgcRenderTuning(
         rawData: ByteBuffer?,
         rowStride: Int,
         samplesPerPixel: Int,
     ): RawMetadata {
-        if (mgcSharpenTuningSnr != null && mgcSharpenAttenuationScale != null) {
+        val needsSingleFrameDenoiseSnr =
+            samplesPerPixel == 1 && frameCount == 1 && mgcDenoiseTuningSnr == null
+        val needsSharpenTuning =
+            mgcSharpenTuningSnr == null || mgcSharpenAttenuationScale == null
+        if (!needsSingleFrameDenoiseSnr && !needsSharpenTuning) {
             return this
         }
         val source = rawData ?: return this
@@ -7390,21 +7402,28 @@ class RawDemosaicProcessor {
         if (!snr.isFinite() || snr <= 0f) {
             PLog.w(
                 TAG,
-                "MGC single-frame sharpen tuning unavailable: signal=$signal " +
+                "MGC RAW render tuning unavailable: signal=$signal " +
                     "greenShot=$greenShot greenRead=$greenRead layout=$noiseProfileLayout",
             )
             return this
         }
         PLog.i(
             TAG,
-            "MGC single-frame sharpen tuning signal=$signal snr=$snr " +
-                "greenShot=$greenShot greenRead=$greenRead attenuation=1.0",
+            "MGC RAW render tuning signal=$signal snr=$snr " +
+                "greenShot=$greenShot greenRead=$greenRead " +
+                "singleFrameDenoise=$needsSingleFrameDenoiseSnr " +
+                "sharpen=$needsSharpenTuning attenuation=1.0",
         )
         return copy(
-            mgcSharpenTuningSnr = snr,
+            mgcDenoiseTuningSnr = if (needsSingleFrameDenoiseSnr) {
+                snr
+            } else {
+                mgcDenoiseTuningSnr
+            },
+            mgcSharpenTuningSnr = mgcSharpenTuningSnr ?: snr,
             // A single frame has identical requested/reference TET, so MGC's
             // min(FinalTet / referenceActualTet, 1) evaluates to one.
-            mgcSharpenAttenuationScale = 1f,
+            mgcSharpenAttenuationScale = mgcSharpenAttenuationScale ?: 1f,
         )
     }
 

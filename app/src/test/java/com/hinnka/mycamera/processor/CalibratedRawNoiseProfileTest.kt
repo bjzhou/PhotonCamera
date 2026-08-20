@@ -132,8 +132,29 @@ class CalibratedRawNoiseProfileTest {
         val model = requireNotNull(profile.evaluate(sensitivity))
 
         // The generated `.c` profile declares sens/800, so ISO 1600 has digitalGain=2.
+        assertEquals(Int.MAX_VALUE, profile.maximumCompatibleSensitivity)
         assertEquals(1e-10f * sensitivity * sensitivity + 4e-6f,
             model.readNoise[0], 1e-10f)
+    }
+
+    @Test
+    fun sensitivityAboveCompatibleReadNoiseRangeUsesItsUpperBound() {
+        val source = """
+            static double noise_model_A[] = { 1e-6, 1e-6, 1e-6, 1e-6 };
+            static double noise_model_B[] = { 0.0, 0.0, 0.0, 0.0 };
+            static double noise_model_C[] = { -1e-12, -1e-12, -1e-12, -1e-12 };
+            static double noise_model_D[] = { 1e-6, 1e-6, 1e-6, 1e-6 };
+            double digital_gain = (sens / 3200.0) < 1.0 ? 1.0 : (sens / 3200.0);
+        """.trimIndent()
+        val profile = CalibratedRawNoiseProfile.parseGcamC("upper-bounded", source)
+        val modelAtLimit = requireNotNull(profile.evaluate(999))
+        val modelAboveLimit = requireNotNull(profile.evaluate(13_592))
+
+        assertEquals(999, profile.maximumCompatibleSensitivity)
+        assertEquals(999, profile.compatibleSensitivityAt(13_592))
+        assertTrue(modelAtLimit.shotNoise.contentEquals(modelAboveLimit.shotNoise))
+        assertTrue(modelAtLimit.readNoise.contentEquals(modelAboveLimit.readNoise))
+        assertTrue(modelAboveLimit.readNoise.all { it > 0f })
     }
 
     @Test

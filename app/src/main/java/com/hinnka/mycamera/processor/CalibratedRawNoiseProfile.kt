@@ -2,7 +2,9 @@ package com.hinnka.mycamera.processor
 
 import java.io.InputStream
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * Standard GCam sensor noise calibration.
@@ -41,10 +43,17 @@ data class CalibratedRawNoiseProfile(
         require(maxAnalogSensitivity == null || maxAnalogSensitivity > 0)
     }
 
+    /** Highest integer ISO whose evaluated read variance remains positive in every plane. */
+    val maximumCompatibleSensitivity: Int = maximumCompatibleReadSensitivity().also { maximum ->
+        require(maximum > 0) {
+            "RAW noise model has no sensitivity with positive read variance in every plane"
+        }
+    }
+
     fun evaluate(sensitivity: Int): RawNoiseModel? {
-        if (sensitivity <= 0) return null
-        val sensorSensitivity = sensitivity.toDouble()
-        val digitalGain = digitalGainAt(sensitivity) ?: return null
+        val compatibleSensitivity = compatibleSensitivityAt(sensitivity) ?: return null
+        val sensorSensitivity = compatibleSensitivity.toDouble()
+        val digitalGain = digitalGainAt(compatibleSensitivity) ?: return null
         val digitalGainSquared = digitalGain * digitalGain
         val shot = FloatArray(CHANNEL_COUNT) { plane ->
             sanitize(shotSlopeA[plane] * sensorSensitivity + shotInterceptB[plane])
@@ -58,6 +67,9 @@ data class CalibratedRawNoiseProfile(
         return RawNoiseModel.fromCanonicalBayerChannels(shot, read)
     }
 
+    fun compatibleSensitivityAt(sensitivity: Int): Int? =
+        sensitivity.takeIf { it > 0 }?.coerceAtMost(maximumCompatibleSensitivity)
+
     /** MGC's override-table coordinate: CaptureResult ISO expressed relative to ISO 100. */
     fun overallGainAt(sensitivity: Int): Double? =
         sensitivity.takeIf { it > 0 }?.toDouble()?.div(100.0)
@@ -69,6 +81,32 @@ data class CalibratedRawNoiseProfile(
                 maxOf(validSensitivity.toDouble() / maxAnalog.toDouble(), 1.0)
             } ?: 1.0
         }
+
+    private fun maximumCompatibleReadSensitivity(): Int {
+        var maximum = Int.MAX_VALUE
+        for (plane in 0 until CHANNEL_COUNT) {
+            val quadratic = readQuadraticC[plane]
+            val digital = readDigitalGainD[plane]
+            val planeMaximum = maxAnalogSensitivity?.let { maxAnalog ->
+                val maxAnalogDouble = maxAnalog.toDouble()
+                val readAtMaxAnalog =
+                    quadratic * maxAnalogDouble * maxAnalogDouble + digital
+                when {
+                    readAtMaxAnalog > 0.0 -> Int.MAX_VALUE
+                    quadratic < 0.0 && digital > 0.0 ->
+                        largestIntegerStrictlyBelow(sqrt(digital / -quadratic))
+                    else -> 0
+                }
+            } ?: when {
+                quadratic < 0.0 && digital > 0.0 ->
+                    largestIntegerStrictlyBelow(sqrt(digital / -quadratic))
+                quadratic > 0.0 || digital > 0.0 -> Int.MAX_VALUE
+                else -> 0
+            }
+            maximum = minOf(maximum, planeMaximum)
+        }
+        return maximum
+    }
 
     companion object {
         private const val CHANNEL_COUNT = 4
@@ -190,6 +228,14 @@ data class CalibratedRawNoiseProfile(
             value.toDoubleOrNull()
                 ?.takeIf(Double::isFinite)
                 ?: throw IllegalArgumentException("Invalid $label coefficient: $value")
+
+        private fun largestIntegerStrictlyBelow(value: Double): Int {
+            if (!value.isFinite()) return Int.MAX_VALUE
+            if (value <= 1.0) return 0
+            return (ceil(value).toLong() - 1L)
+                .coerceAtMost(Int.MAX_VALUE.toLong())
+                .toInt()
+        }
 
         private fun sanitize(value: Double): Float =
             value.takeIf(Double::isFinite)?.coerceAtLeast(0.0)?.toFloat() ?: 0f

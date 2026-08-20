@@ -130,7 +130,7 @@ data class RawStackResult(
      */
     val mgcSabreNoiseModelScale: Float? = null,
     /**
-     * Reference-frame SNR used by MGC FinishRaw to select luma/chroma tuning.
+     * Merged output-frame SNR used by MGC FinishRaw to select luma/chroma tuning.
      * This is the linear signal-domain SNR, not ISO or sensor gain.
      */
     val mgcDenoiseTuningSnr: Float? = null,
