@@ -52,6 +52,30 @@ class RawTilePlannerTest {
     }
 
     @Test
+    fun unevenImageDimensionsBalanceCoresToReduceRepeatedRendering() {
+        val bounds = RawTileRect(0, 0, 5_000, 3_500)
+        val tiles = RawTilePlanner.plan(
+            sourceWidth = bounds.width,
+            sourceHeight = bounds.height,
+            outputSourceBounds = bounds,
+            rotation = 0,
+            coreEdgePx = 3_072,
+            supportPx = 112,
+            cfaPeriod = 2,
+        )
+
+        assertEquals(4, tiles.size)
+        assertEquals(setOf(2_500), tiles.map { it.outputCore.width }.toSet())
+        assertEquals(setOf(1_750), tiles.map { it.outputCore.height }.toSet())
+        assertEquals(setOf(2_726), tiles.map { it.sourceWorking.width }.toSet())
+        assertEquals(setOf(1_976), tiles.map { it.sourceWorking.height }.toSet())
+        assertEquals(
+            bounds.width.toLong() * bounds.height,
+            tiles.sumOf { it.outputCore.width.toLong() * it.outputCore.height },
+        )
+    }
+
+    @Test
     fun allRotationsMapOutputBackToTheSameSourceCrop() {
         val sourceWidth = 43
         val sourceHeight = 34

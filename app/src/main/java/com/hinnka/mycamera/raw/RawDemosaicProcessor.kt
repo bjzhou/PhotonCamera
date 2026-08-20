@@ -307,7 +307,7 @@ class RawDemosaicProcessor {
             -0.9083024859428406f,
             -0.09169333428144455f,
         )
-        private const val RAW_TILE_CORE_EDGE_PX = 3072
+        private const val RAW_TILE_MAX_CORE_EDGE_PX = 3072
         private const val RAW_PREWARM_CORE_EDGE_PX = 2048
         // Phocus GetStripMargin(50) returns 60 pixels for gradient/color-noise interpolation.
         // The remaining 52 pixels cover chroma denoise, NLM, shadows/highlights and sharpening.
@@ -2653,7 +2653,7 @@ class RawDemosaicProcessor {
                     outputSourceBounds.bottom,
                 ),
                 rotation = actualRotation,
-                coreEdgePx = RAW_TILE_CORE_EDGE_PX,
+                coreEdgePx = RAW_TILE_MAX_CORE_EDGE_PX,
                 supportPx = RAW_TILE_SUPPORT_PX,
                 cfaPeriod = RawCfaCorrection.repeatPatternDim(actualMetadata.cfaPattern)[0],
             )
@@ -3595,7 +3595,8 @@ class RawDemosaicProcessor {
         PLog.i(
             TAG,
             "RAW_TILE_PLAN mode=phocus-output-threaded tiles=${config.tiles.size} " +
-                "core=${RAW_TILE_CORE_EDGE_PX}px support=${RAW_TILE_SUPPORT_PX}px " +
+                "core=${maximumOutputWidth}x$maximumOutputHeight " +
+                "maxCoreEdge=$RAW_TILE_MAX_CORE_EDGE_PX support=${RAW_TILE_SUPPORT_PX}px " +
                 "work=${firstWorking.width}x${firstWorking.height} " +
                 "output=${outputWidth}x$outputHeight serialGpu=true queueDepth=1 " +
                 "estimatedTileGpuMiB=${estimatedTileGpuBytes / (1024L * 1024L)} " +

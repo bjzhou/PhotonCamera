@@ -64,7 +64,8 @@ internal object RawTilePlanner {
         )
         require(rotation in setOf(0, 90, 180, 270))
         val phase = cfaPeriod.coerceAtLeast(2)
-        val coreEdge = alignDown(coreEdgePx.coerceAtLeast(phase), phase).coerceAtLeast(phase)
+        val maximumCoreEdge =
+            alignDown(coreEdgePx.coerceAtLeast(phase), phase).coerceAtLeast(phase)
         val support = supportPx.coerceAtLeast(0)
         val outputWidth = if (rotation == 90 || rotation == 270) {
             outputSourceBounds.height
@@ -76,13 +77,21 @@ internal object RawTilePlanner {
         } else {
             outputSourceBounds.height
         }
+        // Keep the minimum grid that fits under the configured GPU resource ceiling, then
+        // distribute each axis evenly across that grid. With fixed-size stepping, a narrow last
+        // core still forces every reusable working texture to the largest core size, so most of
+        // the last tile can be previously rendered pixels. Balanced, CFA-aligned core lengths
+        // retain stable resource dimensions while limiting that expansion to less than one CFA
+        // period per tile.
+        val outputCoreWidth = balancedCoreLength(outputWidth, maximumCoreEdge, phase)
+        val outputCoreHeight = balancedCoreLength(outputHeight, maximumCoreEdge, phase)
         val cores = ArrayList<Pair<RawTileRect, RawTileRect>>()
         var outputTop = 0
         while (outputTop < outputHeight) {
-            val outputBottom = minOf(outputHeight, outputTop + coreEdge)
+            val outputBottom = minOf(outputHeight, outputTop + outputCoreHeight)
             var outputLeft = 0
             while (outputLeft < outputWidth) {
-                val outputRight = minOf(outputWidth, outputLeft + coreEdge)
+                val outputRight = minOf(outputWidth, outputLeft + outputCoreWidth)
                 val outputCore = RawTileRect(outputLeft, outputTop, outputRight, outputBottom)
                 val sourceCore = outputToSource(
                     outputCore = outputCore,
@@ -235,6 +244,14 @@ internal object RawTilePlanner {
         val remainder = floorMod(sourceSize - requestedLength, phase)
         return requestedLength + remainder
     }
+
+    private fun balancedCoreLength(totalLength: Int, maximumLength: Int, phase: Int): Int {
+        val tileCount = ceilDiv(totalLength, maximumLength)
+        return alignUp(ceilDiv(totalLength, tileCount), phase).coerceAtMost(maximumLength)
+    }
+
+    private fun ceilDiv(value: Int, divisor: Int): Int =
+        (value.toLong() + divisor - 1L).div(divisor).toInt()
 
     private fun alignDown(value: Int, alignment: Int): Int = value / alignment * alignment
 
