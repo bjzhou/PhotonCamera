@@ -120,6 +120,13 @@ shader storage block binding gets value 12, out of range [0 - 7]
 
 ## SSBO 与 image format
 
+### `R16UI` 采样不代表可用于 image store
+
+GLES 3.1 可以通过 `usampler2D` 采样 `R16UI` texture，但核心 GLSL ES 3.10 image
+format qualifier 不包含 `r16ui`。需要 compute shader 写入并由 RAW sampler 读取时，使用
+`RGBA16UI` + `layout(rgba16ui) writeonly uimage2D`，下游继续读取 `.r`；不要声明
+`layout(r16ui)`，也不要由 texture 可分配、可采样推断它可用于 image load/store。
+
 ### `readonly` SSBO 元素不能直接作为用户函数实参
 
 **证据**：OPPO PLW110，Mali-G720-Immortalis MC12，驱动 `v1.r44p1-01eac0.7c759d1daf93e2baa476e2d4d07e761b`。

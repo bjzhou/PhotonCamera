@@ -161,9 +161,14 @@ class RawTilePlannerTest {
     }
 
     @Test
-    fun phocusThresholdUsesEffectiveCropPixels() {
-        assertTrue(!RawTilePlanner.shouldTile(3_000, 3_000))
-        assertTrue(RawTilePlanner.shouldTile(3_001, 3_000))
+    fun fullFrameLimitIsInclusiveAndRotationInvariant() {
+        assertTrue(!RawTilePlanner.shouldTile(3_072, 4_096))
+        assertTrue(!RawTilePlanner.shouldTile(4_096, 3_072))
+        assertTrue(!RawTilePlanner.shouldTile(4_000, 3_000))
+        assertTrue(RawTilePlanner.shouldTile(3_073, 4_096))
+        assertTrue(RawTilePlanner.shouldTile(4_096, 3_073))
+        assertTrue(RawTilePlanner.shouldTile(3_072, 4_097))
+        assertTrue(RawTilePlanner.shouldTile(4_097, 3_072))
     }
 
     @Test

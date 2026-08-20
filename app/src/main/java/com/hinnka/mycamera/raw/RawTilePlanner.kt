@@ -39,12 +39,15 @@ internal data class RawRenderTile(
  * consumer. Their origins are aligned to the sensor CFA period.
  */
 internal object RawTilePlanner {
-    /** Phocus switches OutputImageThreaded above nine million effective output pixels. */
-    const val THREADED_OUTPUT_THRESHOLD_PIXELS = 9_000_000L
+    /** Ordinary 12 MP 4:3 captures stay on the full-frame path in either orientation. */
+    const val FULL_FRAME_MAX_SHORT_EDGE_PX = 3_072
+    const val FULL_FRAME_MAX_LONG_EDGE_PX = 4_096
 
     fun shouldTile(outputWidth: Int, outputHeight: Int): Boolean {
-        return outputWidth.toLong() * outputHeight.toLong() >
-            THREADED_OUTPUT_THRESHOLD_PIXELS
+        val shortEdge = minOf(outputWidth, outputHeight)
+        val longEdge = maxOf(outputWidth, outputHeight)
+        return shortEdge > FULL_FRAME_MAX_SHORT_EDGE_PX ||
+            longEdge > FULL_FRAME_MAX_LONG_EDGE_PX
     }
 
     fun plan(
