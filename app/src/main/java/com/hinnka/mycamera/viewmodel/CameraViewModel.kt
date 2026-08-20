@@ -747,7 +747,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             useRaw = SettingValue(this?.useRaw ?: false),
             useJpgMax = SettingValue(this?.useJpgMax ?: false),
             useRawMax = SettingValue(this?.useRawMax ?: false),
-            ultraHdrGainMapEnabled = SettingValue(this?.ultraHdrGainMapEnabled ?: true),
+            ultraHdrGainMapEnabled = SettingValue(this?.ultraHdrGainMapEnabled ?: false),
             frameId = SettingValue(this?.frameId),
             rawDcpId = SettingValue(this?.rawDcpId),
             rawDcpIdsByLens = SettingValue(this?.rawDcpIdsByLens ?: emptyMap()),
@@ -3018,7 +3018,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         rawToneMappingParameters: RawToneMappingParameters? = null
     ): Boolean {
         if (hasEmbeddedGainmap) return true
-        return userPrefs?.ultraHdrGainMapEnabled ?: true
+        return userPrefs?.ultraHdrGainMapEnabled ?: false
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {

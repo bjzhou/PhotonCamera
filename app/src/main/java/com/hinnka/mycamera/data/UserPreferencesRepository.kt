@@ -242,7 +242,7 @@ data class UserPreferences(
     val videoLensLockEnabled: Boolean = false,
     val videoWhiteBalanceLockEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
-    val ultraHdrGainMapEnabled: Boolean = true,
+    val ultraHdrGainMapEnabled: Boolean = false,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
@@ -811,7 +811,7 @@ class UserPreferencesRepository(private val context: Context) {
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
-                ultraHdrGainMapEnabled = preferences[ULTRA_HDR_GAIN_MAP_ENABLED] ?: true,
+                ultraHdrGainMapEnabled = preferences[ULTRA_HDR_GAIN_MAP_ENABLED] ?: false,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,

@@ -107,7 +107,7 @@ fun PresetEditorScreen(
     var useJpgMax by remember { mutableStateOf(sourcePreset?.useJpgMax ?: false) }
     var useRawMax by remember { mutableStateOf(sourcePreset?.useRawMax ?: false) }
     var ultraHdrGainMapEnabled by remember {
-        mutableStateOf(sourcePreset?.ultraHdrGainMapEnabled ?: true)
+        mutableStateOf(sourcePreset?.ultraHdrGainMapEnabled ?: false)
     }
     var frameId by remember { mutableStateOf(sourcePreset?.frameId) }
 

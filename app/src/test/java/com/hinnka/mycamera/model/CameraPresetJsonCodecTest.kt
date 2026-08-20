@@ -262,7 +262,7 @@ class CameraPresetJsonCodecTest {
         assertEquals(AspectRatio.RATIO_4_3.name, preset.aspectRatio)
         assertFalse(preset.useJpgMax)
         assertFalse(preset.useRawMax)
-        assertTrue(preset.ultraHdrGainMapEnabled)
+        assertFalse(preset.ultraHdrGainMapEnabled)
         assertEquals(0.4f, preset.rawSharpening, 0.0001f)
         assertEquals(0.4f, preset.rawMaxSharpening, 0.0001f)
         assertEquals(RawDenoiseDefaults.RAW_LUMA_STRENGTH, preset.rawNoiseReduction, 0f)

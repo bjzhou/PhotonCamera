@@ -24,7 +24,7 @@ data class CameraPreset(
     val useRaw: Boolean = false,
     val useJpgMax: Boolean = false,
     val useRawMax: Boolean = false,
-    val ultraHdrGainMapEnabled: Boolean = true,
+    val ultraHdrGainMapEnabled: Boolean = false,
     val frameId: String? = null,
     // Quick RAW 功能
     val rawDcpId: String? = null,

@@ -357,7 +357,7 @@ object GalleryManager {
                 isImported = false,
                 software = baseMetadata.software ?: "MGC/libgcam",
                 customProperties = customProperties,
-                manualHdrEffectEnabled = preferences?.ultraHdrGainMapEnabled ?: true,
+                manualHdrEffectEnabled = preferences?.ultraHdrGainMapEnabled ?: false,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = preferences?.rawSpectralFilmPrint ?: "kodak_portra_endura",
                 spectralFilmCDensityGain = spectralFilmTuning.cDensityGain,
