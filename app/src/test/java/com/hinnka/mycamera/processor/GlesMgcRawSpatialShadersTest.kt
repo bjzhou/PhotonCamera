@@ -1,8 +1,10 @@
 package com.hinnka.mycamera.processor
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class GlesMgcRawSpatialShadersTest {
@@ -72,6 +74,61 @@ class GlesMgcRawSpatialShadersTest {
         assertTrue(merge.contains("chromaGuideWeight(localGreen, targetGreen)"))
         assertTrue(merge.contains("uGreenNoise.x * signal + uGreenNoise.y"))
         assertTrue(merge.contains("jointWeight"))
+    }
+
+    @Test
+    fun rgbMergeCarriesFusedRawGreenDirectionWithoutAnotherSurface() {
+        val merge = GlesMgcRawSpatialShaders.mergeRgb
+        val normalize = GlesMgcRawSpatialShaders.normalizeRgb16
+
+        assertTrue(merge.contains("vec2 greenDirectionMoment"))
+        assertTrue(merge.contains("directionMoment * weights.r * frameWeight"))
+        assertTrue(normalize.contains("gbWeightsAndDirection.ba / max(colorAndR.a"))
+        assertTrue(normalize.contains("packDirectionMoment(directionMoment)"))
+    }
+
+    @Test
+    fun changedRgbFragmentShadersPassAvailableNdkValidator() {
+        val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
+        val validator = sdkRoot?.let(::File)
+            ?.resolve("ndk")
+            ?.listFiles()
+            ?.sortedByDescending { it.name }
+            ?.asSequence()
+            ?.mapNotNull { ndk ->
+                ndk.resolve("shader-tools")
+                    .walkTopDown()
+                    .firstOrNull { it.name == "glslc" && it.canExecute() }
+            }
+            ?.firstOrNull()
+        assumeTrue("Android NDK glslc is unavailable", validator != null)
+
+        listOf(
+            GlesMgcRawSpatialShaders.mergeRgb,
+            GlesMgcRawSpatialShaders.normalizeRgb16,
+        ).forEachIndexed { index, shader ->
+            val sourceFile = File.createTempFile("mgc-spatial-rgb-$index-", ".frag")
+            val outputFile = File.createTempFile("mgc-spatial-rgb-$index-", ".spv")
+            try {
+                sourceFile.writeText(shader.replaceFirst("#version 300 es", "#version 310 es"))
+                val process = ProcessBuilder(
+                    checkNotNull(validator).absolutePath,
+                    "--target-env=opengl",
+                    "-fauto-map-locations",
+                    "-fauto-bind-uniforms",
+                    "-fshader-stage=frag",
+                    sourceFile.absolutePath,
+                    "-o",
+                    outputFile.absolutePath,
+                ).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+
+                assertEquals("shader $index: $output", 0, process.waitFor())
+            } finally {
+                sourceFile.delete()
+                outputFile.delete()
+            }
+        }
     }
 
     @Test

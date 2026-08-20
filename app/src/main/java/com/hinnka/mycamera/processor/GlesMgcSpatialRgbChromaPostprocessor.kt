@@ -6,7 +6,6 @@ import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import java.nio.ByteBuffer
 import kotlin.math.acos
-import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
@@ -461,10 +460,6 @@ internal class GlesMgcSpatialRgbChromaPostprocessor(
             GLES31.glUniform1i(backend.uniformLocation(iirRgbProgram, "uFilterLuma"), if (filterLuma) 1 else 0)
             GLES31.glUniform1i(backend.uniformLocation(iirRgbProgram, "uDirection"), direction[0])
             GLES31.glUniform1i(backend.uniformLocation(iirRgbProgram, "uAxis"), direction[1])
-            GLES31.glUniform1i(
-                backend.uniformLocation(iirRgbProgram, "uBoundaryWarmup"),
-                ceil(16f * safeOutputScale).toInt().coerceIn(16, 48),
-            )
             bindImage(0, input, GLES31.GL_READ_ONLY)
             bindImage(1, output, GLES31.GL_WRITE_ONLY)
             dispatchIir(direction[1], "$label direction $index")
@@ -494,10 +489,6 @@ internal class GlesMgcSpatialRgbChromaPostprocessor(
             GLES31.glUniform4fv(backend.uniformLocation(iirErrorProgram, "uB10"), 1, b10, 0)
             GLES31.glUniform1i(backend.uniformLocation(iirErrorProgram, "uDirection"), direction[0])
             GLES31.glUniform1i(backend.uniformLocation(iirErrorProgram, "uAxis"), direction[1])
-            GLES31.glUniform1i(
-                backend.uniformLocation(iirErrorProgram, "uBoundaryWarmup"),
-                ceil(16f * safeOutputScale).toInt().coerceIn(16, 48),
-            )
             bindImage(0, input, GLES31.GL_READ_ONLY)
             bindImage(1, output, GLES31.GL_WRITE_ONLY)
             dispatchIir(direction[1], "IIR2 direction $index")
@@ -832,6 +823,20 @@ internal object GlesMgcSpatialRgbChromaShaders {
             return dot(rgb, vec3(0.25, 0.5, 0.25));
         }
 
+        float decodeSnorm8(uint encoded) {
+            int signedValue = int(encoded & 255u);
+            if (signedValue > 127) signedValue -= 256;
+            return clamp(float(signedValue) / 127.0, -1.0, 1.0);
+        }
+
+        vec2 directionMomentAt(ivec2 p) {
+            uint encoded = imageLoad(uCameraRgb, imagePosition(p)).a;
+            return vec2(
+                decodeSnorm8(encoded),
+                decodeSnorm8(encoded >> 8u)
+            );
+        }
+
         uint directionMaskAt(ivec2 p) {
             const ivec2 directions[8] = ivec2[8](
                 ivec2(0, -1),
@@ -843,14 +848,33 @@ internal object GlesMgcSpatialRgbChromaShaders {
                 ivec2(-1, 1),
                 ivec2(-1, -1)
             );
+            const vec2 doubledDirectionAxes[8] = vec2[8](
+                vec2(-1.0, 0.0),
+                vec2(1.0, 0.0),
+                vec2(-1.0, 0.0),
+                vec2(1.0, 0.0),
+                vec2(0.0, -1.0),
+                vec2(0.0, 1.0),
+                vec2(0.0, -1.0),
+                vec2(0.0, 1.0)
+            );
             float center = yAt(p);
+            vec2 directionMoment = directionMomentAt(p);
             float gradients[8];
             float minGradient = 65504.0;
             float maxGradient = 0.0;
             for (int i = 0; i < 8; ++i) {
                 float first = yAt(p + directions[i]);
                 float second = yAt(p + directions[i] * 2);
-                gradients[i] = abs(center - first) + 0.5 * abs(first - second);
+                float rgbGradient = abs(center - first) + 0.5 * abs(first - second);
+                // The fused RAW-green moment identifies the edge axis. RGB still supplies the
+                // signed N/E/S/W decision and all local gradient magnitudes.
+                float structureScale = clamp(
+                    1.0 + 0.5 * dot(directionMoment, doubledDirectionAxes[i]),
+                    0.5,
+                    1.5
+                );
+                gradients[i] = rgbGradient * structureScale;
                 minGradient = min(minGradient, gradients[i]);
                 maxGradient = max(maxGradient, gradients[i]);
             }
@@ -1131,7 +1155,6 @@ internal object GlesMgcSpatialRgbChromaShaders {
         uniform int uDirection;
         uniform int uAxis;
         uniform int uFilterLuma;
-        uniform int uBoundaryWarmup;
 
         $imageCommon
 
@@ -1150,6 +1173,16 @@ internal object GlesMgcSpatialRgbChromaShaders {
             state.x0 = value;
             state.y0 = clampUnsigned ? clamp(result, 0.0, 65504.0) : result;
             return state.y0;
+        }
+
+        float steadyOutput(float value, vec4 a, vec4 b, bool clampUnsigned) {
+            float result = value * (a[0] + a[1] + a[2]) /
+                (1.0 + b[1] + b[2]);
+            return clampUnsigned ? clamp(result, 0.0, 65504.0) : result;
+        }
+
+        Delayer steadyState(float sourceValue, float outputValue) {
+            return Delayer(sourceValue, sourceValue, outputValue, outputValue);
         }
 
         ivec2 linePosition(int inner, int outer) {
@@ -1184,28 +1217,23 @@ internal object GlesMgcSpatialRgbChromaShaders {
             int start = uDirection == 0 ? 0 : innerSize - 1;
             int step = uDirection == 0 ? 1 : -1;
 
-            Delayer yState = Delayer(0.0, 0.0, 0.0, 0.0);
-            Delayer crState1 = Delayer(0.0, 0.0, 0.0, 0.0);
-            Delayer cbState1 = Delayer(0.0, 0.0, 0.0, 0.0);
-            Delayer crState2 = Delayer(0.0, 0.0, 0.0, 0.0);
-            Delayer cbState2 = Delayer(0.0, 0.0, 0.0, 0.0);
             uvec4 boundary = imageLoad(uInput, linePosition(start, outer));
+            float boundaryY = uint16ToFloat(boundary.r);
+            float boundaryCr = float(chromaSigned(boundary.g));
+            float boundaryCb = float(chromaSigned(boundary.b));
+            float steadyY = steadyOutput(boundaryY, uA10, uB10, true);
+            float steadyCr1 = steadyOutput(boundaryCr, uADyn1, uBDyn1, false);
+            float steadyCb1 = steadyOutput(boundaryCb, uADyn1, uBDyn1, false);
+            float steadyCr2 = steadyOutput(steadyCr1, uADyn2, uBDyn2, false);
+            float steadyCb2 = steadyOutput(steadyCb1, uADyn2, uBDyn2, false);
+            Delayer yState = steadyState(boundaryY, steadyY);
+            Delayer crState1 = steadyState(boundaryCr, steadyCr1);
+            Delayer cbState1 = steadyState(boundaryCb, steadyCb1);
+            Delayer crState2 = steadyState(steadyCr1, steadyCr2);
+            Delayer cbState2 = steadyState(steadyCb1, steadyCb2);
             float y;
             float cr;
             float cb;
-            for (int warmup = 0; warmup < uBoundaryWarmup; ++warmup) {
-                filterSample(
-                    boundary,
-                    yState,
-                    crState1,
-                    cbState1,
-                    crState2,
-                    cbState2,
-                    y,
-                    cr,
-                    cb
-                );
-            }
             for (int i = 0; i < innerSize; ++i) {
                 ivec2 p = linePosition(start + i * step, outer);
                 ivec2 storage = p;
@@ -1244,7 +1272,6 @@ internal object GlesMgcSpatialRgbChromaShaders {
         uniform vec4 uB10;
         uniform int uDirection;
         uniform int uAxis;
-        uniform int uBoundaryWarmup;
 
         $imageCommon
 
@@ -1265,6 +1292,13 @@ internal object GlesMgcSpatialRgbChromaShaders {
             return state.y0;
         }
 
+        Delayer steadyState(float value) {
+            float outputValue = value * (uA10[0] + uA10[1] + uA10[2]) /
+                (1.0 + uB10[1] + uB10[2]);
+            outputValue = clamp(outputValue, 0.0, 65504.0);
+            return Delayer(value, value, outputValue, outputValue);
+        }
+
         ivec2 linePosition(int inner, int outer) {
             return uAxis == 0 ? ivec2(inner, outer) : ivec2(outer, inner);
         }
@@ -1276,11 +1310,8 @@ internal object GlesMgcSpatialRgbChromaShaders {
             if (outer >= outerLimit) return;
             int start = uDirection == 0 ? 0 : innerSize - 1;
             int step = uDirection == 0 ? 1 : -1;
-            Delayer state = Delayer(0.0, 0.0, 0.0, 0.0);
             uvec4 boundary = imageLoad(uInput, linePosition(start, outer));
-            for (int warmup = 0; warmup < uBoundaryWarmup; ++warmup) {
-                applyFilter(state, uint16ToFloat(boundary.a));
-            }
+            Delayer state = steadyState(uint16ToFloat(boundary.a));
             for (int i = 0; i < innerSize; ++i) {
                 ivec2 p = linePosition(start + i * step, outer);
                 ivec2 storage = p;

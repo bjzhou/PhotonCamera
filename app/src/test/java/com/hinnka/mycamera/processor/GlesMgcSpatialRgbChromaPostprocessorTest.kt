@@ -16,11 +16,27 @@ class GlesMgcSpatialRgbChromaPostprocessorTest {
         assertTrue(seed.contains("cameraRgb * uCalculationGains"))
         assertTrue(finish.contains("/\n                max(uCalculationGains"))
         assertTrue(seed.contains("directionMaskAt(p)"))
+        assertTrue(seed.contains("directionMomentAt(p)"))
+        assertTrue(seed.contains("dot(directionMoment, doubledDirectionAxes[i])"))
         assertTrue(seed.contains("count << 8"))
         assertTrue(seed.contains("const float finiteScale = 65504.0 / 65535.0"))
         assertTrue(!seed.contains("vec3(imageLoad(uCameraRgb"))
         assertTrue(!seed.contains("LensShading"))
         assertTrue(!finish.contains("LensShading"))
+    }
+
+    @Test
+    fun recursiveFiltersUseAnalyticConstantBoundaryState() {
+        val rgb = GlesMgcSpatialRgbChromaShaders.iirRgb
+        val error = GlesMgcSpatialRgbChromaShaders.iirError
+
+        assertTrue(rgb.contains("float steadyOutput"))
+        assertTrue(rgb.contains("1.0 + b[1] + b[2]"))
+        assertTrue(rgb.contains("steadyState(boundaryY, steadyY)"))
+        assertTrue(error.contains("Delayer steadyState(float value)"))
+        assertTrue(error.contains("1.0 + uB10[1] + uB10[2]"))
+        assertTrue(!rgb.contains("uBoundaryWarmup"))
+        assertTrue(!error.contains("uBoundaryWarmup"))
     }
 
     @Test
@@ -133,4 +149,3 @@ class GlesMgcSpatialRgbChromaPostprocessorTest {
         }
     }
 }
-

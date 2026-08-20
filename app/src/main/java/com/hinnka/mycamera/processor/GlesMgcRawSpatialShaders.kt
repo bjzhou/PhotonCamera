@@ -1359,6 +1359,26 @@ internal object GlesMgcRawSpatialShaders {
             return exp(-0.5 * normalizedDifference * normalizedDifference);
         }
 
+        vec2 greenDirectionMoment(ivec2 center, float signal) {
+            float gx = chromaGuideAt(center + ivec2(1, 0)) -
+                chromaGuideAt(center - ivec2(1, 0));
+            float gy = chromaGuideAt(center + ivec2(0, 1)) -
+                chromaGuideAt(center - ivec2(0, 1));
+            float energy = gx * gx + gy * gy;
+            float variance = max(uGreenNoise.x * max(signal, 0.0) + uGreenNoise.y, 0.0);
+            float varianceFloor = uChromaEdgeSigmaFloor * uChromaEdgeSigmaFloor;
+            // Two independent central differences contribute four samples of noise energy.
+            float noiseEnergy = 4.0 * max(variance, varianceFloor);
+            float confidence = clamp(
+                (energy - noiseEnergy) / max(energy + noiseEnergy, 1.0e-12),
+                0.0,
+                1.0
+            );
+            vec2 doubledAngle = vec2(gx * gx - gy * gy, 2.0 * gx * gy) /
+                max(energy, 1.0e-12);
+            return doubledAngle * confidence;
+        }
+
         void main() {
             ivec2 localOutput = ivec2(gl_FragCoord.xy) - uAccumulatorOrigin;
             ivec2 outputPixel = localOutput + uOutputOrigin;
@@ -1415,8 +1435,12 @@ internal object GlesMgcRawSpatialShaders {
                 texture(uFrameWeight, clamp(weightUv, vec2(0.0), vec2(1.0))).r : 1.0;
             frameWeight = clamp(frameWeight, 0.0, 1.0);
             frameWeight *= uGlobalFrameWeight;
+            vec2 directionMoment = greenDirectionMoment(anchor, targetGreen);
             oColorAndRWeight = vec4(semanticSums * frameWeight, weights.r * frameWeight);
-            oGbWeights = vec4(weights.gb * frameWeight, 0.0, 0.0);
+            oGbWeights = vec4(
+                weights.gb * frameWeight,
+                directionMoment * weights.r * frameWeight
+            );
         }
     """.trimIndent()
 
@@ -1436,18 +1460,28 @@ internal object GlesMgcRawSpatialShaders {
         uniform int uUseLensShading;
         layout(location = 0) out highp uvec4 oRgb16;
 
+        uint encodeSnorm8(float value) {
+            int encoded = int(round(clamp(value, -1.0, 1.0) * 127.0));
+            return uint(encoded & 0xFF);
+        }
+
+        uint packDirectionMoment(vec2 moment) {
+            return encodeSnorm8(moment.x) | (encodeSnorm8(moment.y) << 8u);
+        }
+
         void main() {
             ivec2 local = ivec2(gl_FragCoord.xy) - uTargetOrigin;
             if (any(lessThan(local, ivec2(0))) || any(greaterThanEqual(local, uAccumulatorSize))) {
-                oRgb16 = uvec4(0u, 0u, 0u, 65535u);
+                oRgb16 = uvec4(0u);
                 return;
             }
             vec4 colorAndR = texelFetch(uColorAndRWeight, local, 0);
-            vec2 gbWeights = texelFetch(uGbWeights, local, 0).rg;
+            vec4 gbWeightsAndDirection = texelFetch(uGbWeights, local, 0);
             vec3 semantic = colorAndR.rgb / max(
-                vec3(colorAndR.a, gbWeights.x, gbWeights.y),
+                vec3(colorAndR.a, gbWeightsAndDirection.x, gbWeightsAndDirection.y),
                 vec3(1.0e-8)
             );
+            vec2 directionMoment = gbWeightsAndDirection.ba / max(colorAndR.a, 1.0e-8);
             vec3 rgb = vec3(
                 semantic.r + semantic.g,
                 semantic.r,
@@ -1462,7 +1496,7 @@ internal object GlesMgcRawSpatialShaders {
             rgb = max(rgb * uCameraDomainScale * uOutputExposureScale, vec3(0.0));
             oRgb16 = uvec4(
                 uvec3(round(clamp(rgb, vec3(0.0), vec3(1.0)) * 65535.0)),
-                65535u
+                packDirectionMoment(directionMoment)
             );
         }
     """.trimIndent()
