@@ -21,6 +21,8 @@ class OglBokehProcessor {
     companion object {
         private const val TAG = "OglBokehProcessor"
         private const val MAX_BOKEH_RENDER_EDGE = 2560
+        // Keep the analytic pipeline available, but do not synthesize highlight discs for now.
+        private const val ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED = false
         private const val HIGHLIGHT_MASK_THRESHOLD = 0.02f
         private const val MIN_ANALYTIC_COC_PIXELS = 20f
         private const val FOCUS_DEPTH_DEAD_BAND = 0.015f
@@ -176,140 +178,146 @@ class OglBokehProcessor {
 
             drawQuad(depthRefineProgramId)
 
-            // CPU highlight topology only needs a conservative normalized copy.
-            // Its R8 quantization never feeds the renderer; finalDepthTex remains
-            // R16F. Resolving explicitly also avoids unsupported float readback
-            // format/type combinations on GLES 3.0 drivers.
-            GLES30.glGenTextures(1, depthReadbackTex, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthReadbackTex[0])
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, bokehWidth, bokehHeight, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, null)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, depthReadbackTex[0], 0)
-            requireFramebufferComplete("depth classification resolve")
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            GLES30.glUseProgram(depthReadbackProgramId)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, refinedDepthTex[0])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(depthReadbackProgramId, "uDepthTexture"), 0)
-            drawQuad(depthReadbackProgramId)
-            val refinedDepthPixels = readCurrentR8Framebuffer(bokehWidth, bokehHeight)
-            GLES30.glEnable(GLES30.GL_DITHER)
-
             val finalDepthTex = refinedDepthTex[0]
             val maxBlurRadius = originalImage.width.toFloat() / 45.0f
             val identity = FloatArray(16)
             android.opengl.Matrix.setIdentityM(identity, 0)
 
-            // Step 3: Classify only compact, isolated highlights. This prevents
-            // large bright regions from entering the inferred-radiance bokeh path.
             val compactHighlightTex = IntArray(1)
-            GLES30.glGenTextures(1, compactHighlightTex, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
-                bokehWidth,
-                bokehHeight,
-                0,
-                GLES30.GL_RGBA,
-                if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
-                null
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            val analyticHighlights = if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
+                // CPU highlight topology only needs a conservative normalized copy.
+                // Its R8 quantization never feeds the renderer; finalDepthTex remains
+                // R16F. Resolving explicitly also avoids unsupported float readback
+                // format/type combinations on GLES 3.0 drivers.
+                GLES30.glGenTextures(1, depthReadbackTex, 0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthReadbackTex[0])
+                GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, bokehWidth, bokehHeight, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, null)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, depthReadbackTex[0], 0)
+                requireFramebufferComplete("depth classification resolve")
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                GLES30.glUseProgram(depthReadbackProgramId)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, refinedDepthTex[0])
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(depthReadbackProgramId, "uDepthTexture"), 0)
+                drawQuad(depthReadbackProgramId)
+                val refinedDepthPixels = readCurrentR8Framebuffer(bokehWidth, bokehHeight)
+                GLES30.glEnable(GLES30.GL_DITHER)
 
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER,
-                GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D,
-                compactHighlightTex[0],
-                0
-            )
-            requireFramebufferComplete("compact bokeh highlight")
-            GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            GLES30.glUseProgram(compactHighlightProgramId)
+                // Step 3: Classify only compact, isolated highlights. This prevents
+                // large bright regions from entering the inferred-radiance bokeh path.
+                GLES30.glGenTextures(1, compactHighlightTex, 0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
+                GLES30.glTexImage2D(
+                    GLES30.GL_TEXTURE_2D,
+                    0,
+                    if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
+                    bokehWidth,
+                    bokehHeight,
+                    0,
+                    GLES30.GL_RGBA,
+                    if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                    null
+                )
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uInputTexture"),
-                0
-            )
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthTexture"),
-                1
-            )
-            GLES30.glUniformMatrix4fv(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthMatrix"),
-                1,
-                false,
-                identity,
-                0
-            )
-            GLES30.glUniform1f(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uMaxBlurRadius"),
-                maxBlurRadius
-            )
-            GLES30.glUniform1f(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
-                HIGHLIGHT_CLASSIFICATION_F_NUMBER
-            )
-            GLES30.glUniform1f(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uFocusDepth"),
-                focusDepth
-            )
-            GLES30.glUniform2f(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uTexelSize"),
-                1.0f / originalImage.width,
-                1.0f / originalImage.height
-            )
-            GLES30.glUniform1f(
-                GLES30.glGetUniformLocation(
-                    compactHighlightProgramId,
-                    "uMinNeighborhoodLumaDifference",
-                ),
-                MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE,
-            )
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(compactHighlightProgramId, "uLinearInput"),
-                if (linearInput) 1 else 0
-            )
-            drawQuad(compactHighlightProgramId)
+                GLES30.glFramebufferTexture2D(
+                    GLES30.GL_FRAMEBUFFER,
+                    GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D,
+                    compactHighlightTex[0],
+                    0
+                )
+                requireFramebufferComplete("compact bokeh highlight")
+                GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                GLES30.glUseProgram(compactHighlightProgramId)
 
-            // Collapse every connected highlight response to exactly one center.
-            // Components whose complete CoC support is not clear of the focused
-            // subject are rejected before any synthetic light is rasterized.
-            val analyticHighlights = extractAnalyticHighlights(
-                width = bokehWidth,
-                height = bokehHeight,
-                halfFloat = halfFloatOutput,
-                refinedDepthPixels = refinedDepthPixels,
-                originalWidth = originalImage.width,
-                originalHeight = originalImage.height,
-                focusDepth = focusDepth,
-                aperture = aperture,
-                maxBlurRadius = maxBlurRadius,
-            )
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
+                GLES30.glUniform1i(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uInputTexture"),
+                    0
+                )
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
+                GLES30.glUniform1i(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthTexture"),
+                    1
+                )
+                GLES30.glUniformMatrix4fv(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthMatrix"),
+                    1,
+                    false,
+                    identity,
+                    0
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uMaxBlurRadius"),
+                    maxBlurRadius
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
+                    HIGHLIGHT_CLASSIFICATION_F_NUMBER
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uFocusDepth"),
+                    focusDepth
+                )
+                GLES30.glUniform2f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uTexelSize"),
+                    1.0f / originalImage.width,
+                    1.0f / originalImage.height
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(
+                        compactHighlightProgramId,
+                        "uMinNeighborhoodLumaDifference",
+                    ),
+                    MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE,
+                )
+                GLES30.glUniform1i(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uLinearInput"),
+                    if (linearInput) 1 else 0
+                )
+                drawQuad(compactHighlightProgramId)
 
-            PLog.d(
-                TAG,
-                "Analytic bokeh highlights: fNumber=$aperture, " +
-                    "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
-                    "candidates=${analyticHighlights.eligibleCandidateCount}, " +
-                    "depthGateRejected=${analyticHighlights.depthGateRejectedCount}, " +
-                    "preExisting=${analyticHighlights.preExistingBokehCount}, " +
-                    "densitySuppressed=${analyticHighlights.densitySuppressedCount}, " +
-                    "accepted=${analyticHighlights.highlights.size}"
-            )
+                // Collapse every connected highlight response to exactly one center.
+                // Components whose complete CoC support is not clear of the focused
+                // subject are rejected before any synthetic light is rasterized.
+                extractAnalyticHighlights(
+                    width = bokehWidth,
+                    height = bokehHeight,
+                    halfFloat = halfFloatOutput,
+                    refinedDepthPixels = refinedDepthPixels,
+                    originalWidth = originalImage.width,
+                    originalHeight = originalImage.height,
+                    focusDepth = focusDepth,
+                    aperture = aperture,
+                    maxBlurRadius = maxBlurRadius,
+                ).also { extraction ->
+                    PLog.d(
+                        TAG,
+                        "Analytic bokeh highlights: fNumber=$aperture, " +
+                            "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
+                            "candidates=${extraction.eligibleCandidateCount}, " +
+                            "depthGateRejected=${extraction.depthGateRejectedCount}, " +
+                            "preExisting=${extraction.preExistingBokehCount}, " +
+                            "densitySuppressed=${extraction.densitySuppressedCount}, " +
+                            "accepted=${extraction.highlights.size}"
+                    )
+                }.highlights
+            } else {
+                GLES30.glEnable(GLES30.GL_DITHER)
+                PLog.d(TAG, "Analytic bokeh highlights disabled")
+                emptyList()
+            }
 
             // Step 4: Render the expensive PSF at a bounded working resolution.
             val bokehTex = IntArray(1)
@@ -404,7 +412,7 @@ class OglBokehProcessor {
             GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             drawAnalyticHighlights(
-                highlights = analyticHighlights.highlights,
+                highlights = analyticHighlights,
                 framebuffer = fbo[0],
                 renderWidth = bokehWidth,
                 renderHeight = bokehHeight,
@@ -1315,11 +1323,13 @@ class OglBokehProcessor {
         val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
         check(vs != 0) { "Bokeh vertex shader compilation failed" }
         try {
-            compactHighlightProgramId = createProgram(
-                vs,
-                Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
-                "compact bokeh highlight"
-            )
+            if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
+                compactHighlightProgramId = createProgram(
+                    vs,
+                    Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
+                    "compact bokeh highlight"
+                )
+            }
             bokehProgramId = createProgram(vs, Shaders.PSF_SPLAT_FRAGMENT_SHADER, "PSF bokeh")
             bokehCompositeProgramId = createProgram(
                 vs,
@@ -1328,30 +1338,34 @@ class OglBokehProcessor {
             )
             jbuUpsampleProgramId = createProgram(vs, Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER, "depth upsample")
             depthRefineProgramId = createProgram(vs, Shaders.DEPTH_REFINE_FRAGMENT_SHADER, "depth refine")
-            depthReadbackProgramId = createProgram(
-                vs,
-                Shaders.DEPTH_READBACK_FRAGMENT_SHADER,
-                "depth classification resolve",
-            )
+            if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
+                depthReadbackProgramId = createProgram(
+                    vs,
+                    Shaders.DEPTH_READBACK_FRAGMENT_SHADER,
+                    "depth classification resolve",
+                )
+            }
         } finally {
             GLES30.glDeleteShader(vs)
         }
 
-        val analyticHighlightVertexShader = GlUtils.compileShader(
-            GLES30.GL_VERTEX_SHADER,
-            Shaders.ANALYTIC_BOKEH_HIGHLIGHT_VERTEX_SHADER,
-        )
-        check(analyticHighlightVertexShader != 0) {
-            "Analytic bokeh highlight vertex shader compilation failed"
-        }
-        try {
-            analyticHighlightProgramId = createProgram(
-                analyticHighlightVertexShader,
-                Shaders.ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
-                "analytic bokeh highlight",
+        if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
+            val analyticHighlightVertexShader = GlUtils.compileShader(
+                GLES30.GL_VERTEX_SHADER,
+                Shaders.ANALYTIC_BOKEH_HIGHLIGHT_VERTEX_SHADER,
             )
-        } finally {
-            GLES30.glDeleteShader(analyticHighlightVertexShader)
+            check(analyticHighlightVertexShader != 0) {
+                "Analytic bokeh highlight vertex shader compilation failed"
+            }
+            try {
+                analyticHighlightProgramId = createProgram(
+                    analyticHighlightVertexShader,
+                    Shaders.ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
+                    "analytic bokeh highlight",
+                )
+            } finally {
+                GLES30.glDeleteShader(analyticHighlightVertexShader)
+            }
         }
 
         vertexBufferId = GlUtils.createBuffer(Shaders.FULL_QUAD_VERTICES)
@@ -1369,8 +1383,10 @@ class OglBokehProcessor {
         GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, Shaders.DRAW_ORDER.size * 2, indexBuffer, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
 
-        GLES30.glGenBuffers(1, ids, 0)
-        highlightInstanceBufferId = ids[0]
+        if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
+            GLES30.glGenBuffers(1, ids, 0)
+            highlightInstanceBufferId = ids[0]
+        }
     }
 
     private fun createProgram(vertexShader: Int, fragmentSource: String, label: String): Int {
