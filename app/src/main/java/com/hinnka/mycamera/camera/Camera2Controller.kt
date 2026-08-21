@@ -4600,6 +4600,17 @@ class Camera2Controller(private val context: Context) {
         return _state.value.currentCameraId
     }
 
+    /** Physical sensor area for the selected output lens, in square millimeters. */
+    fun getCurrentSensorPhysicalAreaMm2(): Float? {
+        val characteristics = resolveActiveFocusCharacteristics()?.second
+            ?: getActiveOpenCameraCharacteristics()
+            ?: return null
+        val size = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            ?: return null
+        val area = size.width * size.height
+        return area.takeIf { it.isFinite() && it > 0f }
+    }
+
     /**
      * 获取传感器方向（供外部 YUV 处理使用）
      */

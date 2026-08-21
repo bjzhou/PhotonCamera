@@ -46,4 +46,23 @@ class MgcSabreKernelTuningTest {
             1e-4f,
         )
     }
+
+    @Test
+    fun mergeGradientThresholdReplacesOnlyCovarianceParameters1Z() {
+        val stock = MgcSabreKernelTuning.build(referenceSnr = 11f, frameCount = 12)
+        val patched = MgcSabreKernelTuning.build(
+            referenceSnr = 11f,
+            frameCount = 12,
+            mergeGradientThreshold = 0.02f,
+        )
+
+        assertEquals(0.02f, patched.gradientThreshold, 0f)
+        assertEquals(0.02f, patched.covarianceParameters1[2], 0f)
+        assertEquals(stock.directionalScale, patched.directionalScale, 0f)
+        assertEquals(stock.isotropicScale, patched.isotropicScale, 0f)
+        assertEquals(stock.gradientTransition, patched.gradientTransition, 0f)
+        assertEquals(stock.anisotropyScale, patched.anisotropyScale, 0f)
+        assertEquals(stock.coherenceScale, patched.coherenceScale, 0f)
+        assertArrayEquals(stock.covarianceParameters2, patched.covarianceParameters2, 0f)
+    }
 }

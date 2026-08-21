@@ -46,11 +46,13 @@ Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgba8(
     jint width,
     jint height,
     jfloat snr,
-    jfloat sharpen_attenuation_scale) {
+    jfloat sharpen_attenuation_scale,
+    jfloatArray interpolation_scales_array) {
     if (rgba_buffer == nullptr || width <= 0 || height <= 0 ||
         !std::isfinite(snr) || snr <= 0.0f ||
         !std::isfinite(sharpen_attenuation_scale) ||
-        sharpen_attenuation_scale < 0.0f) {
+        sharpen_attenuation_scale < 0.0f || interpolation_scales_array == nullptr ||
+        env->GetArrayLength(interpolation_scales_array) != 3) {
         return -1;
     }
     const size_t pixel_count =
@@ -69,8 +71,12 @@ Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgba8(
     }
 
     photon::mgc_denoise::SharpenCurveSelection curve_selection;
+    float interpolation_scales[3] = {};
+    env->GetFloatArrayRegion(interpolation_scales_array, 0, 3, interpolation_scales);
+    if (env->ExceptionCheck()) return -1;
     if (!photon::mgc_denoise::BuildDefaultSharpenCurves(
             snr,
+            interpolation_scales,
             &curve_selection)) {
         return -1;
     }

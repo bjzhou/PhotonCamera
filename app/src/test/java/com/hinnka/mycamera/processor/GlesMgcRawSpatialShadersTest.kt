@@ -166,6 +166,7 @@ class GlesMgcRawSpatialShadersTest {
             GlesMgcRawSpatialShaders.alignmentGradientProducts,
             GlesMgcRawSpatialShaders.upsampleAlignment,
             GlesMgcRawSpatialShaders.blockLucasKanade,
+            GlesMgcRawSpatialShaders.rejectionFilterDownsample,
         )
 
         assertTrue(rawToGray.contains("out highp int oGray"))
@@ -177,6 +178,16 @@ class GlesMgcRawSpatialShadersTest {
             assertFalse(shader.contains("highp usampler2D uReference"))
             assertFalse(shader.contains("highp usampler2D uCurrent"))
         }
+        assertTrue(
+            GlesMgcRawSpatialShaders.rejectionFilterDownsample.contains(
+                "uniform highp isampler2D uBaseLuma",
+            ),
+        )
+        assertFalse(
+            GlesMgcRawSpatialShaders.rejectionFilterDownsample.contains(
+                "uniform highp usampler2D uBaseLuma",
+            ),
+        )
     }
 
     @Test

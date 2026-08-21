@@ -2533,7 +2533,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             PLog.d(
                 TAG,
                 "persist RAW edit metadata: ${mediaData.id}, dro=$droMode, noise=$noiseReduction, " +
-                    "chromaNoise=$chromaNoiseReduction, profileToneMap=${rawToneMappingParameters.profileToneMapMode}"
+                    "chromaNoise=$chromaNoiseReduction, " +
+                    "profileToneMap=${rawToneMappingParameters.profileToneMapMode}"
             )
             val updated = GalleryManager.updateMetadata(context, mediaData.id) { current ->
                 current.copy(

@@ -400,6 +400,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     jfloat prepared_normalized_chroma_quadratic,
     jfloatArray luma_correlation_array,
     jfloatArray chroma_correlation_array,
+    jfloat denoise_response_offset,
+    jfloat denoise_response_cosine_offset,
     jshortArray spatial_strength_q8_array,
     jint spatial_strength_width,
     jint spatial_strength_height,
@@ -427,6 +429,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
         (run_measure_moire &&
          (!run_chroma || cfa_pattern < 0 || cfa_pattern > 3)) ||
         (apply_bayer_lens_shading && !bayer_input) ||
+        !std::isfinite(denoise_response_offset) ||
+        !std::isfinite(denoise_response_cosine_offset) ||
         (!run_luma && !run_chroma)) {
         return -1;
     }
@@ -1053,6 +1057,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                     q14_chroma_shared_shot,
                     chroma_shared_quadratic,
                     prepared_chroma_correlation,
+                    denoise_response_offset,
+                    denoise_response_cosine_offset,
                     chroma_strength,
                     chroma_outlier,
                     &chroma_noise)) {
@@ -1082,6 +1088,8 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                     q14_yuv_shot[0],
                     yuv_quadratic[0],
                     prepared_luma_correlation,
+                    denoise_response_offset,
+                    denoise_response_cosine_offset,
                     luma_strength,
                     luma_outlier,
                     luma_revert,

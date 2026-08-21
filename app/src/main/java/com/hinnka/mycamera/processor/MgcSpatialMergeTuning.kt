@@ -15,6 +15,29 @@ internal object MgcSpatialMergeTuning {
     }
 
     /**
+     * Evaluates the representative SNR of Spatial's propagated output NoiseModel.
+     *
+     * Unlike [mergedSnr], this includes the actual alignment/rejection weights already folded
+     * into ComputeBayerNoiseModel/ComputeRgbNoiseModel rather than assuming every admitted frame
+     * contributed one full independent sample.
+     */
+    fun outputNoiseModelSnr(
+        signal: Float,
+        greenReadVariance: Float,
+        greenShotNoiseFactor: Float,
+    ): Float? {
+        if (!signal.isFinite() || signal < 0f ||
+            !greenReadVariance.isFinite() || greenReadVariance < 0f ||
+            !greenShotNoiseFactor.isFinite() || greenShotNoiseFactor < 0f
+        ) {
+            return null
+        }
+        val variance = greenReadVariance + greenShotNoiseFactor * signal
+        if (!variance.isFinite() || variance <= 0f) return null
+        return (signal / sqrt(variance)).takeIf { it.isFinite() && it >= 0f }
+    }
+
+    /**
      * Recovered from SpatialMergeParams::BuildForSnr at libgcastartup.so+0x386b3cc.
      * The curve input is the merged-stack SNR, not the base-frame SNR.
      */
@@ -67,23 +90,61 @@ internal object MgcSpatialMergeTuning {
             .coerceAtMost(MAXIMUM_MERGE_WEIGHT_CAP)
     }
 
+    /**
+     * Spatial ExpectedMergeWeight at libgcastartup.so+0x386ba74.
+     *
+     * The normal Spatial path does not pass [maximumMergeWeight] to MergeBayer/Spatial RGB.
+     * MGC first transports the alternate shot/read model into the base exposure domain, then
+     * compares both models at the reference signal. The shadow-only maximum is an envelope used
+     * while constructing the parameters and is overwritten by this value for normal merging.
+     */
+    fun expectedMergeWeight(
+        referenceSignal: Float,
+        baseShotNoiseFactor: Float,
+        baseReadVariance: Float,
+        alternateShotNoiseFactor: Float,
+        alternateReadVariance: Float,
+        exposureScale: Float,
+        frameWeightExponent: Float = DEFAULT_FRAME_WEIGHT_EXPONENT,
+    ): Float {
+        require(referenceSignal.isFinite() && referenceSignal >= 0f)
+        require(baseShotNoiseFactor.isFinite() && baseShotNoiseFactor >= 0f)
+        require(baseReadVariance.isFinite() && baseReadVariance >= 0f)
+        require(alternateShotNoiseFactor.isFinite() && alternateShotNoiseFactor >= 0f)
+        require(alternateReadVariance.isFinite() && alternateReadVariance >= 0f)
+        require(exposureScale.isFinite() && exposureScale > 0f)
+        require(frameWeightExponent.isFinite() && frameWeightExponent >= 0f)
+
+        val baseVariance =
+            baseShotNoiseFactor * referenceSignal + baseReadVariance
+        val scaledAlternateVariance =
+            alternateShotNoiseFactor * exposureScale * referenceSignal +
+                alternateReadVariance * exposureScale * exposureScale
+        check(scaledAlternateVariance > 0f) {
+            "MGC Spatial requires positive alternate variance at the reference signal"
+        }
+        return (baseVariance / scaledAlternateVariance)
+            .pow(frameWeightExponent)
+            .coerceAtMost(MAXIMUM_MERGE_WEIGHT_CAP)
+    }
+
     /** Static MGC map initialized from libgcastartup.so rodata at 0x6b6e40. */
-    fun frameWeightKernelMultiplier(maximumMergeWeight: Float): Float = interpolate(
-        maximumMergeWeight.takeIf { it.isFinite() } ?: 0f,
+    fun frameWeightKernelMultiplier(mergeWeight: Float): Float = interpolate(
+        mergeWeight.takeIf { it.isFinite() } ?: 0f,
         10f to 1f,
         30f to 1.414000034332275f,
     )
 
     fun kernelSigma(
         baseSpatialScale: Float,
-        maximumMergeWeight: Float,
+        mergeWeight: Float,
         selectedFrameMultiplier: Float = DEFAULT_SELECTED_FRAME_MULTIPLIER,
     ): Float {
         require(baseSpatialScale.isFinite() && baseSpatialScale > 0f)
         require(selectedFrameMultiplier.isFinite() && selectedFrameMultiplier > 0f)
         return 1f / (
             baseSpatialScale *
-                frameWeightKernelMultiplier(maximumMergeWeight) *
+                frameWeightKernelMultiplier(mergeWeight) *
                 selectedFrameMultiplier
             )
     }

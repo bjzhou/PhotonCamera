@@ -35,6 +35,8 @@ import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
+import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
+import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -161,6 +163,8 @@ data class UserPreferences(
     val rawChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
     val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
     val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+    /** Hidden override used only while RAWmax quality tuning is enabled; null selects its area model. */
+    val coreImagingTuning: PhotonCoreImagingTuning? = null,
     val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
     val phantomFrameId: String? = null,
@@ -200,6 +204,8 @@ data class UserPreferences(
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
     val useRawMaxHdrComposition: Boolean = MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION, // RAWmax：包围曝光 HDR 融合
+    val rawMaxQualityTuningEnabled: Boolean =
+        PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
     /** RAWmax processor/output selection. */
     val rawMaxSpatialMode: MgcRawMaxMode = MgcRawMaxMode.DEFAULT,
     /** Legacy compatibility mirror; new code should use rawMaxSpatialMode. */
@@ -410,6 +416,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_MAX_NOISE_REDUCTION_KEY = floatPreferencesKey("raw_max_noise_reduction")
         private val RAW_MAX_CHROMA_NOISE_REDUCTION_KEY =
             floatPreferencesKey("raw_max_chroma_noise_reduction")
+        private val PHOTON_CORE_IMAGING_TUNING_KEY =
+            stringPreferencesKey("photon_core_imaging_tuning")
         private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
         private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
@@ -456,6 +464,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
         private val USE_RAW_MAX_HDR_COMPOSITION =
             booleanPreferencesKey("use_raw_max_hdr_composition")
+        private val RAW_MAX_QUALITY_TUNING_ENABLED =
+            booleanPreferencesKey("raw_max_quality_tuning_enabled")
         private val USE_RAW_MAX_SPATIAL_RGB =
             booleanPreferencesKey("use_raw_max_spatial_rgb")
         private val RAW_MAX_SPATIAL_MODE =
@@ -686,6 +696,9 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[RAW_MAX_CHROMA_NOISE_REDUCTION_KEY]
                         ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
                 ),
+                coreImagingTuning = preferences[PHOTON_CORE_IMAGING_TUNING_KEY]?.let(
+                    PhotonCoreImagingTuning::fromPersistedString,
+                ),
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
@@ -744,6 +757,8 @@ class UserPreferencesRepository(private val context: Context) {
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useRawMax = useRawMax,
                 useRawMaxHdrComposition = useRawMaxHdrComposition,
+                rawMaxQualityTuningEnabled = preferences[RAW_MAX_QUALITY_TUNING_ENABLED]
+                    ?: PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
                 rawMaxSpatialMode = rawMaxSpatialMode,
                 useRawMaxSpatialRgb = rawMaxSpatialMode == MgcRawMaxMode.SPATIAL_RGB,
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
@@ -1753,6 +1768,18 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveCoreImagingTuning(tuning: PhotonCoreImagingTuning) {
+        context.dataStore.edit { preferences ->
+            preferences[PHOTON_CORE_IMAGING_TUNING_KEY] = tuning.normalized().toPersistedString()
+        }
+    }
+
+    suspend fun clearCoreImagingTuning() {
+        context.dataStore.edit { preferences ->
+            preferences.remove(PHOTON_CORE_IMAGING_TUNING_KEY)
+        }
+    }
+
     /**
      * 保存滤镜排序顺序
      */
@@ -1936,6 +1963,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseRawMaxHdrComposition(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_RAW_MAX_HDR_COMPOSITION] = enabled
+        }
+    }
+
+    suspend fun saveRawMaxQualityTuningEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_MAX_QUALITY_TUNING_ENABLED] = enabled
         }
     }
 

@@ -617,8 +617,8 @@ internal object GlesMgcRawSpatialShaders {
         #version 300 es
         precision highp float;
         precision highp int;
-        precision highp usampler2D;
-        uniform highp usampler2D uBaseLuma;
+        precision highp isampler2D;
+        uniform highp isampler2D uBaseLuma;
         uniform sampler2D uRejection;
         uniform ivec2 uInputSize;
         layout(location = 0) out float oLuma;

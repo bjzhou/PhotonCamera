@@ -2,6 +2,7 @@ package com.hinnka.mycamera.raw
 
 import android.content.Context
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.processor.PhotonSabreLumaTuningNodes
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackRuntimeDebug
 import com.hinnka.mycamera.utils.PLog
@@ -18,7 +19,7 @@ import java.nio.ByteBuffer
  * This class owns luma/chroma protobuf tuning selection and normalized
  * noise-model preparation. Spatial consumes its propagated correlation/coefficient/strength
  * outputs; classic Sabre consumes its dedicated luma tuning and scales the complete reference
- * NoiseModel by its reference-SNR-derived variance reduction factor. The
+ * NoiseModel by its measured merge factor and post-merge SNR-table reduction. The
  * native bridge converts normalized read/shot/quadratic coefficients exactly once at
  * the Q14 S16 kernel boundary.
  */
@@ -173,19 +174,28 @@ internal object MgcFullResolutionDenoise {
             PLog.e(
                 TAG,
                 "MGC denoise rejected malformed prepared VGN YUV model: " +
-                    "read=${preparedYuvNoiseModel?.normalizedRead?.contentToString()} " +
-                    "lumaShot=${preparedYuvNoiseModel?.normalizedLumaShot} " +
-                    "lumaQuadratic=${preparedYuvNoiseModel?.normalizedLumaQuadratic} " +
-                    "chromaShot=${preparedYuvNoiseModel?.normalizedChromaShot} " +
-                    "chromaQuadratic=${preparedYuvNoiseModel?.normalizedChromaQuadratic}",
+                    "read=${preparedYuvNoiseModel.normalizedRead.contentToString()} " +
+                    "lumaShot=${preparedYuvNoiseModel.normalizedLumaShot} " +
+                    "lumaQuadratic=${preparedYuvNoiseModel.normalizedLumaQuadratic} " +
+                    "chromaShot=${preparedYuvNoiseModel.normalizedChromaShot} " +
+                    "chromaQuadratic=${preparedYuvNoiseModel.normalizedChromaQuadratic}",
             )
             return false
         }
         val spatialCorrelation = if (useSpatialModel) {
             metadata.mgcDenoiseCorrelation
         } else null
-        val lumaCorrelation = preparedYuvNoiseModel?.lumaCorrelation ?: spatialCorrelation
-        val chromaCorrelation = preparedYuvNoiseModel?.chromaCorrelation ?: spatialCorrelation
+        val coreTuning = metadata.coreImagingTuning.normalized()
+        val lumaCorrelation = applyFusionCorrelationScale(
+            correlation = preparedYuvNoiseModel?.lumaCorrelation ?: spatialCorrelation,
+            scale = coreTuning.fusion.noiseCorrelationScale,
+            enabled = useSabreModel,
+        )
+        val chromaCorrelation = applyFusionCorrelationScale(
+            correlation = preparedYuvNoiseModel?.chromaCorrelation ?: spatialCorrelation,
+            scale = coreTuning.fusion.noiseCorrelationScale,
+            enabled = useSabreModel,
+        )
         if (useSpatialModel &&
             (!validCorrelation(lumaCorrelation) || !validCorrelation(chromaCorrelation))
         ) {
@@ -255,10 +265,11 @@ internal object MgcFullResolutionDenoise {
             } else {
                 1f
             }
-            // MergeRaw passes the reciprocal SNR-table reduction as an equivalent sample count
-            // to NoiseModel::Average() at libgcastartup.so+0x5e97a84. Average() takes the
-            // reciprocal again, so the table reduction itself is applied uniformly to read,
-            // shot and quadratic coefficients. The physical camera model has no quadratic term.
+            // Sabre first obtains the merged NoiseModel produced from its accumulated frame
+            // weights. MergeRaw then passes the reciprocal SNR-table reduction as an equivalent
+            // sample count to NoiseModel::Average() at libgcastartup.so+0x5e97a84. The metadata
+            // scale contains both stages and is applied uniformly to read and shot coefficients.
+            // The physical camera model has no quadratic term.
             rgbShot = FloatArray(3) { channel ->
                 resolvedNoise.shot[channel] * sabreNoiseModelScale
             }
@@ -271,14 +282,32 @@ internal object MgcFullResolutionDenoise {
                 hasValidLensShadingMap(metadata)
         val rgbWhiteBalance = normalizedRgbWhiteBalance(metadata.whiteBalanceGains)
         val selectedLumaTuningPoints = if (useSabreModel) {
-            sabreLumaTuningPoints
+            sabreLumaTuningPoints.map { point ->
+                point.copy(
+                    tuning = applySabreLumaNodeOverrides(
+                        tuning = point.tuning,
+                        snr = point.snr,
+                        nodes = coreTuning.denoise.sabreLumaNodes,
+                    ),
+                )
+            }
         } else {
             lumaTuningPoints
         }
-        val lumaTuning = interpolateTuning(tuningSnr, selectedLumaTuningPoints)
-            .withStrengthScale(finiteLumaScale)
-        val chromaTuning = interpolateTuning(tuningSnr, chromaTuningPoints)
-            .withStrengthScale(finiteChromaScale)
+        val lumaTuning = applyCoreDenoiseScales(
+            tuning = interpolateTuning(tuningSnr, selectedLumaTuningPoints),
+            globalStrengthScale = finiteLumaScale,
+            strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray(),
+            revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray(),
+            outlierLevelScales = coreTuning.denoise.outlierRejectionScale.toFloatArray(),
+        )
+        val chromaTuning = applyCoreDenoiseScales(
+            tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
+            globalStrengthScale = finiteChromaScale,
+            strengthLevelScales = coreTuning.denoise.chromaStrengthScale.toFloatArray(),
+            revertLevelScales = FloatArray(5) { 1f },
+            outlierLevelScales = FloatArray(5) { 1f },
+        )
         // MGC process_raw enables MeasureMoire only for a standard Bayer
         // capture at exact 1x output. The AOT consumes RawToYuv's Y plane, so
         // this remains valid when the current handoff already contains RGB.
@@ -313,6 +342,8 @@ internal object MgcFullResolutionDenoise {
                 preparedYuvNoiseModel?.normalizedChromaQuadratic ?: 0f,
             lumaCorrelation = lumaCorrelation,
             chromaCorrelation = chromaCorrelation,
+            denoiseResponseOffset = coreTuning.denoise.frequencyResponse.responseOffset,
+            denoiseResponseCosineOffset = coreTuning.denoise.frequencyResponse.cosineOffset,
             spatialStrengthQ8 = spatialStrengthMap?.q8,
             spatialStrengthWidth = spatialStrengthMap?.width ?: 0,
             spatialStrengthHeight = spatialStrengthMap?.height ?: 0,
@@ -351,6 +382,12 @@ internal object MgcFullResolutionDenoise {
                 "sabreNoiseModelScale=$sabreNoiseModelScale " +
                 "rgbWb=${rgbWhiteBalance.contentToString()} " +
                 "tuningInterpolation=linear " +
+                "lumaScales=${coreTuning.denoise.lumaStrengthScale} " +
+                "detailReconstructionScales=${coreTuning.denoise.detailReconstructionScale} " +
+                "outlierRejectionScales=${coreTuning.denoise.outlierRejectionScale} " +
+                "chromaScales=${coreTuning.denoise.chromaStrengthScale} " +
+                "frequencyResponse=${coreTuning.denoise.frequencyResponse} " +
+                "noiseCorrelationScale=${coreTuning.fusion.noiseCorrelationScale} " +
                 "lumaStrength=${lumaTuning.strength.contentToString()} " +
                 "lumaOutlier=${lumaTuning.outlierDistance.contentToString()} " +
                 "lumaRevert=${lumaTuning.revertFactor.contentToString()} " +
@@ -433,11 +470,81 @@ internal object MgcFullResolutionDenoise {
             map.all { it.isFinite() && it > 0f }
     }
 
-    private fun Tuning.withStrengthScale(scale: Float): Tuning = copy(
-        strength = FloatArray(strength.size) { index -> strength[index] * scale },
-        revertFactor = revertFactor.copyOf(),
-        outlierDistance = outlierDistance.copyOf(),
+    internal fun applyLumaStrengthScales(
+        tuning: Tuning,
+        globalScale: Float,
+        levelScales: FloatArray,
+    ): Tuning = applyCoreDenoiseScales(
+        tuning = tuning,
+        globalStrengthScale = globalScale,
+        strengthLevelScales = levelScales,
+        revertLevelScales = FloatArray(tuning.strength.size) { 1f },
+        outlierLevelScales = FloatArray(tuning.strength.size) { 1f },
     )
+
+    /**
+     * Applies Photon controls to the three independent denoise protobuf fields:
+     * strength, revert factor (detail reconstruction), and outlier distance.
+     */
+    internal fun applyCoreDenoiseScales(
+        tuning: Tuning,
+        globalStrengthScale: Float,
+        strengthLevelScales: FloatArray,
+        revertLevelScales: FloatArray,
+        outlierLevelScales: FloatArray,
+    ): Tuning {
+        val levelCount = tuning.strength.size
+        require(tuning.revertFactor.size == levelCount && tuning.outlierDistance.size == levelCount)
+        require(
+            strengthLevelScales.size == levelCount &&
+                revertLevelScales.size == levelCount &&
+                outlierLevelScales.size == levelCount,
+        ) { "Denoise control count does not match the tuning level count" }
+        require(
+            globalStrengthScale.isFinite() &&
+                strengthLevelScales.all(Float::isFinite) &&
+                revertLevelScales.all(Float::isFinite) &&
+                outlierLevelScales.all(Float::isFinite),
+        ) { "Denoise control is not finite" }
+        return Tuning(
+            strength = FloatArray(levelCount) { index ->
+                tuning.strength[index] * globalStrengthScale * strengthLevelScales[index]
+            },
+            revertFactor = FloatArray(levelCount) { index ->
+                tuning.revertFactor[index] * revertLevelScales[index]
+            },
+            outlierDistance = FloatArray(levelCount) { index ->
+                tuning.outlierDistance[index] * outlierLevelScales[index]
+            },
+        )
+    }
+
+    internal fun applySabreLumaNodeOverrides(
+        tuning: Tuning,
+        snr: Float,
+        nodes: PhotonSabreLumaTuningNodes,
+    ): Tuning {
+        val row = nodes.normalized().valuesForSnr(snr) ?: return tuning.copyArrays()
+        require(row.size == tuning.strength.size)
+        return tuning.copy(
+            strength = FloatArray(tuning.strength.size) { index ->
+                row[index] ?: tuning.strength[index]
+            },
+            revertFactor = tuning.revertFactor.copyOf(),
+            outlierDistance = tuning.outlierDistance.copyOf(),
+        )
+    }
+
+    internal fun applyFusionCorrelationScale(
+        correlation: FloatArray?,
+        scale: Float,
+        enabled: Boolean,
+    ): FloatArray? {
+        if (!enabled) return correlation
+        require(scale.isFinite() && scale >= 0f)
+        if (correlation == null && scale == 1f) return null
+        return FloatArray(128) { index -> (correlation?.get(index) ?: 1f) * scale }
+    }
 
     private fun validRgbNoise(values: FloatArray): Boolean =
         values.size == 3 && values.all { it.isFinite() && it >= 0f }
@@ -659,6 +766,8 @@ internal object MgcFullResolutionDenoise {
         preparedNormalizedChromaQuadratic: Float,
         lumaCorrelation: FloatArray?,
         chromaCorrelation: FloatArray?,
+        denoiseResponseOffset: Float,
+        denoiseResponseCosineOffset: Float,
         spatialStrengthQ8: ShortArray?,
         spatialStrengthWidth: Int,
         spatialStrengthHeight: Int,

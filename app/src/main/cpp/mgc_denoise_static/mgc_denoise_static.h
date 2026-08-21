@@ -58,6 +58,8 @@ bool BuildNoiseBuffers(
     float shot_noise,
     float quadratic_noise,
     const float correlation[128],
+    float response_offset,
+    float response_cosine_offset,
     const float strength[5],
     const float outlier_distance[5],
     const float revert_factor[5],
@@ -72,6 +74,8 @@ bool BuildChromaNoiseBuffers(
     float shot_noise,
     float quadratic_noise,
     const float correlation[128],
+    float response_offset,
+    float response_cosine_offset,
     const float strength[5],
     const float outlier_threshold[5],
     ChromaDenoiseNoiseBuffers* output);
@@ -222,6 +226,7 @@ int RunYuvToRgb(
  */
 bool BuildDefaultSharpenCurves(
     float snr,
+    const float interpolation_scales[3],
     SharpenCurveSelection* output);
 
 /**

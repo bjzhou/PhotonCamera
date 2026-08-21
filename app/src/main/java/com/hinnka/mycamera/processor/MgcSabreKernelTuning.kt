@@ -45,9 +45,15 @@ internal object MgcSabreKernelTuning {
             )
     }
 
-    fun build(referenceSnr: Float, frameCount: Int): Parameters {
+    fun build(
+        referenceSnr: Float,
+        frameCount: Int,
+        mergeGradientThreshold: Float? = null,
+    ): Parameters {
         val finiteSnr = referenceSnr.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
         val effectiveSnr = finiteSnr * sqrt(frameCount.coerceAtLeast(0).toFloat() / 12f)
+        val resolvedGradientThreshold = mergeGradientThreshold
+            ?.takeIf { it.isFinite() }
         return Parameters(
             directionalScale = interpolate(
                 effectiveSnr,
@@ -60,7 +66,7 @@ internal object MgcSabreKernelTuning {
                 11f to 4f,
                 27f to 3f,
             ),
-            gradientThreshold = interpolate(
+            gradientThreshold = resolvedGradientThreshold ?: interpolate(
                 effectiveSnr,
                 0.9f to 0.01f,
                 1f to 0.0012f,

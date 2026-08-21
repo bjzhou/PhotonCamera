@@ -138,6 +138,8 @@ data class RawStackResult(
     val mgcSharpenTuningSnr: Float? = null,
     /** Exact FinishRaw sharpen_attenuation_scale generated from the reference-frame TET. */
     val mgcSharpenAttenuationScale: Float? = null,
+    /** Capture-scoped Photon controls for the core imaging chain. */
+    val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
     /**
      * True only for the debug reference-only isolation path. This state is process-local and is
      * never persisted into RAW/DNG metadata.
@@ -293,6 +295,7 @@ object MultiFrameStacker {
         exportGpuLinearRgbSource: Boolean = false,
         gpuLinearRgbStorage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
         enableHdrFusion: Boolean = true,
+        coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
     ): RawStackResult? {
         if (frames.isEmpty()) return null
         val images = frames.map { it.image }
@@ -336,6 +339,7 @@ object MultiFrameStacker {
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
             gpuLinearRgbStorage = gpuLinearRgbStorage,
+            coreImagingTuning = coreImagingTuning.normalized(),
         ).processFrames(frames)
     }
 

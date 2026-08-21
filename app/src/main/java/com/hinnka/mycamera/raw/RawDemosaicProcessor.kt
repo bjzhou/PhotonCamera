@@ -30,6 +30,7 @@ import com.hinnka.mycamera.processor.GlesMgcRawSpatialStacker
 import com.hinnka.mycamera.processor.GlesPixelBufferTransfer
 import com.hinnka.mycamera.processor.GpuBayerSource
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
+import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
@@ -220,6 +221,8 @@ class RawDemosaicProcessor {
             mgcDenoiseTuningSnr = baseMetadata?.mgcDenoiseTuningSnr,
             mgcSharpenTuningSnr = baseMetadata?.mgcSharpenTuningSnr,
             mgcSharpenAttenuationScale = baseMetadata?.mgcSharpenAttenuationScale,
+            coreImagingTuning = baseMetadata?.coreImagingTuning
+                ?: PhotonCoreImagingTuning.DEFAULT,
             rotation = dngRawData.rotation,
             profileGainTableMap = baseMetadata?.profileGainTableMap
         )
@@ -1521,6 +1524,7 @@ class RawDemosaicProcessor {
     private val linearFloatToUintPass = RawLinearFloatToUintPass()
     private val warpRectilinearPass = RawWarpRectilinearPass(fullscreenQuad)
     private val linearRcdPass = RawLinearRcdPass(fullscreenQuad)
+    private val photonDehazePipeline = PhotonDehazePipeline(fullscreenQuad)
     private val hdrReferencePass = RawHdrReferencePass(fullscreenQuad)
     private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
     private val quadBayerDemosaicAlgorithm = QuadBayerDemosaicAlgorithm()
@@ -1829,6 +1833,7 @@ class RawDemosaicProcessor {
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
         sharpeningValue: Float = 0f,
+        processLocalCoreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -1871,6 +1876,7 @@ class RawDemosaicProcessor {
                 rawWhiteLevelMode = rawWhiteLevelMode,
                 rawCustomWhiteLevel = rawCustomWhiteLevel,
                 sharpeningValue = sharpeningValue,
+                processLocalCoreImagingTuning = processLocalCoreImagingTuning,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
@@ -2059,6 +2065,7 @@ class RawDemosaicProcessor {
         sharpeningValue: Float = 0f,
         processLocalMgcSharpenTuningSnr: Float? = null,
         processLocalMgcSharpenAttenuationScale: Float? = null,
+        processLocalCoreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -2104,6 +2111,7 @@ class RawDemosaicProcessor {
                 processLocalMgcSharpenTuningSnr = processLocalMgcSharpenTuningSnr,
                 processLocalMgcSharpenAttenuationScale =
                     processLocalMgcSharpenAttenuationScale,
+                processLocalCoreImagingTuning = processLocalCoreImagingTuning,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
@@ -2304,6 +2312,7 @@ class RawDemosaicProcessor {
         sharpeningValue: Float = 0f,
         processLocalMgcSharpenTuningSnr: Float? = null,
         processLocalMgcSharpenAttenuationScale: Float? = null,
+        processLocalCoreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -2437,6 +2446,7 @@ class RawDemosaicProcessor {
                 mgcSharpenTuningSnr = processLocalMgcSharpenTuningSnr,
                 mgcSharpenAttenuationScale =
                     processLocalMgcSharpenAttenuationScale,
+                coreImagingTuning = processLocalCoreImagingTuning.normalized(),
             )
             profileGainTableMap?.let {
                 PLog.d(
@@ -2627,6 +2637,8 @@ class RawDemosaicProcessor {
             actualSamplesPerPixel !in setOf(1, 3, 4) ->
                 "unsupported samplesPerPixel=$actualSamplesPerPixel"
             borrowedGpuSource != null -> "GPU-resident stacked source"
+            actualMetadata.coreImagingTuning.dehaze.isActive ->
+                "Photon dehaze requires one continuous low-frequency image"
             hasActiveWarp && !(captureProfilePreparationRequested && exposurePreviewRequest == null) ->
                 "DNG WarpRectilinear requires a displacement-aware render source region"
             colorEngine == RawRenderingEngine.DarktableFilmic ->
@@ -3207,6 +3219,7 @@ class RawDemosaicProcessor {
             } else {
                 0
             }
+            var hdrReferencePreparedBeforeDehaze = false
 
             val denoiseProfileTextureId = renderMgcUserAdjustmentDenoise(
                 context = context.applicationContext,
@@ -3241,6 +3254,7 @@ class RawDemosaicProcessor {
             // it through ColorCorrectAll's camera-domain inputEV; other linear engines retain
             // the exact post-matrix 2^EV gain.
             checkGlError("Before LinearRcdPass")
+            val dehazeTuning = actualMetadata.coreImagingTuning.dehaze.normalized()
 
             renderLinearRcdPass(
                 metadata = actualMetadata,
@@ -3251,7 +3265,10 @@ class RawDemosaicProcessor {
                 rawExposureCompensation = 0f,
                 colorCorrectionMatrix = linearColorCorrectionMatrix,
                 cameraWhite = linearCameraWhite,
-                hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                // MGC ProcessLowFrequency runs DehazeAndDha before ApplyColorMap. Defer the DCP
+                // hue/sat map to a second linear pass only while standalone dehaze is active.
+                hueSatMap = activeDcpRenderPlan?.hueSatMap
+                    ?.takeUnless { dehazeTuning.isActive },
                 applyDngBaselineExposure = applyLinearDngBaselineExposure,
                 clampProfileRgb = clampProfileRgb,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -3270,6 +3287,69 @@ class RawDemosaicProcessor {
 
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             checkGlError("After LinearRcdPass Swap")
+            if (dehazeTuning.isActive) {
+                // The next ping-pong target is the original camera-RGB texture. Preserve the HDR
+                // reference first because that branch intentionally excludes dehaze/tone/sharpen.
+                if (includeHdrReference) {
+                    setupHdrReferenceFramebuffer(actualWidth, actualHeight)
+                    renderHdrReferencePass(
+                        metadata = actualMetadata,
+                        rawExposureCompensation = effectiveExposureCompensation,
+                        inputTextureId = hdrReferenceSourceTextureId,
+                        colorCorrectionMatrix = linearColorCorrectionMatrix,
+                        cameraWhite = linearCameraWhite,
+                        hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                        profileToLinearSrgb = profileToLinearSrgbTransform,
+                    )
+                    hdrReferencePreparedBeforeDehaze = true
+                }
+                checkNotNull(
+                    photonDehazePipeline.render(
+                        sourceTextureId = demosaicTextureId,
+                        targetFramebufferId = linearOutputFramebufferId,
+                        targetTextureId = linearOutputTextureId,
+                        width = actualWidth,
+                        height = actualHeight,
+                        tuning = dehazeTuning,
+                    ),
+                ) { "Photon dehaze pipeline failed" }
+
+                val dehazeTempTexture = demosaicTextureId
+                demosaicTextureId = linearOutputTextureId
+                linearOutputTextureId = dehazeTempTexture
+                val dehazeTempFramebuffer = demosaicFramebufferId
+                demosaicFramebufferId = linearOutputFramebufferId
+                linearOutputFramebufferId = dehazeTempFramebuffer
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                checkGlError("After PhotonDehazePass Swap")
+
+                activeDcpRenderPlan?.hueSatMap?.takeIf { it.isValid }?.let { hueSatMap ->
+                    renderLinearRcdPass(
+                        metadata = actualMetadata,
+                        sourceTextureId = demosaicTextureId,
+                        targetFramebufferId = linearOutputFramebufferId,
+                        viewportWidth = actualWidth,
+                        viewportHeight = actualHeight,
+                        rawExposureCompensation = 0f,
+                        colorCorrectionMatrix = identityMatrix3x3(),
+                        cameraWhite = floatArrayOf(1f, 1f, 1f),
+                        hueSatMap = hueSatMap,
+                        applyDngBaselineExposure = false,
+                        clampProfileRgb = false,
+                        hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
+                        hncsCameraDomainGains = null,
+                        label = "PostDehazeColorMapPass",
+                    )
+                    val colorMapTempTexture = demosaicTextureId
+                    demosaicTextureId = linearOutputTextureId
+                    linearOutputTextureId = colorMapTempTexture
+                    val colorMapTempFramebuffer = demosaicFramebufferId
+                    demosaicFramebufferId = linearOutputFramebufferId
+                    linearOutputFramebufferId = colorMapTempFramebuffer
+                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                    checkGlError("After PostDehazeColorMapPass Swap")
+                }
+            }
             // LinearRcdPass has consumed the camera-RGB NLM result. The post-CCM pipeline uses
             // the full-resolution ping-pong textures, so both denoiseprofile textures can go.
             releaseDenoiseProfileFramebuffers()
@@ -3430,16 +3510,18 @@ class RawDemosaicProcessor {
             val hdrReferenceBitmap = if (includeHdrReference) {
                 val hdrStartNs = System.nanoTime()
                 try {
-                    setupHdrReferenceFramebuffer(actualWidth, actualHeight)
-                    renderHdrReferencePass(
-                        metadata = actualMetadata,
-                        rawExposureCompensation = effectiveExposureCompensation,
-                        inputTextureId = hdrReferenceSourceTextureId,
-                        colorCorrectionMatrix = linearColorCorrectionMatrix,
-                        cameraWhite = linearCameraWhite,
-                        hueSatMap = activeDcpRenderPlan?.hueSatMap,
-                        profileToLinearSrgb = profileToLinearSrgbTransform,
-                    )
+                    if (!hdrReferencePreparedBeforeDehaze) {
+                        setupHdrReferenceFramebuffer(actualWidth, actualHeight)
+                        renderHdrReferencePass(
+                            metadata = actualMetadata,
+                            rawExposureCompensation = effectiveExposureCompensation,
+                            inputTextureId = hdrReferenceSourceTextureId,
+                            colorCorrectionMatrix = linearColorCorrectionMatrix,
+                            cameraWhite = linearCameraWhite,
+                            hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                            profileToLinearSrgb = profileToLinearSrgbTransform,
+                        )
+                    }
                     renderOutputPass(
                         actualRotation,
                         actualWidth,
@@ -5373,10 +5455,10 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Reproduces classic Sabre's MergeRaw metadata branch (libgcastartup.so+0x388396c).
-     * Sabre retains the reference-frame Bayer NoiseModel and applies the SNR-table variance
-     * reduction uniformly to every read/shot/quadratic coefficient. It does not expose Spatial
-     * correlation or propagated read/shot coefficients.
+     * Reproduces classic Sabre's MergeRaw metadata branch. Sabre's merge first derives an output
+     * NoiseModel from its accumulated frame weights; MergeRaw then applies the SNR-table variance
+     * reduction at libgcastartup.so+0x388396c. Photon transports both scalar stages through
+     * [RawMetadata.mgcSabreNoiseModelScale]. Sabre does not expose Spatial correlation data.
      */
     private fun sabreOutputNoiseMetadata(metadata: RawMetadata): RawMetadata {
         val scale = checkNotNull(metadata.mgcSabreNoiseModelScale) {
@@ -5390,7 +5472,7 @@ class RawDemosaicProcessor {
         ) { "Sabre physical Bayer noise model is unavailable" }
         PLog.i(
             TAG,
-            "MGC Sabre default denoise noise source=reference-bayer*sabre-snr-scale " +
+            "MGC Sabre default denoise noise source=reference-bayer*merge-factor*sabre-snr-scale " +
                 "captureFrames=${metadata.frameCount} scale=$scale " +
                 "read=${rgbNoise.read.contentToString()} " +
                 "shot=${rgbNoise.shot.contentToString()}",
@@ -7041,6 +7123,9 @@ class RawDemosaicProcessor {
         val rgba = checkNotNull(
             LargeDirectBuffer.allocate(byteCount, "MGC final sharpen RGBA8"),
         ) { "Unable to allocate MGC final sharpen readback" }
+        val interpolationScales = metadata.coreImagingTuning.sharpen
+            .snrInterpolationScale
+            .toFloatArray()
         try {
             rgba.clear()
             rgba.limit(byteCount.toInt())
@@ -7064,6 +7149,7 @@ class RawDemosaicProcessor {
                 height = metadata.height,
                 snr = snr,
                 sharpenAttenuationScale = effectiveAttenuation,
+                interpolationScales = interpolationScales,
             )
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sharpenTextureId)
@@ -7084,7 +7170,8 @@ class RawDemosaicProcessor {
                 "MGC final sharpen replaced legacy USM size=${metadata.width}x${metadata.height} " +
                     "snr=$snr runtimeAttenuation=$runtimeAttenuation " +
                     "slider=$sliderValue algorithmStrength=$algorithmStrength " +
-                    "effectiveAttenuation=$effectiveAttenuation",
+                    "effectiveAttenuation=$effectiveAttenuation " +
+                    "frequencyInterpolationScales=${interpolationScales.contentToString()}",
             )
         } finally {
             LargeDirectBuffer.free(rgba)
@@ -8265,6 +8352,7 @@ class RawDemosaicProcessor {
         profileGainTableAlgorithm.release()
         meteringDemosaicAlgorithm.release()
         linearRcdPass.release()
+        photonDehazePipeline.release()
         warpRectilinearPass.release()
         linearUintToFloatPass.release()
         linearFloatToUintPass.release()

@@ -478,7 +478,9 @@ HalideBuffer MakeBuffer(
 float DownsamplingEnergy(
     const float spectrum[128],
     int x_factor,
-    int y_factor) {
+    int y_factor,
+    float response_offset,
+    float response_cosine_offset) {
     // Exact scalar form of MGC sub_5E9DEE0 (0x5e9dee0).
     float total = 0.0f;
     for (int outer = 0; outer < 128; ++outer) {
@@ -495,8 +497,9 @@ float DownsamplingEnergy(
                 static_cast<double>(x_factor + y_factor) * M_PI;
             const float cosine = static_cast<float>(std::cos(angle));
             const float response =
-                (1.0f - cosine * cosine) +
-                (cosine - 1.0f) * (cosine - 1.0f);
+                (response_offset - cosine * cosine) +
+                (cosine + response_cosine_offset) *
+                    (cosine + response_cosine_offset);
             inner_sum += spectrum[inner] * response;
         }
         total += inner_sum * spectrum[outer];
@@ -752,6 +755,8 @@ bool BuildNoiseBuffers(
     float shot_noise,
     float quadratic_noise,
     const float correlation[128],
+    float response_offset,
+    float response_cosine_offset,
     const float strength[5],
     const float outlier_distance[5],
     const float revert_factor[5],
@@ -759,7 +764,9 @@ bool BuildNoiseBuffers(
     if (correlation == nullptr || strength == nullptr ||
         outlier_distance == nullptr || revert_factor == nullptr ||
         output == nullptr || !std::isfinite(read_noise) ||
-        !std::isfinite(shot_noise) || !std::isfinite(quadratic_noise)) {
+        !std::isfinite(shot_noise) || !std::isfinite(quadratic_noise) ||
+        !std::isfinite(response_offset) ||
+        !std::isfinite(response_cosine_offset)) {
         return false;
     }
 
@@ -779,10 +786,20 @@ bool BuildNoiseBuffers(
         const float strength_native = std::max(strength[level], 0.0f);
         const float downsampled_scale =
             strength_downsampled * strength_downsampled * 0.5f *
-            DownsamplingEnergy(current_correlation, 2, 0);
+            DownsamplingEnergy(
+                current_correlation,
+                2,
+                0,
+                response_offset,
+                response_cosine_offset);
         const float native_scale =
             strength_native * strength_native *
-            DownsamplingEnergy(current_correlation, 1, 0);
+            DownsamplingEnergy(
+                current_correlation,
+                1,
+                0,
+                response_offset,
+                response_cosine_offset);
 
         output->read[level] = current_read * downsampled_scale;
         output->read[4 + level] = current_read * native_scale;
@@ -815,6 +832,8 @@ bool BuildChromaNoiseBuffers(
     float shot_noise,
     float quadratic_noise,
     const float correlation[128],
+    float response_offset,
+    float response_cosine_offset,
     const float strength[5],
     const float outlier_threshold[5],
     ChromaDenoiseNoiseBuffers* output) {
@@ -823,7 +842,9 @@ bool BuildChromaNoiseBuffers(
         output == nullptr) {
         return false;
     }
-    if (!std::isfinite(shot_noise) || !std::isfinite(quadratic_noise)) {
+    if (!std::isfinite(shot_noise) || !std::isfinite(quadratic_noise) ||
+        !std::isfinite(response_offset) ||
+        !std::isfinite(response_cosine_offset)) {
         return false;
     }
     float current_correlation[128] = {};
@@ -856,7 +877,9 @@ bool BuildChromaNoiseBuffers(
                 DownsamplingEnergy(
                     current_correlation,
                     downsample_factor,
-                    0);
+                    0,
+                    response_offset,
+                    response_cosine_offset);
             const int scalar_index = level + branch * 12;
             output->shot[scalar_index] = current_shot * scale;
             output->quadratic[scalar_index] = current_quadratic * scale;
@@ -1723,8 +1746,14 @@ int RunYuvToRgb(
 
 bool BuildDefaultSharpenCurves(
     float snr,
+    const float interpolation_scales[3],
     SharpenCurveSelection* output) {
-    if (output == nullptr || !std::isfinite(snr) || snr <= 0.0f) {
+    if (output == nullptr || interpolation_scales == nullptr ||
+        !std::isfinite(snr) || snr <= 0.0f ||
+        !std::all_of(
+            interpolation_scales,
+            interpolation_scales + 3,
+            [](float value) { return std::isfinite(value); })) {
         return false;
     }
     std::fill_n(output->relative_corner_acutance_correction, 3, 0.0f);
@@ -1796,6 +1825,9 @@ bool BuildDefaultSharpenCurves(
     };
 
     for (int frequency = 0; frequency < 3; ++frequency) {
+        // Photon exposes one independent interpolation scale per sharpening frequency group.
+        const float frequency_interpolation =
+            interpolation * interpolation_scales[frequency];
         float lower_points[2][5] = {};
         float upper_points[2][5] = {};
         convert(lower->parameters[frequency], lower_points);
@@ -1806,8 +1838,8 @@ bool BuildDefaultSharpenCurves(
                 const float upper_value = upper_points[coordinate][point];
                 output->curves[
                     point + 5 * frequency + 15 * coordinate] =
-                    lower_value * (1.0f - interpolation) +
-                    upper_value * interpolation;
+                    lower_value * (1.0f - frequency_interpolation) +
+                    upper_value * frequency_interpolation;
             }
         }
     }

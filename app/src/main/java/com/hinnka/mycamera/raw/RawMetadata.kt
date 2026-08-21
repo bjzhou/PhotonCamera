@@ -9,6 +9,7 @@ import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
 import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
+import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawNoiseProfileSelection
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -142,6 +143,8 @@ data class RawMetadata(
     val mgcSharpenTuningSnr: Float? = null,
     /** Exact FinishRaw sharpen_attenuation_scale generated from the reference-frame TET. */
     val mgcSharpenAttenuationScale: Float? = null,
+    /** Capture-scoped Photon controls for fusion, denoise, sharpen and future dehaze. */
+    val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
     val rotation: Int? = null,
     val profileGainTableMap: DngProfileGainTableMap? = null
 ) {
@@ -1076,6 +1079,7 @@ data class RawMetadata(
         if (mgcDenoiseTuningSnr != other.mgcDenoiseTuningSnr) return false
         if (mgcSharpenTuningSnr != other.mgcSharpenTuningSnr) return false
         if (mgcSharpenAttenuationScale != other.mgcSharpenAttenuationScale) return false
+        if (coreImagingTuning != other.coreImagingTuning) return false
         if (rotation != other.rotation) return false
 
         return true
@@ -1111,6 +1115,7 @@ data class RawMetadata(
         result = 31 * result + (mgcDenoiseTuningSnr?.hashCode() ?: 0)
         result = 31 * result + (mgcSharpenTuningSnr?.hashCode() ?: 0)
         result = 31 * result + (mgcSharpenAttenuationScale?.hashCode() ?: 0)
+        result = 31 * result + coreImagingTuning.hashCode()
         result = 31 * result + (rotation ?: 0)
         return result
     }

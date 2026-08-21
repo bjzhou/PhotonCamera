@@ -14,12 +14,16 @@ internal object MgcSharpen {
         height: Int,
         snr: Float,
         sharpenAttenuationScale: Float,
+        interpolationScales: FloatArray = floatArrayOf(1f, 1f, 1f),
     ) {
         require(rgba.isDirect) { "MGC sharpen input must be a direct buffer" }
         require(width > 0 && height > 0) { "Invalid MGC sharpen dimensions" }
         require(snr.isFinite() && snr > 0f) { "Invalid MGC sharpen SNR: $snr" }
         require(sharpenAttenuationScale.isFinite() && sharpenAttenuationScale >= 0f) {
             "Invalid MGC sharpen attenuation: $sharpenAttenuationScale"
+        }
+        require(interpolationScales.size == 3 && interpolationScales.all(Float::isFinite)) {
+            "MGC sharpen interpolation scales must contain three finite values"
         }
         val requiredBytes = width.toLong() * height * 4L
         require(requiredBytes <= rgba.capacity().toLong()) {
@@ -31,6 +35,7 @@ internal object MgcSharpen {
             height,
             snr,
             sharpenAttenuationScale,
+            interpolationScales,
         )
         check(result == 0) { "MGC SharpenTo16Bit failed with status=$result" }
         rgba.position(0)
@@ -43,5 +48,6 @@ internal object MgcSharpen {
         height: Int,
         snr: Float,
         sharpenAttenuationScale: Float,
+        interpolationScales: FloatArray,
     ): Int
 }

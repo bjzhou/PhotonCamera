@@ -25,6 +25,42 @@ class MgcSpatialMergeTuningTest {
     }
 
     @Test
+    fun finishRawSnrUsesSpatialAotOutputNoiseInsteadOfAdmittedFrameCount() {
+        val signal = 0.1f
+        val inputRead = 0.001f
+        val inputShot = 0.02f
+        val propagatedCoefficientScale = 0.2f
+        val inputSnr = MgcSpatialMergeTuning.outputNoiseModelSnr(
+            signal = signal,
+            greenReadVariance = inputRead,
+            greenShotNoiseFactor = inputShot,
+        )
+        val outputSnr = MgcSpatialMergeTuning.outputNoiseModelSnr(
+            signal = signal,
+            greenReadVariance = inputRead * propagatedCoefficientScale,
+            greenShotNoiseFactor = inputShot * propagatedCoefficientScale,
+        )
+
+        assertEquals(
+            checkNotNull(inputSnr) / kotlin.math.sqrt(propagatedCoefficientScale),
+            checkNotNull(outputSnr),
+            1e-5f,
+        )
+    }
+
+    @Test
+    fun outputNoiseSnrRejectsMalformedNoiseModel() {
+        assertEquals(
+            null,
+            MgcSpatialMergeTuning.outputNoiseModelSnr(
+                signal = 0.1f,
+                greenReadVariance = Float.NaN,
+                greenShotNoiseFactor = 0.01f,
+            ),
+        )
+    }
+
+    @Test
     fun rgbScaleUsesItsIndependentOriginalCurve() {
         assertEquals(
             0.32f,
@@ -63,7 +99,27 @@ class MgcSpatialMergeTuningTest {
     }
 
     @Test
-    fun kernelSigmaUsesOriginalMaximumWeightMultiplierMap() {
+    fun normalMergeWeightUsesExpectedVarianceAtReferenceSignal() {
+        val maximum = MgcSpatialMergeTuning.maximumMergeWeight(
+            baseReadVariance = 0.004f,
+            alternateReadVariance = 0.001f,
+            exposureScale = 0.5f,
+        )
+        val expected = MgcSpatialMergeTuning.expectedMergeWeight(
+            referenceSignal = 0.5f,
+            baseShotNoiseFactor = 0.001f,
+            baseReadVariance = 0.004f,
+            alternateShotNoiseFactor = 0.05f,
+            alternateReadVariance = 0.001f,
+            exposureScale = 0.5f,
+        )
+
+        assertEquals(16f, maximum, 1e-6f)
+        assertEquals(0.0045f / 0.01275f, expected, 1e-6f)
+    }
+
+    @Test
+    fun kernelSigmaUsesOriginalMergeWeightMultiplierMap() {
         assertEquals(1f, MgcSpatialMergeTuning.frameWeightKernelMultiplier(10f), 0f)
         assertEquals(
             1.414000034332275f,

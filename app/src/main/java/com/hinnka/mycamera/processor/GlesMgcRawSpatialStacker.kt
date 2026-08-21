@@ -25,6 +25,15 @@ internal enum class MgcRawProcessorPipeline {
     SABRE,
 }
 
+/** Exact FrameMetadata::EstimateSnr missing-signal fallback used by classic Sabre. */
+internal fun resolveFusionReferenceSignal(
+    measuredSignal: Float?,
+    fallbackSignal: Float,
+): Float {
+    measuredSignal?.takeIf { it.isFinite() && it >= 0f }?.let { return it }
+    return fallbackSignal.takeIf { it.isFinite() && it >= 0f } ?: 0.18f
+}
+
 /**
  * Independent GLES MGC Spatial RAW merge pipeline.
  *
@@ -55,6 +64,7 @@ internal class GlesMgcRawSpatialStacker(
     private val exportGpuLinearRgbSource: Boolean,
     private val gpuLinearRgbStorage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
     private val processorPipeline: MgcRawProcessorPipeline = MgcRawProcessorPipeline.SPATIAL,
+    private val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
 ) {
     private data class TextureLevel(
         val texture: Int,
@@ -316,7 +326,8 @@ internal class GlesMgcRawSpatialStacker(
 
     private data class BayerKernelTuning(
         val referenceSignal: Float,
-        val referenceShadowReadVariance: Float,
+        val referenceGreenShotNoiseFactor: Float,
+        val referenceGreenReadVariance: Float,
         val referenceSnr: Float,
         val baseSpatialScale: Float,
     )
@@ -1848,10 +1859,21 @@ internal class GlesMgcRawSpatialStacker(
             }
             checkGlError("MGC Spatial ${outputMode.name} merge")
             returned = true
-            val finishRawDenoiseSnr = MgcSpatialMergeTuning.mergedSnr(
-                bayerKernelTuning.referenceSnr,
-                mergedFrames,
-            )
+            val propagatedOutputSnr = if (outputReadNoise != null && outputShotNoise != null) {
+                MgcSpatialMergeTuning.outputNoiseModelSnr(
+                    signal = bayerKernelTuning.referenceSignal *
+                        outputExposure.normalizationScale,
+                    greenReadVariance = outputReadNoise.getOrElse(1) { Float.NaN },
+                    greenShotNoiseFactor = outputShotNoise.getOrElse(1) { Float.NaN },
+                )
+            } else {
+                null
+            }
+            val finishRawDenoiseSnr = propagatedOutputSnr
+                ?: MgcSpatialMergeTuning.mergedSnr(
+                    bayerKernelTuning.referenceSnr,
+                    mergedFrames,
+                )
             val resultLabel = when {
                 exportedRgbTexture != 0 -> "${gpuLinearRgbStorage.name}_GPU"
                 exportedBayerTexture != 0 -> "BAYER16_GPU"
@@ -1864,6 +1886,11 @@ internal class GlesMgcRawSpatialStacker(
                     "output=${outputWidth}x$outputHeight " +
                     "referenceSnr=${bayerKernelTuning.referenceSnr} " +
                     "finishRawDenoiseSnr=$finishRawDenoiseSnr " +
+                    "finishRawDenoiseSnrSource=${if (propagatedOutputSnr != null) {
+                        "spatial-output-noise-model"
+                    } else {
+                        "reference-snr-frame-count-fallback"
+                    }} " +
                     "lscApplied=$lensShadingCorrectionApplied result=$resultLabel " +
                     "programInit=${programInitMs}ms " +
                     "queueMode=${if (outputMode == MgcSpatialOutputMode.RGB) {
@@ -1922,6 +1949,7 @@ internal class GlesMgcRawSpatialStacker(
                 mgcDenoiseTuningSnr = finishRawDenoiseSnr,
                 mgcSharpenTuningSnr = bayerKernelTuning.referenceSnr,
                 mgcSharpenAttenuationScale = finishRawSharpenAttenuationScale,
+                coreImagingTuning = coreImagingTuning,
                 mgcSpatialReferenceOnlyDiagnostic = referenceOnly,
             )
         } catch (error: Exception) {
@@ -2084,13 +2112,14 @@ internal class GlesMgcRawSpatialStacker(
             val sabreKernelParameters = MgcSabreKernelTuning.build(
                 referenceSnr = kernelTuning.referenceSnr,
                 frameCount = frames.size,
+                mergeGradientThreshold = coreImagingTuning.fusion.mergeGradientThreshold,
             )
             val sabreResolveParameters = MgcSabreResolveTuning.build(
                 referenceSnr = kernelTuning.referenceSnr,
                 desiredExposureProduct = frames.first().desiredExposureProduct,
                 actualExposureProduct = frames.first().exposureProduct,
             )
-            val sabreNoiseModelScale = classicSabreNoiseModelScale(
+            val sabrePostMergeNoiseReduction = classicSabreNoiseModelScale(
                 kernelTuning.referenceSnr,
             )
             val referenceCalibration = calibrationForFrame(
@@ -2111,7 +2140,8 @@ internal class GlesMgcRawSpatialStacker(
                     "${sabreKernelParameters.gradientTransition}," +
                     "${sabreKernelParameters.anisotropyScale}," +
                     "${sabreKernelParameters.coherenceScale} " +
-                    "coefficientScale=$sabreNoiseModelScale " +
+                    "mergeGradientThreshold=${coreImagingTuning.fusion.mergeGradientThreshold ?: "adaptive"} " +
+                    "postMergeNoiseReduction=$sabrePostMergeNoiseReduction " +
                     "guideColorSpace=sqrt noiseLut=qmc64x10 " +
                     "alignmentInputGain=${referenceCalibration.alignmentGain} " +
                     "alignmentDomain=signed-s16",
@@ -2258,6 +2288,24 @@ internal class GlesMgcRawSpatialStacker(
                 GlesGpuScheduler.yieldToUiRenderer()
             }
 
+            val accumulatedCoverageBytes = readR8Mask(
+                texture = accumulatedCoverage,
+                label = "MGC Sabre accumulated coverage",
+                maskWidth = coverageWidth,
+                maskHeight = coverageHeight,
+            )
+            val sabreNoiseModelScale = MgcSabreNoiseEstimatesLut.outputNoiseModelScale(
+                postMergeReduction = sabrePostMergeNoiseReduction,
+                accumulatedCoverage = accumulatedCoverageBytes,
+                maximumAdditionalWeight = accumulatedWeightScale,
+            )
+            PLog.i(
+                SABRE_TAG,
+                "MGC Sabre merged NoiseModel postMergeReduction=$sabrePostMergeNoiseReduction " +
+                    "averageMergeFactor=${sabreNoiseModelScale / sabrePostMergeNoiseReduction} " +
+                    "coefficientScale=$sabreNoiseModelScale",
+            )
+
             renderSabreDehomogenize(
                 accumulatedColor,
                 accumulatedWeightsGb,
@@ -2386,10 +2434,8 @@ internal class GlesMgcRawSpatialStacker(
             }
             checkGlError("MGC Sabre Resolve/VGN color noise")
             returned = true
-            val finishRawDenoiseSnr = MgcSpatialMergeTuning.mergedSnr(
-                kernelTuning.referenceSnr,
-                frames.size,
-            )
+            val finishRawDenoiseSnr = kernelTuning.referenceSnr /
+                sqrt(sabreNoiseModelScale)
             PLog.i(
                 SABRE_TAG,
                 "MGC Sabre complete frames=${frames.size} output=${width}x$height " +
@@ -2426,6 +2472,7 @@ internal class GlesMgcRawSpatialStacker(
                 mgcDenoiseTuningSnr = finishRawDenoiseSnr,
                 mgcSharpenTuningSnr = kernelTuning.referenceSnr,
                 mgcSharpenAttenuationScale = sabreResolveParameters.demosaicSharpness,
+                coreImagingTuning = coreImagingTuning,
             )
         } catch (error: Exception) {
             completionRecorder.releasePending()
@@ -3256,8 +3303,11 @@ internal class GlesMgcRawSpatialStacker(
                 (sensorWhiteLevel * gains[2] + blackTerms[2])
             )
         val globalFrameWeight = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
-            MgcSpatialMergeTuning.maximumMergeWeight(
-                baseReadVariance = kernelTuning.referenceShadowReadVariance,
+            MgcSpatialMergeTuning.expectedMergeWeight(
+                referenceSignal = kernelTuning.referenceSignal,
+                baseShotNoiseFactor = kernelTuning.referenceGreenShotNoiseFactor,
+                baseReadVariance = kernelTuning.referenceGreenReadVariance,
+                alternateShotNoiseFactor = sourceShot.getOrElse(1) { 0f },
                 alternateReadVariance = sourceRead.getOrElse(1) { 0f },
                 exposureScale = exposureScale,
             )
@@ -3267,7 +3317,7 @@ internal class GlesMgcRawSpatialStacker(
         val kernelSigma = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
             MgcSpatialMergeTuning.kernelSigma(
                 baseSpatialScale = kernelTuning.baseSpatialScale,
-                maximumMergeWeight = globalFrameWeight,
+                mergeWeight = globalFrameWeight,
             )
         } else {
             SPATIAL_IDENTITY_MULTIPLIER
@@ -3328,10 +3378,18 @@ internal class GlesMgcRawSpatialStacker(
         image: SafeImage,
         frameCount: Int,
     ): BayerKernelTuning {
-        val referenceSignal = estimateReferenceGreenSignal(
+        val measuredReferenceSignal = estimateReferenceGreenSignal(
             image = image,
             blackLevel = canonicalBlackLevelForFrame(frame),
         )
+        val referenceSignal = if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
+            resolveFusionReferenceSignal(
+                measuredSignal = measuredReferenceSignal,
+                fallbackSignal = coreImagingTuning.fusion.missingReferenceSignal,
+            )
+        } else {
+            measuredReferenceSignal ?: 0f
+        }
         val noiseModel = noiseModelForFrame(frame)
         val shotNoise = noiseModel.normalizedShotNoiseForShader(cfaPattern)
         val readNoise = noiseModel.normalizedReadNoiseForShader(cfaPattern)
@@ -3352,7 +3410,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         return BayerKernelTuning(
             referenceSignal = referenceSignal,
-            referenceShadowReadVariance = readNoise.getOrElse(1) { 0f },
+            referenceGreenShotNoiseFactor = shotNoise.getOrElse(1) { 0f },
+            referenceGreenReadVariance = readNoise.getOrElse(1) { 0f },
             referenceSnr = referenceSnr,
             baseSpatialScale = baseSpatialScale,
         )
@@ -3361,13 +3420,13 @@ internal class GlesMgcRawSpatialStacker(
     private fun estimateReferenceGreenSignal(
         image: SafeImage,
         blackLevel: FloatArray,
-    ): Float {
-        val plane = image.planes.firstOrNull() ?: return 0f
+    ): Float? {
+        val plane = image.planes.firstOrNull() ?: return null
         if (
             plane.pixelStride != RAW_BYTES_PER_PIXEL ||
             plane.rowStride < width * plane.pixelStride
         ) {
-            return 0f
+            return null
         }
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val bufferStart = buffer.position()
@@ -3379,7 +3438,7 @@ internal class GlesMgcRawSpatialStacker(
         val cropRight = ((width * 7) / 8) and -4
         val cropTop = (height / 8) and -2
         val cropBottom = ((height * 7) / 8) and -2
-        if (cropRight <= cropLeft || cropBottom <= cropTop) return 0f
+        if (cropRight <= cropLeft || cropBottom <= cropTop) return null
 
         val firstRowGreenPhase = when (cfaPattern.mod(4)) {
             0, 3 -> 1 // RGGB/BGGR
@@ -3388,7 +3447,7 @@ internal class GlesMgcRawSpatialStacker(
         val greenChannel = canonicalChannelAtPhase(firstRowGreenPhase)
         val black = blackLevel[greenChannel]
         val range = sensorWhiteLevel - black
-        if (!black.isFinite() || !range.isFinite() || range <= 0f) return 0f
+        if (!black.isFinite() || !range.isFinite() || range <= 0f) return null
 
         val histogramShift = run {
             val tail = sensorWhiteLevel.toInt() - SABRE_SIGNAL_LINEAR_HISTOGRAM_BINS
@@ -3431,9 +3490,8 @@ internal class GlesMgcRawSpatialStacker(
             ((meanSqrtSignal * meanSqrtSignal) / range.toDouble())
                 .toFloat()
                 .takeIf { it.isFinite() && it >= 0f }
-                ?: 0f
         } else {
-            0f
+            null
         }
     }
 
@@ -7614,27 +7672,15 @@ internal class GlesMgcRawSpatialStacker(
         reference: FrameCalibration,
         current: FrameCalibration,
     ): Int {
-        val values = FloatArray(NOISE_LUT_WIDTH * 2 * 4)
-        val rows = arrayOf(reference, current)
-        for (row in rows.indices) {
-            val calibration = rows[row]
-            for (x in 0 until NOISE_LUT_WIDTH) {
-                val luma = (x + 0.5f) / NOISE_LUT_WIDTH.toFloat()
-                val offset = (row * NOISE_LUT_WIDTH + x) * 4
-                values[offset] =
-                    calibration.shotNoise[0] * luma + calibration.readNoise[0]
-                values[offset + 1] = 0.25f * (
-                    calibration.shotNoise[1] * luma + calibration.readNoise[1] +
-                        calibration.shotNoise[2] * luma + calibration.readNoise[2]
-                    )
-                values[offset + 2] =
-                    calibration.shotNoise[3] * luma + calibration.readNoise[3]
-                values[offset + 3] = 0f
-            }
-        }
+        val values = MgcSpatialNoiseEstimatesLut.create(
+            referenceShotNoise = reference.shotNoise,
+            referenceReadNoise = reference.readNoise,
+            currentShotNoise = current.shotNoise,
+            currentReadNoise = current.readNoise,
+        )
         return createFloatTexture(
-            width = NOISE_LUT_WIDTH,
-            height = 2,
+            width = MgcSpatialNoiseEstimatesLut.WIDTH,
+            height = MgcSpatialNoiseEstimatesLut.ROWS,
             internalFormat = GLES30.GL_RGBA16F,
             format = GLES30.GL_RGBA,
             values = values,
@@ -8888,7 +8934,6 @@ internal class GlesMgcRawSpatialStacker(
         const val RGB_TEXTURE_ESTIMATE_RESERVE_BYTES = 8L * 1024L * 1024L
         const val RGB_ONLINE_DRAW_BAND_HEIGHT = 1024
         const val RGB_CHROMA_GUIDE_RAW_RADIUS = 2
-        const val NOISE_LUT_WIDTH = 10
         const val ALIGN_TARGET_FINEST_DIMENSION = 256
         const val ALIGN_MIN_TILE_SIZE = 8
         const val ALIGN_MAX_TILE_SIZE = 64

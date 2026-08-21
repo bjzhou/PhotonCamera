@@ -227,6 +227,8 @@
     <string name="settings_use_raw_max">RAWmax</string>
     <string name="settings_raw_max_hdr_composition">RAWmax HDR 合成</string>
     <string name="settings_raw_max_hdr_composition_description">在 RAWmax 中使用包围曝光进行 HDR 融合。关闭可提升处理性能。</string>
+    <string name="settings_raw_max_quality_tuning">RAWmax 画质调优</string>
+    <string name="settings_raw_max_quality_tuning_description">按当前物理传感器尺寸应用融合、降噪和锐化调优。关闭时使用默认成像参数。</string>
     <string name="settings_raw_max_spatial_rgb">RAWmax Spatial RGB</string>
     <string name="settings_raw_max_spatial_rgb_description">输出已解马赛克的线性 RGB，并启用超分倍率；关闭时保留原生 Bayer 阵列。</string>
     <string name="settings_raw_max_spatial_mode">RAWmax 融合模式</string>

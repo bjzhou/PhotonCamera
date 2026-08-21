@@ -30,6 +30,7 @@ internal class GlesMgcRawFusion(
     private val useCurrentGlContext: Boolean,
     private val exportGpuLinearRgbSource: Boolean,
     private val gpuLinearRgbStorage: GpuLinearRgbStorage,
+    private val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
 ) {
     private val outputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
 
@@ -113,6 +114,7 @@ internal class GlesMgcRawFusion(
                 useCurrentGlContext = useCurrentGlContext,
                 exportGpuLinearRgbSource = exportGpuLinearRgbSource,
                 gpuLinearRgbStorage = gpuLinearRgbStorage,
+                coreImagingTuning = coreImagingTuning,
             ).processFrames(referenceFirstFrames)
         }
 
@@ -203,6 +205,7 @@ internal class GlesMgcRawFusion(
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
             gpuLinearRgbStorage = gpuLinearRgbStorage,
+            coreImagingTuning = coreImagingTuning,
         ).processFrames(scheduledFrames)
     }
 

@@ -305,6 +305,7 @@ fun SettingsScreen(
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useJpgMaxHdrComposition by viewModel.useJpgMaxHdrComposition.collectAsState()
     val useRawMaxHdrComposition by viewModel.useRawMaxHdrComposition.collectAsState()
+    val rawMaxQualityTuningEnabled by viewModel.rawMaxQualityTuningEnabled.collectAsState()
     val rawMaxSpatialMode by viewModel.rawMaxSpatialMode.collectAsState()
     val rawMaxSpatialModeOptions = listOf(
         MgcRawMaxMode.SABRE to stringResource(R.string.settings_raw_max_mode_sabre),
@@ -1760,6 +1761,20 @@ fun SettingsScreen(
                             enabled = rawMaxSpatialMode != MgcRawMaxMode.SABRE,
                         )
 
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_raw_max_quality_tuning),
+                            description = stringResource(
+                                R.string.settings_raw_max_quality_tuning_description
+                            ),
+                            checked = rawMaxQualityTuningEnabled,
+                            onCheckedChange = viewModel::setRawMaxQualityTuningEnabled,
+                        )
+
                         if (isHdrSettingsSupported) {
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
@@ -2050,6 +2065,7 @@ fun SettingsScreen(
                             },
                             onValueChangeFinished = ::commitRawSliderValues,
                         )
+
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
@@ -2916,6 +2932,7 @@ private fun SettingsCategoryOverview(
             description = listOf(
                 stringResource(R.string.settings_jpg_max_hdr_composition),
                 stringResource(R.string.settings_raw_max_hdr_composition),
+                stringResource(R.string.settings_raw_max_quality_tuning),
                 stringResource(R.string.settings_ultra_hdr_gain_map),
                 stringResource(R.string.settings_raw_max_output_scale),
                 stringResource(R.string.settings_raw_max_default_sharpening)
