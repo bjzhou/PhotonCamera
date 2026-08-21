@@ -8,6 +8,7 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
+import android.util.Half
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
@@ -463,6 +464,7 @@ internal class GlesMgcRawSpatialStacker(
     private var sabreMergeProgram = 0
     private var sabreCopyMaskProgram = 0
     private var sabreCopyAlphaProgram = 0
+    private var sabreReciprocalGreenWeightProgram = 0
     private var sabreDehomogenizeProgram = 0
     private var sabreOutputTransformProgram = 0
     private var currentMergeCovariance = 0
@@ -2140,6 +2142,7 @@ internal class GlesMgcRawSpatialStacker(
                     "${sabreKernelParameters.gradientTransition}," +
                     "${sabreKernelParameters.anisotropyScale}," +
                     "${sabreKernelParameters.coherenceScale} " +
+                    "forceReferenceColorRgb=${sabreKernelParameters.forceReferenceColorRgb} " +
                     "mergeGradientThreshold=${coreImagingTuning.fusion.mergeGradientThreshold ?: "adaptive"} " +
                     "postMergeNoiseReduction=$sabrePostMergeNoiseReduction " +
                     "guideColorSpace=sqrt noiseLut=qmc64x10 " +
@@ -2288,21 +2291,15 @@ internal class GlesMgcRawSpatialStacker(
                 GlesGpuScheduler.yieldToUiRenderer()
             }
 
-            val accumulatedCoverageBytes = readR8Mask(
-                texture = accumulatedCoverage,
-                label = "MGC Sabre accumulated coverage",
-                maskWidth = coverageWidth,
-                maskHeight = coverageHeight,
+            val sabreAverageMergeFactor = readSabreAverageMergeFactor(
+                accumulatedWeightsGb = accumulatedWeightsGb,
             )
-            val sabreNoiseModelScale = MgcSabreNoiseEstimatesLut.outputNoiseModelScale(
-                postMergeReduction = sabrePostMergeNoiseReduction,
-                accumulatedCoverage = accumulatedCoverageBytes,
-                maximumAdditionalWeight = accumulatedWeightScale,
-            )
+            val sabreNoiseModelScale =
+                sabrePostMergeNoiseReduction * sabreAverageMergeFactor
             PLog.i(
                 SABRE_TAG,
                 "MGC Sabre merged NoiseModel postMergeReduction=$sabrePostMergeNoiseReduction " +
-                    "averageMergeFactor=${sabreNoiseModelScale / sabrePostMergeNoiseReduction} " +
+                    "averageMergeFactor=$sabreAverageMergeFactor " +
                     "coefficientScale=$sabreNoiseModelScale",
             )
 
@@ -2434,6 +2431,11 @@ internal class GlesMgcRawSpatialStacker(
             }
             checkGlError("MGC Sabre Resolve/VGN color noise")
             returned = true
+            // FinishRaw resolves denoise tuning SNR from the merged frame's NoiseModel when no
+            // explicit override is present. Sabre has already scaled that model by the measured
+            // average merge factor and its post-merge reduction table. The separately logged
+            // referenceSnr * sqrt(frameCount) value is a pre-merge planning estimate, not the
+            // authoritative FinishRaw/Pecan tuning input.
             val finishRawDenoiseSnr = kernelTuning.referenceSnr /
                 sqrt(sabreNoiseModelScale)
             PLog.i(
@@ -2553,13 +2555,14 @@ internal class GlesMgcRawSpatialStacker(
             covariancePackScale(kernelParameters.covarianceMinB, kernelParameters.covarianceMaxB),
         )
         uniform1f(program, "uGreenClippingPoint", calibration.greenClippingPoint)
-        val forceReferenceColorSentinel =
-            if (kernelParameters.useBlackTermForReferenceColorSentinel) {
-                calibration.blackTerms[3]
-            } else {
-                calibration.gains[3]
-            }
-        uniform1f(program, "uForceReferenceColorRgb", forceReferenceColorSentinel)
+        uniform4f(
+            program,
+            "uForceReferenceColorRgb",
+            if (kernelParameters.forceReferenceColorRgb) 1f else 0f,
+            0f,
+            0f,
+            0f,
+        )
         draw(program, guideWidth, guideHeight, intArrayOf(guide, covariance))
     }
 
@@ -2776,6 +2779,75 @@ internal class GlesMgcRawSpatialStacker(
         }
     }
 
+    private fun readSabreAverageMergeFactor(
+        accumulatedWeightsGb: Int,
+    ): Float {
+        val reducedWidth = ceilDiv(width, 4)
+        val reducedHeight = ceilDiv(height, 4)
+        val reduced = createTexture(
+            reducedWidth,
+            reducedHeight,
+            GLES30.GL_RG16F,
+            GLES30.GL_NEAREST,
+        )
+        try {
+            GLES30.glUseProgram(sabreReciprocalGreenWeightProgram)
+            bindTexture(
+                sabreReciprocalGreenWeightProgram,
+                "uAccumulatedWeightsGb",
+                0,
+                accumulatedWeightsGb,
+            )
+            uniform2i(sabreReciprocalGreenWeightProgram, "uInputSize", width, height)
+            draw(
+                sabreReciprocalGreenWeightProgram,
+                reducedWidth,
+                reducedHeight,
+                intArrayOf(reduced),
+            )
+
+            val valueCount = Math.multiplyExact(
+                Math.multiplyExact(reducedWidth, reducedHeight),
+                2,
+            )
+            val readback = ByteBuffer.allocateDirect(
+                Math.multiplyExact(valueCount, Short.SIZE_BYTES),
+            ).order(ByteOrder.nativeOrder())
+            bindRenderTargets(intArrayOf(reduced), "MGC Sabre reciprocal green-weight readback")
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+            GLES30.glReadPixels(
+                0,
+                0,
+                reducedWidth,
+                reducedHeight,
+                GLES30.GL_RG,
+                GLES30.GL_HALF_FLOAT,
+                readback,
+            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            checkGlError("read MGC Sabre reciprocal green weights")
+
+            val values = readback.asShortBuffer()
+            var reciprocalSum = 0.0
+            var sampleCount = 0.0
+            for (index in 0 until reducedWidth * reducedHeight) {
+                reciprocalSum += Half.toFloat(values.get(index * 2)).toDouble()
+                sampleCount += Half.toFloat(values.get(index * 2 + 1)).toDouble()
+            }
+            check(
+                reciprocalSum.isFinite() && sampleCount.isFinite() &&
+                    reciprocalSum > 0.0 && sampleCount > 0.0
+            ) {
+                "MGC Sabre accumulated green weights produced an invalid merge factor: " +
+                    "sum=$reciprocalSum count=$sampleCount"
+            }
+            return (reciprocalSum / sampleCount).toFloat()
+        } finally {
+            releaseOwnedTexture(reduced, "Sabre reciprocal green-weight reduction")
+        }
+    }
+
     private fun renderSabreOutputTransform(
         resolvedRgbPlanes: IntArray,
         lensShadingTexture: Int,
@@ -2956,6 +3028,10 @@ internal class GlesMgcRawSpatialStacker(
         sabreCopyAlphaProgram = linkProgram(
             GlesMgcRawSabreShaders.copyAlpha,
             "mgc_sabre_copy_alpha",
+        )
+        sabreReciprocalGreenWeightProgram = linkProgram(
+            GlesMgcRawSabreShaders.reciprocalGreenWeight4x4,
+            "mgc_sabre_reciprocal_green_weight_4x4",
         )
         sabreDehomogenizeProgram = linkProgram(
             GlesMgcRawSabreShaders.dehomogenize,

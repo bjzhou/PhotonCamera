@@ -18,12 +18,12 @@ class MgcSabreKernelTuningTest {
         assertEquals(4.2f, low.isotropicScale, 0f)
         assertEquals(0.01f, low.gradientThreshold, 0f)
         assertEquals(0.028f, low.gradientTransition, 0f)
-        assertEquals(true, low.useBlackTermForReferenceColorSentinel)
+        assertEquals(true, low.forceReferenceColorRgb)
 
         val middle = MgcSabreKernelTuning.build(referenceSnr = 11f, frameCount = 12)
         assertEquals(4f, middle.isotropicScale, 0f)
         assertEquals(0.014925926f, middle.gradientTransition, 1e-7f)
-        assertEquals(false, middle.useBlackTermForReferenceColorSentinel)
+        assertEquals(false, middle.forceReferenceColorRgb)
 
         val high = MgcSabreKernelTuning.build(referenceSnr = 30f, frameCount = 12)
         assertEquals(0.25f, high.directionalScale, 0f)

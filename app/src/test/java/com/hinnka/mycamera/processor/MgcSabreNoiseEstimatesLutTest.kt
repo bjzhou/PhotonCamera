@@ -6,37 +6,6 @@ import org.junit.Test
 
 class MgcSabreNoiseEstimatesLutTest {
     @Test
-    fun mergedNoiseScaleIncludesAccumulatedTemporalWeightsBeforeTableReduction() {
-        // Seven accepted additional frames in Sabre's 15-weight bucket encode exactly as 119.
-        val coverage = ByteArray(32) { 119.toByte() }
-
-        assertEquals(
-            0.7f / 8f,
-            MgcSabreNoiseEstimatesLut.outputNoiseModelScale(
-                postMergeReduction = 0.7f,
-                accumulatedCoverage = coverage,
-                maximumAdditionalWeight = 15f,
-            ),
-            1e-7f,
-        )
-    }
-
-    @Test
-    fun mergedNoiseScaleAveragesReciprocalLocalMergeWeights() {
-        val coverage = byteArrayOf(0, 0xff.toByte())
-
-        assertEquals(
-            0.625f,
-            MgcSabreNoiseEstimatesLut.outputNoiseModelScale(
-                postMergeReduction = 1f,
-                accumulatedCoverage = coverage,
-                maximumAdditionalWeight = 3f,
-            ),
-            1e-7f,
-        )
-    }
-
-    @Test
     fun zeroLinearNoiseProducesZeroSqrtDomainNoise() {
         for (index in 0 until MgcSabreNoiseEstimatesLut.WIDTH) {
             val signal = index.toFloat() / (MgcSabreNoiseEstimatesLut.WIDTH - 1).toFloat()
@@ -120,5 +89,14 @@ class MgcSabreNoiseEstimatesLutTest {
 
         assertTrue(shader.contains(sqrtTransform))
         assertTrue(shader.indexOf(sqrtTransform) < shader.indexOf(greenTensorInput))
+    }
+
+    @Test
+    fun mergedNoiseFactorUsesActualGreenRbfWeightsInQ8Domain() {
+        val shader = GlesMgcRawSabreShaders.reciprocalGreenWeight4x4
+
+        assertTrue(shader.contains("texelFetch(uAccumulatedWeightsGb, p, 0).r"))
+        assertTrue(shader.contains("floor(weight * 256.0 + 0.5)"))
+        assertTrue(shader.contains("reciprocalSum += 256.0 / weightQ8"))
     }
 }

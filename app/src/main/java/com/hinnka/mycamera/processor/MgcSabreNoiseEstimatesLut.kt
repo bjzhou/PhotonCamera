@@ -43,34 +43,6 @@ internal object MgcSabreNoiseEstimatesLut {
         return values
     }
 
-    /**
-     * Reconstructs the scalar part of Sabre's merged NoiseModel from its accumulated temporal
-     * weights. The R8 coverage texture stores the sum of non-reference frame weights divided by
-     * [maximumAdditionalWeight]; the reference contributes one implicit unit of weight.
-     *
-     * Classic Sabre computes an average reciprocal merge factor from the accumulated Q8 weights,
-     * then applies its SNR-table reduction to the NoiseModel returned by the merge. Applying only
-     * [postMergeReduction] to the reference-frame model drops the multi-frame variance reduction.
-     */
-    fun outputNoiseModelScale(
-        postMergeReduction: Float,
-        accumulatedCoverage: ByteArray,
-        maximumAdditionalWeight: Float,
-    ): Float {
-        require(postMergeReduction.isFinite() && postMergeReduction > 0f)
-        require(maximumAdditionalWeight.isFinite() && maximumAdditionalWeight >= 0f)
-        if (accumulatedCoverage.isEmpty()) return postMergeReduction
-
-        var reciprocalWeightSum = 0.0
-        accumulatedCoverage.forEach { encoded ->
-            val normalizedCoverage = (encoded.toInt() and 0xff) / 255.0
-            val totalWeight = 1.0 + normalizedCoverage * maximumAdditionalWeight
-            reciprocalWeightSum += 1.0 / totalWeight
-        }
-        val averageMergeFactor = reciprocalWeightSum / accumulatedCoverage.size.toDouble()
-        return (postMergeReduction * averageMergeFactor).toFloat()
-    }
-
     private fun writeRow(
         destination: FloatArray,
         row: Int,

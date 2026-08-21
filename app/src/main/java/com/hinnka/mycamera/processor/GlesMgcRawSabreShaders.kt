@@ -52,7 +52,8 @@ internal object GlesMgcRawSabreShaders {
         uniform vec4 uCovRangeRgFactors;
         uniform vec2 uCovRangeBFactor;
         uniform float uGreenClippingPoint;
-        uniform float uForceReferenceColorRgb;
+        // Exact Sabre contract: x is a 0/1 switch; the remaining components are unused.
+        uniform vec4 uForceReferenceColorRgb;
         layout(location = 0) out vec4 oGuide;
         layout(location = 1) out vec4 oCovariance;
 
@@ -237,7 +238,7 @@ internal object GlesMgcRawSabreShaders {
 
             vec3 referenceColor;
             float referenceVariance;
-            if (greenVariance > 3.0 * greenNoise && uForceReferenceColorRgb == 0.0) {
+            if (greenVariance > 3.0 * greenNoise && uForceReferenceColorRgb.x == 0.0) {
                 referenceColor = vec3(averageRgb.x, centerGreen, averageRgb.z);
                 referenceVariance = -max(rgbVariance.y, greenVariance);
             } else {
@@ -599,6 +600,38 @@ internal object GlesMgcRawSabreShaders {
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
             oWeight = texelFetch(uSource, p, 0).a;
+        }
+    """.trimIndent()
+
+    /**
+     * Matches SabreProcessor::GetMergedNoiseModel's average-merge-factor input. The original
+     * accumulator is Q8, so quantize the GLES floating-point accumulator before taking 256/w.
+     * Four-by-four reduction keeps the readback small without changing the global average.
+     */
+    val reciprocalGreenWeight4x4 = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uAccumulatedWeightsGb;
+        uniform ivec2 uInputSize;
+        layout(location = 0) out vec2 oReciprocalSumAndCount;
+        void main() {
+            ivec2 base = ivec2(gl_FragCoord.xy) * 4;
+            float reciprocalSum = 0.0;
+            float sampleCount = 0.0;
+            for (int y = 0; y < 4; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    ivec2 p = base + ivec2(x, y);
+                    if (p.x >= uInputSize.x || p.y >= uInputSize.y) {
+                        continue;
+                    }
+                    float weight = texelFetch(uAccumulatedWeightsGb, p, 0).r;
+                    float weightQ8 = max(floor(weight * 256.0 + 0.5), 1.0);
+                    reciprocalSum += 256.0 / weightQ8;
+                    sampleCount += 1.0;
+                }
+            }
+            oReciprocalSumAndCount = vec2(reciprocalSum, sampleCount);
         }
     """.trimIndent()
 
