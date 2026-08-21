@@ -4229,11 +4229,6 @@ internal class GlesMgcRawSpatialStacker(
         )
         uniform1f(
             convertBayerAlignmentProgram,
-            "uInterpolationFlowTolerance",
-            SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
-        )
-        uniform1f(
-            convertBayerAlignmentProgram,
             "uTargetTileStride",
             (MERGE_BAYER_RAW_TILE_SIZE / 2).toFloat(),
         )

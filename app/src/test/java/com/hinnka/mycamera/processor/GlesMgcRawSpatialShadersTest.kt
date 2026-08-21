@@ -202,13 +202,19 @@ class GlesMgcRawSpatialShadersTest {
     }
 
     @Test
-    fun bayerAlignmentUsesConvertAlignmentTileCentreTransport() {
+    fun bayerAlignmentContinuouslyResamplesFinestGridBeforeMergeGate() {
         val shader = GlesMgcRawSpatialShaders.convertBayerAlignment
 
         assertTrue(shader.contains("vec2(outputTile) + vec2(0.5)"))
         assertTrue(shader.contains("uTargetTileStride"))
-        assertTrue(shader.contains("uInterpolationFlowTolerance"))
-        assertTrue(shader.contains("vec2 flow = interpolatedFlow"))
+        assertTrue(shader.contains("vec2 flow = resampledFlow(sourceGrid)"))
+        assertTrue(shader.contains("mix(flow00, flow10, fraction.x)"))
+        assertFalse(shader.contains("uInterpolationFlowTolerance"))
+        assertFalse(shader.contains("cancelInterpolation"))
         assertFalse(shader.contains("uAlignmentToBayerQuads"))
+
+        // The discontinuity gate remains in the actual merge-domain consumer, where its
+        // 8-Bayer-quad threshold cannot quantize flow at the 32-quad LK cadence.
+        assertTrue(GlesMgcRawSpatialShaders.mergeBayer.contains("cancelInterpolation"))
     }
 }
