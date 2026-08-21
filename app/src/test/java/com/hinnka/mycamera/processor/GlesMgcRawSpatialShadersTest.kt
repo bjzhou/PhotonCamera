@@ -202,13 +202,13 @@ class GlesMgcRawSpatialShadersTest {
     }
 
     @Test
-    fun bayerAlignmentLeavesInterpolationToOriginalMergeKernel() {
+    fun bayerAlignmentUsesConvertAlignmentTileCentreTransport() {
         val shader = GlesMgcRawSpatialShaders.convertBayerAlignment
 
-        assertTrue(shader.contains("uAlignmentToBayerQuads"))
-        assertTrue(shader.contains("texelFetch"))
-        assertFalse(shader.contains("uTargetTileStride"))
-        assertFalse(shader.contains("uInterpolationFlowTolerance"))
-        assertFalse(shader.contains("interpolatedFlow"))
+        assertTrue(shader.contains("vec2(outputTile) + vec2(0.5)"))
+        assertTrue(shader.contains("uTargetTileStride"))
+        assertTrue(shader.contains("uInterpolationFlowTolerance"))
+        assertTrue(shader.contains("vec2 flow = interpolatedFlow"))
+        assertFalse(shader.contains("uAlignmentToBayerQuads"))
     }
 }

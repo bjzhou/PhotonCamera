@@ -1011,13 +1011,6 @@ internal class GlesMgcRawSpatialStacker(
                     )
                     bentoAlignSubmitNs = System.nanoTime() - alignmentStartNs
                     val postAlignStartNs = System.nanoTime()
-                    val flow = createTexture(
-                        rejectionWidth,
-                        rejectionHeight,
-                        GLES30.GL_RGBA16F,
-                        GLES30.GL_LINEAR,
-                    )
-                    renderConvertedAlignment(alignment, flow)
                     val bayerAlignment = createTexture(
                         bayerAlignmentWidth,
                         bayerAlignmentHeight,
@@ -1025,6 +1018,13 @@ internal class GlesMgcRawSpatialStacker(
                         GLES30.GL_NEAREST,
                     )
                     renderBayerAlignment(alignment, bayerAlignment)
+                    val flow = createTexture(
+                        rejectionWidth,
+                        rejectionHeight,
+                        GLES30.GL_RGBA16F,
+                        GLES30.GL_LINEAR,
+                    )
+                    renderMergeDomainFlow(bayerAlignment, flow)
                     val tilingMask = renderFindBlockTiles(
                         baseRaw = referenceRaw,
                         ultrashortRaw = bentoRaw,
@@ -3780,12 +3780,9 @@ internal class GlesMgcRawSpatialStacker(
      * The first three levels use three LK iterations; the finest uses two. The standalone
      * AlignL1 search is absent, but UpsampleAlignment still selects among three neighboring
      * coarse-flow candidates using target-level L1 residuals before every finer LK level.
-     * ConvertAlignmentHalide expands the finest LK result only for the full-resolution rejection
-     * flow. Spatial merge has a different contract: MergeBayer/Spatial RGB consume one alignment
-     * sample per 8x8 Bayer-quad tile and perform GetInterpolatedFlow themselves. The Spatial path
-     * therefore uses the original content-selected UpsampleAlignment step to produce that merge
-     * grid. Sabre consumes the continuous rejection-domain flow directly and keeps the finest LK
-     * grid here.
+     * AlignPyramid::AlignAlt exits after the finest LK pass; its level loop does not run an
+     * additional UpsampleAlignment pass to the MergeBayer tile grid. Spatial merge transports
+     * the resulting finest-level flow with ConvertAlignmentHalide instead.
      */
     private fun alignPyramids(
         reference: List<TextureLevel>,
@@ -3853,23 +3850,6 @@ internal class GlesMgcRawSpatialStacker(
                     "LK$iterations,normalize=$normalize," +
                     "levelScale=$scale"
         }
-        if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
-            alignment = renderUpsampledAlignment(
-                reference = reference.first(),
-                current = current.first(),
-                initial = alignment,
-                targetGridWidth = bayerAlignmentWidth,
-                targetGridHeight = bayerAlignmentHeight,
-                targetGridMin = MERGE_ALIGNMENT_GRID_MIN,
-                targetTileStride = MERGE_BAYER_RAW_TILE_SIZE / 2,
-                targetTileSize = MERGE_BAYER_RAW_TILE_SIZE / 2,
-            )
-        }
-        val finalUpsampleMode = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
-            "merge-grid"
-        } else {
-            "level-transitions-only"
-        }
         PLog.i(
             TAG,
                 "MGC AlignPyramid target=$ALIGN_TARGET_FINEST_DIMENSION " +
@@ -3878,7 +3858,7 @@ internal class GlesMgcRawSpatialStacker(
                 "flowGrid=${alignment.gridWidth}x${alignment.gridHeight} " +
                 "flowScale=${alignment.scaleToBayerQuads} useL1=false " +
                 "gradientProducts=cached " +
-                "upsampleL1=$finalUpsampleMode/3-candidate " +
+                "upsampleL1=level-transitions-only/3-candidate " +
                 "median=false " +
                 "runtimeOptions=256/8/64/-1/2/3/0/1/0 " +
                 "schedule=${schedule.joinToString(" -> ")}",
@@ -4162,15 +4142,62 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
+    /**
+     * Expands the exact alignment consumed by Spatial merge into the per-Bayer-quad flow domain
+     * consumed by rejection. Both paths must interpolate the same 8x8-quad alignment grid;
+     * converting the finest LK grid independently can validate a different warp at motion edges.
+     */
+    private fun renderMergeDomainFlow(bayerAlignment: Int, output: Int) {
+        GLES30.glUseProgram(convertAlignmentProgram)
+        bindTexture(convertAlignmentProgram, "uAlignment", 0, bayerAlignment)
+        uniform2i(
+            convertAlignmentProgram,
+            "uGridSize",
+            bayerAlignmentWidth,
+            bayerAlignmentHeight,
+        )
+        uniform2i(
+            convertAlignmentProgram,
+            "uOutputSize",
+            rejectionWidth,
+            rejectionHeight,
+        )
+        uniform1f(
+            convertAlignmentProgram,
+            "uTileStride",
+            (MERGE_BAYER_RAW_TILE_SIZE / 2).toFloat(),
+        )
+        uniform1f(convertAlignmentProgram, "uAlignmentScale", 1f)
+        uniform1f(convertAlignmentProgram, "uOutputToAlignmentScale", 1f)
+        uniform1f(convertAlignmentProgram, "uGridMin", 0f)
+        uniform1f(
+            convertAlignmentProgram,
+            "uInterpolationFlowTolerance",
+            SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
+        )
+        uniform2f(
+            convertAlignmentProgram,
+            "uFlowNormalizationSize",
+            rejectionWidth.toFloat(),
+            rejectionHeight.toFloat(),
+        )
+        draw(
+            convertAlignmentProgram,
+            rejectionWidth,
+            rejectionHeight,
+            intArrayOf(output),
+        )
+    }
+
     private fun renderBayerAlignment(alignment: Alignment, output: Int) {
         require(
-            alignment.gridWidth == bayerAlignmentWidth &&
-                alignment.gridHeight == bayerAlignmentHeight &&
-                alignment.tileStride == MERGE_BAYER_RAW_TILE_SIZE / 2 &&
-                alignment.scaleToBayerQuads == 1f &&
-                alignment.gridMin == MERGE_ALIGNMENT_GRID_MIN
+            alignment.gridWidth > 0 &&
+                alignment.gridHeight > 0 &&
+                alignment.tileStride > 0 &&
+                alignment.scaleToBayerQuads.isFinite() &&
+                alignment.scaleToBayerQuads > 0f
         ) {
-            "Spatial merge requires the content-selected full-resolution alignment grid"
+            "MergeBayer requires a valid finest-level LK alignment"
         }
         GLES30.glUseProgram(convertBayerAlignmentProgram)
         bindTexture(
@@ -4187,8 +4214,34 @@ internal class GlesMgcRawSpatialStacker(
         )
         uniform1f(
             convertBayerAlignmentProgram,
-            "uAlignmentToBayerQuads",
+            "uTileStride",
+            alignment.tileStride * alignment.scaleToBayerQuads,
+        )
+        uniform1f(
+            convertBayerAlignmentProgram,
+            "uAlignmentScale",
             alignment.scaleToBayerQuads,
+        )
+        uniform1f(
+            convertBayerAlignmentProgram,
+            "uGridMin",
+            alignment.gridMin.toFloat(),
+        )
+        uniform1f(
+            convertBayerAlignmentProgram,
+            "uInterpolationFlowTolerance",
+            SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
+        )
+        uniform1f(
+            convertBayerAlignmentProgram,
+            "uTargetTileStride",
+            (MERGE_BAYER_RAW_TILE_SIZE / 2).toFloat(),
+        )
+        uniform2f(
+            convertBayerAlignmentProgram,
+            "uFlowNormalizationSize",
+            ceilDiv(width, 2).toFloat(),
+            ceilDiv(height, 2).toFloat(),
         )
         draw(
             convertBayerAlignmentProgram,
@@ -4686,13 +4739,6 @@ internal class GlesMgcRawSpatialStacker(
         )
         val alignmentNs = System.nanoTime() - alignmentStartNs
         val flowStartNs = System.nanoTime()
-        val flow = createTexture(
-            rejectionWidth,
-            rejectionHeight,
-            GLES30.GL_RGBA16F,
-            GLES30.GL_LINEAR,
-        )
-        renderConvertedAlignment(alignment, flow)
         val bayerAlignment = createTexture(
             bayerAlignmentWidth,
             bayerAlignmentHeight,
@@ -4700,6 +4746,13 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_NEAREST,
         )
         renderBayerAlignment(alignment, bayerAlignment)
+        val flow = createTexture(
+            rejectionWidth,
+            rejectionHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+        renderMergeDomainFlow(bayerAlignment, flow)
         val flowNs = System.nanoTime() - flowStartNs
         val rejectionStartNs = System.nanoTime()
         val unblockerWidth = ceilDiv(width, UNBLOCKER_FULLRES_TILE_SIZE * 2)
@@ -9021,7 +9074,6 @@ internal class GlesMgcRawSpatialStacker(
         // the GPU command stream instead of synchronously reading every alignment texture.
         const val MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS = 128f
         const val ALIGN_LK_GRID_MIN = 1
-        const val MERGE_ALIGNMENT_GRID_MIN = 0
         const val MERGE_BAYER_RAW_TILE_SIZE = 16
         // MGC defines the tolerance as a fraction of its 8 Bayer-quad tile. Keep
         // interpolation only where every neighboring flow is within one raw pixel

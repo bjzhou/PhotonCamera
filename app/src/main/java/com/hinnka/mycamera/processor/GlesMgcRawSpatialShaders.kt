@@ -2735,9 +2735,9 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * Packs the content-selected Spatial merge grid for MergeBayer/Spatial RGB. The original
-     * merge kernels perform GetInterpolatedFlow themselves; this pass must not interpolate the
-     * grid a second time. ConvertAlignmentHalide is the separate rejection-flow pass above.
+     * ConvertAlignmentHalide transport from the finest LK grid to MergeBayerRaw16's
+     * one-sample-per-8x8-Bayer-quad alignment contract. The source alignment remains sparse,
+     * while this pass evaluates its edge-aware tile-centre interpolation at every merge tile.
      */
     val convertBayerAlignment = """
         #version 300 es
@@ -2745,17 +2745,96 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         uniform sampler2D uAlignment;
         uniform ivec2 uGridSize;
-        uniform float uAlignmentToBayerQuads;
+        uniform float uTileStride;
+        uniform float uAlignmentScale;
+        uniform float uGridMin;
+        uniform float uInterpolationFlowTolerance;
+        uniform float uTargetTileStride;
+        uniform vec2 uFlowNormalizationSize;
         out vec4 oAlignment;
 
+        vec2 flowAt(ivec2 p) {
+            return texelFetch(
+                uAlignment,
+                clamp(p, ivec2(0), uGridSize - ivec2(1)),
+                0
+            ).xy * uAlignmentScale;
+        }
+        vec2 interpolatedFlow(
+            ivec2 tile,
+            ivec2 offsetWithinTile,
+            vec2 baseFlow
+        ) {
+            if (uInterpolationFlowTolerance <= 0.0) {
+                return baseFlow;
+            }
+            bool leftHalf =
+                float(offsetWithinTile.x) <= 0.5 * uTileStride;
+            bool topHalf =
+                float(offsetWithinTile.y) <= 0.5 * uTileStride;
+            int tx0 = leftHalf ? tile.x - 1 : tile.x;
+            int ty0 = topHalf ? tile.y - 1 : tile.y;
+            vec2 flow00 = flowAt(ivec2(tx0, ty0));
+            vec2 flow10 = flowAt(ivec2(tx0 + 1, ty0));
+            vec2 flow01 = flowAt(ivec2(tx0, ty0 + 1));
+            vec2 flow11 = flowAt(ivec2(tx0 + 1, ty0 + 1));
+            float threshold =
+                uTileStride * uInterpolationFlowTolerance;
+            bool cancelInterpolation =
+                any(greaterThanEqual(abs(flow00 - baseFlow), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow10 - baseFlow), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow01 - baseFlow), vec2(threshold))) ||
+                any(greaterThanEqual(abs(flow11 - baseFlow), vec2(threshold)));
+            if (cancelInterpolation) {
+                return baseFlow;
+            }
+            vec2 logicalTile = vec2(tile) + vec2(uGridMin);
+            vec2 pixelPosition =
+                logicalTile * uTileStride + vec2(offsetWithinTile);
+            float tx0Logical = float(tx0) + uGridMin;
+            float ty0Logical = float(ty0) + uGridMin;
+            float ux =
+                pixelPosition.x / uTileStride - (tx0Logical + 0.5);
+            float uy =
+                pixelPosition.y / uTileStride - (ty0Logical + 0.5);
+            return mix(
+                mix(flow00, flow10, ux),
+                mix(flow01, flow11, ux),
+                uy
+            );
+        }
         void main() {
             ivec2 outputTile = ivec2(gl_FragCoord.xy);
-            vec2 flowInBayerQuads = texelFetch(
-                uAlignment,
-                clamp(outputTile, ivec2(0), uGridSize - ivec2(1)),
-                0
-            ).xy * uAlignmentToBayerQuads;
-            oAlignment = vec4(flowInBayerQuads, 0.0, 0.0);
+            // MergeBayer interprets alignment texels as samples at 8x8 Bayer-quad
+            // tile centres. The half-stride offset is observable at the first LK
+            // boundary and must not be replaced by a tile-origin lookup.
+            ivec2 alignmentPixel = ivec2(floor(
+                (vec2(outputTile) + vec2(0.5)) * uTargetTileStride
+            ));
+            ivec2 logicalTile = ivec2(floor(
+                vec2(alignmentPixel) / uTileStride
+            ));
+            ivec2 tile = logicalTile - ivec2(int(uGridMin));
+            ivec2 offsetWithinTile = alignmentPixel -
+                ivec2(floor(vec2(alignmentPixel) / uTileStride)) *
+                int(uTileStride);
+            vec2 baseFlow = flowAt(tile);
+            vec2 flow = interpolatedFlow(tile, offsetWithinTile, baseFlow);
+
+            vec2 minimumFlow = vec2(1.0e20);
+            vec2 maximumFlow = vec2(-1.0e20);
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    vec2 candidate = flowAt(tile + ivec2(x, y));
+                    minimumFlow = min(minimumFlow, candidate);
+                    maximumFlow = max(maximumFlow, candidate);
+                }
+            }
+            float localFlowVariation = length(
+                (maximumFlow - minimumFlow) /
+                max(uFlowNormalizationSize, vec2(1.0))
+            );
+            oAlignment = vec4(flow, localFlowVariation, 0.0);
         }
     """.trimIndent()
 
