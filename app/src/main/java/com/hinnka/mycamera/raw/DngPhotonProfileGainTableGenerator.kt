@@ -169,12 +169,12 @@ internal object DngPhotonProfileGainTableGenerator {
  * encoding is performed by the renderer after the DNG profile pipeline.
  */
 internal data class PhotonLocalToneMappingParameters(
-    val localLaplacianRangeSigma: Float = ln(1.5).toFloat(),
+    val localLaplacianRangeSigma: Float = ln(2.5).toFloat(),
     val localLaplacianDetailExponent: Float = 1f,
     val localLaplacianIntensityLevels: Int = 64,
     val percentileClip: Float = 0.005f,
     val targetDynamicRange: Float = 100f,
-    val preToneMapExposureBoostEv: Float = 0.35f,
+    val preToneMapExposureBoostEv: Float = 0.0f,
     val bilateralSpatialBinSize: Int = 16,
     val bilateralRangeSigma: Float = 1f / 12f,
     val bilateralGuideCurveAlpha: Float = 0.8f,

@@ -36,7 +36,6 @@ import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
-import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.HncsProfileManager
@@ -150,12 +149,6 @@ fun PresetEditorScreen(
     var rawAutoExposure by remember {
         mutableStateOf(sourcePreset?.rawAutoExposure ?: true)
     }
-    var rawAutoExposureMeteringPriority by remember {
-        mutableStateOf(
-            sourcePreset?.rawAutoExposureMeteringPriority
-                ?: RawAutoExposureMeteringPriority.DEFAULT
-        )
-    }
     var rawHighlightsAdjustment by remember {
         mutableStateOf(sourcePreset?.rawHighlightsAdjustment ?: 0f)
     }
@@ -221,7 +214,6 @@ fun PresetEditorScreen(
             rawMaxChromaNoiseReduction = rawMaxChromaNoiseReduction,
             rawExposureCompensation = rawExposureCompensation,
             rawAutoExposure = rawAutoExposure,
-            rawAutoExposureMeteringPriority = rawAutoExposureMeteringPriority,
             rawHighlightsAdjustment = rawHighlightsAdjustment,
             rawShadowsAdjustment = rawShadowsAdjustment,
             rawBlackPointCorrection = rawBlackPointCorrection,
@@ -517,19 +509,6 @@ fun PresetEditorScreen(
                     description = stringResource(R.string.settings_raw_auto_exposure_description),
                     checked = rawAutoExposure,
                     onCheckedChange = { rawAutoExposure = it }
-                )
-
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_raw_auto_exposure_metering_priority),
-                    description = stringResource(R.string.settings_raw_auto_exposure_metering_priority_description),
-                    value = RawAutoExposureMeteringPriority.normalize(rawAutoExposureMeteringPriority),
-                    valueRange = RawAutoExposureMeteringPriority.MIN..RawAutoExposureMeteringPriority.MAX,
-                    valueTextFormatter = { value ->
-                        if (kotlin.math.abs(value) < 0.005f) "0.00" else String.format("%+.2f", value)
-                    },
-                    resetValue = RawAutoExposureMeteringPriority.DEFAULT,
-                    onValueChange = { rawAutoExposureMeteringPriority = it },
-                    enabled = rawAutoExposure,
                 )
 
                 SliderSettingItem(

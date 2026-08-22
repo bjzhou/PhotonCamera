@@ -895,8 +895,6 @@
     <string name="settings_spectral_film_y_density_gain">Yellow Density</string>
     <string name="settings_raw_auto_exposure">Auto Exposure</string>
     <string name="settings_raw_auto_exposure_description">Automatically meters RAW linear data during development and applies exposure compensation.</string>
-    <string name="settings_raw_auto_exposure_metering_priority">Auto Exposure Balance</string>
-    <string name="settings_raw_auto_exposure_metering_priority_description">Adjusts the brightness balance of RAW auto exposure. Higher values favor a brighter look, while lower values favor a darker look.</string>
     <string name="settings_raw_min_shutter_speed">Minimum Shutter Speed</string>
     <string name="settings_raw_min_shutter_speed_description">For RAW capture only, keeps the capture shutter near this limit and automatically balances ISO for the selected speed.</string>
     <string name="settings_raw_dro">Dynamic Range Optimization</string>

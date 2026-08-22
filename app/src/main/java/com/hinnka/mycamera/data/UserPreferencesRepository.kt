@@ -34,7 +34,6 @@ import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
-import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
@@ -74,8 +73,8 @@ private fun sanitizeTonemapMode(mode: String): String {
 private fun resolveStoredRawAutoExposure(mode: String?, legacyValue: Boolean?): Boolean {
     return when {
         mode.equals("OFF", ignoreCase = true) -> false
+        // Read the removed thumbnail-matching value as enabled for backward compatibility.
         mode.equals("VIEWFINDER_MATCH", ignoreCase = true) -> true
-        // Migrate the removed dynamic-scene option to the remaining viewfinder matcher.
         mode.equals("DYNAMIC_SCENE_ESTIMATION", ignoreCase = true) -> true
         else -> legacyValue ?: true
     }
@@ -143,7 +142,6 @@ data class UserPreferences(
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val rawExposureCompensation: Float = 0f,
     val rawAutoExposure: Boolean = true,
-    val rawAutoExposureMeteringPriority: Float = RawAutoExposureMeteringPriority.DEFAULT,
     val rawHighlightsAdjustment: Float = 0f,
     val rawShadowsAdjustment: Float = 0f,
     val rawMinShutterSpeedNs: Long = 0L,
@@ -337,7 +335,6 @@ data class CameraFeaturePreferencesUpdate(
     val rawMaxChromaNoiseReduction: PreferenceUpdateValue<Float>? = null,
     val rawExposureCompensation: PreferenceUpdateValue<Float>? = null,
     val rawAutoExposure: PreferenceUpdateValue<Boolean>? = null,
-    val rawAutoExposureMeteringPriority: PreferenceUpdateValue<Float>? = null,
     val rawHighlightsAdjustment: PreferenceUpdateValue<Float>? = null,
     val rawShadowsAdjustment: PreferenceUpdateValue<Float>? = null,
     val rawBlackPointCorrection: PreferenceUpdateValue<Float>? = null,
@@ -393,8 +390,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_exposure_compensation")
         private val RAW_AUTO_EXPOSURE_KEY = booleanPreferencesKey("raw_auto_exposure")
         private val RAW_AUTO_EXPOSURE_MODE_KEY = stringPreferencesKey("raw_auto_exposure_mode")
-        private val RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY =
-            floatPreferencesKey("raw_auto_exposure_metering_priority")
         private val RAW_HIGHLIGHTS_ADJUSTMENT_KEY = floatPreferencesKey("raw_highlights_adjustment")
         private val RAW_SHADOWS_ADJUSTMENT_KEY = floatPreferencesKey("raw_shadows_adjustment")
         private val RAW_MIN_SHUTTER_SPEED_NS_KEY = longPreferencesKey("raw_min_shutter_speed_ns")
@@ -656,10 +651,6 @@ class UserPreferencesRepository(private val context: Context) {
                 rawAutoExposure = resolveStoredRawAutoExposure(
                     mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
                     legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
-                ),
-                rawAutoExposureMeteringPriority = RawAutoExposureMeteringPriority.normalize(
-                    preferences[RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY]
-                        ?: RawAutoExposureMeteringPriority.DEFAULT
                 ),
                 rawHighlightsAdjustment = preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] ?: 0f,
                 rawShadowsAdjustment = preferences[RAW_SHADOWS_ADJUSTMENT_KEY] ?: 0f,
@@ -1301,17 +1292,10 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[RAW_AUTO_EXPOSURE_KEY] = enabled
             preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (enabled) {
-                "VIEWFINDER_MATCH"
+                "DYNAMIC_SCENE_ESTIMATION"
             } else {
                 "OFF"
             }
-        }
-    }
-
-    suspend fun saveRawAutoExposureMeteringPriority(value: Float) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY] =
-                RawAutoExposureMeteringPriority.normalize(value)
         }
     }
 
@@ -1329,7 +1313,7 @@ class UserPreferencesRepository(private val context: Context) {
             )
             preferences[RAW_AUTO_EXPOSURE_KEY] = rawAutoExposure
             preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (rawAutoExposure) {
-                "VIEWFINDER_MATCH"
+                "DYNAMIC_SCENE_ESTIMATION"
             } else {
                 "OFF"
             }
@@ -2567,14 +2551,10 @@ class UserPreferencesRepository(private val context: Context) {
             update.rawAutoExposure?.let {
                 preferences[RAW_AUTO_EXPOSURE_KEY] = it.value
                 preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (it.value) {
-                    "VIEWFINDER_MATCH"
+                    "DYNAMIC_SCENE_ESTIMATION"
                 } else {
                     "OFF"
                 }
-            }
-            update.rawAutoExposureMeteringPriority?.let {
-                preferences[RAW_AUTO_EXPOSURE_METERING_PRIORITY_KEY] =
-                    RawAutoExposureMeteringPriority.normalize(it.value)
             }
             update.rawHighlightsAdjustment?.let {
                 preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] = it.value.coerceIn(-1f, 1f)

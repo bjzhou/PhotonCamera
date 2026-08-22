@@ -8,7 +8,6 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
-import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 
 /**
  * 拍摄预设组合（用户自定义档位配置）
@@ -41,7 +40,6 @@ data class CameraPreset(
     val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
     val rawExposureCompensation: Float = 0f,
     val rawAutoExposure: Boolean = true,
-    val rawAutoExposureMeteringPriority: Float = RawAutoExposureMeteringPriority.DEFAULT,
     val rawHighlightsAdjustment: Float = 0f,
     val rawShadowsAdjustment: Float = 0f,
     val rawBlackPointCorrection: Float = 0f,
@@ -178,9 +176,6 @@ data class CameraPreset(
                 rawMaxChromaNoiseReduction =
                     RawDenoiseDefaults.normalize(rawMaxChromaNoiseReduction),
                 rawExposureCompensation = rawExposureCompensation.coerceIn(-4f, 4f),
-                rawAutoExposureMeteringPriority = RawAutoExposureMeteringPriority.normalize(
-                    rawAutoExposureMeteringPriority
-                ),
                 rawHighlightsAdjustment = rawHighlightsAdjustment.coerceIn(-1f, 1f),
                 rawShadowsAdjustment = rawShadowsAdjustment.coerceIn(-1f, 1f),
                 rawBlackPointCorrection = rawBlackPointCorrection.coerceIn(-1f, 1f),

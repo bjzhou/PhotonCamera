@@ -136,7 +136,7 @@ data class DngProfileGainTableMap(
          */
         fun hasClassicTiffHeader(file: File): Boolean {
             if (!file.exists() || file.length() < 8L) return false
-            //if (BuildConfig.DEBUG) return false
+            if (BuildConfig.DEBUG) return false
             return runCatching {
                 RandomAccessFile(file, "r").use { raf ->
                     val byteOrder = readTiffByteOrder(raf) ?: return@use false

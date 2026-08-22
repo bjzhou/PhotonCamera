@@ -60,7 +60,6 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawViewfinderExposureMatcher
-import com.hinnka.mycamera.raw.RawAutoExposureMeteringPriority
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -228,25 +227,6 @@ object GalleryManager {
         return metadata?.rawAutoExposure ?: fallback
     }
 
-    private suspend fun resolveRawAutoExposureMeteringPriority(
-        context: Context,
-        metadata: MediaMetadata,
-    ): Float {
-        RawAutoExposureMeteringPriority.fromMetadata(
-            metadata.customProperties[RawAutoExposureMeteringPriority.METADATA_PROPERTY]
-        )?.let { return it }
-        if (!metadata.isImported) {
-            return RawAutoExposureMeteringPriority.DEFAULT
-        }
-        val value = ContentRepository.getInstance(context)
-            .userPreferencesRepository
-            .userPreferences
-            .firstOrNull()
-            ?.rawAutoExposureMeteringPriority
-            ?: RawAutoExposureMeteringPriority.DEFAULT
-        return RawAutoExposureMeteringPriority.normalize(value)
-    }
-
     private fun resolveNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
         return metadata.noiseReduction ?: (if (metadata.isImported) 0f else fallback)
     }
@@ -314,13 +294,6 @@ object GalleryManager {
             val resolvedRotation = rotation.takeIf { it != 0 } ?: baseMetadata.rotation
             val customProperties = baseMetadata.customProperties.toMutableMap().apply {
                 put("captureSource", "MGC")
-                put(
-                    RawAutoExposureMeteringPriority.METADATA_PROPERTY,
-                    RawAutoExposureMeteringPriority.normalize(
-                        preferences?.rawAutoExposureMeteringPriority
-                            ?: RawAutoExposureMeteringPriority.DEFAULT
-                    ).toString()
-                )
                 sourcePackage?.takeIf { it.isNotBlank() }?.let { put("mgcSourcePackage", it) }
                 source?.takeIf { it.isNotBlank() }?.let { put("mgcSource", it) }
             }
@@ -2043,7 +2016,7 @@ object GalleryManager {
             saveMetadata(context, photoId, metadataWithInfo)
 
             // The preview bitmap is the UI placeholder shown while the final image is being
-            // processed. For flash captures it must not participate in RAW exposure matching,
+            // processed. For flash captures it must not participate in RAW scene exposure,
             // but it should still be published immediately and replaced by the rendered result.
             if (thumbnail != null && !thumbnail.isRecycled) {
                 generateThumbnail(thumbnail, thumbnailFile)
@@ -2341,7 +2314,7 @@ object GalleryManager {
                 PLog.i(
                     TAG,
                     "RAW flash capture: ignoring the unflashed preview thumbnail for " +
-                        "DNG embedding and viewfinder exposure matching"
+                        "DNG embedding and capture-scene exposure estimation"
                 )
             }
 
@@ -2387,7 +2360,6 @@ object GalleryManager {
                 defaultCrop = rawDngDefaultCrop,
                 aspectRatio = aspectRatio,
                 rotation = rotation,
-                capturePreviewThumbnail = dngThumbnail,
                 captureResult = resolvedCaptureResult,
             )
             val preparedProfile = RawProcessor.prepareRawDngProfile(
@@ -3618,7 +3590,6 @@ object GalleryManager {
                     defaultCrop = dngDefaultCrop,
                     aspectRatio = aspectRatio,
                     rotation = rotation,
-                    capturePreviewThumbnail = capturePreviewThumbnail,
                     captureResult = captureResult,
                 )
                 val profileStartMs = System.currentTimeMillis()
@@ -4294,7 +4265,6 @@ object GalleryManager {
                             defaultCrop = rawDngDefaultCrop,
                             aspectRatio = aspectRatio,
                             rotation = rotation,
-                            capturePreviewThumbnail = capturePreviewThumbnail,
                             captureResult = captureResult,
                         ),
                     // Serialize the resolved Camera2/ISZ crop through the standard DNG tags.
@@ -4465,7 +4435,6 @@ object GalleryManager {
         defaultCrop: Rect?,
         aspectRatio: AspectRatio?,
         rotation: Int,
-        capturePreviewThumbnail: Bitmap?,
         captureResult: CaptureResult?,
     ): RawDngProfilePreparationOptions {
         val generatePhotonPgtm = metadata.rawToneMappingParameters.usePhotonHdr
@@ -4484,13 +4453,9 @@ object GalleryManager {
             metadataDefaultCrop = blackBorderDefaultCrop ?: defaultCrop,
         ).takeUnless { it.hasSameBounds(Rect(0, 0, width, height)) }
         val mainFlashFired = didMainFlashFire(captureResult)
-        val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
-            !mainFlashFired &&
-            resolveRawAutoExposure(context, metadata)
-        val rawAutoExposureMeteringPriority =
-            resolveRawAutoExposureMeteringPriority(context, metadata)
+        val sceneExposureEnabled = !mainFlashFired && resolveRawAutoExposure(context, metadata)
         val profileGainTableRequired = generatePhotonPgtm
-        val captureProfilePreparer = if (viewfinderMatchEnabled || profileGainTableRequired) {
+        val captureProfilePreparer = if (sceneExposureEnabled || profileGainTableRequired) {
             RawDngCaptureProfilePreparer { input ->
                 RawViewfinderExposureMatcher.prepareCaptureProfile(
                     renderer = RawDemosaicProcessor.getInstance(),
@@ -4499,9 +4464,7 @@ object GalleryManager {
                     aspectRatio = aspectRatio,
                     cropRegion = metadata.cropRegion,
                     rotation = rotation,
-                    capturePreviewThumbnail = capturePreviewThumbnail.takeIf {
-                        viewfinderMatchEnabled
-                    },
+                    estimateSceneExposure = sceneExposureEnabled,
                     generatePhotonPgtm = generatePhotonPgtm,
                     statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
@@ -4516,7 +4479,6 @@ object GalleryManager {
                     ),
                     rawBlackBorderCrop = metadata.rawBlackBorderCrop,
                     rawNoiseProfileId = resolveRawNoiseProfileId(context, metadata),
-                    rawAutoExposureMeteringPriority = rawAutoExposureMeteringPriority,
                 )
             }
         } else {
@@ -4524,11 +4486,10 @@ object GalleryManager {
         }
         PLog.i(
             TAG,
-            "RAW_VIEWFINDER_BASELINE stage=DNG_PREPARE enabled=$viewfinderMatchEnabled " +
+            "RAW_SCENE_EXPOSURE stage=DNG_PREPARE enabled=$sceneExposureEnabled " +
                 "curve=DEFAULT blackBorderDefaultCrop=$blackBorderDefaultCrop " +
                 "photonPgtm=$generatePhotonPgtm statsBounds=$statsBounds " +
                 "mainFlashFired=$mainFlashFired " +
-                "meteringPriority=$rawAutoExposureMeteringPriority " +
                 "flashState=${captureResult?.get(CaptureResult.FLASH_STATE)} " +
                 "sourceAutoExposure=${metadata.rawAutoExposure} " +
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"

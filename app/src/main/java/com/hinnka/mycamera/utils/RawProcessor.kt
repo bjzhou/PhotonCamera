@@ -21,6 +21,7 @@ import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawNoiseProfileLayout
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawSceneExposureDeviceLimits
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.toAdobeDefaultMeteringPlan
 import java.io.File
@@ -651,8 +652,8 @@ object RawProcessor {
             PLog.e(TAG, "Unable to resolve the DNG color plan for RAW capture-profile preparation")
             return null
         }
-        // Metering has one fixed Adobe/default tone pipeline. Reuse only the DNG color solution;
-        // layout-specific DNG black-render tags and embedded profile curves must not alter it.
+        // Scene inference has one fixed linear-sRGB color pipeline. Reuse only the DNG color
+        // solution; black-render tags and embedded profile curves must not alter its input.
         val meteringRenderPlan = embeddedDngColorPlan.toAdobeDefaultMeteringPlan()
         val captureProfileMetadata = statsMetadata.copy(
             colorCorrectionMatrix = meteringRenderPlan.colorCorrectionMatrix.copyOf(),
@@ -668,6 +669,8 @@ object RawProcessor {
                 metadata = captureProfileMetadata.copy(profileGainTableMap = null),
                 meteringRenderPlan = meteringRenderPlan,
                 gpuLinearRgbSource = gpuLinearRgbSource,
+                sceneExposureDeviceLimits = RawSceneExposureDeviceLimits
+                    .fromCameraCharacteristics(characteristics),
             )
         )
         val exposureOffsetEv = captureProfile?.exposureOffsetEv
@@ -676,8 +679,9 @@ object RawProcessor {
                 com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MIN_EV,
                 com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MAX_EV,
             )
-        val finalBaselineExposureEv = DngBaselineExposure.sanitize(
-            sourceBaselineExposureEv + (exposureOffsetEv ?: 0f)
+        val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
+            sourceBaselineEv = sourceBaselineExposureEv,
+            sceneBaselineEv = exposureOffsetEv,
         )
         val profileRequired = options.generatePhotonPgtm
         if (profileRequired && captureProfile?.profileGainTableMap == null) {
@@ -701,13 +705,14 @@ object RawProcessor {
         ).also { finalProfile ->
             PLog.i(
                 TAG,
-                "RAW_VIEWFINDER_BASELINE stage=SHARED_PROFILE_READY " +
+                "RAW_SCENE_EXPOSURE stage=SHARED_PROFILE_READY " +
                     "enabled=${options.captureProfilePreparer != null} " +
-                    "matched=${exposureOffsetEv != null} " +
+                    "estimated=${exposureOffsetEv != null} " +
                     "sourceBaselineEv=$sourceBaselineExposureEv " +
                     "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
-                    "meteredExposureOffsetEv=${exposureOffsetEv ?: 0f} " +
-                    "meteredExposureGain=${DngBaselineExposure.exactGain(exposureOffsetEv ?: 0f)} " +
+                    "sceneBaselineEv=$exposureOffsetEv " +
+                    "sceneBaselineGain=${exposureOffsetEv?.let(DngBaselineExposure::exactGain)} " +
+                    "sourceBaselineApplied=${exposureOffsetEv == null} " +
                     "finalBaselineEv=${finalProfile.baselineExposureEv} " +
                     "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +

@@ -21,6 +21,9 @@ internal class RawLinearRcdPass(
         val hncsHighlightMaximum: Float,
         val clampProfileRgb: Boolean,
         val hueSatMapSupportsOverrange: Boolean,
+        val textureBounds: FloatArray = FULL_TEXTURE_BOUNDS,
+        val areaSampleFootprint: FloatArray = NO_AREA_SAMPLE,
+        val textureRotation: Int = 0,
         val bindHueSatMap: (program: Int) -> Unit,
         val label: String,
     )
@@ -91,6 +94,24 @@ internal class RawLinearRcdPass(
             GLES30.glGetUniformLocation(activeProgram, "uHueSatSupportOverrange"),
             if (input.hueSatMapSupportsOverrange) 1 else 0,
         )
+        require(input.textureBounds.size >= 4) { "Expected normalized texture bounds" }
+        require(input.areaSampleFootprint.size >= 2) { "Expected an area-sample footprint" }
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(activeProgram, "uTextureBounds"),
+            input.textureBounds[0],
+            input.textureBounds[1],
+            input.textureBounds[2],
+            input.textureBounds[3],
+        )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(activeProgram, "uAreaSampleFootprint"),
+            input.areaSampleFootprint[0],
+            input.areaSampleFootprint[1],
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uTextureRotation"),
+            ((input.textureRotation % 360) + 360) % 360,
+        )
         quad.bindIdentityTextureMatrix(activeProgram)
         quad.draw(activeProgram)
         RawGlesProgram.logErrors("${input.label} draw")
@@ -120,6 +141,8 @@ internal class RawLinearRcdPass(
 
     companion object {
         private val IDENTITY_GAIN = floatArrayOf(1f, 1f, 1f)
+        private val FULL_TEXTURE_BOUNDS = floatArrayOf(0f, 0f, 1f, 1f)
+        private val NO_AREA_SAMPLE = floatArrayOf(0f, 0f)
 
         val FRAGMENT_SHADER = """
             #version 300 es
@@ -144,11 +167,40 @@ internal class RawLinearRcdPass(
             uniform int uLinearDcpHueSatEnabled;
             uniform ivec3 uLinearDcpHueSatDivisions;
             uniform int uLinearDcpHueSatEncoding;
+            uniform vec4 uTextureBounds;
+            uniform vec2 uAreaSampleFootprint;
+            uniform int uTextureRotation;
 
             ${DcpHueSatMapGl.SHADER_FUNCTIONS}
 
+            vec3 sampleCameraRgb(vec2 center) {
+                if (max(uAreaSampleFootprint.x, uAreaSampleFootprint.y) <= 0.0) {
+                    return texture(uDemosaickedTexture, center).rgb;
+                }
+                vec3 sum = vec3(0.0);
+                for (int y = 0; y < 4; ++y) {
+                    for (int x = 0; x < 4; ++x) {
+                        vec2 offset = (vec2(float(x), float(y)) - vec2(1.5)) * 0.25;
+                        sum += texture(
+                            uDemosaickedTexture,
+                            center + offset * uAreaSampleFootprint
+                        ).rgb;
+                    }
+                }
+                return sum * (1.0 / 16.0);
+            }
+
             void main() {
-                vec3 rgb = texture(uDemosaickedTexture, vTexCoord).rgb;
+                vec2 orientedCoord = vTexCoord;
+                if (uTextureRotation == 90) {
+                    orientedCoord = vec2(vTexCoord.y, 1.0 - vTexCoord.x);
+                } else if (uTextureRotation == 180) {
+                    orientedCoord = vec2(1.0) - vTexCoord;
+                } else if (uTextureRotation == 270) {
+                    orientedCoord = vec2(1.0 - vTexCoord.y, vTexCoord.x);
+                }
+                vec2 sourceCoord = mix(uTextureBounds.xy, uTextureBounds.zw, orientedCoord);
+                vec3 rgb = sampleCameraRgb(sourceCoord);
                 if (uHncsCameraDomainEnabled != 0) {
                     rgb *= uHncsCameraDomainGain;
                     rgb /= uHncsHrTrunc;

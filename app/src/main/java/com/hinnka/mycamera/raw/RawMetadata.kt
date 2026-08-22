@@ -146,7 +146,9 @@ data class RawMetadata(
     /** Capture-scoped Photon controls for fusion, denoise, sharpen and future dehaze. */
     val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
     val rotation: Int? = null,
-    val profileGainTableMap: DngProfileGainTableMap? = null
+    val profileGainTableMap: DngProfileGainTableMap? = null,
+    /** Whether the exact CaptureResult paired with this RAW reported at least one face. */
+    val sceneHasFace: Boolean = false,
 ) {
     fun withNoiseProfileSelection(selection: RawNoiseProfileSelection): RawMetadata {
         val profile = when (selection) {
@@ -419,7 +421,9 @@ data class RawMetadata(
                 iso = iso,
                 maxAnalogSensitivity = maxAnalogSensitivity,
                 shutterSpeed = shutterSpeed,
-                aperture = aperture
+                aperture = aperture,
+                sceneHasFace = captureResult.get(CaptureResult.STATISTICS_FACES)
+                    ?.isNotEmpty() == true,
             )
         }
 

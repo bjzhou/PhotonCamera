@@ -14,6 +14,7 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
+import android.util.Half
 import android.util.Log
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
@@ -478,35 +479,14 @@ class RawDemosaicProcessor {
                 height = programSize.height,
             )
 
-            val exposureReady = renderExposurePreviewRequest(
-                request = RawExposurePreviewRequest(
-                    width = programSize.width,
-                    height = programSize.height,
-                    solve = { renderSample -> if (renderSample(0f) != null) 0f else null },
-                ),
+            val exposureReady = renderSceneExposureRequest(
+                request = RawSceneExposureRequest { 0f },
                 metadata = metadata,
-                samplesPerPixel = 4,
                 sourceTextureId = demosaicTextureId,
-                rawBlackPointCorrection = 0f,
-                rawWhitePointCorrection = 0f,
                 colorCorrectionMatrix = identity,
                 cameraWhite = metadata.cameraWhite,
-                dcpRenderPlan = null,
-                applyLinearDngBaselineExposure = false,
-                applyProfileDngBaselineExposure = false,
-                applyProfileGainTableMap = false,
-                clampProfileRgb = true,
-                outputBounds = Rect(0, 0, programSize.width, programSize.height),
-                outputRotation = 0,
-                spectralFilmLut = null,
-                hncsRenderPlan = null,
-                colorEngine = RawRenderingEngine.AdobeCurve,
-                outputWorkingColorSpace = ColorSpace.ProPhoto,
-                profileToEngineTransform = identity,
-                rawToneMappingParameters = RawToneMappingParameters.DEFAULT,
-                useProfileExposureRamp = true,
-                applyProfileDcpBaselineExposureOffset = false,
-                hueSatMapSupportsOverrange = false,
+                profileToLinearSrgbTransform = identity,
+                outputSourceBounds = Rect(0, 0, programSize.width, programSize.height),
             ) != null
             // Execute only a small viewport to force deferred driver compilation.
             renderLinearRcdPass(
@@ -1591,10 +1571,6 @@ class RawDemosaicProcessor {
     private var linearExposurePreviewTextureId = 0
     private var linearExposurePreviewWidth = 0
     private var linearExposurePreviewHeight = 0
-    private var srgbExposurePreviewFramebufferId = 0
-    private var srgbExposurePreviewTextureId = 0
-    private var srgbExposurePreviewWidth = 0
-    private var srgbExposurePreviewHeight = 0
 
     private var hdrReferenceFramebufferId = 0
     private var hdrReferenceTextureId = 0
@@ -1984,14 +1960,14 @@ class RawDemosaicProcessor {
         }
     }
 
-    /** Solves the optional viewfinder exposure in the capture GL context. */
+    /** Solves the optional scene exposure from the exact capture RAW in the capture GL context. */
     internal suspend fun prepareCaptureProfile(
         context: Context,
         input: RawDngCaptureProfileInput,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        request: RawExposurePreviewRequest?,
+        request: RawSceneExposureRequest?,
         generatePhotonPgtm: Boolean,
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
@@ -2032,7 +2008,7 @@ class RawDemosaicProcessor {
                     RawProfileToneMapMode.Default
                 ).withPhotonHdr(false),
                 rawBlackBorderCrop = rawBlackBorderCrop,
-                exposurePreviewRequest = request,
+                sceneExposureRequest = request,
                 captureProfilePreparationRequested = true,
                 capturePhotonPgtmRequested = generatePhotonPgtm,
                 captureProfileStatsBounds = statsBounds,
@@ -2331,7 +2307,7 @@ class RawDemosaicProcessor {
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false,
-        exposurePreviewRequest: RawExposurePreviewRequest? = null,
+        sceneExposureRequest: RawSceneExposureRequest? = null,
         captureProfilePreparationRequested: Boolean = false,
         capturePhotonPgtmRequested: Boolean = false,
         captureProfileStatsBounds: Rect? = null,
@@ -2625,9 +2601,9 @@ class RawDemosaicProcessor {
                 RawTilePlanner.shouldTile(actualWidth, actualHeight)
         val hasActiveWarp = applicableDngWarpRectilinear?.isNotEmpty() == true
         val prepareCaptureProfile =
-            exposurePreviewRequest != null || captureProfilePreparationRequested
+            sceneExposureRequest != null || captureProfilePreparationRequested
         val useHalfResolutionMeteringDemosaic =
-            exposurePreviewRequest != null &&
+            sceneExposureRequest != null &&
                 actualSamplesPerPixel == 1 &&
                 actualMetadata.frameCount == 1 &&
                 actualMetadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
@@ -2639,11 +2615,11 @@ class RawDemosaicProcessor {
             borrowedGpuSource != null -> "GPU-resident stacked source"
             actualMetadata.coreImagingTuning.dehaze.isActive ->
                 "Photon dehaze requires one continuous low-frequency image"
-            hasActiveWarp && !(captureProfilePreparationRequested && exposurePreviewRequest == null) ->
+            hasActiveWarp && !(captureProfilePreparationRequested && sceneExposureRequest == null) ->
                 "DNG WarpRectilinear requires a displacement-aware render source region"
             colorEngine == RawRenderingEngine.DarktableFilmic ->
                 "Darktable Filmic wavelet reconstruction requires scale-by-scale tiling"
-            exposurePreviewRequest != null -> "capture exposure metering"
+            sceneExposureRequest != null -> "capture scene exposure"
             else -> null
         }
         val rawRenderTiles = if (highResolutionOutput && tileBlockingReason == null) {
@@ -2672,10 +2648,10 @@ class RawDemosaicProcessor {
                     "tiledCpuUpload=false",
             )
         } else if (highResolutionOutput && tileBlockingReason != null) {
-            if (tileBlockingReason == "capture exposure metering") {
+            if (tileBlockingReason == "capture scene exposure") {
                 PLog.i(
                     TAG,
-                    "RAW capture metering path=FULL_FRAME " +
+                    "RAW capture scene exposure path=FULL_FRAME " +
                         "source=${actualWidth}x$actualHeight " +
                         "output=${outputSourceBounds.width()}x${outputSourceBounds.height()}",
                 )
@@ -2720,7 +2696,7 @@ class RawDemosaicProcessor {
                         (actualHeight + 1) / 2,
                     )
 
-                    !captureProfilePreparationRequested || exposurePreviewRequest != null ->
+                    !captureProfilePreparationRequested || sceneExposureRequest != null ->
                         setupFullResFramebuffer(actualWidth, actualHeight)
                 }
             }
@@ -2944,10 +2920,10 @@ class RawDemosaicProcessor {
                         width = actualWidth,
                         height = actualHeight,
                     )
-                } else if (captureProfilePreparationRequested && exposurePreviewRequest == null) {
+                } else if (captureProfilePreparationRequested && sceneExposureRequest == null) {
                     PLog.d(
                         TAG,
-                        "RAW capture profile preparation skipped demosaic: exposure matching disabled",
+                        "RAW capture profile preparation skipped demosaic: scene exposure disabled",
                     )
                 } else if (actualSamplesPerPixel in 3..4) {
                     renderLinearRawRgbToTexture(
@@ -3006,7 +2982,7 @@ class RawDemosaicProcessor {
                 applicableDngWarpRectilinear
                     ?.takeUnless {
                         useHalfResolutionMeteringDemosaic ||
-                            (captureProfilePreparationRequested && exposurePreviewRequest == null)
+                            (captureProfilePreparationRequested && sceneExposureRequest == null)
                     }
                     ?.let { warps ->
                     var appliedWarpCount = 0
@@ -3040,46 +3016,31 @@ class RawDemosaicProcessor {
             }
 
             if (prepareCaptureProfile) {
-                val solvedExposureEv = exposurePreviewRequest?.let { request ->
-                    renderExposurePreviewRequest(
+                val solvedExposureEv = sceneExposureRequest?.let { request ->
+                    renderSceneExposureRequest(
                         request = request,
                         metadata = actualMetadata,
-                        samplesPerPixel = actualSamplesPerPixel,
                         sourceTextureId = demosaicTextureId,
-                        rawBlackPointCorrection = rawBlackPointCorrection,
-                        rawWhitePointCorrection = rawWhitePointCorrection,
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         cameraWhite = linearCameraWhite,
-                        dcpRenderPlan = activeDcpRenderPlan,
-                        applyLinearDngBaselineExposure = applyLinearDngBaselineExposure,
-                        applyProfileDngBaselineExposure = applyProfileDngBaselineExposure,
-                        applyProfileGainTableMap = false,
-                        clampProfileRgb = clampProfileRgb,
-                        outputBounds = bounds,
+                        profileToLinearSrgbTransform = profileToLinearSrgbTransform,
+                        outputSourceBounds = outputSourceBounds,
                         outputRotation = actualRotation,
-                        spectralFilmLut = spektrafilmLut,
-                        hncsRenderPlan = hncsRenderPlan,
-                        colorEngine = colorEngine,
-                        outputWorkingColorSpace = engineWorkingColorSpace,
-                        profileToEngineTransform = profileToEngineTransform,
-                        rawToneMappingParameters = rawToneMappingParameters,
-                        useProfileExposureRamp = useProfileExposureRamp,
-                        applyProfileDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
-                        hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
-                        hncsCameraDomainGains = hncsCameraDomainGains,
                         stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                     )
                 }
                 solvedExposureEv?.let { exposureEv ->
                     PLog.i(
                         TAG,
-                        "RAW_VIEWFINDER_BASELINE stage=METERING_COMPLETE curve=DEFAULT " +
-                            "pgtm=false sourceBaselineEv=${actualMetadata.baselineExposure} " +
-                            "meteredExposureOffsetEv=$exposureEv",
+                        "RAW_SCENE_EXPOSURE stage=INFERENCE_COMPLETE " +
+                            "pgtm=$capturePhotonPgtmRequested " +
+                            "sourceBaselineEv=${actualMetadata.baselineExposure} " +
+                            "sceneBaselineEv=$exposureEv",
                     )
                 }
-                val finalBaselineExposureEv = DngBaselineExposure.sanitize(
-                    actualMetadata.baselineExposure + (solvedExposureEv ?: 0f)
+                val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
+                    sourceBaselineEv = actualMetadata.baselineExposure,
+                    sceneBaselineEv = solvedExposureEv,
                 )
                 val captureProfileGainTableMap = if (capturePhotonPgtmRequested) {
                     generateProfileGainTableMapOnGpu(
@@ -3114,7 +3075,7 @@ class RawDemosaicProcessor {
                 return@withContext null
             }
 
-            // BaselineExposure already contains the capture-time viewfinder match. Rendering only
+            // BaselineExposure already contains the capture-time scene estimate. Rendering only
             // applies explicit edit controls.
             val effectiveExposureCompensation = rawExposureCompensation
             val effectiveHighlightsAdjustment = rawHighlightsAdjustment
@@ -6072,59 +6033,6 @@ class RawDemosaicProcessor {
         checkGlError("setupLinearExposurePreviewFramebuffer")
     }
 
-    private fun setupSrgbExposurePreviewFramebuffer(width: Int, height: Int) {
-        if (
-            srgbExposurePreviewWidth == width &&
-            srgbExposurePreviewHeight == height &&
-            srgbExposurePreviewFramebufferId != 0
-        ) {
-            return
-        }
-
-        if (srgbExposurePreviewTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(srgbExposurePreviewTextureId), 0)
-        }
-        if (srgbExposurePreviewFramebufferId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(srgbExposurePreviewFramebufferId), 0)
-        }
-
-        srgbExposurePreviewWidth = width
-        srgbExposurePreviewHeight = height
-
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        srgbExposurePreviewTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, srgbExposurePreviewTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_RGBA8,
-            width,
-            height,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_UNSIGNED_BYTE,
-            null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-
-        val framebuffers = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffers, 0)
-        srgbExposurePreviewFramebufferId = framebuffers[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, srgbExposurePreviewFramebufferId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            srgbExposurePreviewTextureId,
-            0
-        )
-        checkGlError("setupSrgbExposurePreviewFramebuffer")
-    }
-
     private fun setupHdrReferenceFramebuffer(width: Int, height: Int) {
         if (hdrReferenceWidth == width && hdrReferenceHeight == height && hdrReferenceFramebufferId != 0) {
             return
@@ -7460,6 +7368,9 @@ class RawDemosaicProcessor {
         clampProfileRgb: Boolean,
         hueSatMapSupportsOverrange: Boolean,
         hncsCameraDomainGains: FloatArray? = null,
+        textureBounds: FloatArray = floatArrayOf(0f, 0f, 1f, 1f),
+        areaSampleFootprint: FloatArray = floatArrayOf(0f, 0f),
+        textureRotation: Int = 0,
         label: String
     ) {
         val hncsCameraDomain = hncsCameraDomainGains?.let { gains ->
@@ -7502,6 +7413,9 @@ class RawDemosaicProcessor {
                     hncsHighlightMaximum = hncsCameraDomain?.hrMax ?: 1f,
                     clampProfileRgb = clampProfileRgb,
                     hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
+                    textureBounds = textureBounds,
+                    areaSampleFootprint = areaSampleFootprint,
+                    textureRotation = textureRotation,
                     bindHueSatMap = { program -> bindLinearDcpHueSatMap(program, hueSatMap) },
                     label = label,
                 ),
@@ -7700,184 +7614,123 @@ class RawDemosaicProcessor {
         profileGainTableTextureSource = null
     }
 
-    private fun renderExposurePreviewRequest(
-        request: RawExposurePreviewRequest,
+    private fun renderSceneExposureRequest(
+        request: RawSceneExposureRequest,
         metadata: RawMetadata,
-        samplesPerPixel: Int,
         sourceTextureId: Int,
-        rawBlackPointCorrection: Float,
-        rawWhitePointCorrection: Float,
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray,
-        dcpRenderPlan: DcpRenderPlan?,
-        applyLinearDngBaselineExposure: Boolean,
-        applyProfileDngBaselineExposure: Boolean,
-        applyProfileGainTableMap: Boolean,
-        clampProfileRgb: Boolean,
-        outputBounds: Rect,
-        outputRotation: Int,
-        spectralFilmLut: SpectralFilmLut?,
-        hncsRenderPlan: HncsRenderPlan?,
-        colorEngine: RawRenderingEngine,
-        outputWorkingColorSpace: ColorSpace,
-        profileToEngineTransform: FloatArray,
-        rawToneMappingParameters: RawToneMappingParameters,
-        useProfileExposureRamp: Boolean,
-        applyProfileDcpBaselineExposureOffset: Boolean,
-        hueSatMapSupportsOverrange: Boolean,
-        hncsCameraDomainGains: FloatArray? = null,
+        profileToLinearSrgbTransform: FloatArray,
+        outputSourceBounds: Rect,
+        outputRotation: Int = 0,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
     ): Float? {
-        val previewSize = resolveLongEdgePreviewSize(
-            sourceWidth = metadata.width,
-            sourceHeight = metadata.height,
-            maxLongEdge = 256
-        )
-        val previewWidth = previewSize.width
-        val previewHeight = previewSize.height
         return try {
-            setupLinearExposurePreviewFramebuffer(previewWidth, previewHeight)
-            val useAdobeSdkExposure = colorEngine == RawRenderingEngine.AdobeCurve &&
-                useProfileExposureRamp &&
-                !applyLinearDngBaselineExposure
-            val profileBaselineExposureOffsetEv = if (applyProfileDcpBaselineExposureOffset) {
-                dcpBaselineExposureOffsetOrZero(dcpRenderPlan)
-            } else {
-                0f
-            }
-            if (useAdobeSdkExposure) {
-                renderLinearRcdPass(
-                    metadata = metadata,
-                    sourceTextureId = sourceTextureId,
-                    targetFramebufferId = linearExposurePreviewFramebufferId,
-                    viewportWidth = previewWidth,
-                    viewportHeight = previewHeight,
-                    rawExposureCompensation = 0f,
-                    colorCorrectionMatrix = colorCorrectionMatrix,
-                    cameraWhite = cameraWhite,
-                    hueSatMap = dcpRenderPlan?.hueSatMap,
-                    applyDngBaselineExposure = false,
-                    clampProfileRgb = clampProfileRgb,
-                    hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
-                    hncsCameraDomainGains = hncsCameraDomainGains,
-                    label = "AdobeExposurePreviewLinearPass"
-                )
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                GLES31.glMemoryBarrier(
-                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
-                )
-            }
-            setupCombinedFramebuffer(previewWidth, previewHeight)
-            val previewBounds = scaleExposurePreviewBounds(
-                bounds = outputBounds,
-                sourceWidth = metadata.width,
-                sourceHeight = metadata.height,
-                targetWidth = previewWidth,
-                targetHeight = previewHeight,
-                outputRotation = outputRotation
+            val width = RawSceneExposureMath.INPUT_WIDTH
+            val height = RawSceneExposureMath.INPUT_HEIGHT
+            setupLinearExposurePreviewFramebuffer(width, height)
+            val normalizedBounds = floatArrayOf(
+                outputSourceBounds.left.toFloat() / metadata.width.toFloat(),
+                outputSourceBounds.top.toFloat() / metadata.height.toFloat(),
+                outputSourceBounds.right.toFloat() / metadata.width.toFloat(),
+                outputSourceBounds.bottom.toFloat() / metadata.height.toFloat(),
             )
-            setupSrgbExposurePreviewFramebuffer(
-                request.width.coerceAtLeast(1),
-                request.height.coerceAtLeast(1)
+            val areaSampleFootprint = floatArrayOf(
+                (normalizedBounds[2] - normalizedBounds[0]) / width.toFloat(),
+                (normalizedBounds[3] - normalizedBounds[1]) / height.toFloat(),
             )
-            val pixelCount = request.width.coerceAtLeast(1) * request.height.coerceAtLeast(1)
-            val readbackBuffer = LargeDirectBuffer.allocate(
-                pixelCount.toLong() * 4L,
-                "RAW exposure preview readback"
-            ) ?: return null
-            val sourceBaselineEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
-            PLog.i(
-                TAG,
-                "RAW_VIEWFINDER_BASELINE stage=METERING_SOURCE " +
-                    "source=${if (exportedStackTextureIds.contains(sourceTextureId)) {
-                        "GPU_STACK_TEXTURE"
-                    } else {
-                        "WRITER_INPUT_BUFFER"
-                    }} " +
-                    "layout=${if (samplesPerPixel >= 3) "LINEAR_RAW_RGB" else "CFA_RAW"} " +
-                    "samplesPerPixel=$samplesPerPixel size=${metadata.width}x${metadata.height} " +
-                    "sourceBaselineEv=$sourceBaselineEv " +
-                    "profileBaselineExposureOffsetEv=$profileBaselineExposureOffsetEv " +
-                    "defaultBlackRender=${resolveProfileDefaultBlackRender(
-                        metadata = metadata,
-                        dcpRenderPlan = dcpRenderPlan,
-                        applyDngBaselineExposure = applyProfileDngBaselineExposure,
-                        useRamp = useProfileExposureRamp,
-                    )} " +
-                    "candidateDomain=${if (useAdobeSdkExposure) "ADOBE_DNG_SDK" else "LINEAR_GAIN"}"
+            val cameraToLinearSrgb = multiplyMatrix3x3(
+                profileToLinearSrgbTransform,
+                colorCorrectionMatrix,
             )
-            try {
-                request.solve { exposureEv ->
-                    val clampedExposureEv = exposureEv.coerceIn(
-                        MeteringSystem.RAW_EXPOSURE_MIN_EV,
-                        MeteringSystem.RAW_EXPOSURE_MAX_EV,
-                    )
-                    PLog.d(
-                        TAG,
-                        "RAW viewfinder candidate: domain=" +
-                            "${if (useAdobeSdkExposure) "ADOBE_DNG_SDK" else "LINEAR_GAIN"} " +
-                            "sourceBaselineEv=$sourceBaselineEv " +
-                            "offsetEv=$clampedExposureEv " +
-                            "effectiveBaselineEv=${sourceBaselineEv + clampedExposureEv} " +
-                            "totalProfileExposureEv=" +
-                            "${sourceBaselineEv + profileBaselineExposureOffsetEv + clampedExposureEv}"
-                    )
-                    if (!useAdobeSdkExposure) {
-                        renderLinearRcdPass(
-                            metadata = metadata,
-                            sourceTextureId = sourceTextureId,
-                            targetFramebufferId = linearExposurePreviewFramebufferId,
-                            viewportWidth = previewWidth,
-                            viewportHeight = previewHeight,
-                            rawExposureCompensation = clampedExposureEv,
-                            colorCorrectionMatrix = colorCorrectionMatrix,
-                            cameraWhite = cameraWhite,
-                            hueSatMap = dcpRenderPlan?.hueSatMap,
-                            applyDngBaselineExposure = applyLinearDngBaselineExposure,
-                            clampProfileRgb = clampProfileRgb,
-                            hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
-                            hncsCameraDomainGains = hncsCameraDomainGains,
-                            label = "LinearExposurePreviewPass"
-                        )
-                        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                        GLES31.glMemoryBarrier(
-                            GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
-                        )
-                    }
-                    renderToneMappedExposurePreviewFrame(
-                        metadata = metadata,
-                        linearTextureId = linearExposurePreviewTextureId,
-                        width = previewWidth,
-                        height = previewHeight,
-                        exposureEv = if (useAdobeSdkExposure) clampedExposureEv else 0f,
-                        dcpRenderPlan = dcpRenderPlan,
-                        spectralFilmLut = spectralFilmLut,
-                        hncsRenderPlan = hncsRenderPlan,
-                        colorEngine = colorEngine,
-                        outputWorkingColorSpace = outputWorkingColorSpace,
-                        profileToEngineTransform = profileToEngineTransform,
-                        rawToneMappingParameters = rawToneMappingParameters,
-                        rawBlacksAdjustment = rawBlackPointCorrection,
-                        rawWhitesAdjustment = rawWhitePointCorrection,
-                        useProfileExposureRamp = useProfileExposureRamp,
-                        applyProfileDcpBaselineExposureOffset = applyProfileDcpBaselineExposureOffset,
-                        applyProfileDngBaselineExposure =
-                            useAdobeSdkExposure && applyProfileDngBaselineExposure,
-                        applyProfileGainTableMap = applyProfileGainTableMap,
-                        readbackBounds = previewBounds,
-                        readbackWidth = request.width.coerceAtLeast(1),
-                        readbackHeight = request.height.coerceAtLeast(1),
-                        outputRotation = outputRotation,
-                        readbackBuffer = readbackBuffer,
-                        stackCompletionTimeline = stackCompletionTimeline,
-                    )
-                }
-            } finally {
-                LargeDirectBuffer.free(readbackBuffer)
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to render RAW exposure preview", e)
+            renderLinearRcdPass(
+                metadata = metadata,
+                sourceTextureId = sourceTextureId,
+                targetFramebufferId = linearExposurePreviewFramebufferId,
+                viewportWidth = width,
+                viewportHeight = height,
+                rawExposureCompensation = 0f,
+                colorCorrectionMatrix = cameraToLinearSrgb,
+                cameraWhite = cameraWhite,
+                hueSatMap = null,
+                applyDngBaselineExposure = false,
+                clampProfileRgb = false,
+                hueSatMapSupportsOverrange = false,
+                textureBounds = normalizedBounds,
+                areaSampleFootprint = areaSampleFootprint,
+                textureRotation = outputRotation,
+                label = "RawSceneExposureLinearPass",
+            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES31.glMemoryBarrier(
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+            )
+            readSceneExposureFrame(
+                width = width,
+                height = height,
+                stackCompletionTimeline = stackCompletionTimeline,
+            )?.let(request::solve)
+        } catch (error: Throwable) {
+            PLog.e(TAG, "Failed to prepare RAW scene exposure input", error)
             null
+        }
+    }
+
+    private fun readSceneExposureFrame(
+        width: Int,
+        height: Int,
+        stackCompletionTimeline: GpuStackCompletionTimeline?,
+    ): RawSceneLinearFrame? {
+        val pixelCount = width * height
+        val byteCount = pixelCount * 4 * Short.SIZE_BYTES
+        val readback = LargeDirectBuffer.allocate(
+            byteCount.toLong(),
+            "RAW scene exposure readback",
+        ) ?: return null
+        return try {
+            readback.clear()
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, linearExposurePreviewFramebufferId)
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+            val upstreamTiming = stackCompletionTimeline?.awaitPending(
+                syncPoint = "RAW_SCENE_EXPOSURE",
+                checkGlError = ::checkGlError,
+            )
+            val queueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+                label = "RAW scene exposure ${width}x$height",
+                checkGlError = ::checkGlError,
+            )
+            val transferStartNs = System.nanoTime()
+            GLES30.glReadPixels(
+                0,
+                0,
+                width,
+                height,
+                GLES30.GL_RGBA,
+                GLES30.GL_HALF_FLOAT,
+                readback,
+            )
+            val transferMs = (System.nanoTime() - transferStartNs) / 1_000_000L
+            checkGlError("RAW scene exposure readback")
+            readback.position(0)
+            val half = readback.order(ByteOrder.nativeOrder()).asShortBuffer()
+            val rgb = FloatArray(pixelCount * 3)
+            for (pixel in 0 until pixelCount) {
+                val sourceOffset = pixel * 4
+                val targetOffset = pixel * 3
+                rgb[targetOffset] = Half.toFloat(half.get(sourceOffset))
+                rgb[targetOffset + 1] = Half.toFloat(half.get(sourceOffset + 1))
+                rgb[targetOffset + 2] = Half.toFloat(half.get(sourceOffset + 2))
+            }
+            PLog.d(
+                TAG,
+                "RAW scene exposure timing size=${width}x$height " +
+                    "upstreamStackGpuWait=${upstreamTiming?.totalWaitMs ?: 0L}ms " +
+                    "gpuQueueWait=${queueWaitMs}ms pixelTransfer=${transferMs}ms",
+            )
+            RawSceneLinearFrame(width = width, height = height, rgb = rgb)
+        } finally {
+            LargeDirectBuffer.free(readback)
         }
     }
 
@@ -7930,199 +7783,6 @@ class RawDemosaicProcessor {
                 height = longEdge
             )
         }
-    }
-
-    private fun scaleExposurePreviewBounds(
-        bounds: Rect,
-        sourceWidth: Int,
-        sourceHeight: Int,
-        targetWidth: Int,
-        targetHeight: Int,
-        outputRotation: Int
-    ): Rect {
-        if (sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) {
-            return Rect(0, 0, targetWidth.coerceAtLeast(1), targetHeight.coerceAtLeast(1))
-        }
-        if (outputRotation == 90 || outputRotation == 270) {
-            val scaleRotatedX = targetHeight.toFloat() / sourceHeight.toFloat()
-            val scaleRotatedY = targetWidth.toFloat() / sourceWidth.toFloat()
-            val left = floor(bounds.left * scaleRotatedX).toInt().coerceIn(0, targetHeight - 1)
-            val top = floor(bounds.top * scaleRotatedY).toInt().coerceIn(0, targetWidth - 1)
-            val right = ceil(bounds.right * scaleRotatedX).toInt().coerceIn(left + 1, targetHeight)
-            val bottom = ceil(bounds.bottom * scaleRotatedY).toInt().coerceIn(top + 1, targetWidth)
-            return Rect(left, top, right, bottom)
-        }
-        val scaleX = targetWidth.toFloat() / sourceWidth.toFloat()
-        val scaleY = targetHeight.toFloat() / sourceHeight.toFloat()
-        val left = floor(bounds.left * scaleX).toInt().coerceIn(0, targetWidth - 1)
-        val top = floor(bounds.top * scaleY).toInt().coerceIn(0, targetHeight - 1)
-        val right = ceil(bounds.right * scaleX).toInt().coerceIn(left + 1, targetWidth)
-        val bottom = ceil(bounds.bottom * scaleY).toInt().coerceIn(top + 1, targetHeight)
-        return Rect(left, top, right, bottom)
-    }
-
-    private fun renderToneMappedExposurePreviewFrame(
-        metadata: RawMetadata,
-        linearTextureId: Int,
-        width: Int,
-        height: Int,
-        exposureEv: Float,
-        dcpRenderPlan: DcpRenderPlan?,
-        spectralFilmLut: SpectralFilmLut?,
-        hncsRenderPlan: HncsRenderPlan?,
-        colorEngine: RawRenderingEngine,
-        outputWorkingColorSpace: ColorSpace,
-        profileToEngineTransform: FloatArray,
-        rawToneMappingParameters: RawToneMappingParameters,
-        rawBlacksAdjustment: Float,
-        rawWhitesAdjustment: Float,
-        useProfileExposureRamp: Boolean,
-        applyProfileDcpBaselineExposureOffset: Boolean,
-        applyProfileDngBaselineExposure: Boolean,
-        applyProfileGainTableMap: Boolean,
-        readbackBounds: Rect,
-        readbackWidth: Int,
-        readbackHeight: Int,
-        outputRotation: Int,
-        readbackBuffer: ByteBuffer,
-        stackCompletionTimeline: GpuStackCompletionTimeline?,
-    ): RawExposurePreviewFrame? {
-        val clampedExposureEv = exposureEv.coerceIn(-4f, 4f)
-        val profileExposureUniforms = computeProfileExposureUniforms(
-            metadata = metadata,
-            profileExposureCompensation = clampedExposureEv + colorEngine.defaultExposureCompensationEv,
-            dcpRenderPlan = dcpRenderPlan,
-            applyDcpBaselineExposureOffset = applyProfileDcpBaselineExposureOffset,
-            applyDngBaselineExposure = applyProfileDngBaselineExposure,
-            useRamp = useProfileExposureRamp,
-        )
-        val rendered = renderCombinedPass(
-            metadata = metadata,
-            inputTextureId = linearTextureId,
-            dcpRenderPlan = dcpRenderPlan,
-            applyDcpHueSatMap = false,
-            spectralFilmLut = spectralFilmLut,
-            hncsRenderPlan = hncsRenderPlan,
-            colorEngine = colorEngine,
-            outputWorkingColorSpace = outputWorkingColorSpace,
-            profileToEngineTransform = profileToEngineTransform,
-            profileExposureUniforms = profileExposureUniforms,
-            shadowsHighlightsParams = ShadowsHighlightsParams.NEUTRAL,
-            rawBlacksAdjustment = rawBlacksAdjustment,
-            rawWhitesAdjustment = rawWhitesAdjustment,
-            rawToneMappingParameters = rawToneMappingParameters,
-            applyProfileGainTableMap = applyProfileGainTableMap,
-            viewportWidth = width,
-            viewportHeight = height
-        )
-        if (!rendered) {
-            PLog.e(TAG, "RAW exposure preview render failed for ev=$clampedExposureEv")
-            return null
-        }
-        if (!renderSrgbExposurePreviewPass(
-                sourceTextureId = combinedTextureId,
-                sourceWidth = width,
-                sourceHeight = height,
-                bounds = readbackBounds,
-                targetWidth = readbackWidth,
-                targetHeight = readbackHeight,
-                rotation = outputRotation
-            )
-        ) {
-            return null
-        }
-        return readExposurePreviewFrame(
-            width = readbackWidth,
-            height = readbackHeight,
-            pixelBuffer = readbackBuffer,
-            stackCompletionTimeline = stackCompletionTimeline,
-        )
-    }
-
-    private fun renderSrgbExposurePreviewPass(
-        sourceTextureId: Int,
-        sourceWidth: Int,
-        sourceHeight: Int,
-        bounds: Rect,
-        targetWidth: Int,
-        targetHeight: Int,
-        rotation: Int
-    ): Boolean {
-        if (srgbExposurePreviewFramebufferId == 0) return false
-        return outputPass.render(
-            RawOutputPass.Input(
-                textureId = sourceTextureId,
-                sourceWidth = sourceWidth,
-                sourceHeight = sourceHeight,
-                rotation = rotation,
-                bounds = bounds,
-                targetFramebufferId = srgbExposurePreviewFramebufferId,
-                targetTextureId = srgbExposurePreviewTextureId,
-                targetWidth = targetWidth,
-                targetHeight = targetHeight,
-            ),
-        ) != null
-    }
-
-    private fun readExposurePreviewFrame(
-        width: Int,
-        height: Int,
-        pixelBuffer: ByteBuffer,
-        stackCompletionTimeline: GpuStackCompletionTimeline?,
-    ): RawExposurePreviewFrame? {
-        if (width <= 0 || height <= 0) {
-            return null
-        }
-        val pixelCount = width * height
-        pixelBuffer.clear()
-        pixelBuffer.limit(pixelCount * 4)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, srgbExposurePreviewFramebufferId)
-        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
-        val upstreamStackTiming = stackCompletionTimeline?.awaitPending(
-            syncPoint = "RAW_EXPOSURE_PREVIEW",
-            checkGlError = ::checkGlError,
-        )
-        val previewGpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
-            label = "RAW exposure preview ${width}x$height",
-            checkGlError = ::checkGlError,
-        )
-        val pixelTransferStartNs = System.nanoTime()
-        GLES30.glReadPixels(
-            0,
-            0,
-            width,
-            height,
-            GLES30.GL_RGBA,
-            GLES30.GL_UNSIGNED_BYTE,
-            pixelBuffer
-        )
-        val pixelTransferMs = (System.nanoTime() - pixelTransferStartNs) / 1_000_000L
-        checkGlError("RAW exposure preview readback")
-        pixelBuffer.position(0)
-
-        val cpuPackStartNs = System.nanoTime()
-        val argbPixels = IntArray(pixelCount)
-        for (i in 0 until pixelCount) {
-            val r = pixelBuffer.get().toInt() and 0xff
-            val g = pixelBuffer.get().toInt() and 0xff
-            val b = pixelBuffer.get().toInt() and 0xff
-            val a = pixelBuffer.get().toInt() and 0xff
-            argbPixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
-        }
-        val cpuPackMs = (System.nanoTime() - cpuPackStartNs) / 1_000_000L
-        PLog.d(
-            TAG,
-            "RAW exposure preview timing size=${width}x$height " +
-                "upstreamStackGpuWait=${upstreamStackTiming?.totalWaitMs ?: 0L}ms " +
-                "previewGpuQueueWait=${previewGpuQueueWaitMs}ms " +
-                "pixelTransfer=${pixelTransferMs}ms " +
-                "cpuPack=${cpuPackMs}ms",
-        )
-        return RawExposurePreviewFrame(
-            width = width,
-            height = height,
-            argbPixels = argbPixels,
-        )
     }
 
     private fun renderOutputPass(
@@ -8415,16 +8075,6 @@ class RawDemosaicProcessor {
         if (linearExposurePreviewFramebufferId != 0) GLES30.glDeleteFramebuffers(
             1,
             intArrayOf(linearExposurePreviewFramebufferId),
-            0
-        )
-        if (srgbExposurePreviewTextureId != 0) GLES30.glDeleteTextures(
-            1,
-            intArrayOf(srgbExposurePreviewTextureId),
-            0
-        )
-        if (srgbExposurePreviewFramebufferId != 0) GLES30.glDeleteFramebuffers(
-            1,
-            intArrayOf(srgbExposurePreviewFramebufferId),
             0
         )
         if (hdrReferenceTextureId != 0) GLES30.glDeleteTextures(

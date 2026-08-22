@@ -17,3 +17,5 @@ app/release.jks
 /third_party
 __pycache__
 /scripts/research
+.codex-tmp
+.tmp

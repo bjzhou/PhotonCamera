@@ -191,7 +191,7 @@ abstract class GalleryDatabase : RoomDatabase() {
                     """
                     UPDATE gallery_media
                     SET rawAutoExposureMode = CASE
-                        WHEN rawAutoExposure = 1 THEN 'VIEWFINDER_MATCH'
+                        WHEN rawAutoExposure = 1 THEN 'DYNAMIC_SCENE_ESTIMATION'
                         WHEN rawAutoExposure = 0 THEN 'OFF'
                         ELSE NULL
                     END

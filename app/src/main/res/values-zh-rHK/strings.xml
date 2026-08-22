@@ -890,8 +890,6 @@
     <string name="settings_spectral_film_y_density_gain">黃色密度</string>
     <string name="settings_raw_auto_exposure">自動曝光</string>
     <string name="settings_raw_auto_exposure_description">顯影時對 RAW 線性資料自動測光并應用曝光補償。</string>
-    <string name="settings_raw_auto_exposure_metering_priority">自動曝光平衡度</string>
-    <string name="settings_raw_auto_exposure_metering_priority_description">用於調整 RAW 自動曝光的明暗觀感平衡。數值越大越偏向亮部觀感，數值越小越偏向暗部觀感。</string>
     <string name="settings_raw_min_shutter_speed">最低快門速度</string>
     <string name="settings_raw_min_shutter_speed_description">僅對 RAW 拍攝生效，拍攝時盡量讓快門符合該限制，并自動匹配 ISO。</string>
     <string name="settings_raw_dro">動態范圍優化</string>
