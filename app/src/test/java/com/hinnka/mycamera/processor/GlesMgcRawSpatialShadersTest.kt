@@ -202,19 +202,37 @@ class GlesMgcRawSpatialShadersTest {
     }
 
     @Test
-    fun bayerAlignmentContinuouslyResamplesFinestGridBeforeMergeGate() {
-        val shader = GlesMgcRawSpatialShaders.convertBayerAlignment
+    fun spatialRejectionPipelineKeepsMergeAcceptanceWeightSemantics() {
+        val pixelDifferenceDownsample =
+            GlesMgcRawSpatialShaders.rejectionPixelDifferenceDownsample
+        val dilate = GlesMgcRawSpatialShaders.dilateRejection
+        val filter = GlesMgcRawSpatialShaders.rejectionFilter
+        val postprocess = GlesMgcRawSpatialShaders.rejectionPostprocess
 
-        assertTrue(shader.contains("vec2(outputTile) + vec2(0.5)"))
-        assertTrue(shader.contains("uTargetTileStride"))
-        assertTrue(shader.contains("vec2 flow = resampledFlow(sourceGrid)"))
-        assertTrue(shader.contains("mix(flow00, flow10, fraction.x)"))
-        assertFalse(shader.contains("uInterpolationFlowTolerance"))
-        assertFalse(shader.contains("cancelInterpolation"))
-        assertFalse(shader.contains("uAlignmentToBayerQuads"))
+        assertTrue(pixelDifferenceDownsample.contains("ivec2(gl_FragCoord.xy) * 2"))
+        assertTrue(pixelDifferenceDownsample.contains("source + ivec2(1, 1)"))
+        assertTrue(dilate.contains("oWeight = 1.0 - rejection"))
+        assertTrue(filter.contains("max(deltaWeight, centerWeight)"))
+        assertFalse(filter.contains("min(deltaWeight, centerWeight)"))
+        assertTrue(postprocess.contains("uniform sampler2D uOriginalWeight"))
+        assertTrue(postprocess.contains("uniform sampler2D uFilteredWeight"))
+        assertTrue(postprocess.contains("if (filtered > original)"))
+    }
 
-        // The discontinuity gate remains in the actual merge-domain consumer, where its
-        // 8-Bayer-quad threshold cannot quantize flow at the 32-quad LK cadence.
+    @Test
+    fun finalAlignmentUpsampleSelectsWholeCandidateBeforeMergeInterpolation() {
+        val shader = GlesMgcRawSpatialShaders.upsampleAlignment
+
+        assertTrue(shader.contains("uniform int uTargetTileSize"))
+        assertTrue(shader.contains("float candidateCost"))
+        assertTrue(shader.contains("vec2 bestFlow = candidateFlow(nearest)"))
+        assertTrue(shader.contains("vec2 flowY = candidateFlow(nextY)"))
+        assertTrue(shader.contains("vec2 flowX = candidateFlow(nextX)"))
+        assertFalse(shader.contains("mix(flow00, flow10"))
+
+        // MergeBayer consumes the selected 8-quad grid and performs its own guarded
+        // interpolation; ConvertAlignment independently expands the same grid for rejection.
         assertTrue(GlesMgcRawSpatialShaders.mergeBayer.contains("cancelInterpolation"))
+        assertTrue(GlesMgcRawSpatialShaders.convertAlignment.contains("cancelInterpolation"))
     }
 }

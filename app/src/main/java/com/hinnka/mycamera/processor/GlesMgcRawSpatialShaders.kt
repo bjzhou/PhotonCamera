@@ -547,6 +547,35 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
+     * Rejection::Downsample2x. GenerateRejectionTextureCpu applies this to pixel-difference
+     * immediately after DilateMask has moved the rejection result onto the merge-weight grid.
+     */
+    val rejectionPixelDifferenceDownsample = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uInput;
+        uniform ivec2 uInputSize;
+        out float oPixelDifference;
+        float valueAt(ivec2 p) {
+            return texelFetch(
+                uInput,
+                clamp(p, ivec2(0), uInputSize - ivec2(1)),
+                0
+            ).r;
+        }
+        void main() {
+            ivec2 source = ivec2(gl_FragCoord.xy) * 2;
+            oPixelDifference = 0.25 * (
+                valueAt(source) +
+                valueAt(source + ivec2(1, 0)) +
+                valueAt(source + ivec2(0, 1)) +
+                valueAt(source + ivec2(1, 1))
+            );
+        }
+    """.trimIndent()
+
+    /**
      * ClippedGaussianBlurHalide (0x387cd28), recovered from the AOT workers and verified against
      * the original function with constant, impulse, step and asymmetric synthetic inputs.
      *
@@ -611,7 +640,8 @@ internal object GlesMgcRawSpatialShaders {
 
     /**
      * Read4xDownSample and the input preparation for
-     * Downsample4xAndFilterRejectionMap from the embedded rejection.cl.
+     * Downsample4xAndFilterRejectionMap from the embedded rejection.cl. These inputs are already
+     * on DilateMask's RAW/4 merge-weight grid; this pass produces the RAW/16 filter grid.
      */
     val rejectionFilterDownsample = """
         #version 300 es
@@ -619,7 +649,7 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uBaseLuma;
-        uniform sampler2D uRejection;
+        uniform sampler2D uWeight;
         uniform ivec2 uInputSize;
         layout(location = 0) out float oLuma;
         layout(location = 1) out float oRejection;
@@ -648,9 +678,9 @@ internal object GlesMgcRawSpatialShaders {
             );
         }
 
-        float rejectionLinearAt(vec2 coordinate) {
+        float weightLinearAt(vec2 coordinate) {
             return texture(
-                uRejection,
+                uWeight,
                 coordinate / vec2(uInputSize)
             ).r;
         }
@@ -663,17 +693,17 @@ internal object GlesMgcRawSpatialShaders {
                 vec2(uInputSize) - vec2(2.0)
             );
             float luma = 0.0;
-            float rejection = 0.0;
+            float weight = 0.0;
             for (int y = -1; y <= 1; y += 2) {
                 for (int x = -1; x <= 1; x += 2) {
                     vec2 coordinate = center + vec2(x, y);
                     luma += lumaLinearAt(coordinate);
-                    rejection += rejectionLinearAt(coordinate);
+                    weight += weightLinearAt(coordinate);
                 }
             }
             // The source reads CL_SNORM_INT16 and multiplies by 32767 / 16383.
             oLuma = 0.25 * luma / 16383.0;
-            oRejection = 0.25 * rejection;
+            oRejection = 0.25 * weight;
         }
     """.trimIndent()
 
@@ -723,7 +753,7 @@ internal object GlesMgcRawSpatialShaders {
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
             float centerLuma = valueAt(uLuma, p);
-            float centerRejection = valueAt(uRejection, p);
+            float centerWeight = valueAt(uRejection, p);
             int spatialRadius = min(uRadius, 3 * int(uSigmaSpatial));
             float weightedRejection = 0.0;
             float weightSum = 0.0;
@@ -734,9 +764,9 @@ internal object GlesMgcRawSpatialShaders {
                     if (abs(dx) > spatialRadius) continue;
                     ivec2 q = p + ivec2(dx, dy);
                     float deltaLuma = valueAt(uLuma, q);
-                    float deltaRejection = valueAt(uRejection, q);
-                    float sigma = centerRejection <
-                            deltaRejection - 1.0 / 255.0
+                    float deltaWeight = valueAt(uRejection, q);
+                    float sigma = centerWeight <
+                            deltaWeight - 1.0 / 255.0
                         ? uColorSigma
                         : uColorSigma * (
                             uClipRejection != 0 ? uColorSigmaBoost : 1.0
@@ -746,16 +776,19 @@ internal object GlesMgcRawSpatialShaders {
                         sigma
                     );
                     weight *= spatialWeight(float(dx)) * spatialWeightY;
+                    // The buffer contains acceptance weight after DilateMask has inverted the
+                    // rejection map. clip_rejection therefore prevents filtering from creating
+                    // additional rejection: it may raise a weight, but may not lower its center.
                     float value = uClipRejection != 0
-                        ? min(deltaRejection, centerRejection)
-                        : deltaRejection;
+                        ? max(deltaWeight, centerWeight)
+                        : deltaWeight;
                     weightedRejection += weight * value;
                     weightSum += weight;
                 }
             }
             oFilteredRejection = weightSum > 0.0
                 ? weightedRejection / weightSum
-                : centerRejection;
+                : centerWeight;
         }
     """.trimIndent()
 
@@ -767,8 +800,8 @@ internal object GlesMgcRawSpatialShaders {
         #version 300 es
         precision highp float;
         precision highp int;
-        uniform sampler2D uOriginalRejection;
-        uniform sampler2D uFilteredRejection;
+        uniform sampler2D uOriginalWeight;
+        uniform sampler2D uFilteredWeight;
         uniform sampler2D uPixelDifference;
         uniform ivec2 uSize;
         uniform float uPixelDifferenceThreshold;
@@ -776,10 +809,10 @@ internal object GlesMgcRawSpatialShaders {
         out float oRejection;
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
-            float original = texelFetch(uOriginalRejection, p, 0).r;
+            float original = texelFetch(uOriginalWeight, p, 0).r;
             float pixelDifference = texelFetch(uPixelDifference, p, 0).r;
             vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uSize);
-            float filtered = texture(uFilteredRejection, uv).r;
+            float filtered = texture(uFilteredWeight, uv).r;
             float postprocessed = filtered;
             if (filtered > original) {
                 float weight = pixelDifference < uPixelDifferenceThreshold
@@ -1699,9 +1732,8 @@ internal object GlesMgcRawSpatialShaders {
             ivec2 phase = outputPixel & ivec2(1);
             int phaseChannel = phaseIndex(phase);
             ivec2 outputQuad = outputPixel / 2;
-            // MergeBayerRaw16 addresses the converted alignment as one texel per
+            // MergeBayerRaw16 addresses the final AlignAlt output as one texel per
             // 8x8 Bayer-quad tile. X/Y are displacements in Bayer-quad units.
-            // There is no normalized-UV conversion or filtering at this stage.
             ivec2 tileId = outputQuad / 8;
             ivec2 offsetWithinTile = outputQuad - tileId * 8;
             ivec2 alignmentSize = max(textureSize(uAlignment, 0), ivec2(1));
@@ -2731,81 +2763,6 @@ internal object GlesMgcRawSpatialShaders {
             // min/max flow extent. X and Y use their own output dimensions.
             float localFlowVariation = length(normalizedRange);
             oFlow = vec4(uvFlow, localFlowVariation, 0.0);
-        }
-    """.trimIndent()
-
-    /**
-     * Resamples the finest LK grid onto MergeBayerRaw16's one-sample-per-8x8-Bayer-quad
-     * alignment contract.
-     *
-     * This transport must stay continuous. Applying GetInterpolatedFlow's discontinuity gate to
-     * the sparse 32-quad LK grid turns every rejected interpolation into a 64-RAW-pixel constant
-     * flow block. MergeBayer/Spatial RGB apply that gate once, after this pass, on their native
-     * 8-quad grid; rejection is then derived from that exact merge-domain flow.
-     */
-    val convertBayerAlignment = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        uniform sampler2D uAlignment;
-        uniform ivec2 uGridSize;
-        uniform float uTileStride;
-        uniform float uAlignmentScale;
-        uniform float uGridMin;
-        uniform float uTargetTileStride;
-        uniform vec2 uFlowNormalizationSize;
-        out vec4 oAlignment;
-
-        vec2 flowAt(ivec2 p) {
-            return texelFetch(
-                uAlignment,
-                clamp(p, ivec2(0), uGridSize - ivec2(1)),
-                0
-            ).xy * uAlignmentScale;
-        }
-        vec2 resampledFlow(vec2 sourceGrid) {
-            ivec2 p00 = ivec2(floor(sourceGrid));
-            vec2 fraction = fract(sourceGrid);
-            vec2 flow00 = flowAt(p00);
-            vec2 flow10 = flowAt(p00 + ivec2(1, 0));
-            vec2 flow01 = flowAt(p00 + ivec2(0, 1));
-            vec2 flow11 = flowAt(p00 + ivec2(1, 1));
-            return mix(
-                mix(flow00, flow10, fraction.x),
-                mix(flow01, flow11, fraction.x),
-                fraction.y
-            );
-        }
-        void main() {
-            ivec2 outputTile = ivec2(gl_FragCoord.xy);
-            // MergeBayer interprets alignment texels as samples at 8x8 Bayer-quad
-            // tile centres. The half-stride offset is observable at the first LK
-            // boundary and must not be replaced by a tile-origin lookup.
-            ivec2 alignmentPixel = ivec2(floor(
-                (vec2(outputTile) + vec2(0.5)) * uTargetTileStride
-            ));
-            // Local texel zero is logical LK tile uGridMin and its sample lives at
-            // (uGridMin + 0.5) * uTileStride in the Bayer-quad image domain.
-            vec2 sourceGrid =
-                vec2(alignmentPixel) / uTileStride -
-                vec2(uGridMin + 0.5);
-            vec2 flow = resampledFlow(sourceGrid);
-            ivec2 tile = ivec2(floor(sourceGrid + vec2(0.5)));
-
-            vec2 minimumFlow = vec2(1.0e20);
-            vec2 maximumFlow = vec2(-1.0e20);
-            for (int y = -1; y <= 1; ++y) {
-                for (int x = -1; x <= 1; ++x) {
-                    vec2 candidate = flowAt(tile + ivec2(x, y));
-                    minimumFlow = min(minimumFlow, candidate);
-                    maximumFlow = max(maximumFlow, candidate);
-                }
-            }
-            float localFlowVariation = length(
-                (maximumFlow - minimumFlow) /
-                max(uFlowNormalizationSize, vec2(1.0))
-            );
-            oAlignment = vec4(flow, localFlowVariation, 0.0);
         }
     """.trimIndent()
 

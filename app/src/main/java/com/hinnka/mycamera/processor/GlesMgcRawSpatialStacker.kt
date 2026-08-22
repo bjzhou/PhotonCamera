@@ -352,10 +352,11 @@ internal class GlesMgcRawSpatialStacker(
     private val bayerAlignmentHeight = ceilDiv(height, MERGE_BAYER_RAW_TILE_SIZE)
     private val rejectionWidth = ceilDiv(width, 2)
     private val rejectionHeight = ceilDiv(height, 2)
-    private val mergeWeightWidth = ceilDiv(rejectionWidth, 2)
-    private val mergeWeightHeight = ceilDiv(rejectionHeight, 2)
-    private val rejectionFilterWidth = ceilDiv(rejectionWidth, REJECTION_FILTER_DOWNSAMPLE)
-    private val rejectionFilterHeight = ceilDiv(rejectionHeight, REJECTION_FILTER_DOWNSAMPLE)
+    // Rejection::DilateMask and Rejection::Downsample2x require floor(input / 2).
+    private val mergeWeightWidth = rejectionWidth / 2
+    private val mergeWeightHeight = rejectionHeight / 2
+    private val rejectionFilterWidth = ceilDiv(mergeWeightWidth, REJECTION_FILTER_DOWNSAMPLE)
+    private val rejectionFilterHeight = ceilDiv(mergeWeightHeight, REJECTION_FILTER_DOWNSAMPLE)
     private val normalizedOutputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
     private val outputWidth = if (outputMode == MgcSpatialOutputMode.RGB) {
         MultiFrameConfig.scaledRawOutputDimension(width, normalizedOutputScale)
@@ -437,11 +438,11 @@ internal class GlesMgcRawSpatialStacker(
     private var upsampleAlignmentProgram = 0
     private var blockLucasKanadeProgram = 0
     private var convertAlignmentProgram = 0
-    private var convertBayerAlignmentProgram = 0
     private var strengthAlignmentProgram = 0
     private var strengthRejectionProgram = 0
     private var unblockerProgram = 0
     private var rejectionProgram = 0
+    private var rejectionPixelDifferenceDownsampleProgram = 0
     private var clippedGaussianHorizontalProgram = 0
     private var clippedGaussianVerticalProgram = 0
     private var rejectionFilterDownsampleProgram = 0
@@ -1011,20 +1012,14 @@ internal class GlesMgcRawSpatialStacker(
                     )
                     bentoAlignSubmitNs = System.nanoTime() - alignmentStartNs
                     val postAlignStartNs = System.nanoTime()
-                    val bayerAlignment = createTexture(
-                        bayerAlignmentWidth,
-                        bayerAlignmentHeight,
-                        GLES30.GL_RGBA32F,
-                        GLES30.GL_NEAREST,
-                    )
-                    renderBayerAlignment(alignment, bayerAlignment)
+                    val bayerAlignment = alignment.texture
                     val flow = createTexture(
                         rejectionWidth,
                         rejectionHeight,
                         GLES30.GL_RGBA16F,
                         GLES30.GL_LINEAR,
                     )
-                    renderMergeDomainFlow(bayerAlignment, flow)
+                    renderConvertedAlignment(alignment, flow)
                     val tilingMask = renderFindBlockTiles(
                         baseRaw = referenceRaw,
                         ultrashortRaw = bentoRaw,
@@ -3100,10 +3095,6 @@ internal class GlesMgcRawSpatialStacker(
             GlesMgcRawSpatialShaders.convertAlignment,
             "mgc_convert_alignment",
         )
-        convertBayerAlignmentProgram = linkProgram(
-            GlesMgcRawSpatialShaders.convertBayerAlignment,
-            "mgc_convert_bayer_alignment",
-        )
         strengthAlignmentProgram = linkProgram(
             GlesMgcRawSpatialShaders.strengthAlignment,
             "mgc_strength_alignment",
@@ -3116,6 +3107,10 @@ internal class GlesMgcRawSpatialStacker(
         rejectionProgram = linkProgram(
             GlesMgcRawSpatialShaders.rejection,
             "mgc_spatial_rejection",
+        )
+        rejectionPixelDifferenceDownsampleProgram = linkProgram(
+            GlesMgcRawSpatialShaders.rejectionPixelDifferenceDownsample,
+            "mgc_rejection_pixel_difference_downsample",
         )
         clippedGaussianHorizontalProgram = linkProgram(
             GlesMgcRawSpatialShaders.clippedGaussianHorizontal,
@@ -3780,9 +3775,11 @@ internal class GlesMgcRawSpatialStacker(
      * The first three levels use three LK iterations; the finest uses two. The standalone
      * AlignL1 search is absent, but UpsampleAlignment still selects among three neighboring
      * coarse-flow candidates using target-level L1 residuals before every finer LK level.
-     * AlignPyramid::AlignAlt exits after the finest LK pass; its level loop does not run an
-     * additional UpsampleAlignment pass to the MergeBayer tile grid. Spatial merge transports
-     * the resulting finest-level flow with ConvertAlignmentHalide instead.
+     * AlignPyramid::AlignAlt then performs one final UpsampleAlignment pass from the 32-quad
+     * finest LK grid to Spatial MergeBayerRaw16's full 8-quad grid. The final pass evaluates
+     * 16x16 target blocks and selects a whole neighboring LK candidate by L1 residual; it is
+     * not a bilinear resample. That final output is the alignment object consumed by merge and
+     * separately converted into the dense rejection flow.
      */
     private fun alignPyramids(
         reference: List<TextureLevel>,
@@ -3850,6 +3847,34 @@ internal class GlesMgcRawSpatialStacker(
                     "LK$iterations,normalize=$normalize," +
                     "levelScale=$scale"
         }
+        val finalUpsampleMode = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
+            alignment = renderUpsampledAlignment(
+                reference = reference.first(),
+                current = current.first(),
+                initial = alignment,
+                targetGridWidth = bayerAlignmentWidth,
+                targetGridHeight = bayerAlignmentHeight,
+                targetGridMin = MERGE_ALIGNMENT_GRID_MIN,
+                targetTileStride = MERGE_BAYER_RAW_TILE_SIZE / 2,
+                targetTileSize = MERGE_BAYER_RAW_TILE_SIZE,
+            )
+            schedule +=
+                "${reference.first().width}x${reference.first().height}:" +
+                    "${MERGE_BAYER_RAW_TILE_SIZE / 2}px," +
+                    "UpsampleL1(tile=${MERGE_BAYER_RAW_TILE_SIZE})"
+            check(
+                alignment.gridWidth == bayerAlignmentWidth &&
+                    alignment.gridHeight == bayerAlignmentHeight &&
+                    alignment.tileStride == MERGE_BAYER_RAW_TILE_SIZE / 2 &&
+                    alignment.scaleToBayerQuads == 1f &&
+                    alignment.gridMin == MERGE_ALIGNMENT_GRID_MIN
+            ) {
+                "Spatial AlignAlt final output does not match MergeBayerRaw16's alignment grid"
+            }
+            "merge-grid"
+        } else {
+            "level-transitions-only"
+        }
         PLog.i(
             TAG,
                 "MGC AlignPyramid target=$ALIGN_TARGET_FINEST_DIMENSION " +
@@ -3858,7 +3883,7 @@ internal class GlesMgcRawSpatialStacker(
                 "flowGrid=${alignment.gridWidth}x${alignment.gridHeight} " +
                 "flowScale=${alignment.scaleToBayerQuads} useL1=false " +
                 "gradientProducts=cached " +
-                "upsampleL1=level-transitions-only/3-candidate " +
+                "upsampleL1=$finalUpsampleMode/3-candidate " +
                 "median=false " +
                 "runtimeOptions=256/8/64/-1/2/3/0/1/0 " +
                 "schedule=${schedule.joinToString(" -> ")}",
@@ -4142,110 +4167,6 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
-    /**
-     * Expands the exact alignment consumed by Spatial merge into the per-Bayer-quad flow domain
-     * consumed by rejection. Both paths must interpolate the same 8x8-quad alignment grid;
-     * converting the finest LK grid independently can validate a different warp at motion edges.
-     */
-    private fun renderMergeDomainFlow(bayerAlignment: Int, output: Int) {
-        GLES30.glUseProgram(convertAlignmentProgram)
-        bindTexture(convertAlignmentProgram, "uAlignment", 0, bayerAlignment)
-        uniform2i(
-            convertAlignmentProgram,
-            "uGridSize",
-            bayerAlignmentWidth,
-            bayerAlignmentHeight,
-        )
-        uniform2i(
-            convertAlignmentProgram,
-            "uOutputSize",
-            rejectionWidth,
-            rejectionHeight,
-        )
-        uniform1f(
-            convertAlignmentProgram,
-            "uTileStride",
-            (MERGE_BAYER_RAW_TILE_SIZE / 2).toFloat(),
-        )
-        uniform1f(convertAlignmentProgram, "uAlignmentScale", 1f)
-        uniform1f(convertAlignmentProgram, "uOutputToAlignmentScale", 1f)
-        uniform1f(convertAlignmentProgram, "uGridMin", 0f)
-        uniform1f(
-            convertAlignmentProgram,
-            "uInterpolationFlowTolerance",
-            SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
-        )
-        uniform2f(
-            convertAlignmentProgram,
-            "uFlowNormalizationSize",
-            rejectionWidth.toFloat(),
-            rejectionHeight.toFloat(),
-        )
-        draw(
-            convertAlignmentProgram,
-            rejectionWidth,
-            rejectionHeight,
-            intArrayOf(output),
-        )
-    }
-
-    private fun renderBayerAlignment(alignment: Alignment, output: Int) {
-        require(
-            alignment.gridWidth > 0 &&
-                alignment.gridHeight > 0 &&
-                alignment.tileStride > 0 &&
-                alignment.scaleToBayerQuads.isFinite() &&
-                alignment.scaleToBayerQuads > 0f
-        ) {
-            "MergeBayer requires a valid finest-level LK alignment"
-        }
-        GLES30.glUseProgram(convertBayerAlignmentProgram)
-        bindTexture(
-            convertBayerAlignmentProgram,
-            "uAlignment",
-            0,
-            alignment.texture,
-        )
-        uniform2i(
-            convertBayerAlignmentProgram,
-            "uGridSize",
-            alignment.gridWidth,
-            alignment.gridHeight,
-        )
-        uniform1f(
-            convertBayerAlignmentProgram,
-            "uTileStride",
-            alignment.tileStride * alignment.scaleToBayerQuads,
-        )
-        uniform1f(
-            convertBayerAlignmentProgram,
-            "uAlignmentScale",
-            alignment.scaleToBayerQuads,
-        )
-        uniform1f(
-            convertBayerAlignmentProgram,
-            "uGridMin",
-            alignment.gridMin.toFloat(),
-        )
-        uniform1f(
-            convertBayerAlignmentProgram,
-            "uTargetTileStride",
-            (MERGE_BAYER_RAW_TILE_SIZE / 2).toFloat(),
-        )
-        uniform2f(
-            convertBayerAlignmentProgram,
-            "uFlowNormalizationSize",
-            ceilDiv(width, 2).toFloat(),
-            ceilDiv(height, 2).toFloat(),
-        )
-        draw(
-            convertBayerAlignmentProgram,
-            bayerAlignmentWidth,
-            bayerAlignmentHeight,
-            intArrayOf(output),
-        )
-    }
-
     private fun renderGuide(
         rawTexture: Int,
         noiseTexture: Int,
@@ -4479,8 +4400,8 @@ internal class GlesMgcRawSpatialStacker(
         uniform2i(
             clippedGaussianHorizontalProgram,
             "uSize",
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
         )
         uniform1fv(
             clippedGaussianHorizontalProgram,
@@ -4489,8 +4410,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             clippedGaussianHorizontalProgram,
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             intArrayOf(horizontal),
         )
         GlesGpuScheduler.yieldToUiRenderer()
@@ -4500,8 +4421,8 @@ internal class GlesMgcRawSpatialStacker(
         uniform2i(
             clippedGaussianVerticalProgram,
             "uSize",
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
         )
         uniform1fv(
             clippedGaussianVerticalProgram,
@@ -4510,8 +4431,29 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             clippedGaussianVerticalProgram,
+            mergeWeightWidth,
+            mergeWeightHeight,
+            intArrayOf(output),
+        )
+        GlesGpuScheduler.yieldToUiRenderer()
+    }
+
+    private fun renderPixelDifferenceDownsample(
+        input: Int,
+        output: Int,
+    ) {
+        GLES30.glUseProgram(rejectionPixelDifferenceDownsampleProgram)
+        bindTexture(rejectionPixelDifferenceDownsampleProgram, "uInput", 0, input)
+        uniform2i(
+            rejectionPixelDifferenceDownsampleProgram,
+            "uInputSize",
             rejectionWidth,
             rejectionHeight,
+        )
+        draw(
+            rejectionPixelDifferenceDownsampleProgram,
+            mergeWeightWidth,
+            mergeWeightHeight,
             intArrayOf(output),
         )
         GlesGpuScheduler.yieldToUiRenderer()
@@ -4519,18 +4461,18 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun renderRejectionFilterDownsample(
         baseLuma: Int,
-        rejection: Int,
+        weight: Int,
         downsampledLuma: Int,
         downsampledRejection: Int,
     ) {
         GLES30.glUseProgram(rejectionFilterDownsampleProgram)
         bindTexture(rejectionFilterDownsampleProgram, "uBaseLuma", 0, baseLuma)
-        bindTexture(rejectionFilterDownsampleProgram, "uRejection", 1, rejection)
+        bindTexture(rejectionFilterDownsampleProgram, "uWeight", 1, weight)
         uniform2i(
             rejectionFilterDownsampleProgram,
             "uInputSize",
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
         )
         draw(
             rejectionFilterDownsampleProgram,
@@ -4582,23 +4524,23 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     private fun renderRejectionPostprocess(
-        originalRejection: Int,
-        filteredRejection: Int,
+        originalWeight: Int,
+        filteredWeight: Int,
         pixelDifference: Int,
         output: Int,
     ) {
         GLES30.glUseProgram(rejectionPostprocessProgram)
         bindTexture(
             rejectionPostprocessProgram,
-            "uOriginalRejection",
+            "uOriginalWeight",
             0,
-            originalRejection,
+            originalWeight,
         )
         bindTexture(
             rejectionPostprocessProgram,
-            "uFilteredRejection",
+            "uFilteredWeight",
             1,
-            filteredRejection,
+            filteredWeight,
         )
         bindTexture(
             rejectionPostprocessProgram,
@@ -4609,8 +4551,8 @@ internal class GlesMgcRawSpatialStacker(
         uniform2i(
             rejectionPostprocessProgram,
             "uSize",
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
         )
         uniform1f(
             rejectionPostprocessProgram,
@@ -4624,8 +4566,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             rejectionPostprocessProgram,
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             intArrayOf(output),
         )
         GlesGpuScheduler.yieldToUiRenderer()
@@ -4734,20 +4676,13 @@ internal class GlesMgcRawSpatialStacker(
         )
         val alignmentNs = System.nanoTime() - alignmentStartNs
         val flowStartNs = System.nanoTime()
-        val bayerAlignment = createTexture(
-            bayerAlignmentWidth,
-            bayerAlignmentHeight,
-            GLES30.GL_RGBA32F,
-            GLES30.GL_NEAREST,
-        )
-        renderBayerAlignment(alignment, bayerAlignment)
         val flow = createTexture(
             rejectionWidth,
             rejectionHeight,
             GLES30.GL_RGBA16F,
             GLES30.GL_LINEAR,
         )
-        renderMergeDomainFlow(bayerAlignment, flow)
+        renderConvertedAlignment(alignment, flow)
         val flowNs = System.nanoTime() - flowStartNs
         val rejectionStartNs = System.nanoTime()
         val unblockerWidth = ceilDiv(width, UNBLOCKER_FULLRES_TILE_SIZE * 2)
@@ -4765,27 +4700,39 @@ internal class GlesMgcRawSpatialStacker(
             outputWidth = unblockerWidth,
             outputHeight = unblockerHeight,
         )
-        val reverseWeight = createTexture(
+        val rawReverseWeight = createTexture(
             rejectionWidth,
             rejectionHeight,
             GLES30.GL_R8,
             GLES30.GL_LINEAR,
         )
-        val pixelDifference = createTexture(
+        val rawPixelDifference = createTexture(
             rejectionWidth,
             rejectionHeight,
             GLES30.GL_R8,
             GLES30.GL_NEAREST,
         )
+        val initialWeight = createTexture(
+            mergeWeightWidth,
+            mergeWeightHeight,
+            GLES30.GL_R8,
+            GLES30.GL_LINEAR,
+        )
+        val pixelDifference = createTexture(
+            mergeWeightWidth,
+            mergeWeightHeight,
+            GLES30.GL_R8,
+            GLES30.GL_NEAREST,
+        )
         val pixelDifferenceHorizontal = createTexture(
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             GLES30.GL_R32F,
             GLES30.GL_NEAREST,
         )
         val smoothedPixelDifference = createTexture(
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             GLES30.GL_R8,
             GLES30.GL_NEAREST,
         )
@@ -4807,12 +4754,6 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_R8,
             GLES30.GL_LINEAR,
         )
-        val postprocessedRejection = createTexture(
-            rejectionWidth,
-            rejectionHeight,
-            GLES30.GL_R8,
-            GLES30.GL_LINEAR,
-        )
         val frameWeight = createTexture(
             mergeWeightWidth,
             mergeWeightHeight,
@@ -4825,17 +4766,27 @@ internal class GlesMgcRawSpatialStacker(
             flowTexture = flow,
             unblockerTexture = unblocker,
             noiseTexture = currentNoiseLut,
-            reverseWeightTexture = reverseWeight,
-            pixelDifferenceTexture = pixelDifference,
+            reverseWeightTexture = rawReverseWeight,
+            pixelDifferenceTexture = rawPixelDifference,
         )
+        // MGC's CPU wrapper closes this boundary before FilterRejectionMap:
+        // DilateMask converts RAW/2 rejection to RAW/4 acceptance weight, while
+        // Downsample2x brings pixel difference to that same merge domain.
+        renderDilation(rawReverseWeight, initialWeight)
+        renderPixelDifferenceDownsample(rawPixelDifference, pixelDifference)
         renderClippedGaussianPixelDifference(
             input = pixelDifference,
             horizontal = pixelDifferenceHorizontal,
             output = smoothedPixelDifference,
         )
+        check(referenceGrayPyramid.size > 1) {
+            "FilterRejectionMap requires the RAW/4 reference-luma pyramid level"
+        }
         renderRejectionFilterDownsample(
-            baseLuma = referenceGrayPyramid.first().texture,
-            rejection = reverseWeight,
+            // The stored pyramid keeps one positive-edge support texel. The shader's
+            // logical uInputSize clips it to MGC's floor-sized RAW/4 merge domain.
+            baseLuma = referenceGrayPyramid[1].texture,
+            weight = initialWeight,
             downsampledLuma = downsampledLuma,
             downsampledRejection = downsampledRejection,
         )
@@ -4845,12 +4796,11 @@ internal class GlesMgcRawSpatialStacker(
             output = filteredRejection,
         )
         renderRejectionPostprocess(
-            originalRejection = reverseWeight,
-            filteredRejection = filteredRejection,
+            originalWeight = initialWeight,
+            filteredWeight = filteredRejection,
             pixelDifference = smoothedPixelDifference,
-            output = postprocessedRejection,
+            output = frameWeight,
         )
-        renderDilation(postprocessedRejection, frameWeight)
         val rejectionNs = System.nanoTime() - rejectionStartNs
         PLog.i(
             TAG,
@@ -4865,7 +4815,7 @@ internal class GlesMgcRawSpatialStacker(
         return PreparedTemporalFrame(
             calibration = calibration,
             flowTexture = flow,
-            bayerAlignmentTexture = bayerAlignment,
+            bayerAlignmentTexture = alignment.texture,
             weightTexture = frameWeight,
         )
     }
@@ -9069,6 +9019,7 @@ internal class GlesMgcRawSpatialStacker(
         // the GPU command stream instead of synchronously reading every alignment texture.
         const val MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS = 128f
         const val ALIGN_LK_GRID_MIN = 1
+        const val MERGE_ALIGNMENT_GRID_MIN = 0
         const val MERGE_BAYER_RAW_TILE_SIZE = 16
         // MGC defines the tolerance as a fraction of its 8 Bayer-quad tile. Keep
         // interpolation only where every neighboring flow is within one raw pixel
