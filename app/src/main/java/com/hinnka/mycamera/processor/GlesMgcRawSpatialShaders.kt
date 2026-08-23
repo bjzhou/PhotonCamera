@@ -2801,11 +2801,12 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
+    /** Packs AlignPyramid's final MergeBayer/RGB grid without changing its Bayer-quad units. */
     val strengthAlignment = """
         #version 300 es
         precision highp float;
         precision highp int;
-        uniform sampler2D uFlow;
+        uniform sampler2D uAlignment;
         uniform ivec2 uOutputSize;
         uniform ivec2 uOutputOrigin;
         uniform int uComponent;
@@ -2813,7 +2814,7 @@ internal object GlesMgcRawSpatialShaders {
         void main() {
             vec2 local = gl_FragCoord.xy - vec2(uOutputOrigin);
             vec2 uv = local / vec2(uOutputSize);
-            oAlignment = texture(uFlow, uv)[uComponent];
+            oAlignment = texture(uAlignment, uv)[uComponent];
         }
     """.trimIndent()
 

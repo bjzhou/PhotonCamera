@@ -1324,7 +1324,7 @@ internal class GlesMgcRawSpatialStacker(
                         capture = capture,
                         frameIndex = capturedFrameIndex++,
                         calibration = referenceCalibration,
-                        flowTexture = zeroFlow,
+                        alignmentTexture = zeroFlow,
                         weightTexture = bentoBaseWeight,
                         identityWeight = false,
                     )
@@ -1360,7 +1360,7 @@ internal class GlesMgcRawSpatialStacker(
                         capture = capture,
                         frameIndex = capturedFrameIndex++,
                         calibration = checkNotNull(bentoCalibration),
-                        flowTexture = bentoFlowTexture,
+                        alignmentTexture = bentoBayerAlignmentTexture,
                         weightTexture = bentoShortWeight,
                         identityWeight = false,
                     )
@@ -1397,7 +1397,7 @@ internal class GlesMgcRawSpatialStacker(
                         capture = capture,
                         frameIndex = capturedFrameIndex++,
                         calibration = referenceCalibration,
-                        flowTexture = zeroFlow,
+                        alignmentTexture = zeroFlow,
                         weightTexture = identityWeight,
                         identityWeight = true,
                     )
@@ -1511,7 +1511,7 @@ internal class GlesMgcRawSpatialStacker(
                             capture = capture,
                             frameIndex = capturedFrameIndex++,
                             calibration = prepared.calibration,
-                            flowTexture = prepared.flowTexture,
+                            alignmentTexture = prepared.bayerAlignmentTexture,
                             weightTexture = mergeWeight,
                             identityWeight = identityTemporalWeights,
                         )
@@ -5121,7 +5121,7 @@ internal class GlesMgcRawSpatialStacker(
         capture: StrengthCapture,
         frameIndex: Int,
         calibration: FrameCalibration,
-        flowTexture: Int,
+        alignmentTexture: Int,
         weightTexture: Int,
         identityWeight: Boolean,
     ) {
@@ -5132,7 +5132,7 @@ internal class GlesMgcRawSpatialStacker(
             val outputOriginX = capture.alignmentLayout.originX(slot)
             val outputOriginY = capture.alignmentLayout.originY(slot)
             GLES30.glUseProgram(strengthAlignmentProgram)
-            bindTexture(strengthAlignmentProgram, "uFlow", 0, flowTexture)
+            bindTexture(strengthAlignmentProgram, "uAlignment", 0, alignmentTexture)
             uniform2i(
                 strengthAlignmentProgram,
                 "uOutputSize",
