@@ -2765,8 +2765,8 @@ class RawDemosaicProcessor {
                     "engine=$colorEngine profileToneMap=${normalizedToneMappingParameters.profileToneMapMode} " +
                     "customDcp=$hasDcpSelection " +
                     "photonHdr=${when {
-                        embeddedProfileDecision.applyEmbeddedProfile -> "replaced-by-embedded-profile"
-                        photonHdrRequested -> "generate-independent-pgtm"
+                        embeddedProfileGainTableMap != null -> "embedded-mgc-pgtm"
+                        photonHdrRequested -> "unavailable-no-embedded-mgc-pgtm"
                         else -> "disabled"
                     }}"
             )
@@ -2785,35 +2785,11 @@ class RawDemosaicProcessor {
                     workingColorSpace = profileWorkingColorSpace
                 )
             }
+            normalizedToneMappingParameters.profileToneMapMode ==
+                RawProfileToneMapMode.Default -> profileBaseDcpRenderPlan?.copy(
+                    toneCurveLut = null
+                )
             else -> profileBaseDcpRenderPlan
-        }
-        if (embeddedProfileDecision.shouldGeneratePhotonPgtm(photonHdrRequested) &&
-            actualMetadata.profileGainTableMap == null
-        ) {
-            val generatedProfileGainTableMap = generateProfileGainTableMapOnGpu(
-                rawTextureId = rawTextureId,
-                streamingRawData = tiledRawData,
-                streamingRowStride = actualRowStride,
-                width = actualWidth,
-                height = actualHeight,
-                samplesPerPixel = actualSamplesPerPixel,
-                metadata = actualMetadata.copy(profileGainTableMap = null),
-                statsBounds = outputSourceBounds,
-                baselineExposureEv = DngBaselineExposure.sanitize(actualMetadata.baselineExposure) +
-                    dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
-                colorCorrectionMatrix = activeDcpRenderPlan?.colorCorrectionMatrix
-                    ?: actualMetadata.colorCorrectionMatrix,
-                hueSatMap = activeDcpRenderPlan?.hueSatMap,
-                hueSatMapSupportsOverrange = activeDcpRenderPlan?.supportsOverrange == true,
-                warpRectilinear = applicableDngWarpRectilinear,
-            )?.takeIf { it.isValid }
-            if (generatedProfileGainTableMap == null) {
-                PLog.e(TAG, "Photon HDR PGTM generation failed")
-                return@withContext null
-            }
-            actualMetadata = actualMetadata.copy(
-                profileGainTableMap = generatedProfileGainTableMap,
-            )
         }
         val profilePlanSource = when {
             oppoMasterToneMapActive -> when {
@@ -3041,11 +3017,12 @@ class RawDemosaicProcessor {
                 }
                 val solvedExposureEv = sceneExposureSolution?.baselineExposureEv
                 val mgcLtmPlan = sceneExposureSolution?.mgcLtmPlan
+                    ?.takeIf { capturePhotonPgtmRequested }
                 solvedExposureEv?.let { exposureEv ->
                     PLog.i(
                         TAG,
                         "RAW_SCENE_EXPOSURE stage=INFERENCE_COMPLETE " +
-                            "pgtm=${capturePhotonPgtmRequested || mgcLtmPlan != null} " +
+                            "pgtm=$capturePhotonPgtmRequested " +
                             "sourceBaselineEv=${actualMetadata.baselineExposure} " +
                             "sceneBaselineEv=$exposureEv",
                     )
@@ -3054,8 +3031,7 @@ class RawDemosaicProcessor {
                     sourceBaselineEv = actualMetadata.baselineExposure,
                     sceneBaselineEv = solvedExposureEv,
                 )
-                val mgcLtmRequired = mgcLtmPlan != null
-                val captureProfileGainTableMap = if (capturePhotonPgtmRequested || mgcLtmRequired) {
+                val captureProfileGainTableMap = if (capturePhotonPgtmRequested && mgcLtmPlan != null) {
                     generateProfileGainTableMapOnGpu(
                         rawTextureId = rawTextureId,
                         streamingRawData = tiledRawData,
@@ -3074,10 +3050,14 @@ class RawDemosaicProcessor {
                         mgcLtmPlan = mgcLtmPlan,
                     )
                 } else {
+                    if (capturePhotonPgtmRequested) {
+                        PLog.e(TAG, "Photon HDR PGTM unavailable: MGC LTM capture plan is missing")
+                    }
                     null
                 }
-                val profileRequired = capturePhotonPgtmRequested || mgcLtmRequired
-                val captureResult = if (profileRequired && captureProfileGainTableMap == null) {
+                val captureResult = if (
+                    capturePhotonPgtmRequested && captureProfileGainTableMap == null
+                ) {
                     null
                 } else {
                     RawDngCaptureProfileResult(
@@ -4132,7 +4112,7 @@ class RawDemosaicProcessor {
         hueSatMap: DcpHueSatMap?,
         hueSatMapSupportsOverrange: Boolean,
         warpRectilinear: FloatArray? = null,
-        mgcLtmPlan: MgcLtmCapturePlan? = null,
+        mgcLtmPlan: MgcLtmCapturePlan,
     ): DngProfileGainTableMap? {
         val streamingUploader = streamingRawData?.let {
             DngPhotonProfileGainTableAlgorithm.StreamingRawUploader {

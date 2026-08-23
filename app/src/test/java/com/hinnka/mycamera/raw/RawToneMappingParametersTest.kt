@@ -25,4 +25,16 @@ class RawToneMappingParametersTest {
         assertTrue(parameters.usePhotonHdr)
         assertEquals(RawProfileToneMapMode.Default, parameters.profileToneMapMode)
     }
+
+    @Test
+    fun profileAndAcr3ToneMapsRemainDistinctSelections() {
+        val profile = RawToneMappingParameters.DEFAULT
+            .withProfileToneMapMode(RawProfileToneMapMode.Profile)
+        val acr3 = profile.withProfileToneMapMode(RawProfileToneMapMode.Default)
+
+        assertTrue(profile.useProfileToneMap)
+        assertEquals(RawProfileToneMapMode.Profile, profile.profileToneMapMode)
+        assertEquals(false, acr3.useProfileToneMap)
+        assertEquals(RawProfileToneMapMode.Default, acr3.profileToneMapMode)
+    }
 }

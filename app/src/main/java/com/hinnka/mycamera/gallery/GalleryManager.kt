@@ -2504,7 +2504,11 @@ object GalleryManager {
                     characteristics = characteristics,
                     metadata = preparedMetadata,
                     imageLayout = SuperResolutionDngWriter.ImageLayout.CFA,
-                    profileGainTableMap = null,
+                    // Mirror the profile which saveRawBufferToDng will serialize. Passing null
+                    // here made the first in-memory render resolve DefaultBlackRender=Auto even
+                    // though its final metadata already contained a ProfileGainTableMap and the
+                    // persisted DNG correctly wrote DefaultBlackRender=None.
+                    profileGainTableMap = preparedMetadata.profileGainTableMap,
                     profileToneCurve = null,
                 )
             }
@@ -3731,7 +3735,9 @@ object GalleryManager {
                         characteristics = characteristics,
                         metadata = preparedMetadata,
                         imageLayout = imageLayout,
-                        profileGainTableMap = null,
+                        // Use the final prepared profile for the pre-persistence render as well as
+                        // for DNG serialization, so both paths resolve the same black-render mode.
+                        profileGainTableMap = preparedMetadata.profileGainTableMap,
                         profileToneCurve = null,
                     )
                 }

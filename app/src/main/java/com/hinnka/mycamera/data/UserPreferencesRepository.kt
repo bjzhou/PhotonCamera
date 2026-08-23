@@ -383,6 +383,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_FILMIC_BLACK_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_filmic_black_relative_exposure")
         private val RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_filmic_white_relative_exposure")
         private val LEGACY_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_google_pixel_tone_map")
+        private val RAW_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_profile_tone_map")
         private val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
         private val RAW_PHOTON_HDR_KEY = booleanPreferencesKey("raw_photon_hdr")
         private val LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY =
@@ -641,6 +642,7 @@ class UserPreferencesRepository(private val context: Context) {
                         ?: RawToneMappingParameters.FILMIC_BLACK_RELATIVE_EXPOSURE_DEFAULT,
                     filmicWhiteRelativeExposure = preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY]
                         ?: RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
+                    useProfileToneMap = preferences[RAW_PROFILE_TONE_MAP_KEY] ?: true,
                     useOppoMasterToneMap = preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false,
                     usePhotonHdr =
                         (preferences[RAW_PHOTON_HDR_KEY] ?: RawToneMappingParameters.PHOTON_HDR_DEFAULT) ||
@@ -1276,6 +1278,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_FILMIC_BLACK_RELATIVE_EXPOSURE_KEY] = normalized.filmicBlackRelativeExposure
             preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.filmicWhiteRelativeExposure
             preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
+            preferences[RAW_PROFILE_TONE_MAP_KEY] = normalized.useProfileToneMap
             preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
             preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
             preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false

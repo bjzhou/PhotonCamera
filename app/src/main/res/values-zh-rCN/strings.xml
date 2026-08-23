@@ -889,6 +889,7 @@
     <string name="settings_raw_profile_tone_map">RAW 影调曲线</string>
     <string name="settings_raw_profile_tone_map_description">选择 Adobe 配置文件影调曲线</string>
     <string name="settings_raw_profile_tone_map_default">默认</string>
+    <string name="settings_raw_profile_tone_map_embedded">内嵌</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO 大师</string>
     <string name="settings_raw_photon_hdr">光子 HDR</string>
     <string name="settings_raw_photon_hdr_description">在明暗反差较大的场景中保留更多高光和暗部细节，让画面亮度过渡更自然。</string>

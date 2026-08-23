@@ -7,10 +7,6 @@ internal data class EmbeddedDngProfileDecision(
     fun shouldRetainEmbeddedPgtm(): Boolean {
         return applyEmbeddedProfile
     }
-
-    fun shouldGeneratePhotonPgtm(photonHdrRequested: Boolean): Boolean {
-        return photonHdrRequested && !applyEmbeddedProfile
-    }
 }
 
 /** Treats every component of an embedded DNG profile as one indivisible render profile. */
@@ -23,7 +19,7 @@ internal object EmbeddedDngProfilePolicy {
     ): EmbeddedDngProfileDecision {
         val applyEmbeddedProfile = hasEmbeddedProfile &&
             colorEngine == RawRenderingEngine.AdobeCurve &&
-            profileToneMapMode == RawProfileToneMapMode.Default &&
+            profileToneMapMode == RawProfileToneMapMode.Profile &&
             !hasDcpSelection
         return EmbeddedDngProfileDecision(
             hasEmbeddedProfile = hasEmbeddedProfile,

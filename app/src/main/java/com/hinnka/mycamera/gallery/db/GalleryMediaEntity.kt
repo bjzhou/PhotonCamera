@@ -69,6 +69,8 @@ data class GalleryMediaEntity(
     val rawFilmicWhiteRelativeExposure: Float,
     @ColumnInfo(name = "rawGooglePixelToneMap")
     val legacyPhotonToneMap: Boolean,
+    @ColumnInfo(defaultValue = "1")
+    val rawProfileToneMap: Boolean,
     val rawOppoMasterToneMap: Boolean,
     @ColumnInfo(name = "rawPhotonPgtmToneMap")
     val rawPhotonHdr: Boolean,

@@ -14,6 +14,7 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngBaselineExposure
+import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
@@ -807,7 +808,14 @@ object RawProcessor {
         } else {
             profileGainTableMap
         }
-        val writtenProfileName = profileName
+        val writesGeneratedPhotonPgtm =
+            dngProfilePreparationOptions?.generatePhotonPgtm == true &&
+                writtenProfileGainTableMap != null
+        val writtenProfileName = if (writesGeneratedPhotonPgtm) {
+            DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
+        } else {
+            profileName
+        }
         val orientation = when (rotation) {
             90 -> ExifInterface.ORIENTATION_ROTATE_90
             180 -> ExifInterface.ORIENTATION_ROTATE_180

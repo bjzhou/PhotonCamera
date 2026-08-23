@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 35,
+    version = 36,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -309,6 +309,16 @@ abstract class GalleryDatabase : RoomDatabase() {
                     db.execSQL("ALTER TABLE gallery_media ADD COLUMN recipe_$column REAL")
                     db.execSQL("ALTER TABLE gallery_media ADD COLUMN baseline_recipe_$column REAL")
                 }
+            }
+        }
+
+        private val MIGRATION_35_36 = object : androidx.room.migration.Migration(35, 36) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Existing rows used the selected DCP or embedded DNG profile whenever present.
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN rawProfileToneMap " +
+                        "INTEGER NOT NULL DEFAULT 1"
+                )
             }
         }
 
@@ -678,7 +688,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_31_32,
                         MIGRATION_32_33,
                         MIGRATION_33_34,
-                        MIGRATION_34_35
+                        MIGRATION_34_35,
+                        MIGRATION_35_36
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

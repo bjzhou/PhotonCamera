@@ -103,6 +103,17 @@ internal object DngEmbeddedProfile {
             )
     }
 
+    internal fun resolveEmbeddedProfileToneCurve(
+        profileName: String?,
+        toneCurve: DcpToneCurve?,
+    ): DcpToneCurve? {
+        if (toneCurve?.isValid != true) return null
+        return toneCurve.takeUnless { curve ->
+            isPhotonPgtmProfileName(profileName) ||
+                DngProfileToneCurve.isPhotonPgtmToneCurve(curve)
+        }
+    }
+
     private fun decodeProfile(
         raf: RandomAccessFile,
         ifd: Map<Int, TiffEntry>,
@@ -177,7 +188,11 @@ internal object DngEmbeddedProfile {
             byteOrder = byteOrder
         )
 
-        val toneCurve = readToneCurve(raf, ifd[TAG_PROFILE_TONE_CURVE], byteOrder)
+        val parsedToneCurve = readToneCurve(raf, ifd[TAG_PROFILE_TONE_CURVE], byteOrder)
+        // Photon HDR's generated/legacy tone data belongs to PGTM, not to the user-selectable
+        // embedded Adobe profile curve. Ignore both its reserved profile name and its known
+        // historical curve payload so UI selection and rendering consistently fall back to ACR3.
+        val toneCurve = resolveEmbeddedProfileToneCurve(profileName, parsedToneCurve)
         val baselineExposureOffset = readRealValues(raf, ifd[TAG_BASELINE_EXPOSURE_OFFSET], byteOrder)
             ?.firstOrNull()
             ?.takeIf { it.isFinite() }

@@ -30,7 +30,8 @@ object RawToneMappingGl {
         val normalized = params.normalized()
         return when (normalized.profileToneMapMode) {
             RawProfileToneMapMode.OppoMaster -> OPPO_MASTER_ADOBE_CURVE
-            else -> ACR3Curve.samples()
+            RawProfileToneMapMode.Default,
+            RawProfileToneMapMode.Profile -> ACR3Curve.samples()
         }
     }
 

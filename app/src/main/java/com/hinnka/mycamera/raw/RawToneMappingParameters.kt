@@ -7,12 +7,14 @@ data class RawToneMappingParameters(
     val agxShoulder: Float = AGX_SHOULDER_DEFAULT,
     val filmicBlackRelativeExposure: Float = FILMIC_BLACK_RELATIVE_EXPOSURE_DEFAULT,
     val filmicWhiteRelativeExposure: Float = FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
+    val useProfileToneMap: Boolean = true,
     val useOppoMasterToneMap: Boolean = false,
     val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT
 ) {
     val profileToneMapMode: RawProfileToneMapMode
         get() = when {
             useOppoMasterToneMap -> RawProfileToneMapMode.OppoMaster
+            useProfileToneMap -> RawProfileToneMapMode.Profile
             else -> RawProfileToneMapMode.Default
         }
 
@@ -55,6 +57,7 @@ data class RawToneMappingParameters(
 
     fun withProfileToneMapMode(mode: RawProfileToneMapMode): RawToneMappingParameters {
         return copy(
+            useProfileToneMap = mode == RawProfileToneMapMode.Profile,
             useOppoMasterToneMap = mode == RawProfileToneMapMode.OppoMaster
         ).normalized()
     }

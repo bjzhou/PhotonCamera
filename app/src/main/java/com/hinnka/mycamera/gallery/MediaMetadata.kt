@@ -42,7 +42,7 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 30,
+    val version: Int = 31,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -392,6 +392,11 @@ data class MediaMetadata(
                             RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT
                         } else {
                             obj.optDouble("rawFilmicWhiteRelativeExposure").toFloat()
+                        },
+                        useProfileToneMap = if (obj.has("rawProfileToneMap")) {
+                            obj.optBoolean("rawProfileToneMap")
+                        } else {
+                            true
                         },
                         useOppoMasterToneMap = obj.optBoolean("rawOppoMasterToneMap", false),
                         usePhotonHdr =

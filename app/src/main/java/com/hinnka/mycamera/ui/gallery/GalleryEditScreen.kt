@@ -58,6 +58,7 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.gallery.MediaData
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.PostEditGeometry
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
@@ -69,6 +70,9 @@ import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.HncsProfileManager
+import com.hinnka.mycamera.raw.DngEmbeddedProfile
+import com.hinnka.mycamera.raw.DngProfileGainTableMap
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
@@ -113,6 +117,11 @@ private const val EDIT_TAB_DETAIL = 3
 private const val EDIT_TAB_RAW = 4
 private const val EDIT_TAB_CROP = 5
 private const val DEFAULT_COMPUTATIONAL_APERTURE = 1.8f
+
+private data class EmbeddedDngProfileUiInfo(
+    val name: String,
+    val isPhotonPgtm: Boolean,
+)
 
 private data class PreviewRenderSignature(
     val photoId: String,
@@ -289,6 +298,75 @@ fun GalleryEditScreen(
     val editAiDenoiseStrength by viewModel.editAiDenoiseStrength.collectAsState()
 
     val isRaw = editSourcePhoto?.let { viewModel.isRaw(it.id) } ?: false
+    val embeddedProfileFallbackName = stringResource(
+        R.string.settings_raw_profile_tone_map_embedded
+    )
+    var embeddedDngProfileInfo by remember(editSourcePhoto?.id) {
+        mutableStateOf<EmbeddedDngProfileUiInfo?>(null)
+    }
+
+    LaunchedEffect(editSourcePhoto?.id, isRaw, embeddedProfileFallbackName) {
+        val photo = editSourcePhoto
+        embeddedDngProfileInfo = if (photo != null && isRaw) {
+            withContext(Dispatchers.IO) {
+                val dngFile = GalleryManager.getDngFile(context, photo.id)
+                val profile = DngEmbeddedProfile.readFrom(dngFile)
+                val profileGainTableMap = DngProfileGainTableMap.readFrom(dngFile)
+                    ?.takeIf { it.isValid }
+                val sourceMetadata = photo.metadata
+                    ?: GalleryManager.loadMetadata(context, photo.id)
+                val hasEmbeddedToneCurve = profile?.toneCurve?.isValid == true
+                val hasEmbeddedPgtm = profileGainTableMap != null
+                val isPhotonPgtm = hasEmbeddedPgtm && (
+                    DngEmbeddedProfile.isPhotonPgtmProfileName(profile?.profileName) ||
+                        sourceMetadata?.isImported == false
+                    )
+                PLog.d(
+                    "GalleryEditScreen",
+                    "DNG embedded profile classified: name=${profile?.profileName} " +
+                        "toneCurve=$hasEmbeddedToneCurve pgtm=$hasEmbeddedPgtm " +
+                        "imported=${sourceMetadata?.isImported} photonPgtm=$isPhotonPgtm"
+                )
+                if (hasEmbeddedToneCurve || hasEmbeddedPgtm) {
+                    EmbeddedDngProfileUiInfo(
+                        name = profile?.profileName
+                            ?.trim()
+                            ?.takeUnless {
+                                it.isEmpty() || it.equals("Embedded", ignoreCase = true)
+                            }
+                            ?: embeddedProfileFallbackName,
+                        isPhotonPgtm = isPhotonPgtm,
+                    )
+                } else {
+                    null
+                }
+            }
+        } else {
+            null
+        }
+    }
+
+    LaunchedEffect(
+        editSourcePhoto?.id,
+        embeddedDngProfileInfo?.isPhotonPgtm,
+        editRawToneMappingParameters.usePhotonHdr,
+        editRawToneMappingParameters.profileToneMapMode,
+        editRawDcpId,
+    ) {
+        val photo = editSourcePhoto ?: return@LaunchedEffect
+        if (embeddedDngProfileInfo?.isPhotonPgtm == true &&
+            !editRawToneMappingParameters.usePhotonHdr &&
+            editRawToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Profile &&
+            editRawDcpId == null
+        ) {
+            viewModel.saveRawToneMappingParameters(
+                photo,
+                editRawToneMappingParameters.withProfileToneMapMode(
+                    RawProfileToneMapMode.Default
+                )
+            )
+        }
+    }
 
     var showOrigin by remember { mutableStateOf(false) }
 
@@ -1774,6 +1852,12 @@ fun GalleryEditScreen(
                                         },
                                         onRawToneMappingParametersChange = {
                                             viewModel.saveRawToneMappingParameters(currentEditSourcePhoto, it)
+                                        },
+                                        embeddedDngProfileName = embeddedDngProfileInfo?.name,
+                                        embeddedDngProfileIsPhotonPgtm =
+                                            embeddedDngProfileInfo?.isPhotonPgtm == true,
+                                        onSelectEmbeddedDngProfile = {
+                                            viewModel.selectRawEmbeddedDngProfileForEdit()
                                         },
                                         onSpectralFilmSelectionChange = {
                                             viewModel.saveRawSpectralFilmSelection(currentEditSourcePhoto, it) {

@@ -42,6 +42,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -2615,6 +2616,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             onComplete = onComplete,
             enableHdrGainmapForGoogleToneMap = shouldEnableHdrGainmap
         )
+    }
+
+    /** Selects the current DNG's embedded profile; the caller commits the combined edit state. */
+    fun selectRawEmbeddedDngProfileForEdit() {
+        editRawDcpId.value = null
+        editRawToneMappingParameters.value = editRawToneMappingParameters.value
+            .withProfileToneMapMode(RawProfileToneMapMode.Profile)
     }
 
     fun saveRawExposureCompensationValue(mediaData: MediaData, value: Float, onComplete: ((Boolean) -> Unit)? = null) {
