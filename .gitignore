@@ -16,6 +16,7 @@ app/release.jks
 /agc-photon-lut
 /third_party
 __pycache__
-/scripts/research
+/scripts/research/*
+!/scripts/research/generate_mgc_spatial_rgb_merge_static_asm.py
 .codex-tmp
 .tmp

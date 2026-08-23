@@ -823,20 +823,6 @@ internal object GlesMgcSpatialRgbChromaShaders {
             return dot(rgb, vec3(0.25, 0.5, 0.25));
         }
 
-        float decodeSnorm8(uint encoded) {
-            int signedValue = int(encoded & 255u);
-            if (signedValue > 127) signedValue -= 256;
-            return clamp(float(signedValue) / 127.0, -1.0, 1.0);
-        }
-
-        vec2 directionMomentAt(ivec2 p) {
-            uint encoded = imageLoad(uCameraRgb, imagePosition(p)).a;
-            return vec2(
-                decodeSnorm8(encoded),
-                decodeSnorm8(encoded >> 8u)
-            );
-        }
-
         uint directionMaskAt(ivec2 p) {
             const ivec2 directions[8] = ivec2[8](
                 ivec2(0, -1),
@@ -848,18 +834,7 @@ internal object GlesMgcSpatialRgbChromaShaders {
                 ivec2(-1, 1),
                 ivec2(-1, -1)
             );
-            const vec2 doubledDirectionAxes[8] = vec2[8](
-                vec2(-1.0, 0.0),
-                vec2(1.0, 0.0),
-                vec2(-1.0, 0.0),
-                vec2(1.0, 0.0),
-                vec2(0.0, -1.0),
-                vec2(0.0, 1.0),
-                vec2(0.0, -1.0),
-                vec2(0.0, 1.0)
-            );
             float center = yAt(p);
-            vec2 directionMoment = directionMomentAt(p);
             float gradients[8];
             float minGradient = 65504.0;
             float maxGradient = 0.0;
@@ -867,14 +842,7 @@ internal object GlesMgcSpatialRgbChromaShaders {
                 float first = yAt(p + directions[i]);
                 float second = yAt(p + directions[i] * 2);
                 float rgbGradient = abs(center - first) + 0.5 * abs(first - second);
-                // The fused RAW-green moment identifies the edge axis. RGB still supplies the
-                // signed N/E/S/W decision and all local gradient magnitudes.
-                float structureScale = clamp(
-                    1.0 + 0.5 * dot(directionMoment, doubledDirectionAxes[i]),
-                    0.5,
-                    1.5
-                );
-                gradients[i] = rgbGradient * structureScale;
+                gradients[i] = rgbGradient;
                 minGradient = min(minGradient, gradients[i]);
                 maxGradient = max(maxGradient, gradients[i]);
             }

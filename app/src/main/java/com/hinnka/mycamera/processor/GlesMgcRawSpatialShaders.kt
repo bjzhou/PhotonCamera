@@ -1535,6 +1535,41 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
+     * Converts the original MGC MergeRgbRaw16F16 planar Q14 output to the stacker's RGB16
+     * boundary. The AOT output is already un-white-balanced camera RGB; WB is used only by the
+     * AOT's internal green guide and must not be divided out again here.
+     */
+    val normalizeAotRgb16 = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uChannelPlane;
+        uniform sampler2D uLensShading;
+        uniform ivec2 uOutputSize;
+        uniform float uOutputExposureScale;
+        uniform int uUseLensShading;
+        uniform int uChannel;
+        layout(location = 0) out highp uvec4 oRgb16;
+
+        void main() {
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            float value = texelFetch(uChannelPlane, p, 0).r * (1.0 / 16384.0);
+            if (uUseLensShading != 0) {
+                vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uOutputSize);
+                vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
+                float channelShading = uChannel == 0 ? shading.r :
+                    (uChannel == 1 ? 0.5 * (shading.g + shading.b) : shading.a);
+                value *= channelShading;
+            }
+            uint encodedValue = uint(round(
+                clamp(value * uOutputExposureScale, 0.0, 1.0) * 65535.0
+            ));
+            oRgb16 = uvec4(0u);
+            oRgb16[uChannel] = encodedValue;
+        }
+    """.trimIndent()
+
+    /**
      * First integer-to-float conversion stays in compute image load/store. Some Mali drivers
      * incorrectly lower the equivalent fragment-sampler uint16 conversion to FP16.
      */

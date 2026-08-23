@@ -94,7 +94,7 @@ internal object RawSceneExposureMath {
     // Ordinary MGC/Google ZSL exposure tuning. These are finalizer constraints, not sensor limits.
     const val MAX_POST_CAPTURE_GAIN = 26.5f
     const val MAX_OVERALL_GAIN = 102f
-    const val DEFAULT_EXPOSURE_COMPENSATION_EV = -0.3f
+    const val DEFAULT_EXPOSURE_COMPENSATION_EV = 0f
 
     // MGC's low-resolution RGB scene measurement uses ten U15 code values as its floor.
     private const val SIGNAL_FLOOR = 10f / 32767f

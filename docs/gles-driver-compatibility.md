@@ -13,7 +13,7 @@
 | SSBO binding | 跨驱动约束 | 查询上限；不同 program 复用低编号槽位 |
 | PBO 热路径回读 | 已确认存在驱动差异 | 优先 compute 打包到 SSBO，超限或编译失败时回退 framebuffer readback |
 | `readonly` SSBO 实参 | 已确认，Mali | SSBO 元素先复制到局部变量，再传给用户函数 |
-| `RGBA16F` image 原位读写 | 已确认 | 改用 `R32UI` half 打包、ping-pong 或 additive blending |
+| `RGBA16F` / `RGBA16UI` image 原位读写 | 已确认 | 改用 framebuffer、`R32UI` half 打包、ping-pong 或 additive blending |
 | `RGBA16UI` attachment 回读 | 跨驱动约束 | 以 RGBA16 回读，在 native 层批量移除 Alpha |
 | MRT attachment 残留 | 已确认，Adreno | render-target 数减少时显式 detach 尾部 attachment |
 | `uint16 -> float` | 已确认，Mali | 首次转换走 compute image load/store，不走 fragment sampler 直接转换 |
@@ -161,6 +161,24 @@ unsupported format on read/write image
 3. **纯逐帧加法**：优先 framebuffer additive blending。NR sum/weight 与 detail sum/weight 分别使用两张 `RGBA16F` attachment；fragment 输出 `vec4(rgb * weight, weight)`；两个 MRT draw buffer 均使用 `GL_FUNC_ADD + GL_ONE, GL_ONE`。每次 draw 后恢复 blend 状态，切回单 attachment 前 detach 第二 attachment；write-only image 清零后转入 blending 前包含 `GL_FRAMEBUFFER_BARRIER_BIT`。
 
 Blending 路径保留逐帧 FP16 写回舍入语义，但仅适用于加法；不得用于非加法更新、次序相关替换或任意读改写。每个 compute pass 还必须校验并发 image 数不超过 image unit 上限。
+
+### `RGBA16UI` image 原位读写
+
+**证据**：OPPO PMA110，Adreno 840，驱动
+`OpenGL ES 3.2 V@0842.41 (GIT@8cfe428358, I8188c84bfe, 1777522173)`。该驱动
+拒绝同时包含 `imageLoad` / `imageStore` 的 `layout(rgba16ui) uimage2D`：
+
+```text
+unsupported format on read/write image
+```
+
+- 不由 `RGBA16UI` readonly/writeonly image 或整数 framebuffer 可用推断同格式 read/write
+  image 可用。
+- 逐通道组装 RGBA16UI 时，使用整数 framebuffer fragment 输出配合
+  `glColorMask`；每个通道恰好写一次，结束后恢复完整 color mask，并在 image consumer
+  前包含 `GL_FRAMEBUFFER_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT`。
+- 算法确实需要读取旧值时，使用 readonly source 与 writeonly destination ping-pong；不要把
+  read/modify/write 改写成依赖未定义 attachment 内容的局部通道覆盖。
 
 ### `RGBA16UI` attachment 回读
 

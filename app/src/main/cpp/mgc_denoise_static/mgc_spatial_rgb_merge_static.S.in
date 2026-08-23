@@ -1,0 +1,1118 @@
+/* Generated mechanically from pinned MGC 9.7.047 V25 Spatial RGB Merge AOT.
+ * Do not edit; regenerate with
+ * scripts/research/generate_mgc_spatial_rgb_merge_static_asm.py.
+ */
+
+#if !defined(__aarch64__)
+#error "MGC Spatial RGB Merge static lift is arm64-only"
+#endif
+
+    .hidden photon_mgc_halide_error_2055170
+    .hidden photon_mgc_halide_error_38a3740
+    .hidden photon_mgc_halide_error_38a92e8
+    .hidden photon_mgc_halide_error_5f94b18
+    .hidden photon_mgc_halide_error_5f94c0c
+    .hidden photon_mgc_halide_error_5f94c78
+    .hidden photon_mgc_halide_error_5f94d60
+    .hidden photon_mgc_halide_error_5f94e38
+    .hidden photon_mgc_halide_error_5f94ec4
+    .hidden photon_mgc_halide_error_5f94fa8
+    .hidden photon_mgc_halide_error_5f95034
+    .hidden photon_mgc_halide_error_5f950cc
+    .hidden photon_mgc_halide_error_5f95260
+    .hidden photon_mgc_halide_error_5f95540
+    .hidden photon_mgc_halide_error_5f95560
+    .hidden photon_mgc_halide_error_5f95638
+    .hidden photon_mgc_halide_error_5f956a4
+    .hidden photon_mgc_halide_error_5ff6938
+    .hidden photon_mgc_halide_error_5ff8944
+    .hidden photon_mgc_halide_error_5ff89a0
+    .hidden photon_mgc_halide_do_par_for
+    .hidden photon_mgc_halide_free
+    .hidden photon_mgc_halide_malloc
+    .hidden photon_mgc_halide_trace
+    .hidden photon_mgc_u16_copy_dispatch
+
+.section .text.photon_mgc.SpatialRgb.u16_copy_dispatch,"ax",@progbits
+    .p2align 4
+    .type photon_mgc_u16_copy_dispatch, %function
+photon_mgc_u16_copy_dispatch:
+    cmp w0, #2
+    b.ne .Lphoton_mgc_u16_copy_unsupported
+    mov x0, x1
+    mov x1, x2
+    ldr w8, [x1, #0x24]
+    cmp w8, #3
+    b.eq photon_mgc_spatial_rgb_address_5e4dca8
+    b photon_mgc_spatial_rgb_address_5e4cb58
+.Lphoton_mgc_u16_copy_unsupported:
+    mov w0, #-1
+    ret
+    .size photon_mgc_u16_copy_dispatch, .-photon_mgc_u16_copy_dispatch
+
+.section .text.photon_mgc.SpatialRgb.merge,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_merge_rgb_raw16_f16_tile16_halide
+    .hidden photon_mgc_merge_rgb_raw16_f16_tile16_halide
+    .type photon_mgc_merge_rgb_raw16_f16_tile16_halide, %function
+photon_mgc_spatial_rgb_page_370f000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x0, 0x514
+photon_mgc_spatial_rgb_address_370f514:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x514, 0x38
+    adrp x10, photon_mgc_spatial_rgb_page_6b6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x54c, 0x38
+    adrp x10, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x584, 0x70
+    adrp x8, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5f4, 0x2ec
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x8e0, 0x274
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb54, 0x214
+    adrp x20, photon_mgc_spatial_rgb_page_6ba000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd68, 0xf0
+    adrp x15, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xe58, 0x18c
+photon_mgc_spatial_rgb_page_3710000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfe4, 0x80
+    adrp x9, photon_mgc_spatial_rgb_page_6c2000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1064, 0x8
+    adrp x9, photon_mgc_spatial_rgb_page_6b9000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x106c, 0x4
+    adrp x9, photon_mgc_spatial_rgb_page_6b5000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1070, 0xf68
+photon_mgc_spatial_rgb_page_3711000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1fd8, 0xb8
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x2090, 0x278
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x2308, 0x1c4
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x24cc, 0x2a0
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x276c, 0x1f8
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x2964, 0x3c
+    adrp x4, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x29a0, 0x620
+photon_mgc_spatial_rgb_page_3712000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x2fc0, 0xd74
+    adrp x8, photon_mgc_spatial_rgb_page_6c4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x3d34, 0x288
+photon_mgc_spatial_rgb_page_3713000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x3fbc, 0x470
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x442c, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4458, 0x58
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x44b0, 0x44
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x44f4, 0x40
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4534, 0x20
+    adrp x4, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4554, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4574, 0x20
+    adrp x4, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4594, 0x69c
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4c30, 0x288
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4eb8, 0xdc
+photon_mgc_spatial_rgb_page_3714000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x4f94, 0x104
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5098, 0x298
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5330, 0x1f4
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5524, 0x3c
+    adrp x30, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5560, 0x50c
+    adrp x30, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5a6c, 0x2dc
+    adrp x30, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5d48, 0x234
+photon_mgc_spatial_rgb_page_3715000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x5f7c, 0x1000
+photon_mgc_spatial_rgb_page_3716000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x6f7c, 0x74
+    adrp x8, photon_mgc_spatial_rgb_page_6c4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x6ff0, 0x6dc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x76cc, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x76f8, 0x4c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x7744, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x7778, 0x34
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x77ac, 0x18
+    adrp x30, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x77c4, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x77e4, 0x18
+    adrp x30, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x77fc, 0x618
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x7e14, 0x140
+photon_mgc_spatial_rgb_page_3717000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x7f54, 0x154
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x80a8, 0x1e4
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x828c, 0x2a0
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x852c, 0x1f4
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x8720, 0x3c
+    adrp x4, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x875c, 0x7e4
+photon_mgc_spatial_rgb_page_3718000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x8f40, 0xbcc
+    adrp x8, photon_mgc_spatial_rgb_page_6c4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x9b0c, 0x430
+photon_mgc_spatial_rgb_page_3719000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x9f3c, 0x3a8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa2e4, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa310, 0x54
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa364, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa398, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa3d4, 0x20
+    adrp x4, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa3f4, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa414, 0x20
+    adrp x4, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa434, 0x10c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa540, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa568, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa590, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa5a4, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa5ec, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa610, 0x4
+    bl photon_mgc_halide_error_5f94b18
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa614, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa620, 0x8
+    bl photon_mgc_halide_error_5f94b18
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa628, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa638, 0x4
+    bl photon_mgc_halide_error_5f94c0c
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa63c, 0x3c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa678, 0x4
+    bl photon_mgc_halide_error_5f94b18
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa67c, 0x1c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa698, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa6a4, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa6d4, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa6e0, 0x18
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa6f8, 0x8
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa700, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa720, 0x8
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa728, 0x1c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa744, 0x4
+    bl photon_mgc_halide_error_5f94b18
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa748, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa754, 0x18
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa76c, 0x58
+photon_mgc_spatial_rgb_address_371990c:
+photon_mgc_merge_rgb_raw16_f16_tile16_halide:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa7c4, 0x168
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa92c, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa94c, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xa96c, 0x518
+    bl photon_mgc_spatial_rgb_address_389ec70
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xae84, 0x24
+photon_mgc_spatial_rgb_page_371a000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xaea8, 0x218
+    bl photon_mgc_spatial_rgb_address_389ec70
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb0c0, 0x8
+    adrp x9, photon_mgc_spatial_rgb_page_6b6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb0c8, 0x1c
+    adrp x10, photon_mgc_spatial_rgb_page_6bc000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb0e4, 0x198
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb27c, 0x1a0
+    bl photon_mgc_spatial_rgb_address_389b420
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb41c, 0x2e0
+    adrp x13, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb6fc, 0x48
+    adrp x9, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb744, 0xf8
+    adrp x13, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb83c, 0x38
+    adrp x13, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb874, 0x5c
+    adrp x15, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb8d0, 0x38
+    adrp x14, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb908, 0x88
+    adrp x29, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xb990, 0x88
+    adrp x17, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xba18, 0x80
+    adrp x29, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xba98, 0x10c
+    adrp x11, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xbba4, 0x2c8
+photon_mgc_spatial_rgb_page_371b000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xbe6c, 0x5ac
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc418, 0x8
+    bl photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc420, 0x3c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc45c, 0x50
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc4ac, 0x8
+    bl photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc4b4, 0x40
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc4f4, 0x34
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc528, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc558, 0x44
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc59c, 0x44
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc5e0, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc60c, 0x8
+    bl photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc614, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc638, 0x3c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc674, 0x48
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc6bc, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc6ec, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc71c, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc74c, 0x34
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc780, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc784, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc7a8, 0x34
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc7dc, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc7fc, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc828, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc84c, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc87c, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc8ac, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc8b0, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc8d4, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc8f4, 0x34
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc928, 0x44
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc96c, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc998, 0x8
+    bl photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc9a0, 0x1c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc9bc, 0x34
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xc9f0, 0x18
+    bl photon_mgc_halide_error_5f94ec4
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xca08, 0xb0
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xcab8, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xcabc, 0x8
+    bl photon_mgc_halide_error_5f95260
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xcac4, 0x308
+photon_mgc_spatial_rgb_page_371c000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xcdcc, 0x210
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xcfdc, 0x34
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd010, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd03c, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd06c, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd090, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd0b0, 0x28
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd0d8, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd108, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd12c, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd14c, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd16c, 0x28
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd194, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd1b8, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd1d8, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd1f8, 0x44
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd23c, 0x1c
+    adrp x8, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd258, 0x2c
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd284, 0xf8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd37c, 0x20
+    adrp x9, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd39c, 0x94
+    bl photon_mgc_spatial_rgb_address_389ec70
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd430, 0x274
+    adrp x1, photon_mgc_spatial_rgb_page_61e7000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd6a4, 0x4c
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd6f0, 0x8
+    adrp x20, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd6f8, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd708, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd718, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd738, 0x38
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd770, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd77c, 0x8
+    bl photon_mgc_halide_error_5f94b18
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd784, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd790, 0x4
+    adrp x2, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd794, 0x10
+    bl photon_mgc_halide_error_5f94c78
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7a4, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7ac, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7b8, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7c0, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7c8, 0x8
+    bl photon_mgc_halide_error_5f94c0c
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7d0, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7f0, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd7f8, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd800, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd808, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd810, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd818, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd820, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd828, 0x34
+    b photon_mgc_halide_error_5f95560
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd85c, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd864, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd874, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd878, 0x8
+    bl photon_mgc_halide_error_5f95260
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd880, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd88c, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd89c, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8a0, 0x8
+    bl photon_mgc_halide_error_5f95260
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8a8, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8b4, 0xc
+    bl photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8c0, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8cc, 0x8
+    bl photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8d4, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8d8, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8e8, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd8f8, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd908, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd914, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd91c, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd924, 0x14
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd938, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd940, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd948, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd954, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd960, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd968, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd974, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd980, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd990, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9a0, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9a8, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9b4, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9c0, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9c8, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9d0, 0x8
+    bl photon_mgc_halide_error_5f95638
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9d8, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9dc, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9e8, 0x10
+    bl photon_mgc_halide_error_5f950cc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9f8, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xd9fc, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda04, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda0c, 0x8
+    bl photon_mgc_halide_error_5f956a4
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda14, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda1c, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda28, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda34, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda40, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda4c, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda58, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda64, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda70, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda78, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda84, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda8c, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xda98, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdaa4, 0x8
+    bl photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdaac, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdab4, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdac0, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdacc, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdad8, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdae4, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdaf0, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdafc, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb08, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb10, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb1c, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb24, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb28, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb38, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb44, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb50, 0x8
+    bl photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb58, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb60, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb6c, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb78, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb84, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb90, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdb98, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdba4, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbac, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbb0, 0x14
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbc4, 0x4
+photon_mgc_spatial_rgb_page_371d000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbc8, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbd0, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbdc, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbe4, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbf0, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdbf8, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc04, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc10, 0x8
+    bl photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc18, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc24, 0x8
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc2c, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc34, 0xc
+    bl photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc40, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc48, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc4c, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc5c, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bc6000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xdc60, 0xf28
+
+
+.section .text.photon_mgc.SpatialRgb.green_dispatch,"ax",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_389e000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xeb88, 0xc70
+photon_mgc_spatial_rgb_address_389ec70:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xf7f8, 0x84
+    adrp x10, photon_mgc_spatial_rgb_page_6b2000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xf87c, 0x19c
+    bl photon_mgc_halide_error_38a92e8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa18, 0x14
+    bl photon_mgc_halide_error_38a3740
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa2c, 0x1c
+    bl photon_mgc_spatial_rgb_address_38aee1c
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa48, 0x14
+    adrp x2, photon_mgc_spatial_rgb_page_4e9000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa5c, 0x8
+    bl photon_mgc_halide_error_5ff6938
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa64, 0x8
+    bl photon_mgc_halide_error_2055170
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa6c, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_51d000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa70, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_51d000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa80, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_53d000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa84, 0x10
+    bl photon_mgc_halide_error_5ff8944
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa94, 0x4
+    bl photon_mgc_halide_error_5ff89a0
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfa98, 0xc0
+
+
+.section .text.photon_mgc.SpatialRgb.green_raw16,"ax",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_38aa000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0xfb58, 0x69c
+photon_mgc_spatial_rgb_address_38aa69c:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x101f4, 0x1cc
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x103c0, 0x44
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x10404, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x10420, 0x68c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x10aac, 0x9c
+photon_mgc_spatial_rgb_page_38ab000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x10b48, 0xd70
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x118b8, 0x28c
+photon_mgc_spatial_rgb_page_38ac000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x11b44, 0x8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x11b4c, 0x420
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x11f6c, 0x474
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x123e0, 0x18
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x123f8, 0x150
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x12548, 0x78
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x125c0, 0xc8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x12688, 0x68
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x126f0, 0x58
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x12748, 0x4c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x12794, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x127b0, 0x368
+photon_mgc_spatial_rgb_page_38ad000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x12b18, 0x20c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x12d24, 0x6e4
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x13408, 0x288
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x13690, 0x424
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x13ab4, 0x54
+photon_mgc_spatial_rgb_page_38ae000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x13b08, 0x420
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x13f28, 0x18
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x13f40, 0x118
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14058, 0x68
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x140c0, 0xa0
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14160, 0x48
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x141a8, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x141bc, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x141d0, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14200, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1420c, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14218, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14224, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1422c, 0x20
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1424c, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14278, 0x28
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x142a0, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x142a8, 0x20
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x142c8, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x142f4, 0x28
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1431c, 0xc
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14328, 0x38
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14360, 0x3c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1439c, 0x40
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x143dc, 0x3c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14418, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14448, 0x68
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x144b0, 0x18
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x144c8, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x144d0, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x144e0, 0xc
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x144ec, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14518, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14528, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14558, 0x18
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14570, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14584, 0x50
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x145d4, 0x80
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14654, 0x48
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1469c, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x146cc, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x146f8, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14724, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14754, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14774, 0x20
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14794, 0x34
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x147c8, 0x38
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14800, 0x34
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14834, 0x30
+photon_mgc_spatial_rgb_address_38aee1c:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14864, 0xb8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1491c, 0x128
+photon_mgc_spatial_rgb_page_38af000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14a44, 0x290
+    adrp x7, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14cd4, 0x64
+    adrp x14, photon_mgc_spatial_rgb_page_6ba000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14d38, 0x40
+    adrp x14, photon_mgc_spatial_rgb_page_6ba000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14d78, 0xa0
+    adrp x5, photon_mgc_spatial_rgb_page_6b4000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x14e18, 0x3fc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15214, 0x40
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15254, 0x3c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15290, 0x44
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x152d4, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x152d8, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15304, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15330, 0x3c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1536c, 0x30
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1539c, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x153a0, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x153cc, 0x1d8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x155a4, 0x34
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x155d8, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x155f8, 0x24
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1561c, 0x18
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15634, 0x1c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15650, 0x18
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15668, 0x48
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x156b0, 0x10
+    adrp x8, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x156c0, 0x24
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x156e4, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_61e7000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x156e8, 0x114
+    adrp x8, photon_mgc_spatial_rgb_page_6c3000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x157fc, 0x4
+    adrp x8, photon_mgc_spatial_rgb_page_6bd000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15800, 0x34
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15834, 0x4
+    adrp x8, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15838, 0x1c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15854, 0x1c
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15870, 0x2c
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1589c, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x158a4, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x158b0, 0x28
+    b photon_mgc_halide_error_5f95560
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x158d8, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x158dc, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x158ec, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x158f8, 0x20
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15918, 0x18
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15930, 0x14
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15944, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15954, 0x18
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1596c, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1597c, 0x14
+photon_mgc_spatial_rgb_page_38b0000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15990, 0x18
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x159a8, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x159b4, 0x2c
+    b photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x159e0, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x159f0, 0x30
+    b photon_mgc_halide_error_5f94ec4
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a20, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a24, 0x10
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a34, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a40, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a48, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a54, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a5c, 0x30
+    b photon_mgc_halide_error_5f94fa8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15a8c, 0x28
+    b photon_mgc_halide_error_5f95638
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15ab4, 0x30
+    b photon_mgc_halide_error_5f950cc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15ae4, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15aec, 0x28
+    b photon_mgc_halide_error_5f956a4
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b14, 0x4
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b18, 0x18
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b30, 0xc
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b3c, 0x2c
+    b photon_mgc_halide_error_5f95034
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b68, 0x8
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b70, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b74, 0x14
+    adrp x1, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b88, 0x4
+    adrp x3, photon_mgc_spatial_rgb_page_bd1000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15b8c, 0x2c
+    b photon_mgc_halide_error_5f95260
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x15bb8, 0xd68
+
+
+.section .text.photon_mgc.SpatialRgb.u16_buffer_view_copy,"ax",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_389b000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x16920, 0x20c
+    adrp x11, photon_mgc_spatial_rgb_page_6b5000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x16b2c, 0x1c0
+    bl photon_mgc_u16_copy_dispatch
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x16cec, 0x4c
+photon_mgc_spatial_rgb_address_389b420:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x16d38, 0xbe0
+
+
+.section .text.photon_mgc.SpatialRgb.u16_copy,"ax",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_5e4c000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x17918, 0xb58
+photon_mgc_spatial_rgb_address_5e4cb58:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x18470, 0x4a8
+photon_mgc_spatial_rgb_page_5e4d000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x18918, 0x68
+    adrp x6, photon_mgc_spatial_rgb_page_6ba000
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x18980, 0xc3c
+photon_mgc_spatial_rgb_address_5e4dca8:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x195bc, 0x358
+photon_mgc_spatial_rgb_page_5e4e000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x19914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_4e9000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_4e9000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1a914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_51d000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_51d000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1b914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_53d000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_53d000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1c914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6b2000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6b2000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1d914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6b4000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6b4000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1e914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6b5000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6b5000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x1f914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6b6000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6b6000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x20914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6b9000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6b9000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x21914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6ba000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6ba000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x22914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6bc000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6bc000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x23914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6bd000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6bd000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x24914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6c2000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6c2000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x25914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6c3000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6c3000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x26914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_6c4000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_6c4000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x27914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_bc6000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_bc6000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x28914, 0x1000
+
+.section .rodata.photon_mgc.spatial_rgb_page_bd1000,"a",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_bd1000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x29914, 0x1000
+
+.section .data.rel.ro.photon_mgc.spatial_rgb_page_61e7000,"aw",@progbits
+    .p2align 12
+photon_mgc_spatial_rgb_page_61e7000:
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x2a914, 0x938
+    .xword photon_mgc_spatial_rgb_address_370f514
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x2b24c, 0xe8
+    .xword photon_mgc_spatial_rgb_address_38aa69c
+    .incbin "@MGC_SPATIAL_RGB_CAPSULE@", 0x2b334, 0x5d0
+
+.section .note.GNU-stack,"",@progbits

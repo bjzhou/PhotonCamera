@@ -3,21 +3,24 @@ package com.hinnka.mycamera.processor
 import java.io.File
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class GlesMgcSpatialRgbChromaPostprocessorTest {
     @Test
-    fun postprocessorKeepsWbPairedAndDoesNotReapplyLensShading() {
+    fun postprocessorKeepsWbPairedUsesRgbDirectionAndDoesNotReapplyLensShading() {
         val seed = GlesMgcSpatialRgbChromaShaders.seed
         val finish = GlesMgcSpatialRgbChromaShaders.finalCameraRgb
 
         assertTrue(seed.contains("cameraRgb * uCalculationGains"))
         assertTrue(finish.contains("/\n                max(uCalculationGains"))
         assertTrue(seed.contains("directionMaskAt(p)"))
-        assertTrue(seed.contains("directionMomentAt(p)"))
-        assertTrue(seed.contains("dot(directionMoment, doubledDirectionAxes[i])"))
+        assertTrue(seed.contains("float rgbGradient"))
+        assertTrue(seed.contains("gradients[i] = rgbGradient"))
+        assertFalse(seed.contains("directionMomentAt"))
+        assertFalse(seed.contains("doubledDirectionAxes"))
         assertTrue(seed.contains("count << 8"))
         assertTrue(seed.contains("const float finiteScale = 65504.0 / 65535.0"))
         assertTrue(!seed.contains("vec3(imageLoad(uCameraRgb"))

@@ -106,6 +106,7 @@ class GlesMgcRawSpatialShadersTest {
         listOf(
             GlesMgcRawSpatialShaders.mergeRgb,
             GlesMgcRawSpatialShaders.normalizeRgb16,
+            GlesMgcRawSpatialShaders.normalizeAotRgb16,
         ).forEachIndexed { index, shader ->
             val sourceFile = File.createTempFile("mgc-spatial-rgb-$index-", ".frag")
             val outputFile = File.createTempFile("mgc-spatial-rgb-$index-", ".spv")
@@ -199,6 +200,22 @@ class GlesMgcRawSpatialShadersTest {
         assertTrue(shader.contains("float(4 - abs(offset)) * (1.0 / 16.0)"))
         assertTrue(shader.contains("floor(value + 0.5)"))
         assertFalse(shader.contains("ivec2(gl_FragCoord.xy) * 2"))
+    }
+
+    @Test
+    fun originalAotOutputUsesPlanarQ14CameraRgbWithoutWbUndo() {
+        val shader = GlesMgcRawSpatialShaders.normalizeAotRgb16
+
+        assertTrue(shader.contains("#version 300 es"))
+        assertTrue(shader.contains("* (1.0 / 16384.0)"))
+        assertTrue(shader.contains("float channelShading"))
+        assertTrue(shader.contains("out highp uvec4 oRgb16"))
+        assertTrue(shader.contains("oRgb16[uChannel] = encodedValue"))
+        assertFalse(shader.contains("uimage2D"))
+        assertFalse(shader.contains("imageLoad"))
+        assertFalse(shader.contains("imageStore"))
+        assertFalse(shader.contains("uCalculationGains"))
+        assertFalse(shader.contains("uCameraDomainScale"))
     }
 
     @Test
