@@ -135,9 +135,9 @@ data class RawMetadata(
     val mgcDenoiseShotNoise: FloatArray? = null,
     /** Exact process-local Q8 Spatial variance multiplier; never serialized into DNG. */
     val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
-    /** Classic Sabre's process-local, four-channel-uniform NoiseModel coefficient scale. */
+    /** Sabre's process-local NoiseModel scale measured from accumulated Q8 green merge weights. */
     val mgcSabreNoiseModelScale: Float? = null,
-    /** Reference-frame SNR used by MGC FinishRaw to select luma/chroma tuning. */
+    /** Merged output-frame SNR used by MGC FinishRaw to select luma/chroma tuning. */
     val mgcDenoiseTuningSnr: Float? = null,
     /** Reference-frame SNR used by MGC FinishRaw to select the sharpen curves. */
     val mgcSharpenTuningSnr: Float? = null,

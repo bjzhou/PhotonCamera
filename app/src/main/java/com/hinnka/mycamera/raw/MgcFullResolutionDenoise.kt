@@ -19,9 +19,8 @@ import java.nio.ByteBuffer
  * This class owns luma/chroma protobuf tuning selection and normalized
  * noise-model preparation. Spatial consumes its propagated correlation/coefficient/strength
  * outputs; classic Sabre consumes its dedicated luma tuning and scales the complete reference
- * NoiseModel by its measured merge factor and post-merge SNR-table reduction. The
- * native bridge converts normalized read/shot/quadratic coefficients exactly once at
- * the Q14 S16 kernel boundary.
+ * NoiseModel by its measured merge factor. The native bridge converts normalized
+ * read/shot/quadratic coefficients exactly once at the Q14 S16 kernel boundary.
  */
 internal object MgcFullResolutionDenoise {
     private const val TAG = "MgcFullResolutionDenoise"
@@ -265,10 +264,9 @@ internal object MgcFullResolutionDenoise {
             } else {
                 1f
             }
-            // Sabre first obtains the merged NoiseModel produced from its accumulated frame
-            // weights. MergeRaw then passes the reciprocal SNR-table reduction as an equivalent
-            // sample count to NoiseModel::Average() at libgcastartup.so+0x5e97a84. The metadata
-            // scale contains both stages and is applied uniformly to read and shot coefficients.
+            // V25 GetMergedNoiseModel returns Sabre's merged model directly. Photon transports
+            // the measured Q8 average merge factor and applies it uniformly to the physical
+            // reference read/shot coefficients; there is no additional reference-SNR table.
             // The physical camera model has no quadratic term.
             rgbShot = FloatArray(3) { channel ->
                 resolvedNoise.shot[channel] * sabreNoiseModelScale

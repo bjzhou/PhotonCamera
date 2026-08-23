@@ -10,7 +10,14 @@ import java.nio.ByteBuffer
  */
 internal object MgcSpatialStrengthMapGenerator {
     private const val TAG = "MgcSpatialStrength"
-    private const val FIXED16_WHITE_LEVEL = 16384f
+
+    /**
+     * Stock MGC V25 Spatial configuration value. This is an independent multiplier for
+     * rejected samples; it is not derived from the sensor white level. The original call path
+     * copies Context +0x2c0 into the Spatial state and forwards it to the noise-model AOT after
+     * exposure normalization. The normal base-exposure path therefore uses the identity value.
+     */
+    private const val REJECTED_DENOISE_MULTIPLIER = 1f
 
     init {
         System.loadLibrary("my-native-lib")
@@ -49,7 +56,6 @@ internal object MgcSpatialStrengthMapGenerator {
         rejectionWidth: Int,
         rejectionHeight: Int,
         frameCount: Int,
-        whiteLevel: Int,
         inputReadNoise: FloatArray,
         inputShotNoise: FloatArray,
         frameWeights: FloatArray,
@@ -64,7 +70,6 @@ internal object MgcSpatialStrengthMapGenerator {
             rejectionWidth.toLong() * rejectionHeight.toLong() * frameCount
         val valid = fusedFixed16.isDirect && alignment.isDirect && rejection.isDirect &&
             width > 0 && height > 0 && cfaPattern in 0..3 && frameCount > 1 &&
-            whiteLevel > 0 &&
             fusedFixed16.capacity().toLong() >=
                 geometry.fixed16SampleCount * Short.SIZE_BYTES &&
             alignmentWidth == geometry.alignmentWidth &&
@@ -95,11 +100,6 @@ internal object MgcSpatialStrengthMapGenerator {
         val outputShotNoise = FloatArray(3)
         val outputWeightsSumTotalDiag0 = FloatArray(3)
         val outputWeightsSumTotalDiag1 = FloatArray(3)
-        // MergeRaw computes this from StaticMetadata::white_level before invoking
-        // Compute{Bayer,Rgb}NoiseModel. The Fixed16 image is normalized too, but the
-        // noise-model ABI still receives the original sensor-domain rejection scale.
-        val rejectedDenoiseMultiplier =
-            (FIXED16_WHITE_LEVEL / (whiteLevel.toFloat() + 1f)).coerceAtLeast(1f)
         val result = nativeCompute(
             layout = if (outputMode == MgcSpatialOutputMode.BAYER) 0 else 1,
             fusedFixed16 = fusedFixed16,
@@ -117,7 +117,7 @@ internal object MgcSpatialStrengthMapGenerator {
             inputShotNoise = inputShotNoise,
             frameWeights = frameWeights,
             kernelSigmas = kernelSigmas,
-            rejectedDenoiseMultiplier = rejectedDenoiseMultiplier,
+            rejectedDenoiseMultiplier = REJECTED_DENOISE_MULTIPLIER,
             outputStrengthQ8 = output,
             outputReadNoise = outputReadNoise,
             outputShotNoise = outputShotNoise,

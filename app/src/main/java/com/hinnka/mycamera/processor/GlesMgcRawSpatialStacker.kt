@@ -1727,6 +1727,10 @@ internal class GlesMgcRawSpatialStacker(
             }
             checkGlError("MGC Spatial ${outputMode.name} merge")
             returned = true
+            // MGC's base-SNR * sqrt(planned frame count) value is only a pre-merge planning
+            // estimate. FinishRaw leaves its explicit SNR override unset and evaluates the
+            // propagated Spatial output NoiseModel instead, after alignment/rejection weights
+            // and output-exposure normalization have been folded into read/shot.
             val propagatedOutputSnr = if (outputReadNoise != null && outputShotNoise != null) {
                 MgcSpatialMergeTuning.outputNoiseModelSnr(
                     signal = bayerKernelTuning.referenceSignal *
@@ -1982,9 +1986,6 @@ internal class GlesMgcRawSpatialStacker(
                 desiredExposureProduct = frames.first().desiredExposureProduct,
                 actualExposureProduct = frames.first().exposureProduct,
             )
-            val sabrePostMergeNoiseReduction = classicSabreNoiseModelScale(
-                kernelTuning.referenceSnr,
-            )
             val referenceCalibration = calibrationForFrame(
                 frame = frames.first(),
                 exposureScale = 1f,
@@ -2005,7 +2006,6 @@ internal class GlesMgcRawSpatialStacker(
                     "${sabreKernelParameters.coherenceScale} " +
                     "forceReferenceColorRgb=${sabreKernelParameters.forceReferenceColorRgb} " +
                     "mergeGradientThreshold=${coreImagingTuning.fusion.mergeGradientThreshold ?: "adaptive"} " +
-                    "postMergeNoiseReduction=$sabrePostMergeNoiseReduction " +
                     "guideColorSpace=sqrt noiseLut=qmc64x10 " +
                     "alignmentInputGain=${referenceCalibration.alignmentGain} " +
                     "alignmentDomain=signed-s16",
@@ -2155,12 +2155,10 @@ internal class GlesMgcRawSpatialStacker(
             val sabreAverageMergeFactor = readSabreAverageMergeFactor(
                 accumulatedWeightsGb = accumulatedWeightsGb,
             )
-            val sabreNoiseModelScale =
-                sabrePostMergeNoiseReduction * sabreAverageMergeFactor
+            val sabreNoiseModelScale = sabreAverageMergeFactor
             PLog.i(
                 SABRE_TAG,
-                "MGC Sabre merged NoiseModel postMergeReduction=$sabrePostMergeNoiseReduction " +
-                    "averageMergeFactor=$sabreAverageMergeFactor " +
+                "MGC Sabre merged NoiseModel averageMergeFactor=$sabreAverageMergeFactor " +
                     "coefficientScale=$sabreNoiseModelScale",
             )
 
@@ -2293,10 +2291,11 @@ internal class GlesMgcRawSpatialStacker(
             checkGlError("MGC Sabre Resolve/VGN color noise")
             returned = true
             // FinishRaw resolves denoise tuning SNR from the merged frame's NoiseModel when no
-            // explicit override is present. Sabre has already scaled that model by the measured
-            // average merge factor and its post-merge reduction table. The separately logged
-            // referenceSnr * sqrt(frameCount) value is a pre-merge planning estimate, not the
-            // authoritative FinishRaw/Pecan tuning input.
+            // explicit override is present. Photon represents Sabre's merged model with the
+            // measured Q8 average merge factor. V25's GetMergedNoiseModel branch returns the
+            // model directly and does not apply a second SNR lookup-table reduction. The
+            // separately logged referenceSnr * sqrt(frameCount) value remains only a pre-merge
+            // planning estimate.
             val finishRawDenoiseSnr = kernelTuning.referenceSnr /
                 sqrt(sabreNoiseModelScale)
             PLog.i(
@@ -3266,7 +3265,7 @@ internal class GlesMgcRawSpatialStacker(
             // finest-level subpixel update and temporal merging loses high-frequency detail.
             alignmentGain = MgcAlignmentInputScale.compute(
                 frameGain = exposureScale,
-                whiteLevel = sensorWhiteLevel,
+                staticMetadataWhiteLevel = sensorWhiteLevel,
             ),
             unblockerShotNoise = unblockerShot,
             unblockerReadNoise = unblockerRead,
@@ -3419,31 +3418,6 @@ internal class GlesMgcRawSpatialStacker(
         } else {
             null
         }
-    }
-
-    /** Classic Sabre table at libgcastartup.so+0x00bc67dc, consumed by 0x388396c. */
-    private fun classicSabreNoiseModelScale(referenceSnr: Float): Float {
-        val snr = referenceSnr.takeIf { it.isFinite() } ?: 0f
-        val reduction = when {
-            snr <= SABRE_DENOISE_SNR_LOW -> SABRE_DENOISE_REDUCTION_LOW
-            snr < SABRE_DENOISE_SNR_MID -> {
-                val amount = (snr - SABRE_DENOISE_SNR_LOW) /
-                    (SABRE_DENOISE_SNR_MID - SABRE_DENOISE_SNR_LOW)
-                SABRE_DENOISE_REDUCTION_LOW +
-                    amount * (SABRE_DENOISE_REDUCTION_MID - SABRE_DENOISE_REDUCTION_LOW)
-            }
-            snr < SABRE_DENOISE_SNR_HIGH -> {
-                val amount = (snr - SABRE_DENOISE_SNR_MID) /
-                    (SABRE_DENOISE_SNR_HIGH - SABRE_DENOISE_SNR_MID)
-                SABRE_DENOISE_REDUCTION_MID +
-                    amount * (SABRE_DENOISE_REDUCTION_HIGH - SABRE_DENOISE_REDUCTION_MID)
-            }
-            else -> SABRE_DENOISE_REDUCTION_HIGH
-        }
-        // MergeRaw passes 1 / reduction as the equivalent sample count to
-        // NoiseModel::Average(). Average() takes its reciprocal, so the coefficients that
-        // leave Sabre are multiplied by the table value itself.
-        return reduction
     }
 
     private fun resolveNoiseModelForFrame(frame: RawStackFrame): ResolvedRawNoiseModel =
@@ -5863,7 +5837,6 @@ internal class GlesMgcRawSpatialStacker(
                 rejectionWidth = capture.rejectionWidth,
                 rejectionHeight = capture.rejectionHeight,
                 frameCount = capture.frameCount,
-                whiteLevel = sensorWhiteLevelCode,
                 inputReadNoise = capture.inputReadNoise,
                 inputShotNoise = capture.inputShotNoise,
                 frameWeights = capture.frameWeights,
@@ -9167,12 +9140,6 @@ internal class GlesMgcRawSpatialStacker(
         const val SABRE_SIGNAL_LINEAR_HISTOGRAM_BITS = 10
         const val SABRE_SIGNAL_LINEAR_HISTOGRAM_BINS = 1 shl SABRE_SIGNAL_LINEAR_HISTOGRAM_BITS
         const val SABRE_SIGNAL_ROW_STEP = 8
-        const val SABRE_DENOISE_SNR_LOW = 0.5f
-        const val SABRE_DENOISE_REDUCTION_LOW = 0.8f
-        const val SABRE_DENOISE_SNR_MID = 4f
-        const val SABRE_DENOISE_REDUCTION_MID = 1f
-        const val SABRE_DENOISE_SNR_HIGH = 10f
-        const val SABRE_DENOISE_REDUCTION_HIGH = 0.7f
         const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         const val RAW_BYTES_PER_PIXEL = 2
         const val RGB_AOT_TILE_SIZE = 16

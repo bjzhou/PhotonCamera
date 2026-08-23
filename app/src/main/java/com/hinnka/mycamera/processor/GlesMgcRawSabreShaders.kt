@@ -604,8 +604,11 @@ internal object GlesMgcRawSabreShaders {
     """.trimIndent()
 
     /**
-     * Matches SabreProcessor::GetMergedNoiseModel's average-merge-factor input. The original
-     * accumulator is Q8, so quantize the GLES floating-point accumulator before taking 256/w.
+     * Reproduces the Q8 `SABRE: Average merge factor` diagnostic at V25 0x34e6964. The original
+     * computes the global mean of `256 / accumulated_green_weight_q8`. This is the measured
+     * coefficient scale Photon can transport for its reimplemented Sabre merge; the diagnostic
+     * itself must not be mistaken for the input of GetMergedNoiseModel.
+     *
      * Four-by-four reduction keeps the readback small without changing the global average.
      */
     val reciprocalGreenWeight4x4 = """

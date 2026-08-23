@@ -9,6 +9,7 @@ internal object MgcSpatialMergeTuning {
     private const val DEFAULT_FRAME_WEIGHT_EXPONENT = 1f
     private const val DEFAULT_SELECTED_FRAME_MULTIPLIER = 1f
 
+    /** MGC's pre-merge planning estimate: base-frame SNR times sqrt(frame count). */
     fun mergedSnr(referenceSnr: Float, frameCount: Int): Float {
         val snr = referenceSnr.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
         return snr * sqrt(frameCount.coerceAtLeast(0).toFloat())
@@ -17,9 +18,9 @@ internal object MgcSpatialMergeTuning {
     /**
      * Evaluates the representative SNR of Spatial's propagated output NoiseModel.
      *
-     * Unlike [mergedSnr], this includes the actual alignment/rejection weights already folded
-     * into ComputeBayerNoiseModel/ComputeRgbNoiseModel rather than assuming every admitted frame
-     * contributed one full independent sample.
+     * This mirrors MGC V25 NoiseModel::EstimateSnr for the normalized signal path: use the
+     * green channel (index 1), whose read/shot coefficients already include the actual AOT
+     * alignment/rejection weights and output-exposure transport.
      */
     fun outputNoiseModelSnr(
         signal: Float,

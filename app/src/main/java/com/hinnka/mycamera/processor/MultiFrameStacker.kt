@@ -123,10 +123,9 @@ data class RawStackResult(
      */
     val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
     /**
-     * Classic Sabre's four-channel-uniform NoiseModel coefficient scale.
-     *
-     * MGC derives this process-local value from the reference-frame green SNR, then multiplies
-     * every read/shot/quadratic coefficient in the reference NoiseModel by it before FinishRaw.
+     * Process-local Sabre NoiseModel coefficient scale measured from accumulated Q8 green merge
+     * weights. V25 does not apply a second reference-SNR lookup-table scale after
+     * GetMergedNoiseModel.
      */
     val mgcSabreNoiseModelScale: Float? = null,
     /**
