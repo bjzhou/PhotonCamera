@@ -249,6 +249,7 @@ object SuperResolutionDngWriter {
     private const val TAG_OPCODE_LIST_3 = 51022
     private const val TAG_NOISE_PROFILE = 51041
     private const val TAG_DEFAULT_BLACK_RENDER = 51110
+    private const val TAG_PROFILE_NAME = 50936
     private const val TAG_PROFILE_TONE_CURVE = 50940
     private const val TAG_PROFILE_GAIN_TABLE_MAP_2 = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2
     private const val PREVIEW_MAX_EDGE = 512
@@ -717,6 +718,10 @@ object SuperResolutionDngWriter {
                 add(long(TAG_DEFAULT_BLACK_RENDER, 1))
             }
             add(sRationalArray(TAG_BASELINE_EXPOSURE, listOf(resolvedBaselineExposureEv.toDouble())))
+            profileName
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { add(ascii(TAG_PROFILE_NAME, it)) }
             profileToneCurve?.let { add(floatArray(TAG_PROFILE_TONE_CURVE, it)) }
             add(short(TAG_CALIBRATION_ILLUMINANT_1, illuminant1))
             if (illuminant2 != null && colorMatrix2 != null) {

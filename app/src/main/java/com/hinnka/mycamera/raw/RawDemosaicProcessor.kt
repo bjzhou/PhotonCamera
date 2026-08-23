@@ -1813,6 +1813,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawEmbeddedDngProfileId: String? = null,
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
@@ -1856,6 +1857,7 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawEmbeddedDngProfileId = rawEmbeddedDngProfileId,
                 rawNoiseProfileId = rawNoiseProfileId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
@@ -1901,6 +1903,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawEmbeddedDngProfileId: String? = null,
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
@@ -1942,6 +1945,7 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawEmbeddedDngProfileId = rawEmbeddedDngProfileId,
                 rawNoiseProfileId = rawNoiseProfileId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
@@ -2045,6 +2049,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawEmbeddedDngProfileId: String? = null,
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
@@ -2091,6 +2096,7 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawEmbeddedDngProfileId = rawEmbeddedDngProfileId,
                 rawNoiseProfileId = rawNoiseProfileId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
@@ -2146,6 +2152,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawEmbeddedDngProfileId: String? = null,
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
@@ -2292,6 +2299,7 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawEmbeddedDngProfileId: String? = null,
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
@@ -2353,15 +2361,22 @@ class RawDemosaicProcessor {
             ColorSpace.ProPhoto
         }
         var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
+        var embeddedDngProfiles: List<DngEmbeddedProfileEntry> = emptyList()
+        var selectedEmbeddedDngProfile: DngEmbeddedProfileEntry? = null
+        val sourceProfileGainTableMap = metadata?.profileGainTableMap?.takeIf { it.isValid }
 
         if (dngFile != null) {
             val hasClassicTiffHeader = DngProfileGainTableMap.hasClassicTiffHeader(dngFile)
-            val profileGainTableMap = if (hasClassicTiffHeader) {
-                DngProfileGainTableMap.readFrom(dngFile)
+            embeddedDngProfiles = if (hasClassicTiffHeader) {
+                DngEmbeddedProfile.readAllFrom(dngFile)
             } else {
                 PLog.d(TAG, "Skipping DNG-only metadata for non-classic-TIFF RAW: ${dngFile.name}")
-                null
+                emptyList()
             }
+            selectedEmbeddedDngProfile = DngEmbeddedProfile.resolveSelection(
+                embeddedDngProfiles,
+                rawEmbeddedDngProfileId,
+            )
             val dngRawData = processDngNative(
                 dngFile.absolutePath,
                 profileWorkingColorSpace.xr, profileWorkingColorSpace.yr,
@@ -2409,7 +2424,7 @@ class RawDemosaicProcessor {
                 rawCustomWhiteLevel = rawCustomWhiteLevel,
                 rawCfaCorrectionMode = rawCfaCorrectionMode
             ).copy(
-                profileGainTableMap = profileGainTableMap ?: actualMetadata?.profileGainTableMap,
+                profileGainTableMap = null,
                 // A persisted DNG is a new editing source. Spatial merge state is consumed only
                 // by the pre-write default pass and must never leak into later slider edits.
                 frameCount = 1,
@@ -2424,22 +2439,13 @@ class RawDemosaicProcessor {
                     processLocalMgcSharpenAttenuationScale,
                 coreImagingTuning = processLocalCoreImagingTuning.normalized(),
             )
-            profileGainTableMap?.let {
-                PLog.d(
-                    TAG,
-                    "DNG ProfileGainTableMap loaded: tag=${it.sourceTag} " +
-                        "grid=${it.mapPointsH}x${it.mapPointsV} points=${it.mapPointsN} gamma=${it.gamma}"
-                )
-            }
             actualRotation = if (dngRawData.rotation != 0) dngRawData.rotation else rotation
-            embeddedDngRenderPlan = if (hasClassicTiffHeader) {
+            embeddedDngRenderPlan = selectedEmbeddedDngProfile?.let { selectedProfile ->
                 DngEmbeddedProfile.resolveRenderPlan(
-                    file = dngFile,
+                    entry = selectedProfile,
                     metadata = actualMetadata,
                     workingColorSpace = profileWorkingColorSpace
                 )
-            } else {
-                null
             }
             onMetadata?.invoke(actualMetadata)
         }
@@ -2535,10 +2541,8 @@ class RawDemosaicProcessor {
         val photonHdrRequested = normalizedToneMappingParameters.usePhotonHdr
         val useAdobeProfilePipeline = colorEngine == RawRenderingEngine.AdobeCurve
         val embeddedProfileDecision = EmbeddedDngProfilePolicy.resolve(
-            hasEmbeddedProfile = embeddedDngRenderPlan != null ||
-                actualMetadata.profileGainTableMap?.isValid == true,
+            hasEmbeddedProfile = embeddedDngRenderPlan != null,
             colorEngine = colorEngine,
-            profileToneMapMode = normalizedToneMappingParameters.profileToneMapMode,
             hasDcpSelection = hasDcpSelection,
         )
         val resolvedDcpRenderPlan = if (useAdobeProfilePipeline) {
@@ -2741,27 +2745,35 @@ class RawDemosaicProcessor {
 
         val oppoMasterToneMapActive = useAdobeProfilePipeline &&
             normalizedToneMappingParameters.useOppoMasterToneMap
-        val validEmbeddedProfileGainTableMap = actualMetadata.profileGainTableMap
+        val photonProfileGainTableMap = embeddedDngProfiles
+            .firstOrNull { it.isPhotonHdr && it.hasProfileGainTableMap }
+            ?.profileGainTableMap
+        val selectedProfileGainTableMap = selectedEmbeddedDngProfile
+            ?.takeUnless { it.isPhotonHdr }
+            ?.profileGainTableMap
             ?.takeIf { it.isValid }
-        val embeddedProfileGainTableMap = validEmbeddedProfileGainTableMap
-            ?.takeIf {
-                embeddedProfileDecision.shouldRetainEmbeddedPgtm()
-            }
-        if (embeddedProfileDecision.hasEmbeddedProfile) {
+        val selectedEmbeddedProfileIsActive = useAdobeProfilePipeline &&
+            !hasDcpSelection &&
+            normalizedToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Profile
+        val embeddedProfileGainTableMap = when {
+            photonHdrRequested -> photonProfileGainTableMap
+                ?: sourceProfileGainTableMap.takeIf { dngFile == null }
+            selectedEmbeddedProfileIsActive -> selectedProfileGainTableMap
+            else -> null
+        }
+        if (embeddedDngProfiles.isNotEmpty() || sourceProfileGainTableMap != null) {
             PLog.i(
                 TAG,
                 "DNG embedded profile: " +
                     "action=${if (embeddedProfileDecision.applyEmbeddedProfile) "apply" else "disable"} " +
-                    "engine=$colorEngine profileToneMap=${normalizedToneMappingParameters.profileToneMapMode} " +
-                    "customDcp=$hasDcpSelection " +
-                    "photonHdr=${when {
-                        embeddedProfileGainTableMap != null -> "embedded-mgc-pgtm"
-                        photonHdrRequested -> "unavailable-no-embedded-mgc-pgtm"
-                        else -> "disabled"
+                    "selected=${selectedEmbeddedDngProfile?.profileName ?: "none"} " +
+                    "engine=$colorEngine customDcp=$hasDcpSelection photonHdr=$photonHdrRequested " +
+                    "pgtmSource=${when {
+                        embeddedProfileGainTableMap == null -> "none"
+                        photonHdrRequested -> "photon-hdr"
+                        else -> "selected-profile"
                     }}"
             )
-        } else if (!photonHdrRequested && validEmbeddedProfileGainTableMap != null) {
-            PLog.i(TAG, "DNG ProfileGainTableMap disabled by Photon HDR setting")
         }
         actualMetadata = actualMetadata.copy(
             profileGainTableMap = embeddedProfileGainTableMap

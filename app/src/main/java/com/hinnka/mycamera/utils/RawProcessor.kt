@@ -808,13 +808,20 @@ object RawProcessor {
         } else {
             profileGainTableMap
         }
-        val writesGeneratedPhotonPgtm =
-            dngProfilePreparationOptions?.generatePhotonPgtm == true &&
-                writtenProfileGainTableMap != null
-        val writtenProfileName = if (writesGeneratedPhotonPgtm) {
+        val photonHdrCaptureRequested =
+            dngProfilePreparationOptions?.generatePhotonPgtm == true
+        val writtenProfileName = if (photonHdrCaptureRequested) {
             DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
         } else {
             profileName
+        }
+        val writtenProfileToneCurve = if (photonHdrCaptureRequested) {
+            if (profileToneCurve != null) {
+                PLog.w(TAG, "Ignoring ProfileToneCurve for Photon HDR capture")
+            }
+            null
+        } else {
+            profileToneCurve
         }
         val orientation = when (rotation) {
             90 -> ExifInterface.ORIENTATION_ROTATE_90
@@ -847,7 +854,7 @@ object RawProcessor {
                 baselineExposureEv = writtenBaselineExposureEv,
                 profileGainTableMap = writtenProfileGainTableMap,
                 profileName = writtenProfileName,
-                profileToneCurve = profileToneCurve,
+                profileToneCurve = writtenProfileToneCurve,
                 imageLayout = imageLayout,
                 compression = compression,
                 inputRowStepSamples = inputRowStepSamples,

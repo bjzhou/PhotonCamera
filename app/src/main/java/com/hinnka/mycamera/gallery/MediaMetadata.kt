@@ -42,7 +42,7 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 31,
+    val version: Int = 32,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -70,6 +70,7 @@ data class MediaMetadata(
     val rawAutoWhiteBalanceEstimate: Boolean? = null,
     val rawLensShadingCorrectionEnabled: Boolean? = null,
     val rawDcpId: String? = null,
+    val rawEmbeddedDngProfileId: String? = null,
     val rawHncsProfileId: String? = null,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
@@ -339,6 +340,11 @@ data class MediaMetadata(
                     rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
                     rawLensShadingCorrectionEnabled = if (obj.isNull("rawLensShadingCorrectionEnabled")) null else obj.optBoolean("rawLensShadingCorrectionEnabled"),
                     rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
+                    rawEmbeddedDngProfileId = if (obj.isNull("rawEmbeddedDngProfileId")) {
+                        null
+                    } else {
+                        obj.optString("rawEmbeddedDngProfileId")
+                    },
                     rawHncsProfileId = if (obj.isNull("rawHncsProfileId")) {
                         null
                     } else {

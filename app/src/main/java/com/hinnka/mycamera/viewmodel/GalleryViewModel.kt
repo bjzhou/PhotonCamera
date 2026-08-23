@@ -384,6 +384,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawDcpId = MutableStateFlow<String?>(null)
         private set
+    var editRawEmbeddedDngProfileId = MutableStateFlow<String?>(null)
+        private set
     var editRawHncsProfileId = MutableStateFlow<String?>(null)
         private set
     var editRawHncsRenderIntent = MutableStateFlow(HncsRenderIntent.Standard)
@@ -1373,6 +1375,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawCustomWhiteLevel.value = m.rawCustomWhiteLevel ?: 0f
             editRawCfaCorrectionMode.value = m.rawCfaCorrectionMode ?: RawCfaCorrection.MODE_DEFAULT
             editRawDcpId.value = m.rawDcpId
+            editRawEmbeddedDngProfileId.value = m.rawEmbeddedDngProfileId
             editRawHncsProfileId.value = m.rawHncsProfileId
             editRawHncsRenderIntent.value = m.rawHncsRenderIntent
             editRawHncsFilmCurveMode.value = m.rawHncsFilmCurveMode
@@ -1992,6 +1995,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             
             if (!targetPhoto.isVideo) {
                 editRawDcpId.value = metadata.rawDcpId
+                editRawEmbeddedDngProfileId.value = metadata.rawEmbeddedDngProfileId
                 editRawHncsProfileId.value = metadata.rawHncsProfileId
                 editRawHncsRenderIntent.value = metadata.rawHncsRenderIntent
                 editRawHncsFilmCurveMode.value = metadata.rawHncsFilmCurveMode
@@ -2056,6 +2060,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawCfaCorrectionMode.value = RawCfaCorrection.MODE_DEFAULT
                 editRawDROMode.value = "OFF"
                 editRawDcpId.value = null
+                editRawEmbeddedDngProfileId.value = null
                 editRawHncsProfileId.value = null
                 editRawHncsRenderIntent.value = HncsRenderIntent.Standard
                 editRawHncsFilmCurveMode.value = HncsFilmCurveMode.Standard
@@ -2176,6 +2181,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawCfaCorrectionMode.value = RawCfaCorrection.MODE_DEFAULT
         editRawDROMode.value = "OFF"
         editRawDcpId.value = null
+        editRawEmbeddedDngProfileId.value = null
         editRawHncsProfileId.value = null
         editRawHncsRenderIntent.value = HncsRenderIntent.Standard
         editRawHncsFilmCurveMode.value = HncsFilmCurveMode.Standard
@@ -2497,7 +2503,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private fun persistRawEditMetadata(
         mediaData: MediaData,
         onComplete: ((Boolean) -> Unit)? = null,
-        enableHdrGainmapForGoogleToneMap: Boolean = false
     ) {
         val sharpening = editSharpening.value
         val noiseReduction = editNoiseReduction.value
@@ -2516,6 +2521,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val customWhiteLevel = editRawCustomWhiteLevel.value
         val cfaCorrectionMode = editRawCfaCorrectionMode.value
         val dcpId = editRawDcpId.value
+        val embeddedDngProfileId = editRawEmbeddedDngProfileId.value
         val hncsProfileId = editRawHncsProfileId.value
         val hncsRenderIntent = editRawHncsRenderIntent.value
         val hncsFilmCurveMode = editRawHncsFilmCurveMode.value
@@ -2556,6 +2562,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     rawCfaCorrectionMode = cfaCorrectionMode,
                     droMode = droMode,
                     rawDcpId = dcpId,
+                    rawEmbeddedDngProfileId = embeddedDngProfileId,
                     rawHncsProfileId = hncsProfileId,
                     rawHncsRenderIntent = hncsRenderIntent,
                     rawHncsFilmCurveMode = hncsFilmCurveMode,
@@ -2564,7 +2571,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     baselineColorRecipeParams = baselineRecipeParams,
                     rawRenderingEngine = rawColorEngine,
                     rawToneMappingParameters = rawToneMappingParameters,
-                    manualHdrEffectEnabled = current.manualHdrEffectEnabled || enableHdrGainmapForGoogleToneMap,
                     spectralFilmStock = spectralFilmStock,
                     spectralFilmPrint = spectralFilmPrint,
                     spectralFilmCDensityGain = spectralFilmCDensityGain,
@@ -2605,24 +2611,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         value: RawToneMappingParameters,
         onComplete: ((Boolean) -> Unit)? = null
     ) {
-        val previous = editRawToneMappingParameters.value.normalized()
         val updated = value.normalized()
-        val shouldEnableHdrGainmap =
-            previous.profileToneMapMode != updated.profileToneMapMode &&
-                updated.usePhotonHdr
         editRawToneMappingParameters.value = updated
         persistRawEditMetadata(
             mediaData = mediaData,
             onComplete = onComplete,
-            enableHdrGainmapForGoogleToneMap = shouldEnableHdrGainmap
         )
     }
 
-    /** Selects the current DNG's embedded profile; the caller commits the combined edit state. */
-    fun selectRawEmbeddedDngProfileForEdit() {
+    /** Selects one embedded DNG profile; the caller commits the combined edit state. */
+    fun selectRawEmbeddedDngProfileForEdit(profileId: String, hasProfileGainTableMap: Boolean) {
         editRawDcpId.value = null
-        editRawToneMappingParameters.value = editRawToneMappingParameters.value
+        editRawEmbeddedDngProfileId.value = profileId
+        var updatedToneMapping = editRawToneMappingParameters.value
             .withProfileToneMapMode(RawProfileToneMapMode.Profile)
+        if (hasProfileGainTableMap) {
+            updatedToneMapping = updatedToneMapping.withPhotonHdr(false)
+        }
+        editRawToneMappingParameters.value = updatedToneMapping
     }
 
     fun saveRawExposureCompensationValue(mediaData: MediaData, value: Float, onComplete: ((Boolean) -> Unit)? = null) {
@@ -2712,6 +2718,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun saveRawDcpSelection(mediaData: MediaData, dcpId: String?, onComplete: ((Boolean) -> Unit)? = null) {
         editRawDcpId.value = dcpId
+        if (dcpId != null) {
+            editRawEmbeddedDngProfileId.value = null
+        }
         persistRawEditMetadata(mediaData, onComplete)
     }
 
@@ -2785,6 +2794,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         contentRepository.refreshCustomContent()
         return contentRepository.getAvailableDcps().firstOrNull { it.id == importedId }?.also {
             editRawDcpId.value = it.id
+            editRawEmbeddedDngProfileId.value = null
         }
     }
 
@@ -2800,7 +2810,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         contentRepository.refreshCustomContent()
         val dcpById = contentRepository.getAvailableDcps().associateBy { it.id }
         val importedDcps = importedIds.mapNotNull { dcpById[it] }
-        importedDcps.lastOrNull()?.let { editRawDcpId.value = it.id }
+        importedDcps.lastOrNull()?.let {
+            editRawDcpId.value = it.id
+            editRawEmbeddedDngProfileId.value = null
+        }
         return importedDcps
     }
 
@@ -3152,6 +3165,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawCustomWhiteLevel = editRawCustomWhiteLevel.value,
                         rawCfaCorrectionMode = editRawCfaCorrectionMode.value,
                         rawDcpId = editRawDcpId.value,
+                        rawEmbeddedDngProfileId = editRawEmbeddedDngProfileId.value,
                         rawHncsProfileId = editRawHncsProfileId.value,
                         rawHncsRenderIntent = editRawHncsRenderIntent.value,
                         rawHncsFilmCurveMode = editRawHncsFilmCurveMode.value,
@@ -3547,6 +3561,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawCustomWhiteLevel = editRawCustomWhiteLevel.value,
                         rawCfaCorrectionMode = editRawCfaCorrectionMode.value,
                         rawDcpId = editRawDcpId.value,
+                        rawEmbeddedDngProfileId = editRawEmbeddedDngProfileId.value,
                         rawHncsProfileId = editRawHncsProfileId.value,
                         rawHncsRenderIntent = editRawHncsRenderIntent.value,
                         rawHncsFilmCurveMode = editRawHncsFilmCurveMode.value,

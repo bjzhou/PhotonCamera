@@ -71,8 +71,6 @@ import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
-import com.hinnka.mycamera.raw.DngProfileGainTableMap
-import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
@@ -118,9 +116,9 @@ private const val EDIT_TAB_RAW = 4
 private const val EDIT_TAB_CROP = 5
 private const val DEFAULT_COMPUTATIONAL_APERTURE = 1.8f
 
-private data class EmbeddedDngProfileUiInfo(
-    val name: String,
-    val isPhotonPgtm: Boolean,
+private data class EmbeddedDngProfileUiState(
+    val options: List<RawEmbeddedDngProfileOption> = emptyList(),
+    val defaultProfileId: String? = null,
 )
 
 private data class PreviewRenderSignature(
@@ -149,6 +147,7 @@ private data class PreviewRenderSignature(
     val editRawCustomWhiteLevel: Float,
     val editRawCfaCorrectionMode: String,
     val editRawDcpId: String?,
+    val editRawEmbeddedDngProfileId: String?,
     val editRawHncsProfileId: String?,
     val editRawHncsRenderIntent: String,
     val editRawHncsFilmCurveMode: String,
@@ -268,6 +267,8 @@ fun GalleryEditScreen(
     val editRawCustomWhiteLevel by viewModel.editRawCustomWhiteLevel.collectAsState()
     val editRawCfaCorrectionMode by viewModel.editRawCfaCorrectionMode.collectAsState()
     val editRawDcpId by viewModel.editRawDcpId.collectAsState()
+    val editRawEmbeddedDngProfileId by
+        viewModel.editRawEmbeddedDngProfileId.collectAsState()
     val editRawHncsProfileId by viewModel.editRawHncsProfileId.collectAsState()
     val editRawHncsRenderIntent by viewModel.editRawHncsRenderIntent.collectAsState()
     val editRawHncsFilmCurveMode by viewModel.editRawHncsFilmCurveMode.collectAsState()
@@ -298,75 +299,68 @@ fun GalleryEditScreen(
     val editAiDenoiseStrength by viewModel.editAiDenoiseStrength.collectAsState()
 
     val isRaw = editSourcePhoto?.let { viewModel.isRaw(it.id) } ?: false
+    val refreshKey = editSourcePhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
+    val dngProfileStamp = remember(editSourcePhoto?.id, refreshKey, isRaw) {
+        editSourcePhoto
+            ?.takeIf { isRaw }
+            ?.let { GalleryManager.getDngFile(context, it.id) }
+            ?.takeIf { it.exists() }
+            ?.let { it.lastModified() xor it.length() }
+            ?: 0L
+    }
     val embeddedProfileFallbackName = stringResource(
         R.string.settings_raw_profile_tone_map_embedded
     )
-    var embeddedDngProfileInfo by remember(editSourcePhoto?.id) {
-        mutableStateOf<EmbeddedDngProfileUiInfo?>(null)
-    }
-
-    LaunchedEffect(editSourcePhoto?.id, isRaw, embeddedProfileFallbackName) {
-        val photo = editSourcePhoto
-        embeddedDngProfileInfo = if (photo != null && isRaw) {
-            withContext(Dispatchers.IO) {
-                val dngFile = GalleryManager.getDngFile(context, photo.id)
-                val profile = DngEmbeddedProfile.readFrom(dngFile)
-                val profileGainTableMap = DngProfileGainTableMap.readFrom(dngFile)
-                    ?.takeIf { it.isValid }
-                val sourceMetadata = photo.metadata
-                    ?: GalleryManager.loadMetadata(context, photo.id)
-                val hasEmbeddedToneCurve = profile?.toneCurve?.isValid == true
-                val hasEmbeddedPgtm = profileGainTableMap != null
-                val isPhotonPgtm = hasEmbeddedPgtm && (
-                    DngEmbeddedProfile.isPhotonPgtmProfileName(profile?.profileName) ||
-                        sourceMetadata?.isImported == false
-                    )
-                PLog.d(
-                    "GalleryEditScreen",
-                    "DNG embedded profile classified: name=${profile?.profileName} " +
-                        "toneCurve=$hasEmbeddedToneCurve pgtm=$hasEmbeddedPgtm " +
-                        "imported=${sourceMetadata?.isImported} photonPgtm=$isPhotonPgtm"
-                )
-                if (hasEmbeddedToneCurve || hasEmbeddedPgtm) {
-                    EmbeddedDngProfileUiInfo(
-                        name = profile?.profileName
-                            ?.trim()
-                            ?.takeUnless {
-                                it.isEmpty() || it.equals("Embedded", ignoreCase = true)
-                            }
-                            ?: embeddedProfileFallbackName,
-                        isPhotonPgtm = isPhotonPgtm,
-                    )
-                } else {
-                    null
-                }
-            }
-        } else {
-            null
-        }
+    var embeddedDngProfileUiState by remember(editSourcePhoto?.id, dngProfileStamp) {
+        mutableStateOf(EmbeddedDngProfileUiState())
     }
 
     LaunchedEffect(
         editSourcePhoto?.id,
-        embeddedDngProfileInfo?.isPhotonPgtm,
-        editRawToneMappingParameters.usePhotonHdr,
-        editRawToneMappingParameters.profileToneMapMode,
-        editRawDcpId,
+        dngProfileStamp,
+        isRaw,
+        embeddedProfileFallbackName,
     ) {
-        val photo = editSourcePhoto ?: return@LaunchedEffect
-        if (embeddedDngProfileInfo?.isPhotonPgtm == true &&
-            !editRawToneMappingParameters.usePhotonHdr &&
-            editRawToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Profile &&
-            editRawDcpId == null
-        ) {
-            viewModel.saveRawToneMappingParameters(
-                photo,
-                editRawToneMappingParameters.withProfileToneMapMode(
-                    RawProfileToneMapMode.Default
+        val photo = editSourcePhoto
+        embeddedDngProfileUiState = if (photo != null && isRaw) {
+            withContext(Dispatchers.IO) {
+                val dngFile = GalleryManager.getDngFile(context, photo.id)
+                val profiles = DngEmbeddedProfile.readAllFrom(dngFile)
+                val visibleProfiles = profiles.filterNot { it.isPhotonHdr }
+                PLog.d(
+                    "GalleryEditScreen",
+                    "DNG embedded profiles: " + profiles.joinToString { profile ->
+                        "${profile.id}:${profile.profileName}" +
+                            "(pgtm=${profile.hasProfileGainTableMap},photon=${profile.isPhotonHdr})"
+                    }
                 )
-            )
+                EmbeddedDngProfileUiState(
+                    options = visibleProfiles.map { profile ->
+                        RawEmbeddedDngProfileOption(
+                            id = profile.id,
+                            name = profile.profileName
+                                .trim()
+                                .takeUnless {
+                                    it.isEmpty() || it.equals("Embedded", ignoreCase = true)
+                                }
+                                ?: embeddedProfileFallbackName,
+                            hasProfileGainTableMap = profile.hasProfileGainTableMap,
+                        )
+                    },
+                    defaultProfileId = visibleProfiles
+                        .firstOrNull { it.id == DngEmbeddedProfile.PRIMARY_PROFILE_ID }
+                        ?.id,
+                )
+            }
+        } else {
+            EmbeddedDngProfileUiState()
         }
     }
+    val activeEmbeddedDngProfileId = editRawEmbeddedDngProfileId
+        ?.takeIf { selectedId ->
+            embeddedDngProfileUiState.options.any { it.id == selectedId }
+        }
+        ?: embeddedDngProfileUiState.defaultProfileId
 
     var showOrigin by remember { mutableStateOf(false) }
 
@@ -380,7 +374,6 @@ fun GalleryEditScreen(
     var topBarHeightPx by remember { mutableIntStateOf(0) }
     var editPanelHeightPx by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    val refreshKey = editSourcePhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
     val isBaselineLutEditSheetVisible = showBaselineLutEditSheet && baselineLutEditId != null
     val shouldShowEditPanel = !isBaselineLutEditSheetVisible &&
         !showRawBaselineLutSelectorSheet
@@ -424,6 +417,8 @@ fun GalleryEditScreen(
             editRawCustomWhiteLevel = if (fast || rawDevelopIsBaked) 0f else editRawCustomWhiteLevel,
             editRawCfaCorrectionMode = if (fast || rawDevelopIsBaked) "" else editRawCfaCorrectionMode,
             editRawDcpId = if (fast || rawDevelopIsBaked) null else editRawDcpId,
+            editRawEmbeddedDngProfileId =
+                if (fast || rawDevelopIsBaked) null else editRawEmbeddedDngProfileId,
             editRawHncsProfileId =
                 if (fast || rawDevelopIsBaked) null else editRawHncsProfileId,
             editRawHncsRenderIntent =
@@ -1853,11 +1848,14 @@ fun GalleryEditScreen(
                                         onRawToneMappingParametersChange = {
                                             viewModel.saveRawToneMappingParameters(currentEditSourcePhoto, it)
                                         },
-                                        embeddedDngProfileName = embeddedDngProfileInfo?.name,
-                                        embeddedDngProfileIsPhotonPgtm =
-                                            embeddedDngProfileInfo?.isPhotonPgtm == true,
-                                        onSelectEmbeddedDngProfile = {
-                                            viewModel.selectRawEmbeddedDngProfileForEdit()
+                                        embeddedDngProfiles = embeddedDngProfileUiState.options,
+                                        selectedEmbeddedDngProfileId = activeEmbeddedDngProfileId,
+                                        onSelectEmbeddedDngProfile = { profile ->
+                                            viewModel.selectRawEmbeddedDngProfileForEdit(
+                                                profileId = profile.id,
+                                                hasProfileGainTableMap =
+                                                    profile.hasProfileGainTableMap,
+                                            )
                                         },
                                         onSpectralFilmSelectionChange = {
                                             viewModel.saveRawSpectralFilmSelection(currentEditSourcePhoto, it) {

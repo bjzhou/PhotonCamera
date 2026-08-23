@@ -173,6 +173,18 @@ data class DngProfileGainTableMap(
             }.getOrNull()
         }
 
+        internal fun decodeEmbeddedProfileMap(
+            sourceTag: Int,
+            bytes: ByteArray,
+            byteOrder: ByteOrder,
+        ): DngProfileGainTableMap? {
+            return when (sourceTag) {
+                TAG_PROFILE_GAIN_TABLE_MAP2 -> decodeProfileGainTableMap2(bytes, byteOrder)
+                TAG_PROFILE_GAIN_TABLE_MAP -> decodeProfileGainTableMap(bytes, byteOrder)
+                else -> null
+            }?.takeIf { it.isValid }
+        }
+
         private fun decodeMap2FromIfd(
             raf: RandomAccessFile,
             ifd: Map<Int, TiffEntry>,

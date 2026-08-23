@@ -2879,15 +2879,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
 
         val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
-        val hdrDefaultToneMappingParameters = if (baselineTarget == BaselineColorCorrectionTarget.RAW) {
-            rawToneMappingParameters
-        } else {
-            null
-        }
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
             hasEmbeddedGainmap = false,
             userPrefs = userPrefs,
-            rawToneMappingParameters = hdrDefaultToneMappingParameters
         )
         val baselineMetadata = resolveBaselineMetadata(
             target = baselineTarget,
@@ -3021,7 +3015,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun defaultHdrEffectEnabled(
         hasEmbeddedGainmap: Boolean,
         userPrefs: UserPreferences?,
-        rawToneMappingParameters: RawToneMappingParameters? = null
     ): Boolean {
         if (hasEmbeddedGainmap) return true
         return userPrefs?.ultraHdrGainMapEnabled ?: false
@@ -5483,15 +5476,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 BaselineColorCorrectionTarget.JPG
             }
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
-            val hdrDefaultToneMappingParameters = if (baselineTarget == BaselineColorCorrectionTarget.RAW) {
-                rawToneMappingParameters
-            } else {
-                null
-            }
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
                 hasEmbeddedGainmap = false,
                 userPrefs = userPrefs,
-                rawToneMappingParameters = hdrDefaultToneMappingParameters
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
             val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
@@ -6094,15 +6081,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 BaselineColorCorrectionTarget.JPG
             }
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
-            val hdrDefaultToneMappingParameters = if (baselineTarget == BaselineColorCorrectionTarget.RAW) {
-                rawToneMappingParameters
-            } else {
-                null
-            }
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
                 hasEmbeddedGainmap = false,
                 userPrefs = userPrefs,
-                rawToneMappingParameters = hdrDefaultToneMappingParameters
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
             val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
@@ -6536,15 +6517,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             BaselineColorCorrectionTarget.JPG
         }
         val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
-        val hdrDefaultToneMappingParameters = if (baselineTarget == BaselineColorCorrectionTarget.RAW) {
-            rawToneMappingParameters
-        } else {
-            null
-        }
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
             hasEmbeddedGainmap = false,
             userPrefs = userPrefs,
-            rawToneMappingParameters = hdrDefaultToneMappingParameters
         )
         val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
         val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(

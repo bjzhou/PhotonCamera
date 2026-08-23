@@ -1,46 +1,49 @@
 package com.hinnka.mycamera.raw
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DngEmbeddedProfileTest {
     @Test
-    fun canonicalPhotonHdrProfileNameIsRecognized() {
+    fun photonHdrProfileUsesExactPersistedProfileName() {
         assertTrue(
-            DngEmbeddedProfile.isPhotonPgtmProfileName(
+            DngEmbeddedProfile.isPhotonHdrProfileName(
                 DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
             )
         )
-        assertTrue(DngEmbeddedProfile.isPhotonPgtmProfileName("Photon PGTM"))
-        assertFalse(DngEmbeddedProfile.isPhotonPgtmProfileName("Google Embedded Camera Profile"))
-        assertFalse(DngEmbeddedProfile.isPhotonPgtmProfileName(null))
+        assertTrue(DngEmbeddedProfile.isPhotonHdrProfileName(" photon hdr "))
+        assertFalse(DngEmbeddedProfile.isPhotonHdrProfileName("Photon PGTM"))
+        assertFalse(DngEmbeddedProfile.isPhotonHdrProfileName(null))
     }
 
     @Test
-    fun photonPgtmIsNotExposedAsEmbeddedProfileToneCurve() {
-        val photonCurve = DcpToneCurve(DngProfileToneCurve.photonPgtmToneCurvePoints())
-        val regularCurve = DcpToneCurve(floatArrayOf(0f, 0f, 0.5f, 0.62f, 1f, 1f))
+    fun profileSelectionUsesRequestedIdAndFallsBackToPrimaryOnlyWhenUnset() {
+        val primary = entry(DngEmbeddedProfile.PRIMARY_PROFILE_ID, "Primary")
+        val extra = entry("extra:0", "Extra")
+        val profiles = listOf(primary, extra)
 
-        assertNull(
-            DngEmbeddedProfile.resolveEmbeddedProfileToneCurve(
-                DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME,
-                regularCurve,
-            )
+        assertEquals(
+            extra,
+            DngEmbeddedProfile.resolveSelection(profiles, extra.id),
         )
-        assertNull(
-            DngEmbeddedProfile.resolveEmbeddedProfileToneCurve(
-                "Legacy generated profile",
-                photonCurve,
-            )
+        assertEquals(
+            primary,
+            DngEmbeddedProfile.resolveSelection(profiles, null),
         )
-        assertNotNull(
-            DngEmbeddedProfile.resolveEmbeddedProfileToneCurve(
-                "Camera embedded profile",
-                regularCurve,
-            )
+        assertEquals(
+            primary,
+            DngEmbeddedProfile.resolveSelection(profiles, "missing"),
+        )
+    }
+
+    private fun entry(id: String, name: String): DngEmbeddedProfileEntry {
+        return DngEmbeddedProfileEntry(
+            id = id,
+            profileName = name,
+            profile = null,
+            profileGainTableMap = null,
         )
     }
 }

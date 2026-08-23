@@ -232,6 +232,7 @@ object GalleryMediaStore {
             rawAutoWhiteBalanceEstimate = metadata.rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = metadata.rawLensShadingCorrectionEnabled,
             rawDcpId = metadata.rawDcpId,
+            rawEmbeddedDngProfileId = metadata.rawEmbeddedDngProfileId,
             rawHncsProfileId = metadata.rawHncsProfileId,
             rawHncsRenderIntent = metadata.rawHncsRenderIntent.assetValue,
             rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode.persistedValue,
@@ -422,6 +423,7 @@ object GalleryMediaStore {
             rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = rawLensShadingCorrectionEnabled,
             rawDcpId = rawDcpId,
+            rawEmbeddedDngProfileId = rawEmbeddedDngProfileId,
             rawHncsProfileId = rawHncsProfileId,
             rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(rawHncsRenderIntent),
             rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(

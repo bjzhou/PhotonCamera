@@ -50,6 +50,12 @@ enum class RawEditPanelContentMode {
     QUICK,
 }
 
+data class RawEmbeddedDngProfileOption(
+    val id: String,
+    val name: String,
+    val hasProfileGainTableMap: Boolean,
+)
+
 data class RawDcpLensOption(
     val id: String,
     val label: String
@@ -118,9 +124,9 @@ fun RawEditPanel(
     onRawCfaCorrectionModeChange: (String) -> Unit = {},
     onRawColorEngineChange: (RawRenderingEngine) -> Unit,
     onRawToneMappingParametersChange: (RawToneMappingParameters) -> Unit = {},
-    embeddedDngProfileName: String? = null,
-    embeddedDngProfileIsPhotonPgtm: Boolean = false,
-    onSelectEmbeddedDngProfile: (() -> Unit)? = null,
+    embeddedDngProfiles: List<RawEmbeddedDngProfileOption> = emptyList(),
+    selectedEmbeddedDngProfileId: String? = null,
+    onSelectEmbeddedDngProfile: ((RawEmbeddedDngProfileOption) -> Unit)? = null,
     onSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onSpectralFilmPrintChange: (String?) -> Unit,
     onAdjustmentStart: () -> Unit,
@@ -155,22 +161,8 @@ fun RawEditPanel(
             description = stringResource(R.string.settings_raw_photon_hdr_description),
             checked = rawToneMappingParameters.usePhotonHdr,
             onCheckedChange = { enabled ->
-                val updatedParameters = rawToneMappingParameters.withPhotonHdr(enabled)
-                val embeddedPhotonPgtmSelected =
-                    embeddedDngProfileIsPhotonPgtm &&
-                        selectedDcpId == null &&
-                        rawToneMappingParameters.profileToneMapMode ==
-                        RawProfileToneMapMode.Profile
-                val embeddedPhotonPgtmAvailable =
-                    embeddedDngProfileIsPhotonPgtm && selectedDcpId == null
                 onRawToneMappingParametersChange(
-                    when {
-                        !enabled && embeddedPhotonPgtmSelected ->
-                            updatedParameters.withProfileToneMapMode(RawProfileToneMapMode.Default)
-                        enabled && embeddedPhotonPgtmAvailable ->
-                            updatedParameters.withProfileToneMapMode(RawProfileToneMapMode.Profile)
-                        else -> updatedParameters
-                    }
+                    rawToneMappingParameters.withPhotonHdr(enabled)
                 )
                 onAdjustmentEnd()
             }
@@ -253,7 +245,8 @@ fun RawEditPanel(
                 params = rawToneMappingParameters.normalized(),
                 selectedDcpName = availableDcps.firstOrNull { it.id == selectedDcpId }?.getName(),
                 hasSelectedDcpId = selectedDcpId != null,
-                embeddedDngProfileName = embeddedDngProfileName,
+                embeddedDngProfiles = embeddedDngProfiles,
+                selectedEmbeddedDngProfileId = selectedEmbeddedDngProfileId,
                 onSelectEmbeddedDngProfile = onSelectEmbeddedDngProfile,
                 onParamsChange = onRawToneMappingParametersChange,
                 onAdjustmentEnd = onAdjustmentEnd
@@ -587,8 +580,9 @@ private fun RawProfileToneMapSwitches(
     params: RawToneMappingParameters,
     selectedDcpName: String?,
     hasSelectedDcpId: Boolean,
-    embeddedDngProfileName: String?,
-    onSelectEmbeddedDngProfile: (() -> Unit)?,
+    embeddedDngProfiles: List<RawEmbeddedDngProfileOption>,
+    selectedEmbeddedDngProfileId: String?,
+    onSelectEmbeddedDngProfile: ((RawEmbeddedDngProfileOption) -> Unit)?,
     onParamsChange: (RawToneMappingParameters) -> Unit,
     onAdjustmentEnd: () -> Unit
 ) {
@@ -597,7 +591,8 @@ private fun RawProfileToneMapSwitches(
         RawProfileToneMapMode.Profile -> when {
             selectedDcpName != null -> PROFILE_TONE_MAP_DCP_LEVEL
             hasSelectedDcpId -> RawProfileToneMapMode.Default.name
-            embeddedDngProfileName != null -> PROFILE_TONE_MAP_EMBEDDED_LEVEL
+            embeddedDngProfiles.any { it.id == selectedEmbeddedDngProfileId } ->
+                embeddedProfileLevel(selectedEmbeddedDngProfileId.orEmpty())
             else -> RawProfileToneMapMode.Default.name
         }
         RawProfileToneMapMode.OppoMaster -> RawProfileToneMapMode.OppoMaster.name
@@ -611,7 +606,9 @@ private fun RawProfileToneMapSwitches(
                     stringResource(R.string.settings_raw_profile_tone_map_default)
             )
             selectedDcpName?.let { add(PROFILE_TONE_MAP_DCP_LEVEL to it) }
-            embeddedDngProfileName?.let { add(PROFILE_TONE_MAP_EMBEDDED_LEVEL to it) }
+            embeddedDngProfiles.forEach { profile ->
+                add(embeddedProfileLevel(profile.id) to profile.name)
+            }
             add(
                 RawProfileToneMapMode.OppoMaster.name to
                     stringResource(R.string.settings_raw_profile_tone_map_oppo_master)
@@ -623,18 +620,24 @@ private fun RawProfileToneMapSwitches(
                 PROFILE_TONE_MAP_DCP_LEVEL -> {
                     onParamsChange(params.withProfileToneMapMode(RawProfileToneMapMode.Profile))
                 }
-                PROFILE_TONE_MAP_EMBEDDED_LEVEL -> {
-                    if (onSelectEmbeddedDngProfile != null) {
-                        onSelectEmbeddedDngProfile()
-                    } else {
-                        onParamsChange(params.withProfileToneMapMode(RawProfileToneMapMode.Profile))
-                    }
-                }
                 else -> {
-                    val mode = RawProfileToneMapMode.values()
-                        .firstOrNull { it.name == selected }
-                        ?: RawProfileToneMapMode.Default
-                    onParamsChange(params.withProfileToneMapMode(mode))
+                    val embeddedProfile = embeddedDngProfiles.firstOrNull {
+                        embeddedProfileLevel(it.id) == selected
+                    }
+                    if (embeddedProfile != null) {
+                        if (onSelectEmbeddedDngProfile != null) {
+                            onSelectEmbeddedDngProfile(embeddedProfile)
+                        } else {
+                            onParamsChange(
+                                params.withProfileToneMapMode(RawProfileToneMapMode.Profile)
+                            )
+                        }
+                    } else {
+                        val mode = RawProfileToneMapMode.values()
+                            .firstOrNull { it.name == selected }
+                            ?: RawProfileToneMapMode.Default
+                        onParamsChange(params.withProfileToneMapMode(mode))
+                    }
                 }
             }
             onAdjustmentEnd()
@@ -643,7 +646,11 @@ private fun RawProfileToneMapSwitches(
 }
 
 private const val PROFILE_TONE_MAP_DCP_LEVEL = "profile:dcp"
-private const val PROFILE_TONE_MAP_EMBEDDED_LEVEL = "profile:embedded"
+private const val PROFILE_TONE_MAP_EMBEDDED_PREFIX = "profile:embedded:"
+
+private fun embeddedProfileLevel(profileId: String): String {
+    return PROFILE_TONE_MAP_EMBEDDED_PREFIX + profileId
+}
 
 @Composable
 private fun RawToneMappingControls(

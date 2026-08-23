@@ -7,8 +7,23 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
 
+internal data class DngEmbeddedProfileEntry(
+    val id: String,
+    val profileName: String,
+    val profile: DcpProfile?,
+    val profileGainTableMap: DngProfileGainTableMap?,
+) {
+    val hasProfileGainTableMap: Boolean
+        get() = profileGainTableMap?.isValid == true
+
+    val isPhotonHdr: Boolean
+        get() = DngEmbeddedProfile.isPhotonHdrProfileName(profileName)
+}
+
 internal object DngEmbeddedProfile {
     private const val TAG = "DngEmbeddedProfile"
+
+    const val PRIMARY_PROFILE_ID = "primary"
 
     private const val TIFF_CLASSIC_MAGIC = 42
 
@@ -31,6 +46,7 @@ internal object DngEmbeddedProfile {
     private const val TAG_ANALOG_BALANCE = 50727
     private const val TAG_CALIBRATION_ILLUMINANT1 = 50778
     private const val TAG_CALIBRATION_ILLUMINANT2 = 50779
+    private const val TAG_EXTRA_CAMERA_PROFILES = 50933
     private const val TAG_PROFILE_NAME = 50936
     private const val TAG_PROFILE_HUE_SAT_MAP_DIMS = 50937
     private const val TAG_PROFILE_HUE_SAT_MAP_DATA1 = 50938
@@ -55,9 +71,19 @@ internal object DngEmbeddedProfile {
     fun resolveRenderPlan(
         file: File,
         metadata: RawMetadata,
+        profileId: String? = null,
         workingColorSpace: ColorSpace = ColorSpace.ProPhoto
     ): DcpRenderPlan? {
-        val profile = readFrom(file) ?: return null
+        val entry = resolveSelection(readAllFrom(file), profileId) ?: return null
+        return resolveRenderPlan(entry, metadata, workingColorSpace)
+    }
+
+    fun resolveRenderPlan(
+        entry: DngEmbeddedProfileEntry,
+        metadata: RawMetadata,
+        workingColorSpace: ColorSpace = ColorSpace.ProPhoto,
+    ): DcpRenderPlan? {
+        val profile = entry.profile ?: return null
         return DcpProfileParser.resolveRenderPlan(profile, metadata, workingColorSpace)
             ?.also { plan ->
                 PLog.d(
@@ -74,44 +100,86 @@ internal object DngEmbeddedProfile {
     }
 
     fun readFrom(file: File): DcpProfile? {
-        if (!file.exists() || file.length() < 16L) return null
-        return runCatching {
+        return readAllFrom(file).firstOrNull { it.id == PRIMARY_PROFILE_ID }?.profile
+    }
+
+    fun readAllFrom(file: File): List<DngEmbeddedProfileEntry> {
+        if (!file.exists() || file.length() < 16L) return emptyList()
+        return runCatching<List<DngEmbeddedProfileEntry>> {
             RandomAccessFile(file, "r").use { raf ->
-                val byteOrder = readTiffByteOrder(raf) ?: return@use null
+                val byteOrder = readTiffByteOrder(raf) ?: return@use emptyList()
                 val magic = raf.readUnsignedShort(byteOrder)
                 if (magic != TIFF_CLASSIC_MAGIC) {
                     PLog.w(TAG, "Unsupported TIFF magic=$magic in ${file.name}")
-                    return@use null
+                    return@use emptyList()
                 }
                 val ifd0Offset = raf.readUnsignedInt(byteOrder)
                 val ifd0 = readIfdEntries(raf, ifd0Offset, byteOrder)
-                decodeProfile(raf, ifd0, byteOrder)
+                buildList {
+                    decodeEntry(
+                        id = PRIMARY_PROFILE_ID,
+                        raf = raf,
+                        ifd = ifd0,
+                        byteOrder = byteOrder,
+                        fallbackProfileGainTableMap = DngProfileGainTableMap.readFrom(file),
+                    )?.let(::add)
+
+                    val extraProfileOffsets = readIntegerValues(
+                        raf,
+                        ifd0[TAG_EXTRA_CAMERA_PROFILES],
+                        byteOrder,
+                    ).orEmpty()
+                    extraProfileOffsets.distinct().forEachIndexed { index, offset ->
+                        val profileIfd = readIfdEntries(raf, offset, byteOrder)
+                        decodeEntry(
+                            id = "extra:$index",
+                            raf = raf,
+                            ifd = profileIfd,
+                            byteOrder = byteOrder,
+                        )?.let(::add)
+                    }
+                }
             }
         }.onFailure {
-            PLog.w(TAG, "Failed to read embedded DNG profile from ${file.absolutePath}", it)
-        }.getOrNull()
+            PLog.w(TAG, "Failed to read embedded DNG profiles from ${file.absolutePath}", it)
+        }.getOrDefault(emptyList())
     }
 
-    fun isPhotonPgtmProfileName(profileName: String?): Boolean {
-        val normalizedName = profileName?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-        return normalizedName.equals(
-            DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME,
-            ignoreCase = true
-        ) || (
-            normalizedName.contains("photon", ignoreCase = true) &&
-                normalizedName.contains("pgtm", ignoreCase = true)
-            )
+    fun resolveSelection(
+        profiles: List<DngEmbeddedProfileEntry>,
+        profileId: String?,
+    ): DngEmbeddedProfileEntry? {
+        return profileId?.let { requestedId ->
+            profiles.firstOrNull { it.id == requestedId }
+        } ?: profiles.firstOrNull { it.id == PRIMARY_PROFILE_ID }
     }
 
-    internal fun resolveEmbeddedProfileToneCurve(
-        profileName: String?,
-        toneCurve: DcpToneCurve?,
-    ): DcpToneCurve? {
-        if (toneCurve?.isValid != true) return null
-        return toneCurve.takeUnless { curve ->
-            isPhotonPgtmProfileName(profileName) ||
-                DngProfileToneCurve.isPhotonPgtmToneCurve(curve)
-        }
+    fun isPhotonHdrProfileName(profileName: String?): Boolean {
+        return profileName
+            ?.trim()
+            ?.equals(DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME, ignoreCase = true) == true
+    }
+
+    private fun decodeEntry(
+        id: String,
+        raf: RandomAccessFile,
+        ifd: Map<Int, TiffEntry>,
+        byteOrder: ByteOrder,
+        fallbackProfileGainTableMap: DngProfileGainTableMap? = null,
+    ): DngEmbeddedProfileEntry? {
+        if (ifd.isEmpty()) return null
+        val explicitName = readAscii(raf, ifd[TAG_PROFILE_NAME], byteOrder)
+            ?.takeIf { it.isNotBlank() }
+        val profile = decodeProfile(raf, ifd, byteOrder)
+        val profileGainTableMap = readProfileGainTableMap(raf, ifd, byteOrder)
+            ?: fallbackProfileGainTableMap?.takeIf { it.isValid }
+        if (profile == null && profileGainTableMap == null && explicitName == null) return null
+        return DngEmbeddedProfileEntry(
+            id = id,
+            profileName = explicitName ?: profile?.profileName ?: "Embedded",
+            profile = profile,
+            profileGainTableMap = profileGainTableMap,
+        )
     }
 
     private fun decodeProfile(
@@ -188,11 +256,7 @@ internal object DngEmbeddedProfile {
             byteOrder = byteOrder
         )
 
-        val parsedToneCurve = readToneCurve(raf, ifd[TAG_PROFILE_TONE_CURVE], byteOrder)
-        // Photon HDR's generated/legacy tone data belongs to PGTM, not to the user-selectable
-        // embedded Adobe profile curve. Ignore both its reserved profile name and its known
-        // historical curve payload so UI selection and rendering consistently fall back to ACR3.
-        val toneCurve = resolveEmbeddedProfileToneCurve(profileName, parsedToneCurve)
+        val toneCurve = readToneCurve(raf, ifd[TAG_PROFILE_TONE_CURVE], byteOrder)
         val baselineExposureOffset = readRealValues(raf, ifd[TAG_BASELINE_EXPOSURE_OFFSET], byteOrder)
             ?.firstOrNull()
             ?.takeIf { it.isFinite() }
@@ -251,6 +315,25 @@ internal object DngEmbeddedProfile {
     ): DcpToneCurve? {
         val values = readRealValues(raf, entry, byteOrder) ?: return null
         return DcpToneCurve(values).takeIf { it.isValid }
+    }
+
+    private fun readProfileGainTableMap(
+        raf: RandomAccessFile,
+        ifd: Map<Int, TiffEntry>,
+        byteOrder: ByteOrder,
+    ): DngProfileGainTableMap? {
+        return sequenceOf(
+            DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2,
+            DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP,
+        ).firstNotNullOfOrNull { tag ->
+            val entry = ifd[tag]?.takeIf { it.type == TIFF_TYPE_UNDEFINED }
+                ?: return@firstNotNullOfOrNull null
+            DngProfileGainTableMap.decodeEmbeddedProfileMap(
+                sourceTag = tag,
+                bytes = readEntryBytes(raf, entry, byteOrder),
+                byteOrder = byteOrder,
+            )
+        }
     }
 
     private fun readProfileSupportsOverrange(
