@@ -480,17 +480,7 @@ class RawDemosaicProcessor {
             )
 
             val exposureReady = renderSceneExposureRequest(
-                request = RawSceneExposureRequest {
-                    RawSceneExposureSolution(
-                        baselineExposureEv = 0f,
-                        mgcLtmPlan = MgcLtmCapturePlan(
-                            hdrRatio = 1f,
-                            finalShortGain = 1f,
-                            finalLongGain = 1f,
-                            longTargetAverageLdr = 0f,
-                        ),
-                    )
-                },
+                request = RawSceneExposureRequest { 0f },
                 metadata = metadata,
                 sourceTextureId = demosaicTextureId,
                 colorCorrectionMatrix = identity,
@@ -3002,7 +2992,7 @@ class RawDemosaicProcessor {
             }
 
             if (prepareCaptureProfile) {
-                val sceneExposureSolution = sceneExposureRequest?.let { request ->
+                val solvedExposureEv = sceneExposureRequest?.let { request ->
                     renderSceneExposureRequest(
                         request = request,
                         metadata = actualMetadata,
@@ -3015,9 +3005,6 @@ class RawDemosaicProcessor {
                         stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                     )
                 }
-                val solvedExposureEv = sceneExposureSolution?.baselineExposureEv
-                val mgcLtmPlan = sceneExposureSolution?.mgcLtmPlan
-                    ?.takeIf { capturePhotonPgtmRequested }
                 solvedExposureEv?.let { exposureEv ->
                     PLog.i(
                         TAG,
@@ -3031,7 +3018,7 @@ class RawDemosaicProcessor {
                     sourceBaselineEv = actualMetadata.baselineExposure,
                     sceneBaselineEv = solvedExposureEv,
                 )
-                val captureProfileGainTableMap = if (capturePhotonPgtmRequested && mgcLtmPlan != null) {
+                val captureProfileGainTableMap = if (capturePhotonPgtmRequested) {
                     generateProfileGainTableMapOnGpu(
                         rawTextureId = rawTextureId,
                         streamingRawData = tiledRawData,
@@ -3047,7 +3034,6 @@ class RawDemosaicProcessor {
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
                         hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                         warpRectilinear = applicableDngWarpRectilinear,
-                        mgcLtmPlan = mgcLtmPlan,
                     )
                 } else {
                     if (capturePhotonPgtmRequested) {
@@ -4112,7 +4098,6 @@ class RawDemosaicProcessor {
         hueSatMap: DcpHueSatMap?,
         hueSatMapSupportsOverrange: Boolean,
         warpRectilinear: FloatArray? = null,
-        mgcLtmPlan: MgcLtmCapturePlan,
     ): DngProfileGainTableMap? {
         val streamingUploader = streamingRawData?.let {
             DngPhotonProfileGainTableAlgorithm.StreamingRawUploader {
@@ -4147,7 +4132,6 @@ class RawDemosaicProcessor {
                 hueSatMap = hueSatMap,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                 warpRectilinear = warpRectilinear,
-                mgcLtmPlan = mgcLtmPlan,
                 lensShadingDescription = lensShadingLogString(metadata),
                 bindLensShading = { program ->
                     bindLensShadingForProgram(program, metadata)
@@ -7620,7 +7604,7 @@ class RawDemosaicProcessor {
         outputSourceBounds: Rect,
         outputRotation: Int = 0,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
-    ): RawSceneExposureSolution? {
+    ): Float? {
         return try {
             val width = RawSceneExposureMath.INPUT_WIDTH
             val height = RawSceneExposureMath.INPUT_HEIGHT

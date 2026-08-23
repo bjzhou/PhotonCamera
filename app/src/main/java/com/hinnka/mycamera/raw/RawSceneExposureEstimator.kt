@@ -477,7 +477,7 @@ internal object RawSceneExposureEstimator {
         frame: RawSceneLinearFrame,
         metadata: RawMetadata,
         deviceLimits: RawSceneExposureDeviceLimits?,
-    ): RawSceneExposureSolution? {
+    ): Float? {
         val resolvedDeviceLimits = deviceLimits?.takeIf(RawSceneExposureDeviceLimits::isValid)
             ?: run {
                 PLog.e(TAG, "MGC AE device TET limits are unavailable")
@@ -559,13 +559,6 @@ internal object RawSceneExposureEstimator {
                     PLog.e(TAG, "RAW scene exposure MGC AE finalization returned invalid values")
                     return@synchronized null
                 }
-                val longTargetAverageLdr = MgcLocalToneMappingMath.longTargetAverageLdr(
-                    frame,
-                    fusion.longIdealGain,
-                ) ?: run {
-                    PLog.e(TAG, "RAW scene exposure MGC long target returned invalid values")
-                    return@synchronized null
-                }
                 PLog.i(
                     TAG,
                     "RAW_SCENE_EXPOSURE stage=MGC_AE_FINALIZE " +
@@ -585,9 +578,7 @@ internal object RawSceneExposureEstimator {
                         "finalLongGain=${fusion.finalLongGain} " +
                         "finalPortraitGain=${fusion.finalPortraitGain} " +
                         "shortCaptureEv=${fusion.shortCaptureEv} " +
-                        "longTargetAverageLdr=$longTargetAverageLdr " +
-                        "baselineExposureEv=${fusion.shortCaptureEv} " +
-                        "solver=MGC_AE_SHORT_WITH_LTM_PLAN " +
+                        "solver=MGC_ML_AE_ORIGINAL_TET " +
                         "hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit} " +
                         "finalHdrRatio=${fusion.finalHdrRatio} " +
                         "hdrRatioLimited=${fusion.hdrRatioLimited} " +
@@ -619,15 +610,7 @@ internal object RawSceneExposureEstimator {
                         "deviceMaxTetMs=${resolvedDeviceLimits.deviceMaxTetMs} " +
                         "apertureTransmission=${measurement.apertureTransmission}",
                 )
-                RawSceneExposureSolution(
-                    baselineExposureEv = fusion.shortCaptureEv,
-                    mgcLtmPlan = MgcLtmCapturePlan(
-                        hdrRatio = fusion.finalHdrRatio,
-                        finalShortGain = fusion.finalShortGain,
-                        finalLongGain = fusion.finalLongGain,
-                        longTargetAverageLdr = longTargetAverageLdr,
-                    ),
-                )
+                fusion.shortCaptureEv
             } catch (error: Throwable) {
                 PLog.e(TAG, "RAW scene exposure inference failed", error)
                 null

@@ -70,5 +70,5 @@ internal object RawSceneExposureMatcher {
 }
 
 internal fun interface RawSceneExposureRequest {
-    fun solve(frame: RawSceneLinearFrame): RawSceneExposureSolution?
+    fun solve(frame: RawSceneLinearFrame): Float?
 }
