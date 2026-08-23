@@ -71,7 +71,7 @@ internal data class RawSceneExposureFusion(
     val finalLongGain: Float,
     val finalPortraitGain: Float,
     val finalGain: Float,
-    val exposureOffsetEv: Float,
+    val shortCaptureEv: Float,
     val hdrRatioBeforeLimit: Float,
     val finalHdrRatio: Float,
     val hdrRatioLimited: Boolean,
@@ -94,7 +94,6 @@ internal object RawSceneExposureMath {
     // Ordinary MGC/Google ZSL exposure tuning. These are finalizer constraints, not sensor limits.
     const val MAX_POST_CAPTURE_GAIN = 26.5f
     const val MAX_OVERALL_GAIN = 102f
-    const val DEFAULT_EXPOSURE_COMPENSATION_EV = 0f
 
     // MGC's low-resolution RGB scene measurement uses ten U15 code values as its floor.
     private const val SIGNAL_FLOOR = 10f / 32767f
@@ -276,15 +275,6 @@ internal object RawSceneExposureMath {
         return ev.takeIf(Double::isFinite)?.toFloat()
     }
 
-    /** Applies PhotonCamera's fixed product target after the original MGC ML-AE solution. */
-    fun applyDefaultExposureCompensation(meteredExposureEv: Float): Float? {
-        if (!meteredExposureEv.isFinite()) return null
-        return (meteredExposureEv + DEFAULT_EXPOSURE_COMPENSATION_EV).coerceIn(
-            MeteringSystem.RAW_EXPOSURE_MIN_EV,
-            MeteringSystem.RAW_EXPOSURE_MAX_EV,
-        )
-    }
-
     /**
      * Reproduces the MGC ML-AE ideal-TET to final-TET state transition.
      *
@@ -389,7 +379,7 @@ internal object RawSceneExposureMath {
         val longClippedFraction = clippedFraction(frame, longIdealGain) ?: return null
         val portraitClippedFraction = clippedFraction(frame, portraitIdealGain) ?: return null
         val finalClippedFraction = clippedFraction(frame, finalGain) ?: return null
-        val exposureOffsetEv = linearGainToEv(finalGain) ?: return null
+        val shortCaptureEv = linearGainToEv(finalGain) ?: return null
         return RawSceneExposureFusion(
             idealShortTetMs = idealShortTetMs,
             idealLongTetMs = idealLongTetMs,
@@ -404,7 +394,7 @@ internal object RawSceneExposureMath {
             finalLongGain = finalLongGain,
             finalPortraitGain = finalPortraitGain,
             finalGain = finalGain,
-            exposureOffsetEv = exposureOffsetEv,
+            shortCaptureEv = shortCaptureEv,
             hdrRatioBeforeLimit = hdrRatioBeforeLimit,
             finalHdrRatio = finalLongTetMs / finalShortTetMs,
             hdrRatioLimited = hdrRatioLimited,
@@ -487,7 +477,7 @@ internal object RawSceneExposureEstimator {
         frame: RawSceneLinearFrame,
         metadata: RawMetadata,
         deviceLimits: RawSceneExposureDeviceLimits?,
-    ): Float? {
+    ): RawSceneExposureSolution? {
         val resolvedDeviceLimits = deviceLimits?.takeIf(RawSceneExposureDeviceLimits::isValid)
             ?: run {
                 PLog.e(TAG, "MGC AE device TET limits are unavailable")
@@ -569,10 +559,11 @@ internal object RawSceneExposureEstimator {
                     PLog.e(TAG, "RAW scene exposure MGC AE finalization returned invalid values")
                     return@synchronized null
                 }
-                val compensatedExposureEv = RawSceneExposureMath.applyDefaultExposureCompensation(
-                    fusion.exposureOffsetEv,
+                val longTargetAverageLdr = MgcLocalToneMappingMath.longTargetAverageLdr(
+                    frame,
+                    fusion.longIdealGain,
                 ) ?: run {
-                    PLog.e(TAG, "RAW scene exposure default compensation returned invalid values")
+                    PLog.e(TAG, "RAW scene exposure MGC long target returned invalid values")
                     return@synchronized null
                 }
                 PLog.i(
@@ -593,11 +584,10 @@ internal object RawSceneExposureEstimator {
                         "finalShortGain=${fusion.finalShortGain} " +
                         "finalLongGain=${fusion.finalLongGain} " +
                         "finalPortraitGain=${fusion.finalPortraitGain} " +
-                        "meteredOffsetEv=${fusion.exposureOffsetEv} " +
-                        "defaultCompensationEv=" +
-                        "${RawSceneExposureMath.DEFAULT_EXPOSURE_COMPENSATION_EV} " +
-                        "offsetEv=$compensatedExposureEv " +
-                        "solver=MGC_ML_AE_ORIGINAL_TET " +
+                        "shortCaptureEv=${fusion.shortCaptureEv} " +
+                        "longTargetAverageLdr=$longTargetAverageLdr " +
+                        "baselineExposureEv=${fusion.shortCaptureEv} " +
+                        "solver=MGC_AE_SHORT_WITH_LTM_PLAN " +
                         "hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit} " +
                         "finalHdrRatio=${fusion.finalHdrRatio} " +
                         "hdrRatioLimited=${fusion.hdrRatioLimited} " +
@@ -629,7 +619,15 @@ internal object RawSceneExposureEstimator {
                         "deviceMaxTetMs=${resolvedDeviceLimits.deviceMaxTetMs} " +
                         "apertureTransmission=${measurement.apertureTransmission}",
                 )
-                compensatedExposureEv
+                RawSceneExposureSolution(
+                    baselineExposureEv = fusion.shortCaptureEv,
+                    mgcLtmPlan = MgcLtmCapturePlan(
+                        hdrRatio = fusion.finalHdrRatio,
+                        finalShortGain = fusion.finalShortGain,
+                        finalLongGain = fusion.finalLongGain,
+                        longTargetAverageLdr = longTargetAverageLdr,
+                    ),
+                )
             } catch (error: Throwable) {
                 PLog.e(TAG, "RAW scene exposure inference failed", error)
                 null

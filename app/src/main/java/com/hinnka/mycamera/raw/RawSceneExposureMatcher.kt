@@ -14,8 +14,8 @@ import com.hinnka.mycamera.utils.PLog
  * exact RAW frame being written. A device-independent scene model then predicts the exposure
  * offset from the full spatial image and its physical scene-brightness coordinate.
  */
-internal object RawViewfinderExposureMatcher {
-    private const val TAG = "RawViewfinderExposureMatcher"
+internal object RawSceneExposureMatcher {
+    private const val TAG = "RawSceneExposureMatcher"
 
     suspend fun prepareCaptureProfile(
         renderer: RawDemosaicProcessor,
@@ -70,5 +70,5 @@ internal object RawViewfinderExposureMatcher {
 }
 
 internal fun interface RawSceneExposureRequest {
-    fun solve(frame: RawSceneLinearFrame): Float?
+    fun solve(frame: RawSceneLinearFrame): RawSceneExposureSolution?
 }

@@ -20,7 +20,7 @@ import kotlin.math.roundToInt
 
 
 /**
- * GLES 3.1 compute passes for the current Photon Local Laplacian + legacy Google BGU generator.
+ * GLES 3.1 compute passes for MGC exposure-fusion LTM and the legacy manual Local Laplacian path.
  *
  * The equations and boundary handling intentionally mirror [DngPhotonLocalToneMapper]. Each
  * pyramid level occupies a disjoint range in one SSBO so a pass can read one level and write the
@@ -29,6 +29,13 @@ import kotlin.math.roundToInt
 internal object DngPhotonLocalToneMapGpuShaders {
     enum class Pass {
         PREPARE_SOURCE,
+        PREPARE_MGC_EXPOSURE,
+        ACCUMULATE_MGC_EXPOSURE,
+        NORMALIZE_MGC_FUSION,
+        REDUCE_MGC_SHADOW_LEVEL,
+        REDUCE_MGC_VEC2,
+        FINALIZE_MGC_TARGET,
+        MGC_LINEAR_HISTOGRAM,
         NORMALIZE_LOG,
         CLEAR_UINT,
         DOWNSAMPLE,
@@ -55,6 +62,13 @@ internal object DngPhotonLocalToneMapGpuShaders {
     val sources: Array<String> by lazy {
         arrayOf(
             prepareSource,
+            prepareMgcExposure,
+            accumulateMgcExposure,
+            normalizeMgcFusion,
+            reduceMgcShadowLevel,
+            reduceMgcVec2,
+            finalizeMgcTarget,
+            mgcLinearHistogram,
             normalizeLog,
             clearUint,
             downsample,
@@ -105,6 +119,314 @@ internal object DngPhotonLocalToneMapGpuShaders {
             uint bits = floatBitsToUint(value);
             atomicMin(sourceRange[0], bits);
             atomicMax(sourceRange[1], bits);
+        }
+    """.trimIndent()
+
+    private val prepareMgcExposure = """
+        #version 310 es
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) readonly buffer LinearSource {
+            float sourceValues[];
+        };
+        layout(std430, binding = 1) writeonly buffer ExposureWeightPyramid {
+            float weightValues[];
+        };
+        layout(std430, binding = 2) writeonly buffer ExposureTonePyramid {
+            float toneValues[];
+        };
+        uniform int uCount;
+        uniform int uWeightOffset;
+        uniform int uToneOffset;
+        uniform float uExposureGain;
+        uniform float uFusionWeight;
+
+        float mgcWeight(float exposed) {
+            // GenerateShadowWeightMap in MGC V25: gamma-domain triangular confidence followed by
+            // smoothstep and the recovered 2.857 power. It supplies the exposure-fusion guide;
+            // the continuous PlanExposures weight is applied independently.
+            float normalized = clamp(exposed, 0.01, 1.0);
+            float encoded = pow(normalized, 0.35);
+            float triangle = clamp((1.0 - abs(2.0 * encoded - 1.0)) * 1.25, 0.0, 1.0);
+            float smoothTriangle = triangle * triangle * (3.0 - 2.0 * triangle);
+            return pow(smoothTriangle, 2.857);
+        }
+
+        void main() {
+            int index = int(gl_GlobalInvocationID.x);
+            if (index >= uCount) return;
+            float exposed = clamp(max(sourceValues[index], 0.0) * uExposureGain, 0.0, 1.0);
+            float confidence = max(mgcWeight(exposed), 1e-7) * uFusionWeight;
+            weightValues[uWeightOffset + index] = confidence;
+            toneValues[uToneOffset + index] = exposed;
+        }
+    """.trimIndent()
+
+    private val accumulateMgcExposure = """
+        #version 310 es
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) readonly buffer ExposureWeightPyramid {
+            float weightValues[];
+        };
+        layout(std430, binding = 1) readonly buffer ExposureTonePyramid {
+            float toneValues[];
+        };
+        layout(std430, binding = 2) buffer FusedLaplacianNumerator {
+            float fusedValues[];
+        };
+        layout(std430, binding = 3) buffer FusedWeightDenominator {
+            float fusedWeights[];
+        };
+        uniform ivec2 uCurrentSize;
+        uniform ivec2 uNextSize;
+        uniform int uCurrentOffset;
+        uniform int uNextOffset;
+        uniform int uHasNextLevel;
+
+        float filterWeight(int delta) {
+            int distance = abs(delta);
+            return distance == 0 ? 0.40 : (distance == 1 ? 0.25 : 0.05);
+        }
+
+        float expandedTone(ivec2 position) {
+            float sum = 0.0;
+            float weightSum = 0.0;
+            for (int dy = -2; dy <= 2; ++dy) {
+                int insertedY = position.y + dy;
+                if ((insertedY & 1) != 0) continue;
+                int sourceY = insertedY / 2;
+                if (sourceY < 0 || sourceY >= uNextSize.y) continue;
+                float wy = filterWeight(dy);
+                for (int dx = -2; dx <= 2; ++dx) {
+                    int insertedX = position.x + dx;
+                    if ((insertedX & 1) != 0) continue;
+                    int sourceX = insertedX / 2;
+                    if (sourceX < 0 || sourceX >= uNextSize.x) continue;
+                    float weight = wy * filterWeight(dx);
+                    sum += toneValues[
+                        uNextOffset + sourceY * uNextSize.x + sourceX
+                    ] * weight;
+                    weightSum += weight;
+                }
+            }
+            return sum / max(weightSum, 1e-8);
+        }
+
+        void main() {
+            ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+            if (any(greaterThanEqual(position, uCurrentSize))) return;
+            int localIndex = position.y * uCurrentSize.x + position.x;
+            int index = uCurrentOffset + localIndex;
+            float laplacian = toneValues[index];
+            if (uHasNextLevel != 0) laplacian -= expandedTone(position);
+            float confidence = max(weightValues[index], 0.0);
+            fusedValues[index] += confidence * laplacian;
+            fusedWeights[index] += confidence;
+        }
+    """.trimIndent()
+
+    private val normalizeMgcFusion = """
+        #version 310 es
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) buffer FusedLaplacianNumerator {
+            float fusedValues[];
+        };
+        layout(std430, binding = 1) readonly buffer FusedWeightDenominator {
+            float fusedWeights[];
+        };
+        uniform int uCount;
+
+        void main() {
+            int index = int(gl_GlobalInvocationID.x);
+            if (index >= uCount) return;
+            fusedValues[index] /= max(fusedWeights[index], 1e-8);
+        }
+    """.trimIndent()
+
+    private val reduceMgcShadowLevel = """
+        #version 310 es
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) readonly buffer LinearSource {
+            float sourceValues[];
+        };
+        layout(std430, binding = 1) readonly buffer ReconstructedFusion {
+            float reconstructedValues[];
+        };
+        layout(std430, binding = 2) writeonly buffer PartialShadowSums {
+            float partialSums[];
+        };
+        uniform int uCount;
+        uniform int uReconstructedOffset;
+        uniform float uFinalLongGain;
+        shared float levelSums[128];
+        shared float weightSums[128];
+
+        float shadowWeight(float longExposureLevel) {
+            float normalized = clamp(longExposureLevel, 0.01, 1.0);
+            float encoded = pow(normalized, 0.35);
+            float triangle = clamp((1.0 - abs(2.0 * encoded - 1.0)) * 1.25, 0.0, 1.0);
+            float smoothTriangle = triangle * triangle * (3.0 - 2.0 * triangle);
+            return pow(smoothTriangle, 2.857);
+        }
+
+        float shadowLevelCoordinate(float value) {
+            return (log2(max(value, 0.0) + 0.0001) + 13.28771) * 0.07525668;
+        }
+
+        void main() {
+            uint lane = gl_LocalInvocationIndex;
+            int index = int(gl_GlobalInvocationID.x);
+            float level = 0.0;
+            float weight = 0.0;
+            if (index < uCount) {
+                // Keep readonly SSBO elements out of user-function arguments for Mali drivers.
+                float sourceValue = max(sourceValues[index], 0.0);
+                float reconstructedValue = max(
+                    reconstructedValues[uReconstructedOffset + index],
+                    0.0
+                );
+                weight = shadowWeight(sourceValue * uFinalLongGain);
+                level = shadowLevelCoordinate(reconstructedValue) * weight;
+            }
+            levelSums[lane] = level;
+            weightSums[lane] = weight;
+            barrier();
+            for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+                if (lane < stride) {
+                    levelSums[lane] += levelSums[lane + stride];
+                    weightSums[lane] += weightSums[lane + stride];
+                }
+                barrier();
+            }
+            if (lane == 0u) {
+                int outputIndex = int(gl_WorkGroupID.x) * 2;
+                partialSums[outputIndex] = levelSums[0];
+                partialSums[outputIndex + 1] = weightSums[0];
+            }
+        }
+    """.trimIndent()
+
+    private val reduceMgcVec2 = """
+        #version 310 es
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) readonly buffer InputSums {
+            float inputSums[];
+        };
+        layout(std430, binding = 1) writeonly buffer OutputSums {
+            float outputSums[];
+        };
+        uniform int uPairCount;
+        shared float firstSums[128];
+        shared float secondSums[128];
+
+        void main() {
+            uint lane = gl_LocalInvocationIndex;
+            int index = int(gl_GlobalInvocationID.x);
+            float first = 0.0;
+            float second = 0.0;
+            if (index < uPairCount) {
+                first = inputSums[index * 2];
+                second = inputSums[index * 2 + 1];
+            }
+            firstSums[lane] = first;
+            secondSums[lane] = second;
+            barrier();
+            for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+                if (lane < stride) {
+                    firstSums[lane] += firstSums[lane + stride];
+                    secondSums[lane] += secondSums[lane + stride];
+                }
+                barrier();
+            }
+            if (lane == 0u) {
+                int outputIndex = int(gl_WorkGroupID.x) * 2;
+                outputSums[outputIndex] = firstSums[0];
+                outputSums[outputIndex + 1] = secondSums[0];
+            }
+        }
+    """.trimIndent()
+
+    private val finalizeMgcTarget = """
+        #version 310 es
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) readonly buffer LinearSource {
+            float sourceValues[];
+        };
+        layout(std430, binding = 1) readonly buffer ReconstructedFusion {
+            float reconstructedValues[];
+        };
+        layout(std430, binding = 2) writeonly buffer ToneMappedTarget {
+            float targetValues[];
+        };
+        uniform int uCount;
+        uniform int uReconstructedOffset;
+        uniform float uBaselineExposureGain;
+        uniform float uFinalLongGain;
+        uniform float uShadowLevelGain;
+
+        float shadowWeight(float longExposureLevel) {
+            float normalized = clamp(longExposureLevel, 0.01, 1.0);
+            float encoded = pow(normalized, 0.35);
+            float triangle = clamp((1.0 - abs(2.0 * encoded - 1.0)) * 1.25, 0.0, 1.0);
+            float smoothTriangle = triangle * triangle * (3.0 - 2.0 * triangle);
+            return pow(smoothTriangle, 2.857);
+        }
+
+        void main() {
+            int index = int(gl_GlobalInvocationID.x);
+            if (index >= uCount) return;
+            float fused = max(reconstructedValues[uReconstructedOffset + index], 0.0);
+            float mask = shadowWeight(max(sourceValues[index], 0.0) * uFinalLongGain);
+            float shadowMatched = fused * mix(1.0, uShadowLevelGain, mask);
+            // PGTM precedes BaselineExposure in dng_render. Store the unexposed target so the
+            // later exposure ramp restores this exact LTM-linear value before ACR3.
+            targetValues[index] = shadowMatched / max(uBaselineExposureGain, 1e-8);
+        }
+    """.trimIndent()
+
+    private val mgcLinearHistogram = """
+        #version 310 es
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) readonly buffer ToneMappedTarget {
+            float targetValues[];
+        };
+        layout(std430, binding = 1) buffer LinearHistogram {
+            uint histogram[];
+        };
+        uniform int uCount;
+        uniform int uBinCount;
+        uniform float uBaselineExposureGain;
+
+        void main() {
+            int index = int(gl_GlobalInvocationID.x);
+            if (index >= uCount) return;
+            float linearLtm = clamp(
+                max(targetValues[index], 0.0) * uBaselineExposureGain,
+                0.0,
+                1.0
+            );
+            int bin = int(round(linearLtm * float(uBinCount - 1)));
+            atomicAdd(histogram[clamp(bin, 0, uBinCount - 1)], 1u);
         }
     """.trimIndent()
 
@@ -569,6 +891,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
         uniform int uRangeBinCount;
         uniform int uRangePlaneCount;
         uniform float uGuideAlpha;
+        uniform float uTargetGain;
 
         float curvedGuide(float value) {
             float x = clamp(value, 0.0, 1.0);
@@ -599,7 +922,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
                     // Fit the unexposed Local Laplacian target. Rendering applies the resulting
                     // scalar gain after the engine's BaselineExposure stage.
                     float x = sourceValue;
-                    float y = max(targetValues[sampleIndex], 0.0);
+                    float y = max(targetValues[sampleIndex] * uTargetGain, 0.0);
                     if (component == 0) sum += x * x;
                     else if (component == 1) sum += x;
                     else if (component == 2) sum += 1.0;
@@ -1230,6 +1553,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val hueSatMap: DcpHueSatMap?,
         val hueSatMapSupportsOverrange: Boolean,
         val warpRectilinear: FloatArray? = null,
+        val mgcLtmPlan: MgcLtmCapturePlan? = null,
         val lensShadingDescription: String,
         val bindLensShading: (programId: Int) -> Unit,
         val ensureHueSatTexture: (DcpHueSatMap) -> Int,
@@ -1559,6 +1883,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 width = width,
                 height = height,
                 baselineExposureEv = baselineExposureEv,
+                mgcLtmPlan = input.mgcLtmPlan,
                 diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
                 samplingArea = PhotonPgtmSamplingArea(
                     originH = safeStatsBounds.left.toDouble() / rawTextureWidth,
@@ -1594,7 +1919,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 2.0f.pow(photonPlan.parameters.preToneMapExposureBoostEv)
             PLog.d(
                 TAG,
-                "GPU Photon HDR prepared: size=${width}x$height " +
+                "GPU local tone map prepared: size=${width}x$height " +
                     "source=${rawTextureWidth}x$rawTextureHeight " +
                     "streaming=$streamingInput sampleTiles=${streamingTiles.size} " +
                     "statsBounds=$safeStatsBounds " +
@@ -1602,6 +1927,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "lsc=${input.lensShadingDescription} " +
                     "warpCount=${activeWarpParameters.size / 8} " +
                     "photonGuide=paperIntensity " +
+                    "algorithm=${if (input.mgcLtmPlan != null) "MGC_LTM" else "PHOTON_LL"} " +
                     "hueSatOverrange=$hueSatMapSupportsOverrange " +
                     "photonBaselineGain=${photonPlan.exposureGain} " +
                     "photonPreToneMapGain=$photonPreToneMapGain " +
@@ -1796,6 +2122,9 @@ internal class DngPhotonProfileGainTableAlgorithm {
             dispatch2d(sampleWidth, sampleHeight, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
             storageBarrier()
 
+            var finalTargetGain = 1f
+            val mgcLtmPlan = photonPlan.mgcLtmPlan
+            if (mgcLtmPlan == null) {
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.NORMALIZE_LOG)
             GLES31.glUseProgram(activeProgram)
             bindStorage(0, buffers[sourceBuffer])
@@ -2184,6 +2513,312 @@ internal class DngPhotonProfileGainTableAlgorithm {
             dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
+            } else {
+                val exposures = MgcLocalToneMappingMath.planSyntheticExposures(
+                    mgcLtmPlan.hdrRatio,
+                ) ?: run {
+                    PLog.e(TAG, "MGC LTM exposure plan is invalid: ${mgcLtmPlan.hdrRatio}")
+                    return null
+                }
+                val fusionAndShadowStartNanos = System.nanoTime()
+                clearUintBuffer(buffers[laplacianBuffer], pyramid.floatCount)
+                clearUintBuffer(buffers[reconstructedBuffer], pyramid.floatCount)
+
+                exposures.forEach { exposure ->
+                    activeProgram = program(
+                        DngPhotonLocalToneMapGpuShaders.Pass.PREPARE_MGC_EXPOSURE,
+                    )
+                    GLES31.glUseProgram(activeProgram)
+                    bindStorage(0, buffers[sourceBuffer])
+                    bindStorage(1, buffers[gaussianBuffer])
+                    bindStorage(2, buffers[remappedBuffer])
+                    uniform1i(activeProgram, "uCount", sampleCount)
+                    uniform1i(
+                        activeProgram,
+                        "uWeightOffset",
+                        pyramid.levels.first().offset,
+                    )
+                    uniform1i(
+                        activeProgram,
+                        "uToneOffset",
+                        pyramid.levels.first().offset,
+                    )
+                    uniform1f(
+                        activeProgram,
+                        "uExposureGain",
+                        mgcLtmPlan.finalShortGain * exposure.gain,
+                    )
+                    uniform1f(activeProgram, "uFusionWeight", exposure.fusionWeight)
+                    dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
+                    storageBarrier()
+
+                    activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.DOWNSAMPLE)
+                    GLES31.glUseProgram(activeProgram)
+                    for (buffer in intArrayOf(gaussianBuffer, remappedBuffer)) {
+                        bindStorage(0, buffers[buffer])
+                        bindStorage(1, buffers[buffer])
+                        for (levelIndex in 1 until pyramid.levels.size) {
+                            val sourceLevel = pyramid.levels[levelIndex - 1]
+                            val destinationLevel = pyramid.levels[levelIndex]
+                            uniform2i(
+                                activeProgram,
+                                "uSourceSize",
+                                sourceLevel.width,
+                                sourceLevel.height,
+                            )
+                            uniform2i(
+                                activeProgram,
+                                "uDestinationSize",
+                                destinationLevel.width,
+                                destinationLevel.height,
+                            )
+                            uniform1i(activeProgram, "uSourceOffset", sourceLevel.offset)
+                            uniform1i(
+                                activeProgram,
+                                "uDestinationOffset",
+                                destinationLevel.offset,
+                            )
+                            dispatch2d(
+                                destinationLevel.width,
+                                destinationLevel.height,
+                                GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                                GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                            )
+                            storageBarrier()
+                        }
+                    }
+
+                    activeProgram = program(
+                        DngPhotonLocalToneMapGpuShaders.Pass.ACCUMULATE_MGC_EXPOSURE,
+                    )
+                    GLES31.glUseProgram(activeProgram)
+                    bindStorage(0, buffers[gaussianBuffer])
+                    bindStorage(1, buffers[remappedBuffer])
+                    bindStorage(2, buffers[laplacianBuffer])
+                    bindStorage(3, buffers[reconstructedBuffer])
+                    pyramid.levels.forEachIndexed { levelIndex, currentLevel ->
+                        val nextLevel = pyramid.levels.getOrNull(levelIndex + 1)
+                        uniform2i(
+                            activeProgram,
+                            "uCurrentSize",
+                            currentLevel.width,
+                            currentLevel.height,
+                        )
+                        uniform2i(
+                            activeProgram,
+                            "uNextSize",
+                            nextLevel?.width ?: 1,
+                            nextLevel?.height ?: 1,
+                        )
+                        uniform1i(activeProgram, "uCurrentOffset", currentLevel.offset)
+                        uniform1i(activeProgram, "uNextOffset", nextLevel?.offset ?: 0)
+                        uniform1i(
+                            activeProgram,
+                            "uHasNextLevel",
+                            if (nextLevel != null) 1 else 0,
+                        )
+                        dispatch2d(
+                            currentLevel.width,
+                            currentLevel.height,
+                            GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                            GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                        )
+                    }
+                    storageBarrier()
+                }
+
+                activeProgram = program(
+                    DngPhotonLocalToneMapGpuShaders.Pass.NORMALIZE_MGC_FUSION,
+                )
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[laplacianBuffer])
+                bindStorage(1, buffers[reconstructedBuffer])
+                uniform1i(activeProgram, "uCount", pyramid.floatCount)
+                dispatch1d(pyramid.floatCount, GlesComputeWorkGroup.LINEAR_SIZE)
+                storageBarrier()
+
+                val coarsestLevel = pyramid.levels.last()
+                activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.COPY_RANGE)
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[laplacianBuffer])
+                bindStorage(1, buffers[reconstructedBuffer])
+                uniform1i(activeProgram, "uCount", coarsestLevel.size)
+                uniform1i(activeProgram, "uSourceOffset", coarsestLevel.offset)
+                uniform1i(activeProgram, "uDestinationOffset", coarsestLevel.offset)
+                dispatch1d(coarsestLevel.size, GlesComputeWorkGroup.LINEAR_SIZE)
+                storageBarrier()
+
+                activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.RECONSTRUCT)
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[laplacianBuffer])
+                bindStorage(1, buffers[reconstructedBuffer])
+                for (levelIndex in pyramid.levels.lastIndex - 1 downTo 0) {
+                    val currentLevel = pyramid.levels[levelIndex]
+                    val nextLevel = pyramid.levels[levelIndex + 1]
+                    uniform2i(
+                        activeProgram,
+                        "uCurrentSize",
+                        currentLevel.width,
+                        currentLevel.height,
+                    )
+                    uniform2i(
+                        activeProgram,
+                        "uNextSize",
+                        nextLevel.width,
+                        nextLevel.height,
+                    )
+                    uniform1i(activeProgram, "uLaplacianOffset", currentLevel.offset)
+                    uniform1i(activeProgram, "uCurrentOffset", currentLevel.offset)
+                    uniform1i(activeProgram, "uNextOffset", nextLevel.offset)
+                    dispatch2d(
+                        currentLevel.width,
+                        currentLevel.height,
+                        GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                        GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                    )
+                    storageBarrier()
+                }
+
+                val reductionLocalSize = GlesComputeWorkGroup.LINEAR_SIZE
+                var reductionPairCount =
+                    (sampleCount + reductionLocalSize - 1) / reductionLocalSize
+                activeProgram = program(
+                    DngPhotonLocalToneMapGpuShaders.Pass.REDUCE_MGC_SHADOW_LEVEL,
+                )
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[sourceBuffer])
+                bindStorage(1, buffers[reconstructedBuffer])
+                bindStorage(2, buffers[gaussianBuffer])
+                uniform1i(activeProgram, "uCount", sampleCount)
+                uniform1i(
+                    activeProgram,
+                    "uReconstructedOffset",
+                    pyramid.levels.first().offset,
+                )
+                uniform1f(activeProgram, "uFinalLongGain", mgcLtmPlan.finalLongGain)
+                dispatch1d(sampleCount, reductionLocalSize)
+                storageBarrier()
+
+                var reductionInputBuffer = gaussianBuffer
+                var reductionOutputBuffer = remappedBuffer
+                while (reductionPairCount > 1) {
+                    activeProgram = program(
+                        DngPhotonLocalToneMapGpuShaders.Pass.REDUCE_MGC_VEC2,
+                    )
+                    GLES31.glUseProgram(activeProgram)
+                    bindStorage(0, buffers[reductionInputBuffer])
+                    bindStorage(1, buffers[reductionOutputBuffer])
+                    uniform1i(activeProgram, "uPairCount", reductionPairCount)
+                    dispatch1d(reductionPairCount, reductionLocalSize)
+                    storageBarrier()
+                    reductionPairCount =
+                        (reductionPairCount + reductionLocalSize - 1) /
+                            reductionLocalSize
+                    val previousInput = reductionInputBuffer
+                    reductionInputBuffer = reductionOutputBuffer
+                    reductionOutputBuffer = previousInput
+                }
+                val shadowStatistics = readFloatStorageBuffer(
+                    bufferId = buffers[reductionInputBuffer],
+                    floatCount = 2,
+                    label = "MGC LTM shadow statistics",
+                ) ?: return null
+                val shadowMatch = MgcLocalToneMappingMath.solveShadowLevelMatch(
+                    weightedLevelCoordinateSum = shadowStatistics[0],
+                    weightSum = shadowStatistics[1],
+                    longTargetAverageLdr = mgcLtmPlan.longTargetAverageLdr,
+                ) ?: run {
+                    PLog.e(TAG, "MGC LTM shadow-level matching failed")
+                    return null
+                }
+                val fusionAndShadowWallMs =
+                    (System.nanoTime() - fusionAndShadowStartNanos) / 1_000_000.0
+
+                val targetAndHistogramStartNanos = System.nanoTime()
+                activeProgram = program(
+                    DngPhotonLocalToneMapGpuShaders.Pass.FINALIZE_MGC_TARGET,
+                )
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[sourceBuffer])
+                bindStorage(1, buffers[reconstructedBuffer])
+                bindStorage(2, buffers[targetBuffer])
+                uniform1i(activeProgram, "uCount", sampleCount)
+                uniform1i(
+                    activeProgram,
+                    "uReconstructedOffset",
+                    pyramid.levels.first().offset,
+                )
+                uniform1f(
+                    activeProgram,
+                    "uBaselineExposureGain",
+                    photonPlan.exposureGain,
+                )
+                uniform1f(activeProgram, "uFinalLongGain", mgcLtmPlan.finalLongGain)
+                uniform1f(activeProgram, "uShadowLevelGain", shadowMatch.gain)
+                dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
+                storageBarrier()
+
+                val mgcHistogramBinCount =
+                    DngPhotonLocalToneMapGpuShaders.HISTOGRAM_BIN_COUNT
+                allocate(
+                    buffers[histogramBuffer],
+                    mgcHistogramBinCount * Int.SIZE_BYTES,
+                )
+                clearUintBuffer(buffers[histogramBuffer], mgcHistogramBinCount)
+                activeProgram = program(
+                    DngPhotonLocalToneMapGpuShaders.Pass.MGC_LINEAR_HISTOGRAM,
+                )
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[targetBuffer])
+                bindStorage(1, buffers[histogramBuffer])
+                uniform1i(activeProgram, "uCount", sampleCount)
+                uniform1i(activeProgram, "uBinCount", mgcHistogramBinCount)
+                uniform1f(
+                    activeProgram,
+                    "uBaselineExposureGain",
+                    photonPlan.exposureGain,
+                )
+                dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
+                storageBarrier()
+                val linearHistogram = readUintStorageBuffer(
+                    bufferId = buffers[histogramBuffer],
+                    intCount = mgcHistogramBinCount,
+                    label = "MGC LTM linear histogram",
+                ) ?: return null
+                val targetAndHistogramWallMs =
+                    (System.nanoTime() - targetAndHistogramStartNanos) / 1_000_000.0
+                val brightnessSolveStartNanos = System.nanoTime()
+                val curveMatch = MgcLocalToneMappingMath.solveAcr3BrightnessMatch(
+                    linearHistogram = linearHistogram,
+                    expectedSampleCount = sampleCount,
+                ) ?: run {
+                    PLog.e(TAG, "MGC LTM Google-to-ACR3 brightness calibration failed")
+                    return null
+                }
+                val brightnessSolveCpuMs =
+                    (System.nanoTime() - brightnessSolveStartNanos) / 1_000_000.0
+                finalTargetGain = curveMatch.gain
+                PLog.i(
+                    TAG,
+                    "RAW_SCENE_EXPOSURE stage=MGC_LTM_FINALIZE " +
+                        "hdrRatio=${mgcLtmPlan.hdrRatio} " +
+                        "syntheticExposureCount=${exposures.size} " +
+                        "syntheticExposures=${exposures.joinToString { it.gain.toString() }} " +
+                        "syntheticWeights=${exposures.joinToString { it.fusionWeight.toString() }} " +
+                        "shadowTarget=${shadowMatch.targetLevelLinear} " +
+                        "shadowMeasured=${shadowMatch.measuredLevelLinear} " +
+                        "shadowGain=${shadowMatch.gain} " +
+                        "googleBrightness=${curveMatch.googleDisplayBrightness} " +
+                        "acr3BrightnessBefore=${curveMatch.acr3DisplayBrightnessBefore} " +
+                        "acr3BrightnessAfter=${curveMatch.acr3DisplayBrightnessAfter} " +
+                        "curveBrightnessGain=${curveMatch.gain} " +
+                        "fusionAndShadowWallMs=$fusionAndShadowWallMs " +
+                        "targetAndHistogramWallMs=$targetAndHistogramWallMs " +
+                        "brightnessSolveCpuMs=$brightnessSolveCpuMs " +
+                        "globalToneCurve=ACR3",
+                )
+            }
+
             allocate(buffers[bguBufferA], extendedBguFloatCount * Float.SIZE_BYTES)
             allocate(buffers[bguBufferB], extendedBguFloatCount * Float.SIZE_BYTES)
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_HISTOGRAM)
@@ -2205,6 +2840,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 "uGuideAlpha",
                 parameters.bilateralGuideCurveAlpha,
             )
+            uniform1f(activeProgram, "uTargetGain", finalTargetGain)
             GLES31.glDispatchCompute(extendedGridWidth, extendedGridHeight, 1)
             storageBarrier()
 

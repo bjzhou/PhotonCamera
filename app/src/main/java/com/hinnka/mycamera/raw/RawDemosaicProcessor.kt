@@ -480,7 +480,17 @@ class RawDemosaicProcessor {
             )
 
             val exposureReady = renderSceneExposureRequest(
-                request = RawSceneExposureRequest { 0f },
+                request = RawSceneExposureRequest {
+                    RawSceneExposureSolution(
+                        baselineExposureEv = 0f,
+                        mgcLtmPlan = MgcLtmCapturePlan(
+                            hdrRatio = 1f,
+                            finalShortGain = 1f,
+                            finalLongGain = 1f,
+                            longTargetAverageLdr = 0f,
+                        ),
+                    )
+                },
                 metadata = metadata,
                 sourceTextureId = demosaicTextureId,
                 colorCorrectionMatrix = identity,
@@ -3016,7 +3026,7 @@ class RawDemosaicProcessor {
             }
 
             if (prepareCaptureProfile) {
-                val solvedExposureEv = sceneExposureRequest?.let { request ->
+                val sceneExposureSolution = sceneExposureRequest?.let { request ->
                     renderSceneExposureRequest(
                         request = request,
                         metadata = actualMetadata,
@@ -3029,11 +3039,13 @@ class RawDemosaicProcessor {
                         stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                     )
                 }
+                val solvedExposureEv = sceneExposureSolution?.baselineExposureEv
+                val mgcLtmPlan = sceneExposureSolution?.mgcLtmPlan
                 solvedExposureEv?.let { exposureEv ->
                     PLog.i(
                         TAG,
                         "RAW_SCENE_EXPOSURE stage=INFERENCE_COMPLETE " +
-                            "pgtm=$capturePhotonPgtmRequested " +
+                            "pgtm=${capturePhotonPgtmRequested || mgcLtmPlan != null} " +
                             "sourceBaselineEv=${actualMetadata.baselineExposure} " +
                             "sceneBaselineEv=$exposureEv",
                     )
@@ -3042,7 +3054,8 @@ class RawDemosaicProcessor {
                     sourceBaselineEv = actualMetadata.baselineExposure,
                     sceneBaselineEv = solvedExposureEv,
                 )
-                val captureProfileGainTableMap = if (capturePhotonPgtmRequested) {
+                val mgcLtmRequired = mgcLtmPlan != null
+                val captureProfileGainTableMap = if (capturePhotonPgtmRequested || mgcLtmRequired) {
                     generateProfileGainTableMapOnGpu(
                         rawTextureId = rawTextureId,
                         streamingRawData = tiledRawData,
@@ -3058,11 +3071,12 @@ class RawDemosaicProcessor {
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
                         hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                         warpRectilinear = applicableDngWarpRectilinear,
+                        mgcLtmPlan = mgcLtmPlan,
                     )
                 } else {
                     null
                 }
-                val profileRequired = capturePhotonPgtmRequested
+                val profileRequired = capturePhotonPgtmRequested || mgcLtmRequired
                 val captureResult = if (profileRequired && captureProfileGainTableMap == null) {
                     null
                 } else {
@@ -4118,6 +4132,7 @@ class RawDemosaicProcessor {
         hueSatMap: DcpHueSatMap?,
         hueSatMapSupportsOverrange: Boolean,
         warpRectilinear: FloatArray? = null,
+        mgcLtmPlan: MgcLtmCapturePlan? = null,
     ): DngProfileGainTableMap? {
         val streamingUploader = streamingRawData?.let {
             DngPhotonProfileGainTableAlgorithm.StreamingRawUploader {
@@ -4152,6 +4167,7 @@ class RawDemosaicProcessor {
                 hueSatMap = hueSatMap,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                 warpRectilinear = warpRectilinear,
+                mgcLtmPlan = mgcLtmPlan,
                 lensShadingDescription = lensShadingLogString(metadata),
                 bindLensShading = { program ->
                     bindLensShadingForProgram(program, metadata)
@@ -5416,10 +5432,10 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Reproduces classic Sabre's MergeRaw metadata branch. Sabre's merge first derives an output
-     * NoiseModel from its accumulated frame weights; MergeRaw then applies the SNR-table variance
-     * reduction at libgcastartup.so+0x388396c. Photon transports both scalar stages through
-     * [RawMetadata.mgcSabreNoiseModelScale]. Sabre does not expose Spatial correlation data.
+     * Reproduces classic Sabre's MergeRaw metadata branch. V25 calls GetMergedNoiseModel and uses
+     * the returned model directly. Photon transports the measured Q8 average merge factor through
+     * [RawMetadata.mgcSabreNoiseModelScale]; no second reference-SNR lookup-table scale is applied.
+     * Sabre does not expose Spatial correlation data.
      */
     private fun sabreOutputNoiseMetadata(metadata: RawMetadata): RawMetadata {
         val scale = checkNotNull(metadata.mgcSabreNoiseModelScale) {
@@ -5433,7 +5449,7 @@ class RawDemosaicProcessor {
         ) { "Sabre physical Bayer noise model is unavailable" }
         PLog.i(
             TAG,
-            "MGC Sabre default denoise noise source=reference-bayer*merge-factor*sabre-snr-scale " +
+            "MGC Sabre default denoise noise source=reference-bayer*measured-merge-factor " +
                 "captureFrames=${metadata.frameCount} scale=$scale " +
                 "read=${rgbNoise.read.contentToString()} " +
                 "shot=${rgbNoise.shot.contentToString()}",
@@ -7624,7 +7640,7 @@ class RawDemosaicProcessor {
         outputSourceBounds: Rect,
         outputRotation: Int = 0,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
-    ): Float? {
+    ): RawSceneExposureSolution? {
         return try {
             val width = RawSceneExposureMath.INPUT_WIDTH
             val height = RawSceneExposureMath.INPUT_HEIGHT

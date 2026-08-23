@@ -59,7 +59,7 @@ import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
-import com.hinnka.mycamera.raw.RawViewfinderExposureMatcher
+import com.hinnka.mycamera.raw.RawSceneExposureMatcher
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -4457,7 +4457,7 @@ object GalleryManager {
         val profileGainTableRequired = generatePhotonPgtm
         val captureProfilePreparer = if (sceneExposureEnabled || profileGainTableRequired) {
             RawDngCaptureProfilePreparer { input ->
-                RawViewfinderExposureMatcher.prepareCaptureProfile(
+                RawSceneExposureMatcher.prepareCaptureProfile(
                     renderer = RawDemosaicProcessor.getInstance(),
                     context = context,
                     input = input,

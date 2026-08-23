@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.pow
 
 class RawSceneExposureMathTest {
     @Test
@@ -197,15 +198,135 @@ class RawSceneExposureMathTest {
     }
 
     @Test
-    fun automaticExposureAppliesFixedPhotonCameraTargetAfterMgcMetering() {
-        val compensated = RawSceneExposureMath.applyDefaultExposureCompensation(0.2198973f)
+    fun recoveredMgcPlanUsesContinuousExposureCountAndLogPlacement() {
+        val plan = MgcLocalToneMappingMath.planSyntheticExposures(2.4375658f)
 
-        assertEquals(-0.0801027f, compensated!!, 1e-6f)
-        assertEquals(
-            -0.3f,
-            RawSceneExposureMath.applyDefaultExposureCompensation(0f)!!,
-            0f,
+        assertNotNull(plan)
+        assertEquals(4, plan!!.size)
+        assertEquals(0f, plan[0].fraction, 1e-7f)
+        assertEquals(0.13826938f, plan[1].fraction, 1e-6f)
+        assertEquals(0.5691347f, plan[2].fraction, 1e-6f)
+        assertEquals(1f, plan[3].fraction, 1e-7f)
+        assertEquals(1f, plan[0].fusionWeight, 1e-7f)
+        assertEquals(0.32091093f, plan[1].fusionWeight, 1e-6f)
+        assertEquals(1f, plan[2].fusionWeight, 1e-7f)
+        assertEquals(MgcLocalToneMappingMath.bentoFactor(2.4375658f), plan.first().gain, 1e-6f)
+        assertEquals(2.4375658f, plan.last().gain, 1e-6f)
+    }
+
+    @Test
+    fun recoveredMgcPlanPreservesBothLowHdrTransitions() {
+        val veryLowHdr = MgcLocalToneMappingMath.planSyntheticExposures(1.05f)!!
+        val middleHdr = MgcLocalToneMappingMath.planSyntheticExposures(1.5f)!!
+
+        assertEquals(2, veryLowHdr.size)
+        assertEquals(0.620252f, veryLowHdr[0].fusionWeight, 1e-5f)
+        assertEquals(0f, veryLowHdr[0].fraction, 0f)
+        assertEquals(1f, veryLowHdr[1].fraction, 0f)
+        assertEquals(3, middleHdr.size)
+        assertEquals(0.475513f, middleHdr[1].fusionWeight, 1e-5f)
+        assertEquals(0.5f, middleHdr[1].fraction, 0f)
+    }
+
+    @Test
+    fun recoveredMgcShadowMaskConcentratesOnLongExposureMidShadows() {
+        val center = 0.5.pow(1.0 / 0.35)
+        val centerWeight = MgcLocalToneMappingMath.shadowWeight(center)
+        val darkWeight = MgcLocalToneMappingMath.shadowWeight(0.01)
+        val highlightWeight = MgcLocalToneMappingMath.shadowWeight(1.0)
+
+        assertEquals(1.0, centerWeight, 1e-9)
+        assertTrue(centerWeight > darkWeight)
+        assertTrue(centerWeight > highlightWeight)
+        assertEquals(0.0, highlightWeight, 0.0)
+    }
+
+    @Test
+    fun recoveredMgcLongTargetAveragesAfterGammaEncoding() {
+        val rgb = FloatArray(64 * 64 * 3)
+        for (pixel in 0 until 64 * 64) {
+            val value = if (pixel < 64 * 32) 0.01f else 0.1f
+            rgb[pixel * 3] = value
+            rgb[pixel * 3 + 1] = value
+            rgb[pixel * 3 + 2] = value
+        }
+        val target = MgcLocalToneMappingMath.longTargetAverageLdr(
+            frame = RawSceneLinearFrame(64, 64, rgb),
+            idealLongGain = 4f,
         )
+        val expected = (
+            0.04.pow(1.0 / 2.2) + 0.4.pow(1.0 / 2.2)
+            ) * 0.5 * 255.0
+
+        assertEquals(expected.toFloat(), target!!, 1e-4f)
+    }
+
+    @Test
+    fun curveCalibrationMatchesSceneBrightnessWithoutReplacingAcr3() {
+        val ltmOutput = FloatArray(4096) { index ->
+            0.002f + 0.7f * index / 4095f
+        }
+        val match = MgcLocalToneMappingMath.solveAcr3BrightnessMatch(ltmOutput)
+
+        assertNotNull(match)
+        assertEquals(
+            match!!.googleDisplayBrightness,
+            match.acr3DisplayBrightnessAfter,
+            1e-5f,
+        )
+        assertTrue(match.gain.isFinite() && match.gain > 0f)
+        assertTrue(kotlin.math.abs(match.acr3DisplayBrightnessBefore -
+            match.googleDisplayBrightness) > 1e-4f)
+    }
+
+    @Test
+    fun histogramCurveCalibrationMatchesEquivalentLinearSamples() {
+        val histogram = IntArray(32_768)
+        val occupiedBins = intArrayOf(0, 37, 1024, 8192, 16_384, 24_576, 32_767)
+        occupiedBins.forEachIndexed { index, bin ->
+            histogram[bin] = index + 1
+        }
+        val samples = occupiedBins.flatMapIndexed { index, bin ->
+            List(index + 1) { bin.toFloat() / histogram.lastIndex }
+        }.toFloatArray()
+
+        val sampleMatch = MgcLocalToneMappingMath.solveAcr3BrightnessMatch(samples)
+        val histogramMatch = MgcLocalToneMappingMath.solveAcr3BrightnessMatch(
+            linearHistogram = histogram,
+            expectedSampleCount = samples.size,
+        )
+
+        assertNotNull(sampleMatch)
+        assertNotNull(histogramMatch)
+        assertEquals(
+            sampleMatch!!.googleDisplayBrightness,
+            histogramMatch!!.googleDisplayBrightness,
+            1e-6f,
+        )
+        assertEquals(sampleMatch.gain, histogramMatch.gain, 1e-6f)
+        assertEquals(
+            histogramMatch.googleDisplayBrightness,
+            histogramMatch.acr3DisplayBrightnessAfter,
+            1e-5f,
+        )
+    }
+
+    @Test
+    fun shadowLevelGainIsSolvedOnLtmOutputInsteadOfBaselineExposure() {
+        val source = FloatArray(4096) { 0.05f }
+        val fused = FloatArray(4096) { 0.1f }
+        val targetLdr = (0.2.pow(1.0 / 2.2) * 255.0).toFloat()
+        val match = MgcLocalToneMappingMath.solveShadowLevelMatch(
+            source = source,
+            fusedLinear = fused,
+            finalLongGain = 4f,
+            longTargetAverageLdr = targetLdr,
+        )
+
+        assertNotNull(match)
+        assertEquals(0.2f, match!!.targetLevelLinear, 1e-5f)
+        assertEquals(0.1f, match.measuredLevelLinear, 1e-6f)
+        assertEquals(2f, match.gain, 1e-5f)
     }
 
     @Test
@@ -225,7 +346,7 @@ class RawSceneExposureMathTest {
         assertEquals(30f, fusion.finalLongTetMs, 1e-4f)
         assertEquals(12.5f, fusion.finalPortraitTetMs, 1e-4f)
         assertEquals(1.25f, fusion.finalGain, 1e-5f)
-        assertEquals(kotlin.math.log2(1.25f), fusion.exposureOffsetEv, 1e-5f)
+        assertEquals(kotlin.math.log2(1.25f), fusion.shortCaptureEv, 1e-5f)
     }
 
     @Test
@@ -383,7 +504,7 @@ class RawSceneExposureMathTest {
 
         assertEquals(120f, fusion!!.finalShortTetMs, 0f)
         assertEquals(1.2f, fusion.finalShortGain, 1e-6f)
-        assertEquals(kotlin.math.log2(1.2f), fusion.exposureOffsetEv, 1e-6f)
+        assertEquals(kotlin.math.log2(1.2f), fusion.shortCaptureEv, 1e-6f)
     }
 
     private fun branches(
