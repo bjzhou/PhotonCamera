@@ -18,7 +18,7 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * 开发期私有图库恢复器。
+ * 私有图库恢复器。
  *
  * 只扫描 App 私有 photos/<photoId> 目录，不访问公开相册或用户自定义公开目录。
  */

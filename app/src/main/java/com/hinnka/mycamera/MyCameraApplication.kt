@@ -37,7 +37,7 @@ class MyCameraApplication : Application() {
         phantomService = StartupTrace.measure("PhantomService()") {
             PhantomService(this)
         }
-        recoverPrivateGalleryIndexForDebugBuild()
+        recoverPrivateGalleryIndex()
 //        AppUpdateManager.startSilentUpdate(this)
 
         val userPreferencesRepository = contentRepository.userPreferencesRepository
@@ -63,19 +63,18 @@ class MyCameraApplication : Application() {
         StartupTrace.mark("Application.onCreate end")
     }
 
-    private fun recoverPrivateGalleryIndexForDebugBuild() {
-        if (!BuildConfig.DEBUG) return
+    private fun recoverPrivateGalleryIndex() {
         applicationScope.launch {
             try {
                 val result = GalleryManager.recoverPrivatePhotoDirectoryToDatabase(this@MyCameraApplication)
                 PLog.d(
                     TAG,
-                    "Debug private gallery recovery: scanned=${result.scannedCount}, " +
+                    "Private gallery recovery: scanned=${result.scannedCount}, " +
                         "restored=${result.restoredCount}, existing=${result.skippedExistingCount}, " +
                         "unsupported=${result.skippedUnsupportedCount}, failed=${result.failedCount}"
                 )
             } catch (e: Exception) {
-                PLog.e(TAG, "Debug private gallery recovery failed", e)
+                PLog.e(TAG, "Private gallery recovery failed", e)
             }
         }
     }

@@ -5028,7 +5028,7 @@ object GalleryManager {
     /**
      * 扫描 App 私有照片目录，将文件存在但数据库缺失的记录补回图库数据库。
      *
-     * 这是开发期维护入口：不覆盖已有数据库记录，只为缺失的 photoId 重建最小可用元数据。
+     * 不覆盖已有数据库记录，只为缺失的 photoId 重建最小可用元数据。
      */
     suspend fun recoverPrivatePhotoDirectoryToDatabase(context: Context): PhotoDirectoryRecoveryResult {
         return PrivatePhotoDirectoryRecovery.recover(context)
