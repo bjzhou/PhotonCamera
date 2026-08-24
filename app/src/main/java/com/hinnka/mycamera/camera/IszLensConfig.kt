@@ -90,31 +90,6 @@ data class IszLensConfig(
             return "$baseId:$profileId"
         }
 
-        fun isVirtualCameraId(cameraId: String?): Boolean {
-            return cameraId?.startsWith("$VIRTUAL_CAMERA_ID_PREFIX:") == true
-        }
-
-        /**
-         * Resolves the real Camera2 device ID represented by a persisted lens ID.
-         *
-         * ISZ IDs are application-level identities and must never be passed to Camera2. The
-         * corresponding configuration is authoritative because Camera2 IDs are opaque strings
-         * and therefore cannot be safely reconstructed by splitting the virtual ID.
-         */
-        fun resolveCamera2DeviceId(
-            cameraId: String?,
-            configs: List<IszLensConfig>,
-        ): String? {
-            val normalizedCameraId = cameraId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-            if (!isVirtualCameraId(normalizedCameraId)) return normalizedCameraId
-
-            return configs
-                .firstOrNull { it.virtualCameraId == normalizedCameraId }
-                ?.baseCameraId
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() && !isVirtualCameraId(it) }
-        }
-
         fun deserializeList(value: String?): List<IszLensConfig> {
             if (value.isNullOrBlank()) return emptyList()
             val array = runCatching {

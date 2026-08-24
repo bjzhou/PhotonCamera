@@ -67,7 +67,7 @@ internal object RawSceneExposureMatcher {
     internal fun createRequest(
         context: Context,
         metadata: RawMetadata,
-        deviceLimits: RawSceneExposureDeviceLimits?,
+        deviceLimits: RawSceneExposureDeviceLimits? = null,
         includeExposureOffset: Boolean,
     ): RawSceneExposureRequest = RawSceneExposureRequest { frame ->
         val result = RawSceneExposureEstimator.estimate(

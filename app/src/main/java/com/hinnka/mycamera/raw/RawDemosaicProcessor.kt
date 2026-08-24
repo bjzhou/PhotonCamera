@@ -1831,7 +1831,6 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         forceRegeneratePhotonPgtm: Boolean = false,
         photonHdrRatio: Float? = null,
-        photonHdrRatioDeviceLimits: RawSceneExposureDeviceLimits? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         onMetadata: ((RawMetadata) -> Unit)? = null
@@ -1878,7 +1877,6 @@ class RawDemosaicProcessor {
                 rawToneMappingParameters = rawToneMappingParameters,
                 forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
                 photonHdrRatio = photonHdrRatio,
-                photonHdrRatioDeviceLimits = photonHdrRatioDeviceLimits,
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 dngFile = dngFile,
@@ -2323,7 +2321,6 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         forceRegeneratePhotonPgtm: Boolean = false,
         photonHdrRatio: Float? = null,
-        photonHdrRatioDeviceLimits: RawSceneExposureDeviceLimits? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         dngFile: File? = null,
@@ -3108,14 +3105,11 @@ class RawDemosaicProcessor {
 
             if (forcePhotonPgtmRegeneration) {
                 val persistedHdrRatio = photonHdrRatio?.takeIf { it.isFinite() && it >= 1f }
-                val estimatedHdrRatio = if (
-                    persistedHdrRatio == null && photonHdrRatioDeviceLimits != null
-                ) {
+                val estimatedHdrRatio = if (persistedHdrRatio == null) {
                     renderSceneExposureRequest(
                         request = RawSceneExposureMatcher.createRequest(
                             context = context,
                             metadata = actualMetadata,
-                            deviceLimits = photonHdrRatioDeviceLimits,
                             includeExposureOffset = false,
                         ),
                         metadata = actualMetadata,
@@ -3134,7 +3128,8 @@ class RawDemosaicProcessor {
                 if (regenerationHdrRatio == null) {
                     PLog.e(
                         TAG,
-                        "HDRNet PGTM regeneration requires the capture MGC AE HDR ratio",
+                        "HDRNet PGTM regeneration could not resolve an MGC AE HDR ratio " +
+                            "from persisted metadata or DNG exposure data",
                     )
                     return@withContext null
                 }

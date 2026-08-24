@@ -105,6 +105,9 @@ internal object RawSceneExposureMath {
     // Ordinary MGC/Google ZSL exposure tuning. These are finalizer constraints, not sensor limits.
     const val MAX_POST_CAPTURE_GAIN = 26.5f
     const val MAX_OVERALL_GAIN = 102f
+    // DNG exposure equations use ISO 100 as the portable reference sensitivity. Supported sensor
+    // ISO ranges are not part of the DNG image contract and must not be read from the current phone.
+    const val DNG_REFERENCE_SENSITIVITY_ISO = 100
 
     // MGC's low-resolution RGB scene measurement uses ten U15 code values as its floor.
     private const val SIGNAL_FLOOR = 10f / 32767f
@@ -490,22 +493,20 @@ internal object RawSceneExposureEstimator {
         deviceLimits: RawSceneExposureDeviceLimits?,
     ): RawSceneExposureEstimate? {
         val resolvedDeviceLimits = deviceLimits?.takeIf(RawSceneExposureDeviceLimits::isValid)
-            ?: run {
-                PLog.e(TAG, "MGC AE device TET limits are unavailable")
-                return null
-            }
+        val referenceSensitivityIso = resolvedDeviceLimits?.referenceSensitivityIso
+            ?: RawSceneExposureMath.DNG_REFERENCE_SENSITIVITY_ISO
         val measurement = RawSceneExposureMath.measureSceneBrightness(
             frame = frame,
             exposureTimeNs = metadata.shutterSpeed,
             sensitivityIso = metadata.iso,
-            referenceSensitivityIso = resolvedDeviceLimits.referenceSensitivityIso,
+            referenceSensitivityIso = referenceSensitivityIso,
             aperture = metadata.aperture,
         ) ?: run {
             PLog.e(
                 TAG,
                 "Invalid RAW scene coordinate: shutterNs=${metadata.shutterSpeed} " +
                     "iso=${metadata.iso} " +
-                    "referenceIso=${resolvedDeviceLimits.referenceSensitivityIso} " +
+                    "referenceIso=$referenceSensitivityIso " +
                     "aperture=${metadata.aperture}",
             )
             return null
@@ -513,7 +514,8 @@ internal object RawSceneExposureEstimator {
         val shotRange = RawSceneExposureMath.resolveMgcShotRange(
             exposureTimeMs = measurement.exposureTimeMs,
             overallGain = measurement.overallGain,
-            deviceMinTetMs = resolvedDeviceLimits.minTetMs,
+            deviceMinTetMs = resolvedDeviceLimits?.minTetMs
+                ?: RawSceneExposureDeviceLimits.MIN_TET_MS,
         ) ?: run {
             PLog.e(TAG, "Unable to construct MGC AE shot TET range")
             return null
@@ -605,7 +607,8 @@ internal object RawSceneExposureEstimator {
                         "predictedImageBrightness=${measurement.predictedImageBrightness} " +
                         "exposureTimeMs=${measurement.exposureTimeMs} " +
                         "iso=${metadata.iso} " +
-                        "referenceIso=${resolvedDeviceLimits.referenceSensitivityIso} " +
+                        "referenceIso=$referenceSensitivityIso " +
+                        "referenceSource=${if (resolvedDeviceLimits != null) "CAMERA2_CAPTURE" else "DNG_ISO_100"} " +
                         "maxAnalogIso=${metadata.maxAnalogSensitivity} " +
                         "overallGain=${measurement.overallGain} " +
                         "currentTetMs=${measurement.currentTetMs} " +
@@ -616,9 +619,6 @@ internal object RawSceneExposureEstimator {
                         "maxOverallTetMs=${shotRange.maxOverallTetMs} " +
                         "maxPostCaptureGain=${RawSceneExposureMath.MAX_POST_CAPTURE_GAIN} " +
                         "tuningMaxOverallGain=${RawSceneExposureMath.MAX_OVERALL_GAIN} " +
-                        "deviceMaxExposureTimeMs=${resolvedDeviceLimits.maxExposureTimeMs} " +
-                        "deviceMaxOverallGain=${resolvedDeviceLimits.deviceMaxOverallGain} " +
-                        "deviceMaxTetMs=${resolvedDeviceLimits.deviceMaxTetMs} " +
                         "apertureTransmission=${measurement.apertureTransmission}",
                 )
                 RawSceneExposureEstimate(

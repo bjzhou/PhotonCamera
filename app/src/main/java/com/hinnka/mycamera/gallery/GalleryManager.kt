@@ -7,7 +7,6 @@ import android.content.Context
 import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
-import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureResult
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -21,7 +20,6 @@ import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.camera.HdrBracketConfig
-import com.hinnka.mycamera.camera.IszLensConfig
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.gallery.db.GalleryMediaStore
@@ -62,7 +60,6 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawSceneExposureMatcher
-import com.hinnka.mycamera.raw.RawSceneExposureDeviceLimits
 import com.hinnka.mycamera.raw.RawPhotonHdrRatioMetadata
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -237,29 +234,6 @@ object GalleryManager {
 
     private fun resolveChromaNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
         return metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else fallback)
-    }
-
-    private suspend fun resolveCamera2DeviceId(
-        context: Context,
-        lensId: String?,
-    ): String? {
-        if (!IszLensConfig.isVirtualCameraId(lensId)) {
-            return IszLensConfig.resolveCamera2DeviceId(lensId, emptyList())
-        }
-        val configs = ContentRepository.getInstance(context)
-            .userPreferencesRepository
-            .userPreferences
-            .firstOrNull()
-            ?.iszLensConfigs
-            .orEmpty()
-        return IszLensConfig.resolveCamera2DeviceId(lensId, configs).also { deviceId ->
-            if (deviceId == null) {
-                PLog.w(
-                    TAG,
-                    "Skipping Camera2 characteristics lookup: ISZ lens $lensId has no base camera mapping"
-                )
-            }
-        }
     }
 
     suspend fun saveMgcRawDngPhoto(
@@ -5623,24 +5597,6 @@ object GalleryManager {
                 val rawNoiseReduction = resolveNoiseReduction(rawMetadata, 0f)
                 val rawChromaNoiseReduction = rawMetadata.chromaNoiseReduction
                     ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
-                val hdrRatioDeviceLimits = resolveCamera2DeviceId(
-                    context = context,
-                    lensId = rawMetadata.cameraId,
-                )?.let { deviceId ->
-                    runCatching {
-                        val cameraManager = context.getSystemService(CameraManager::class.java)
-                        RawSceneExposureDeviceLimits.fromCameraCharacteristics(
-                            cameraManager.getCameraCharacteristics(deviceId),
-                        )
-                    }.onFailure { error ->
-                        PLog.w(
-                            TAG,
-                            "Unable to resolve MGC AE limits for Camera2 device $deviceId " +
-                                "(lens ${rawMetadata.cameraId})",
-                            error,
-                        )
-                    }.getOrNull()
-                }
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
@@ -5677,7 +5633,6 @@ object GalleryManager {
                     photonHdrRatio = RawPhotonHdrRatioMetadata.read(
                         rawMetadata.customProperties,
                     ),
-                    photonHdrRatioDeviceLimits = hdrRatioDeviceLimits,
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,
                     rawBlackBorderCrop = rawMetadata.rawBlackBorderCrop,
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,
