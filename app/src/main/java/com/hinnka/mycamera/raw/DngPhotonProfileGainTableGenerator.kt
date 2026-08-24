@@ -16,9 +16,6 @@ internal object DngPhotonProfileGainTableGenerator {
     private const val GRID_MAX_V = 48
     private const val MIN_TABLE_GAIN = 1f / 4096f
     private const val MAX_TABLE_GAIN = 4096f
-    // Applied only after HDRNet has produced its affine target. A BaselineExposure adjustment
-    // cannot replace this because PGTM generation compensates the complete BaselineExposure.
-    private const val HDRNET_OUTPUT_EXPOSURE_TRIM_EV = -0.8f
 
     const val HDRNET_INPUT_WIDTH = 256
     const val HDRNET_INPUT_HEIGHT = 192
@@ -161,14 +158,6 @@ internal object DngPhotonProfileGainTableGenerator {
             return null
         }
 
-        val outputExposureGain = DngBaselineExposure.exactGain(
-            HDRNET_OUTPUT_EXPOSURE_TRIM_EV,
-        )
-        PLog.i(
-            TAG,
-            "HDRNet output exposure: " +
-                "trimEv=$HDRNET_OUTPUT_EXPOSURE_TRIM_EV gain=$outputExposureGain",
-        )
         val gains = FloatArray(plan.cellCount * plan.pointCount)
         for (cell in 0 until plan.cellCount) {
             for (point in 0 until plan.pointCount) {
@@ -185,10 +174,11 @@ internal object DngPhotonProfileGainTableGenerator {
                 // This is the exact scale adjustment performed by MGC after inference.
                 val scale = rawScale * (plan.hdrRatio - 1f) + 1f
                 val targetLuma = scale * sourceLuma + bias
-                // First reconstruct HDRNet's complete scene-dependent target, then apply the
-                // fixed post-network output exposure. Keeping this factor outside the baseline
-                // compensation prevents PGTM from cancelling it.
-                var gain = (targetLuma * outputExposureGain /
+                // ACR3 is applied after PGTM and BaselineExposure. Solve the curve input that
+                // produces HDRNet's target instead of approximating that compensation with a
+                // fixed exposure trim.
+                val preCurveTarget = ACR3Curve.inputForOutput(targetLuma)
+                var gain = (preCurveTarget /
                     (plan.baselineGain * sourceLuma))
                     .coerceIn(MIN_TABLE_GAIN, MAX_TABLE_GAIN)
                 plan.diagnosticBand?.let { band ->

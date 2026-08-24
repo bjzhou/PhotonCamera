@@ -92,7 +92,7 @@ class RawProfileGainTablePipelineTest {
     }
 
     @Test
-    fun hdrNetGridCancelsBaselineThenAppliesOutputExposureTrim() {
+    fun hdrNetGridCancelsBaselineAndPrecompensatesAcr3() {
         val plan = checkNotNull(
             DngPhotonProfileGainTableGenerator.hdrNetPlan(
                 sourceWidth = 4000,
@@ -120,10 +120,13 @@ class RawProfileGainTablePipelineTest {
         assertEquals(DngPhotonProfileGainTableGenerator.HDRNET_GRID_WIDTH, map.mapPointsH)
         assertEquals(DngPhotonProfileGainTableGenerator.HDRNET_GRID_HEIGHT, map.mapPointsV)
         assertEquals(257, map.mapPointsN)
-        val expectedGain = 0.25f * DngBaselineExposure.exactGain(
-            -RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
-        )
-        assertTrue(map.gains.all { gain -> kotlin.math.abs(gain - expectedGain) <= 1e-6f })
+        map.gains.forEachIndexed { index, gain ->
+            val point = index % map.mapPointsN
+            val evaluatedPoint = if (point == 0) 1 else point
+            val sourceLuma = evaluatedPoint.toFloat() / map.mapPointsN
+            val expectedGain = ACR3Curve.inputForOutput(sourceLuma) / (4f * sourceLuma)
+            assertEquals(expectedGain, gain, 1e-6f)
+        }
         DngPhotonProfileGainTableGenerator.HDRNET_LUMA_WEIGHTS
             .forEachIndexed { index, weight ->
                 assertEquals(weight / 4f, map.mapInputWeights[index], 1e-7f)
@@ -153,10 +156,13 @@ class RawProfileGainTablePipelineTest {
             DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(plan, coefficients),
         )
 
-        val expectedGain = 4f * DngBaselineExposure.exactGain(
-            -RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
-        )
-        assertTrue(map.gains.all { gain -> kotlin.math.abs(gain - expectedGain) <= 1e-6f })
+        map.gains.forEachIndexed { index, gain ->
+            val point = index % map.mapPointsN
+            val evaluatedPoint = if (point == 0) 1 else point
+            val sourceLuma = evaluatedPoint.toFloat() / map.mapPointsN
+            val expectedGain = ACR3Curve.inputForOutput(4f * sourceLuma) / sourceLuma
+            assertEquals(expectedGain, gain, 1e-6f)
+        }
     }
 
     @Test
