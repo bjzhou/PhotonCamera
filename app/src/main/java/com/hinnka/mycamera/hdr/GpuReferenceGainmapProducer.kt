@@ -113,9 +113,9 @@ class GpuReferenceGainmapProducer : GainmapProducer {
     ): GainmapResult? {
         val width = downsampleDimension(sdrBase.width, config.downsample)
         val height = downsampleDimension(sdrBase.height, config.downsample)
-        val fullHdrRatio = (source.displayHdrSdrRatio.takeIf { it > 1f } ?: config.defaultFullHdrRatio)
-            .coerceAtLeast(config.minFullHdrRatio)
-            .coerceAtMost(config.maxGainRatio)
+        // This metadata describes when the encoded content gain has been fully applied. It is
+        // not the current panel's capability; Android supplies that capability at playback.
+        val fullHdrRatio = config.maxGainRatio
 
         val lutLuminanceGainMap = source.lutLuminanceGainMap?.bitmap ?: return null
         if (hdrReference.width != sdrBase.width || hdrReference.height != sdrBase.height ||
@@ -203,14 +203,6 @@ class GpuReferenceGainmapProducer : GainmapProducer {
         )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(rawLumaResidualProgram, "uOffset"), EPSILON)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(rawLumaResidualProgram, "uStrength"), strength)
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(rawLumaResidualProgram, "uGainStartLuma"),
-            RAW_GAIN_START_LUMA,
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(rawLumaResidualProgram, "uGainFullLuma"),
-            RAW_GAIN_FULL_LUMA,
-        )
         drawQuad(rawLumaResidualProgram)
         checkGlError("renderRawLumaResidualPass")
     }
@@ -458,8 +450,6 @@ class GpuReferenceGainmapProducer : GainmapProducer {
     private data class Config(
         val minGainRatio: Float,
         val maxGainRatio: Float,
-        val defaultFullHdrRatio: Float,
-        val minFullHdrRatio: Float = 1.0f,
         val minDisplayRatioForHdrTransition: Float = 1.0f,
         val downsample: Int,
     )
@@ -492,14 +482,10 @@ class GpuReferenceGainmapProducer : GainmapProducer {
         private const val RAW_DOWNSAMPLE = RawGainmapMath.DOWNSAMPLE
         private const val RAW_MIN_GAIN_RATIO = RawGainmapMath.MIN_GAIN_RATIO
         private const val RAW_MAX_GAIN_RATIO = RawGainmapMath.MAX_GAIN_RATIO
-        private const val RAW_GAIN_START_LUMA = RawGainmapMath.GAIN_START_LUMA
-        private const val RAW_GAIN_FULL_LUMA = RawGainmapMath.GAIN_FULL_LUMA
-        private const val RAW_LOW_SCENE_MAX_GAIN_RATIO = 1.6033f
         private const val EPSILON = RawGainmapMath.OFFSET
         private val RAW_CONFIG = Config(
             minGainRatio = RAW_MIN_GAIN_RATIO,
             maxGainRatio = RAW_MAX_GAIN_RATIO,
-            defaultFullHdrRatio = RAW_LOW_SCENE_MAX_GAIN_RATIO,
             downsample = RAW_DOWNSAMPLE,
         )
         private val VERTICES = floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
@@ -534,8 +520,6 @@ class GpuReferenceGainmapProducer : GainmapProducer {
             uniform float uMaxGainRatio;
             uniform float uOffset;
             uniform float uStrength;
-            uniform float uGainStartLuma;
-            uniform float uGainFullLuma;
 
             float srgbToLinear(float value) {
                 float safeValue = max(value, 0.0);
@@ -574,20 +558,10 @@ class GpuReferenceGainmapProducer : GainmapProducer {
                     uMinGainRatio,
                     uMaxGainRatio
                 );
-                float gainParticipation = smoothstep(
-                    uGainStartLuma,
-                    uGainFullLuma,
-                    hdrLuma
-                );
-                float ratio = clamp(
-                    mix(1.0, candidateRatio, gainParticipation),
-                    uMinGainRatio,
-                    uMaxGainRatio
-                );
 
                 float normalizedStrength = clamp(uStrength, 0.25, 2.0);
                 float strengthRatio = clamp(
-                    1.0 + (ratio - 1.0) * normalizedStrength,
+                    1.0 + (candidateRatio - 1.0) * normalizedStrength,
                     uMinGainRatio,
                     uMaxGainRatio
                 );

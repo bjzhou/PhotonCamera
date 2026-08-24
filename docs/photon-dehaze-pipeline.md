@@ -51,7 +51,8 @@ full-resolution denoise
 
 Photon 没有接入 GCam 的 AE face-map buffer，统计采用原版的 zero-mask 分支：每个低频样本一票，
 不增加 face 权重，也不减 face luminance offset。管线不使用逐 tile 曲线；去雾开启时要求连续
-全帧低频统计。HDR reference 仍从去雾前 camera RGB 生成。
+全帧低频统计。HDR reference 与 SDR 共用去雾及去雾后的 HueSatMap 结果，再从当前渲染引擎的
+实测基准曲线构造连续的 HDR 高光延伸，避免 gain map 把去雾差异误判为 HDR 增益。
 
 ## 控制与持久化
 

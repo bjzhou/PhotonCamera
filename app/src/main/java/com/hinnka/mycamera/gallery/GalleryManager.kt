@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureResult
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -60,6 +61,8 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawSceneExposureMatcher
+import com.hinnka.mycamera.raw.RawSceneExposureDeviceLimits
+import com.hinnka.mycamera.raw.RawPhotonHdrRatioMetadata
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -2380,6 +2383,12 @@ object GalleryManager {
                 options = profileOptions,
                 defaultCrop = writtenRawDngDefaultCrop,
             ) ?: return@withContext
+            updatedMetadata = updatedMetadata.copy(
+                customProperties = RawPhotonHdrRatioMetadata.write(
+                    updatedMetadata.customProperties,
+                    preparedProfile.hdrRatio,
+                ),
+            )
 
             suspend fun persistDng(): Boolean {
                 tempDngFile.delete()
@@ -3624,6 +3633,12 @@ object GalleryManager {
                     PLog.e(TAG, "Failed to prepare shared RAW render/DNG profile")
                     return@withContext
                 }
+                updatedMetadata = updatedMetadata.copy(
+                    customProperties = RawPhotonHdrRatioMetadata.write(
+                        updatedMetadata.customProperties,
+                        dngProfilePreparation.hdrRatio,
+                    ),
+                )
                 val profileElapsedMs = System.currentTimeMillis() - profileStartMs
 
                 suspend fun materializeAndPersistDng(): Boolean {
@@ -5562,6 +5577,7 @@ object GalleryManager {
     suspend fun refreshRawPreview(
         context: Context,
         photoId: String,
+        forceRegeneratePhotonPgtm: Boolean = false,
     ): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
@@ -5583,6 +5599,16 @@ object GalleryManager {
                 val rawNoiseReduction = resolveNoiseReduction(rawMetadata, 0f)
                 val rawChromaNoiseReduction = rawMetadata.chromaNoiseReduction
                     ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
+                val hdrRatioDeviceLimits = rawMetadata.cameraId?.let { cameraId ->
+                    runCatching {
+                        val cameraManager = context.getSystemService(CameraManager::class.java)
+                        RawSceneExposureDeviceLimits.fromCameraCharacteristics(
+                            cameraManager.getCameraCharacteristics(cameraId),
+                        )
+                    }.onFailure { error ->
+                        PLog.w(TAG, "Unable to resolve MGC AE limits for camera $cameraId", error)
+                    }.getOrNull()
+                }
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
@@ -5615,6 +5641,11 @@ object GalleryManager {
                         ?: MediaMetadata().rawHncsFilmCurveMode,
                     rawRenderingEngine = updatedMetadata?.rawRenderingEngine ?: MediaMetadata().rawRenderingEngine,
                     rawToneMappingParameters = updatedMetadata?.rawToneMappingParameters ?: MediaMetadata().rawToneMappingParameters,
+                    forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
+                    photonHdrRatio = RawPhotonHdrRatioMetadata.read(
+                        rawMetadata.customProperties,
+                    ),
+                    photonHdrRatioDeviceLimits = hdrRatioDeviceLimits,
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,
                     rawBlackBorderCrop = rawMetadata.rawBlackBorderCrop,
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,

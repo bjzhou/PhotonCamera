@@ -3648,14 +3648,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 刷新 RAW 照片的预览图
      */
-    fun refreshRawPreview(photo: MediaData, onComplete: (Boolean) -> Unit = {}) {
+    fun refreshRawPreview(
+        photo: MediaData,
+        forceRegeneratePhotonPgtm: Boolean = false,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
         if (refreshingPhotos.contains(photo.id)) return
 
         viewModelScope.launch {
             refreshingPhotos.add(photo.id)
             try {
                 val context = getApplication<Application>()
-                val result = GalleryManager.refreshRawPreview(context, photo.id)
+                val result = GalleryManager.refreshRawPreview(
+                    context = context,
+                    photoId = photo.id,
+                    forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
+                )
                 if (result != null) {
                     val updatedMetadata = updatePhotoMetadata(photo.id) { it }
                     updatedMetadata?.let { applyRawDevelopMetadataToEditState(it) }

@@ -85,12 +85,15 @@ metadata，支持 RAW 重处理复现。面积模型及标定方法见
 
 处理顺序为：全分辨率 luma/chroma 降噪 → LinearRcd 线性工作 RGB → 去雾 → tone/风格 →
 最终锐化。它对应 MGC `ProcessLowFrequency` 中 `DehazeAndDha` 位于 `FinishRaw` tone 和
-`SharpenTo16Bit` 之前的边界，不接入 HDR、gamma、用户高光滑杆或锐化。
+`SharpenTo16Bit` 之前的边界；去雾自身不使用 HDR、gamma、用户高光滑杆或锐化参数。
 
 管线先做固定 `8×8` box reduction，再按原版语义建立两个 12-bit 直方图：低端 summed-RGB
 直方图决定雾幕点，高端 `max(RGB) + (max-min)/8` 直方图决定动态高光比例。最终曲线按
-`(R+G+B)/3` 查共享 gain，同时乘到 RGB 三通道，保持色度比例。HDR reference 明确从去雾前
-camera RGB 分支生成。去雾启用时整幅图必须共享一次统计结果，因此不会退化成逐 tile 独立曲线。
+`(R+G+B)/3` 查共享 gain，同时乘到 RGB 三通道，保持色度比例。HDR reference 从去雾及
+PostDehazeColorMap 之后的线性工作 RGB 分支生成，并使用 SDR 的实际线性结果作为颜色基底；
+它沿当前渲染引擎的实测中性基准曲线运行，在高光 shoulder 处以数值/斜率连续的二次段离开，
+场景白点达到 `√2`，白点以上按末端切线继续。去雾与 PGTM 都只在分支前执行一次。
+去雾启用时整幅图必须共享一次统计结果，因此不会退化成逐 tile 独立曲线。
 
 ## 生命周期与持久化
 

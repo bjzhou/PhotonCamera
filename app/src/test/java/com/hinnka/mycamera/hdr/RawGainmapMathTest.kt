@@ -108,55 +108,16 @@ class RawGainmapMathTest {
     }
 
     @Test
-    fun keepsZeroGainThroughDarkLuminanceRange() {
-        assertEquals(
-            1f,
-            RawGainmapMath.gateRatioByHdrLuminance(
-                candidateRatio = RawGainmapMath.MAX_GAIN_RATIO,
-                hdrReferenceLuma = RawGainmapMath.GAIN_START_LUMA,
-            ),
-            0.00001f,
-        )
-        assertEquals(
-            1f,
-            RawGainmapMath.gateRatioByHdrLuminance(
-                candidateRatio = RawGainmapMath.MIN_GAIN_RATIO,
-                hdrReferenceLuma = RawGainmapMath.GAIN_START_LUMA,
-            ),
-            0.00001f,
-        )
-    }
-
-    @Test
-    fun smoothlyIntroducesGainBetweenDarkAndFullThresholds() {
-        val midpoint = (RawGainmapMath.GAIN_START_LUMA + RawGainmapMath.GAIN_FULL_LUMA) * 0.5f
-
-        assertEquals(
-            2f,
-            RawGainmapMath.gateRatioByHdrLuminance(
-                candidateRatio = 3f,
-                hdrReferenceLuma = midpoint,
-            ),
-            0.00001f,
-        )
-        assertEquals(
-            3f,
-            RawGainmapMath.gateRatioByHdrLuminance(
-                candidateRatio = 3f,
-                hdrReferenceLuma = RawGainmapMath.GAIN_FULL_LUMA,
-            ),
-            0.00001f,
-        )
-    }
-
-    @Test
-    fun lutLiftCannotActivateGainBelowDarkThreshold() {
+    fun encodesTheReferenceCurveWithoutASecondLuminanceGate() {
         val encoded = RawGainmapMath.encodeLuminance(
             sdrEncodedRgb = floatArrayOf(0.10f, 0.10f, 0.10f),
             hdrLinearRgb = floatArrayOf(0.08f, 0.08f, 0.08f),
-            lutLuminanceGain = 2.0f,
+        )
+        val expected = RawGainmapMath.encode(
+            sdrEncoded = 0.10f,
+            hdrLinear = 0.08f,
         )
 
-        assertEquals(0.5f, encoded, 0.00001f)
+        assertEquals(expected, encoded, 0.00001f)
     }
 }

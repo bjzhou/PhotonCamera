@@ -15,6 +15,17 @@ internal data class RawSceneLinearFrame(
     val rgb: FloatArray,
 )
 
+/** Capture-side values consumed by both DNG BaselineExposure and MGC HDRNet. */
+internal data class RawSceneExposureEstimate(
+    val shortCaptureEv: Float,
+    val hdrRatio: Float,
+) {
+    init {
+        require(shortCaptureEv.isFinite())
+        require(hdrRatio.isFinite() && hdrRatio >= 1f)
+    }
+}
+
 internal data class RawSceneBrightnessMeasurement(
     val geometricSignal: Float,
     val predictedImageBrightness: Float,
@@ -477,7 +488,7 @@ internal object RawSceneExposureEstimator {
         frame: RawSceneLinearFrame,
         metadata: RawMetadata,
         deviceLimits: RawSceneExposureDeviceLimits?,
-    ): Float? {
+    ): RawSceneExposureEstimate? {
         val resolvedDeviceLimits = deviceLimits?.takeIf(RawSceneExposureDeviceLimits::isValid)
             ?: run {
                 PLog.e(TAG, "MGC AE device TET limits are unavailable")
@@ -610,7 +621,10 @@ internal object RawSceneExposureEstimator {
                         "deviceMaxTetMs=${resolvedDeviceLimits.deviceMaxTetMs} " +
                         "apertureTransmission=${measurement.apertureTransmission}",
                 )
-                fusion.shortCaptureEv
+                RawSceneExposureEstimate(
+                    shortCaptureEv = fusion.shortCaptureEv,
+                    hdrRatio = fusion.finalHdrRatio,
+                )
             } catch (error: Throwable) {
                 PLog.e(TAG, "RAW scene exposure inference failed", error)
                 null

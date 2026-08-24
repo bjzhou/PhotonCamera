@@ -94,6 +94,7 @@ data class RawDngCaptureProfileInput(
 
 data class RawDngCaptureProfileResult(
     val exposureOffsetEv: Float?,
+    val hdrRatio: Float?,
     val profileGainTableMap: DngProfileGainTableMap?,
 )
 
@@ -110,5 +111,20 @@ internal fun DcpRenderPlan.toAdobeDefaultMeteringPlan(): DcpRenderPlan {
 /** BaselineExposure and optional PGTM prepared before the DNG writer starts. */
 data class RawDngProfilePreparation(
     val baselineExposureEv: Float,
+    val hdrRatio: Float?,
     val profileGainTableMap: DngProfileGainTableMap?,
 )
+
+/** Process-local capture result persisted with Photon gallery metadata for PGTM regeneration. */
+internal object RawPhotonHdrRatioMetadata {
+    private const val PROPERTY = "photonHdrNetRatio"
+
+    fun read(properties: Map<String, String>): Float? = properties[PROPERTY]
+        ?.toFloatOrNull()
+        ?.takeIf { it.isFinite() && it >= 1f }
+
+    fun write(properties: Map<String, String>, hdrRatio: Float?): Map<String, String> {
+        val validRatio = hdrRatio?.takeIf { it.isFinite() && it >= 1f } ?: return properties
+        return properties + (PROPERTY to validRatio.toString())
+    }
+}

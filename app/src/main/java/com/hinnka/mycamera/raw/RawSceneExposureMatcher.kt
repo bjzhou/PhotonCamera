@@ -34,19 +34,15 @@ internal object RawSceneExposureMatcher {
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
     ): RawDngCaptureProfileResult? {
-        val request = if (estimateSceneExposure) {
-            RawSceneExposureRequest { frame ->
-                val result = RawSceneExposureEstimator.estimate(
-                    context = context.applicationContext,
-                    frame = frame,
-                    metadata = input.metadata,
-                    deviceLimits = input.sceneExposureDeviceLimits,
-                )
-                if (result == null) {
-                    PLog.w(TAG, "RAW scene exposure unavailable; automatic offset omitted")
-                }
-                result
-            }
+        // HDRNet needs the final long/short TET ratio even when automatic BaselineExposure is
+        // disabled. Run the shared MGC AE estimator whenever either consumer needs its result.
+        val request = if (estimateSceneExposure || generatePhotonPgtm) {
+            createRequest(
+                context = context,
+                metadata = input.metadata,
+                deviceLimits = input.sceneExposureDeviceLimits,
+                includeExposureOffset = estimateSceneExposure,
+            )
         } else {
             null
         }
@@ -67,8 +63,41 @@ internal object RawSceneExposureMatcher {
             rawNoiseProfileId = rawNoiseProfileId,
         )
     }
+
+    internal fun createRequest(
+        context: Context,
+        metadata: RawMetadata,
+        deviceLimits: RawSceneExposureDeviceLimits?,
+        includeExposureOffset: Boolean,
+    ): RawSceneExposureRequest = RawSceneExposureRequest { frame ->
+        val result = RawSceneExposureEstimator.estimate(
+            context = context.applicationContext,
+            frame = frame,
+            metadata = metadata,
+            deviceLimits = deviceLimits,
+        )
+        if (result == null) {
+            PLog.w(TAG, "RAW scene exposure unavailable; MGC AE result omitted")
+        }
+        result?.let { estimate ->
+            RawSceneExposureResult(
+                exposureOffsetEv = estimate.shortCaptureEv.takeIf { includeExposureOffset },
+                hdrRatio = estimate.hdrRatio,
+            )
+        }
+    }
 }
 
 internal fun interface RawSceneExposureRequest {
-    fun solve(frame: RawSceneLinearFrame): Float?
+    fun solve(frame: RawSceneLinearFrame): RawSceneExposureResult?
+}
+
+internal data class RawSceneExposureResult(
+    val exposureOffsetEv: Float?,
+    val hdrRatio: Float,
+) {
+    init {
+        require(exposureOffsetEv == null || exposureOffsetEv.isFinite())
+        require(hdrRatio.isFinite() && hdrRatio >= 1f)
+    }
 }

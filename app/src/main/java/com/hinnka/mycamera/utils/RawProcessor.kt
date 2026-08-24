@@ -702,6 +702,7 @@ object RawProcessor {
         }
         return RawDngProfilePreparation(
             baselineExposureEv = finalBaselineExposureEv,
+            hdrRatio = captureProfile?.hdrRatio,
             profileGainTableMap = preparedProfileGainTableMap,
         ).also { finalProfile ->
             PLog.i(

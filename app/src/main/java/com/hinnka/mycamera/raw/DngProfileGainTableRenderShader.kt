@@ -50,6 +50,8 @@ internal object DngProfileGainTableRenderShader {
             int y1 = min(y0 + 1, mapV - 1);
             float tx = position.x - float(x0);
             float ty = position.y - float(y0);
+            // Match Adobe DNG SDK RefBaselineProfileGainTableMap exactly: weightScaled =
+            // weight * tableSize, followed by clamping integer indices to tableSize - 1.
             float tableIndex = profileGainTableInput(profileRgb) *
                 float(max(uProfileGainTableSize.z, 1));
             float gain00 = profileGainTableValue(x0, y0, tableIndex);

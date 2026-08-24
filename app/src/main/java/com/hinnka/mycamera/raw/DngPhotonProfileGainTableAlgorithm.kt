@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import android.content.Context
 import android.graphics.Rect
 import android.opengl.GLES30
 import android.opengl.GLES31
@@ -7,6 +8,9 @@ import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.utils.PLog
+import org.tensorflow.lite.DataType
+import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.support.common.FileUtil
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.ceil
@@ -929,6 +933,153 @@ internal data class PhotonGpuPyramidLayout(
 
 /** Compute shaders for capture-time DNG ProfileGainTableMap preparation. */
 internal object DngPhotonProfileGainTableInputShader {
+    val HDRNET_INPUT = """
+        #version 310 es
+
+        layout(
+            local_size_x = ${GlesComputeWorkGroup.IMAGE_TILE_SIZE},
+            local_size_y = ${GlesComputeWorkGroup.IMAGE_TILE_SIZE},
+            local_size_z = 1
+        ) in;
+
+        precision highp float;
+        precision highp int;
+        precision highp sampler2D;
+        precision highp sampler3D;
+
+        uniform sampler2D uLinearRgbTexture;
+        uniform sampler3D uHueSatMap;
+        uniform ivec2 uImageSize;
+        uniform ivec4 uStatsBounds;
+        uniform mat3 uColorCorrectionMatrix;
+        uniform float uHdrRatio;
+        uniform int uHueSatEnabled;
+        uniform ivec3 uHueSatDivisions;
+        uniform int uHueSatEncoding;
+        uniform int uHueSatSupportOverrange;
+        uniform int uWarpCount;
+
+        layout(std430, binding = 0) writeonly buffer HdrNetInputBuffer {
+            float hdrNetInput[];
+        };
+        layout(std430, binding = 1) readonly buffer WarpRectilinearBuffer {
+            float warpParameters[];
+        };
+
+        ${DcpHueSatMapGl.SHADER_FUNCTIONS}
+
+        vec2 warpDestinationToSource(vec2 destinationPixel) {
+            vec2 sourcePixel = destinationPixel;
+            // DNG rendering applies opcodes in file order. Sampling the original linear texture
+            // from the final destination coordinate composes those mappings in reverse order.
+            for (int warpIndex = uWarpCount - 1; warpIndex >= 0; --warpIndex) {
+                int offset = warpIndex * 8;
+                // Some Mali drivers reject readonly SSBO elements passed directly to even
+                // constructor-like calls. Copy every element to an ordinary local first.
+                float radial0 = warpParameters[offset];
+                float radial1 = warpParameters[offset + 1];
+                float radial2 = warpParameters[offset + 2];
+                float radial3 = warpParameters[offset + 3];
+                float tangential0 = warpParameters[offset + 4];
+                float tangential1 = warpParameters[offset + 5];
+                float center0 = warpParameters[offset + 6];
+                float center1 = warpParameters[offset + 7];
+                vec4 radial = vec4(
+                    radial0,
+                    radial1,
+                    radial2,
+                    radial3
+                );
+                vec2 tangential = vec2(
+                    tangential0,
+                    tangential1
+                );
+                vec2 center = vec2(
+                    center0,
+                    center1
+                ) * vec2(uImageSize);
+                vec2 difference = sourcePixel - center;
+                vec2 farthest = max(center, vec2(uImageSize) - center);
+                float normalizationRadius = max(length(farthest), 1.0);
+                vec2 normalized = difference / normalizationRadius;
+                float radiusSquared = min(dot(normalized, normalized), 1.0);
+                float ratio = radial.x + radial.y * radiusSquared +
+                    radial.z * radiusSquared * radiusSquared +
+                    radial.w * radiusSquared * radiusSquared * radiusSquared;
+                float horizontal = normalized.x;
+                float vertical = normalized.y;
+                vec2 tangent = vec2(
+                    tangential.y * (radiusSquared + 2.0 * horizontal * horizontal) +
+                        2.0 * tangential.x * horizontal * vertical,
+                    tangential.x * (radiusSquared + 2.0 * vertical * vertical) +
+                        2.0 * tangential.y * horizontal * vertical
+                );
+                sourcePixel = center + normalizationRadius * (normalized * ratio + tangent);
+            }
+            return clamp(sourcePixel, vec2(0.0), vec2(uImageSize - ivec2(1)));
+        }
+
+        void main() {
+            ivec2 outputPosition = ivec2(gl_GlobalInvocationID.xy);
+            const ivec2 OUTPUT_SIZE = ivec2(
+                ${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH},
+                ${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT}
+            );
+            if (any(greaterThanEqual(outputPosition, OUTPUT_SIZE))) return;
+
+            ivec2 statsSize = uStatsBounds.zw - uStatsBounds.xy;
+            ivec2 sourceStart = uStatsBounds.xy +
+                (outputPosition * statsSize) / OUTPUT_SIZE;
+            ivec2 sourceEnd = uStatsBounds.xy +
+                ((outputPosition + ivec2(1)) * statsSize) / OUTPUT_SIZE;
+            sourceEnd = max(sourceEnd, sourceStart + ivec2(1));
+            sourceStart = clamp(sourceStart, ivec2(0), uImageSize - ivec2(1));
+            sourceEnd = clamp(sourceEnd, sourceStart + ivec2(1), uImageSize);
+
+            vec3 cameraRgbSum = vec3(0.0);
+            int sampleCount = 0;
+            for (int y = sourceStart.y; y < sourceEnd.y; ++y) {
+                for (int x = sourceStart.x; x < sourceEnd.x; ++x) {
+                    ivec2 sourceCoordinate = ivec2(round(
+                        warpDestinationToSource(vec2(x, y))
+                    ));
+                    cameraRgbSum += max(
+                        texelFetch(uLinearRgbTexture, sourceCoordinate, 0).rgb,
+                        vec3(0.0)
+                    );
+                    ++sampleCount;
+                }
+            }
+            vec3 cameraRgb = cameraRgbSum / float(max(sampleCount, 1));
+            vec3 profileRgb = max(uColorCorrectionMatrix * cameraRgb, vec3(0.0));
+            if (uHueSatEnabled != 0) {
+                profileRgb = max(
+                    dngApplyHueSatMap(
+                        profileRgb,
+                        uHueSatMap,
+                        uHueSatDivisions,
+                        uHueSatEncoding,
+                        uHueSatSupportOverrange != 0
+                    ),
+                    vec3(0.0)
+                );
+            }
+
+            const vec3 HDRNET_LUMA_WEIGHTS = vec3(
+                0.298828125,
+                0.5869140625,
+                0.1142578125
+            );
+            float shortLuma = max(dot(profileRgb, HDRNET_LUMA_WEIGHTS), 0.0);
+            int outputIndex =
+                (outputPosition.y * OUTPUT_SIZE.x + outputPosition.x) * 4;
+            hdrNetInput[outputIndex] = profileRgb.r;
+            hdrNetInput[outputIndex + 1] = profileRgb.g;
+            hdrNetInput[outputIndex + 2] = profileRgb.b;
+            hdrNetInput[outputIndex + 3] = min(shortLuma * uHdrRatio, 12.0);
+        }
+    """.trimIndent()
+
     val CELL_SAMPLES = """
         #version 310 es
 
@@ -1215,6 +1366,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
     }
 
     data class Input(
+        val context: Context,
+        val linearRgbTextureId: Int,
         val rawTextureId: Int,
         val streamingRawData: ByteBuffer? = null,
         val streamingRowStride: Int = 0,
@@ -1226,6 +1379,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val metadata: RawMetadata,
         val statsBounds: Rect?,
         val baselineExposureEv: Float,
+        val hdrRatio: Float,
         val colorCorrectionMatrix: FloatArray,
         val hueSatMap: DcpHueSatMap?,
         val hueSatMapSupportsOverrange: Boolean,
@@ -1249,24 +1403,17 @@ internal class DngPhotonProfileGainTableAlgorithm {
 
     private var cellSamplesProgram = 0
     private val photonPrograms = IntArray(DngPhotonLocalToneMapGpuShaders.Pass.entries.size)
+    private var hdrNetInputProgram = 0
+    private var hdrNetInterpreter: Interpreter? = null
 
     fun initialize(): Boolean {
-        if (cellSamplesProgram == 0) {
-            cellSamplesProgram = RawGlesProgram.compileCompute(
-                DngPhotonProfileGainTableInputShader.CELL_SAMPLES,
-                "DNG_PGTM_CELL_SAMPLES",
+        if (hdrNetInputProgram == 0) {
+            hdrNetInputProgram = RawGlesProgram.compileCompute(
+                DngPhotonProfileGainTableInputShader.HDRNET_INPUT,
+                "DNG_HDRNET_INPUT",
             )
         }
-        DngPhotonLocalToneMapGpuShaders.sources.forEachIndexed { index, source ->
-            if (photonPrograms[index] == 0) {
-                val pass = DngPhotonLocalToneMapGpuShaders.Pass.entries[index]
-                photonPrograms[index] = RawGlesProgram.compileCompute(
-                    source,
-                    "DNG_PHOTON_PGTM_${pass.name}",
-                )
-            }
-        }
-        return cellSamplesProgram != 0 && photonPrograms.all { it != 0 }
+        return hdrNetInputProgram != 0
     }
 
     fun execute(input: Input): Output? {
@@ -1275,6 +1422,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
     }
 
     fun release() {
+        hdrNetInterpreter?.close()
+        hdrNetInterpreter = null
+        if (hdrNetInputProgram != 0) GLES31.glDeleteProgram(hdrNetInputProgram)
+        hdrNetInputProgram = 0
         if (cellSamplesProgram != 0) GLES31.glDeleteProgram(cellSamplesProgram)
         cellSamplesProgram = 0
         photonPrograms.forEachIndexed { index, program ->
@@ -1284,6 +1435,249 @@ internal class DngPhotonProfileGainTableAlgorithm {
     }
 
     private fun generate(input: Input): DngProfileGainTableMap? {
+        val linearRgbTextureId = input.linearRgbTextureId
+        val width = input.width
+        val height = input.height
+        if (linearRgbTextureId == 0 || width <= 0 || height <= 0 || hdrNetInputProgram == 0) {
+            PLog.e(
+                TAG,
+                "HDRNet input invalid: texture=$linearRgbTextureId size=${width}x$height " +
+                    "program=$hdrNetInputProgram",
+            )
+            return null
+        }
+        val safeStatsBounds = sanitizePgtmStatsBounds(input.statsBounds, width, height) ?: run {
+            PLog.e(TAG, "HDRNet stats bounds invalid: source=${width}x$height bounds=${input.statsBounds}")
+            return null
+        }
+        val plan = DngPhotonProfileGainTableGenerator.hdrNetPlan(
+            sourceWidth = width,
+            sourceHeight = height,
+            baselineExposureEv = input.baselineExposureEv,
+            hdrRatio = input.hdrRatio,
+            diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG HDRNet capture"),
+            samplingArea = PhotonPgtmSamplingArea(
+                originH = safeStatsBounds.left.toDouble() / width,
+                originV = safeStatsBounds.top.toDouble() / height,
+                extentH = safeStatsBounds.width().toDouble() / width,
+                extentV = safeStatsBounds.height().toDouble() / height,
+            ),
+        ) ?: return null
+        val interpreter = ensureHdrNetInterpreter(input.context) ?: return null
+        val activeWarpParameters = ArrayList<Float>()
+        input.warpRectilinear
+            ?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }
+            ?.let { warps ->
+                for (offset in warps.indices step 8) {
+                    val parameters = warps.copyOfRange(offset, offset + 8)
+                    if (input.isNoOpWarp(parameters)) continue
+                    parameters.forEach(activeWarpParameters::add)
+                }
+            }
+        val inputFloatCount = DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH *
+            DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT * 4
+        val inputByteCount = inputFloatCount * Float.SIZE_BYTES
+        RawGlesProgram.logErrors("before HDRNet SSBO capability query")
+        val maxSsboBytes = LongArray(1)
+        GLES30.glGetInteger64v(GLES31.GL_MAX_SHADER_STORAGE_BLOCK_SIZE, maxSsboBytes, 0)
+        val maxSsboError = GLES30.glGetError()
+        val usableMaxSsboBytes = if (
+            maxSsboError == GLES30.GL_NO_ERROR && maxSsboBytes[0] > 0L
+        ) {
+            maxSsboBytes[0]
+        } else {
+            PLog.w(TAG, "GL_MAX_SHADER_STORAGE_BLOCK_SIZE unavailable; using GLES 3.1 minimum")
+            GLES31_MIN_SSBO_BYTES
+        }
+        val maxSsboBindings = IntArray(1)
+        GLES30.glGetIntegerv(GLES31.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, maxSsboBindings, 0)
+        if (inputByteCount > usableMaxSsboBytes || maxSsboBindings[0] < 2) {
+            PLog.e(
+                TAG,
+                "HDRNet SSBO requirements unavailable: inputBytes=$inputByteCount " +
+                    "maxBlockBytes=$usableMaxSsboBytes bindings=${maxSsboBindings[0]}",
+            )
+            return null
+        }
+        val bufferIds = IntArray(2)
+        val totalStartNs = System.nanoTime()
+        GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
+        try {
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferIds[0])
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                inputByteCount,
+                null,
+                GLES31.GL_DYNAMIC_READ,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bufferIds[0])
+
+            val warpBuffer = ByteBuffer.allocateDirect(
+                max(activeWarpParameters.size, 1) * Float.SIZE_BYTES,
+            ).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            if (activeWarpParameters.isEmpty()) {
+                warpBuffer.put(0f)
+            } else {
+                activeWarpParameters.forEach(warpBuffer::put)
+            }
+            warpBuffer.position(0)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferIds[1])
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                max(activeWarpParameters.size, 1) * Float.SIZE_BYTES,
+                warpBuffer,
+                GLES31.GL_STATIC_DRAW,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, bufferIds[1])
+            GLES31.glUseProgram(hdrNetInputProgram)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_RGB_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, linearRgbTextureId)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uLinearRgbTexture"),
+                LINEAR_RGB_TEXTURE_UNIT,
+            )
+
+            val activeHueSatMap = input.hueSatMap?.takeIf { it.isValid }
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + HUE_SAT_TEXTURE_UNIT)
+            val hueSatTextureId = activeHueSatMap?.let(input.ensureHueSatTexture)
+                ?: input.ensureDummyHueSatTexture()
+            GLES31.glBindTexture(GLES30.GL_TEXTURE_3D, hueSatTextureId)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatMap"),
+                HUE_SAT_TEXTURE_UNIT,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatEnabled"),
+                if (activeHueSatMap != null) 1 else 0,
+            )
+            GLES31.glUniform3i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatDivisions"),
+                activeHueSatMap?.hueDivisions ?: 1,
+                activeHueSatMap?.satDivisions ?: 1,
+                activeHueSatMap?.valueDivisions ?: 1,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatEncoding"),
+                activeHueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatSupportOverrange"),
+                if (input.hueSatMapSupportsOverrange) 1 else 0,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uImageSize"),
+                width,
+                height,
+            )
+            GLES31.glUniform4i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uStatsBounds"),
+                safeStatsBounds.left,
+                safeStatsBounds.top,
+                safeStatsBounds.right,
+                safeStatsBounds.bottom,
+            )
+            val safeColorCorrectionMatrix = input.colorCorrectionMatrix.takeIf { matrix ->
+                matrix.size >= 9 && matrix.take(9).all { it.isFinite() }
+            } ?: run {
+                PLog.e(TAG, "HDRNet color-correction matrix is invalid")
+                return null
+            }
+            GLES31.glUniformMatrix3fv(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uColorCorrectionMatrix"),
+                1,
+                false,
+                RawToneMappingGl.transposeMatrix3x3(safeColorCorrectionMatrix),
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHdrRatio"),
+                plan.hdrRatio,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uWarpCount"),
+                activeWarpParameters.size / 8,
+            )
+            GLES31.glDispatchCompute(
+                GlesComputeWorkGroup.imageGroupCount(
+                    DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH,
+                ),
+                GlesComputeWorkGroup.imageGroupCount(
+                    DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT,
+                ),
+                1,
+            )
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
+            )
+            RawGlesProgram.logErrors("prepare HDRNet input")
+            val inputReadyNs = System.nanoTime()
+
+            val inputFloats = readFloatStorageBuffer(
+                bufferId = bufferIds[0],
+                floatCount = inputFloatCount,
+                label = "HDRNet input",
+            ) ?: return null
+            if (inputFloats.any { !it.isFinite() }) {
+                PLog.e(TAG, "HDRNet input contains a non-finite value")
+                return null
+            }
+            val modelInput = ByteBuffer.allocateDirect(inputFloats.size * Float.SIZE_BYTES)
+                .order(ByteOrder.nativeOrder())
+            modelInput.asFloatBuffer().put(inputFloats)
+            modelInput.rewind()
+            val modelOutput = ByteBuffer.allocateDirect(
+                DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT * Float.SIZE_BYTES,
+            ).order(ByteOrder.nativeOrder())
+            val inferenceStartNs = System.nanoTime()
+            interpreter.run(modelInput, modelOutput)
+            val inferenceReadyNs = System.nanoTime()
+            modelOutput.rewind()
+            val coefficients = FloatArray(
+                DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
+            )
+            modelOutput.asFloatBuffer().get(coefficients)
+            val map = DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(
+                plan,
+                coefficients,
+            ) ?: return null
+            val textureId = uploadProfileGainTableTexture(map) ?: return null
+            try {
+                input.installProfileGainTableTexture(map, textureId)
+            } catch (error: Throwable) {
+                GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
+                throw error
+            }
+            val totalReadyNs = System.nanoTime()
+            PLog.d(
+                TAG,
+                "HDRNet PGTM ready: input=${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH}x" +
+                    "${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT}x4 " +
+                    "grid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV}x" +
+                    "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
+                    "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
+                    "inputMs=${(inputReadyNs - totalStartNs) / 1_000_000f} " +
+                    "inferenceMs=${(inferenceReadyNs - inferenceStartNs) / 1_000_000f} " +
+                    "totalMs=${(totalReadyNs - totalStartNs) / 1_000_000f}",
+            )
+            return map
+        } catch (error: Throwable) {
+            PLog.e(TAG, "HDRNet ProfileGainTableMap generation failed", error)
+            return null
+        } finally {
+            GLES31.glUseProgram(0)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_RGB_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + HUE_SAT_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+            GLES31.glDeleteBuffers(bufferIds.size, bufferIds, 0)
+        }
+    }
+
+    @Suppress("unused")
+    private fun generateLegacy(input: Input): DngProfileGainTableMap? {
         val rawTextureId = input.rawTextureId
         val streamingRawData = input.streamingRawData
         val streamingRowStride = input.streamingRowStride
@@ -2492,6 +2886,137 @@ internal class DngPhotonProfileGainTableAlgorithm {
             "atCell=$maximumSpatialGainCell point=$maximumSpatialGainPoint"
     }
 
+    private fun ensureHdrNetInterpreter(context: Context): Interpreter? {
+        hdrNetInterpreter?.let { return it }
+        return runCatching {
+            val candidate = Interpreter(
+                FileUtil.loadMappedFile(context.applicationContext, HDRNET_MODEL_ASSET),
+                Interpreter.Options().apply {
+                    setNumThreads(4)
+                    setUseXNNPACK(true)
+                },
+            )
+            try {
+                check(candidate.inputTensorCount == 1) {
+                    "HDRNet input tensor count changed: ${candidate.inputTensorCount}"
+                }
+                check(candidate.outputTensorCount == 1) {
+                    "HDRNet output tensor count changed: ${candidate.outputTensorCount}"
+                }
+                val modelInput = candidate.getInputTensor(0)
+                val modelOutput = candidate.getOutputTensor(0)
+                check(modelInput.dataType() == DataType.FLOAT32)
+                check(
+                    modelInput.shape().contentEquals(
+                        intArrayOf(
+                            1,
+                            DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT,
+                            DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH,
+                            4,
+                        ),
+                    ),
+                ) { "HDRNet input shape changed: ${modelInput.shape().contentToString()}" }
+                check(modelOutput.dataType() == DataType.FLOAT32)
+                check(
+                    modelOutput.shape().contentEquals(
+                        intArrayOf(
+                            1,
+                            DngPhotonProfileGainTableGenerator.HDRNET_GRID_HEIGHT,
+                            DngPhotonProfileGainTableGenerator.HDRNET_GRID_WIDTH,
+                            DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH,
+                            1,
+                            DngPhotonProfileGainTableGenerator.HDRNET_COEFFICIENT_COUNT,
+                        ),
+                    ),
+                ) { "HDRNet output shape changed: ${modelOutput.shape().contentToString()}" }
+                hdrNetInterpreter = candidate
+                PLog.i(
+                    TAG,
+                    "MGC HDRNet loaded: asset=$HDRNET_MODEL_ASSET input=" +
+                        "${modelInput.shape().contentToString()} output=" +
+                        modelOutput.shape().contentToString(),
+                )
+                candidate
+            } catch (error: Throwable) {
+                candidate.close()
+                throw error
+            }
+        }.onFailure { error ->
+            PLog.e(TAG, "Unable to initialize MGC HDRNet", error)
+        }.getOrNull()
+    }
+
+    private fun uploadProfileGainTableTexture(map: DngProfileGainTableMap): Int? {
+        val textureSize = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, textureSize, 0)
+        val textureWidth = map.mapPointsN
+        val textureHeight = map.mapPointsH * map.mapPointsV
+        if (textureWidth > textureSize[0] || textureHeight > textureSize[0]) {
+            PLog.e(
+                TAG,
+                "HDRNet gain texture ${textureWidth}x$textureHeight exceeds GL_MAX_TEXTURE_SIZE=" +
+                    textureSize[0],
+            )
+            return null
+        }
+        RawGlesProgram.logErrors("before HDRNet gain texture upload")
+        val gainBuffer = ByteBuffer.allocateDirect(map.gains.size * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .put(map.gains)
+        gainBuffer.position(0)
+        val textureIds = IntArray(1)
+        GLES30.glGenTextures(1, textureIds, 0)
+        if (textureIds[0] == 0) {
+            PLog.e(TAG, "Unable to allocate HDRNet ProfileGainTableMap texture")
+            return null
+        }
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureIds[0])
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_R32F,
+            textureWidth,
+            textureHeight,
+            0,
+            GLES30.GL_RED,
+            GLES30.GL_FLOAT,
+            gainBuffer,
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_MIN_FILTER,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_MAG_FILTER,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_WRAP_S,
+            GLES30.GL_CLAMP_TO_EDGE,
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_WRAP_T,
+            GLES30.GL_CLAMP_TO_EDGE,
+        )
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "HDRNet gain texture upload failed: glError=$error")
+            GLES30.glDeleteTextures(1, textureIds, 0)
+            return null
+        }
+        return textureIds[0]
+    }
+
     private fun readFloatStorageBuffer(
         bufferId: Int,
         floatCount: Int,
@@ -2646,9 +3171,12 @@ internal class DngPhotonProfileGainTableAlgorithm {
 
     private companion object {
         const val TAG = "PhotonPGTM"
+        const val HDRNET_MODEL_ASSET = "mgc_hdrnet/hdrnet_coefficients.tflite"
+        const val LINEAR_RGB_TEXTURE_UNIT = 0
         const val RAW_TEXTURE_UNIT = 0
         const val LENS_SHADING_TEXTURE_UNIT = 1
         const val HUE_SAT_TEXTURE_UNIT = 3
+        const val GLES31_MIN_SSBO_BYTES = 16L * 1024L * 1024L
         const val STREAMING_TILE_CORE_EDGE_PX = 3072
     }
 }

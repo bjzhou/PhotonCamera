@@ -351,7 +351,7 @@ class PhotoProcessor(
                 HdrBuffer(
                     bitmap = it,
                     encoding = HdrBufferEncoding.LINEAR_SRGB,
-                    description = "raw_linear_srgb_baseline_acr3_linear",
+                    description = "raw_linear_srgb_selected_engine_highlight_reference",
                 )
             },
             sourceKind = SourceKind.RAW,

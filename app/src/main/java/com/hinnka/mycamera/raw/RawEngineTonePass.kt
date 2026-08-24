@@ -41,6 +41,14 @@ internal class RawEngineTonePass(
 
     fun render(input: Input): Output? = algorithmFor(input.colorEngine).render(input)
 
+    fun renderHdrReference(
+        input: Input,
+        sdrLinearTextureId: Int,
+    ): Output? = algorithmFor(input.colorEngine).renderHdrReference(
+        input = input,
+        sdrLinearTextureId = sdrLinearTextureId,
+    )
+
     fun release() {
         adobeCurveAlgorithm.release()
         agxAlgorithm.release()
@@ -69,6 +77,19 @@ internal class RawEngineTonePass(
             return fragmentShader(shaderDefinitionFor(colorEngine))
         }
 
+        fun hdrReferenceFragmentShaderFor(colorEngine: RawRenderingEngine): String {
+            return hdrReferenceFragmentShader(
+                shaderDefinition = shaderDefinitionFor(colorEngine),
+            )
+        }
+
+        fun hdrBaseCurveFragmentShaderFor(colorEngine: RawRenderingEngine): String {
+            return hdrBaseCurveFragmentShader(
+                shaderDefinition = shaderDefinitionFor(colorEngine),
+                isHncs = colorEngine.isHncs,
+            )
+        }
+
         internal fun fragmentShader(shaderDefinition: RawEngineToneShaderDefinition): String {
             val source = combinedFragmentShader(shaderDefinition, includeShadowsHighlights = false)
             val cutoff = source.indexOf("const vec3 BW_LUMA")
@@ -87,6 +108,112 @@ internal class RawEngineTonePass(
                 vec3 color = uProfileToEngineTransform * exposedProfileColor;
                 color = applyEngineTone(color);
                 fragColor = vec4(color, 1.0);
+            }
+            """.trimIndent()
+        }
+
+        internal fun hdrReferenceFragmentShader(
+            shaderDefinition: RawEngineToneShaderDefinition,
+        ): String {
+            val source = combinedFragmentShader(shaderDefinition, includeShadowsHighlights = false)
+            val cutoff = source.indexOf("const vec3 BW_LUMA")
+                .takeIf { it >= 0 }
+                ?: source.indexOf("void main()").takeIf { it >= 0 }
+                ?: error("Unable to find combined shader adjustment section")
+            return source.substring(0, cutoff) + """
+
+            ${DngProfileGainTableRenderShader.GLSL}
+
+            uniform sampler2D uHdrSdrLinearTexture;
+            uniform sampler2D uHdrBaseCurveTexture;
+            uniform float uHdrCurveJoinInput;
+            uniform float uHdrCurveJoinOutput;
+            uniform float uHdrCurveJoinSlope;
+            uniform float uHdrCurveQuadratic;
+            uniform float uHdrCurveWhiteOutput;
+            uniform float uHdrCurveWhiteSlope;
+
+            const float HDR_SCENE_WHITE = 1.0;
+            const float HDR_EPSILON = 0.000001;
+            const float HDR_BASE_CURVE_SIZE = ${RawHdrReferenceMath.BASE_CURVE_SAMPLE_COUNT}.0;
+
+            float sampleHdrBaseCurve(float inputValue) {
+                float normalized = clamp(inputValue, 0.0, HDR_SCENE_WHITE);
+                float coordinate = normalized *
+                    ((HDR_BASE_CURVE_SIZE - 1.0) / HDR_BASE_CURVE_SIZE) +
+                    (0.5 / HDR_BASE_CURVE_SIZE);
+                return texture(
+                    uHdrBaseCurveTexture,
+                    vec2(coordinate, 0.5)
+                ).r;
+            }
+
+            float applyHdrExtendedCurve(float inputValue) {
+                float value = max(inputValue, 0.0);
+                if (value <= uHdrCurveJoinInput) {
+                    return sampleHdrBaseCurve(value);
+                }
+                if (value <= HDR_SCENE_WHITE) {
+                    float distance = value - uHdrCurveJoinInput;
+                    return uHdrCurveJoinOutput + uHdrCurveJoinSlope * distance +
+                        uHdrCurveQuadratic * distance * distance;
+                }
+                return uHdrCurveWhiteOutput +
+                    uHdrCurveWhiteSlope * (value - HDR_SCENE_WHITE);
+            }
+
+            void main() {
+                vec3 profileColor = texture(uInputTexture, vTexCoord).rgb;
+                profileColor = applyProfileGainTableMap(profileColor);
+                vec3 engineColor = prepareEngineInput(profileColor);
+                vec3 sdrLinear = max(texture(uHdrSdrLinearTexture, vTexCoord).rgb, vec3(0.0));
+                float toneInput = max(max(engineColor.r, engineColor.g), engineColor.b);
+                if (toneInput <= uHdrCurveJoinInput) {
+                    fragColor = vec4(sdrLinear, 1.0);
+                    return;
+                }
+
+                float baseCurveOutput = max(sampleHdrBaseCurve(toneInput), HDR_EPSILON);
+                float extendedCurveOutput = max(applyHdrExtendedCurve(toneInput), 0.0);
+                float gain = extendedCurveOutput / baseCurveOutput;
+                fragColor = vec4(sdrLinear * gain, 1.0);
+            }
+            """.trimIndent()
+        }
+
+        internal fun hdrBaseCurveFragmentShader(
+            shaderDefinition: RawEngineToneShaderDefinition,
+            isHncs: Boolean,
+        ): String {
+            val source = combinedFragmentShader(shaderDefinition, includeShadowsHighlights = false)
+            val cutoff = source.indexOf("const vec3 BW_LUMA")
+                .takeIf { it >= 0 }
+                ?: source.indexOf("void main()").takeIf { it >= 0 }
+                ?: error("Unable to find combined shader adjustment section")
+            val engineOutputToLinearSrgb = if (isHncs) {
+                "uHdrEngineToLinearSrgb * pow(max(engineOutput, vec3(0.0)), vec3(2.2))"
+            } else {
+                "engineOutput"
+            }
+
+            return source.substring(0, cutoff) + """
+
+            uniform mat3 uHdrEngineToLinearSrgb;
+            uniform float uHdrBaseCurveSampleCount;
+
+            const vec3 HDR_LUMA = vec3(0.2126, 0.7152, 0.0722);
+
+            vec3 hdrEngineOutputToLinearSrgb(vec3 engineOutput) {
+                return $engineOutputToLinearSrgb;
+            }
+
+            void main() {
+                float sampleIndex = floor(gl_FragCoord.x);
+                float inputValue = sampleIndex / max(uHdrBaseCurveSampleCount - 1.0, 1.0);
+                vec3 engineOutput = applyEngineTone(vec3(inputValue));
+                vec3 linearSrgb = hdrEngineOutputToLinearSrgb(engineOutput);
+                float response = max(dot(linearSrgb, HDR_LUMA), 0.0);
+                fragColor = vec4(response, 0.0, 0.0, 1.0);
             }
             """.trimIndent()
         }

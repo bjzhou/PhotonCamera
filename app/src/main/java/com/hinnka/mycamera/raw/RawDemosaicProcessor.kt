@@ -480,7 +480,9 @@ class RawDemosaicProcessor {
             )
 
             val exposureReady = renderSceneExposureRequest(
-                request = RawSceneExposureRequest { 0f },
+                request = RawSceneExposureRequest {
+                    RawSceneExposureResult(exposureOffsetEv = 0f, hdrRatio = 1f)
+                },
                 metadata = metadata,
                 sourceTextureId = demosaicTextureId,
                 colorCorrectionMatrix = identity,
@@ -1505,7 +1507,7 @@ class RawDemosaicProcessor {
     private val warpRectilinearPass = RawWarpRectilinearPass(fullscreenQuad)
     private val linearRcdPass = RawLinearRcdPass(fullscreenQuad)
     private val photonDehazePipeline = PhotonDehazePipeline(fullscreenQuad)
-    private val hdrReferencePass = RawHdrReferencePass(fullscreenQuad)
+    private val hdrReferencePass = RawHdrReferencePass(engineTonePass)
     private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
     private val quadBayerDemosaicAlgorithm = QuadBayerDemosaicAlgorithm()
     private val vgnDemosaicAlgorithm = VgnDemosaicAlgorithm()
@@ -1636,14 +1638,12 @@ class RawDemosaicProcessor {
         val outputSourceBounds: Rect,
         val rotation: Int,
         val includeHdrReference: Boolean,
-        val rawExposureCompensation: Float,
         val chromaDenoiseValue: Float?,
         val denoiseValue: Float?,
         val sharpeningValue: Float,
         val linearColorCorrectionMatrix: FloatArray,
         val linearCameraWhite: FloatArray,
         val hueSatMap: DcpHueSatMap?,
-        val profileToLinearSrgbTransform: FloatArray,
         val applyLinearDngBaselineExposure: Boolean,
         val hasProfileGainTableMap: Boolean,
         val applyDcpBaselineExposureOffset: Boolean,
@@ -1667,6 +1667,11 @@ class RawDemosaicProcessor {
     private data class RawTileBitmapResult(
         val sdrBitmap: Bitmap,
         val hdrReferenceBitmap: Bitmap?,
+    )
+
+    private data class RawCombinedRenderOutput(
+        val encodedTextureId: Int,
+        val linearSdrTextureId: Int,
     )
 
     private fun SceneStats.toRenderPlan(): RawRenderPlan {
@@ -1824,6 +1829,9 @@ class RawDemosaicProcessor {
         spectralFilmTuning: SpectralFilmTuning = SpectralFilmTuning.DEFAULT,
         rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+        forceRegeneratePhotonPgtm: Boolean = false,
+        photonHdrRatio: Float? = null,
+        photonHdrRatioDeviceLimits: RawSceneExposureDeviceLimits? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         onMetadata: ((RawMetadata) -> Unit)? = null
@@ -1868,6 +1876,9 @@ class RawDemosaicProcessor {
                 spectralFilmTuning = spectralFilmTuning,
                 rawRenderingEngine = rawRenderingEngine,
                 rawToneMappingParameters = rawToneMappingParameters,
+                forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
+                photonHdrRatio = photonHdrRatio,
+                photonHdrRatioDeviceLimits = photonHdrRatioDeviceLimits,
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 dngFile = dngFile,
@@ -2310,6 +2321,9 @@ class RawDemosaicProcessor {
         spectralFilmTuning: SpectralFilmTuning = SpectralFilmTuning.DEFAULT,
         rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+        forceRegeneratePhotonPgtm: Boolean = false,
+        photonHdrRatio: Float? = null,
+        photonHdrRatioDeviceLimits: RawSceneExposureDeviceLimits? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         dngFile: File? = null,
@@ -2539,6 +2553,8 @@ class RawDemosaicProcessor {
         }
         val normalizedToneMappingParameters = rawToneMappingParameters.normalized()
         val photonHdrRequested = normalizedToneMappingParameters.usePhotonHdr
+        val forcePhotonPgtmRegeneration =
+            photonHdrRequested && forceRegeneratePhotonPgtm
         val useAdobeProfilePipeline = colorEngine == RawRenderingEngine.AdobeCurve
         val embeddedProfileDecision = EmbeddedDngProfilePolicy.resolve(
             hasEmbeddedProfile = embeddedDngRenderPlan != null,
@@ -2617,6 +2633,8 @@ class RawDemosaicProcessor {
             actualSamplesPerPixel !in setOf(1, 3, 4) ->
                 "unsupported samplesPerPixel=$actualSamplesPerPixel"
             borrowedGpuSource != null -> "GPU-resident stacked source"
+            forcePhotonPgtmRegeneration ->
+                "HDRNet PGTM regeneration requires continuous linear RGB"
             actualMetadata.coreImagingTuning.dehaze.isActive ->
                 "Photon dehaze requires one continuous low-frequency image"
             hasActiveWarp && !(captureProfilePreparationRequested && sceneExposureRequest == null) ->
@@ -2756,6 +2774,7 @@ class RawDemosaicProcessor {
             !hasDcpSelection &&
             normalizedToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Profile
         val embeddedProfileGainTableMap = when {
+            forcePhotonPgtmRegeneration -> null
             photonHdrRequested -> photonProfileGainTableMap
                 ?: sourceProfileGainTableMap.takeIf { dngFile == null }
             selectedEmbeddedProfileIsActive -> selectedProfileGainTableMap
@@ -2769,6 +2788,7 @@ class RawDemosaicProcessor {
                     "selected=${selectedEmbeddedDngProfile?.profileName ?: "none"} " +
                     "engine=$colorEngine customDcp=$hasDcpSelection photonHdr=$photonHdrRequested " +
                     "pgtmSource=${when {
+                        forcePhotonPgtmRegeneration -> "regenerate-hdrnet"
                         embeddedProfileGainTableMap == null -> "none"
                         photonHdrRequested -> "photon-hdr"
                         else -> "selected-profile"
@@ -2812,7 +2832,7 @@ class RawDemosaicProcessor {
                     "source=$requestedProfilePlanSource"
             )
         }
-        val hasProfileGainTableMap = actualMetadata.profileGainTableMap?.isValid == true
+        var hasProfileGainTableMap = actualMetadata.profileGainTableMap?.isValid == true
         val hasDngBaselineExposure = shouldApplyLinearDngBaselineExposure(actualMetadata)
         // Match dng_render: PGTM is evaluated first with TotalBaselineExposure folded into its
         // MapInputWeights coordinate, then every engine consumes BaselineExposure in its own
@@ -2908,7 +2928,11 @@ class RawDemosaicProcessor {
                         width = actualWidth,
                         height = actualHeight,
                     )
-                } else if (captureProfilePreparationRequested && sceneExposureRequest == null) {
+                } else if (
+                    captureProfilePreparationRequested &&
+                    sceneExposureRequest == null &&
+                    !capturePhotonPgtmRequested
+                ) {
                     PLog.d(
                         TAG,
                         "RAW capture profile preparation skipped demosaic: scene exposure disabled",
@@ -3004,7 +3028,7 @@ class RawDemosaicProcessor {
             }
 
             if (prepareCaptureProfile) {
-                val solvedExposureEv = sceneExposureRequest?.let { request ->
+                val solvedSceneExposure = sceneExposureRequest?.let { request ->
                     renderSceneExposureRequest(
                         request = request,
                         metadata = actualMetadata,
@@ -3017,21 +3041,29 @@ class RawDemosaicProcessor {
                         stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                     )
                 }
-                solvedExposureEv?.let { exposureEv ->
+                val solvedExposureEv = solvedSceneExposure?.exposureOffsetEv
+                solvedSceneExposure?.let { solution ->
                     PLog.i(
                         TAG,
                         "RAW_SCENE_EXPOSURE stage=INFERENCE_COMPLETE " +
                             "pgtm=$capturePhotonPgtmRequested " +
                             "sourceBaselineEv=${actualMetadata.baselineExposure} " +
-                            "sceneBaselineEv=$exposureEv",
+                            "sceneBaselineEv=${solution.exposureOffsetEv} " +
+                            "hdrRatio=${solution.hdrRatio}",
                     )
                 }
                 val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
                     sourceBaselineEv = actualMetadata.baselineExposure,
                     sceneBaselineEv = solvedExposureEv,
                 )
-                val captureProfileGainTableMap = if (capturePhotonPgtmRequested) {
+                val captureHdrRatio = solvedSceneExposure?.hdrRatio
+                    ?.takeIf { it.isFinite() && it >= 1f }
+                val captureProfileGainTableMap = if (
+                    capturePhotonPgtmRequested && captureHdrRatio != null
+                ) {
                     generateProfileGainTableMapOnGpu(
+                        context = context.applicationContext,
+                        linearRgbTextureId = demosaicTextureId,
                         rawTextureId = rawTextureId,
                         streamingRawData = tiledRawData,
                         streamingRowStride = actualRowStride,
@@ -3042,14 +3074,20 @@ class RawDemosaicProcessor {
                         statsBounds = captureProfileStatsBounds,
                         baselineExposureEv = finalBaselineExposureEv +
                             dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
+                        // HDRNet's ratio describes capture exposure, not the DCP profile's
+                        // independent BaselineExposureOffset rendering adjustment.
+                        hdrRatio = captureHdrRatio,
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
                         hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
-                        warpRectilinear = applicableDngWarpRectilinear,
+                        // MGC AE is also the owner of HDRNet's ratio, so every Photon HDR capture
+                        // profile reaches this point through the metering path. WarpRectilinear
+                        // has therefore already been applied to demosaicTextureId.
+                        warpRectilinear = null,
                     )
                 } else {
                     if (capturePhotonPgtmRequested) {
-                        PLog.e(TAG, "Photon HDR PGTM unavailable: MGC LTM capture plan is missing")
+                        PLog.e(TAG, "Photon HDR PGTM unavailable: MGC AE HDR ratio is missing")
                     }
                     null
                 }
@@ -3060,11 +3098,95 @@ class RawDemosaicProcessor {
                 } else {
                     RawDngCaptureProfileResult(
                         exposureOffsetEv = solvedExposureEv,
+                        hdrRatio = captureHdrRatio,
                         profileGainTableMap = captureProfileGainTableMap,
                     )
                 }
                 onCaptureProfilePrepared?.invoke(captureResult)
                 return@withContext null
+            }
+
+            if (forcePhotonPgtmRegeneration) {
+                val persistedHdrRatio = photonHdrRatio?.takeIf { it.isFinite() && it >= 1f }
+                val estimatedHdrRatio = if (
+                    persistedHdrRatio == null && photonHdrRatioDeviceLimits != null
+                ) {
+                    renderSceneExposureRequest(
+                        request = RawSceneExposureMatcher.createRequest(
+                            context = context,
+                            metadata = actualMetadata,
+                            deviceLimits = photonHdrRatioDeviceLimits,
+                            includeExposureOffset = false,
+                        ),
+                        metadata = actualMetadata,
+                        sourceTextureId = demosaicTextureId,
+                        colorCorrectionMatrix = linearColorCorrectionMatrix,
+                        cameraWhite = linearCameraWhite,
+                        profileToLinearSrgbTransform = profileToLinearSrgbTransform,
+                        outputSourceBounds = outputSourceBounds,
+                        outputRotation = actualRotation,
+                        stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
+                    )?.hdrRatio
+                } else {
+                    null
+                }
+                val regenerationHdrRatio = persistedHdrRatio ?: estimatedHdrRatio
+                if (regenerationHdrRatio == null) {
+                    PLog.e(
+                        TAG,
+                        "HDRNet PGTM regeneration requires the capture MGC AE HDR ratio",
+                    )
+                    return@withContext null
+                }
+                PLog.i(
+                    TAG,
+                    "HDRNet PGTM regeneration ratio=$regenerationHdrRatio " +
+                        "source=${if (persistedHdrRatio != null) "metadata" else "MGC_AE"}",
+                )
+                if (rawRenderTiles.isNotEmpty() || demosaicTextureId == 0) {
+                    PLog.e(
+                        TAG,
+                        "HDRNet PGTM regeneration has no continuous linear RGB source: " +
+                            "tiles=${rawRenderTiles.size} texture=$demosaicTextureId",
+                    )
+                    return@withContext null
+                }
+                val regeneratedPhotonPgtm = generateProfileGainTableMapOnGpu(
+                    context = context.applicationContext,
+                    linearRgbTextureId = demosaicTextureId,
+                    rawTextureId = rawTextureId,
+                    streamingRawData = tiledRawData,
+                    streamingRowStride = actualRowStride,
+                    width = actualWidth,
+                    height = actualHeight,
+                    samplesPerPixel = actualSamplesPerPixel,
+                    metadata = actualMetadata.copy(profileGainTableMap = null),
+                    statsBounds = outputSourceBounds,
+                    baselineExposureEv = actualMetadata.baselineExposure +
+                        dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
+                    hdrRatio = regenerationHdrRatio,
+                    colorCorrectionMatrix = linearColorCorrectionMatrix,
+                    hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                    hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
+                    // The ordinary render path has already applied every active DNG warp to the
+                    // continuous linear texture immediately above.
+                    warpRectilinear = null,
+                )
+                if (regeneratedPhotonPgtm == null) {
+                    PLog.e(TAG, "HDRNet PGTM regeneration failed for RAW refresh")
+                    return@withContext null
+                }
+                actualMetadata = actualMetadata.copy(
+                    profileGainTableMap = regeneratedPhotonPgtm,
+                )
+                hasProfileGainTableMap = true
+                PLog.i(
+                    TAG,
+                    "HDRNet PGTM regenerated for RAW refresh: " +
+                        "${regeneratedPhotonPgtm.mapPointsH}x" +
+                        "${regeneratedPhotonPgtm.mapPointsV}x" +
+                        regeneratedPhotonPgtm.mapPointsN,
+                )
             }
 
             // BaselineExposure already contains the capture-time scene estimate. Rendering only
@@ -3123,14 +3245,12 @@ class RawDemosaicProcessor {
                         outputSourceBounds = outputSourceBounds,
                         rotation = actualRotation,
                         includeHdrReference = includeHdrReference,
-                        rawExposureCompensation = effectiveExposureCompensation,
                         chromaDenoiseValue = chromaDenoiseValue,
                         denoiseValue = denoiseValue,
                         sharpeningValue = sharpeningValue,
                         linearColorCorrectionMatrix = linearColorCorrectionMatrix,
                         linearCameraWhite = linearCameraWhite,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
-                        profileToLinearSrgbTransform = profileToLinearSrgbTransform,
                         applyLinearDngBaselineExposure = applyLinearDngBaselineExposure,
                         hasProfileGainTableMap = hasProfileGainTableMap,
                         applyDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
@@ -3161,18 +3281,6 @@ class RawDemosaicProcessor {
                     effectiveDefaultCrop = effectiveDefaultCrop?.let(::Rect),
                 )
             }
-
-            // Preserve the undenoised camera-RGB source identity for the lower-priority HDR
-            // branch. LinearRcdPass swaps the full-resolution ping-pong members below, so looking
-            // up demosaicTextureId after the SDR render would select the post-CCM texture instead.
-            // The source texture itself remains read-only and alive until the complete render ends.
-            val hdrReferenceSourceTextureId = if (includeHdrReference) {
-                check(demosaicTextureId != 0) { "HDR reference source texture is unavailable" }
-                demosaicTextureId
-            } else {
-                0
-            }
-            var hdrReferencePreparedBeforeDehaze = false
 
             val denoiseProfileTextureId = renderMgcUserAdjustmentDenoise(
                 context = context.applicationContext,
@@ -3241,21 +3349,6 @@ class RawDemosaicProcessor {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             checkGlError("After LinearRcdPass Swap")
             if (dehazeTuning.isActive) {
-                // The next ping-pong target is the original camera-RGB texture. Preserve the HDR
-                // reference first because that branch intentionally excludes dehaze/tone/sharpen.
-                if (includeHdrReference) {
-                    setupHdrReferenceFramebuffer(actualWidth, actualHeight)
-                    renderHdrReferencePass(
-                        metadata = actualMetadata,
-                        rawExposureCompensation = effectiveExposureCompensation,
-                        inputTextureId = hdrReferenceSourceTextureId,
-                        colorCorrectionMatrix = linearColorCorrectionMatrix,
-                        cameraWhite = linearCameraWhite,
-                        hueSatMap = activeDcpRenderPlan?.hueSatMap,
-                        profileToLinearSrgb = profileToLinearSrgbTransform,
-                    )
-                    hdrReferencePreparedBeforeDehaze = true
-                }
                 checkNotNull(
                     photonDehazePipeline.render(
                         sourceTextureId = demosaicTextureId,
@@ -3353,11 +3446,12 @@ class RawDemosaicProcessor {
                     identityMatrix3x3()
                 } else {
                     profileToEngineTransform
-                }
+            }
             setupCombinedFramebuffer(actualWidth, actualHeight)
             val combinedStart = System.currentTimeMillis()
-            val combinedRendered = try {
-                renderCombinedPass(
+            var hdrReferencePreparedFromCombinedInput = false
+            val combinedOutput = try {
+                val output = renderCombinedPass(
                     metadata = actualMetadata,
                     inputTextureId = combinedInputTexture,
                     dcpRenderPlan = activeDcpRenderPlan,
@@ -3375,12 +3469,48 @@ class RawDemosaicProcessor {
                     applyProfileGainTableMap =
                         hasProfileGainTableMap && colorEngine != RawRenderingEngine.DarktableFilmic,
                 )
+                // Filmic's wavelet reconstruction owns its prepared engine-domain source. Render
+                // the HDR reference before releasing those framebuffers so SDR and HDR consume
+                // the same reconstructed input without applying PGTM/exposure a second time.
+                if (output != null && includeHdrReference &&
+                    colorEngine == RawRenderingEngine.DarktableFilmic
+                ) {
+                    hdrReferencePreparedFromCombinedInput = try {
+                        setupHdrReferenceFramebuffer(actualWidth, actualHeight)
+                        renderHdrReferencePass(
+                            metadata = actualMetadata,
+                            inputTextureId = combinedInputTexture,
+                            sdrLinearTextureId = output.linearSdrTextureId,
+                            dcpRenderPlan = activeDcpRenderPlan,
+                            spectralFilmLut = spektrafilmLut,
+                            hncsRenderPlan = hncsRenderPlan,
+                            colorEngine = colorEngine,
+                            outputWorkingColorSpace = engineWorkingColorSpace,
+                            profileToEngineTransform = combinedProfileToEngineTransform,
+                            profileExposureUniforms = combinedProfileExposureUniforms,
+                            rawToneMappingParameters = rawToneMappingParameters,
+                            applyProfileGainTableMap = false,
+                        )
+                        true
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (error: OutOfMemoryError) {
+                        PLog.e(TAG, "Unable to prepare Filmic HDR reference; using fallback", error)
+                        releaseHdrReferenceFramebuffer()
+                        false
+                    } catch (error: Exception) {
+                        PLog.e(TAG, "Filmic HDR reference preparation failed; using fallback", error)
+                        releaseHdrReferenceFramebuffer()
+                        false
+                    }
+                }
+                output
             } finally {
                 if (colorEngine == RawRenderingEngine.DarktableFilmic) {
                     filmicHighlightReconstructionAlgorithm.releaseFramebuffers()
                 }
             }
-            if (!combinedRendered) {
+            if (combinedOutput == null) {
                 PLog.e(TAG, "Combined Pass failed for colorEngine=$colorEngine")
                 return@withContext null
             }
@@ -3388,7 +3518,7 @@ class RawDemosaicProcessor {
             // 6. 第三步：锐化 (Sharpen Pass)
             setupSharpenFramebuffer(actualWidth, actualHeight)
             val sharpenStart = System.currentTimeMillis()
-            renderFinalSharpenPass(actualMetadata, sharpeningValue, combinedTextureId)
+            renderFinalSharpenPass(actualMetadata, sharpeningValue, combinedOutput.encodedTextureId)
             PLog.d(TAG, "Sharpen Pass took: ${System.currentTimeMillis() - sharpenStart}ms")
             // combinedTextureId 已被 sharpenPass 消费，提前释放
             if (combinedTextureId != 0) {
@@ -3455,24 +3585,28 @@ class RawDemosaicProcessor {
                     "${finalBitmap.width}x${finalBitmap.height}",
             )
 
-            // Keep both output materializations contiguous: HDR follows the completed SDR readback
-            // without yielding to JPEG encoding or another CPU consumer in between.
-            // It branches from the preserved undenoised camera RGB, excludes the SDR denoise/tone/
-            // sharpen chain, and reuses the existing rotated Output FBO after its SDR pixels have
-            // already been copied into the bitmap.
+            // Keep both output materializations contiguous. The HDR branch uses the exact
+            // post-linear processing source and selected engine preparation used by SDR. It
+            // follows the selected engine's measured base response, then leaves its SDR shoulder
+            // with a value/slope-continuous curve and preserves the actual SDR result as color.
             val hdrReferenceBitmap = if (includeHdrReference) {
                 val hdrStartNs = System.nanoTime()
                 try {
-                    if (!hdrReferencePreparedBeforeDehaze) {
+                    if (!hdrReferencePreparedFromCombinedInput) {
                         setupHdrReferenceFramebuffer(actualWidth, actualHeight)
                         renderHdrReferencePass(
                             metadata = actualMetadata,
-                            rawExposureCompensation = effectiveExposureCompensation,
-                            inputTextureId = hdrReferenceSourceTextureId,
-                            colorCorrectionMatrix = linearColorCorrectionMatrix,
-                            cameraWhite = linearCameraWhite,
-                            hueSatMap = activeDcpRenderPlan?.hueSatMap,
-                            profileToLinearSrgb = profileToLinearSrgbTransform,
+                            inputTextureId = demosaicTextureId,
+                            sdrLinearTextureId = combinedOutput.linearSdrTextureId,
+                            dcpRenderPlan = activeDcpRenderPlan,
+                            spectralFilmLut = spektrafilmLut,
+                            hncsRenderPlan = hncsRenderPlan,
+                            colorEngine = colorEngine,
+                            outputWorkingColorSpace = engineWorkingColorSpace,
+                            profileToEngineTransform = profileToEngineTransform,
+                            profileExposureUniforms = profileExposureUniforms,
+                            rawToneMappingParameters = rawToneMappingParameters,
+                            applyProfileGainTableMap = hasProfileGainTableMap,
                         )
                     }
                     renderOutputPass(
@@ -3720,43 +3854,6 @@ class RawDemosaicProcessor {
                         "source=${tile.sourceCore}"
                 }
 
-                if (config.includeHdrReference) {
-                    setupHdrReferenceFramebuffer(workWidth, workHeight)
-                    renderHdrReferencePass(
-                        metadata = config.metadata,
-                        rawExposureCompensation = config.rawExposureCompensation,
-                        inputTextureId = demosaicTextureId,
-                        colorCorrectionMatrix = config.linearColorCorrectionMatrix,
-                        cameraWhite = config.linearCameraWhite,
-                        hueSatMap = config.hueSatMap,
-                        profileToLinearSrgb = config.profileToLinearSrgbTransform,
-                        viewportWidth = workWidth,
-                        viewportHeight = workHeight,
-                    )
-                    renderOutputPass(
-                        rotation = config.rotation,
-                        width = workWidth,
-                        height = workHeight,
-                        bounds = localOutputBounds,
-                        sourceTextureId = hdrReferenceTextureId,
-                    )
-                    val tileBitmap = readTilePixels(
-                        width = tile.outputCore.width,
-                        height = tile.outputCore.height,
-                        colorSpace = hdrColorSpace,
-                    ) ?: return null
-                    try {
-                        hdrCanvas?.drawBitmap(
-                            tileBitmap,
-                            tile.outputCore.left.toFloat(),
-                            tile.outputCore.top.toFloat(),
-                            copyPaint,
-                        )
-                    } finally {
-                        tileBitmap.recycle()
-                    }
-                }
-
                 val denoisedTextureId = renderMgcUserAdjustmentDenoise(
                     context = config.context,
                     sourceTextureId = demosaicTextureId,
@@ -3810,7 +3907,7 @@ class RawDemosaicProcessor {
                 demosaicFramebufferId = linearOutputFramebufferId
                 linearOutputFramebufferId = tempFramebuffer
 
-                val combinedRendered = renderCombinedPass(
+                val combinedOutput = renderCombinedPass(
                     metadata = config.metadata,
                     inputTextureId = demosaicTextureId,
                     dcpRenderPlan = config.activeDcpRenderPlan,
@@ -3833,15 +3930,60 @@ class RawDemosaicProcessor {
                     viewportWidth = workWidth,
                     viewportHeight = workHeight,
                 )
-                if (!combinedRendered) {
+                if (combinedOutput == null) {
                     PLog.e(TAG, "Combined tile pass failed at tile=${tile.index}")
                     return null
+                }
+                if (config.includeHdrReference) {
+                    setupHdrReferenceFramebuffer(workWidth, workHeight)
+                    renderHdrReferencePass(
+                        metadata = config.metadata,
+                        inputTextureId = demosaicTextureId,
+                        sdrLinearTextureId = combinedOutput.linearSdrTextureId,
+                        dcpRenderPlan = config.activeDcpRenderPlan,
+                        spectralFilmLut = config.spectralFilmLut,
+                        hncsRenderPlan = config.hncsRenderPlan,
+                        colorEngine = config.colorEngine,
+                        outputWorkingColorSpace = config.engineWorkingColorSpace,
+                        profileToEngineTransform = config.profileToEngineTransform,
+                        profileExposureUniforms = config.profileExposureUniforms,
+                        rawToneMappingParameters = config.rawToneMappingParameters,
+                        applyProfileGainTableMap = config.hasProfileGainTableMap,
+                        globalOriginX = working.left,
+                        globalOriginY = working.top,
+                        fullImageWidth = config.fullWidth,
+                        fullImageHeight = config.fullHeight,
+                        viewportWidth = workWidth,
+                        viewportHeight = workHeight,
+                    )
+                    renderOutputPass(
+                        rotation = config.rotation,
+                        width = workWidth,
+                        height = workHeight,
+                        bounds = localOutputBounds,
+                        sourceTextureId = hdrReferenceTextureId,
+                    )
+                    val hdrTileBitmap = readTilePixels(
+                        width = tile.outputCore.width,
+                        height = tile.outputCore.height,
+                        colorSpace = hdrColorSpace,
+                    ) ?: return null
+                    try {
+                        hdrCanvas?.drawBitmap(
+                            hdrTileBitmap,
+                            tile.outputCore.left.toFloat(),
+                            tile.outputCore.top.toFloat(),
+                            copyPaint,
+                        )
+                    } finally {
+                        hdrTileBitmap.recycle()
+                    }
                 }
                 setupSharpenFramebuffer(workWidth, workHeight)
                 renderFinalSharpenPass(
                     metadata = config.metadata.copy(width = workWidth, height = workHeight),
                     sharpeningValue = config.sharpeningValue,
-                    inputTextureId = combinedTextureId,
+                    inputTextureId = combinedOutput.encodedTextureId,
                 )
                 renderOutputPass(
                     rotation = config.rotation,
@@ -4095,6 +4237,8 @@ class RawDemosaicProcessor {
     }
 
     private fun generateProfileGainTableMapOnGpu(
+        context: Context,
+        linearRgbTextureId: Int,
         rawTextureId: Int,
         streamingRawData: ByteBuffer? = null,
         streamingRowStride: Int = 0,
@@ -4106,6 +4250,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         statsBounds: Rect?,
         baselineExposureEv: Float,
+        hdrRatio: Float,
         colorCorrectionMatrix: FloatArray,
         hueSatMap: DcpHueSatMap?,
         hueSatMapSupportsOverrange: Boolean,
@@ -4129,6 +4274,8 @@ class RawDemosaicProcessor {
         }
         return profileGainTableAlgorithm.execute(
             DngPhotonProfileGainTableAlgorithm.Input(
+                context = context,
+                linearRgbTextureId = linearRgbTextureId,
                 rawTextureId = rawTextureId,
                 streamingRawData = streamingRawData,
                 streamingRowStride = streamingRowStride,
@@ -4140,6 +4287,7 @@ class RawDemosaicProcessor {
                 metadata = metadata,
                 statsBounds = statsBounds,
                 baselineExposureEv = baselineExposureEv,
+                hdrRatio = hdrRatio,
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 hueSatMap = hueSatMap,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -6213,7 +6361,7 @@ class RawDemosaicProcessor {
         fullImageHeight: Int = metadata.height,
         viewportWidth: Int = metadata.width,
         viewportHeight: Int = metadata.height
-    ): Boolean {
+    ): RawCombinedRenderOutput? {
         val outputTransform = computeWorkingToOutputTransform(outputWorkingColorSpace, ColorSpace.SRGB)
         setupEngineToneFramebuffer(viewportWidth, viewportHeight)
         if (!renderEngineTonePass(
@@ -6238,7 +6386,7 @@ class RawDemosaicProcessor {
                 viewportHeight = viewportHeight
             )
         ) {
-            return false
+            return null
         }
         var linearOutputTextureId = engineToneTextureId
         if (colorEngine.isHncs) {
@@ -6251,7 +6399,7 @@ class RawDemosaicProcessor {
                     viewportHeight = viewportHeight,
                 )
             ) {
-                return false
+                return null
             }
             linearOutputTextureId = adjustmentTextureId
         }
@@ -6278,7 +6426,7 @@ class RawDemosaicProcessor {
                     viewportHeight = viewportHeight
                 )
             ) {
-                return false
+                return null
             }
             if (colorEngine.isHncs) engineToneTextureId else adjustmentTextureId
         } else {
@@ -6286,10 +6434,16 @@ class RawDemosaicProcessor {
         }
 
         setupCombinedFramebuffer(viewportWidth, viewportHeight)
-        return renderSrgbPass(
+        if (!renderSrgbPass(
             inputTextureId = srgbInputTextureId,
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight
+        )) {
+            return null
+        }
+        return RawCombinedRenderOutput(
+            encodedTextureId = combinedTextureId,
+            linearSdrTextureId = srgbInputTextureId,
         )
     }
 
@@ -6769,34 +6923,63 @@ class RawDemosaicProcessor {
 
     private fun renderHdrReferencePass(
         metadata: RawMetadata,
-        rawExposureCompensation: Float,
         inputTextureId: Int,
-        colorCorrectionMatrix: FloatArray,
-        cameraWhite: FloatArray,
-        hueSatMap: DcpHueSatMap?,
-        profileToLinearSrgb: FloatArray,
+        sdrLinearTextureId: Int,
+        dcpRenderPlan: DcpRenderPlan?,
+        spectralFilmLut: SpectralFilmLut?,
+        hncsRenderPlan: HncsRenderPlan?,
+        colorEngine: RawRenderingEngine,
+        outputWorkingColorSpace: ColorSpace,
+        profileToEngineTransform: FloatArray,
+        profileExposureUniforms: ProfileExposureUniforms,
+        rawToneMappingParameters: RawToneMappingParameters,
+        applyProfileGainTableMap: Boolean,
+        globalOriginX: Int = 0,
+        globalOriginY: Int = 0,
+        fullImageWidth: Int = metadata.width,
+        fullImageHeight: Int = metadata.height,
         viewportWidth: Int = metadata.width,
         viewportHeight: Int = metadata.height,
     ) {
-        val safeCameraWhite = sanitizeCameraWhite(cameraWhite)
-        val acr3Curve = ACR3Curve.samples()
+        val outputTransform = computeWorkingToOutputTransform(
+            outputWorkingColorSpace,
+            ColorSpace.SRGB,
+        )
         checkNotNull(
             hdrReferencePass.render(
                 RawHdrReferencePass.Input(
-                    textureId = inputTextureId,
-                    targetFramebufferId = hdrReferenceFramebufferId,
-                    targetTextureId = hdrReferenceTextureId,
-                    width = viewportWidth,
-                    height = viewportHeight,
-                    cameraToProfile = colorCorrectionMatrix,
-                    profileToLinearSrgb = profileToLinearSrgb,
-                    cameraWhite = safeCameraWhite,
-                    exposureGain = RawHdrReferenceMath.exposureGain(
-                        baselineExposureEv = metadata.baselineExposure,
-                        rawExposureCompensationEv = rawExposureCompensation,
+                    engineInput = RawEngineTonePass.Input(
+                        textureId = inputTextureId,
+                        targetFramebufferId = hdrReferenceFramebufferId,
+                        targetTextureId = hdrReferenceTextureId,
+                        colorEngine = colorEngine,
+                        profileToEngineTransform = profileToEngineTransform,
+                        outputTransform = outputTransform,
+                        globalOriginX = globalOriginX,
+                        globalOriginY = globalOriginY,
+                        fullImageWidth = fullImageWidth,
+                        fullImageHeight = fullImageHeight,
+                        width = viewportWidth,
+                        height = viewportHeight,
+                        toneMappingParameters = rawToneMappingParameters,
+                        profileExposure = profileExposureUniforms,
+                        dcpRenderPlan = dcpRenderPlan,
+                        // LinearRcdPass has already applied the profile HueSatMap. Adobe still
+                        // consumes the selected curve and LookTable through the shared binder.
+                        applyDcpHueSatMap = false,
+                        spectralFilmLut = spectralFilmLut,
+                        hncsRenderPlan = hncsRenderPlan,
+                        bindProfileGainTable = { program ->
+                            bindProfileGainTableMap(
+                                program = program,
+                                metadata = metadata,
+                                applyProfileGainTableMap = applyProfileGainTableMap,
+                                profileBaselineExposureOffsetEv =
+                                    dcpBaselineExposureOffsetOrZero(dcpRenderPlan),
+                            )
+                        },
                     ),
-                    bindCurve = { program -> curveTextureResources.bind(program, acr3Curve) },
-                    bindHueSatMap = { program -> bindLinearDcpHueSatMap(program, hueSatMap) },
+                    sdrLinearTextureId = sdrLinearTextureId,
                 ),
             ),
         ) { "RAW HDR reference pass failed" }
@@ -7616,7 +7799,7 @@ class RawDemosaicProcessor {
         outputSourceBounds: Rect,
         outputRotation: Int = 0,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
-    ): Float? {
+    ): RawSceneExposureResult? {
         return try {
             val width = RawSceneExposureMath.INPUT_WIDTH
             val height = RawSceneExposureMath.INPUT_HEIGHT

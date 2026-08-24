@@ -3,82 +3,85 @@ package com.hinnka.mycamera.raw
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.exp
 
 class RawHdrReferenceMathTest {
     @Test
-    fun combinesBaselineAndUserExposure() {
-        assertEquals(0f, RawHdrReferenceMath.exposureEv(0f, 0f), 0.0001f)
-        assertEquals(-0.7f, RawHdrReferenceMath.exposureEv(-0.7f, 0f), 0.0001f)
-        assertEquals(0.55f, RawHdrReferenceMath.exposureEv(-0.7f, 1.25f), 0.0001f)
-    }
+    fun followsSelectedBaseCurveThroughTheJoin() {
+        val base = sampledCurve { x -> x * x * (3f - 2f * x) }
+        val extension = RawHdrReferenceMath.solve(base)
 
-    @Test
-    fun convertsCombinedExposureToExactLinearGain() {
-        assertEquals(1f, RawHdrReferenceMath.exposureGain(0f, 0f), 0.0001f)
+        val belowJoin = extension.joinInput * 0.8f
         assertEquals(
-            Math.pow(2.0, 0.55).toFloat(),
-            RawHdrReferenceMath.exposureGain(-0.7f, 1.25f),
-            0.0001f,
+            RawHdrReferenceMath.sampleCurve(base, belowJoin),
+            extension.evaluate(belowJoin, base),
+            0.000001f,
         )
-    }
-
-    @Test
-    fun sanitizesNonFiniteExposureInputsIndependently() {
-        assertEquals(1.25f, RawHdrReferenceMath.exposureEv(Float.NaN, 1.25f), 0.0001f)
-        assertEquals(-0.7f, RawHdrReferenceMath.exposureEv(-0.7f, Float.NaN), 0.0001f)
         assertEquals(
-            0f,
-            RawHdrReferenceMath.exposureEv(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY),
-            0.0001f,
+            RawHdrReferenceMath.sampleCurve(base, extension.joinInput),
+            extension.evaluate(extension.joinInput, base),
+            0.000001f,
         )
     }
 
     @Test
-    fun usesCompleteAcr3CurveThroughBlendStart() {
-        val curve = ACR3Curve.samples()
-        assertEquals(sampleCurve(curve, 0.08f), RawHdrReferenceMath.toneValue(0.08f), 0.000001f)
-        assertEquals(sampleCurve(curve, 0.09f), RawHdrReferenceMath.toneValue(0.09f), 0.000001f)
+    fun leavesTheShoulderWithContinuousValueAndSlope() {
+        val base = sampledCurve { x -> (1f - exp(-3.2f * x)) / (1f - exp(-3.2f)) }
+        val extension = RawHdrReferenceMath.solve(base)
+        val epsilon = 0.0001f
+        val leftValue = extension.evaluate(extension.joinInput - epsilon, base)
+        val joinValue = extension.evaluate(extension.joinInput, base)
+        val rightValue = extension.evaluate(extension.joinInput + epsilon, base)
+        val leftSlope = (joinValue - leftValue) / epsilon
+        val rightSlope = (rightValue - joinValue) / epsilon
+
+        assertEquals(leftSlope, rightSlope, 0.03f)
+        assertTrue(extension.joinInput >= RawHdrReferenceMath.SEARCH_START)
+        assertTrue(extension.joinInput < RawHdrReferenceMath.SCENE_WHITE)
     }
 
     @Test
-    fun smoothlyBlendsFromAcr3ToAnchoredLinearGain() {
-        val curve = ACR3Curve.samples()
-        val value = 0.135f
-        val linearGain = sampleCurve(curve, RawHdrReferenceMath.LINEAR_GAIN_START) /
-            RawHdrReferenceMath.LINEAR_GAIN_START
-        val t = smoothstep(
-            RawHdrReferenceMath.ACR3_BLEND_START,
-            RawHdrReferenceMath.LINEAR_GAIN_START,
-            value,
+    fun reachesHalfStopAboveTheSelectedEngineWhite() {
+        val baseWhite = 0.82f
+        val base = sampledCurve { x -> baseWhite * x }
+        val extension = RawHdrReferenceMath.solve(base)
+
+        assertEquals(
+            baseWhite * RawHdrReferenceMath.HDR_WHITE_MULTIPLIER,
+            extension.evaluate(RawHdrReferenceMath.SCENE_WHITE, base),
+            0.00001f,
         )
-        val expected = sampleCurve(curve, value) +
-            (value * linearGain - sampleCurve(curve, value)) * t
-
-        assertEquals(expected, RawHdrReferenceMath.toneValue(value), 0.000001f)
     }
 
     @Test
-    fun keepsMidtonesAndOverrangeOnTheSameUnnormalizedLinearGain() {
-        val curve = ACR3Curve.samples()
-        val linearGain = sampleCurve(curve, RawHdrReferenceMath.LINEAR_GAIN_START) /
-            RawHdrReferenceMath.LINEAR_GAIN_START
+    fun overrangeContinuesWithTheWhitePointTangent() {
+        val base = sampledCurve { x -> x }
+        val extension = RawHdrReferenceMath.solve(base)
+        val white = extension.evaluate(1f, base)
+        val overrange = extension.evaluate(1.4f, base)
 
-        assertTrue(linearGain > 1f)
-        assertEquals(0.18f * linearGain, RawHdrReferenceMath.toneValue(0.18f), 0.000001f)
-        assertEquals(0.75f * linearGain, RawHdrReferenceMath.toneValue(0.75f), 0.000001f)
-        assertEquals(1.0f * linearGain, RawHdrReferenceMath.toneValue(1.0f), 0.000001f)
-        assertEquals(2.5f * linearGain, RawHdrReferenceMath.toneValue(2.5f), 0.000001f)
+        assertEquals(
+            white + extension.whiteSlope * 0.4f,
+            overrange,
+            0.00001f,
+        )
     }
 
-    private fun sampleCurve(curve: FloatArray, value: Float): Float {
-        val position = value.coerceIn(0f, 1f) * (curve.size - 1)
-        val lowerIndex = position.toInt().coerceAtMost(curve.lastIndex - 1)
-        val fraction = position - lowerIndex
-        return curve[lowerIndex] + (curve[lowerIndex + 1] - curve[lowerIndex]) * fraction
+    @Test
+    fun sanitizesNonFiniteBaseSamplesWithoutBreakingTheCurve() {
+        val base = sampledCurve { x -> x }
+        base[200] = Float.NaN
+        base[700] = Float.POSITIVE_INFINITY
+        val extension = RawHdrReferenceMath.solve(base)
+
+        assertTrue(extension.joinInput.isFinite())
+        assertTrue(extension.whiteOutput.isFinite())
+        assertTrue(extension.evaluate(2f, base).isFinite())
     }
 
-    private fun smoothstep(edge0: Float, edge1: Float, value: Float): Float {
-        val t = ((value - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
-        return t * t * (3f - 2f * t)
+    private fun sampledCurve(transform: (Float) -> Float): FloatArray {
+        return FloatArray(RawHdrReferenceMath.BASE_CURVE_SAMPLE_COUNT) { index ->
+            transform(index.toFloat() / (RawHdrReferenceMath.BASE_CURVE_SAMPLE_COUNT - 1))
+        }
     }
 }
