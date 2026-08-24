@@ -3,6 +3,7 @@ package com.hinnka.mycamera.camera
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,6 +54,37 @@ class IszLensConfigTest {
 
         assertEquals(2, restored.size)
         assertEquals(2, restored.map { it.virtualCameraId }.distinct().size)
+    }
+
+    @Test
+    fun resolveCamera2DeviceId_mapsVirtualLensToConfiguredBaseCamera() {
+        val config = IszLensConfig(
+            baseCameraId = "2",
+            iszZoomRatio = 2f,
+            vendorCaptureProfileId = "oplus_agingtest_mode_select_22",
+        )
+
+        assertEquals(
+            "2",
+            IszLensConfig.resolveCamera2DeviceId(
+                cameraId = config.virtualCameraId,
+                configs = listOf(config),
+            ),
+        )
+    }
+
+    @Test
+    fun resolveCamera2DeviceId_neverReturnsUnmappedVirtualId() {
+        assertNull(
+            IszLensConfig.resolveCamera2DeviceId(
+                cameraId = "isz:2:2:oplus_agingtest_mode_select_22",
+                configs = emptyList(),
+            ),
+        )
+        assertEquals(
+            "2",
+            IszLensConfig.resolveCamera2DeviceId(cameraId = "2", configs = emptyList()),
+        )
     }
 
     @Test

@@ -186,7 +186,12 @@ data class CameraInfo(
     val rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(), // RAW 原始分辨率黑边裁切像素
     val minimumFocusDistance: Float = 0f // 最小对焦距离 (diopters, 0 = infinity only)
 ) {
-    fun getOpenCameraId(): String = logicalCameraId ?: cameraId
+    fun getOpenCameraId(): String {
+        if (!isVirtualIszLens) return logicalCameraId ?: cameraId
+        return requireNotNull(logicalCameraId ?: baseCameraId) {
+            "ISZ virtual lens $cameraId has no Camera2 device ID"
+        }
+    }
 
     fun getBoundPhysicalCameraId(): String? = outputPhysicalCameraId
 
