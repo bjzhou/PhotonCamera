@@ -1534,10 +1534,53 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
+    /** Horizontal half of the DNG SDK's A=-0.75 bicubic output-grid resampler. */
+    val resampleAotRgbHorizontal = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uChannelPlane;
+        uniform ivec2 uSourceSize;
+        uniform int uOutputWidth;
+        out float oChannel;
+
+        float bicubicWeight(float x) {
+            const float A = -0.75;
+            x = abs(x);
+            if (x >= 2.0) return 0.0;
+            if (x >= 1.0) return ((A * x - 5.0 * A) * x + 8.0 * A) * x - 4.0 * A;
+            return ((A + 2.0) * x - (A + 3.0)) * x * x + 1.0;
+        }
+
+        void main() {
+            ivec2 outputPixel = ivec2(gl_FragCoord.xy);
+            float sourceX = (float(outputPixel.x) + 0.5) *
+                float(uSourceSize.x) / float(uOutputWidth) - 0.5;
+            sourceX = round(sourceX * 128.0) * (1.0 / 128.0);
+            int baseX = int(floor(sourceX));
+            float fraction = sourceX - float(baseX);
+            float total = 0.0;
+            float totalWeight = 0.0;
+            for (int x = -1; x <= 2; ++x) {
+                float weight = bicubicWeight(float(x) - fraction);
+                int sampleX = clamp(baseX + x, 0, uSourceSize.x - 1);
+                total += texelFetch(
+                    uChannelPlane,
+                    ivec2(sampleX, outputPixel.y),
+                    0
+                ).r * weight;
+                totalWeight += weight;
+            }
+            oChannel = total / max(totalWeight, 1.0e-8);
+        }
+    """.trimIndent()
+
     /**
      * Converts the original MGC MergeRgbRaw16F16 planar Q14 output to the stacker's RGB16
      * boundary. The AOT output is already un-white-balanced camera RGB; WB is used only by the
-     * AOT's internal green guide and must not be divided out again here.
+     * AOT's internal green guide and must not be divided out again here. When the requested output
+     * is larger than the native AOT grid, this pass applies the vertical half of the DNG bicubic
+     * resampler after [resampleAotRgbHorizontal].
      */
     val normalizeAotRgb16 = """
         #version 300 es
@@ -1545,15 +1588,49 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         uniform sampler2D uChannelPlane;
         uniform sampler2D uLensShading;
+        uniform ivec2 uSourceSize;
         uniform ivec2 uOutputSize;
         uniform float uOutputExposureScale;
         uniform int uUseLensShading;
+        uniform int uResampleVertical;
         uniform int uChannel;
         layout(location = 0) out highp uvec4 oRgb16;
 
+        float bicubicWeight(float x) {
+            const float A = -0.75;
+            x = abs(x);
+            if (x >= 2.0) return 0.0;
+            if (x >= 1.0) return ((A * x - 5.0 * A) * x + 8.0 * A) * x - 4.0 * A;
+            return ((A + 2.0) * x - (A + 3.0)) * x * x + 1.0;
+        }
+
+        float sampleChannel(ivec2 outputPixel) {
+            if (uResampleVertical == 0) {
+                return texelFetch(uChannelPlane, outputPixel, 0).r;
+            }
+            float sourceY = (float(outputPixel.y) + 0.5) *
+                float(uSourceSize.y) / float(uOutputSize.y) - 0.5;
+            sourceY = round(sourceY * 128.0) * (1.0 / 128.0);
+            int baseY = int(floor(sourceY));
+            float fraction = sourceY - float(baseY);
+            float total = 0.0;
+            float totalWeight = 0.0;
+            for (int y = -1; y <= 2; ++y) {
+                float weight = bicubicWeight(float(y) - fraction);
+                int sampleY = clamp(baseY + y, 0, uSourceSize.y - 1);
+                total += texelFetch(
+                    uChannelPlane,
+                    ivec2(outputPixel.x, sampleY),
+                    0
+                ).r * weight;
+                totalWeight += weight;
+            }
+            return total / max(totalWeight, 1.0e-8);
+        }
+
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
-            float value = texelFetch(uChannelPlane, p, 0).r * (1.0 / 16384.0);
+            float value = sampleChannel(p) * (1.0 / 16384.0);
             if (uUseLensShading != 0) {
                 vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uOutputSize);
                 vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
@@ -1564,8 +1641,10 @@ internal object GlesMgcRawSpatialShaders {
             uint encodedValue = uint(round(
                 clamp(value * uOutputExposureScale, 0.0, 1.0) * 65535.0
             ));
-            oRgb16 = uvec4(0u);
-            oRgb16[uChannel] = encodedValue;
+            // CPU-side glColorMask selects the destination RGB component for this pass.
+            // Avoid dynamically indexing a fragment output, which is rejected by strict ES
+            // compilers even though dynamically indexing an ordinary local vector is legal.
+            oRgb16 = uvec4(uvec3(encodedValue), 0u);
         }
     """.trimIndent()
 

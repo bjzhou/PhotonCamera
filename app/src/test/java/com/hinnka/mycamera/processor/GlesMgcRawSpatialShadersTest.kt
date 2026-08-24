@@ -106,6 +106,7 @@ class GlesMgcRawSpatialShadersTest {
         listOf(
             GlesMgcRawSpatialShaders.mergeRgb,
             GlesMgcRawSpatialShaders.normalizeRgb16,
+            GlesMgcRawSpatialShaders.resampleAotRgbHorizontal,
             GlesMgcRawSpatialShaders.normalizeAotRgb16,
         ).forEachIndexed { index, shader ->
             val sourceFile = File.createTempFile("mgc-spatial-rgb-$index-", ".frag")
@@ -210,7 +211,8 @@ class GlesMgcRawSpatialShadersTest {
         assertTrue(shader.contains("* (1.0 / 16384.0)"))
         assertTrue(shader.contains("float channelShading"))
         assertTrue(shader.contains("out highp uvec4 oRgb16"))
-        assertTrue(shader.contains("oRgb16[uChannel] = encodedValue"))
+        assertTrue(shader.contains("oRgb16 = uvec4(uvec3(encodedValue), 0u)"))
+        assertFalse(shader.contains("oRgb16[uChannel]"))
         assertFalse(shader.contains("uimage2D"))
         assertFalse(shader.contains("imageLoad"))
         assertFalse(shader.contains("imageStore"))

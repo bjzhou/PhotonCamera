@@ -179,22 +179,37 @@ Java_com_hinnka_mycamera_processor_MgcSpatialRgbMerger_nativeMerge(
     jint raw_height,
     jint output_width,
     jint output_height,
+    jint output_storage_width,
+    jint output_storage_height,
     jint cfa_pattern,
     jobject output_buffer) {
     const int32_t mgc_pattern = Camera2CfaToMgcBayerPattern(cfa_pattern);
     const int frame_count = raw_buffers != nullptr
         ? env->GetArrayLength(raw_buffers)
         : 0;
+    const int64_t expected_alignment_width =
+        (static_cast<int64_t>(output_width) + 15) / 16;
+    const int64_t expected_alignment_height =
+        (static_cast<int64_t>(output_height) + 15) / 16;
+    const int64_t expected_rejection_width =
+        (static_cast<int64_t>(output_width) + 3) / 4;
+    const int64_t expected_rejection_height =
+        (static_cast<int64_t>(output_height) + 3) / 4;
     if (frame_count <= 0 || raw_offsets_array == nullptr ||
         raw_row_strides_array == nullptr || alignment_buffer == nullptr ||
         rejection_buffer == nullptr || output_buffer == nullptr ||
         env->GetArrayLength(raw_offsets_array) != frame_count ||
         env->GetArrayLength(raw_row_strides_array) != frame_count ||
         raw_width <= 0 || raw_height <= 0 || output_width <= 0 ||
-        output_height <= 0 || (output_width & 15) != 0 ||
-        (output_height & 15) != 0 || alignment_width != output_width / 16 ||
-        alignment_height != output_height / 16 || rejection_width <= 0 ||
-        rejection_height <= 0 || mgc_pattern == 0 ||
+        output_height <= 0 || output_storage_width <= 0 ||
+        output_storage_height <= 0 || (output_storage_width & 15) != 0 ||
+        (output_storage_height & 15) != 0 ||
+        output_storage_width != expected_alignment_width * 16 ||
+        output_storage_height != expected_alignment_height * 16 ||
+        alignment_width != expected_alignment_width ||
+        alignment_height != expected_alignment_height ||
+        rejection_width != expected_rejection_width ||
+        rejection_height != expected_rejection_height || mgc_pattern == 0 ||
         !std::isfinite(overall_gain) || overall_gain <= 0.0f ||
         !std::isfinite(merge_sharpness) || merge_sharpness < 0.0f) {
         return -1;
@@ -205,7 +220,9 @@ Java_com_hinnka_mycamera_processor_MgcSpatialRgbMerger_nativeMerge(
     int64_t alignment_sample_count = 0;
     int64_t rejection_sample_count = 0;
     if (!CheckedProduct({raw_width, raw_height}, &raw_pixel_count) ||
-        !CheckedProduct({output_width, output_height, 3}, &output_sample_count) ||
+        !CheckedProduct(
+            {output_storage_width, output_storage_height, 3},
+            &output_sample_count) ||
         !CheckedProduct(
             {alignment_width, alignment_height, frame_count, 2},
             &alignment_sample_count) ||
@@ -294,7 +311,7 @@ Java_com_hinnka_mycamera_processor_MgcSpatialRgbMerger_nativeMerge(
 
     const int32_t alignment_plane_stride = alignment_width * alignment_height;
     const int32_t rejection_plane_stride = rejection_width * rejection_height;
-    const int32_t output_plane_stride = output_width * output_height;
+    const int32_t output_plane_stride = output_storage_width * output_storage_height;
     const HalideDimension raw_dimensions[2] = {
         {0, raw_width, 1, 0},
         {0, raw_height, raw_width, 0},
@@ -315,9 +332,12 @@ Java_com_hinnka_mycamera_processor_MgcSpatialRgbMerger_nativeMerge(
     const HalideDimension wb_dimensions[1] = {{0, 4, 1, 0}};
     const HalideDimension rgb_dimensions[1] = {{0, 3, 1, 0}};
     const HalideDimension rggb_dimensions[1] = {{0, 4, 1, 0}};
+    // The generated schedule constrains the output buffer extents to complete 16x16 tiles. Keep
+    // those storage extents separate from output_width/output_height: the latter are semantic
+    // parameters used by MGC's sampling and rejection equations.
     const HalideDimension output_dimensions[3] = {
-        {0, output_width, 1, 0},
-        {0, output_height, output_width, 0},
+        {0, output_storage_width, 1, 0},
+        {0, output_storage_height, output_storage_width, 0},
         {0, 3, output_plane_stride, 0},
     };
 
@@ -369,12 +389,15 @@ Java_com_hinnka_mycamera_processor_MgcSpatialRgbMerger_nativeMerge(
         __android_log_print(
             ANDROID_LOG_ERROR,
             kTag,
-            "MergeRgbRaw16F16 failed result=%d raw=%dx%d output=%dx%d frames=%d cfa=%d",
+            "MergeRgbRaw16F16 failed result=%d raw=%dx%d logical=%dx%d "
+            "storage=%dx%d frames=%d cfa=%d",
             result,
             raw_width,
             raw_height,
             output_width,
             output_height,
+            output_storage_width,
+            output_storage_height,
             frame_count,
             cfa_pattern);
         return result;

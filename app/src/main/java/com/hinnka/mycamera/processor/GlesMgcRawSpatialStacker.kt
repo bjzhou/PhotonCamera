@@ -41,9 +41,10 @@ internal fun resolveFusionReferenceSignal(
  * The stage order, constants and shader equations come from this APK's libgcastartup.so. The
  * recovered MGC parameter-generation equations are cross-checked against Google's published
  * kernel units and SNR tuning range. The Bayer output preserves the CFA lattice. The RGB output
- * executes MGC 9.7.047 V25's complete MergeRgbRaw16F16 AOT, including its internal full-resolution
- * green reconstruction, while keeping MGC alignment, rejection, Bento admission and propagated-
- * noise postprocessing authoritative.
+ * executes MGC 9.7.047 V25's complete native-grid MergeRgbRaw16F16 AOT, including its internal
+ * full-resolution green reconstruction. Requested larger RGB grids are produced from that linear
+ * camera-RGB result with the DNG bicubic resampling kernel. MGC alignment, rejection, Bento
+ * admission and propagated-noise postprocessing remain authoritative.
  */
 internal class GlesMgcRawSpatialStacker(
     private val width: Int,
@@ -370,10 +371,11 @@ internal class GlesMgcRawSpatialStacker(
     } else {
         height
     }
-    // MergeRgbRaw16F16TileSize16Halide writes complete 16x16 output tiles. Keep the app-visible
-    // dimensions unchanged and let only the private planar AOT allocation cover the final tile.
-    private val rgbAotOutputWidth = ceilDiv(outputWidth, RGB_AOT_TILE_SIZE) * RGB_AOT_TILE_SIZE
-    private val rgbAotOutputHeight = ceilDiv(outputHeight, RGB_AOT_TILE_SIZE) * RGB_AOT_TILE_SIZE
+    // MergeRgbRaw16F16 is a native-grid merge: output coordinates are RAW coordinates and samples
+    // outside the RAW extent use its mirror boundary. Only its private planar allocation is padded
+    // to complete 16x16 tiles; scaling happens after the AOT result has been materialized.
+    private val rgbAotStorageWidth = ceilDiv(width, RGB_AOT_TILE_SIZE) * RGB_AOT_TILE_SIZE
+    private val rgbAotStorageHeight = ceilDiv(height, RGB_AOT_TILE_SIZE) * RGB_AOT_TILE_SIZE
     private val sensorWhiteLevelCode = max(1, whiteLevel)
     private val sensorWhiteLevel = sensorWhiteLevelCode.toFloat()
     // RawMetadata has already converted positional Camera2 black levels to R, Gr, Gb, B.
@@ -478,6 +480,7 @@ internal class GlesMgcRawSpatialStacker(
     private var mergeRgbProgram = 0
     private var normalizeBayerProgram = 0
     private var normalizeRgbProgram = 0
+    private var resampleAotRgbHorizontalProgram = 0
     private var normalizeAotRgbProgram = 0
     private var copyRgb16ToFloatProgram = 0
     private var rgbChromaPostprocessor: GlesMgcSpatialRgbChromaPostprocessor? = null
@@ -1603,7 +1606,8 @@ internal class GlesMgcRawSpatialStacker(
                     "MGC Spatial RGB dispatch complete frames=$mergedFrames " +
                         "took=${(System.nanoTime() - rgbMergeStartNs) / 1_000_000L}ms " +
                         "mode=mgc-v25-merge-rgb-raw16-f16-aot " +
-                        "aotOutput=${rgbAotOutputWidth}x$rgbAotOutputHeight",
+                        "aotNative=${width}x$height " +
+                            "aotStorage=${rgbAotStorageWidth}x$rgbAotStorageHeight",
                 )
             } else {
                 val bayer16 = renderBayer16(
@@ -3056,6 +3060,12 @@ internal class GlesMgcRawSpatialStacker(
             }
             // Color noise/IIR owns a fixed RGBA16UI boundary, matching the VGN/Radiance
             // contract. The original planar F16 AOT output enters that boundary exactly once.
+            if (outputWidth != width || outputHeight != height) {
+                resampleAotRgbHorizontalProgram = linkProgram(
+                    GlesMgcRawSpatialShaders.resampleAotRgbHorizontal,
+                    "mgc_spatial_v25_aot_rgb_resample_x",
+                )
+            }
             normalizeAotRgbProgram = linkProgram(
                 GlesMgcRawSpatialShaders.normalizeAotRgb16,
                 "mgc_spatial_v25_aot_rgb16ui",
@@ -5059,8 +5069,8 @@ internal class GlesMgcRawSpatialStacker(
     ): StrengthCapture {
         val geometry = mgcSpatialDiagnosticGeometry(
             outputMode = outputMode,
-            imageWidth = if (outputMode == MgcSpatialOutputMode.RGB) outputWidth else width,
-            imageHeight = if (outputMode == MgcSpatialOutputMode.RGB) outputHeight else height,
+            imageWidth = width,
+            imageHeight = height,
         )
         require(frameCount >= 1)
         val maximumTextureSize = IntArray(1)
@@ -5245,8 +5255,8 @@ internal class GlesMgcRawSpatialStacker(
     ): MgcSpatialStrengthMapGenerator.Result {
         val geometry = mgcSpatialDiagnosticGeometry(
             outputMode = outputMode,
-            imageWidth = if (outputMode == MgcSpatialOutputMode.RGB) outputWidth else width,
-            imageHeight = if (outputMode == MgcSpatialOutputMode.RGB) outputHeight else height,
+            imageWidth = width,
+            imageHeight = height,
         )
         val noise = spatialNoiseParameters(referenceCalibration)
         PLog.w(
@@ -6287,11 +6297,12 @@ internal class GlesMgcRawSpatialStacker(
         require(frames.all { it.imageIndex in images.indices })
         require(outputExposureScale.isFinite() && outputExposureScale > 0f)
         require(mergeSharpness.isFinite() && mergeSharpness >= 0f)
-        check(capture.geometry.fixed16Width == rgbAotOutputWidth &&
-            capture.geometry.fixed16Height == rgbAotOutputHeight) {
+        check(capture.geometry.imageWidth == width && capture.geometry.imageHeight == height &&
+            capture.geometry.fixed16Width == rgbAotStorageWidth &&
+            capture.geometry.fixed16Height == rgbAotStorageHeight) {
             "MGC Spatial RGB AOT geometry ${capture.geometry.fixed16Width}x" +
                 "${capture.geometry.fixed16Height} does not match " +
-                "${rgbAotOutputWidth}x$rgbAotOutputHeight"
+                "native=${width}x$height storage=${rgbAotStorageWidth}x$rgbAotStorageHeight"
         }
         val alignment = checkNotNull(preparedAlignment.cpuBuffer) {
             "MGC Spatial RGB AOT alignment is not host-resident"
@@ -6384,8 +6395,10 @@ internal class GlesMgcRawSpatialStacker(
                 kernelSigmas = capture.kernelSigmas,
                 rawWidth = width,
                 rawHeight = height,
-                outputWidth = rgbAotOutputWidth,
-                outputHeight = rgbAotOutputHeight,
+                outputWidth = width,
+                outputHeight = height,
+                outputStorageWidth = rgbAotStorageWidth,
+                outputStorageHeight = rgbAotStorageHeight,
                 cfaPattern = cfaPattern,
                 outputPlanarF16 = checkNotNull(aotPlanar),
             )
@@ -6474,8 +6487,9 @@ internal class GlesMgcRawSpatialStacker(
             PLog.i(
                 TAG,
                 "MGC Spatial V25 RGB AOT frames=${frames.size} " +
-                    "raw=${width}x$height aot=${rgbAotOutputWidth}x$rgbAotOutputHeight " +
-                    "visible=${outputWidth}x$outputHeight rawScale=$sabreResolveRawScale " +
+                    "native=${width}x$height " +
+                    "storage=${rgbAotStorageWidth}x$rgbAotStorageHeight " +
+                    "output=${outputWidth}x$outputHeight rawScale=$sabreResolveRawScale " +
                     "mergeSharpness=$mergeSharpness aot=${aotMs}ms " +
                     "colorNoiseIir=${chromaResult.chromaSubmissionMs}ms " +
                     "chromaFinal=${chromaResult.finalSubmissionMs}ms",
@@ -7661,8 +7675,9 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
-     * Streams one planar F16 channel at a time into the RGBA16UI chroma boundary. This keeps the
-     * peak GPU allocation to one R16F plane plus the final surface, even for 2x Spatial output.
+     * Streams one native-grid planar F16 channel at a time into the requested RGBA16UI grid. A
+     * separable DNG bicubic pass performs scaling before lens shading and the chroma stage, while
+     * keeping only one upload plane and one horizontal R16F intermediate live.
      */
     private fun uploadAndNormalizeOriginalAotRgb(
         planarF16: ByteBuffer,
@@ -7673,16 +7688,31 @@ internal class GlesMgcRawSpatialStacker(
         check(normalizeAotRgbProgram != 0)
         require(planarF16.isDirect)
         require(outputExposureScale.isFinite() && outputExposureScale > 0f)
-        val planeByteCountLong = rgbAotOutputWidth.toLong() * rgbAotOutputHeight * Short.SIZE_BYTES
+        val planeByteCountLong =
+            rgbAotStorageWidth.toLong() * rgbAotStorageHeight * Short.SIZE_BYTES
         require(planeByteCountLong in 1..Int.MAX_VALUE.toLong())
         val planeByteCount = planeByteCountLong.toInt()
         require(planarF16.capacity().toLong() >= planeByteCountLong * 3L)
         val planeTexture = createTexture(
-            rgbAotOutputWidth,
-            rgbAotOutputHeight,
+            rgbAotStorageWidth,
+            rgbAotStorageHeight,
             GLES30.GL_R16F,
             GLES30.GL_NEAREST,
         )
+        val resampleOutput = outputWidth != width || outputHeight != height
+        check(!resampleOutput || resampleAotRgbHorizontalProgram != 0) {
+            "MGC Spatial RGB AOT resampling program is not initialized"
+        }
+        val horizontalTexture = if (resampleOutput) {
+            createTexture(
+                outputWidth,
+                height,
+                GLES30.GL_R16F,
+                GLES30.GL_NEAREST,
+            )
+        } else {
+            0
+        }
         try {
             GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
@@ -7698,16 +7728,48 @@ internal class GlesMgcRawSpatialStacker(
                     0,
                     0,
                     0,
-                    rgbAotOutputWidth,
-                    rgbAotOutputHeight,
+                    rgbAotStorageWidth,
+                    rgbAotStorageHeight,
                     GLES30.GL_RED,
                     GLES30.GL_HALF_FLOAT,
                     source,
                 )
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+                val normalizedSource = if (resampleOutput) {
+                    // The previous channel's normalization pass leaves a per-channel color
+                    // mask active. The horizontal target is R16F, so red must be writable for
+                    // every channel before this intermediate pass.
+                    GLES30.glColorMask(true, true, true, true)
+                    GLES30.glUseProgram(resampleAotRgbHorizontalProgram)
+                    bindTexture(
+                        resampleAotRgbHorizontalProgram,
+                        "uChannelPlane",
+                        0,
+                        planeTexture,
+                    )
+                    uniform2i(resampleAotRgbHorizontalProgram, "uSourceSize", width, height)
+                    uniform1i(resampleAotRgbHorizontalProgram, "uOutputWidth", outputWidth)
+                    draw(
+                        resampleAotRgbHorizontalProgram,
+                        outputWidth,
+                        height,
+                        intArrayOf(horizontalTexture),
+                    )
+                    // Framebuffer write -> sampler fetch in the vertical pass.
+                    GlesGpuScheduler.memoryBarrier()
+                    horizontalTexture
+                } else {
+                    planeTexture
+                }
                 GLES30.glUseProgram(normalizeAotRgbProgram)
-                bindTexture(normalizeAotRgbProgram, "uChannelPlane", 0, planeTexture)
+                bindTexture(normalizeAotRgbProgram, "uChannelPlane", 0, normalizedSource)
                 bindTexture(normalizeAotRgbProgram, "uLensShading", 1, lensShadingTexture)
+                uniform2i(
+                    normalizeAotRgbProgram,
+                    "uSourceSize",
+                    if (resampleOutput) outputWidth else width,
+                    height,
+                )
                 uniform2i(normalizeAotRgbProgram, "uOutputSize", outputWidth, outputHeight)
                 uniform1f(
                     normalizeAotRgbProgram,
@@ -7718,6 +7780,11 @@ internal class GlesMgcRawSpatialStacker(
                     normalizeAotRgbProgram,
                     "uUseLensShading",
                     if (hasLensShading()) 1 else 0,
+                )
+                uniform1i(
+                    normalizeAotRgbProgram,
+                    "uResampleVertical",
+                    if (resampleOutput) 1 else 0,
                 )
                 uniform1i(normalizeAotRgbProgram, "uChannel", channel)
                 GLES30.glColorMask(
@@ -7743,6 +7810,12 @@ internal class GlesMgcRawSpatialStacker(
         } finally {
             GLES30.glColorMask(true, true, true, true)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            if (horizontalTexture != 0) {
+                releaseOwnedTexture(
+                    horizontalTexture,
+                    "MGC V25 Spatial RGB AOT horizontal resample",
+                )
+            }
             releaseOwnedTexture(planeTexture, "MGC V25 Spatial RGB AOT upload plane")
         }
     }

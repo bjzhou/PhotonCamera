@@ -2,7 +2,12 @@ package com.hinnka.mycamera.processor
 
 import java.nio.ByteBuffer
 
-/** JNI boundary for MGC 9.7.047 V25's original Spatial RGB merge AOT. */
+/**
+ * JNI boundary for MGC 9.7.047 V25's original Spatial RGB merge AOT.
+ *
+ * `outputWidth`/`outputHeight` are the logical AOT image geometry used by the merge equations;
+ * `outputStorageWidth`/`outputStorageHeight` describe only the 16x16-aligned Halide allocation.
+ */
 internal object MgcSpatialRgbMerger {
     init {
         System.loadLibrary("my-native-lib")
@@ -30,6 +35,8 @@ internal object MgcSpatialRgbMerger {
         rawHeight: Int,
         outputWidth: Int,
         outputHeight: Int,
+        outputStorageWidth: Int,
+        outputStorageHeight: Int,
         cfaPattern: Int,
         outputPlanarF16: ByteBuffer,
     ) {
@@ -55,6 +62,8 @@ internal object MgcSpatialRgbMerger {
             rawHeight,
             outputWidth,
             outputHeight,
+            outputStorageWidth,
+            outputStorageHeight,
             cfaPattern,
             outputPlanarF16,
         )
@@ -93,6 +102,8 @@ internal object MgcSpatialRgbMerger {
         rawHeight: Int,
         outputWidth: Int,
         outputHeight: Int,
+        outputStorageWidth: Int,
+        outputStorageHeight: Int,
         cfaPattern: Int,
         outputPlanarF16: ByteBuffer,
     ): Int
