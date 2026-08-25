@@ -88,6 +88,25 @@ internal class GlesMgcRawSpatialStacker(
         val gridMin: Int,
     )
 
+    /** Sparse normalized flow plus the reference-UV to alignment-texture transform. */
+    private data class ConvertedAlignment(
+        val texture: Int,
+        val scaleX: Float,
+        val scaleY: Float,
+        val offsetX: Float,
+        val offsetY: Float,
+    ) {
+        companion object {
+            fun constant(texture: Int) = ConvertedAlignment(
+                texture = texture,
+                scaleX = 0f,
+                scaleY = 0f,
+                offsetX = 0.5f,
+                offsetY = 0.5f,
+            )
+        }
+    }
+
     /** Reference-only LK products shared by every current frame at one pyramid level. */
     private data class ReferenceAlignmentProducts(
         val referenceTexture: Int,
@@ -102,7 +121,7 @@ internal class GlesMgcRawSpatialStacker(
 
     private data class PreparedTemporalFrame(
         val calibration: FrameCalibration,
-        val flowTexture: Int,
+        val convertedAlignment: ConvertedAlignment,
         val bayerAlignmentTexture: Int,
         val weightTexture: Int,
     )
@@ -995,17 +1014,11 @@ internal class GlesMgcRawSpatialStacker(
                     bentoAlignSubmitNs = System.nanoTime() - alignmentStartNs
                     val postAlignStartNs = System.nanoTime()
                     val bayerAlignment = alignment.texture
-                    val flow = createTexture(
-                        rejectionWidth,
-                        rejectionHeight,
-                        GLES30.GL_RGBA16F,
-                        GLES30.GL_LINEAR,
-                    )
-                    renderConvertedAlignment(alignment, flow)
+                    val flow = createConvertedAlignment(alignment)
                     val tilingMask = renderFindBlockTiles(
                         baseRaw = referenceRaw,
                         ultrashortRaw = bentoRaw,
-                        flowTexture = flow,
+                        flow = flow,
                         baseCalibration = referenceCalibration,
                         ultrashortCalibration = normalizedCalibration,
                     )
@@ -1049,7 +1062,7 @@ internal class GlesMgcRawSpatialStacker(
                         baseFrame = referenceGuide,
                         ultrashortFrame = unscaledGuide,
                         highlightMask = referenceHighlightMask,
-                        flowTexture = flow,
+                        flow = flow,
                         exposureRatio = exposureRatio,
                         adjustedMask = checkNotNull(bentoMask),
                         inpaintingMask = inpaintingMask,
@@ -1097,7 +1110,7 @@ internal class GlesMgcRawSpatialStacker(
                         bentoAccepted = true
                         acceptedBentoExposureRatio = exposureRatio
                         bentoCalibration = normalizedCalibration
-                        bentoFlowTexture = flow
+                        bentoFlowTexture = flow.texture
                         bentoBayerAlignmentTexture = bayerAlignment
                     }
                     bentoPostAlignNs = System.nanoTime() - postAlignStartNs
@@ -1422,7 +1435,7 @@ internal class GlesMgcRawSpatialStacker(
                                 val alignedLongClippingMask =
                                     renderAlignedLongFrameClippingMask(
                                         rawTexture = temporalRaw,
-                                        flowTexture = prepared.flowTexture,
+                                        flow = prepared.convertedAlignment,
                                         calibration = prepared.calibration,
                                     )
                                 PLog.d(
@@ -2005,7 +2018,7 @@ internal class GlesMgcRawSpatialStacker(
             )
             val referenceGrayPyramid = buildGrayPyramid(referenceRaw, referenceCalibration)
             val referenceAlignmentProducts = buildReferenceAlignmentProducts(referenceGrayPyramid)
-            val zeroFlow = createZeroFlowTexture()
+            val zeroFlow = ConvertedAlignment.constant(createZeroFlowTexture())
             val identityWeight = createIdentityWeightTexture()
             val accumulatedWeightScale = maxSabreAccumulatedWeight(frames.size)
             renderSabreMerge(
@@ -2049,13 +2062,7 @@ internal class GlesMgcRawSpatialStacker(
                     currentGrayPyramid,
                     referenceAlignmentProducts,
                 )
-                val flow = createTexture(
-                    extractedWidth,
-                    extractedHeight,
-                    GLES30.GL_RGBA16F,
-                    GLES30.GL_LINEAR,
-                )
-                renderConvertedAlignment(alignment, flow)
+                val flow = createConvertedAlignment(alignment)
                 val unblockerWidth = ceilDiv(width, UNBLOCKER_FULLRES_TILE_SIZE * 2)
                 val unblockerHeight = ceilDiv(height, UNBLOCKER_FULLRES_TILE_SIZE * 2)
                 val unblocker = createTexture(
@@ -2489,7 +2496,7 @@ internal class GlesMgcRawSpatialStacker(
     private fun renderSabreRejection(
         referenceGuide: Int,
         currentGuide: Int,
-        flow: Int,
+        flow: ConvertedAlignment,
         unblocker: Int,
         noiseTexture: Int,
         reverseWeight: Int,
@@ -2501,7 +2508,7 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glUseProgram(program)
         bindTexture(program, "uBaseGuide", 0, referenceGuide)
         bindTexture(program, "uAltGuide", 1, currentGuide)
-        bindTexture(program, "uFlow", 2, flow)
+        bindTexture(program, "uFlow", 2, flow.texture)
         bindTexture(program, "uUnblocker", 3, unblocker)
         bindTexture(program, "uNoiseEstimates", 4, noiseTexture)
         uniform2i(program, "uGuideSize", guideWidth, guideHeight)
@@ -2514,7 +2521,7 @@ internal class GlesMgcRawSpatialStacker(
             1f - SABRE_SAMPLE_BORDER_PIXELS / width,
             1f - SABRE_SAMPLE_BORDER_PIXELS / height,
         )
-        uniform4f(program, "uFlowScaleOffset", 1f, 1f, 0f, 0f)
+        uniformFlowScaleOffset(program, flow)
         uniform2f(program, "uUnblockerScale", 1f, 1f)
         uniform4f(program, "uNoiseTextureScaleBias", 0.9f, 0.5f, 0.05f, 0.25f)
         uniform2f(
@@ -2589,7 +2596,7 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun renderSabreMerge(
         extracted: Int,
-        flow: Int,
+        flow: ConvertedAlignment,
         covariance: Int,
         weight: Int,
         calibration: FrameCalibration,
@@ -2602,11 +2609,12 @@ internal class GlesMgcRawSpatialStacker(
         val program = sabreMergeProgram
         GLES30.glUseProgram(program)
         bindTexture(program, "uExtractedBayer", 0, extracted)
-        bindTexture(program, "uFlow", 1, flow)
+        bindTexture(program, "uFlow", 1, flow.texture)
         bindTexture(program, "uCovariance", 2, covariance)
         bindTexture(program, "uRejection", 3, weight)
         uniform2i(program, "uExtractedSize", extractedWidth, extractedHeight)
         uniform2i(program, "uOutputSize", width, height)
+        uniformFlowScaleOffset(program, flow)
         uniform4f(
             program,
             "uFrameBorderPadded",
@@ -3763,7 +3771,7 @@ internal class GlesMgcRawSpatialStacker(
      * finest LK grid to Spatial MergeBayerRaw16's full 8-quad grid. The final pass evaluates
      * 16x16 target blocks and selects a whole neighboring LK candidate by L1 residual; it is
      * not a bilinear resample. That final output is the alignment object consumed by merge and
-     * separately converted into the dense rejection flow.
+     * separately converted into MGC's sparse normalized-flow grid for rejection.
      */
     private fun alignPyramids(
         reference: List<TextureLevel>,
@@ -4105,6 +4113,44 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
+    private fun createConvertedAlignment(alignment: Alignment): ConvertedAlignment {
+        require(alignment.gridWidth > 0 && alignment.gridHeight > 0) {
+            "ConvertAlignment requires a non-empty alignment grid"
+        }
+        val strideInBayerQuads =
+            alignment.tileStride.toFloat() * alignment.scaleToBayerQuads
+        require(strideInBayerQuads.isFinite() && strideInBayerQuads > 0f) {
+            "ConvertAlignment requires a positive finite Bayer-quad stride"
+        }
+        val output = createTexture(
+            alignment.gridWidth,
+            alignment.gridHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+        renderConvertedAlignment(alignment, output)
+
+        // A flow texel belongs to the centre of logical tile (local + gridMin). Mapping the
+        // normalized reference coordinate onto that sparse grid makes GL_LINEAR reproduce MGC's
+        // downstream interpolation without materializing a dense, piecewise-constant flow image.
+        val scaleX = rejectionWidth.toFloat() /
+            (strideInBayerQuads * alignment.gridWidth.toFloat())
+        val scaleY = rejectionHeight.toFloat() /
+            (strideInBayerQuads * alignment.gridHeight.toFloat())
+        val offsetX = -alignment.gridMin.toFloat() / alignment.gridWidth.toFloat()
+        val offsetY = -alignment.gridMin.toFloat() / alignment.gridHeight.toFloat()
+        check(scaleX.isFinite() && scaleY.isFinite() && offsetX.isFinite() && offsetY.isFinite()) {
+            "ConvertAlignment produced a non-finite flow sampling transform"
+        }
+        return ConvertedAlignment(
+            texture = output,
+            scaleX = scaleX,
+            scaleY = scaleY,
+            offsetX = offsetX,
+            offsetY = offsetY,
+        )
+    }
+
     private fun renderConvertedAlignment(alignment: Alignment, output: Int) {
         GLES30.glUseProgram(convertAlignmentProgram)
         bindTexture(convertAlignmentProgram, "uAlignment", 0, alignment.texture)
@@ -4114,28 +4160,10 @@ internal class GlesMgcRawSpatialStacker(
             alignment.gridWidth,
             alignment.gridHeight,
         )
-        uniform2i(
-            convertAlignmentProgram,
-            "uOutputSize",
-            rejectionWidth,
-            rejectionHeight,
-        )
-        uniform1f(
-            convertAlignmentProgram,
-            "uTileStride",
-            alignment.tileStride * alignment.scaleToBayerQuads,
-        )
         uniform1f(
             convertAlignmentProgram,
             "uAlignmentScale",
             alignment.scaleToBayerQuads,
-        )
-        uniform1f(convertAlignmentProgram, "uOutputToAlignmentScale", 1f)
-        uniform1f(convertAlignmentProgram, "uGridMin", alignment.gridMin.toFloat())
-        uniform1f(
-            convertAlignmentProgram,
-            "uInterpolationFlowTolerance",
-            SPATIAL_INTERPOLATION_FLOW_TOLERANCE,
         )
         uniform2f(
             convertAlignmentProgram,
@@ -4145,9 +4173,20 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             convertAlignmentProgram,
-            rejectionWidth,
-            rejectionHeight,
+            alignment.gridWidth,
+            alignment.gridHeight,
             intArrayOf(output),
+        )
+    }
+
+    private fun uniformFlowScaleOffset(program: Int, flow: ConvertedAlignment) {
+        uniform4f(
+            program,
+            "uFlowScaleOffset",
+            flow.scaleX,
+            flow.scaleY,
+            flow.offsetX,
+            flow.offsetY,
         )
     }
 
@@ -4291,7 +4330,7 @@ internal class GlesMgcRawSpatialStacker(
     private fun renderRejection(
         referenceGuide: Int,
         currentGuide: Int,
-        flowTexture: Int,
+        flow: ConvertedAlignment,
         unblockerTexture: Int,
         noiseTexture: Int,
         reverseWeightTexture: Int,
@@ -4300,7 +4339,7 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glUseProgram(rejectionProgram)
         bindTexture(rejectionProgram, "uBaseGuide", 0, referenceGuide)
         bindTexture(rejectionProgram, "uAltGuide", 1, currentGuide)
-        bindTexture(rejectionProgram, "uFlow", 2, flowTexture)
+        bindTexture(rejectionProgram, "uFlow", 2, flow.texture)
         bindTexture(rejectionProgram, "uUnblocker", 3, unblockerTexture)
         bindTexture(rejectionProgram, "uNoiseEstimates", 4, noiseTexture)
         uniform2i(rejectionProgram, "uGuideSize", guideWidth, guideHeight)
@@ -4310,7 +4349,7 @@ internal class GlesMgcRawSpatialStacker(
             rejectionWidth,
             rejectionHeight,
         )
-        uniform4f(rejectionProgram, "uFlowScaleOffset", 1f, 1f, 0f, 0f)
+        uniformFlowScaleOffset(rejectionProgram, flow)
         uniform2f(rejectionProgram, "uUnblockerScale", 1f, 1f)
         uniform4f(
             rejectionProgram,
@@ -4660,13 +4699,7 @@ internal class GlesMgcRawSpatialStacker(
         )
         val alignmentNs = System.nanoTime() - alignmentStartNs
         val flowStartNs = System.nanoTime()
-        val flow = createTexture(
-            rejectionWidth,
-            rejectionHeight,
-            GLES30.GL_RGBA16F,
-            GLES30.GL_LINEAR,
-        )
-        renderConvertedAlignment(alignment, flow)
+        val flow = createConvertedAlignment(alignment)
         val flowNs = System.nanoTime() - flowStartNs
         val rejectionStartNs = System.nanoTime()
         val unblockerWidth = ceilDiv(width, UNBLOCKER_FULLRES_TILE_SIZE * 2)
@@ -4747,7 +4780,7 @@ internal class GlesMgcRawSpatialStacker(
         renderRejection(
             referenceGuide = referenceGuide,
             currentGuide = currentGuide,
-            flowTexture = flow,
+            flow = flow,
             unblockerTexture = unblocker,
             noiseTexture = currentNoiseLut,
             reverseWeightTexture = rawReverseWeight,
@@ -4798,7 +4831,7 @@ internal class GlesMgcRawSpatialStacker(
         )
         return PreparedTemporalFrame(
             calibration = calibration,
-            flowTexture = flow,
+            convertedAlignment = flow,
             bayerAlignmentTexture = alignment.texture,
             weightTexture = frameWeight,
         )
@@ -4812,7 +4845,7 @@ internal class GlesMgcRawSpatialStacker(
     private fun renderFindBlockTiles(
         baseRaw: Int,
         ultrashortRaw: Int,
-        flowTexture: Int,
+        flow: ConvertedAlignment,
         baseCalibration: FrameCalibration,
         ultrashortCalibration: FrameCalibration,
     ): Int {
@@ -4825,7 +4858,8 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glUseProgram(findBlockTilesGatherEdgesProgram)
         bindTexture(findBlockTilesGatherEdgesProgram, "uBaseRaw", 0, baseRaw)
         bindTexture(findBlockTilesGatherEdgesProgram, "uAltRaw", 1, ultrashortRaw)
-        bindTexture(findBlockTilesGatherEdgesProgram, "uFlow", 2, flowTexture)
+        bindTexture(findBlockTilesGatherEdgesProgram, "uFlow", 2, flow.texture)
+        uniformFlowScaleOffset(findBlockTilesGatherEdgesProgram, flow)
         uniform2i(findBlockTilesGatherEdgesProgram, "uRawSize", width, height)
         uniform2i(
             findBlockTilesGatherEdgesProgram,
@@ -4938,7 +4972,7 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun renderAlignedLongFrameClippingMask(
         rawTexture: Int,
-        flowTexture: Int,
+        flow: ConvertedAlignment,
         calibration: FrameCalibration,
     ): Int {
         check(alignedRawClippingMaskProgram != 0) {
@@ -4957,7 +4991,8 @@ internal class GlesMgcRawSpatialStacker(
         }
         GLES30.glUseProgram(alignedRawClippingMaskProgram)
         bindTexture(alignedRawClippingMaskProgram, "uRaw", 0, rawTexture)
-        bindTexture(alignedRawClippingMaskProgram, "uFlow", 1, flowTexture)
+        bindTexture(alignedRawClippingMaskProgram, "uFlow", 1, flow.texture)
+        uniformFlowScaleOffset(alignedRawClippingMaskProgram, flow)
         uniform2i(alignedRawClippingMaskProgram, "uRawSize", width, height)
         uniform2i(
             alignedRawClippingMaskProgram,
@@ -4989,7 +5024,7 @@ internal class GlesMgcRawSpatialStacker(
         baseFrame: Int,
         ultrashortFrame: Int,
         highlightMask: Int,
-        flowTexture: Int,
+        flow: ConvertedAlignment,
         exposureRatio: Float,
         adjustedMask: Int,
         inpaintingMask: Int,
@@ -4999,7 +5034,8 @@ internal class GlesMgcRawSpatialStacker(
         bindTexture(bentoAdjustProgram, "uBaseFrame", 0, baseFrame)
         bindTexture(bentoAdjustProgram, "uUltrashortFrame", 1, ultrashortFrame)
         bindTexture(bentoAdjustProgram, "uHighlightMask", 2, highlightMask)
-        bindTexture(bentoAdjustProgram, "uFlow", 3, flowTexture)
+        bindTexture(bentoAdjustProgram, "uFlow", 3, flow.texture)
+        uniformFlowScaleOffset(bentoAdjustProgram, flow)
         uniform2i(bentoAdjustProgram, "uSize", guideWidth, guideHeight)
         uniform1f(bentoAdjustProgram, "uExposureRatio", exposureRatio)
         uniform1f(

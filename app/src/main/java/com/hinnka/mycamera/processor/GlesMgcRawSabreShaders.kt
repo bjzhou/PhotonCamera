@@ -399,6 +399,7 @@ internal object GlesMgcRawSabreShaders {
         uniform sampler2D uFlow;
         uniform sampler2D uCovariance;
         uniform sampler2D uRejection;
+        uniform vec4 uFlowScaleOffset;
         uniform ivec2 uExtractedSize;
         uniform ivec2 uOutputSize;
         uniform vec4 uFrameBorderPadded;
@@ -559,7 +560,10 @@ internal object GlesMgcRawSabreShaders {
 
         void main() {
             vec2 referenceUv = gl_FragCoord.xy / vec2(uOutputSize);
-            vec4 flow = texture(uFlow, referenceUv);
+            vec2 flowUv =
+                referenceUv * uFlowScaleOffset.xy +
+                uFlowScaleOffset.zw;
+            vec4 flow = texture(uFlow, flowUv);
             vec2 sampleUv = mirrorUvs(referenceUv + flow.xy);
             vec3 covariance = unpackCovariance(texture(uCovariance, sampleUv).xyz);
             vec3 accumulatedColor = vec3(0.0);

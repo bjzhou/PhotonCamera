@@ -261,9 +261,11 @@ class GlesMgcRawSpatialShadersTest {
         assertTrue(shader.contains("vec2 flowX = candidateFlow(nextX)"))
         assertFalse(shader.contains("mix(flow00, flow10"))
 
-        // MergeBayer consumes the selected 8-quad grid and performs its own guarded
-        // interpolation; ConvertAlignment independently expands the same grid for rejection.
+        // MergeBayer performs the only guarded interpolation. ConvertAlignment follows MGC's
+        // sparse same-grid contract so rejection and Sabre sample it through flow_scale_offset.
         assertTrue(GlesMgcRawSpatialShaders.mergeBayer.contains("cancelInterpolation"))
-        assertTrue(GlesMgcRawSpatialShaders.convertAlignment.contains("cancelInterpolation"))
+        assertFalse(GlesMgcRawSpatialShaders.convertAlignment.contains("cancelInterpolation"))
+        assertFalse(GlesMgcRawSpatialShaders.convertAlignment.contains("uInterpolationFlowTolerance"))
+        assertTrue(GlesMgcRawSpatialShaders.convertAlignment.contains("ivec2 tile = ivec2(gl_FragCoord.xy)"))
     }
 }

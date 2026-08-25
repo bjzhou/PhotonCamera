@@ -912,6 +912,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform usampler2D uBaseRaw;
         uniform usampler2D uAltRaw;
         uniform sampler2D uFlow;
+        uniform vec4 uFlowScaleOffset;
         uniform ivec2 uRawSize;
         uniform ivec2 uBayerSize;
         uniform ivec2 uTileGridSize;
@@ -986,7 +987,11 @@ internal object GlesMgcRawSpatialShaders {
                         continue;
                     }
 
-                    vec2 flowUv = (vec2(bayer) + vec2(0.5)) / vec2(uBayerSize);
+                    vec2 referenceUv =
+                        (vec2(bayer) + vec2(0.5)) / vec2(uBayerSize);
+                    vec2 flowUv =
+                        referenceUv * uFlowScaleOffset.xy +
+                        uFlowScaleOffset.zw;
                     vec2 flow = texture(uFlow, flowUv).xy * vec2(uBayerSize);
                     float baseGreen = greenAt(uBaseRaw, bayer, uBasePhaseGains, uBasePhaseBlackTerms);
                     float altGreen = alignedAltGreen(vec2(bayer) + flow);
@@ -1157,6 +1162,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform sampler2D uUltrashortFrame;
         uniform sampler2D uHighlightMask;
         uniform sampler2D uFlow;
+        uniform vec4 uFlowScaleOffset;
         uniform ivec2 uSize;
         uniform float uExposureRatio;
         uniform float uMinNormalizedIntensityError;
@@ -1178,7 +1184,8 @@ internal object GlesMgcRawSpatialShaders {
                 uSize - ivec2(1)
             );
             vec2 uv = gl_FragCoord.xy / vec2(uSize);
-            vec2 flow = texture(uFlow, uv).xy;
+            vec2 flowUv = uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw;
+            vec2 flow = texture(uFlow, flowUv).xy;
             vec3 base = round(
                 65535.0 * clamp(texelFetch(uBaseFrame, p, 0).rgb, 0.0, 1.0)
             ) / 65535.0;
@@ -1684,6 +1691,7 @@ internal object GlesMgcRawSpatialShaders {
 
         uniform highp usampler2D uRaw;
         uniform sampler2D uFlow;
+        uniform vec4 uFlowScaleOffset;
         uniform ivec2 uRawSize;
         uniform ivec2 uBayerSize;
         uniform ivec2 uOutputSize;
@@ -1715,7 +1723,11 @@ internal object GlesMgcRawSpatialShaders {
             // One merge-weight texel covers 2x2 Bayer quads. Use its center in reference
             // coordinates, then inspect the 3x3 source neighborhood consumed by MergeBayer.
             ivec2 referenceQuad = min(outputPixel * 2 + ivec2(1), uBayerSize - ivec2(1));
-            vec2 flowUv = (vec2(referenceQuad) + vec2(0.5)) / vec2(uBayerSize);
+            vec2 referenceUv =
+                (vec2(referenceQuad) + vec2(0.5)) / vec2(uBayerSize);
+            vec2 flowUv =
+                referenceUv * uFlowScaleOffset.xy +
+                uFlowScaleOffset.zw;
             vec2 sourceFlow = texture(uFlow, flowUv).xy * vec2(uBayerSize);
             ivec2 sourceAnchor = ivec2(roundEven(vec2(referenceQuad) + sourceFlow));
 
@@ -2771,9 +2783,10 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * ConvertAlignment (0x35cf3ec): evaluate the same edge-aware tile-centre interpolation as
-     * MergeBayerRaw, convert it to normalized UV displacement, and store the pre-interpolation
-     * local 3x3 range in B.
+     * ConvertAlignmentHalide (0x362479c): preserve the sparse alignment grid while converting
+     * Bayer-quad displacements to normalized UV and storing the local 3x3 flow range in B.
+     * Consumers interpolate this texture through their flow_scale_offset; guarded interpolation
+     * belongs exclusively to SpatialBayer merge.
      */
     val convertAlignment = """
         #version 300 es
@@ -2781,12 +2794,7 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         uniform sampler2D uAlignment;
         uniform ivec2 uGridSize;
-        uniform ivec2 uOutputSize;
-        uniform float uTileStride;
         uniform float uAlignmentScale;
-        uniform float uOutputToAlignmentScale;
-        uniform float uGridMin;
-        uniform float uInterpolationFlowTolerance;
         uniform vec2 uFlowNormalizationSize;
         out vec4 oFlow;
         vec2 flowAt(ivec2 p) {
@@ -2796,70 +2804,9 @@ internal object GlesMgcRawSpatialShaders {
                 0
             ).xy * uAlignmentScale;
         }
-        vec2 interpolatedFlow(
-            ivec2 tile,
-            ivec2 offsetWithinTile,
-            vec2 baseFlow
-        ) {
-            if (uInterpolationFlowTolerance <= 0.0) {
-                return baseFlow;
-            }
-            bool leftHalf =
-                offsetWithinTile.x <= int(0.5 * uTileStride);
-            bool topHalf =
-                offsetWithinTile.y <= int(0.5 * uTileStride);
-            int tx0 = leftHalf ? tile.x - 1 : tile.x;
-            int ty0 = topHalf ? tile.y - 1 : tile.y;
-            vec2 flow00 = flowAt(ivec2(tx0, ty0));
-            vec2 flow10 = flowAt(ivec2(tx0 + 1, ty0));
-            vec2 flow01 = flowAt(ivec2(tx0, ty0 + 1));
-            vec2 flow11 = flowAt(ivec2(tx0 + 1, ty0 + 1));
-            float threshold =
-                uTileStride * uAlignmentScale *
-                uInterpolationFlowTolerance;
-            bool cancelInterpolation =
-                any(greaterThanEqual(abs(flow00 - baseFlow), vec2(threshold))) ||
-                any(greaterThanEqual(abs(flow10 - baseFlow), vec2(threshold))) ||
-                any(greaterThanEqual(abs(flow01 - baseFlow), vec2(threshold))) ||
-                any(greaterThanEqual(abs(flow11 - baseFlow), vec2(threshold)));
-            if (cancelInterpolation) {
-                return baseFlow;
-            }
-            vec2 logicalTile = vec2(tile) + vec2(uGridMin);
-            vec2 pixelPosition =
-                logicalTile * uTileStride + vec2(offsetWithinTile);
-            float tx0Logical = float(tx0) + uGridMin;
-            float ty0Logical = float(ty0) + uGridMin;
-            float ux =
-                pixelPosition.x / uTileStride -
-                (tx0Logical + 0.5);
-            float uy =
-                pixelPosition.y / uTileStride -
-                (ty0Logical + 0.5);
-            return mix(
-                mix(flow00, flow10, ux),
-                mix(flow01, flow11, ux),
-                uy
-            );
-        }
         void main() {
-            vec2 pixel = gl_FragCoord.xy - vec2(0.5);
-            vec2 alignmentPixel =
-                pixel * uOutputToAlignmentScale;
-            vec2 logicalGrid = alignmentPixel / uTileStride;
-            vec2 grid = logicalGrid -
-                vec2(uGridMin);
-            ivec2 tile = ivec2(floor(grid));
-            ivec2 offsetWithinTile = ivec2(floor(
-                alignmentPixel -
-                floor(logicalGrid) * uTileStride
-            ));
-            vec2 baseFlowPixels = flowAt(tile);
-            vec2 flowPixels = interpolatedFlow(
-                tile,
-                offsetWithinTile,
-                baseFlowPixels
-            );
+            ivec2 tile = ivec2(gl_FragCoord.xy);
+            vec2 flowPixels = flowAt(tile);
             vec2 minimumFlow = vec2(1.0e20);
             vec2 maximumFlow = vec2(-1.0e20);
             for (int y = -1; y <= 1; ++y) {
