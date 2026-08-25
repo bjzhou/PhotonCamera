@@ -1070,14 +1070,14 @@
     <string name="virtual_aperture_viewfinder_hint">f/%1$s</string>
     <string name="settings_default_virtual_aperture">Default Virtual Aperture</string>
     <string name="settings_default_virtual_aperture_description">Automatically enable virtual aperture with the selected f-stop value for new photos.</string>
-    <string name="virtual_aperture_depth_model_description">Uses Depth Anything V2. Download or import the model on first use (about 100 MB).</string>
+    <string name="virtual_aperture_depth_model_description">Uses the installed compatible depth model. Download the default model or import another compatible TFLite model on first use.</string>
     <string name="gallery_large_aperture_blur_title">Wide-Aperture Blur</string>
-    <string name="gallery_large_aperture_blur_description">Uses Depth Anything V2 to estimate scene depth and simulate a shallow depth of field, background blur, and soft bokeh highlights. Tap the image to change the focus point. Lower f-numbers produce stronger blur. Download or import the model on first use (about 100 MB).</string>
+    <string name="gallery_large_aperture_blur_description">Uses the installed compatible depth model to estimate scene depth and simulate a shallow depth of field, background blur, and soft bokeh highlights. Tap the image to change the focus point. Lower f-numbers produce stronger blur. Download the default model or import another compatible TFLite model on first use.</string>
     <string name="edit_panel_title">Editing Controls</string>
     <string name="edit_panel_expand">Expand editing controls</string>
     <string name="edit_panel_minimize">Minimize editing controls</string>
     <string name="depth_model_download_title">Depth Model</string>
-    <string name="depth_model_download_description">Depth-aware blur requires the Depth Anything V2 model. Download about 100 MB, or import the official ZIP or extracted TFLite file. The model will be stored privately by the app.</string>
+    <string name="depth_model_download_description">Depth-aware blur requires a compatible TFLite depth model with one RGB image input and a single-channel depth output. Download the default Depth Anything V2 model (about 100 MB), or import another TFLite model or a ZIP containing one. The model will be stored privately by the app.</string>
     <string name="depth_model_download_action">Download</string>
     <string name="depth_model_import_action">Import</string>
     <string name="depth_model_downloading">Downloading model…</string>
@@ -1085,7 +1085,7 @@
     <string name="depth_model_importing">Importing and verifying model…</string>
     <string name="depth_model_installing">Verifying and installing model…</string>
     <string name="depth_model_download_failed">The model could not be imported, downloaded, or verified. Check the selected file or your connection and try again.</string>
-    <string name="depth_model_download_ready">Depth Anything V2 is ready.</string>
+    <string name="depth_model_download_ready">A compatible depth model is ready. You can import another model to replace it.</string>
     <string name="depth_model_retry">Retry</string>
     <string name="depth_model_done">Done</string>
     <string name="ai_service">AI Service</string>

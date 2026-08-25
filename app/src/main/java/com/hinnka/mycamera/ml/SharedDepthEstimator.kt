@@ -20,10 +20,11 @@ object SharedDepthEstimator {
 
     @Volatile
     private var estimator: DepthEstimator? = null
+    private var estimatorInstallationRevision = -1L
 
     suspend fun prewarm(context: Context) {
         if (!DepthModelManager.isInstalled(context)) {
-            throw IllegalStateException("Depth Anything V2 model is not installed")
+            throw IllegalStateException("A compatible depth model is not installed")
         }
         withEstimator(context) { }
     }
@@ -40,7 +41,7 @@ object SharedDepthEstimator {
                 estimator.estimateDepth(inputBitmap)
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Depth Anything V2 inference is unavailable", e)
+            PLog.e(TAG, "Depth model inference is unavailable", e)
             null
         }
     }
@@ -50,12 +51,18 @@ object SharedDepthEstimator {
         block: (DepthEstimator) -> T
     ): T = withContext(estimatorDispatcher) {
         mutex.withLock {
+            val currentRevision = DepthModelManager.installationRevision
+            if (estimator != null && estimatorInstallationRevision != currentRevision) {
+                estimator?.close()
+                estimator = null
+            }
             val resolved = estimator ?: DepthEstimator(context.applicationContext).also { created ->
                 if (!created.isReady) {
                     created.close()
-                    throw IllegalStateException("Depth Anything V2 interpreter initialization failed")
+                    throw IllegalStateException("Depth model interpreter initialization failed")
                 }
                 estimator = created
+                estimatorInstallationRevision = currentRevision
             }
             block(resolved)
         }
@@ -66,6 +73,7 @@ object SharedDepthEstimator {
             mutex.withLock {
                 estimator?.close()
                 estimator = null
+                estimatorInstallationRevision = -1L
             }
         }
     }

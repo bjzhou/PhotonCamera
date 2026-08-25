@@ -11,6 +11,7 @@ import com.hinnka.mycamera.utils.StartupTrace
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.nnapi.NnApiDelegate
+import org.tensorflow.lite.Tensor
 import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -24,6 +25,9 @@ class DepthEstimator(context: Context) {
     private var outputWidth = 518
     private var outputHeight = 518
     private var inputChannelsFirst = false
+    private var inputDataType = DataType.FLOAT32
+    private var outputDataType = DataType.FLOAT32
+    private var outputTensorIndex = 0
     internal val isReady: Boolean
         get() = isInitialized
 
@@ -45,12 +49,12 @@ class DepthEstimator(context: Context) {
                 cacheName = "depth_estimator",
                 modelAssetName = modelFile.name,
                 modelSizeBytes = modelBuffer.capacity(),
-                modelFingerprint = DepthModelManager.MODEL_SHA256
+                modelFingerprint = DepthModelManager.installedModelFingerprint(context)
             )
 
             // The GPU delegate is deliberately not used: this model can compile but
             // produce a constant map on affected Qualcomm GLES drivers.
-            PLog.d(TAG, "Depth Anything V2: trying NNAPI first")
+            PLog.d(TAG, "Depth model: trying NNAPI first")
             try {
                 val nnApiOptions = Interpreter.Options()
                 nnApiDelegate = StartupTrace.measure("DepthEstimator.NnApiDelegate()") {
@@ -69,7 +73,7 @@ class DepthEstimator(context: Context) {
                     Interpreter(modelBuffer, nnApiOptions)
                 }
                 isInitialized = true
-                PLog.d(TAG, "Using NNAPI (NPU) for Depth Anything V2")
+                PLog.d(TAG, "Using NNAPI (NPU) for depth model")
             } catch (e: Exception) {
                 PLog.w(TAG, "Failed to initialize NNAPI delegate, falling back to CPU", e)
                 nnApiDelegate?.close()
@@ -84,15 +88,15 @@ class DepthEstimator(context: Context) {
                     Interpreter(modelBuffer, cpuOptions)
                 }
                 isInitialized = true
-                PLog.d(TAG, "Using CPU for Depth Anything V2")
+                PLog.d(TAG, "Using CPU for depth model")
             }
 
             interpreter?.let {
-                updateTensorDimensions(it)
+                applyModelContract(it, inspectDepthModelContract(it))
             }
         } catch (e: Exception) {
             close()
-            PLog.e(TAG, "Error initializing Depth Anything V2", e)
+            PLog.e(TAG, "Error initializing depth model", e)
         }
     }
 
@@ -111,21 +115,26 @@ class DepthEstimator(context: Context) {
         try {
             // 1. Get input/output metadata
             val inputTensor = interpreter!!.getInputTensor(0)
-            val outputTensor = interpreter!!.getOutputTensor(0)
-            val inputDataType = inputTensor.dataType()
-            val outputDataType = outputTensor.dataType()
+            val outputTensor = interpreter!!.getOutputTensor(outputTensorIndex)
 
             // 2. Preprocess the input image
             val preparedInput = prepareModelInputBitmap(inputBitmap)
             modelInputBitmap = preparedInput
-            val inputBuffer = createDepthAnythingInputBuffer(preparedInput, inputDataType)
+            val inputBuffer = createDepthModelInputBuffer(preparedInput, inputTensor)
 
             // 3. Prepare the output buffer
             val outputBuffer = TensorBuffer.createFixedSize(outputTensor.shape(), outputDataType)
 
             try {
                 // 4. Run inference
-                interpreter?.run(inputBuffer, outputBuffer.buffer)
+                if (interpreter!!.outputTensorCount == 1 && outputTensorIndex == 0) {
+                    interpreter!!.run(inputBuffer, outputBuffer.buffer)
+                } else {
+                    interpreter!!.runForMultipleInputsOutputs(
+                        arrayOf(inputBuffer),
+                        mapOf(outputTensorIndex to outputBuffer.buffer),
+                    )
+                }
 
                 // 5. Normalize without quantizing the model output.
                 return if (outputDataType == DataType.FLOAT32) {
@@ -153,7 +162,7 @@ class DepthEstimator(context: Context) {
             }
             
         } catch (e: Exception) {
-            PLog.e(TAG, "Error during Depth Anything V2 inference", e)
+            PLog.e(TAG, "Error during depth model inference", e)
             return null
         } finally {
             modelInputBitmap?.let { bitmap ->
@@ -188,11 +197,7 @@ class DepthEstimator(context: Context) {
         }
     }
 
-    private fun createDepthAnythingInputBuffer(inputBitmap: Bitmap, inputDataType: DataType): ByteBuffer {
-        if (inputDataType != DataType.FLOAT32) {
-            throw IllegalArgumentException("Depth Anything V2 input type is not FLOAT32: $inputDataType")
-        }
-
+    private fun createDepthModelInputBuffer(inputBitmap: Bitmap, inputTensor: Tensor): ByteBuffer {
         val resized = if (inputBitmap.width == inputWidth && inputBitmap.height == inputHeight) {
             inputBitmap
         } else {
@@ -204,33 +209,61 @@ class DepthEstimator(context: Context) {
             resized.recycle()
         }
 
+        val bytesPerChannel = when (inputDataType) {
+            DataType.FLOAT32 -> Float.SIZE_BYTES
+            DataType.UINT8, DataType.INT8 -> Byte.SIZE_BYTES
+            else -> throw IllegalArgumentException("Unsupported depth model input type: $inputDataType")
+        }
         val buffer = LargeDirectBuffer.allocate(
-            inputWidth.toLong() * inputHeight.toLong() * 3L * 4L,
-            "Depth Anything input"
-        ) ?: throw OutOfMemoryError("Failed to allocate Depth Anything input buffer")
-        fun channelValue(pixel: Int, channel: Int): Float {
+            inputWidth.toLong() * inputHeight.toLong() * 3L * bytesPerChannel,
+            "Depth model input"
+        ) ?: throw OutOfMemoryError("Failed to allocate depth model input buffer")
+        fun normalizedChannelValue(pixel: Int, channel: Int): Float {
             return when (channel) {
                 0 -> (pixel shr 16) and 0xFF
                 1 -> (pixel shr 8) and 0xFF
                 else -> pixel and 0xFF
             } / 255.0f
         }
+        val quantization = inputTensor.quantizationParams()
+        fun putChannel(pixel: Int, channel: Int) {
+            val value = normalizedChannelValue(pixel, channel)
+            when (inputDataType) {
+                DataType.FLOAT32 -> buffer.putFloat(value)
+                DataType.UINT8 -> {
+                    val quantized = quantize(value, quantization.scale, quantization.zeroPoint)
+                        .coerceIn(0, 255)
+                    buffer.put(quantized.toByte())
+                }
+                DataType.INT8 -> {
+                    val quantized = quantize(value, quantization.scale, quantization.zeroPoint)
+                        .coerceIn(-128, 127)
+                    buffer.put(quantized.toByte())
+                }
+                else -> error("Unsupported depth model input type: $inputDataType")
+            }
+        }
 
         if (inputChannelsFirst) {
             for (channel in 0 until 3) {
                 for (pixel in pixels) {
-                    buffer.putFloat(channelValue(pixel, channel))
+                    putChannel(pixel, channel)
                 }
             }
         } else {
             for (pixel in pixels) {
-                buffer.putFloat(channelValue(pixel, 0))
-                buffer.putFloat(channelValue(pixel, 1))
-                buffer.putFloat(channelValue(pixel, 2))
+                putChannel(pixel, 0)
+                putChannel(pixel, 1)
+                putChannel(pixel, 2)
             }
         }
         buffer.rewind()
         return buffer
+    }
+
+    private fun quantize(value: Float, scale: Float, zeroPoint: Int): Int {
+        require(scale > 0f) { "Quantized depth model input has no valid scale" }
+        return kotlin.math.round(value / scale + zeroPoint.toFloat()).toInt()
     }
 
     /**
@@ -282,36 +315,21 @@ class DepthEstimator(context: Context) {
         return RelativeDepthMap(width, height, normalizedValues)
     }
 
-    private fun updateTensorDimensions(interpreter: Interpreter) {
+    private fun applyModelContract(interpreter: Interpreter, contract: DepthModelContract) {
         val inputShape = interpreter.getInputTensor(0).shape()
-        val outputShape = interpreter.getOutputTensor(0).shape()
-
-        inputChannelsFirst = inputShape.size == 4 && inputShape[1] == 3
-        if (inputShape.size == 4 && inputShape[3] == 3) {
-            inputHeight = inputShape[1]
-            inputWidth = inputShape[2]
-        } else if (inputChannelsFirst) {
-            inputHeight = inputShape[2]
-            inputWidth = inputShape[3]
-        } else {
-            PLog.w(TAG, "Unexpected depth input shape: ${inputShape.contentToString()}")
-        }
-
-        val outputDims = outputShape.filter { it > 1 }
-        if (outputDims.size >= 2) {
-            outputHeight = outputDims[outputDims.size - 2]
-            outputWidth = outputDims[outputDims.size - 1]
-        } else if (outputDims.size == 1) {
-            val side = kotlin.math.sqrt(outputDims[0].toDouble()).toInt()
-            if (side * side == outputDims[0]) {
-                outputHeight = side
-                outputWidth = side
-            }
-        }
+        val outputShape = interpreter.getOutputTensor(contract.outputTensorIndex).shape()
+        inputWidth = contract.inputWidth
+        inputHeight = contract.inputHeight
+        inputChannelsFirst = contract.inputChannelsFirst
+        inputDataType = contract.inputDataType
+        outputTensorIndex = contract.outputTensorIndex
+        outputWidth = contract.outputWidth
+        outputHeight = contract.outputHeight
+        outputDataType = contract.outputDataType
 
         PLog.d(
             TAG,
-            "Depth Anything V2 ready: input=${inputWidth}x$inputHeight output=${outputWidth}x$outputHeight inputLayout=${if (inputChannelsFirst) "NCHW" else "NHWC"} inputType=${interpreter.getInputTensor(0).dataType()} outputType=${interpreter.getOutputTensor(0).dataType()} inputShape=${inputShape.contentToString()} outputShape=${outputShape.contentToString()}"
+            "Depth model ready: input=${inputWidth}x$inputHeight output=${outputWidth}x$outputHeight inputLayout=${if (inputChannelsFirst) "NCHW" else "NHWC"} inputType=$inputDataType outputType=$outputDataType outputIndex=$outputTensorIndex inputShape=${inputShape.contentToString()} outputShape=${outputShape.contentToString()}"
         )
     }
 

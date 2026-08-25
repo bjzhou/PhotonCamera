@@ -554,7 +554,7 @@ fun SettingsScreen(
     val depthModelState by remember(context.applicationContext) {
         DepthModelManager.observe(context)
     }.collectAsState()
-    val isDepthModelInstalled = depthModelState is DepthModelDownloadState.Ready
+    val isDepthModelInstalled = DepthModelManager.isInstalled(context)
     var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
     var pendingDefaultVirtualAperture by remember { mutableStateOf<Float?>(null) }
     val depthModelImportLauncher = rememberLauncherForActivityResult(
@@ -1243,6 +1243,26 @@ fun SettingsScreen(
                     SettingsSection(
                         title = stringResource(R.string.settings_focus_lens_group_virtual_lens_depth)
                     ) {
+                        NavigationSettingItem(
+                            title = stringResource(R.string.depth_model_download_title),
+                            description = stringResource(
+                                if (isDepthModelInstalled) {
+                                    R.string.depth_model_download_ready
+                                } else {
+                                    R.string.depth_model_download_description
+                                }
+                            ),
+                            onClick = {
+                                pendingDefaultVirtualAperture = null
+                                showDepthModelDownloadDialog = true
+                            }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_add_isz_lens),
                             description = stringResource(

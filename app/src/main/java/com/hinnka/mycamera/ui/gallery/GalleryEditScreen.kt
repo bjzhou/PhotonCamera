@@ -188,7 +188,7 @@ fun GalleryEditScreen(
     val depthModelState by remember(context.applicationContext) {
         DepthModelManager.observe(context)
     }.collectAsState()
-    val isDepthModelInstalled = depthModelState is DepthModelDownloadState.Ready
+    val isDepthModelInstalled = DepthModelManager.isInstalled(context)
     var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
     var pendingVirtualAperture by remember { mutableStateOf<Float?>(null) }
     val depthModelImportLauncher = rememberLauncherForActivityResult(

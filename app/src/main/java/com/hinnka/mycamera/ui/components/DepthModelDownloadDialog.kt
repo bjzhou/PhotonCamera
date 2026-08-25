@@ -103,8 +103,13 @@ fun DepthModelDownloadDialog(
                     }
                 }
                 DepthModelDownloadState.Ready -> {
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.depth_model_done))
+                    Row {
+                        TextButton(onClick = onImport) {
+                            Text(stringResource(R.string.depth_model_import_action))
+                        }
+                        TextButton(onClick = onDismiss) {
+                            Text(stringResource(R.string.depth_model_done))
+                        }
                     }
                 }
                 is DepthModelDownloadState.Downloading -> Unit

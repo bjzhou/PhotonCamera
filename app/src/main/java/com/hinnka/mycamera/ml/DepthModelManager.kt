@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.tensorflow.lite.Interpreter
 
 sealed interface DepthModelDownloadState {
     data object Missing : DepthModelDownloadState
@@ -42,10 +43,11 @@ sealed interface DepthModelDownloadState {
 }
 
 /**
- * Owns the optional Depth Anything V2 model lifecycle.
+ * Owns the optional depth model lifecycle.
  *
  * The model is kept in app-private storage and is installed atomically only after
- * its TFLite header, exact size, ZIP CRC, and SHA-256 digest have been validated.
+ * it has been verified as a TFLite model compatible with the app's depth pipeline.
+ * The bundled download additionally retains exact size and SHA-256 verification.
  */
 object DepthModelManager {
     private const val TAG = "DepthModelManager"
@@ -56,7 +58,7 @@ object DepthModelManager {
     private const val MODEL_PART_FILE_NAME = "depth_anything_v2.tflite.part"
     private const val EXPECTED_MODEL_SIZE_BYTES = 98_920_480L
     private const val MAX_IMPORT_SIZE_BYTES = 256L * 1024L * 1024L
-    internal const val MODEL_SHA256 =
+    private const val OFFICIAL_MODEL_SHA256 =
         "69302c7b94a2ebe6f31d5caa78cb72d7e15f5ba72804d0423e699787368a255f"
 
     const val MODEL_DOWNLOAD_URL =
@@ -72,6 +74,10 @@ object DepthModelManager {
     private var initialized = false
     private var operationJob: Job? = null
 
+    @Volatile
+    internal var installationRevision: Long = 0L
+        private set
+
     val state: StateFlow<DepthModelDownloadState> = _state.asStateFlow()
 
     fun observe(context: Context): StateFlow<DepthModelDownloadState> {
@@ -81,17 +87,21 @@ object DepthModelManager {
 
     fun isInstalled(context: Context): Boolean {
         initialize(context.applicationContext)
-        return _state.value is DepthModelDownloadState.Ready
+        return installedModelFileOrNull(context.applicationContext) != null
     }
 
     fun installedModelFileOrNull(context: Context): File? {
         val modelFile = modelFile(context.applicationContext)
-        return modelFile.takeIf(::hasValidInstalledModelShape)
+        return modelFile.takeIf(::hasValidInstalledModelFile)
     }
 
     fun requireInstalledModelFile(context: Context): File {
         return installedModelFileOrNull(context)
-            ?: throw IllegalStateException("Depth Anything V2 model is not installed")
+            ?: throw IllegalStateException("A compatible depth model is not installed")
+    }
+
+    internal fun installedModelFingerprint(context: Context): String {
+        return sha256(requireInstalledModelFile(context.applicationContext))
     }
 
     fun download(context: Context) {
@@ -115,8 +125,8 @@ object DepthModelManager {
                     downloadAndInstall(appContext)
                     _state.value = DepthModelDownloadState.Ready
                 } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to download or install Depth Anything V2", e)
-                    publishFailureOrExistingReady(appContext)
+                    PLog.e(TAG, "Failed to download or install the default depth model", e)
+                    _state.value = DepthModelDownloadState.Failed
                 }
             }
             operationJob = newJob
@@ -145,8 +155,8 @@ object DepthModelManager {
                     importAndInstall(appContext, source)
                     _state.value = DepthModelDownloadState.Ready
                 } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to import or install Depth Anything V2", e)
-                    publishFailureOrExistingReady(appContext)
+                    PLog.e(TAG, "Failed to import or install depth model", e)
+                    _state.value = DepthModelDownloadState.Failed
                 }
             }
             operationJob = newJob
@@ -192,10 +202,11 @@ object DepthModelManager {
                 progress = 1f,
                 isInstalling = true
             )
-            extractModel(archivePartFile, modelPartFile)
-            validateModel(modelPartFile)
+            extractOfficialModel(archivePartFile, modelPartFile)
+            validateOfficialModel(modelPartFile)
             installAtomically(modelPartFile, modelFile(context))
-            PLog.d(TAG, "Depth Anything V2 installed: ${modelFile(context).absolutePath}")
+            publishInstallation()
+            PLog.d(TAG, "Default depth model installed: ${modelFile(context).absolutePath}")
         } finally {
             archivePartFile.deleteIfExistsOrLog()
             modelPartFile.deleteIfExistsOrLog()
@@ -223,14 +234,15 @@ object DepthModelManager {
                         StandardCopyOption.REPLACE_EXISTING
                     )
                 }
-                DepthModelImportFormat.ZIP -> extractModel(importPartFile, modelPartFile)
+                DepthModelImportFormat.ZIP -> extractImportedModel(importPartFile, modelPartFile)
                 null -> throw IOException(
                     "Selected file is neither a TFLite model nor a ZIP archive"
                 )
             }
-            validateModel(modelPartFile)
+            validateImportedModel(modelPartFile)
             installAtomically(modelPartFile, modelFile(context))
-            PLog.d(TAG, "Depth Anything V2 imported successfully")
+            publishInstallation()
+            PLog.d(TAG, "Compatible depth model imported successfully")
         } finally {
             importPartFile.deleteIfExistsOrLog()
             modelPartFile.deleteIfExistsOrLog()
@@ -310,7 +322,7 @@ object DepthModelManager {
         )
     }
 
-    private fun extractModel(archive: File, target: File) {
+    private fun extractOfficialModel(archive: File, target: File) {
         var modelEntryFound = false
         FileInputStream(archive).use { fileInput ->
             ZipInputStream(fileInput).use { zipInput ->
@@ -350,34 +362,76 @@ object DepthModelManager {
         }
     }
 
-    private fun validateModel(file: File) {
-        if (!hasValidInstalledModelShape(file)) {
-            throw IOException("Depth model has an invalid size or TFLite header")
-        }
-        val digest = MessageDigest.getInstance("SHA-256")
-        FileInputStream(file).use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) {
-                    break
+    private fun extractImportedModel(archive: File, target: File) {
+        var tfliteEntryFound = false
+        var extractedBytes = 0L
+        var lastCompatibilityError: Exception? = null
+        FileInputStream(archive).use { fileInput ->
+            ZipInputStream(fileInput).use { zipInput ->
+                var entry = zipInput.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory) {
+                        target.deleteIfExistsOrThrow()
+                        FileOutputStream(target).use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                val read = zipInput.read(buffer)
+                                if (read < 0) break
+                                extractedBytes += read
+                                if (extractedBytes > MAX_IMPORT_SIZE_BYTES) {
+                                    throw IOException("Depth model ZIP exceeds import size limit")
+                                }
+                                output.write(buffer, 0, read)
+                            }
+                            output.fd.sync()
+                        }
+                        if (detectDepthModelImportFormat(target) == DepthModelImportFormat.TFLITE) {
+                            tfliteEntryFound = true
+                            try {
+                                validateImportedModel(target)
+                                zipInput.closeEntry()
+                                return
+                            } catch (e: Exception) {
+                                lastCompatibilityError = e
+                            }
+                        }
+                    }
+                    zipInput.closeEntry()
+                    entry = zipInput.nextEntry
                 }
-                digest.update(buffer, 0, read)
             }
         }
-        val actualSha256 = digest.digest().joinToString("") {
-            (it.toInt() and 0xFF).toString(16).padStart(2, '0')
+        target.deleteIfExistsOrLog()
+        if (!tfliteEntryFound) {
+            throw IOException("Depth model archive does not contain a TFLite model")
         }
-        if (actualSha256 != MODEL_SHA256) {
+        throw IOException("Depth model archive has no compatible TFLite model", lastCompatibilityError)
+    }
+
+    private fun validateOfficialModel(file: File) {
+        if (!hasTfliteHeader(file) || file.length() != EXPECTED_MODEL_SIZE_BYTES) {
+            throw IOException("Default depth model has an invalid size or TFLite header")
+        }
+        if (sha256(file) != OFFICIAL_MODEL_SHA256) {
             throw IOException("Depth model checksum mismatch")
+        }
+        validateImportedModel(file)
+    }
+
+    private fun validateImportedModel(file: File) {
+        if (!hasValidInstalledModelFile(file)) {
+            throw IOException("Depth model has an invalid size or TFLite header")
+        }
+        try {
+            Interpreter(file).use(::inspectDepthModelContract)
+        } catch (e: Exception) {
+            throw IOException("TFLite model is incompatible with the depth pipeline", e)
         }
     }
 
-    private fun publishFailureOrExistingReady(context: Context) {
-        _state.value = if (installedModelFileOrNull(context) != null) {
-            DepthModelDownloadState.Ready
-        } else {
-            DepthModelDownloadState.Failed
+    private fun publishInstallation() {
+        synchronized(lock) {
+            installationRevision += 1L
         }
     }
 
@@ -398,16 +452,35 @@ object DepthModelManager {
         }
     }
 
-    private fun hasValidInstalledModelShape(file: File): Boolean {
-        if (!file.isFile || file.length() != EXPECTED_MODEL_SIZE_BYTES) {
+    private fun hasValidInstalledModelFile(file: File): Boolean {
+        if (!file.isFile || file.length() < TFLITE_HEADER_SIZE || file.length() > MAX_IMPORT_SIZE_BYTES) {
             return false
         }
+        return hasTfliteHeader(file)
+    }
+
+    private fun hasTfliteHeader(file: File): Boolean {
         val header = ByteArray(TFLITE_HEADER_SIZE)
         return runCatching {
             FileInputStream(file).use { input ->
                 input.read(header) == header.size
             } && header.copyOfRange(4, 8).contentEquals(TFLITE_FILE_IDENTIFIER)
         }.getOrDefault(false)
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") {
+            (it.toInt() and 0xFF).toString(16).padStart(2, '0')
+        }
     }
 
     private fun modelDirectory(context: Context): File = File(context.filesDir, MODEL_DIRECTORY)
