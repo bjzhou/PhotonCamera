@@ -6,7 +6,6 @@ import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.hinnka.mycamera.R
@@ -52,7 +52,7 @@ import kotlinx.coroutines.launch
  * The activity hosts Photon's existing LUT selector and recipe editor. Both selection
  * and recipe saves use the shared repository, whose notification path updates MGC.
  */
-class MgcFilterSelectionActivity : ComponentActivity() {
+class MgcFilterSelectionActivity : AppCompatActivity() {
     private val contentRepository by lazy {
         ContentRepository.getInstance(applicationContext)
     }

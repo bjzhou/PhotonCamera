@@ -5,11 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import com.hinnka.mycamera.utils.PLog
 
-class ScreenCapturePermissionActivity : ComponentActivity() {
+class ScreenCapturePermissionActivity : AppCompatActivity() {
 
     private val projectionManager by lazy {
         getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager

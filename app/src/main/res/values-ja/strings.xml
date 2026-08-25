@@ -286,4 +286,7 @@
     <string name="preset_import_partial">%1$d 件をインポート、%2$d 件は失敗しました</string>
     <string name="preset_export_success">プリセットをエクスポートしました</string>
     <string name="preset_export_failed">プリセットをエクスポートできませんでした</string>
+    <string name="settings_language">言語</string>
+    <string name="settings_language_description">アプリで使用する言語を選択します</string>
+    <string name="settings_language_system">システム設定に従う</string>
 </resources>

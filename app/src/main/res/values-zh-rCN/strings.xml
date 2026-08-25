@@ -1191,4 +1191,7 @@
     <string name="preset_import_partial">成功导入 %1$d 个预设，%2$d 个失败</string>
     <string name="preset_export_success">预设导出成功</string>
     <string name="preset_export_failed">预设导出失败</string>
+    <string name="settings_language">语言</string>
+    <string name="settings_language_description">选择 App 使用的语言</string>
+    <string name="settings_language_system">跟随系统</string>
 </resources>

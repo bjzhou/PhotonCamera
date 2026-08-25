@@ -13,7 +13,6 @@ import android.provider.Settings
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import androidx.appcompat.app.AppCompatActivity
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.UserPreferencesRepository
@@ -75,7 +75,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.LinkedHashSet
 
-class ApplyLutActivity : ComponentActivity() {
+class ApplyLutActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "ApplyLutActivity"

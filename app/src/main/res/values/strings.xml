@@ -1195,4 +1195,18 @@
     <string name="preset_import_partial">Imported %1$d presets; %2$d failed</string>
     <string name="preset_export_success">Preset exported successfully</string>
     <string name="preset_export_failed">Failed to export preset</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_description">Choose the language used by the app</string>
+    <string name="settings_language_system">Follow system</string>
+    <string name="settings_language_english" translatable="false">English</string>
+    <string name="settings_language_german" translatable="false">Deutsch</string>
+    <string name="settings_language_french" translatable="false">Français</string>
+    <string name="settings_language_indonesian" translatable="false">Bahasa Indonesia</string>
+    <string name="settings_language_japanese" translatable="false">日本語</string>
+    <string name="settings_language_korean" translatable="false">한국어</string>
+    <string name="settings_language_portuguese_brazil" translatable="false">Português (Brasil)</string>
+    <string name="settings_language_thai" translatable="false">ไทย</string>
+    <string name="settings_language_chinese_simplified" translatable="false">简体中文</string>
+    <string name="settings_language_chinese_hong_kong" translatable="false">繁體中文（香港）</string>
+    <string name="settings_language_chinese_traditional" translatable="false">繁體中文（台灣）</string>
 </resources>

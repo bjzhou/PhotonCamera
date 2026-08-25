@@ -9,6 +9,7 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -77,6 +78,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,6 +97,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.MgcRawMaxMode
 import androidx.core.net.toUri
+import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
@@ -179,6 +182,26 @@ private enum class BackupOperation {
     BACKUP, RESTORE
 }
 
+private data class AppLanguageOption(
+    val languageTag: String,
+    val labelResourceId: Int,
+)
+
+private val APP_LANGUAGE_OPTIONS = listOf(
+    AppLanguageOption("", R.string.settings_language_system),
+    AppLanguageOption("en", R.string.settings_language_english),
+    AppLanguageOption("de", R.string.settings_language_german),
+    AppLanguageOption("fr", R.string.settings_language_french),
+    AppLanguageOption("id", R.string.settings_language_indonesian),
+    AppLanguageOption("ja", R.string.settings_language_japanese),
+    AppLanguageOption("ko", R.string.settings_language_korean),
+    AppLanguageOption("pt-BR", R.string.settings_language_portuguese_brazil),
+    AppLanguageOption("th", R.string.settings_language_thai),
+    AppLanguageOption("zh-CN", R.string.settings_language_chinese_simplified),
+    AppLanguageOption("zh-HK", R.string.settings_language_chinese_hong_kong),
+    AppLanguageOption("zh-TW", R.string.settings_language_chinese_traditional),
+)
+
 private val SettingsBackgroundColor = Color(0xFF151515)
 private val SettingsBackgroundScrim = Color.Black.copy(alpha = 0.62f)
 private val SettingsRippleAlpha = RippleAlpha(
@@ -254,6 +277,37 @@ private fun AiFocusTargetMode.displayName(): String {
         AiFocusTargetMode.VEHICLE -> stringResource(R.string.settings_ai_focus_target_vehicle)
         AiFocusTargetMode.AIRPLANE -> stringResource(R.string.settings_ai_focus_target_airplane)
     }
+}
+
+@Composable
+private fun AppLanguageSetting() {
+    val selectedLanguageTag = AppCompatDelegate.getApplicationLocales()
+        .get(0)
+        ?.toLanguageTag()
+        .orEmpty()
+    val languageLabels = APP_LANGUAGE_OPTIONS.map { stringResource(it.labelResourceId) }
+    val selectedIndex = APP_LANGUAGE_OPTIONS
+        .indexOfFirst { it.languageTag.equals(selectedLanguageTag, ignoreCase = true) }
+        .coerceAtLeast(0)
+
+    DropdownSettingItem(
+        title = stringResource(R.string.settings_language),
+        description = stringResource(R.string.settings_language_description),
+        value = languageLabels[selectedIndex],
+        options = languageLabels,
+        isLoading = false,
+        onExpanded = {},
+        onOptionSelected = { selectedLabel ->
+            val selectedOption = APP_LANGUAGE_OPTIONS.getOrNull(languageLabels.indexOf(selectedLabel))
+                ?: return@DropdownSettingItem
+            val locales = if (selectedOption.languageTag.isEmpty()) {
+                LocaleListCompat.getEmptyLocaleList()
+            } else {
+                LocaleListCompat.forLanguageTags(selectedOption.languageTag)
+            }
+            AppCompatDelegate.setApplicationLocales(locales)
+        },
+    )
 }
 
 
@@ -390,7 +444,7 @@ fun SettingsScreen(
     val availableFrames = viewModel.availableFrameList
     val previewThumbnail = viewModel.previewThumbnail
 
-    var selectedPage by remember { mutableStateOf<SettingsPage?>(null) }
+    var selectedPage by rememberSaveable { mutableStateOf<SettingsPage?>(null) }
     var isRawSliderAdjusting by remember { mutableStateOf(false) }
     var mainCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
     var macroCameraIdOptions by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -2201,6 +2255,13 @@ fun SettingsScreen(
                         title = stringResource(R.string.settings_section_interface),
                         showTitle = false
                     ) {
+                        AppLanguageSetting()
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         BackgroundSetting(
                             viewModel = viewModel,
                             modifier = Modifier.padding(bottom = 16.dp)

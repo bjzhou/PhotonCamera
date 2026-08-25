@@ -922,4 +922,7 @@
     <string name="preset_import_partial">นำเข้าแล้ว %1$d รายการ; ไม่สำเร็จ %2$d รายการ</string>
     <string name="preset_export_success">ส่งออกพรีเซ็ตสำเร็จ</string>
     <string name="preset_export_failed">ส่งออกพรีเซ็ตไม่สำเร็จ</string>
+    <string name="settings_language">ภาษา</string>
+    <string name="settings_language_description">เลือกภาษาที่ใช้ในแอป</string>
+    <string name="settings_language_system">ตามระบบ</string>
 </resources>

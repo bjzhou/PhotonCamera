@@ -286,4 +286,7 @@
     <string name="preset_import_partial">%1$d préréglages importés ; %2$d échecs</string>
     <string name="preset_export_success">Préréglage exporté</string>
     <string name="preset_export_failed">Échec de l’exportation du préréglage</string>
+    <string name="settings_language">Langue</string>
+    <string name="settings_language_description">Choisir la langue de l’application</string>
+    <string name="settings_language_system">Langue du système</string>
 </resources>

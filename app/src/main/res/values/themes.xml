@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyCamera" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.MyCamera" parent="Theme.AppCompat.Light.NoActionBar" />
 
     <style name="Theme.MyCamera.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/splash_background</item>
@@ -10,7 +10,7 @@
         <item name="postSplashScreenTheme">@style/Theme.MyCamera</item>
     </style>
 
-    <style name="Theme.MyCamera.Transparent" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.MyCamera.Transparent" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:backgroundDimEnabled">false</item>

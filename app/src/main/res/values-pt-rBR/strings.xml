@@ -287,4 +287,7 @@
     <string name="preset_import_partial">%1$d predefinições importadas; %2$d falharam</string>
     <string name="preset_export_success">Predefinição exportada</string>
     <string name="preset_export_failed">Falha ao exportar a predefinição</string>
+    <string name="settings_language">Idioma</string>
+    <string name="settings_language_description">Escolha o idioma usado pelo aplicativo</string>
+    <string name="settings_language_system">Seguir o sistema</string>
 </resources>

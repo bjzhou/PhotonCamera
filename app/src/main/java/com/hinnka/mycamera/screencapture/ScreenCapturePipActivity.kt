@@ -13,7 +13,6 @@ import android.os.Looper
 import android.util.Rational
 import android.view.PixelCopy
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.material.icons.Icons
@@ -45,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
+import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
@@ -56,7 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.hinnka.mycamera.ui.icons.AppIcons
 
-class ScreenCapturePipActivity : ComponentActivity() {
+class ScreenCapturePipActivity : AppCompatActivity() {
 
     private lateinit var controller: ScreenCaptureTestController
     private lateinit var userPreferencesRepository: UserPreferencesRepository
