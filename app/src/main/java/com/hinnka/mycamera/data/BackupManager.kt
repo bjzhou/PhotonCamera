@@ -165,6 +165,31 @@ object BackupManager {
                     "Removed $sanitizedRestorePreferenceCount storage authorization preferences during restore"
                 )
             }
+            val frameAssetMigration = FrameAssetPathMigrator.migrateRestoredData(
+                restoreDir = restoreDir,
+                destinationFilesDir = context.filesDir,
+            )
+            if (frameAssetMigration.migratedReferenceCount > 0) {
+                PLog.d(
+                    TAG,
+                    "Migrated ${frameAssetMigration.migratedReferenceCount} frame asset paths " +
+                        "across ${frameAssetMigration.migratedFileCount} restored files"
+                )
+            }
+            if (frameAssetMigration.unresolvedReferenceCount > 0) {
+                PLog.w(
+                    TAG,
+                    "Found ${frameAssetMigration.unresolvedReferenceCount} restored frame asset " +
+                        "paths without matching resource files"
+                )
+            }
+            if (frameAssetMigration.invalidTemplateCount > 0) {
+                PLog.w(
+                    TAG,
+                    "Skipped path migration for ${frameAssetMigration.invalidTemplateCount} " +
+                        "invalid restored frame templates"
+                )
+            }
             applyRestoreDirectory(restoreDir, context.filesDir)
 
             PLog.d(TAG, "Restore successfully completed from $inputUri")

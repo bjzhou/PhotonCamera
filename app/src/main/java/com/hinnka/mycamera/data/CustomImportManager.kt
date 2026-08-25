@@ -906,6 +906,28 @@ class CustomImportManager(private val context: Context) {
      */
     fun getCustomFrames(): List<com.hinnka.mycamera.frame.FrameInfo> {
         return try {
+            val migration = FrameAssetPathMigrator.migrateInstalledFrameTemplates(context.filesDir)
+            if (migration.migratedReferenceCount > 0) {
+                PLog.d(
+                    TAG,
+                    "Migrated ${migration.migratedReferenceCount} installed frame asset paths " +
+                        "across ${migration.migratedFileCount} templates"
+                )
+            }
+            if (migration.unresolvedReferenceCount > 0) {
+                PLog.w(
+                    TAG,
+                    "Found ${migration.unresolvedReferenceCount} installed frame asset paths " +
+                        "without matching resource files"
+                )
+            }
+            if (migration.invalidTemplateCount > 0) {
+                PLog.w(
+                    TAG,
+                    "Skipped path migration for ${migration.invalidTemplateCount} invalid " +
+                        "installed frame templates"
+                )
+            }
             val configFile = File(context.filesDir, CUSTOM_FRAME_CONFIG)
             if (!configFile.exists()) {
                 return emptyList()

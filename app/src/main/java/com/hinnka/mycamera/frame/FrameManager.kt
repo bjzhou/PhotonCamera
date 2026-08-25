@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.data.CustomImportManager
+import com.hinnka.mycamera.data.FrameAssetPathMigrator
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
@@ -306,7 +307,10 @@ class FrameManager(private val context: Context) {
             val jsonString = preferences[customPropertiesKey(frameId)]
             if (jsonString != null) {
                 try {
-                    jsonToMap(jsonString)
+                    FrameAssetPathMigrator.rebaseInstalledCustomProperties(
+                        jsonToMap(jsonString),
+                        context.filesDir,
+                    )
                 } catch (e: Exception) {
                     PLog.e(TAG, "Failed to parse custom properties JSON for frame [$frameId]", e)
                     emptyMap()
@@ -342,7 +346,10 @@ class FrameManager(private val context: Context) {
             val jsonString = preferences[customPropertiesKey(frameId)]
             if (jsonString != null) {
                 try {
-                    jsonToMap(jsonString)
+                    FrameAssetPathMigrator.rebaseInstalledCustomProperties(
+                        jsonToMap(jsonString),
+                        context.filesDir,
+                    )
                 } catch (e: Exception) {
                     PLog.e(TAG, "Failed to parse custom properties JSON for frame [$frameId]", e)
                     emptyMap()
