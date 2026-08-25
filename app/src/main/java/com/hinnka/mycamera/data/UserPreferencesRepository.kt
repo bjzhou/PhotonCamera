@@ -202,12 +202,12 @@ data class UserPreferences(
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val zoomDisplayMode: String = "FOCAL_LENGTH",
     val useJpgMax: Boolean = false, // JPGmax：YUV 多帧降噪
-    val useJpgMaxHdrComposition: Boolean = false, // JPGmax：额外启用包围曝光 HDR 合成
+    val useJpgMaxHdrComposition: Boolean = false, // JPGmax：固定不启用包围曝光 HDR 合成
     val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT, // Max 管线帧数
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
-    val useRawMaxHdrComposition: Boolean = MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION, // RAWmax：包围曝光 HDR 融合
+    val useRawMaxHdrComposition: Boolean = false, // RAWmax：由融合模式决定是否启用 HDR 合成
     val rawMaxQualityTuningEnabled: Boolean =
         PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
     /** RAWmax processor/output selection. */
@@ -461,11 +461,7 @@ class UserPreferencesRepository(private val context: Context) {
 
         // 多帧合成 Key
         private val USE_JPG_MAX = booleanPreferencesKey("use_jpg_max")
-        private val USE_JPG_MAX_HDR_COMPOSITION =
-            booleanPreferencesKey("use_jpg_max_hdr_composition")
         private val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
-        private val USE_RAW_MAX_HDR_COMPOSITION =
-            booleanPreferencesKey("use_raw_max_hdr_composition")
         private val RAW_MAX_QUALITY_TUNING_ENABLED =
             booleanPreferencesKey("raw_max_quality_tuning_enabled")
         private val USE_RAW_MAX_SPATIAL_RGB =
@@ -587,19 +583,18 @@ class UserPreferencesRepository(private val context: Context) {
             val useHeicExport = preferences[USE_HEIC_EXPORT] ?: false
             val useJpeg444Export =
                 (preferences[USE_JPEG_444_EXPORT] ?: false) && !useHeicExport
-            val rawMaxSpatialMode = runCatching {
-                val persistedMode = preferences[RAW_MAX_SPATIAL_MODE]
-                    ?: when (preferences[USE_RAW_MAX_SPATIAL_RGB]) {
-                        true -> MgcRawMaxMode.SPATIAL_RGB.name
-                        false -> MgcRawMaxMode.SPATIAL_BAYER.name
-                        null -> MgcRawMaxMode.DEFAULT.name
-                    }
-                MgcRawMaxMode.valueOf(persistedMode)
-            }.getOrDefault(MgcRawMaxMode.DEFAULT)
-            val useRawMaxHdrComposition =
-                rawMaxSpatialMode != MgcRawMaxMode.SABRE &&
-                    (preferences[USE_RAW_MAX_HDR_COMPOSITION]
-                        ?: MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION)
+            val rawMaxSpatialMode = when (preferences[RAW_MAX_SPATIAL_MODE]) {
+                MgcRawMaxMode.SABRE.name -> MgcRawMaxMode.SABRE
+                MgcRawMaxMode.SPATIAL.name,
+                "SPATIAL_BAYER",
+                "SPATIAL_RGB" -> MgcRawMaxMode.SPATIAL
+                else -> if (preferences.contains(USE_RAW_MAX_SPATIAL_RGB)) {
+                    MgcRawMaxMode.SPATIAL
+                } else {
+                    MgcRawMaxMode.DEFAULT
+                }
+            }
+            val useRawMaxHdrComposition = rawMaxSpatialMode == MgcRawMaxMode.SPATIAL
             UserPreferences(
                 captureMode = CaptureMode.valueOf(preferences[CAPTURE_MODE] ?: CaptureMode.PHOTO.name),
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
@@ -748,7 +743,7 @@ class UserPreferencesRepository(private val context: Context) {
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 zoomDisplayMode = preferences[ZOOM_DISPLAY_MODE] ?: "FOCAL_LENGTH",
                 useJpgMax = useJpgMax,
-                useJpgMaxHdrComposition = preferences[USE_JPG_MAX_HDR_COMPOSITION] ?: false,
+                useJpgMaxHdrComposition = false,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT]
                     ?.coerceIn(MultiFrameConfig.MIN_FRAME_COUNT, MultiFrameConfig.MAX_FRAME_COUNT)
                     ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
@@ -759,7 +754,7 @@ class UserPreferencesRepository(private val context: Context) {
                 rawMaxQualityTuningEnabled = preferences[RAW_MAX_QUALITY_TUNING_ENABLED]
                     ?: PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
                 rawMaxSpatialMode = rawMaxSpatialMode,
-                useRawMaxSpatialRgb = rawMaxSpatialMode == MgcRawMaxMode.SPATIAL_RGB,
+                useRawMaxSpatialRgb = rawMaxSpatialMode == MgcRawMaxMode.SPATIAL,
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
                     ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
                     MultiFrameConfig.normalizeOutputScale(
@@ -1960,18 +1955,6 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveUseJpgMaxHdrComposition(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_JPG_MAX_HDR_COMPOSITION] = enabled
-        }
-    }
-
-    suspend fun saveUseRawMaxHdrComposition(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_RAW_MAX_HDR_COMPOSITION] = enabled
-        }
-    }
-
     suspend fun saveRawMaxQualityTuningEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[RAW_MAX_QUALITY_TUNING_ENABLED] = enabled
@@ -1979,16 +1962,19 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun saveUseRawMaxSpatialRgb(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_RAW_MAX_SPATIAL_RGB] = enabled
-        }
+        saveRawMaxSpatialMode(
+            if (enabled) MgcRawMaxMode.SPATIAL else MgcRawMaxMode.SABRE
+        )
     }
 
     suspend fun saveRawMaxSpatialMode(mode: MgcRawMaxMode) {
         context.dataStore.edit { preferences ->
-            preferences[RAW_MAX_SPATIAL_MODE] = mode.name
-            // Keep older builds/preferences consumers coherent during migration.
-            preferences[USE_RAW_MAX_SPATIAL_RGB] = mode == MgcRawMaxMode.SPATIAL_RGB
+            preferences[RAW_MAX_SPATIAL_MODE] = when (mode) {
+                MgcRawMaxMode.SABRE -> MgcRawMaxMode.SABRE.name
+                MgcRawMaxMode.SPATIAL -> "SPATIAL_RGB"
+            }
+            // Keep the legacy boolean coherent for older preference consumers.
+            preferences[USE_RAW_MAX_SPATIAL_RGB] = mode == MgcRawMaxMode.SPATIAL
         }
     }
 

@@ -67,6 +67,17 @@ class GlesMgcRawSpatialShadersTest {
     }
 
     @Test
+    fun sabreOutputScalingConsumesTheComputeConvertedFloatTexture() {
+        val shader = GlesMgcRawSabreShaders.resampleOutputBicubic
+
+        assertTrue(shader.contains("uniform sampler2D uSource"))
+        assertFalse(shader.contains("usampler2D"))
+        assertTrue(shader.contains("const float A = -0.75"))
+        assertTrue(shader.contains("vec2(uSourceSize) / vec2(uOutputSize)"))
+        assertTrue(shader.contains("* 65504.0"))
+    }
+
+    @Test
     fun rgbOpponentInterpolationIsGuidedByTheSameGreenReconstruction() {
         val merge = GlesMgcRawSpatialShaders.mergeRgb
 
@@ -108,6 +119,7 @@ class GlesMgcRawSpatialShadersTest {
             GlesMgcRawSpatialShaders.normalizeRgb16,
             GlesMgcRawSpatialShaders.resampleAotRgbHorizontal,
             GlesMgcRawSpatialShaders.normalizeAotRgb16,
+            GlesMgcRawSabreShaders.resampleOutputBicubic,
         ).forEachIndexed { index, shader ->
             val sourceFile = File.createTempFile("mgc-spatial-rgb-$index-", ".frag")
             val outputFile = File.createTempFile("mgc-spatial-rgb-$index-", ".spv")

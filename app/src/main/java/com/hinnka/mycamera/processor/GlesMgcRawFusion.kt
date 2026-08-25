@@ -111,6 +111,7 @@ internal class GlesMgcRawFusion(
                 lensShading = lensShading,
                 lensShadingWidth = lensShadingWidth,
                 lensShadingHeight = lensShadingHeight,
+                outputScale = outputScale,
                 useCurrentGlContext = useCurrentGlContext,
                 exportGpuLinearRgbSource = exportGpuLinearRgbSource,
                 gpuLinearRgbStorage = gpuLinearRgbStorage,

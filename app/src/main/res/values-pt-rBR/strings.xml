@@ -273,8 +273,6 @@
     <string name="settings_use_p010">P010 (YUV de 10 bits)</string>
     <string name="settings_use_p010_description">Ativa a saída YUV de 10 bits para melhor precisão dos dados da imagem. Eficaz em dispositivos suportados quando o RAW está desativado.</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: um sistema de gerenciamento de cores desenvolvido de forma independente pela Hasselblad</string>
-    <string name="settings_raw_max_hdr_composition">Fusão HDR RAWmax</string>
-    <string name="settings_raw_max_hdr_composition_description">Usa exposições escalonadas para fusão HDR no RAWmax. Desative para melhorar a velocidade de processamento.</string>
     <string name="settings_raw_max_quality_tuning">Ajuste de qualidade RAWmax</string>
     <string name="settings_raw_max_quality_tuning_description">Ajusta a fusão, a redução de ruído e a nitidez ao tamanho físico do sensor. Quando desativado, o RAWmax usa os parâmetros de imagem padrão.</string>
     <string name="settings_raw_default_sharpening_section">Nitidez padrão</string>

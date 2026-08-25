@@ -303,14 +303,11 @@ fun SettingsScreen(
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
-    val useJpgMaxHdrComposition by viewModel.useJpgMaxHdrComposition.collectAsState()
-    val useRawMaxHdrComposition by viewModel.useRawMaxHdrComposition.collectAsState()
     val rawMaxQualityTuningEnabled by viewModel.rawMaxQualityTuningEnabled.collectAsState()
     val rawMaxSpatialMode by viewModel.rawMaxSpatialMode.collectAsState()
     val rawMaxSpatialModeOptions = listOf(
         MgcRawMaxMode.SABRE to stringResource(R.string.settings_raw_max_mode_sabre),
-        MgcRawMaxMode.SPATIAL_BAYER to stringResource(R.string.settings_raw_max_mode_spatial_bayer),
-        MgcRawMaxMode.SPATIAL_RGB to stringResource(R.string.settings_raw_max_mode_spatial_rgb),
+        MgcRawMaxMode.SPATIAL to stringResource(R.string.settings_raw_max_mode_spatial),
     )
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
@@ -1734,31 +1731,6 @@ fun SettingsScreen(
                         showTitle = false
                     ) {
                         SwitchSettingItem(
-                            title = stringResource(R.string.settings_jpg_max_hdr_composition),
-                            description = stringResource(R.string.settings_jpg_max_hdr_composition_description),
-                            checked = useJpgMaxHdrComposition,
-                            onCheckedChange = viewModel::setUseJpgMaxHdrComposition
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_raw_max_hdr_composition),
-                            description = stringResource(R.string.settings_raw_max_hdr_composition_description),
-                            checked = useRawMaxHdrComposition,
-                            onCheckedChange = viewModel::setUseRawMaxHdrComposition,
-                            enabled = rawMaxSpatialMode != MgcRawMaxMode.SABRE,
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        SwitchSettingItem(
                             title = stringResource(R.string.settings_raw_max_quality_tuning),
                             description = stringResource(
                                 R.string.settings_raw_max_quality_tuning_description
@@ -1803,31 +1775,32 @@ fun SettingsScreen(
                             },
                         )
 
-                        if (rawMaxSpatialMode == MgcRawMaxMode.SPATIAL_RGB) {
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
 
-                            val valueFormat = stringResource(R.string.settings_raw_max_output_scale_value)
-                            SliderSettingItem(
-                                title = stringResource(R.string.settings_raw_max_output_scale),
-                                value = rawMaxOutputScaleUi,
-                                valueRange = MultiFrameConfig.MIN_OUTPUT_SCALE..MultiFrameConfig.MAX_OUTPUT_SCALE,
-                                resetValue = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
-                                onResetValue = { scale ->
-                                    rawMaxOutputScaleUi = scale
-                                    viewModel.setRawMaxOutputScale(scale)
-                                },
-                                onValueChange = {
-                                    rawMaxOutputScaleUi = MultiFrameConfig.normalizeOutputScale(it)
-                                },
-                                onValueChangeFinished = {
-                                    viewModel.setRawMaxOutputScale(rawMaxOutputScaleUi)
-                                },
-                                valueTextFormatter = { scale -> String.format(valueFormat, scale) }
-                            )
-                        }
+                        val valueFormat = stringResource(R.string.settings_raw_max_output_scale_value)
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_raw_max_output_scale),
+                            description = stringResource(
+                                R.string.settings_raw_max_output_scale_description
+                            ),
+                            value = rawMaxOutputScaleUi,
+                            valueRange = MultiFrameConfig.MIN_OUTPUT_SCALE..MultiFrameConfig.MAX_OUTPUT_SCALE,
+                            resetValue = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                            onResetValue = { scale ->
+                                rawMaxOutputScaleUi = scale
+                                viewModel.setRawMaxOutputScale(scale)
+                            },
+                            onValueChange = {
+                                rawMaxOutputScaleUi = MultiFrameConfig.normalizeOutputScale(it)
+                            },
+                            onValueChangeFinished = {
+                                viewModel.setRawMaxOutputScale(rawMaxOutputScaleUi)
+                            },
+                            valueTextFormatter = { scale -> String.format(valueFormat, scale) }
+                        )
 
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
@@ -2916,8 +2889,8 @@ private fun SettingsCategoryOverview(
         NavigationSettingItem(
             title = stringResource(R.string.settings_section_multiframe_exposure),
             description = listOf(
-                stringResource(R.string.settings_jpg_max_hdr_composition),
-                stringResource(R.string.settings_raw_max_hdr_composition),
+                stringResource(R.string.settings_use_jpg_max),
+                stringResource(R.string.settings_raw_max_spatial_mode),
                 stringResource(R.string.settings_raw_max_quality_tuning),
                 stringResource(R.string.settings_ultra_hdr_gain_map),
                 stringResource(R.string.settings_raw_max_output_scale),

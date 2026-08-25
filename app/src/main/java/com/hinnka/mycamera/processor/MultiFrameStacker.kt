@@ -33,22 +33,29 @@ enum class MgcMergeMethod(val mgcValue: Int) {
 /** User-facing RAWmax processor/output choices. */
 enum class MgcRawMaxMode {
     SABRE,
-    SPATIAL_BAYER,
-    SPATIAL_RGB;
+    SPATIAL;
 
     companion object {
         val DEFAULT: MgcRawMaxMode = SABRE
     }
 
     val outputMode: MgcSpatialOutputMode
-        get() = if (this == SPATIAL_BAYER) MgcSpatialOutputMode.BAYER else MgcSpatialOutputMode.RGB
+        get() = MgcSpatialOutputMode.RGB
 
     val mergeMethod: MgcMergeMethod
         get() = when (this) {
             SABRE -> MgcMergeMethod.SABRE
-            SPATIAL_BAYER -> MgcMergeMethod.SPATIAL_BAYER
-            SPATIAL_RGB -> MgcMergeMethod.SPATIAL_RGB
+            SPATIAL -> MgcMergeMethod.SPATIAL_RGB
         }
+}
+
+internal fun resolveRawStackOutputScale(
+    outputMode: MgcSpatialOutputMode,
+    outputScale: Float,
+): Float = if (outputMode == MgcSpatialOutputMode.RGB) {
+    MultiFrameConfig.normalizeOutputScale(outputScale)
+} else {
+    1f
 }
 
 /**
@@ -300,13 +307,9 @@ object MultiFrameStacker {
         val images = frames.map { it.image }
         val width = images[0].width
         val height = images[0].height
-        val effectiveOutputScale = if (
-            outputMode == MgcSpatialOutputMode.BAYER || mergeMethod == MgcMergeMethod.SABRE
-        ) {
-            1f
-        } else {
-            MultiFrameConfig.normalizeOutputScale(outputScale)
-        }
+        // Output scaling is an RGB export transform shared by Spatial and Sabre. Only the
+        // Bayer-preserving path must remain on the native sensor lattice.
+        val effectiveOutputScale = resolveRawStackOutputScale(outputMode, outputScale)
         RawStackRuntimeDebug.d(TAG) {
             "Starting MGC ${if (mergeMethod == MgcMergeMethod.SABRE) "Sabre" else "Spatial ${outputMode.name}"} " +
                 "fusion for ${images.size} frames. " +

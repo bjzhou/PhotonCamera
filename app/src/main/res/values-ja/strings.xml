@@ -272,8 +272,6 @@
     <string name="settings_dro_dr200">DR200</string>
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution：ハッセルブラッドが独自に開発したカラーマネジメントシステム</string>
-    <string name="settings_raw_max_hdr_composition">RAWmax HDR 合成</string>
-    <string name="settings_raw_max_hdr_composition_description">RAWmax でブラケット露出を使用して HDR 合成します。オフにすると処理速度が向上します。</string>
     <string name="settings_raw_max_quality_tuning">RAWmax 画質調整</string>
     <string name="settings_raw_max_quality_tuning_description">物理センサーサイズに合わせて、合成、ノイズ低減、シャープネスを調整します。オフの場合、RAWmax はデフォルトの画像処理パラメーターを使用します。</string>
     <string name="settings_raw_default_sharpening_section">デフォルトのシャープネス</string>

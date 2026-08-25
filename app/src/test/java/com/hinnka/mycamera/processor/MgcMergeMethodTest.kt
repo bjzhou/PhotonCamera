@@ -14,11 +14,25 @@ class MgcMergeMethodTest {
 
     @Test
     fun rawMaxModesSelectMatchingOutputAndMergePaths() {
-        assertEquals(MgcSpatialOutputMode.BAYER, MgcRawMaxMode.SABRE.outputMode)
+        assertEquals(MgcSpatialOutputMode.RGB, MgcRawMaxMode.SABRE.outputMode)
         assertEquals(MgcMergeMethod.SABRE, MgcRawMaxMode.SABRE.mergeMethod)
-        assertEquals(MgcSpatialOutputMode.BAYER, MgcRawMaxMode.SPATIAL_BAYER.outputMode)
-        assertEquals(MgcMergeMethod.SPATIAL_BAYER, MgcRawMaxMode.SPATIAL_BAYER.mergeMethod)
-        assertEquals(MgcSpatialOutputMode.RGB, MgcRawMaxMode.SPATIAL_RGB.outputMode)
-        assertEquals(MgcMergeMethod.SPATIAL_RGB, MgcRawMaxMode.SPATIAL_RGB.mergeMethod)
+        assertEquals(MgcSpatialOutputMode.RGB, MgcRawMaxMode.SPATIAL.outputMode)
+        assertEquals(MgcMergeMethod.SPATIAL_RGB, MgcRawMaxMode.SPATIAL.mergeMethod)
+    }
+
+    @Test
+    fun bothRawMaxModesPreserveRequestedRgbOutputScale() {
+        MgcRawMaxMode.entries.forEach { mode ->
+            assertEquals(
+                1.5f,
+                resolveRawStackOutputScale(mode.outputMode, 1.5f),
+                0f,
+            )
+        }
+        assertEquals(
+            1f,
+            resolveRawStackOutputScale(MgcSpatialOutputMode.BAYER, 1.5f),
+            0f,
+        )
     }
 }

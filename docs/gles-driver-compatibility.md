@@ -284,6 +284,7 @@ Radiance/VGN 连续提交 compute、fusion、chroma 时，CPU 可能覆写 GPU �
 - Pass 后插入 fence，不逐 pass `glFlush`。等待目标 fence 时，第一次 `glClientWaitSync` 使用 `GL_SYNC_FLUSH_COMMANDS_BIT`，后续轮询 flags 为 0。
 - VGN/Radiance compute 统一使用 `GL_ALL_BARRIER_BITS`，pass 后解除 image、sampler、indexed buffer 绑定。
 - 仅在资源冲突、ring 槽复用、CPU readback、纹理回收、最终组件交接时等待；不做逐 pass/tile checkpoint。
+- VGN chroma 的最终 image pass 交给依赖其结果的导出转换时，consumer 提交前完成组件交接；不得在只有 barrier 的情况下紧接提交依赖 compute 并删除 source texture。
 - 调度不得改变 shader、pass 数、帧选择、参数、累加顺序或输出格式。
 
 验证 long frame 开启/关闭时的 Radiance、chroma、导出、单帧 RAW；pending fence 不超过 2，所有等待均可归因于声明的冲突或所有权交接；修复前后像素一致，并比较各路径总耗时。

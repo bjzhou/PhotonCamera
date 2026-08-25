@@ -715,4 +715,61 @@ internal object GlesMgcRawSabreShaders {
             oResolved = vec4(transformOutput(p), 1.0);
         }
     """.trimIndent()
+
+    /**
+     * DNG A=-0.75 bicubic export scaling for Sabre's completed native-grid RGB result.
+     *
+     * This deliberately runs after fusion, ResolveSabre and VGN. It changes the stored pixel
+     * dimensions without presenting interpolation as additional resolved sensor detail.
+     */
+    val resampleOutputBicubic = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uSource;
+        uniform ivec2 uSourceSize;
+        uniform ivec2 uOutputSize;
+        layout(location = 0) out highp uvec4 oRgb16;
+
+        float bicubicWeight(float x) {
+            const float A = -0.75;
+            x = abs(x);
+            if (x >= 2.0) return 0.0;
+            if (x >= 1.0) return ((A * x - 5.0 * A) * x + 8.0 * A) * x - 4.0 * A;
+            return ((A + 2.0) * x - (A + 3.0)) * x * x + 1.0;
+        }
+
+        vec3 sourceRgb(ivec2 p) {
+            return texelFetch(
+                uSource,
+                clamp(p, ivec2(0), uSourceSize - ivec2(1)),
+                0
+            ).rgb;
+        }
+
+        void main() {
+            ivec2 outputPixel = ivec2(gl_FragCoord.xy);
+            vec2 sourcePosition = (vec2(outputPixel) + vec2(0.5)) *
+                vec2(uSourceSize) / vec2(uOutputSize) - vec2(0.5);
+            sourcePosition = round(sourcePosition * 128.0) * (1.0 / 128.0);
+            ivec2 base = ivec2(floor(sourcePosition));
+            vec2 fraction = sourcePosition - vec2(base);
+            vec3 total = vec3(0.0);
+            float totalWeight = 0.0;
+            for (int y = -1; y <= 2; ++y) {
+                float wy = bicubicWeight(float(y) - fraction.y);
+                for (int x = -1; x <= 2; ++x) {
+                    float weight = bicubicWeight(float(x) - fraction.x) * wy;
+                    total += sourceRgb(base + ivec2(x, y)) * weight;
+                    totalWeight += weight;
+                }
+            }
+            oRgb16 = uvec4(
+                uvec3(round(
+                    clamp(total / max(totalWeight, 1.0e-8), 0.0, 1.0) * 65504.0
+                )),
+                65535u
+            );
+        }
+    """.trimIndent()
 }

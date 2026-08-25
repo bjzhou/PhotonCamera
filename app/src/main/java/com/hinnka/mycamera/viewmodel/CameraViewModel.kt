@@ -1665,9 +1665,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useJpgMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useJpgMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val useJpgMaxHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useJpgMaxHdrComposition }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useMultipleExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultipleExposure }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1680,13 +1677,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val useRawMaxHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useRawMaxHdrComposition }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.Eagerly,
-            MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION,
-        )
     val rawMaxQualityTuningEnabled: StateFlow<Boolean> =
         userPreferencesRepository.userPreferences
             .map { it.rawMaxQualityTuningEnabled }
@@ -1932,9 +1922,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val chronologicalFrames = pendingRawStackFrames
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
-                    val rawMaxHdrFusionEnabled =
-                        state.value.isRawMaxHdrEnabled &&
-                            rawMaxSpatialMode.value != MgcRawMaxMode.SABRE
+                    val rawMaxHdrFusionEnabled = state.value.isRawMaxHdrEnabled
                     viewModelScope.launch {
                         val exposurePlan = RawmaxExposurePlanner.plan(
                             exposureProducts = chronologicalFrames.map { it.frame.exposureProduct },
@@ -4564,27 +4552,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setUseJpgMaxHdrComposition(enabled: Boolean) {
-        val currentState = cameraController.state.value
-        val needsCameraReopen = currentState.isJpgMaxEnabled &&
-            currentState.useJpgMaxHdrComposition != enabled
-        cameraController.setUseJpgMaxHdrComposition(enabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseJpgMaxHdrComposition(enabled)
-            if (needsCameraReopen) {
-                reopenCamera()
-            }
-        }
-    }
-
-    fun setUseRawMaxHdrComposition(enabled: Boolean) {
-        val effectiveEnabled = enabled && rawMaxSpatialMode.value != MgcRawMaxMode.SABRE
-        cameraController.setUseRawMaxHdrComposition(effectiveEnabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseRawMaxHdrComposition(enabled)
-        }
-    }
-
     fun setRawMaxQualityTuningEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawMaxQualityTuningEnabled(enabled)
@@ -4598,9 +4565,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setRawMaxSpatialMode(mode: MgcRawMaxMode) {
-        if (mode == MgcRawMaxMode.SABRE) {
-            cameraController.setUseRawMaxHdrComposition(false)
-        }
+        cameraController.setUseRawMaxHdrComposition(mode == MgcRawMaxMode.SPATIAL)
         viewModelScope.launch {
             userPreferencesRepository.saveRawMaxSpatialMode(mode)
         }
