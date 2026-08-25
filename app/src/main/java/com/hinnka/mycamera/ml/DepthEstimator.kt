@@ -44,7 +44,8 @@ class DepthEstimator(context: Context) {
                 tag = TAG,
                 cacheName = "depth_estimator",
                 modelAssetName = modelFile.name,
-                modelSizeBytes = modelBuffer.capacity()
+                modelSizeBytes = modelBuffer.capacity(),
+                modelFingerprint = DepthModelManager.MODEL_SHA256
             )
 
             // The GPU delegate is deliberately not used: this model can compile but

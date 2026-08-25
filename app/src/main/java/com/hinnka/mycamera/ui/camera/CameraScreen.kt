@@ -1147,6 +1147,7 @@ fun CameraScreen(
                         } else {
                             { viewModel.handleAiFocusInputUpdate(it) }
                         },
+                        onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
                         onGLSurfaceViewReady = {
                             viewModel.glSurfaceView = it
                         },

@@ -506,37 +506,6 @@ internal class GlesMgcRawSpatialStacker(
         MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS,
     )
 
-    /** Moves shader compile/link work to the camera-idle persistent EGL context. */
-    internal fun prewarmCapturePipeline(
-        frameCount: Int,
-        includeBento: Boolean,
-    ) {
-        require(useCurrentGlContext) {
-            "MGC Spatial capture prewarm requires the caller-owned current EGL context"
-        }
-        val startNs = System.nanoTime()
-        try {
-            attachCurrentEgl()
-            ensureGles3()
-            if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
-                initSabrePrograms()
-            } else {
-                initPrograms(includeBentoAssessment = includeBento)
-                if (includeBento) initBentoMergePrograms()
-            }
-            renderFbo = createFramebuffer()
-            applyRawRenderState()
-            PLog.d(
-                TAG,
-                "MGC ${processorPipeline.name} capture programs prewarmed size=${width}x$height " +
-                    "frames=${frameCount.coerceAtLeast(1)} bento=$includeBento " +
-                    "took=${(System.nanoTime() - startNs) / 1_000_000L}ms",
-            )
-        } finally {
-            release()
-        }
-    }
-
     fun processFrames(frames: List<RawStackFrame>): RawStackResult? {
         if (frames.isNotEmpty()) {
             PLog.i(

@@ -91,6 +91,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             onHighlightPointUpdated?.invoke(hx, hy)
         }
 
+        renderer.onFirstFrameRendered = {
+            post { onFirstPreviewFrame?.invoke() }
+        }
+
         // 保持 EGL 上下文
         preserveEGLContextOnPause = true
 

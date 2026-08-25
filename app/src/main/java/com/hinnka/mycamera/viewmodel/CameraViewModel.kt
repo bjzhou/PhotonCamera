@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -11,6 +12,7 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CaptureResult
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -514,6 +516,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private const val HDR_BRACKET_ZERO_INDEX = 0
         private const val HDR_BRACKET_LOW_INDEX = 2
         private const val QUICK_SHOT_BURST_MAX_PENDING_SAVES = 2
+        private const val FIRST_PREVIEW_PREWARM_GRACE_MS = 1_000L
+        private const val MIN_PREWARM_MEMORY_CLASS_MB = 384
     }
 
     private data class HdrBracketFrame(
@@ -1381,6 +1385,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     var isAiFocusBusy by mutableStateOf(false)
     private var startupPrewarmJob: Job? = null
+    private var startupPrewarmAttempted = false
 
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
@@ -2713,72 +2718,96 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun prewarmCapturePipeline() {
-        if (startupPrewarmJob?.isActive == true) return
-
-        startupPrewarmJob = viewModelScope.launch {
-            val prefs = userPreferencesRepository.userPreferences.firstOrNull()
-            val currentState = state.value
-            val captureSize = currentState.currentCaptureSize
-            val rawCaptureEnabled = prefs?.useRaw == true
-            val rawMaxEnabled = currentState.isRawMaxEnabled
-            val rawMaxHdrCompositionEnabled =
-                rawMaxEnabled &&
-                    (prefs?.useRawMaxHdrComposition ?: MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION)
-            val totalRawMaxFrameCount = MultiFrameConfig.normalizeFrameCount(
-                prefs?.multiFrameCount ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
-            )
-            val rawMaxFrameCount = if (rawMaxHdrCompositionEnabled) {
-                MultiFrameConfig.normalFrameCount(totalRawMaxFrameCount)
-            } else {
-                totalRawMaxFrameCount
-            }
-            supervisorScope {
-                val dcpPrewarmJob = if (rawCaptureEnabled) {
-                    async {
-                        runCatching {
-                            prewarmRawDcp(prefs.rawDcpIdForLens(currentState.currentCameraId))
-                        }.onFailure { error ->
-                            if (error is CancellationException) throw error
-                            PLog.w(TAG, "RAW DCP prewarm failed", error)
-                        }
-                    }
-                } else {
-                    null
-                }
-
-                // Keep the two GL warmups sequential. They use independent contexts but still
-                // share one GPU with preview, so running both at once only increases contention.
-                if (rawCaptureEnabled) {
+    private suspend fun prewarmCapturePipeline() {
+        val prefs = userPreferencesRepository.userPreferences.firstOrNull()
+            ?: return
+        val currentState = state.value
+        val captureSize = currentState.currentCaptureSize
+        val rawCaptureEnabled = prefs.useRaw
+        supervisorScope {
+            val dcpPrewarmJob = if (rawCaptureEnabled) {
+                async {
                     runCatching {
-                        val rawToneParameters = prefs.rawToneMappingParameters.normalized()
-                        RawDemosaicProcessor.getInstance().prewarmCapturePipeline(
-                            getApplication<Application>().applicationContext,
-                            prefs.rawRenderingEngine,
-                            photonHdrEnabled = rawToneParameters.usePhotonHdr,
-                            captureWidth = captureSize.width,
-                            captureHeight = captureSize.height,
-                            rawMaxFrameCount = rawMaxFrameCount,
-                            rawMaxEnabled = rawMaxEnabled,
-                            rawMaxSpatialOutputMode = prefs.rawMaxSpatialMode.outputMode,
-                            rawMaxMergeMethod = prefs.rawMaxSpatialMode.mergeMethod,
-                            rawMaxHdrCompositionEnabled = rawMaxHdrCompositionEnabled,
-                        )
+                        prewarmRawDcp(prefs.rawDcpIdForLens(currentState.currentCameraId))
                     }.onFailure { error ->
                         if (error is CancellationException) throw error
-                        PLog.w(TAG, "RAW capture pipeline prewarm failed", error)
+                        PLog.w(TAG, "RAW DCP prewarm failed", error)
                     }
                 }
-                currentCoroutineContext().ensureActive()
+            } else {
+                null
+            }
+
+            // Keep the two GL warmups sequential. They use independent contexts but still
+            // share one GPU with preview, so running both at once only increases contention.
+            if (rawCaptureEnabled) {
                 runCatching {
-                    contentRepository.imageProcessor.prewarmCapturePipeline()
+                    RawDemosaicProcessor.getInstance().prewarmCapturePipeline(
+                        getApplication<Application>().applicationContext,
+                        prefs.rawRenderingEngine,
+                        captureWidth = captureSize.width,
+                        captureHeight = captureSize.height,
+                    )
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
-                    PLog.w(TAG, "LUT capture pipeline prewarm failed", error)
+                    PLog.w(TAG, "RAW capture pipeline prewarm failed", error)
                 }
-                dcpPrewarmJob?.await()
             }
+            currentCoroutineContext().ensureActive()
+            runCatching {
+                contentRepository.imageProcessor.prewarmCapturePipeline()
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                PLog.w(TAG, "LUT capture pipeline prewarm failed", error)
+            }
+            dcpPrewarmJob?.await()
         }
+    }
+
+    fun onFirstPreviewFrame() {
+        if (startupPrewarmAttempted) return
+        startupPrewarmAttempted = true
+        startupPrewarmJob = viewModelScope.launch {
+            delay(FIRST_PREVIEW_PREWARM_GRACE_MS)
+            val appContext = getApplication<Application>().applicationContext
+            val currentState = state.value
+            if (
+                !currentState.isPreviewActive ||
+                currentState.captureMode != CaptureMode.PHOTO ||
+                currentState.isCapturing
+            ) {
+                PLog.d(
+                    TAG,
+                    "Skip startup capture prewarm: preview=${currentState.isPreviewActive} " +
+                        "mode=${currentState.captureMode} " +
+                        "capturing=${currentState.isCapturing}",
+                )
+                return@launch
+            }
+            if (!isStartupCapturePrewarmAllowed(appContext)) return@launch
+            prewarmCapturePipeline()
+        }
+    }
+
+    private fun isStartupCapturePrewarmAllowed(context: Context): Boolean {
+        val activityManager = context.getSystemService(ActivityManager::class.java)
+        val powerManager = context.getSystemService(PowerManager::class.java)
+        val constrainedMemory = activityManager?.let {
+            it.isLowRamDevice || it.memoryClass < MIN_PREWARM_MEMORY_CLASS_MB
+        } ?: true
+        val powerSave = powerManager?.isPowerSaveMode ?: true
+        val thermalStatus = powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE
+        val thermallyConstrained = thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE
+        val allowed = !constrainedMemory && !powerSave && !thermallyConstrained
+        if (!allowed) {
+            PLog.d(
+                TAG,
+                "Skip startup capture prewarm: lowMemory=$constrainedMemory " +
+                    "memoryClass=${activityManager?.memoryClass}MB powerSave=$powerSave " +
+                    "thermalStatus=$thermalStatus",
+            )
+        }
+        return allowed
     }
 
     private suspend fun prewarmRawDcp(dcpId: String?) = withContext(Dispatchers.IO) {
@@ -6773,12 +6802,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onShutterAnimationTriggered() {
         _canStartShutterAnimation.value = true
-        viewModelScope.launch {
-            // Delay prewarming to avoid stuttering during the initial reveal animation
-            // 150ms initial delay + 800ms animation + 250ms buffer
-            delay(1200)
-            prewarmCapturePipeline()
-        }
     }
 
     override fun onCleared() {

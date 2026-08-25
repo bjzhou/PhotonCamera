@@ -56,7 +56,7 @@ object DepthModelManager {
     private const val MODEL_PART_FILE_NAME = "depth_anything_v2.tflite.part"
     private const val EXPECTED_MODEL_SIZE_BYTES = 98_920_480L
     private const val MAX_IMPORT_SIZE_BYTES = 256L * 1024L * 1024L
-    private const val EXPECTED_MODEL_SHA256 =
+    internal const val MODEL_SHA256 =
         "69302c7b94a2ebe6f31d5caa78cb72d7e15f5ba72804d0423e699787368a255f"
 
     const val MODEL_DOWNLOAD_URL =
@@ -368,7 +368,7 @@ object DepthModelManager {
         val actualSha256 = digest.digest().joinToString("") {
             (it.toInt() and 0xFF).toString(16).padStart(2, '0')
         }
-        if (actualSha256 != EXPECTED_MODEL_SHA256) {
+        if (actualSha256 != MODEL_SHA256) {
             throw IOException("Depth model checksum mismatch")
         }
     }

@@ -71,7 +71,6 @@ import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.lut.creator.LutCreatorScreen
 import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
-import com.hinnka.mycamera.ml.StartupMlPreloader
 import com.hinnka.mycamera.screencapture.ScreenCaptureRenderConfigStore
 import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.data.FilmData
@@ -285,17 +284,6 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             FilmData.init(this@MainActivity)
-        }
-
-        lifecycleScope.launch {
-            try {
-                StartupMlPreloader.preloadForStartup(
-                    context = this@MainActivity,
-                    preferences = cameraViewModel.userPreferences.value
-                )
-            } finally {
-                StartupTrace.mark("MainActivity.mlPreloadFinished")
-            }
         }
 
         splashScreen.setKeepOnScreenCondition {

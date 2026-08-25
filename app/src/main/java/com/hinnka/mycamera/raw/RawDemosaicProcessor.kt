@@ -27,19 +27,13 @@ import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.DenoiseStrength
-import com.hinnka.mycamera.processor.GlesMgcRawSpatialStacker
 import com.hinnka.mycamera.processor.GlesPixelBufferTransfer
 import com.hinnka.mycamera.processor.GpuBayerSource
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
-import com.hinnka.mycamera.processor.MgcSpatialOutputMode
-import com.hinnka.mycamera.processor.MgcMergeMethod
-import com.hinnka.mycamera.processor.MgcRawProcessorPipeline
 import com.hinnka.mycamera.processor.RawNoiseModel
-import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
-import com.hinnka.mycamera.processor.RawNoiseProfileSelection
 import com.hinnka.mycamera.processor.RawStackResult
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
@@ -263,7 +257,6 @@ class RawDemosaicProcessor {
             1 shl MGC_SIGNAL_LINEAR_HISTOGRAM_BITS
         private const val MGC_SIGNAL_ROW_STEP = 8
         private const val RAW_TILE_MAX_CORE_EDGE_PX = 3072
-        private const val RAW_PREWARM_CORE_EDGE_PX = 2048
         // Phocus GetStripMargin(50) returns 60 pixels for gradient/color-noise interpolation.
         // The remaining 52 pixels cover chroma denoise, NLM, shadows/highlights and sharpening.
         private const val RAW_TILE_SUPPORT_PX = 112
@@ -312,14 +305,8 @@ class RawDemosaicProcessor {
     suspend fun prewarmCapturePipeline(
         context: Context,
         colorEngine: RawRenderingEngine,
-        photonHdrEnabled: Boolean,
         captureWidth: Int,
         captureHeight: Int,
-        rawMaxFrameCount: Int,
-        rawMaxEnabled: Boolean,
-        rawMaxSpatialOutputMode: MgcSpatialOutputMode,
-        rawMaxMergeMethod: MgcMergeMethod = MgcMergeMethod.SPATIAL_BAYER,
-        rawMaxHdrCompositionEnabled: Boolean,
     ): Boolean =
         withContext(glDispatcher) {
             val start = System.currentTimeMillis()
@@ -333,7 +320,6 @@ class RawDemosaicProcessor {
                 prewarmCaptureProfilePasses(
                     captureWidth = warmupWidth,
                     captureHeight = warmupHeight,
-                    frameCount = rawMaxFrameCount,
                 )
             }.onFailure { error ->
                 PLog.w(TAG, "RAW capture profile pass prewarm failed", error)
@@ -351,59 +337,15 @@ class RawDemosaicProcessor {
                 PLog.w(TAG, "RAW render engine prewarm failed", error)
             }.getOrDefault(false)
             currentCoroutineContext().ensureActive()
-            val photonHdrReady = if (photonHdrEnabled) {
-                profileGainTableAlgorithm.initialize()
-            } else {
-                true
-            }
-            currentCoroutineContext().ensureActive()
-            val rawMaxReady = if (rawMaxEnabled) {
-                runCatching {
-                    GlesMgcRawSpatialStacker(
-                        width = warmupWidth,
-                        height = warmupHeight,
-                        cfaPattern = 0,
-                        blackLevel = FloatArray(4),
-                        whiteLevel = 1023,
-                        whiteBalanceGains = FloatArray(4) { 1f },
-                        noiseProfileSelection = RawNoiseProfileSelection.Calibrated(
-                            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
-                        ),
-                        lensShading = null,
-                        lensShadingWidth = 0,
-                        lensShadingHeight = 0,
-                        outputMode = rawMaxSpatialOutputMode,
-                        mergeMethod = rawMaxMergeMethod,
-                        outputScale = 1f,
-                        useCurrentGlContext = true,
-                        exportGpuLinearRgbSource = true,
-                        gpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16F,
-                        processorPipeline = if (rawMaxMergeMethod == MgcMergeMethod.SABRE) {
-                            MgcRawProcessorPipeline.SABRE
-                        } else {
-                            MgcRawProcessorPipeline.SPATIAL
-                        },
-                    ).prewarmCapturePipeline(
-                        frameCount = rawMaxFrameCount,
-                        includeBento = rawMaxHdrCompositionEnabled &&
-                            rawMaxMergeMethod != MgcMergeMethod.SABRE,
-                    )
-                    true
-                }.onFailure { error ->
-                    PLog.w(TAG, "MGC Spatial program prewarm failed", error)
-                }.getOrDefault(false)
-            } else {
-                true
-            }
-            GLES30.glFinish()
-            val ready = captureProfileReady && renderEngineReady && photonHdrReady && rawMaxReady
+            GlesGpuCompletion.awaitSubmittedWork(
+                label = "RAW capture prewarm",
+                checkGlError = ::checkGlError,
+            )
+            val ready = captureProfileReady && renderEngineReady
             PLog.d(
                 TAG,
                 "RAW capture pipeline prewarmed ready=$ready engine=$colorEngine " +
-                    "photonHdr=$photonHdrEnabled " +
-                    "capture=${warmupWidth}x$warmupHeight rawMax=$rawMaxEnabled " +
-                    "rawMaxLayout=${rawMaxSpatialOutputMode.name} " +
-                    "rawMaxHdr=$rawMaxHdrCompositionEnabled frames=$rawMaxFrameCount " +
+                    "capture=${warmupWidth}x$warmupHeight " +
                     "took=${System.currentTimeMillis() - start}ms",
             )
             ready
@@ -413,14 +355,12 @@ class RawDemosaicProcessor {
     private fun prewarmCaptureProfilePasses(
         captureWidth: Int,
         captureHeight: Int,
-        frameCount: Int,
     ): Boolean {
         val programSize = resolveLongEdgePreviewSize(
             captureWidth,
             captureHeight,
             CAPTURE_PROGRAM_PREWARM_LONG_EDGE,
         )
-        val resourceSize = resolveRawRenderResourceSize(captureWidth, captureHeight)
         val identity = identityMatrix3x3()
         val metadata = RawMetadata(
             width = programSize.width,
@@ -431,7 +371,7 @@ class RawDemosaicProcessor {
             whiteBalanceGains = FloatArray(4) { 1f },
             colorCorrectionMatrix = identity,
             cameraWhite = floatArrayOf(1f, 1f, 1f),
-            frameCount = frameCount.coerceAtLeast(1),
+            frameCount = 1,
         )
         val textures = IntArray(2)
         GLES30.glGenTextures(textures.size, textures, 0)
@@ -468,9 +408,7 @@ class RawDemosaicProcessor {
                 height = programSize.height,
             )
             rawTextureId = previousRawTextureId
-            // High-resolution capture uses the same bounded tile capacity as rendering. Prewarm
-            // must not allocate whole-frame intermediates merely to compile a small viewport.
-            setupFullResFramebuffer(resourceSize.width, resourceSize.height)
+            setupFullResFramebuffer(programSize.width, programSize.height)
             renderLinearRawRgbToTexture(
                 sourceTextureId = linearRawTexture,
                 sourceSamplesPerPixel = 4,
@@ -509,7 +447,7 @@ class RawDemosaicProcessor {
             PLog.d(
                 TAG,
                 "RAW reusable capture state prewarmed: capture=${captureWidth}x$captureHeight " +
-                    "resource=${resourceSize.width}x${resourceSize.height} " +
+                    "resource=${programSize.width}x${programSize.height} " +
                     "programViewport=${programSize.width}x${programSize.height}",
             )
             exposureReady
@@ -540,8 +478,7 @@ class RawDemosaicProcessor {
             captureHeight,
             CAPTURE_PROGRAM_PREWARM_LONG_EDGE,
         )
-        val resourceSize = resolveRawRenderResourceSize(captureWidth, captureHeight)
-        setupEngineToneFramebuffer(resourceSize.width, resourceSize.height)
+        setupEngineToneFramebuffer(programSize.width, programSize.height)
         val outputTransform = computeWorkingToOutputTransform(
             warmupColorEngine.workingColorSpace,
             ColorSpace.SRGB,
@@ -572,7 +509,7 @@ class RawDemosaicProcessor {
             viewportHeight = programSize.height,
         )
         val srgbInputTextureId = if (engineToneReady && warmupColorEngine.isHncs) {
-            setupAdjustmentFramebuffer(resourceSize.width, resourceSize.height)
+            setupAdjustmentFramebuffer(programSize.width, programSize.height)
             val outputReady = renderHncsOutputLinearPass(
                 inputTextureId = engineToneTextureId,
                 outputTransform = outputTransform,
@@ -585,12 +522,22 @@ class RawDemosaicProcessor {
         } else {
             engineToneTextureId
         }
-        setupCombinedFramebuffer(resourceSize.width, resourceSize.height)
-        return engineToneReady && renderSrgbPass(
+        setupCombinedFramebuffer(programSize.width, programSize.height)
+        val srgbReady = engineToneReady && renderSrgbPass(
             inputTextureId = srgbInputTextureId,
             viewportWidth = programSize.width,
             viewportHeight = programSize.height,
         )
+        if (!srgbReady) return false
+        setupOutputFramebuffer(programSize.width, programSize.height)
+        renderOutputPass(
+            rotation = 0,
+            width = programSize.width,
+            height = programSize.height,
+            bounds = Rect(0, 0, programSize.width, programSize.height),
+            sourceTextureId = combinedTextureId,
+        )
+        return true
     }
 
     private fun createCaptureWarmupTexture(
@@ -4460,34 +4407,6 @@ class RawDemosaicProcessor {
                 return false
             }
 
-            // 初始化着色器和缓冲区
-            initShaderProgram()
-            val sharpenReady = sharpenPass.initialize()
-            val outputReady = outputPass.initialize()
-            val meteringReady = meteringDemosaicAlgorithm.initialize()
-            val chromaDenoiseReady = chromaDenoiseAlgorithm.initialize()
-            val pgtmReady = profileGainTableAlgorithm.initialize()
-            if (!sharpenReady || !outputReady ||
-                !chromaDenoiseReady ||
-                !pgtmReady ||
-                !meteringReady ||
-                !linearRcdPass.isReady || !linearUintToFloatPass.isReady ||
-                !linearFloatToUintPass.isReady || !linearRgbExpandPass.isReady
-            ) {
-                PLog.e(
-                    TAG, "Critical shader programs failed to compile or link. " +
-                            "sharpenReady=$sharpenReady outputReady=$outputReady " +
-                            "chromaDenoiseReady=$chromaDenoiseReady " +
-                            "pgtmReady=$pgtmReady " +
-                            "meteringHalfReady=$meteringReady " +
-                            "linearRcd=${linearRcdPass.isReady} " +
-                            "linearRawUintToFloat=${linearUintToFloatPass.isReady} " +
-                            "linearRawFloatToUint=${linearFloatToUintPass.isReady} " +
-                            "linearRawRgbExpand=${linearRgbExpandPass.isReady}"
-                )
-                return false
-            }
-
             // 创建静默遮挡图
             dummyShadingTextureId = createDummyShadingTexture()
 
@@ -4499,25 +4418,6 @@ class RawDemosaicProcessor {
             PLog.e(TAG, "Failed to initialize", e)
             return false
         }
-    }
-
-    private fun initShaderProgram() {
-        hdrReferencePass.initialize()
-        chromaDenoiseAlgorithm.initialize()
-        // LinearRaw/Profile programs are common to both CFA and pre-demosaiced inputs.
-        // Expensive CFA demosaic programs are compiled only if a CFA input actually needs them.
-        initLinearRawPrograms()
-        PLog.d(TAG, "Common RAW shader programs created")
-    }
-
-    private fun initLinearRawPrograms() {
-        profileGainTableAlgorithm.initialize()
-        meteringDemosaicAlgorithm.initialize()
-        linearRcdPass.initialize()
-        linearUintToFloatPass.initialize()
-        linearFloatToUintPass.initialize()
-        linearRgbExpandPass.initialize()
-        warpRectilinearPass.initialize()
     }
 
     private fun ensureVgnPrograms(): Boolean {
@@ -7908,25 +7808,6 @@ class RawDemosaicProcessor {
         val width: Int,
         val height: Int
     )
-
-    private fun resolveRawRenderResourceSize(
-        sourceWidth: Int,
-        sourceHeight: Int,
-    ): ExposurePreviewSize {
-        if (!RawTilePlanner.shouldTile(sourceWidth, sourceHeight)) {
-            return ExposurePreviewSize(sourceWidth, sourceHeight)
-        }
-        val working = RawTilePlanner.plan(
-            sourceWidth = sourceWidth,
-            sourceHeight = sourceHeight,
-            outputSourceBounds = RawTileRect(0, 0, sourceWidth, sourceHeight),
-            rotation = 0,
-            coreEdgePx = RAW_PREWARM_CORE_EDGE_PX,
-            supportPx = RAW_TILE_SUPPORT_PX,
-            cfaPeriod = 2,
-        ).first().sourceWorking
-        return ExposurePreviewSize(working.width, working.height)
-    }
 
     private fun resolveLongEdgePreviewSize(
         sourceWidth: Int,

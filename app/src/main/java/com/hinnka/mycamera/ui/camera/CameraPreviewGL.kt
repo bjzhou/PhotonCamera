@@ -63,6 +63,7 @@ fun CameraPreviewGL(
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onHighlightPointUpdated: ((Float, Float) -> Unit)? = null,
     onAiFocusInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
+    onFirstPreviewFrame: (() -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     isHlgInput: Boolean = false,
@@ -213,6 +214,11 @@ fun CameraPreviewGL(
                         glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
                         glSurfaceView.onHighlightPointUpdated = { hx, hy -> onHighlightPointUpdated?.invoke(hx, hy) }
                         glSurfaceView.onAiFocusInputAvailable = { onAiFocusInputAvailable?.invoke(it) }
+                        glSurfaceView.onFirstPreviewFrame = {
+                            if (glSurfaceViewRef === glSurfaceView) {
+                                onFirstPreviewFrame?.invoke()
+                            }
+                        }
 
                         viewWidth = glSurfaceView.width
                         viewHeight = glSurfaceView.height

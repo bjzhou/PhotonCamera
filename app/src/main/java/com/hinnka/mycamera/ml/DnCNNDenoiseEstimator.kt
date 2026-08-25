@@ -57,12 +57,14 @@ class DnCNNDenoiseEstimator(
             )
 
             if (backend == Backend.AUTO || backend == Backend.GPU) {
-                val gpuOptions = Interpreter.Options()
                 val compatList = StartupTrace.measure("DnCNNDenoiseEstimator.CompatibilityList()") {
                     CompatibilityList()
                 }
-                gpuDelegate = StartupTrace.measure("DnCNNDenoiseEstimator.GpuDelegate()") {
-                    if (compatList.isDelegateSupportedOnThisDevice) {
+                if (!compatList.isDelegateSupportedOnThisDevice) {
+                    PLog.d(TAG, "GPU delegate is not supported on this device")
+                } else {
+                    val gpuOptions = Interpreter.Options()
+                    gpuDelegate = StartupTrace.measure("DnCNNDenoiseEstimator.GpuDelegate()") {
                         val delegateOptions = compatList.bestOptionsForThisDevice
                         delegateCache?.let {
                             delegateOptions.setSerializationParams(
@@ -71,31 +73,22 @@ class DnCNNDenoiseEstimator(
                             )
                         }
                         GpuDelegate(delegateOptions)
-                    } else {
-                        val delegateOptions = GpuDelegate.Options()
-                        delegateCache?.let {
-                            delegateOptions.setSerializationParams(
-                                it.directory.absolutePath,
-                                it.modelToken
-                            )
+                    }
+                    StartupTrace.measure("DnCNNDenoiseEstimator.gpuOptions.addDelegate") {
+                        gpuOptions.addDelegate(gpuDelegate)
+                    }
+                    try {
+                        interpreter = StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter(GPU)") {
+                            Interpreter(modelFile, gpuOptions)
                         }
-                        GpuDelegate(delegateOptions)
+                        isInitialized = true
+                        activeBackend = "GPU"
+                        PLog.d(TAG, "Using GPU Delegate for DnCNN Denoise: $modelAssetName")
+                    } catch (e: Exception) {
+                        PLog.w(TAG, "Failed to initialize GPU delegate, falling back to ${if (backend == Backend.AUTO) "NNAPI" else "CPU"}", e)
+                        gpuDelegate?.close()
+                        gpuDelegate = null
                     }
-                }
-                StartupTrace.measure("DnCNNDenoiseEstimator.gpuOptions.addDelegate") {
-                    gpuOptions.addDelegate(gpuDelegate)
-                }
-                try {
-                    interpreter = StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter(GPU)") {
-                        Interpreter(modelFile, gpuOptions)
-                    }
-                    isInitialized = true
-                    activeBackend = "GPU"
-                    PLog.d(TAG, "Using GPU Delegate for DnCNN Denoise: $modelAssetName")
-                } catch (e: Exception) {
-                    PLog.w(TAG, "Failed to initialize GPU delegate, falling back to ${if (backend == Backend.AUTO) "NNAPI" else "CPU"}", e)
-                    gpuDelegate?.close()
-                    gpuDelegate = null
                 }
             }
 

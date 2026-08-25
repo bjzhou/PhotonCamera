@@ -115,6 +115,8 @@ class LutImageProcessor(context: Context? = null) {
     private var bitmapDenoiseNlmFusedAccuProgram = 0
     private var bitmapDenoiseNlmFinishProgram = 0
     private var bitmapDenoisePassthroughProgram = 0
+    private var computeCapabilitiesChecked = false
+    private var computeCapabilitiesSupported = false
     private var naturalLightSrgbToLinearProgram = 0
     private var bitmapChromaDenoiseGuideProgram = 0
     private var bitmapChromaDenoiseProgram = 0
@@ -223,17 +225,15 @@ class LutImageProcessor(context: Context? = null) {
     // 曲线纹理
     private var curveTextureId = 0
 
-    /** Initializes the persistent LUT/HDR GL pipeline before the first captured photo needs it. */
+    /** Initializes only the persistent EGL context and core color pipeline. */
     suspend fun prewarmCapturePipeline(): Boolean = withContext(glDispatcher) {
         if (isReleased) return@withContext false
         val start = System.currentTimeMillis()
         val ready = initialize()
-        if (ready) {
-            GLES30.glFinish()
-        }
         PLog.d(
             TAG,
-            "LUT capture pipeline prewarmed ready=$ready, took=${System.currentTimeMillis() - start}ms",
+            "LUT core capture pipeline initialized ready=$ready, " +
+                "took=${System.currentTimeMillis() - start}ms",
         )
         ready
     }
@@ -343,15 +343,8 @@ class LutImageProcessor(context: Context? = null) {
                 PLog.e(TAG, "Unable to make EGL current")
                 return false
             }
-            if (!logAndValidateComputeCapabilities()) {
-                return false
-            }
-
             // 初始化 shader 和缓冲区
             initShaderProgram()
-            initBitmapDenoiseProfilePrograms()
-            initHDFPrograms()
-            initClarityPrograms()
             initBuffers()
 
             isInitialized = true
@@ -2038,76 +2031,192 @@ class LutImageProcessor(context: Context? = null) {
         )
     }
 
-    private fun initBitmapDenoiseProfilePrograms() {
-        bitmapDenoisePreconditionProgram = compileComputeProgram(DenoiseProfileShaders.PRECONDITION_V2, "BitmapDenoise_PreconditionV2")
-        bitmapDenoiseNlmInitProgram = compileComputeProgram(DenoiseProfileShaders.INIT, "BitmapDenoise_NLM_Init")
-        bitmapDenoiseNlmFusedAccuProgram = compileComputeProgram(DenoiseProfileShaders.FUSED_ACCU, "BitmapDenoise_NLM_FusedAccu")
-        bitmapDenoiseNlmFinishProgram = compileComputeProgram(DenoiseProfileShaders.FINISH_V2, "BitmapDenoise_NLM_FinishV2")
-        bitmapDenoisePassthroughProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, TEXTURE_PASSTHROUGH_SHADER, "BitmapDenoise_Passthrough")
-        naturalLightSrgbToLinearProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, SRGB_TO_LINEAR_SHADER, "NaturalLight_SrgbToLinear")
-        bitmapChromaDenoiseGuideProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_EDGE_GUIDE, "BitmapChromaDenoise_EdgeGuide")
-        bitmapChromaDenoiseProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_CHROMA_DENOISE, "BitmapChromaDenoise_MultiScale")
-        lutSharpenProgram = createFragmentProgram(
-            IMAGE_VERTEX_SHADER,
-            RawSharpenPass.FRAGMENT_SHADER,
-            "LutSharpen",
-        )
+    private fun ensureBitmapDenoiseProfilePrograms() {
+        if (!computeCapabilitiesChecked) {
+            computeCapabilitiesSupported = logAndValidateComputeCapabilities()
+            computeCapabilitiesChecked = true
+        }
+        if (!computeCapabilitiesSupported) {
+            ensureBitmapDenoisePassthroughProgram()
+            return
+        }
+        if (bitmapDenoisePreconditionProgram == 0) {
+            bitmapDenoisePreconditionProgram = compileComputeProgram(
+                DenoiseProfileShaders.PRECONDITION_V2,
+                "BitmapDenoise_PreconditionV2",
+            )
+        }
+        if (bitmapDenoiseNlmInitProgram == 0) {
+            bitmapDenoiseNlmInitProgram = compileComputeProgram(
+                DenoiseProfileShaders.INIT,
+                "BitmapDenoise_NLM_Init",
+            )
+        }
+        if (bitmapDenoiseNlmFusedAccuProgram == 0) {
+            bitmapDenoiseNlmFusedAccuProgram = compileComputeProgram(
+                DenoiseProfileShaders.FUSED_ACCU,
+                "BitmapDenoise_NLM_FusedAccu",
+            )
+        }
+        if (bitmapDenoiseNlmFinishProgram == 0) {
+            bitmapDenoiseNlmFinishProgram = compileComputeProgram(
+                DenoiseProfileShaders.FINISH_V2,
+                "BitmapDenoise_NLM_FinishV2",
+            )
+        }
+        ensureBitmapDenoisePassthroughProgram()
         PLog.d(
             TAG,
             "Bitmap denoiseprofile programs initialized: pre=$bitmapDenoisePreconditionProgram " +
                 "init=$bitmapDenoiseNlmInitProgram fusedAccu=$bitmapDenoiseNlmFusedAccuProgram " +
                 "finish=$bitmapDenoiseNlmFinishProgram " +
-                "pass=$bitmapDenoisePassthroughProgram linearize=$naturalLightSrgbToLinearProgram " +
-                "chromaGuide=$bitmapChromaDenoiseGuideProgram " +
-                "chroma=$bitmapChromaDenoiseProgram " +
-                "sharpen=$lutSharpenProgram"
+                "pass=$bitmapDenoisePassthroughProgram"
         )
     }
 
-    private fun initHDFPrograms() {
-        fun createProgram(vShader: Int, fSource: String): Int {
-            val fShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fSource)
-            if (vShader == 0 || fShader == 0) return 0
-            val program = GLES30.glCreateProgram()
-            GLES30.glAttachShader(program, vShader)
-            GLES30.glAttachShader(program, fShader)
-            GLES30.glLinkProgram(program)
-            GLES30.glDeleteShader(fShader)
-            return program
+    private fun ensureBitmapDenoisePassthroughProgram() {
+        if (bitmapDenoisePassthroughProgram == 0) {
+            bitmapDenoisePassthroughProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                TEXTURE_PASSTHROUGH_SHADER,
+                "BitmapDenoise_Passthrough",
+            )
         }
-
-        val imageVShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
-        hdfExtractBlurHProgram = createProgram(imageVShader, HDF_EXTRACT_BLUR_H_SHADER)
-        hdfBlurVProgram = createProgram(imageVShader, HDF_BLUR_V_SHADER)
-        softLightBlurHProgram = createProgram(imageVShader, Shaders.SOFT_LIGHT_PREVIEW_BLUR_H)
-        halationExtractBlurHProgram = createProgram(imageVShader, HALATION_EXTRACT_BLUR_H_SHADER)
-        halationBlurVProgram = createProgram(imageVShader, HDF_BLUR_V_SHADER)
-        GLES30.glDeleteShader(imageVShader)
-
-        val simpleVShader = compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
-        bloomDownsampleFirstProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_DOWNSAMPLE_FIRST)
-        bloomDownsampleProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_DOWNSAMPLE)
-        bloomUpsampleProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_UPSAMPLE)
-        bloomCompositeProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_COMPOSITE)
-        GLES30.glDeleteShader(simpleVShader)
-
-        PLog.d(
-            TAG,
-            "HDF/Halation/Bloom/SoftLight programs initialized"
-        )
     }
 
-    private fun initClarityPrograms() {
-        clarityDownsampleProgram = createFragmentProgram(
-            IMAGE_VERTEX_SHADER,
-            ClarityShaders.DOWNSAMPLE,
-            "ClarityDownsample",
-        )
-        clarityCompositeProgram = createFragmentProgram(
-            IMAGE_VERTEX_SHADER,
-            ClarityShaders.COMPOSITE,
-            "ClarityComposite",
-        )
+    private fun ensureNaturalLightSrgbToLinearProgram() {
+        if (naturalLightSrgbToLinearProgram == 0) {
+            naturalLightSrgbToLinearProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                SRGB_TO_LINEAR_SHADER,
+                "NaturalLight_SrgbToLinear",
+            )
+        }
+    }
+
+    private fun ensureBitmapChromaDenoisePrograms() {
+        ensureBitmapDenoisePassthroughProgram()
+        if (bitmapChromaDenoiseGuideProgram == 0) {
+            bitmapChromaDenoiseGuideProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                ChromaDenoiseShaders.PASS_EDGE_GUIDE,
+                "BitmapChromaDenoise_EdgeGuide",
+            )
+        }
+        if (bitmapChromaDenoiseProgram == 0) {
+            bitmapChromaDenoiseProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                ChromaDenoiseShaders.PASS_CHROMA_DENOISE,
+                "BitmapChromaDenoise_MultiScale",
+            )
+        }
+    }
+
+    private fun ensureLutSharpenProgram() {
+        if (lutSharpenProgram == 0) {
+            lutSharpenProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                RawSharpenPass.FRAGMENT_SHADER,
+                "LutSharpen",
+            )
+        }
+    }
+
+    private fun ensureHdfPrograms() {
+        if (hdfExtractBlurHProgram == 0) {
+            hdfExtractBlurHProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                HDF_EXTRACT_BLUR_H_SHADER,
+                "HdfExtractBlurH",
+            )
+        }
+        ensureHdfBlurVProgram()
+    }
+
+    private fun ensureSoftLightPrograms() {
+        if (softLightBlurHProgram == 0) {
+            softLightBlurHProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                Shaders.SOFT_LIGHT_PREVIEW_BLUR_H,
+                "SoftLightBlurH",
+            )
+        }
+        ensureHdfBlurVProgram()
+    }
+
+    private fun ensureHdfBlurVProgram() {
+        if (hdfBlurVProgram == 0) {
+            hdfBlurVProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                HDF_BLUR_V_SHADER,
+                "HdfBlurV",
+            )
+        }
+    }
+
+    private fun ensureHalationPrograms() {
+        if (halationExtractBlurHProgram == 0) {
+            halationExtractBlurHProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                HALATION_EXTRACT_BLUR_H_SHADER,
+                "HalationExtractBlurH",
+            )
+        }
+        if (halationBlurVProgram == 0) {
+            halationBlurVProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                HDF_BLUR_V_SHADER,
+                "HalationBlurV",
+            )
+        }
+    }
+
+    private fun ensureBloomPrograms() {
+        if (bloomDownsampleFirstProgram == 0) {
+            bloomDownsampleFirstProgram = createFragmentProgram(
+                Shaders.SIMPLE_VERTEX_SHADER,
+                Shaders.BEVY_BLOOM_DOWNSAMPLE_FIRST,
+                "BloomDownsampleFirst",
+            )
+        }
+        if (bloomDownsampleProgram == 0) {
+            bloomDownsampleProgram = createFragmentProgram(
+                Shaders.SIMPLE_VERTEX_SHADER,
+                Shaders.BEVY_BLOOM_DOWNSAMPLE,
+                "BloomDownsample",
+            )
+        }
+        if (bloomUpsampleProgram == 0) {
+            bloomUpsampleProgram = createFragmentProgram(
+                Shaders.SIMPLE_VERTEX_SHADER,
+                Shaders.BEVY_BLOOM_UPSAMPLE,
+                "BloomUpsample",
+            )
+        }
+        if (bloomCompositeProgram == 0) {
+            bloomCompositeProgram = createFragmentProgram(
+                Shaders.SIMPLE_VERTEX_SHADER,
+                Shaders.BEVY_BLOOM_COMPOSITE,
+                "BloomComposite",
+            )
+        }
+    }
+
+    private fun ensureClarityPrograms() {
+        if (clarityDownsampleProgram == 0) {
+            clarityDownsampleProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                ClarityShaders.DOWNSAMPLE,
+                "ClarityDownsample",
+            )
+        }
+        if (clarityCompositeProgram == 0) {
+            clarityCompositeProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                ClarityShaders.COMPOSITE,
+                "ClarityComposite",
+            )
+        }
         PLog.d(
             TAG,
             "Static clarity programs initialized: " +
@@ -2152,7 +2261,6 @@ class LutImageProcessor(context: Context? = null) {
                 PLog.e(TAG, "Bitmap denoiseprofile FBO $i incomplete: $status")
             }
         }
-        setupBitmapDenoiseResources(width, height)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
@@ -2162,6 +2270,7 @@ class LutImageProcessor(context: Context? = null) {
         height: Int,
         noiseReduction: Float
     ) {
+        ensureBitmapDenoiseProfilePrograms()
         setupBitmapDenoiseFramebuffers(width, height)
 
         val strength = DenoiseStrength.clamp(noiseReduction)
@@ -2173,6 +2282,7 @@ class LutImageProcessor(context: Context? = null) {
             renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[1], width, height)
             return
         }
+        setupBitmapDenoiseResources(width, height)
 
         val preconditionTextureId = if (sourceTextureId == bitmapDenoiseTexId[0]) {
             bitmapDenoiseTexId[1]
@@ -2192,6 +2302,7 @@ class LutImageProcessor(context: Context? = null) {
         chromaNoiseReduction: Float,
         targetIndex: Int = 0
     ) {
+        ensureBitmapChromaDenoisePrograms()
         setupBitmapDenoiseFramebuffers(width, height)
 
         val strength = DenoiseStrength.clamp(chromaNoiseReduction)
@@ -2341,6 +2452,7 @@ class LutImageProcessor(context: Context? = null) {
     }
 
     private fun renderSrgbInputToLinear(sourceTextureId: Int, width: Int, height: Int): Int {
+        ensureNaturalLightSrgbToLinearProgram()
         setupBitmapDenoiseFramebuffers(width, height)
         if (naturalLightSrgbToLinearProgram == 0) return sourceTextureId
         val targetIndex = if (sourceTextureId == bitmapDenoiseTexId[0]) 1 else 0
@@ -2429,7 +2541,9 @@ class LutImageProcessor(context: Context? = null) {
         height: Int,
         sharpening: Float
     ): Boolean {
-        if (lutSharpenProgram == 0 || sharpening <= 0f || !setupLutSharpenFramebuffer(width, height)) {
+        if (sharpening <= 0f) return false
+        ensureLutSharpenProgram()
+        if (lutSharpenProgram == 0 || !setupLutSharpenFramebuffer(width, height)) {
             return false
         }
 
@@ -2919,6 +3033,7 @@ class LutImageProcessor(context: Context? = null) {
         height: Int,
         clarity: Float,
     ): Boolean {
+        ensureClarityPrograms()
         if (clarityDownsampleProgram == 0 || clarityCompositeProgram == 0) {
             return false
         }
@@ -3055,6 +3170,7 @@ class LutImageProcessor(context: Context? = null) {
         width: Int,
         height: Int
     ) {
+        ensureSoftLightPrograms()
         setupSoftLightFramebuffers(width, height)
         if (softLightBlurHProgram == 0 || hdfBlurVProgram == 0) return
 
@@ -3100,6 +3216,7 @@ class LutImageProcessor(context: Context? = null) {
         height: Int,
         halation: Float
     ) {
+        ensureHalationPrograms()
         setupHalationFramebuffers(width, height)
         if (halationExtractBlurHProgram == 0 || halationBlurVProgram == 0) return
 
@@ -3158,6 +3275,7 @@ class LutImageProcessor(context: Context? = null) {
         height: Int,
         halation: Float
     ) {
+        ensureHdfPrograms()
         setupHDFFramebuffers(width, height)
         if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0) return
 
@@ -3327,6 +3445,7 @@ class LutImageProcessor(context: Context? = null) {
     }
 
     private fun renderLdrBloom(sourceTextureId: Int, width: Int, height: Int, bloomStrength: Float): Boolean {
+        ensureBloomPrograms()
         if (!setupBloomFramebuffers(width, height)) {
             return false
         }

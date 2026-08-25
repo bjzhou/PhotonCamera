@@ -181,28 +181,19 @@ class FaceDetLiteFocusDetector(context: Context) {
         delegateCache: MlDelegateCache?,
     ): InterpreterState {
         var gpuDelegate: GpuDelegate? = null
-        try {
+        if (!compatList.isDelegateSupportedOnThisDevice) {
+            PLog.d(TAG, "GPU delegate is not supported on this device; trying NNAPI")
+        } else try {
             val options = Interpreter.Options()
             gpuDelegate = StartupTrace.measure("FaceDetLiteFocusDetector.GpuDelegate") {
-                if (compatList.isDelegateSupportedOnThisDevice) {
-                    val delegateOptions = compatList.bestOptionsForThisDevice
-                    delegateCache?.let {
-                        delegateOptions.setSerializationParams(
-                            it.directory.absolutePath,
-                            it.modelToken
-                        )
-                    }
-                    GpuDelegate(delegateOptions)
-                } else {
-                    val delegateOptions = GpuDelegate.Options()
-                    delegateCache?.let {
-                        delegateOptions.setSerializationParams(
-                            it.directory.absolutePath,
-                            it.modelToken
-                        )
-                    }
-                    GpuDelegate(delegateOptions)
+                val delegateOptions = compatList.bestOptionsForThisDevice
+                delegateCache?.let {
+                    delegateOptions.setSerializationParams(
+                        it.directory.absolutePath,
+                        it.modelToken
+                    )
                 }
+                GpuDelegate(delegateOptions)
             }
             options.addDelegate(gpuDelegate)
             val interpreter = StartupTrace.measure("FaceDetLiteFocusDetector.Interpreter.GPU") {

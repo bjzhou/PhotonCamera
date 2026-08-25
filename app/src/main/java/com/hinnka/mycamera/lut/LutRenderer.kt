@@ -479,6 +479,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
+    var onFirstFrameRendered: (() -> Unit)? = null
 
     // Live Photo 录制器
     var livePhotoRecorder: LivePhotoRecorder? = null
@@ -655,6 +656,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         viewportHeight = 0
         curveTextureId = 0
         baselineCurveTextureId = 0
+        firstFrameRendered = false
     }
 
     /**
@@ -1548,10 +1550,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (viewportWidth <= 0 || viewportHeight <= 0) return
 
         // 更新 SurfaceTexture
+        var cameraFrameUpdated = false
         if (frameAvailable.getAndSet(false)) {
             try {
                 surfaceTexture?.updateTexImage()
                 surfaceTexture?.getTransformMatrix(stMatrix)
+                cameraFrameUpdated = true
             } catch (e: RuntimeException) {
                 PLog.e(
                     TAG,
@@ -1768,6 +1772,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 compositeFinalDisplay = false
             )
         }
+        if (cameraFrameUpdated && !firstFrameRendered) {
+            firstFrameRendered = true
+            onFirstFrameRendered?.invoke()
+        }
     }
 
     /**
@@ -1954,49 +1962,23 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
     }
 
-    private fun initHdfPrograms() {
-        val simpleVs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
-        // Extract + Blur H
-        val extractFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HDF_PREVIEW_EXTRACT_BLUR_H)
-        hdfExtractBlurHProgram = GlUtils.linkProgram(simpleVs, extractFs)
-        GLES30.glDeleteShader(extractFs)
-        // Blur V
-        val blurVFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HDF_PREVIEW_BLUR_V)
-        hdfBlurVProgram = GlUtils.linkProgram(simpleVs, blurVFs)
-        GLES30.glDeleteShader(blurVFs)
-        val softLightBlurHFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.SOFT_LIGHT_PREVIEW_BLUR_H)
-        softLightBlurHProgram = GlUtils.linkProgram(simpleVs, softLightBlurHFs)
-        GLES30.glDeleteShader(softLightBlurHFs)
-        // Composite
-        val compositeFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HDF_PREVIEW_COMPOSITE)
-        hdfCompositeProgram = GlUtils.linkProgram(simpleVs, compositeFs)
-        GLES30.glDeleteShader(compositeFs)
-        val halationExtractHFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HALATION_PREVIEW_EXTRACT_BLUR_H)
-        val halationBlurVFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.HALATION_PREVIEW_BLUR_V)
-        halationExtractBlurHProgram = GlUtils.linkProgram(simpleVs, halationExtractHFs)
-        halationBlurVProgram = GlUtils.linkProgram(simpleVs, halationBlurVFs)
-        GLES30.glDeleteShader(halationExtractHFs)
-        GLES30.glDeleteShader(halationBlurVFs)
-        val bloomDownsampleFirstFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.BEVY_BLOOM_DOWNSAMPLE_FIRST)
-        val bloomDownsampleFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.BEVY_BLOOM_DOWNSAMPLE)
-        val bloomUpsampleFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.BEVY_BLOOM_UPSAMPLE)
-        val bloomCompositeFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.BEVY_BLOOM_COMPOSITE)
-        bloomDownsampleFirstProgram = GlUtils.linkProgram(simpleVs, bloomDownsampleFirstFs)
-        bloomDownsampleProgram = GlUtils.linkProgram(simpleVs, bloomDownsampleFs)
-        bloomUpsampleProgram = GlUtils.linkProgram(simpleVs, bloomUpsampleFs)
-        bloomCompositeProgram = GlUtils.linkProgram(simpleVs, bloomCompositeFs)
-        GLES30.glDeleteShader(bloomDownsampleFirstFs)
-        GLES30.glDeleteShader(bloomDownsampleFs)
-        GLES30.glDeleteShader(bloomUpsampleFs)
-        GLES30.glDeleteShader(bloomCompositeFs)
-        GLES30.glDeleteShader(simpleVs)
-
-        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0 || hdfCompositeProgram == 0 || softLightBlurHProgram == 0 ||
-            halationExtractBlurHProgram == 0 || halationBlurVProgram == 0 ||
-            bloomDownsampleFirstProgram == 0 || bloomDownsampleProgram == 0 || bloomUpsampleProgram == 0 || bloomCompositeProgram == 0
-        ) {
-            PLog.e(TAG, "Failed to link HDF preview programs")
+    private fun createPostProcessProgram(fragmentShaderSource: String, label: String): Int {
+        val vertexShader = GlUtils.compileShader(
+            GLES30.GL_VERTEX_SHADER,
+            Shaders.SIMPLE_VERTEX_SHADER,
+        )
+        val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentShaderSource)
+        if (vertexShader == 0 || fragmentShader == 0) {
+            if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
+            if (fragmentShader != 0) GLES30.glDeleteShader(fragmentShader)
+            PLog.e(TAG, "Failed to compile $label preview program")
+            return 0
         }
+        val program = GlUtils.linkProgram(vertexShader, fragmentShader)
+        GLES30.glDeleteShader(vertexShader)
+        GLES30.glDeleteShader(fragmentShader)
+        if (program == 0) PLog.e(TAG, "Failed to link $label preview program")
+        return program
     }
 
     private fun setupHalationFbos(width: Int, height: Int) {
@@ -2108,7 +2090,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun renderHdfPreviewBlur(sourceTexId: Int, width: Int, height: Int) {
-        if (!ensureHdfPrograms()) return
+        if (!ensureHdfBlurPrograms()) return
         setupHdfFbos(width, height)
         if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0) return
         val dsW = width / 4;
@@ -2141,7 +2123,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun renderSoftLightPreviewBlur(sourceTexId: Int, width: Int, height: Int) {
-        if (!ensureHdfPrograms()) return
+        if (!ensureSoftLightPrograms()) return
         setupSoftLightFbos(width, height)
         if (softLightBlurHProgram == 0 || hdfBlurVProgram == 0) return
         val dsW = softLightWidth.coerceAtLeast(1)
@@ -2171,7 +2153,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun renderHalationPreviewBlur(sourceTexId: Int, width: Int, height: Int) {
-        if (!ensureHdfPrograms()) return
+        if (!ensureHalationPrograms()) return
         setupHalationFbos(width, height)
         if (halationExtractBlurHProgram == 0 || halationBlurVProgram == 0) return
         val dsW = width / 4; val dsH = height / 4
@@ -2296,7 +2278,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun renderLdrBloom(targetFboId: Int, width: Int, height: Int, sourceTexId: Int) {
-        if (!ensureHdfPrograms()) {
+        if (!ensureBloomPrograms()) {
             drawFboToScreen(targetFboId, width, height, sourceTexId)
             return
         }
@@ -2783,7 +2765,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun drawPostProcessComposite(targetFboId: Int, width: Int, height: Int, sourceTextureId: Int) {
-        if (!ensureHdfPrograms()) return
+        if (!ensurePostProcessCompositeProgram()) return
         if (hdfCompositeProgram == 0) return
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
@@ -2863,6 +2845,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun initMeteringFbo() {
+        if (meteringFboId != 0 && meteringTextureId != 0) return
+        if (meteringFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(meteringFboId), 0)
+            meteringFboId = 0
+        }
+        if (meteringTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(meteringTextureId), 0)
+            meteringTextureId = 0
+        }
         val fbos = IntArray(1)
         GLES30.glGenFramebuffers(1, fbos, 0)
         meteringFboId = fbos[0]
@@ -4280,31 +4271,91 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
     }
 
-    private fun ensureHdfPrograms(): Boolean {
-        if (hdfExtractBlurHProgram != 0 &&
-            hdfBlurVProgram != 0 &&
-            hdfCompositeProgram != 0 &&
-            softLightBlurHProgram != 0 &&
-            halationExtractBlurHProgram != 0 &&
-            halationBlurVProgram != 0 &&
-            bloomDownsampleFirstProgram != 0 &&
-            bloomDownsampleProgram != 0 &&
-            bloomUpsampleProgram != 0 &&
-            bloomCompositeProgram != 0
-        ) {
-            return true
+    private fun ensureHdfBlurPrograms(): Boolean {
+        if (hdfExtractBlurHProgram == 0) {
+            hdfExtractBlurHProgram = createPostProcessProgram(
+                Shaders.HDF_PREVIEW_EXTRACT_BLUR_H,
+                "HDF extract/blur",
+            )
         }
-        initHdfPrograms()
-        return hdfExtractBlurHProgram != 0 &&
-            hdfBlurVProgram != 0 &&
-            hdfCompositeProgram != 0 &&
-            softLightBlurHProgram != 0 &&
-            halationExtractBlurHProgram != 0 &&
-            halationBlurVProgram != 0 &&
-            bloomDownsampleFirstProgram != 0 &&
-            bloomDownsampleProgram != 0 &&
-            bloomUpsampleProgram != 0 &&
-            bloomCompositeProgram != 0
+        if (hdfBlurVProgram == 0) {
+            hdfBlurVProgram = createPostProcessProgram(
+                Shaders.HDF_PREVIEW_BLUR_V,
+                "HDF vertical blur",
+            )
+        }
+        return hdfExtractBlurHProgram != 0 && hdfBlurVProgram != 0
+    }
+
+    private fun ensureSoftLightPrograms(): Boolean {
+        if (softLightBlurHProgram == 0) {
+            softLightBlurHProgram = createPostProcessProgram(
+                Shaders.SOFT_LIGHT_PREVIEW_BLUR_H,
+                "soft light blur",
+            )
+        }
+        if (hdfBlurVProgram == 0) {
+            hdfBlurVProgram = createPostProcessProgram(
+                Shaders.HDF_PREVIEW_BLUR_V,
+                "HDF vertical blur",
+            )
+        }
+        return softLightBlurHProgram != 0 && hdfBlurVProgram != 0
+    }
+
+    private fun ensureHalationPrograms(): Boolean {
+        if (halationExtractBlurHProgram == 0) {
+            halationExtractBlurHProgram = createPostProcessProgram(
+                Shaders.HALATION_PREVIEW_EXTRACT_BLUR_H,
+                "halation extract/blur",
+            )
+        }
+        if (halationBlurVProgram == 0) {
+            halationBlurVProgram = createPostProcessProgram(
+                Shaders.HALATION_PREVIEW_BLUR_V,
+                "halation vertical blur",
+            )
+        }
+        return halationExtractBlurHProgram != 0 && halationBlurVProgram != 0
+    }
+
+    private fun ensureBloomPrograms(): Boolean {
+        if (bloomDownsampleFirstProgram == 0) {
+            bloomDownsampleFirstProgram = createPostProcessProgram(
+                Shaders.BEVY_BLOOM_DOWNSAMPLE_FIRST,
+                "bloom first downsample",
+            )
+        }
+        if (bloomDownsampleProgram == 0) {
+            bloomDownsampleProgram = createPostProcessProgram(
+                Shaders.BEVY_BLOOM_DOWNSAMPLE,
+                "bloom downsample",
+            )
+        }
+        if (bloomUpsampleProgram == 0) {
+            bloomUpsampleProgram = createPostProcessProgram(
+                Shaders.BEVY_BLOOM_UPSAMPLE,
+                "bloom upsample",
+            )
+        }
+        if (bloomCompositeProgram == 0) {
+            bloomCompositeProgram = createPostProcessProgram(
+                Shaders.BEVY_BLOOM_COMPOSITE,
+                "bloom composite",
+            )
+        }
+        return bloomDownsampleFirstProgram != 0 && bloomDownsampleProgram != 0 &&
+            bloomUpsampleProgram != 0 && bloomCompositeProgram != 0
+    }
+
+    private fun ensurePostProcessCompositeProgram(): Boolean {
+        if (hdfCompositeProgram == 0) {
+            hdfCompositeProgram = createPostProcessProgram(
+                Shaders.HDF_PREVIEW_COMPOSITE,
+                "post-process composite",
+            )
+        }
+        return hdfCompositeProgram != 0
     }
 
     private fun ensureFocusPeakingProgram(): Boolean {

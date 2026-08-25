@@ -82,28 +82,19 @@ class YoloXObjectDetector(context: Context) {
                 CompatibilityList()
             }
 
-            try {
+            if (!compatList.isDelegateSupportedOnThisDevice) {
+                PLog.d(TAG, "GPU delegate is not supported on this device; trying NNAPI")
+            } else try {
                 val gpuOptions = Interpreter.Options()
                 gpuDelegate = StartupTrace.measure("YoloXObjectDetector.GpuDelegate") {
-                    if (compatList.isDelegateSupportedOnThisDevice) {
-                        val delegateOptions = compatList.bestOptionsForThisDevice
-                        delegateCache?.let {
-                            delegateOptions.setSerializationParams(
-                                it.directory.absolutePath,
-                                it.modelToken
-                            )
-                        }
-                        GpuDelegate(delegateOptions)
-                    } else {
-                        val delegateOptions = GpuDelegate.Options()
-                        delegateCache?.let {
-                            delegateOptions.setSerializationParams(
-                                it.directory.absolutePath,
-                                it.modelToken
-                            )
-                        }
-                        GpuDelegate(delegateOptions)
+                    val delegateOptions = compatList.bestOptionsForThisDevice
+                    delegateCache?.let {
+                        delegateOptions.setSerializationParams(
+                            it.directory.absolutePath,
+                            it.modelToken
+                        )
                     }
+                    GpuDelegate(delegateOptions)
                 }
                 gpuOptions.addDelegate(gpuDelegate)
                 interpreter = StartupTrace.measure("YoloXObjectDetector.Interpreter.GPU") {
