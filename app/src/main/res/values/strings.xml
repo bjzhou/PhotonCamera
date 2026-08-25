@@ -833,7 +833,7 @@
     <string name="settings_custom_lens_ids">Custom Lens IDs</string>
     <string name="settings_custom_lens_ids_description">Add camera IDs manually, separated by commas. Available IDs will appear in the lens list with a special marker.</string>
     <string name="settings_lens_id_blacklist">Lens ID Blacklist</string>
-    <string name="settings_lens_id_blacklist_description">Camera IDs separated by commas. These IDs will be skipped during active lens probing.</string>
+    <string name="settings_lens_id_blacklist_description">Separate multiple camera IDs with commas. Matching lenses will be blocked regardless of how they are discovered.</string>
     <string name="settings_custom_focal_length_add">Add Custom Focal Length</string>
     <string name="settings_custom_focal_length_hint">e.g. 35, 50, 85, 2x, 4x</string>
     <string name="settings_dro_mode">RAW Dynamic Range Optimizer (DRO)</string>

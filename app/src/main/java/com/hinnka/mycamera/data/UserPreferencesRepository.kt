@@ -264,7 +264,7 @@ data class UserPreferences(
     val defaultVirtualAperture: Float = 0f, // 默认虚化光圈，0表示关闭
     val customFocalLengths: List<Float> = emptyList(), // 自定义焦段/倍率，正数为35mm等效焦段，负数为精确倍率
     val customLensIds: List<String> = emptyList(), // 自定义镜头 ID，逗号分隔存储
-    val lensIdBlacklist: List<String> = emptyList(), // 主动探测黑名单镜头 ID，逗号分隔存储
+    val lensIdBlacklist: List<String> = emptyList(), // 所有发现来源共用的镜头 ID 黑名单，逗号分隔存储
     val iszLensConfigs: List<IszLensConfig> = emptyList(), // 用户新增的 ISZ 虚拟镜头
     val preferredMainCameraId: String? = null, // 用户选择的主摄 ID
     val preferredMacroCameraId: String? = null, // 用户选择的微距镜头 ID

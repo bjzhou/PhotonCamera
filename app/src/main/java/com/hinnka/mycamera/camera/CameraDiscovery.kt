@@ -62,16 +62,28 @@ class CameraDiscovery(private val context: Context) {
      */
     fun discoverAllCameras(): List<CameraInfo> {
         val cameras = mutableListOf<CameraInfo>()
+        val lensIdBlacklist = loadLensIdBlacklist().toSet()
         val preferredMainCameraId = loadPreferredMainCameraId()
         val preferredMacroCameraId = loadPreferredMacroCameraId()
 
         val discoveredCameras = discoverCameraCandidates(
             includeDuplicateMainCameraIds = false,
             preferredMainCameraId = preferredMainCameraId,
-            preferredMacroCameraId = preferredMacroCameraId
+            preferredMacroCameraId = preferredMacroCameraId,
+            lensIdBlacklist = lensIdBlacklist
         )
 
         val iszVirtualCameras = createIszVirtualCameraCandidates(discoveredCameras.backCameras)
+            .filterNot { camera ->
+                val isBlacklisted = lensIdBlacklist.contains(camera.info.cameraId)
+                if (isBlacklisted) {
+                    PLog.d(
+                        TAG,
+                        "ISZ lens ${camera.info.cameraId} skipped from discovery: lens ID blacklist"
+                    )
+                }
+                isBlacklisted
+            }
         val classifiedBackCameras = classifyBackCameras(
             cameras = discoveredCameras.backCameras + iszVirtualCameras,
             preferredMainCameraId = preferredMainCameraId,
@@ -82,7 +94,15 @@ class CameraDiscovery(private val context: Context) {
         // 添加前置摄像头
         discoveredCameras.frontCamera?.let { cameras.add(it) }
 
-        val uniqueCameras = removeDuplicatePhysicalCameraEntries(cameras)
+        // Direct candidates are filtered before inspection. Filter once more here so
+        // generated lenses, such as ISZ lenses, follow the same blacklist contract.
+        val uniqueCameras = removeDuplicatePhysicalCameraEntries(cameras).filterNot { camera ->
+            val isBlacklisted = lensIdBlacklist.contains(camera.cameraId)
+            if (isBlacklisted) {
+                PLog.d(TAG, "Camera ${camera.cameraId} skipped from final list: lens ID blacklist")
+            }
+            isBlacklisted
+        }
 
         PLog.d(TAG, "Camera2 final list:")
         uniqueCameras.forEach { cam ->
@@ -97,10 +117,12 @@ class CameraDiscovery(private val context: Context) {
     }
 
     fun discoverMainCameraIdOptions(): List<String> {
+        val lensIdBlacklist = loadLensIdBlacklist().toSet()
         val preferredMacroCameraId = loadPreferredMacroCameraId()
         val discoveredCameras = discoverCameraCandidates(
             includeDuplicateMainCameraIds = true,
-            preferredMacroCameraId = preferredMacroCameraId
+            preferredMacroCameraId = preferredMacroCameraId,
+            lensIdBlacklist = lensIdBlacklist
         )
         val adjustedCameras = adjustMacroCandidatesByFocalLength(
             cameras = discoveredCameras.backCameras,
@@ -122,10 +144,12 @@ class CameraDiscovery(private val context: Context) {
     }
 
     fun discoverMacroCameraIdOptions(): List<String> {
+        val lensIdBlacklist = loadLensIdBlacklist().toSet()
         val preferredMacroCameraId = loadPreferredMacroCameraId()
         val discoveredCameras = discoverCameraCandidates(
             includeDuplicateMainCameraIds = true,
-            preferredMacroCameraId = preferredMacroCameraId
+            preferredMacroCameraId = preferredMacroCameraId,
+            lensIdBlacklist = lensIdBlacklist
         )
         val options = discoveredCameras.backCameras
             .map { it.info.cameraId }
@@ -139,10 +163,14 @@ class CameraDiscovery(private val context: Context) {
     private fun discoverCameraCandidates(
         includeDuplicateMainCameraIds: Boolean,
         preferredMainCameraId: String? = null,
-        preferredMacroCameraId: String? = null
+        preferredMacroCameraId: String? = null,
+        lensIdBlacklist: Set<String>
     ): DiscoveredCameraCandidates {
         val customLensIdSet = loadCustomLensIds().toSet()
-        val baseCameraIds = getAllCameraIds(includeDuplicateMainCameraIds)
+        val baseCameraIds = getAllCameraIds(
+            includeDuplicateMainCameraIds = includeDuplicateMainCameraIds,
+            lensIdBlacklist = lensIdBlacklist
+        )
         val logicalCameraDiscoveryConfig = loadLogicalCameraDiscoveryConfig()
         val logicalCameraBindings = findLogicalCameraBindings(
             publicCameraIdSet = baseCameraIds.toSet(),
@@ -159,7 +187,15 @@ class CameraDiscovery(private val context: Context) {
             logicalCameraBindings = logicalCameraBindings
         )
         // 获取完整的 Camera ID 列表（包括探测的隐藏摄像头和逻辑多摄暴露的物理摄像头）
-        val allCameraIds = (preferredDirectCameraIds + logicalCameraBindings.keys).distinct()
+        val allCameraIds = (preferredDirectCameraIds + logicalCameraBindings.keys)
+            .distinct()
+            .filterNot { cameraId ->
+                val isBlacklisted = lensIdBlacklist.contains(cameraId)
+                if (isBlacklisted) {
+                    PLog.d(TAG, "Camera $cameraId skipped from discovery: lens ID blacklist")
+                }
+                isBlacklisted
+            }
         PLog.d(TAG, "Camera2 discovered IDs: $allCameraIds")
 
         val backCameras = mutableListOf<CameraInfoWithZoom>()
@@ -214,26 +250,37 @@ class CameraDiscovery(private val context: Context) {
     /**
      * 获取所有 Camera ID，包括通过探测发现的隐藏摄像头
      */
-    private fun getAllCameraIds(includeDuplicateMainCameraIds: Boolean = false): List<String> {
+    private fun getAllCameraIds(
+        includeDuplicateMainCameraIds: Boolean = false,
+        lensIdBlacklist: Set<String>
+    ): List<String> {
         // 使用缓存
         if (includeDuplicateMainCameraIds) {
-            cachedCameraIdsWithDuplicateMain?.let { return appendCustomCameraIds(it) }
+            cachedCameraIdsWithDuplicateMain?.let { cachedIds ->
+                return appendCustomCameraIds(cachedIds).filterNot(lensIdBlacklist::contains)
+            }
         } else {
-            cachedCameraIds?.let { return appendCustomCameraIds(it) }
+            cachedCameraIds?.let { cachedIds ->
+                return appendCustomCameraIds(cachedIds).filterNot(lensIdBlacklist::contains)
+            }
         }
 
         val systemCameraIds = getPublicCameraIds()
+        val availableSystemCameraIds = systemCameraIds.filterNot(lensIdBlacklist::contains)
 
         PLog.d(TAG, "System camera IDs: $systemCameraIds")
 
         // 探测隐藏的摄像头
-        val lensIdBlacklist = loadLensIdBlacklist().toSet()
         val probedIds = if (DeviceUtil.isGoogle || DeviceUtil.isHuawei) {
             emptyList()
         } else {
-            probeCameraIds(systemCameraIds, lensIdBlacklist, includeDuplicateMainCameraIds)
+            probeCameraIds(
+                existingIds = availableSystemCameraIds,
+                lensIdBlacklist = lensIdBlacklist,
+                includeDuplicateMainCameraIds = includeDuplicateMainCameraIds
+            )
         }
-        val allIds = (systemCameraIds + probedIds).distinct()
+        val allIds = (availableSystemCameraIds + probedIds).distinct()
 
         PLog.d(TAG, "After probing: $allIds (probed: $probedIds)")
 
@@ -242,7 +289,7 @@ class CameraDiscovery(private val context: Context) {
         } else {
             cachedCameraIds = allIds
         }
-        return appendCustomCameraIds(allIds)
+        return appendCustomCameraIds(allIds).filterNot(lensIdBlacklist::contains)
     }
 
     private fun getRawCameraIdList(): List<String> {
@@ -790,14 +837,13 @@ class CameraDiscovery(private val context: Context) {
         val foundMap = mutableMapOf<String, Float>()
 
         for (cameraId in getProbeCameraIdCandidates()) {
-
-            if (existingSet.contains(cameraId)) {
-                foundMap[cameraId] = loadZoomRation(cameraId) ?: 1f
+            if (lensIdBlacklist.contains(cameraId)) {
+                PLog.d(TAG, "Probe camera $cameraId skipped: lens ID blacklist")
                 continue
             }
 
-            if (lensIdBlacklist.contains(cameraId)) {
-                PLog.d(TAG, "Probe camera $cameraId skipped: lens ID blacklist")
+            if (existingSet.contains(cameraId)) {
+                foundMap[cameraId] = loadZoomRation(cameraId) ?: 1f
                 continue
             }
 

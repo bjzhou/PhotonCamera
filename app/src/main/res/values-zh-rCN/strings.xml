@@ -822,7 +822,7 @@
     <string name="settings_custom_lens_ids">自定义镜头 ID</string>
     <string name="settings_custom_lens_ids_description">手动添加相机 ID，多个 ID 用逗号分隔。检测可用后会加入镜头列表并显示特殊标识。</string>
     <string name="settings_lens_id_blacklist">镜头 ID 黑名单</string>
-    <string name="settings_lens_id_blacklist_description">多个相机 ID 用逗号分隔。填入的 ID 将不再被主动探测。</string>
+    <string name="settings_lens_id_blacklist_description">多个相机 ID 用逗号分隔。无论通过何种方式发现，匹配 ID 的镜头都将被屏蔽。</string>
     <string name="settings_custom_focal_length_add">添加自定义焦段</string>
     <string name="settings_custom_focal_length_hint">如：35、50、85、2x、4x</string>
     <string name="settings_dro_mode">RAW动态范围优化 (DRO)</string>

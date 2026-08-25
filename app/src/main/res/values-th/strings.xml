@@ -631,7 +631,7 @@
     <string name="settings_custom_lens_ids">รหัสเลนส์ที่กำหนดเอง</string>
     <string name="settings_custom_lens_ids_description">เพิ่มรหัสกล้องด้วยตนเอง โดยแยกหลายรหัสด้วยเครื่องหมายจุลภาค เมื่อการตรวจจับพร้อมใช้งาน ระบบจะเพิ่มเข้าไปในรายการเลนส์และรหัสพิเศษจะแสดงขึ้น</string>
     <string name="settings_lens_id_blacklist">บัญชีดำ ID เลนส์</string>
-    <string name="settings_lens_id_blacklist_description">แยกรหัสกล้องหลายตัวด้วยเครื่องหมายจุลภาค ID ที่กรอกไว้จะไม่ถูกตรวจสอบอีกต่อไป</string>
+    <string name="settings_lens_id_blacklist_description">คั่น ID กล้องหลายรายการด้วยเครื่องหมายจุลภาค เลนส์ที่มี ID ตรงกันจะถูกบล็อกไม่ว่าจะค้นพบด้วยวิธีใด</string>
     <string name="settings_custom_focal_length_add">เพิ่มทางยาวโฟกัสที่กำหนดเอง</string>
     <string name="settings_custom_focal_length_hint">เช่น: 35, 50, 85</string>
     <string name="settings_dro_mode">ตัวเพิ่มประสิทธิภาพช่วงไดนามิก RAW (DRO)</string>

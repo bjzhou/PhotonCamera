@@ -803,7 +803,7 @@
     <string name="settings_custom_lens_ids">自訂鏡頭 ID</string>
     <string name="settings_custom_lens_ids_description">手動添加相機 ID，多個 ID 用逗號分隔。檢測可用后會加入鏡頭列表并顯示特殊標識。</string>
     <string name="settings_lens_id_blacklist">鏡頭 ID 黑名單</string>
-    <string name="settings_lens_id_blacklist_description">多個相機 ID 用逗號分隔。填入的 ID 將不再被主動探測。</string>
+    <string name="settings_lens_id_blacklist_description">多個相機 ID 用逗號分隔。無論透過何種方式發現，符合 ID 的鏡頭都會被封鎖。</string>
     <string name="settings_custom_focal_length_add">添加自訂焦段</string>
     <string name="settings_custom_focal_length_hint">如：35、50、85、2x、4x</string>
     <string name="settings_dro_mode">RAW動態范圍優化 (DRO)</string>
