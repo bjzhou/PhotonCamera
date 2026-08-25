@@ -41,6 +41,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
@@ -135,7 +136,7 @@ fun CameraTopSheet(
     availableLuts: List<LutInfo>,
     previewThumbnail: Bitmap?,
     rawExposureCompensation: Float,
-    rawAutoExposure: Boolean,
+    rawAdaptiveExposureMode: RawAdaptiveExposureMode,
     rawHighlightsAdjustment: Float,
     rawShadowsAdjustment: Float,
     rawDROMode: String,
@@ -156,6 +157,7 @@ fun CameraTopSheet(
     onRawDROModeChange: (String) -> Unit,
     onRawColorEngineChange: (RawRenderingEngine) -> Unit,
     onRawToneMappingParametersChange: (RawToneMappingParameters) -> Unit,
+    onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit,
     onRawSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onRawSpectralFilmPrintChange: (String?) -> Unit,
     meteringMode: MeteringMode,
@@ -702,7 +704,7 @@ fun CameraTopSheet(
                     availableLuts = availableLuts,
                     thumbnail = previewThumbnail,
                     rawExposureCompensation = rawExposureCompensation,
-                    rawAutoExposure = rawAutoExposure,
+                    rawAdaptiveExposureMode = rawAdaptiveExposureMode,
                     rawHighlightsAdjustment = rawHighlightsAdjustment,
                     rawShadowsAdjustment = rawShadowsAdjustment,
                     rawBlackPointCorrection = rawBlackPointCorrection,
@@ -721,7 +723,7 @@ fun CameraTopSheet(
                     hncsFilmCurveMode = rawHncsFilmCurveMode,
                     onHncsFilmCurveModeChange = onRawHncsFilmCurveModeChange,
                     onRawExposureCompensationChange = {},
-                    onRawAutoExposureChange = {},
+                    onRawAdaptiveExposureModeChange = onRawAdaptiveExposureModeChange,
                     onRawHighlightsAdjustmentChange = {},
                     onRawShadowsAdjustmentChange = {},
                     onRawBlackPointCorrectionChange = {},

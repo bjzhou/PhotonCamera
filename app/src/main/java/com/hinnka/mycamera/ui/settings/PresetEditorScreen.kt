@@ -37,12 +37,14 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.MeteringSystem
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.ui.components.FrameSelector
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
 import com.hinnka.mycamera.ui.components.RawDcpSelector
+import com.hinnka.mycamera.ui.components.RawAdaptiveExposureModeSetting
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.rawDcpLensOptions
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
@@ -146,8 +148,12 @@ fun PresetEditorScreen(
     var rawExposureCompensation by remember {
         mutableStateOf(sourcePreset?.rawExposureCompensation ?: 0f)
     }
-    var rawAutoExposure by remember {
-        mutableStateOf(sourcePreset?.rawAutoExposure ?: true)
+    var rawAdaptiveExposureMode by remember {
+        mutableStateOf(
+            RawAdaptiveExposureMode.resolve(
+                usePhotonHdr = sourcePreset?.rawPhotonHdr ?: false,
+            )
+        )
     }
     var rawHighlightsAdjustment by remember {
         mutableStateOf(sourcePreset?.rawHighlightsAdjustment ?: 0f)
@@ -167,7 +173,6 @@ fun PresetEditorScreen(
         mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine))
     }
     var rawOppoMasterToneMap by remember { mutableStateOf(sourcePreset?.rawOppoMasterToneMap ?: false) }
-    var rawPhotonHdr by remember { mutableStateOf(sourcePreset?.rawPhotonHdr ?: false) }
     var rawSpectralFilmStock by remember { mutableStateOf(sourcePreset?.rawSpectralFilmStock ?: "kodak_portra_400") }
     var rawSpectralFilmPrint by remember { mutableStateOf(sourcePreset?.rawSpectralFilmPrint ?: "kodak_2383") }
     var rawDROMode by remember { mutableStateOf(sourcePreset?.rawDROMode ?: "OFF") }
@@ -213,13 +218,13 @@ fun PresetEditorScreen(
             rawMaxNoiseReduction = rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = rawMaxChromaNoiseReduction,
             rawExposureCompensation = rawExposureCompensation,
-            rawAutoExposure = rawAutoExposure,
+            rawAutoExposure = rawAdaptiveExposureMode.usesLegacyAutoExposure,
             rawHighlightsAdjustment = rawHighlightsAdjustment,
             rawShadowsAdjustment = rawShadowsAdjustment,
             rawBlackPointCorrection = rawBlackPointCorrection,
             rawWhitePointCorrection = rawWhitePointCorrection,
             rawOppoMasterToneMap = rawOppoMasterToneMap,
-            rawPhotonHdr = rawPhotonHdr,
+            rawPhotonHdr = rawAdaptiveExposureMode.usesPhotonHdr,
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
             rawDROMode = rawDROMode,
@@ -504,11 +509,9 @@ fun PresetEditorScreen(
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_raw_auto_exposure),
-                    description = stringResource(R.string.settings_raw_auto_exposure_description),
-                    checked = rawAutoExposure,
-                    onCheckedChange = { rawAutoExposure = it }
+                RawAdaptiveExposureModeSetting(
+                    mode = rawAdaptiveExposureMode,
+                    onModeChange = { rawAdaptiveExposureMode = it },
                 )
 
                 SliderSettingItem(
@@ -614,15 +617,6 @@ fun PresetEditorScreen(
                     valueRange = DenoiseStrength.valueRange,
                     resetValue = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
                     onValueChange = { rawMaxChromaNoiseReduction = it },
-                )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_raw_photon_hdr),
-                    description = stringResource(R.string.settings_raw_photon_hdr_description),
-                    checked = rawPhotonHdr,
-                    onCheckedChange = { rawPhotonHdr = it }
                 )
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))

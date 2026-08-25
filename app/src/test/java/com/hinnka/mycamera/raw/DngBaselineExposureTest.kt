@@ -17,15 +17,15 @@ class DngBaselineExposureTest {
     }
 
     @Test
-    fun sceneEstimateReplacesUltraShortFrameNormalizationBaseline() {
+    fun legacyExposureOffsetIsAddedToSourceNormalizationBaseline() {
         val ultraShortNormalizationEv = kotlin.math.log2(3f)
-        val sceneBaselineEv = 1.600188f
+        val legacyExposureOffsetEv = 1.600188f
 
         assertEquals(
-            sceneBaselineEv,
+            ultraShortNormalizationEv + legacyExposureOffsetEv,
             DngBaselineExposure.resolveCaptureBaseline(
                 sourceBaselineEv = ultraShortNormalizationEv,
-                sceneBaselineEv = sceneBaselineEv,
+                legacyExposureOffsetEv = legacyExposureOffsetEv,
             ),
             0f,
         )
@@ -39,7 +39,7 @@ class DngBaselineExposureTest {
             ultraShortNormalizationEv,
             DngBaselineExposure.resolveCaptureBaseline(
                 sourceBaselineEv = ultraShortNormalizationEv,
-                sceneBaselineEv = null,
+                legacyExposureOffsetEv = null,
             ),
             0f,
         )

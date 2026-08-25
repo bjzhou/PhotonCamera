@@ -16,13 +16,15 @@ object DngBaselineExposure {
     /**
      * Resolves ownership of the BaselineExposure written for a captured RAW.
      *
-     * [sourceBaselineEv] restores source-domain normalization such as a multi-frame stack that
-     * was normalized to its ultra-short frame. Scene exposure inference deliberately meters the
-     * same pixels without applying that source baseline, so its result is already the complete
-     * BaselineExposure for those pixels. Combining the two would apply the normalization twice.
+     * [sourceBaselineEv] preserves source-domain normalization such as a multi-frame stack that
+     * was normalized to its ultra-short frame. The classic viewfinder matcher returns an offset
+     * relative to that source baseline. Photon HDR never supplies this offset.
      */
-    fun resolveCaptureBaseline(sourceBaselineEv: Float, sceneBaselineEv: Float?): Float {
-        val estimated = sceneBaselineEv?.takeIf(Float::isFinite)
-        return sanitize(estimated ?: sourceBaselineEv)
+    fun resolveCaptureBaseline(
+        sourceBaselineEv: Float,
+        legacyExposureOffsetEv: Float?,
+    ): Float {
+        val offset = legacyExposureOffsetEv?.takeIf(Float::isFinite) ?: 0f
+        return sanitize(sourceBaselineEv + offset)
     }
 }

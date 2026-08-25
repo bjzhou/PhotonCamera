@@ -15,13 +15,11 @@ internal data class RawSceneLinearFrame(
     val rgb: FloatArray,
 )
 
-/** Capture-side values consumed by both DNG BaselineExposure and MGC HDRNet. */
+/** Capture-side value consumed by MGC HDRNet. */
 internal data class RawSceneExposureEstimate(
-    val shortCaptureEv: Float,
     val hdrRatio: Float,
 ) {
     init {
-        require(shortCaptureEv.isFinite())
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
     }
 }
@@ -82,7 +80,6 @@ internal data class RawSceneExposureFusion(
     val finalLongGain: Float,
     val finalPortraitGain: Float,
     val finalGain: Float,
-    val shortCaptureEv: Float,
     val hdrRatioBeforeLimit: Float,
     val finalHdrRatio: Float,
     val hdrRatioLimited: Boolean,
@@ -121,8 +118,6 @@ internal object RawSceneExposureMath {
     private const val NANOS_PER_MILLISECOND = 1_000_000.0
     private const val MILLIS_PER_SECOND = 1_000.0
     private const val HIGHLIGHT_CLIP_LEVEL = 1.0
-    private val LOG_TWO = kotlin.math.ln(2.0)
-
     fun measureSceneBrightness(
         frame: RawSceneLinearFrame,
         exposureTimeNs: Long,
@@ -283,12 +278,6 @@ internal object RawSceneExposureMath {
         return gain.takeIf { it.isFinite() && it > 0.0 }?.toFloat()
     }
 
-    fun linearGainToEv(gain: Float): Float? {
-        if (!gain.isFinite() || gain <= 0f) return null
-        val ev = kotlin.math.ln(gain.toDouble()) / LOG_TWO
-        return ev.takeIf(Double::isFinite)?.toFloat()
-    }
-
     /**
      * Reproduces the MGC ML-AE ideal-TET to final-TET state transition.
      *
@@ -393,7 +382,6 @@ internal object RawSceneExposureMath {
         val longClippedFraction = clippedFraction(frame, longIdealGain) ?: return null
         val portraitClippedFraction = clippedFraction(frame, portraitIdealGain) ?: return null
         val finalClippedFraction = clippedFraction(frame, finalGain) ?: return null
-        val shortCaptureEv = linearGainToEv(finalGain) ?: return null
         return RawSceneExposureFusion(
             idealShortTetMs = idealShortTetMs,
             idealLongTetMs = idealLongTetMs,
@@ -408,7 +396,6 @@ internal object RawSceneExposureMath {
             finalLongGain = finalLongGain,
             finalPortraitGain = finalPortraitGain,
             finalGain = finalGain,
-            shortCaptureEv = shortCaptureEv,
             hdrRatioBeforeLimit = hdrRatioBeforeLimit,
             finalHdrRatio = finalLongTetMs / finalShortTetMs,
             hdrRatioLimited = hdrRatioLimited,
@@ -590,7 +577,6 @@ internal object RawSceneExposureEstimator {
                         "finalShortGain=${fusion.finalShortGain} " +
                         "finalLongGain=${fusion.finalLongGain} " +
                         "finalPortraitGain=${fusion.finalPortraitGain} " +
-                        "shortCaptureEv=${fusion.shortCaptureEv} " +
                         "solver=MGC_ML_AE_ORIGINAL_TET " +
                         "hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit} " +
                         "finalHdrRatio=${fusion.finalHdrRatio} " +
@@ -622,7 +608,6 @@ internal object RawSceneExposureEstimator {
                         "apertureTransmission=${measurement.apertureTransmission}",
                 )
                 RawSceneExposureEstimate(
-                    shortCaptureEv = fusion.shortCaptureEv,
                     hdrRatio = fusion.finalHdrRatio,
                 )
             } catch (error: Throwable) {

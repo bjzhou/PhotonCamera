@@ -30,6 +30,8 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
     if (!isNull("rawAutoExposureMode")) {
         when (optString("rawAutoExposureMode")) {
             "OFF" -> return false
+            "PHOTON_HDR" -> return false
+            "LEGACY_AUTO_EXPOSURE" -> return true
             "VIEWFINDER_MATCH", "DYNAMIC_SCENE_ESTIMATION" -> return true
         }
     }

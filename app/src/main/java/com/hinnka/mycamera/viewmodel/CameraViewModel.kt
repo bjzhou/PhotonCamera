@@ -69,6 +69,7 @@ import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
@@ -1567,9 +1568,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawExposureCompensation: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawExposureCompensation }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawAutoExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawAutoExposure }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val rawAdaptiveExposureMode: StateFlow<RawAdaptiveExposureMode> =
+        userPreferencesRepository.userPreferences
+            .map { preferences ->
+                RawAdaptiveExposureMode.resolve(
+                    usePhotonHdr = preferences.rawToneMappingParameters.usePhotonHdr,
+                )
+            }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE,
+            )
     val rawHighlightsAdjustment: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawHighlightsAdjustment }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
@@ -2503,8 +2513,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawExposureCompensation(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawExposureCompensation(value) }
     }
-    fun setRawAutoExposure(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.saveRawAutoExposure(enabled) }
+    fun setRawAdaptiveExposureMode(mode: RawAdaptiveExposureMode) {
+        viewModelScope.launch { userPreferencesRepository.saveRawAdaptiveExposureMode(mode) }
     }
     fun setRawHighlightsAdjustment(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawHighlightsAdjustment(value) }

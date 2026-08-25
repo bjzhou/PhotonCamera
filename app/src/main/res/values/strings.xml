@@ -879,6 +879,11 @@
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
     <string name="settings_raw_photon_hdr">Photon HDR</string>
     <string name="settings_raw_photon_hdr_description">Preserves more highlight and shadow detail in high-contrast scenes for more natural tonal transitions.</string>
+    <string name="settings_raw_photon_hdr_edit_description">Enable Photon HDR for this photo. It can also be enabled for photos captured with Classic Auto Exposure.</string>
+    <string name="settings_raw_adaptive_exposure_mode">Adaptive RAW Exposure</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">Choose how the photo’s brightness is handled. Photon HDR preserves more highlight and shadow detail; Classic Auto Exposure aims to match the brightness seen while shooting.</string>
+    <string name="settings_raw_adaptive_exposure_mode_photon_hdr">Photon HDR</string>
+    <string name="settings_raw_adaptive_exposure_mode_legacy">Classic Auto Exposure</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX Black Relative Exposure</string>
     <string name="settings_raw_agx_shoulder">AgX Shoulder</string>

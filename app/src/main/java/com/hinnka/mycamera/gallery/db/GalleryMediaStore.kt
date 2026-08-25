@@ -18,6 +18,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -224,7 +225,9 @@ object GalleryMediaStore {
             rawChromaDenoiseValue = metadata.rawChromaDenoiseValue,
             rawExposureCompensation = metadata.rawExposureCompensation,
             rawAutoExposure = metadata.rawAutoExposure,
-            rawAutoExposureMode = null,
+            rawAutoExposureMode = RawAdaptiveExposureMode.resolve(
+                usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
+            ).persistedValue,
             rawHighlightsAdjustment = metadata.rawHighlightsAdjustment,
             rawShadowsAdjustment = metadata.rawShadowsAdjustment,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection,
@@ -397,7 +400,12 @@ object GalleryMediaStore {
 
     private fun GalleryMediaEntity.toMetadata(): MediaMetadata {
         val resolvedRawAutoExposure = rawAutoExposureMode?.let { mode ->
-            !mode.equals("OFF", ignoreCase = true)
+            when {
+                mode.equals(RawAdaptiveExposureMode.PHOTON_HDR.persistedValue, true) -> false
+                mode.equals(RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE.persistedValue, true) ->
+                    true
+                else -> !mode.equals("OFF", ignoreCase = true)
+            }
         } ?: rawAutoExposure
         return MediaMetadata(
             version = version.takeIf { it > 0 } ?: MediaMetadata().version,

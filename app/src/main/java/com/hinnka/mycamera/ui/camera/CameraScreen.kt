@@ -251,7 +251,7 @@ fun CameraScreen(
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
-    val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
+    val rawAdaptiveExposureMode by viewModel.rawAdaptiveExposureMode.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
     val rawShadowsAdjustment by viewModel.rawShadowsAdjustment.collectAsState()
     val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
@@ -1610,7 +1610,7 @@ fun CameraScreen(
             availableLuts = viewModel.availableLutList,
             previewThumbnail = viewModel.previewThumbnail,
             rawExposureCompensation = rawExposureCompensation,
-            rawAutoExposure = rawAutoExposure,
+            rawAdaptiveExposureMode = rawAdaptiveExposureMode,
             rawHighlightsAdjustment = rawHighlightsAdjustment,
             rawShadowsAdjustment = rawShadowsAdjustment,
             rawDROMode = droMode,
@@ -1644,6 +1644,7 @@ fun CameraScreen(
             onRawDROModeChange = { viewModel.setDroMode(it) },
             onRawColorEngineChange = { viewModel.setRawColorEngine(it) },
             onRawToneMappingParametersChange = { viewModel.setRawToneMappingParameters(it) },
+            onRawAdaptiveExposureModeChange = viewModel::setRawAdaptiveExposureMode,
             onRawSpectralFilmSelectionChange = { viewModel.setRawSpectralFilmSelection(it) },
             onRawSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
             meteringMode = state.meteringMode,

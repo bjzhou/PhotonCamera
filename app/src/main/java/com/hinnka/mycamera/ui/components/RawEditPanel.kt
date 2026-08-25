@@ -32,6 +32,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -93,7 +94,7 @@ fun RawEditPanel(
     availableLuts: List<LutInfo>,
     thumbnail: Bitmap?,
     rawExposureCompensation: Float,
-    rawAutoExposure: Boolean,
+    rawAdaptiveExposureMode: RawAdaptiveExposureMode,
     rawHighlightsAdjustment: Float,
     rawShadowsAdjustment: Float,
     rawBlackPointCorrection: Float,
@@ -112,7 +113,7 @@ fun RawEditPanel(
     onImportDcp: () -> Unit,
     onDeleteDcp: (DcpInfo) -> Unit,
     onRawExposureCompensationChange: (Float) -> Unit,
-    onRawAutoExposureChange: (Boolean) -> Unit,
+    onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit,
     onRawHighlightsAdjustmentChange: (Float) -> Unit,
     onRawShadowsAdjustmentChange: (Float) -> Unit,
     onRawBlackPointCorrectionChange: (Float) -> Unit,
@@ -133,7 +134,7 @@ fun RawEditPanel(
     onAdjustmentEnd: () -> Unit,
     onRawExposureCompensationReset: ((Float) -> Unit)? = null,
     onOpenBaselineLutSheet: (() -> Unit)? = null,
-    showAutoExposureControl: Boolean = true,
+    showAdaptiveExposureModeSelector: Boolean = true,
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
     selectedHncsProfileId: String? = null,
@@ -156,17 +157,31 @@ fun RawEditPanel(
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        RawSwitchSettingItem(
-            title = stringResource(R.string.settings_raw_photon_hdr),
-            description = stringResource(R.string.settings_raw_photon_hdr_description),
-            checked = rawToneMappingParameters.usePhotonHdr,
-            onCheckedChange = { enabled ->
-                onRawToneMappingParametersChange(
-                    rawToneMappingParameters.withPhotonHdr(enabled)
-                )
-                onAdjustmentEnd()
-            }
-        )
+        if (showAdaptiveExposureModeSelector) {
+            RawAdaptiveExposureModeSetting(
+                mode = rawAdaptiveExposureMode,
+                onModeChange = { mode ->
+                    onRawAdaptiveExposureModeChange(mode)
+                    onAdjustmentEnd()
+                },
+            )
+        } else {
+            RawSwitchSettingItem(
+                title = stringResource(R.string.settings_raw_photon_hdr),
+                description = stringResource(R.string.settings_raw_photon_hdr_edit_description),
+                checked = rawAdaptiveExposureMode.usesPhotonHdr,
+                onCheckedChange = { enabled ->
+                    onRawAdaptiveExposureModeChange(
+                        if (enabled) {
+                            RawAdaptiveExposureMode.PHOTON_HDR
+                        } else {
+                            RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE
+                        }
+                    )
+                    onAdjustmentEnd()
+                },
+            )
+        }
         Spacer(modifier = Modifier.height(16.dp))
 
         RawRenderingEngineSelector(
@@ -298,14 +313,6 @@ fun RawEditPanel(
                 onAdjustmentStart = onAdjustmentStart,
                 onAdjustmentEnd = onAdjustmentEnd
             )
-            if (showAutoExposureControl) {
-                RawSwitchSettingItem(
-                    title = stringResource(R.string.settings_raw_auto_exposure),
-                    description = stringResource(R.string.settings_raw_auto_exposure_description),
-                    checked = rawAutoExposure,
-                    onCheckedChange = onRawAutoExposureChange
-                )
-            }
             SliderSettingItem(
                 title = stringResource(R.string.settings_raw_exposure_compensation),
                 value = rawExposureCompensation,
@@ -388,6 +395,31 @@ fun RawEditPanel(
         )
         Spacer(modifier = Modifier.height(16.dp))
     }
+}
+
+@Composable
+fun RawAdaptiveExposureModeSetting(
+    mode: RawAdaptiveExposureMode,
+    onModeChange: (RawAdaptiveExposureMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    RawChoiceSetting(
+        title = stringResource(R.string.settings_raw_adaptive_exposure_mode),
+        description = stringResource(R.string.settings_raw_adaptive_exposure_mode_description),
+        levels = listOf(
+            RawAdaptiveExposureMode.PHOTON_HDR.name to
+                stringResource(R.string.settings_raw_adaptive_exposure_mode_photon_hdr),
+            RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE.name to
+                stringResource(R.string.settings_raw_adaptive_exposure_mode_legacy),
+        ),
+        currentLevel = mode.name,
+        onLevelSelected = { persistedName ->
+            RawAdaptiveExposureMode.entries
+                .firstOrNull { it.name == persistedName }
+                ?.let(onModeChange)
+        },
+        modifier = modifier,
+    )
 }
 
 /** Shared RAW DNG metadata correction controls for a lens-specific configuration. */

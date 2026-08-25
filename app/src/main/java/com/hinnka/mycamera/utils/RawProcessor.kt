@@ -674,7 +674,7 @@ object RawProcessor {
                     .fromCameraCharacteristics(characteristics),
             )
         )
-        val exposureOffsetEv = captureProfile?.exposureOffsetEv
+        val legacyExposureOffsetEv = captureProfile?.exposureOffsetEv
             ?.takeIf { it.isFinite() }
             ?.coerceIn(
                 com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MIN_EV,
@@ -682,7 +682,7 @@ object RawProcessor {
             )
         val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
             sourceBaselineEv = sourceBaselineExposureEv,
-            sceneBaselineEv = exposureOffsetEv,
+            legacyExposureOffsetEv = legacyExposureOffsetEv,
         )
         val profileRequired = options.generatePhotonPgtm
         if (profileRequired && captureProfile?.profileGainTableMap == null) {
@@ -709,12 +709,11 @@ object RawProcessor {
                 TAG,
                 "RAW_SCENE_EXPOSURE stage=SHARED_PROFILE_READY " +
                     "enabled=${options.captureProfilePreparer != null} " +
-                    "estimated=${exposureOffsetEv != null} " +
+                    "legacyAutoExposure=${legacyExposureOffsetEv != null} " +
                     "sourceBaselineEv=$sourceBaselineExposureEv " +
                     "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
-                    "sceneBaselineEv=$exposureOffsetEv " +
-                    "sceneBaselineGain=${exposureOffsetEv?.let(DngBaselineExposure::exactGain)} " +
-                    "sourceBaselineApplied=${exposureOffsetEv == null} " +
+                    "legacyExposureOffsetEv=$legacyExposureOffsetEv " +
+                    "sourceBaselinePreserved=true " +
                     "finalBaselineEv=${finalProfile.baselineExposureEv} " +
                     "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +

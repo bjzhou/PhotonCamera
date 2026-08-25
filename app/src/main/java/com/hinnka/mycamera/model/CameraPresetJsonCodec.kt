@@ -53,6 +53,10 @@ internal object CameraPresetJsonCodec {
         } else {
             useRaw && legacyMultiFrameEnabled
         }
+        val rawPhotonHdr =
+            obj.boolean("rawPhotonHdr", false) ||
+                obj.boolean("rawPhotonPgtmToneMap", false) ||
+                obj.boolean("rawGooglePixelToneMap", false)
 
         return CameraPreset(
             id = id,
@@ -99,7 +103,7 @@ internal object CameraPresetJsonCodec {
             ),
             rawExposureCompensation = obj.float("rawExposureCompensation", 0f)
                 .coerceIn(-4f, 4f),
-            rawAutoExposure = obj.boolean("rawAutoExposure", true),
+            rawAutoExposure = !rawPhotonHdr,
             rawHighlightsAdjustment = obj.float("rawHighlightsAdjustment", 0f)
                 .coerceIn(-1f, 1f),
             rawShadowsAdjustment = obj.float("rawShadowsAdjustment", 0f)
@@ -109,10 +113,7 @@ internal object CameraPresetJsonCodec {
             rawWhitePointCorrection = obj.float("rawWhitePointCorrection", 0f)
                 .coerceIn(-1f, 1f),
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
-            rawPhotonHdr =
-                obj.boolean("rawPhotonHdr", false) ||
-                    obj.boolean("rawPhotonPgtmToneMap", false) ||
-                    obj.boolean("rawGooglePixelToneMap", false),
+            rawPhotonHdr = rawPhotonHdr,
             rawSpectralFilmStock = obj.stringOrNull("rawSpectralFilmStock"),
             rawSpectralFilmPrint = obj.stringOrNull("rawSpectralFilmPrint"),
             rawDROMode = parseDroMode(obj.stringOrNull("rawDROMode")),

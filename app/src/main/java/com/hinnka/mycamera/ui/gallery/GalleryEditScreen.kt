@@ -72,6 +72,7 @@ import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
@@ -1733,7 +1734,10 @@ fun GalleryEditScreen(
                                         availableLuts = availableLuts,
                                         thumbnail = previewBitmap,
                                         rawExposureCompensation = editRawExposureCompensation,
-                                        rawAutoExposure = editRawAutoExposure,
+                                        rawAdaptiveExposureMode = RawAdaptiveExposureMode.resolve(
+                                            usePhotonHdr =
+                                                editRawToneMappingParameters.usePhotonHdr,
+                                        ),
                                         rawHighlightsAdjustment = editRawHighlightsAdjustment,
                                         rawShadowsAdjustment = editRawShadowsAdjustment,
                                         rawBlackPointCorrection = editRawBlackPointCorrection,
@@ -1804,14 +1808,8 @@ fun GalleryEditScreen(
                                                 if (success) requestRawPreviewRefresh()
                                             }
                                         },
-                                        onRawAutoExposureChange = {
-                                            /*if (it) {
-                                                viewModel.saveRawExposureCompensationValue(currentEditSourcePhoto, 0f)
-                                            }
-                                            viewModel.saveRawAutoExposureValue(currentEditSourcePhoto, it) {
-                                                requestRawPreviewRefresh()
-                                            }*/
-                                        },
+                                        onRawAdaptiveExposureModeChange =
+                                            viewModel::selectRawAdaptiveExposureModeForEdit,
                                         onRawHighlightsAdjustmentChange = {
                                             viewModel.saveRawHighlightsAdjustmentValue(currentEditSourcePhoto, it)
                                         },
@@ -1885,7 +1883,7 @@ fun GalleryEditScreen(
                                         onOpenBaselineLutSheet = {
                                             showRawBaselineLutSelectorSheet = true
                                         },
-                                        showAutoExposureControl = false,
+                                        showAdaptiveExposureModeSelector = false,
                                         showDngMetadataControls = true,
                                         contentMode = RawEditPanelContentMode.FULL,
                                         modifier = Modifier.fillMaxWidth()

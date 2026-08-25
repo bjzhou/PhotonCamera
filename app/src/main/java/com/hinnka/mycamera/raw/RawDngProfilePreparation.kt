@@ -93,7 +93,9 @@ data class RawDngCaptureProfileInput(
 )
 
 data class RawDngCaptureProfileResult(
+    /** Classic auto-exposure EV relative to the source baseline; always null for Photon HDR. */
     val exposureOffsetEv: Float?,
+    /** Photon HDR long/short TET ratio; always null for classic auto exposure. */
     val hdrRatio: Float?,
     val profileGainTableMap: DngProfileGainTableMap?,
 )
