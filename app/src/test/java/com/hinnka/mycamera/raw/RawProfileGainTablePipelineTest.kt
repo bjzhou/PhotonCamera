@@ -92,108 +92,32 @@ class RawProfileGainTablePipelineTest {
     }
 
     @Test
-    fun hdrNetGridCancelsBaselineAndPrecompensatesAcr3() {
+    fun hdrNetPlanUsesDenseGridAndPrecompensatesBaselineExposure() {
         val plan = checkNotNull(
             DngPhotonProfileGainTableGenerator.hdrNetPlan(
                 sourceWidth = 4000,
                 sourceHeight = 3000,
                 baselineExposureEv = 2f,
-                hdrRatio = 1f,
-            ),
-        )
-        val coefficients = FloatArray(
-            DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
-        ) { index ->
-            if (index % DngPhotonProfileGainTableGenerator.HDRNET_COEFFICIENT_COUNT == 0) {
-                1f
-            } else {
-                0f
-            }
-        }
-        val map = checkNotNull(
-            DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(
-                plan,
-                coefficients,
-            ),
-        )
-
-        assertEquals(DngPhotonProfileGainTableGenerator.HDRNET_GRID_WIDTH, map.mapPointsH)
-        assertEquals(DngPhotonProfileGainTableGenerator.HDRNET_GRID_HEIGHT, map.mapPointsV)
-        assertEquals(257, map.mapPointsN)
-        map.gains.forEachIndexed { index, gain ->
-            val point = index % map.mapPointsN
-            val evaluatedPoint = if (point == 0) 1 else point
-            val sourceLuma = evaluatedPoint.toFloat() / map.mapPointsN
-            val expectedGain = ACR3Curve.inputForOutput(sourceLuma) / (4f * sourceLuma)
-            assertEquals(expectedGain, gain, 1e-6f)
-        }
-        DngPhotonProfileGainTableGenerator.HDRNET_LUMA_WEIGHTS
-            .forEachIndexed { index, weight ->
-                assertEquals(weight / 4f, map.mapInputWeights[index], 1e-7f)
-        }
-    }
-
-    @Test
-    fun hdrNetDoesNotNormalizeAwayNetworkExposure() {
-        val plan = checkNotNull(
-            DngPhotonProfileGainTableGenerator.hdrNetPlan(
-                sourceWidth = 4000,
-                sourceHeight = 3000,
-                baselineExposureEv = 0f,
                 hdrRatio = 4f,
             ),
         )
-        val coefficients = FloatArray(
-            DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
-        ) { index ->
-            if (index % DngPhotonProfileGainTableGenerator.HDRNET_COEFFICIENT_COUNT == 0) {
-                1f
-            } else {
-                0f
+
+        assertEquals(
+            DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_WIDTH,
+            plan.grid.mapPointsH,
+        )
+        assertEquals(
+            DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_HEIGHT,
+            plan.grid.mapPointsV,
+        )
+        assertEquals(257, plan.pointCount)
+        assertEquals(4f, plan.hdrRatio, 0f)
+        assertEquals(1.0 / 64.0, plan.grid.mapSpacingH, 1e-12)
+        assertEquals(1.0 / 48.0, plan.grid.mapSpacingV, 1e-12)
+        DngPhotonProfileGainTableGenerator.HDRNET_LUMA_WEIGHTS
+            .forEachIndexed { index, weight ->
+                assertEquals(weight / 4f, plan.mapInputWeights[index], 1e-7f)
             }
-        }
-        val map = checkNotNull(
-            DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(plan, coefficients),
-        )
-
-        map.gains.forEachIndexed { index, gain ->
-            val point = index % map.mapPointsN
-            val evaluatedPoint = if (point == 0) 1 else point
-            val sourceLuma = evaluatedPoint.toFloat() / map.mapPointsN
-            val expectedGain = ACR3Curve.inputForOutput(4f * sourceLuma) / sourceLuma
-            assertEquals(expectedGain, gain, 1e-6f)
-        }
-    }
-
-    @Test
-    fun hdrNetBaselineCompensationPreservesLocalToneShape() {
-        val plan = checkNotNull(
-            DngPhotonProfileGainTableGenerator.hdrNetPlan(
-                sourceWidth = 4000,
-                sourceHeight = 3000,
-                baselineExposureEv = 0f,
-                hdrRatio = 1f,
-            ),
-        )
-        val coefficients = FloatArray(
-            DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
-        ) { index ->
-            if (index % DngPhotonProfileGainTableGenerator.HDRNET_COEFFICIENT_COUNT == 0) {
-                1f
-            } else {
-                0.018f
-            }
-        }
-        val map = checkNotNull(
-            DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(plan, coefficients),
-        )
-        val cellOffset = 0
-        val shadowGain = map.gains[cellOffset + 10]
-        val middleGrayGain = map.gains[cellOffset + 46]
-        val highlightGain = map.gains[cellOffset + 200]
-
-        assertTrue(shadowGain > middleGrayGain)
-        assertTrue(highlightGain < middleGrayGain)
     }
 
     @Test

@@ -264,6 +264,7 @@ target_link_libraries(
 )
 add_library(my-native-lib SHARED 
     native-lib.cpp
+    dng_hdrnet_pgtm_jni.cpp
     mgc_strength_map_scaler.cpp
     jpeg_export_jni.cpp
     jpeg_r_encoder.cpp
@@ -289,6 +290,14 @@ add_library(my-native-lib SHARED
 # This host-side scaler is deliberately independent of the MGC AOT/capsule sources.
 set_source_files_properties(
     mgc_strength_map_scaler.cpp
+    PROPERTIES
+    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
+)
+
+# The HDRNet PGTM path rejects non-finite model output and follows the Kotlin
+# reference interpolation order. Keep those invariants independent of fast math.
+set_source_files_properties(
+    dng_hdrnet_pgtm_jni.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

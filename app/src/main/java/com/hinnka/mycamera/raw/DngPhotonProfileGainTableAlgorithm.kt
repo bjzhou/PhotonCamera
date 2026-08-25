@@ -1636,10 +1636,12 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
             )
             modelOutput.asFloatBuffer().get(coefficients)
+            val pgtmStartNs = System.nanoTime()
             val map = DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(
                 plan,
                 coefficients,
             ) ?: return null
+            val pgtmReadyNs = System.nanoTime()
             val textureId = uploadProfileGainTableTexture(map) ?: return null
             try {
                 input.installProfileGainTableTexture(map, textureId)
@@ -1652,11 +1654,14 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 TAG,
                 "HDRNet PGTM ready: input=${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH}x" +
                     "${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT}x4 " +
-                    "grid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV}x" +
+                    "modelGrid=${DngPhotonProfileGainTableGenerator.HDRNET_GRID_WIDTH}x" +
+                    "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_HEIGHT}x" +
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
+                    "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
                     "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
                     "inputMs=${(inputReadyNs - totalStartNs) / 1_000_000f} " +
                     "inferenceMs=${(inferenceReadyNs - inferenceStartNs) / 1_000_000f} " +
+                    "pgtmMs=${(pgtmReadyNs - pgtmStartNs) / 1_000_000f} " +
                     "totalMs=${(totalReadyNs - totalStartNs) / 1_000_000f}",
             )
             return map
