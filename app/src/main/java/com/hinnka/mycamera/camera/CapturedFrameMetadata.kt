@@ -32,6 +32,10 @@ data class CapturedFrameMetadata(
     val frameNumber: Long,
     val exposureTimeNs: Long,
     val sensitivityIso: Int,
+    /** Active physical camera's SENSOR_INFO_SENSITIVITY_RANGE lower bound. */
+    val minimumSensitivityIso: Int = 0,
+    /** Active physical camera's SENSOR_MAX_ANALOG_SENSITIVITY. */
+    val maximumAnalogSensitivityIso: Int = 0,
     val exposureProduct: Double,
     val focusDistanceDiopters: Float,
     val lensState: Int?,

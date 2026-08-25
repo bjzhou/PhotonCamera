@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.processor
 
-/** MGC 9.6.080 Sabre/Spatial rejection defaults and runtime resolution scaling. */
+/** MGC 9.7.047 V25 Sabre/Spatial rejection defaults and runtime resolution scaling. */
 internal object MgcSabreRejectionTuning {
     data class FlowVariationThresholds(
         val unblockerReduction: Float,
@@ -14,21 +14,18 @@ internal object MgcSabreRejectionTuning {
 
     private const val REFERENCE_GUIDE_WIDTH = 2016f
     private const val BASE_FLOW_VARIATION_THRESHOLD = 1e-4f
-    private const val EXTRA_MOTION_ROBUSTNESS_THRESHOLD_SCALE = 0.7f
-
     /**
-     * GenerateRejectionTexture first normalizes the flow-variation threshold by guide width.
-     * The unblocker consumes that base threshold, while the motion prior starts earlier at 70%.
-     * Recovered from libgcastartup.so 0x3492dd0..0x3492e84.
+     * V25 normalizes the captured flow-variation threshold by the rejection width and passes the
+     * same value to unblocker reduction and the extra-motion prior. The older 9.6 wrapper used a
+     * separate 70% motion-prior value; carrying that value into V25 changes rejection semantics.
      */
-    fun flowVariationThresholds(guideWidth: Int): FlowVariationThresholds {
-        require(guideWidth > 0)
-        val baseThreshold = REFERENCE_GUIDE_WIDTH / guideWidth.toFloat() *
+    fun flowVariationThresholds(rejectionWidth: Int): FlowVariationThresholds {
+        require(rejectionWidth > 0)
+        val baseThreshold = REFERENCE_GUIDE_WIDTH / rejectionWidth.toFloat() *
             BASE_FLOW_VARIATION_THRESHOLD
         return FlowVariationThresholds(
             unblockerReduction = baseThreshold,
-            extraMotionRobustness =
-                baseThreshold * EXTRA_MOTION_ROBUSTNESS_THRESHOLD_SCALE,
+            extraMotionRobustness = baseThreshold,
         )
     }
 }

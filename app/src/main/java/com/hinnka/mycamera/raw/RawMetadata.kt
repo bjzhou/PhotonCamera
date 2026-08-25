@@ -119,6 +119,8 @@ data class RawMetadata(
     val exposureCompensation: Float = 0f,
     val exposureBias: Float = 0f,
     val iso: Int = 100,
+    /** CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE lower bound. */
+    val minimumSensitivityIso: Int = 0,
     /** CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY for GCam noise-model digital gain. */
     val maxAnalogSensitivity: Int = 0,
     val shutterSpeed: Long = 0L,
@@ -170,7 +172,11 @@ data class RawMetadata(
                 CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
             }
         }
-        val model = profile.evaluate(iso)
+        val model = profile.evaluate(
+            sensitivity = iso,
+            minimumSensitivityIso = minimumSensitivityIso,
+            maximumAnalogSensitivityIso = maxAnalogSensitivity,
+        )
         return if (model != null) {
             copy(
                 channelNoiseProfile = model.canonicalChannelPairs(),
@@ -384,6 +390,10 @@ data class RawMetadata(
 
             // 10. 获取 ISO 和快门
             val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
+            val minimumSensitivityIso = characteristics
+                .get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                ?.lower
+                ?: 0
             val maxAnalogSensitivity = characteristics.get(
                 CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY,
             ) ?: 0
@@ -419,6 +429,7 @@ data class RawMetadata(
                 exposureCompensation = exposureCompensation,
                 exposureBias = userExposureCompensation ?: exposureCompensation,
                 iso = iso,
+                minimumSensitivityIso = minimumSensitivityIso,
                 maxAnalogSensitivity = maxAnalogSensitivity,
                 shutterSpeed = shutterSpeed,
                 aperture = aperture,
@@ -1061,6 +1072,7 @@ data class RawMetadata(
         if (baselineExposure != other.baselineExposure) return false
         if (shadowScale != other.shadowScale) return false
         if (iso != other.iso) return false
+        if (minimumSensitivityIso != other.minimumSensitivityIso) return false
         if (maxAnalogSensitivity != other.maxAnalogSensitivity) return false
         if (shutterSpeed != other.shutterSpeed) return false
         if (frameCount != other.frameCount) return false
@@ -1106,6 +1118,7 @@ data class RawMetadata(
         result = 31 * result + baselineExposure.hashCode()
         result = 31 * result + shadowScale.hashCode()
         result = 31 * result + iso
+        result = 31 * result + minimumSensitivityIso
         result = 31 * result + maxAnalogSensitivity
         result = 31 * result + shutterSpeed.hashCode()
         result = 31 * result + frameCount

@@ -16,9 +16,9 @@ import kotlin.math.sqrt
  * O = C * sensitivity^2 + D * digitalGain^2
  *
  * Generated external `.c` profiles own a max-analog divisor and use
- * digitalGain=max(sensitivity/maxAnalogSensitivity, 1). Native MGC override tables already
- * contain their final values at each overall-gain coordinate and therefore do not add a second
- * inferred digital-gain term.
+ * digitalGain=max(sensitivity/maxAnalogSensitivity, 1). MGC's native Pixel 3 override is instead
+ * evaluated at the current camera's analog gain, then propagated through its applied digital
+ * gain. The two profile types deliberately keep separate evaluation paths.
  */
 data class CalibratedRawNoiseProfile(
     val id: String,
@@ -28,6 +28,7 @@ data class CalibratedRawNoiseProfile(
     val readDigitalGainD: DoubleArray,
     /** Digital-gain divisor written into an external `.c`; absent for native override tables. */
     val maxAnalogSensitivity: Int?,
+    private val usesMgcNativeGainSplit: Boolean = false,
 ) {
     init {
         require(id.isNotBlank())
@@ -50,18 +51,44 @@ data class CalibratedRawNoiseProfile(
         }
     }
 
-    fun evaluate(sensitivity: Int): RawNoiseModel? {
+    fun evaluate(
+        sensitivity: Int,
+        minimumSensitivityIso: Int = 0,
+        maximumAnalogSensitivityIso: Int = 0,
+    ): RawNoiseModel? {
         val compatibleSensitivity = compatibleSensitivityAt(sensitivity) ?: return null
-        val sensorSensitivity = compatibleSensitivity.toDouble()
-        val digitalGain = digitalGainAt(compatibleSensitivity) ?: return null
+        val mgcGainSplit = if (usesMgcNativeGainSplit) {
+            mgcGainSplitAt(
+                sensitivity = compatibleSensitivity,
+                minimumSensitivityIso = minimumSensitivityIso,
+                maximumAnalogSensitivityIso = maximumAnalogSensitivityIso,
+            )
+        } else {
+            null
+        }
+        val sensorSensitivity = mgcGainSplit
+            ?.analogGain
+            ?.times(MGC_NATIVE_TABLE_REFERENCE_ISO)
+            ?: compatibleSensitivity.toDouble()
+        val digitalGain = mgcGainSplit?.digitalGain
+            ?: digitalGainAt(compatibleSensitivity)
+            ?: return null
         val digitalGainSquared = digitalGain * digitalGain
         val shot = FloatArray(CHANNEL_COUNT) { plane ->
-            sanitize(shotSlopeA[plane] * sensorSensitivity + shotInterceptB[plane])
+            val analogShot = shotSlopeA[plane] * sensorSensitivity + shotInterceptB[plane]
+            sanitize(if (mgcGainSplit != null) analogShot * digitalGain else analogShot)
         }
         val read = FloatArray(CHANNEL_COUNT) { plane ->
             sanitize(
-                readQuadraticC[plane] * sensorSensitivity * sensorSensitivity +
-                    readDigitalGainD[plane] * digitalGainSquared,
+                if (mgcGainSplit != null) {
+                    (
+                        readQuadraticC[plane] * sensorSensitivity * sensorSensitivity +
+                            readDigitalGainD[plane]
+                        ) * digitalGainSquared
+                } else {
+                    readQuadraticC[plane] * sensorSensitivity * sensorSensitivity +
+                        readDigitalGainD[plane] * digitalGainSquared
+                },
             )
         }
         return RawNoiseModel.fromCanonicalBayerChannels(shot, read)
@@ -70,17 +97,82 @@ data class CalibratedRawNoiseProfile(
     fun compatibleSensitivityAt(sensitivity: Int): Int? =
         sensitivity.takeIf { it > 0 }?.coerceAtMost(maximumCompatibleSensitivity)
 
-    /** MGC's override-table coordinate: CaptureResult ISO expressed relative to ISO 100. */
-    fun overallGainAt(sensitivity: Int): Double? =
-        sensitivity.takeIf { it > 0 }?.toDouble()?.div(100.0)
-
-    /** Digital gain prescribed by this profile, or one for an already-final override table. */
-    fun digitalGainAt(sensitivity: Int): Double? =
+    /** MGC's total gain, or the legacy ISO/100 display coordinate for an external `.c`. */
+    fun overallGainAt(sensitivity: Int, minimumSensitivityIso: Int = 0): Double? =
         sensitivity.takeIf { it > 0 }?.let { validSensitivity ->
-            maxAnalogSensitivity?.let { maxAnalog ->
-                maxOf(validSensitivity.toDouble() / maxAnalog.toDouble(), 1.0)
-            } ?: 1.0
+            if (usesMgcNativeGainSplit) {
+                validSensitivity.toDouble() / effectiveMinimumSensitivity(minimumSensitivityIso)
+            } else {
+                validSensitivity.toDouble() / MGC_NATIVE_TABLE_REFERENCE_ISO
+            }
         }
+
+    /** Analog-gain coordinate used to evaluate MGC's native Pixel 3 override table. */
+    fun analogGainAt(
+        sensitivity: Int,
+        minimumSensitivityIso: Int = 0,
+        maximumAnalogSensitivityIso: Int = 0,
+    ): Double? = sensitivity.takeIf { it > 0 }?.let { validSensitivity ->
+        if (usesMgcNativeGainSplit) {
+            mgcGainSplitAt(
+                validSensitivity,
+                minimumSensitivityIso,
+                maximumAnalogSensitivityIso,
+            ).analogGain
+        } else {
+            overallGainAt(validSensitivity, minimumSensitivityIso)
+        }
+    }
+
+    /** Applied digital gain prescribed by the external profile or current MGC camera limits. */
+    fun digitalGainAt(
+        sensitivity: Int,
+        minimumSensitivityIso: Int = 0,
+        maximumAnalogSensitivityIso: Int = 0,
+    ): Double? =
+        sensitivity.takeIf { it > 0 }?.let { validSensitivity ->
+            if (usesMgcNativeGainSplit) {
+                mgcGainSplitAt(
+                    validSensitivity,
+                    minimumSensitivityIso,
+                    maximumAnalogSensitivityIso,
+                ).digitalGain
+            } else {
+                maxAnalogSensitivity?.let { maxAnalog ->
+                    maxOf(validSensitivity.toDouble() / maxAnalog.toDouble(), 1.0)
+                } ?: 1.0
+            }
+        }
+
+    private fun mgcGainSplitAt(
+        sensitivity: Int,
+        minimumSensitivityIso: Int,
+        maximumAnalogSensitivityIso: Int,
+    ): MgcGainSplit {
+        val minimum = effectiveMinimumSensitivity(minimumSensitivityIso)
+        val reportedMaximumAnalog = maximumAnalogSensitivityIso
+            .takeIf { it > 0 }
+            ?.toDouble()
+            ?: MGC_FALLBACK_MAXIMUM_ANALOG_ISO
+        val overallGain = maxOf(sensitivity.toDouble() / minimum, 1.0)
+        val maximumAnalogGain = maxOf(reportedMaximumAnalog / minimum, 1.0)
+        val analogGain = minOf(overallGain, maximumAnalogGain)
+        return MgcGainSplit(
+            analogGain = analogGain,
+            digitalGain = maxOf(overallGain / maximumAnalogGain, 1.0),
+        )
+    }
+
+    private fun effectiveMinimumSensitivity(minimumSensitivityIso: Int): Double =
+        minimumSensitivityIso
+            .takeIf { it > 0 }
+            ?.toDouble()
+            ?: MGC_FALLBACK_MINIMUM_ISO
+
+    private data class MgcGainSplit(
+        val analogGain: Double,
+        val digitalGain: Double,
+    )
 
     private fun maximumCompatibleReadSensitivity(): Int {
         var maximum = Int.MAX_VALUE
@@ -110,13 +202,16 @@ data class CalibratedRawNoiseProfile(
 
     companion object {
         private const val CHANNEL_COUNT = 4
+        private const val MGC_NATIVE_TABLE_REFERENCE_ISO = 100.0
+        private const val MGC_FALLBACK_MINIMUM_ISO = 100.0
+        private const val MGC_FALLBACK_MAXIMUM_ANALOG_ISO = 388.0
 
         /**
          * MGC 9.6's default google/blueline, sensor 0 (rear) override in canonical RGGB order.
          *
          * The coefficients are the unique A/B/C/D model recovered from MGC's 1x, 2x, 4x, 8x,
-         * 16x and 32x runtime override table. That table does not declare a max-analog divisor;
-         * the runtime camera MaxAnalogISO maker-note field is not part of this profile.
+         * 16x and 32x runtime override table. Runtime CameraCharacteristics provide the table's
+         * analog-gain limit and the digital gain applied after the table lookup.
          */
         val MGC_GOOGLE_BLUELINE_REAR = CalibratedRawNoiseProfile(
             id = "google/blueline/sensor0-rear",
@@ -145,6 +240,7 @@ data class CalibratedRawNoiseProfile(
                 2.907827458075682e-7,
             ),
             maxAnalogSensitivity = null,
+            usesMgcNativeGainSplit = true,
         )
 
         private val NUMBER = Regex(

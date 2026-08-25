@@ -367,10 +367,13 @@ internal class GlesMgcRawSpatialStacker(
         val ultrashortClippingOverlap: Float,
     )
 
-    // MGC GuideRaw10 emits one guide sample for every 2x2 Bayer quad. Rejection and
-    // MergeBayer therefore share the same half-resolution coordinate system.
-    private val guideWidth = ceilDiv(width, 2)
-    private val guideHeight = ceilDiv(height, 2)
+    // GuideRaw10 samples every second extracted Bayer quad. MGC's runtime GuideImage for a
+    // 4080x3064 RAW is therefore 1020x766, while GenerateRejectionTexture still runs once per
+    // Bayer quad. Keep these domains separate: making the guide half-resolution changes the
+    // guide variance/rejection statistics and was introduced accidentally with the independent
+    // Sabre path, which owns its own half-resolution extracted guide.
+    private val guideWidth = max(1, width / 4)
+    private val guideHeight = max(1, height / 4)
     // MergeBayerRaw16's queried AOT contract requests one alignment sample per 8x8
     // Bayer-quad tile, i.e. one sample per 16x16 sensor pixels.
     private val bayerAlignmentWidth = ceilDiv(width, MERGE_BAYER_RAW_TILE_SIZE)
@@ -579,7 +582,6 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
-
         var cpuOutput: ByteBuffer? = null
         var returned = false
         var exportedBayerTexture = 0
@@ -716,7 +718,7 @@ internal class GlesMgcRawSpatialStacker(
             val profileSource = calibratedProfile?.let { profile ->
                 profile.maxAnalogSensitivity?.let { maxAnalog ->
                     "gcam-c:${profile.id} profileMaxAnalog=$maxAnalog"
-                } ?: "mgc-override:${profile.id} profileMaxAnalog=not-applicable"
+                } ?: "mgc-override:${profile.id} cameraGainSplit=enabled"
             } ?: "Camera2 SENSOR_NOISE_PROFILE"
             PLog.i(
                 TAG,
@@ -741,10 +743,33 @@ internal class GlesMgcRawSpatialStacker(
                     TAG,
                     "MGC Spatial calibrated per-frame gain " +
                         "iso=${frames.map { it.sensitivityIso }} " +
+                        "minimumIso=${frames.map { it.minimumSensitivityIso }} " +
+                        "maximumAnalogIso=${frames.map { it.maximumAnalogSensitivityIso }} " +
                         "compatibleIso=$compatibleIso " +
                         "compatibleMax=$compatibleMax " +
-                        "overallGain=${compatibleIso.map { iso -> iso?.let(profile::overallGainAt) }} " +
-                        "digitalGain=${compatibleIso.map { iso -> iso?.let(profile::digitalGainAt) }}",
+                        "overallGain=${compatibleIso.mapIndexed { index, iso ->
+                            iso?.let {
+                                profile.overallGainAt(it, frames[index].minimumSensitivityIso)
+                            }
+                        }} " +
+                        "analogGain=${compatibleIso.mapIndexed { index, iso ->
+                            iso?.let {
+                                profile.analogGainAt(
+                                    it,
+                                    frames[index].minimumSensitivityIso,
+                                    frames[index].maximumAnalogSensitivityIso,
+                                )
+                            }
+                        }} " +
+                        "digitalGain=${compatibleIso.mapIndexed { index, iso ->
+                            iso?.let {
+                                profile.digitalGainAt(
+                                    it,
+                                    frames[index].minimumSensitivityIso,
+                                    frames[index].maximumAnalogSensitivityIso,
+                                )
+                            }
+                        }}",
                 )
             }
             val referenceCalibration = calibrationForFrame(
@@ -1874,7 +1899,6 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
-
         var cpuOutput: ByteBuffer? = null
         var sabreAccumulatedReadback: ByteBuffer? = null
         var sabreResolvedRgb: ByteBuffer? = null
@@ -3587,6 +3611,8 @@ internal class GlesMgcRawSpatialStacker(
         RawNoiseModelResolver.resolve(
             selection = noiseProfileSelection,
             sensitivity = frame.sensitivityIso,
+            minimumSensitivityIso = frame.minimumSensitivityIso,
+            maximumAnalogSensitivityIso = frame.maximumAnalogSensitivityIso,
             perFrameCamera2Profile = frame.channelNoiseProfile,
             baseFrameCamera2Model = baseFrameCamera2Model,
         )
@@ -4308,10 +4334,13 @@ internal class GlesMgcRawSpatialStacker(
             "uBlackLevelGreen",
             0.5f * (calibration.blackLevels[1] + calibration.blackLevels[2]),
         )
-        val greenShot = 0.25f * (
+        // UnblockerRaw10Halide receives the arithmetic mean of the two green-channel
+        // noise models. These values describe the variance of one green observation;
+        // they are not the variance of the averaged-green guide sample.
+        val greenShot = 0.5f * (
             calibration.unblockerShotNoise[1] + calibration.unblockerShotNoise[2]
             )
-        val greenRead = 0.25f * (
+        val greenRead = 0.5f * (
             calibration.unblockerReadNoise[1] + calibration.unblockerReadNoise[2]
             )
         uniform1f(unblockerProgram, "uNoiseQuadratic", 0f)
@@ -4365,8 +4394,10 @@ internal class GlesMgcRawSpatialStacker(
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_RGB,
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_GREEN,
         )
+        // The captured 9.88235261e-5 value belongs to the 2040-wide rejection/flow domain
+        // of a 4080 RAW, not to the quarter-resolution GuideImage.
         val flowVariationThresholds =
-            MgcSabreRejectionTuning.flowVariationThresholds(guideWidth)
+            MgcSabreRejectionTuning.flowVariationThresholds(rejectionWidth)
         val diagnosticMode = RawStackRuntimeDebug.mgcSpatialDiagnosticMode
         val unblockerReductionThreshold =
             if (

@@ -26,7 +26,7 @@ internal object GlesMgcRawSpatialShaders {
         out vec4 oGuide;
 
         vec4 rawQuad(ivec2 quad) {
-            ivec2 p = quad * 2;
+            ivec2 p = clamp(quad * 2, ivec2(0), uRawSize - ivec2(2));
             float p00 = float(texelFetch(uRaw, p, 0).r);
             float p10 = float(texelFetch(uRaw, p + ivec2(1, 0), 0).r);
             float p01 = float(texelFetch(uRaw, p + ivec2(0, 1), 0).r);
@@ -39,18 +39,6 @@ internal object GlesMgcRawSpatialShaders {
             return (raw + vec4(1.0e-4)) * uGains + uBlackLevelsTimesGains;
         }
 
-        int mirrorGuideCoordinate(int coordinate, int extent) {
-            const int borderPadding = 1;
-            int maximum = extent - 1 - borderPadding;
-            coordinate = coordinate < borderPadding
-                ? 2 * borderPadding - coordinate
-                : coordinate;
-            coordinate = coordinate > maximum
-                ? 2 * maximum - coordinate
-                : coordinate;
-            return coordinate;
-        }
-
         float luma(vec3 rgb) {
             return dot(rgb, vec3(0.25, 0.5, 0.25));
         }
@@ -61,10 +49,6 @@ internal object GlesMgcRawSpatialShaders {
 
         void main() {
             ivec2 center = ivec2(gl_FragCoord.xy);
-            ivec2 mirroredCenter = ivec2(
-                mirrorGuideCoordinate(center.x, uGuideSize.x),
-                mirrorGuideCoordinate(center.y, uGuideSize.y)
-            );
             vec3 m0Rgb = vec3(0.0);
             vec3 m1Rgb = vec3(0.0);
             float m0Green = 0.0;
@@ -73,7 +57,9 @@ internal object GlesMgcRawSpatialShaders {
             float centerGreen = 0.0;
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    vec4 rggb = rawQuad(mirroredCenter + ivec2(x, y));
+                    // GuideImage is half the extracted-Bayer extent. Consecutive output samples
+                    // are two Bayer quads apart; the 3x3 statistics still use adjacent quads.
+                    vec4 rggb = rawQuad(center * 2 + ivec2(x, y));
                     vec3 rgb = vec3(rggb.x, 0.5 * (rggb.y + rggb.z), rggb.w);
                     averageRgb += rgb * kernelWeight(x) * kernelWeight(y);
                     if (x == 0 && y == 0) centerGreen = rgb.y;
@@ -248,7 +234,7 @@ internal object GlesMgcRawSpatialShaders {
         out vec4 oCovariance;
 
         vec4 rawQuad(ivec2 quad) {
-            ivec2 p = quad * 2;
+            ivec2 p = clamp(quad * 2, ivec2(0), uRawSize - ivec2(2));
             float p00 = float(texelFetch(uRaw, p, 0).r);
             float p10 = float(texelFetch(uRaw, p + ivec2(1, 0), 0).r);
             float p01 = float(texelFetch(uRaw, p + ivec2(0, 1), 0).r);
@@ -259,18 +245,6 @@ internal object GlesMgcRawSpatialShaders {
             else if (uCfaPattern == 2) raw = vec4(p01, p11, p00, p10);
             else raw = vec4(p11, p01, p10, p00);
             return (raw + vec4(1.0e-4)) * uGains + uBlackLevelsTimesGains;
-        }
-
-        int mirrorGuideCoordinate(int coordinate, int extent) {
-            const int borderPadding = 1;
-            int maximum = extent - 1 - borderPadding;
-            coordinate = coordinate < borderPadding
-                ? 2 * borderPadding - coordinate
-                : coordinate;
-            coordinate = coordinate > maximum
-                ? 2 * maximum - coordinate
-                : coordinate;
-            return coordinate;
         }
 
         void accumulateGradient(float dx, float dy, inout vec4 tensor) {
@@ -376,10 +350,6 @@ internal object GlesMgcRawSpatialShaders {
 
         void main() {
             ivec2 center = ivec2(gl_FragCoord.xy);
-            ivec2 mirroredCenter = ivec2(
-                mirrorGuideCoordinate(center.x, uGuideSize.x),
-                mirrorGuideCoordinate(center.y, uGuideSize.y)
-            );
             float green0[9];
             float green1[9];
             float greenSum = 0.0;
@@ -387,7 +357,7 @@ internal object GlesMgcRawSpatialShaders {
             vec3 averageRgb = vec3(0.0);
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    vec4 rggb = rawQuad(mirroredCenter + ivec2(x, y));
+                    vec4 rggb = rawQuad(center * 2 + ivec2(x, y));
                     int index = (y + 1) * 3 + x + 1;
                     if (uCfaPattern == 2 || uCfaPattern == 3) {
                         green0[index] = rggb.z;

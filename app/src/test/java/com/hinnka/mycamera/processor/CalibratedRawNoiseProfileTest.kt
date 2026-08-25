@@ -130,11 +130,20 @@ class CalibratedRawNoiseProfileTest {
         val profile = CalibratedRawNoiseProfile.parseGcamC("fixture", gcamC)
         val sensitivity = 1600
         val model = requireNotNull(profile.evaluate(sensitivity))
+        val modelWithUnrelatedCameraLimits = requireNotNull(
+            profile.evaluate(
+                sensitivity = sensitivity,
+                minimumSensitivityIso = 150,
+                maximumAnalogSensitivityIso = 300,
+            ),
+        )
 
         // The generated `.c` profile declares sens/800, so ISO 1600 has digitalGain=2.
         assertEquals(Int.MAX_VALUE, profile.maximumCompatibleSensitivity)
         assertEquals(1e-10f * sensitivity * sensitivity + 4e-6f,
             model.readNoise[0], 1e-10f)
+        assertTrue(model.shotNoise.contentEquals(modelWithUnrelatedCameraLimits.shotNoise))
+        assertTrue(model.readNoise.contentEquals(modelWithUnrelatedCameraLimits.readNoise))
     }
 
     @Test
@@ -202,10 +211,16 @@ class CalibratedRawNoiseProfileTest {
         val sensitivities = fixture.gains.map { (it * 100.0).toInt() }
 
         assertNull(profile.maxAnalogSensitivity)
-        assertEquals(1.0, profile.digitalGainAt(32_000)!!, 0.0)
+        assertEquals(1.0, profile.digitalGainAt(3_200, 100, 3_200)!!, 0.0)
 
         sensitivities.indices.forEach { index ->
-            val model = requireNotNull(profile.evaluate(sensitivities[index]))
+            val model = requireNotNull(
+                profile.evaluate(
+                    sensitivity = sensitivities[index],
+                    minimumSensitivityIso = 100,
+                    maximumAnalogSensitivityIso = 3_200,
+                ),
+            )
             assertRelativeError(model.shotNoise[0].toDouble(), fixture.shotRed[index], 3e-7)
             assertRelativeError(model.shotNoise[1].toDouble(), fixture.shotGreen[index], 3e-7)
             assertRelativeError(model.shotNoise[2].toDouble(), fixture.shotGreen[index], 3e-7)
@@ -215,6 +230,51 @@ class CalibratedRawNoiseProfileTest {
             assertRelativeError(model.readNoise[2].toDouble(), fixture.readGreen[index], 3e-7)
             assertRelativeError(model.readNoise[3].toDouble(), fixture.readRed[index], 3e-7)
         }
+    }
+
+    @Test
+    fun mgcPixel3ProfileUsesCameraMinimumIsoAsUnitAnalogGain() {
+        val profile = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
+        val model = requireNotNull(
+            profile.evaluate(
+                sensitivity = 150,
+                minimumSensitivityIso = 150,
+                maximumAnalogSensitivityIso = 2_400,
+            ),
+        )
+
+        assertEquals(1.0, profile.overallGainAt(150, 150)!!, 0.0)
+        assertEquals(1.0, profile.analogGainAt(150, 150, 2_400)!!, 0.0)
+        assertEquals(1.0, profile.digitalGainAt(150, 150, 2_400)!!, 0.0)
+        assertRelativeError(model.shotNoise[0].toDouble(), fixture.shotRed[0], 3e-7)
+        assertRelativeError(model.readNoise[0].toDouble(), fixture.readRed[0], 3e-7)
+    }
+
+    @Test
+    fun mgcPixel3ProfilePropagatesNoiseThroughDigitalGainAboveAnalogLimit() {
+        val profile = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
+        val digitalGain = 2.0
+        val model = requireNotNull(
+            profile.evaluate(
+                sensitivity = 1_600,
+                minimumSensitivityIso = 100,
+                maximumAnalogSensitivityIso = 800,
+            ),
+        )
+
+        assertEquals(16.0, profile.overallGainAt(1_600, 100)!!, 0.0)
+        assertEquals(8.0, profile.analogGainAt(1_600, 100, 800)!!, 0.0)
+        assertEquals(digitalGain, profile.digitalGainAt(1_600, 100, 800)!!, 0.0)
+        assertRelativeError(
+            model.shotNoise[0].toDouble(),
+            fixture.shotRed[3] * digitalGain,
+            3e-7,
+        )
+        assertRelativeError(
+            model.readNoise[0].toDouble(),
+            fixture.readRed[3] * digitalGain * digitalGain,
+            3e-7,
+        )
     }
 
     @Test

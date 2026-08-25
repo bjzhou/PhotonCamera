@@ -194,6 +194,7 @@ class RawDemosaicProcessor {
                 if (baseMetadata != null && baseMetadata.exposureBias != 0f) baseMetadata.exposureBias else exposureBias
             } else dngRawData.exposureBias,
             iso = if (dngRawData.iso == 0) (baseMetadata?.iso ?: 100) else dngRawData.iso,
+            minimumSensitivityIso = baseMetadata?.minimumSensitivityIso ?: 0,
             maxAnalogSensitivity = baseMetadata?.maxAnalogSensitivity ?: 0,
             shutterSpeed = if (dngRawData.shutterSpeed == 0L) (baseMetadata?.shutterSpeed
                 ?: 0L) else dngRawData.shutterSpeed,

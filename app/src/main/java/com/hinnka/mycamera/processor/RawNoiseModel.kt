@@ -200,12 +200,18 @@ internal object RawNoiseModelResolver {
     fun resolve(
         selection: RawNoiseProfileSelection,
         sensitivity: Int,
+        minimumSensitivityIso: Int = 0,
+        maximumAnalogSensitivityIso: Int = 0,
         perFrameCamera2Profile: FloatArray?,
         baseFrameCamera2Model: RawNoiseModel,
     ): ResolvedRawNoiseModel {
         when (selection) {
             is RawNoiseProfileSelection.Calibrated -> {
-                val model = selection.profile.evaluate(sensitivity)
+                val model = selection.profile.evaluate(
+                    sensitivity = sensitivity,
+                    minimumSensitivityIso = minimumSensitivityIso,
+                    maximumAnalogSensitivityIso = maximumAnalogSensitivityIso,
+                )
                     ?: return ResolvedRawNoiseModel(
                         RawNoiseModel.EMPTY,
                         RawNoiseModelSource.UNAVAILABLE,
@@ -227,7 +233,11 @@ internal object RawNoiseModelResolver {
             )
         }
         val fallback = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
-            .evaluate(sensitivity)
+            .evaluate(
+                sensitivity = sensitivity,
+                minimumSensitivityIso = minimumSensitivityIso,
+                maximumAnalogSensitivityIso = maximumAnalogSensitivityIso,
+            )
             ?: return ResolvedRawNoiseModel(
                 RawNoiseModel.EMPTY,
                 RawNoiseModelSource.UNAVAILABLE,

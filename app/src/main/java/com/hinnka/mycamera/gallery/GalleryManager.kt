@@ -3360,6 +3360,8 @@ object GalleryManager {
                         image = image,
                         exposureTimeNs = rawMetadata.shutterSpeed,
                         sensitivityIso = rawMetadata.iso,
+                        minimumSensitivityIso = rawMetadata.minimumSensitivityIso,
+                        maximumAnalogSensitivityIso = rawMetadata.maxAnalogSensitivity,
                         exposureProduct = frameExposureProducts.getOrNull(index)
                             ?.takeIf { it.isFinite() && it > 0.0 }
                             ?: 1.0,

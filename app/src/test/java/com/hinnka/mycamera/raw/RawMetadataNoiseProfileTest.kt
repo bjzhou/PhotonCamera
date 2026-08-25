@@ -77,6 +77,29 @@ class RawMetadataNoiseProfileTest {
         assertArrayEquals(expected.canonicalChannelPairs(), resolved.channelNoiseProfile, 0f)
     }
 
+    @Test
+    fun pixel3SelectionUsesMetadataCameraGainLimits() {
+        val metadata = metadata(FloatArray(0)).copy(
+            minimumSensitivityIso = 150,
+            maxAnalogSensitivity = 600,
+        )
+        val expected = checkNotNull(
+            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR.evaluate(
+                sensitivity = TEST_ISO,
+                minimumSensitivityIso = 150,
+                maximumAnalogSensitivityIso = 600,
+            ),
+        )
+
+        val resolved = metadata.withNoiseProfileSelection(
+            RawNoiseProfileSelection.Calibrated(
+                CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
+            ),
+        )
+
+        assertArrayEquals(expected.canonicalChannelPairs(), resolved.channelNoiseProfile, 0f)
+    }
+
     private fun metadata(profile: FloatArray): RawMetadata = RawMetadata(
         width = 16,
         height = 16,

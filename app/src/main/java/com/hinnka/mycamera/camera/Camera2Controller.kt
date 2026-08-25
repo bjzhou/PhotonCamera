@@ -470,11 +470,21 @@ class Camera2Controller(private val context: Context) {
             result.request.get(CaptureRequest.SENSOR_SENSITIVITY),
         )
         val channelNoiseProfile = captureChannelNoiseProfile(result)
+        val framePhysicalCameraId = activeOutputPhysicalCameraId
+            ?: result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+        val sensorCharacteristics = framePhysicalCameraId
+            ?.let { cameraId ->
+                getCameraCharacteristicsOrNull(cameraId, "RAW frame gain limits")
+            }
+            ?: getActiveOpenCameraCharacteristics()
+        val sensitivityLimits = sensorSensitivityLimits(sensorCharacteristics)
         return CapturedFrameMetadata(
             sensorTimestampNs = sensorTimestampNs,
             frameNumber = result.frameNumber,
             exposureTimeNs = exposureTimeNs,
             sensitivityIso = sensitivityIso,
+            minimumSensitivityIso = sensitivityLimits.minimumIso,
+            maximumAnalogSensitivityIso = sensitivityLimits.maximumAnalogIso,
             exposureProduct = exposureProduct,
             focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: Float.NaN,
             lensState = result.get(CaptureResult.LENS_STATE),
@@ -489,6 +499,23 @@ class Camera2Controller(private val context: Context) {
                 ?.copyOf(4),
         )
     }
+
+    private data class SensorSensitivityLimits(
+        val minimumIso: Int,
+        val maximumAnalogIso: Int,
+    )
+
+    private fun sensorSensitivityLimits(
+        characteristics: CameraCharacteristics?,
+    ): SensorSensitivityLimits = SensorSensitivityLimits(
+        minimumIso = characteristics
+            ?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            ?.lower
+            ?: 0,
+        maximumAnalogIso = characteristics
+            ?.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY)
+            ?: 0,
+    )
 
     private fun captureChannelNoiseProfile(result: CaptureResult): FloatArray? {
         return result.get(CaptureResult.SENSOR_NOISE_PROFILE)
@@ -7859,8 +7886,18 @@ class Camera2Controller(private val context: Context) {
         try {
             val width = image.width
             val height = image.height
-            var effectiveCharacteristics = getActiveOpenCameraCharacteristics()
-            var effectiveResult: CaptureResult? = result
+            val reportedPhysicalCameraId = result
+                ?.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+            val effectivePhysicalCameraId = activeOutputPhysicalCameraId
+                ?: reportedPhysicalCameraId
+            var effectiveCharacteristics = effectivePhysicalCameraId
+                ?.let { cameraId ->
+                    getCameraCharacteristicsOrNull(cameraId, "captured RAW physical camera")
+                }
+                ?: getActiveOpenCameraCharacteristics()
+            var effectiveResult: CaptureResult? = effectivePhysicalCameraId
+                ?.let { physicalId -> result?.physicalCameraResults?.get(physicalId) }
+                ?: result
 
             // For RAW images, ensure characteristics match image dimensions to avoid DngCreator crash.
             // This is especially important for logical multi-camera devices where the RAW might come from a physical sub-camera.
@@ -7917,12 +7954,21 @@ class Camera2Controller(private val context: Context) {
             val exposureTimeNs = frameResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
             val sensitivityIso = frameResult?.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
             val frozenMetadata = pendingFrameMetadata.remove(image.timestamp)
+            val sensitivityLimits = sensorSensitivityLimits(effectiveCharacteristics)
             val frameMetadata = if (image.format == ImageFormat.RAW_SENSOR && frameResult != null) {
                 CapturedFrameMetadata(
                     sensorTimestampNs = sensorTimestampNs,
                     frameNumber = frozenMetadata?.frameNumber ?: result?.frameNumber ?: -1L,
                     exposureTimeNs = exposureTimeNs,
                     sensitivityIso = sensitivityIso,
+                    minimumSensitivityIso = sensitivityLimits.minimumIso
+                        .takeIf { it > 0 }
+                        ?: frozenMetadata?.minimumSensitivityIso
+                        ?: 0,
+                    maximumAnalogSensitivityIso = sensitivityLimits.maximumAnalogIso
+                        .takeIf { it > 0 }
+                        ?: frozenMetadata?.maximumAnalogSensitivityIso
+                        ?: 0,
                     exposureProduct = RawExposureMath.productOrNull(
                         exposureTimeNs,
                         sensitivityIso,

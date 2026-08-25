@@ -5958,6 +5958,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             sensitivityIso = metadata?.sensitivityIso
                 ?: captureResult?.get(CaptureResult.SENSOR_SENSITIVITY)
                 ?: 0,
+            minimumSensitivityIso = metadata?.minimumSensitivityIso ?: 0,
+            maximumAnalogSensitivityIso = metadata?.maximumAnalogSensitivityIso ?: 0,
             exposureProduct = metadata?.exposureProduct
                 ?: captureResult?.let(::captureExposureProduct)
                 ?: 1.0,

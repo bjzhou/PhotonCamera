@@ -170,6 +170,8 @@ internal class GlesMgcRawBaseFrameSelector(
                 val noiseModel = RawNoiseModelResolver.resolve(
                     selection = noiseProfileSelection,
                     sensitivity = frame.sensitivityIso,
+                    minimumSensitivityIso = frame.minimumSensitivityIso,
+                    maximumAnalogSensitivityIso = frame.maximumAnalogSensitivityIso,
                     perFrameCamera2Profile = frame.channelNoiseProfile,
                     baseFrameCamera2Model = baseCamera2Model,
                 )

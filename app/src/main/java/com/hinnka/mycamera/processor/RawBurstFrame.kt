@@ -57,6 +57,10 @@ data class RawStackFrame(
     val frameNumber: Long = -1L,
     val exposureTimeNs: Long = 0L,
     val sensitivityIso: Int = 0,
+    /** Active physical camera's minimum ISO used by MGC's native gain coordinate. */
+    val minimumSensitivityIso: Int = 0,
+    /** Active physical camera's maximum analog ISO used by MGC's gain split. */
+    val maximumAnalogSensitivityIso: Int = 0,
     val exposureProduct: Double = 1.0,
     /** Requested RAW TET; MGC compares this with the reference frame's actual TET. */
     val desiredExposureProduct: Double? = null,
