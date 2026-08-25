@@ -175,7 +175,7 @@ fun RawEditPanel(
                         if (enabled) {
                             RawAdaptiveExposureMode.PHOTON_HDR
                         } else {
-                            RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE
+                            RawAdaptiveExposureMode.OFF
                         }
                     )
                     onAdjustmentEnd()
@@ -411,6 +411,8 @@ fun RawAdaptiveExposureModeSetting(
                 stringResource(R.string.settings_raw_adaptive_exposure_mode_photon_hdr),
             RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE.name to
                 stringResource(R.string.settings_raw_adaptive_exposure_mode_legacy),
+            RawAdaptiveExposureMode.OFF.name to
+                stringResource(R.string.settings_raw_adaptive_exposure_mode_off),
         ),
         currentLevel = mode.name,
         onLevelSelected = { persistedName ->

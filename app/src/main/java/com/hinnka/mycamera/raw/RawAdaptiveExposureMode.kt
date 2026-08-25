@@ -1,13 +1,15 @@
 package com.hinnka.mycamera.raw
 
 /**
- * The two mutually exclusive capture/development paths that own adaptive RAW exposure handling.
+ * The mutually exclusive capture/development modes for adaptive RAW exposure handling.
  *
- * [PHOTON_HDR] generates an HDRNet ProfileGainTableMap and preserves the source
+ * [OFF] leaves both paths disabled. [PHOTON_HDR] generates an HDRNet ProfileGainTableMap and
+ * preserves the source
  * BaselineExposure. [LEGACY_AUTO_EXPOSURE] matches the captured viewfinder preview and writes the
  * solved exposure into BaselineExposure.
  */
 enum class RawAdaptiveExposureMode(val persistedValue: String) {
+    OFF("OFF"),
     PHOTON_HDR("PHOTON_HDR"),
     LEGACY_AUTO_EXPOSURE("LEGACY_AUTO_EXPOSURE");
 
@@ -18,15 +20,23 @@ enum class RawAdaptiveExposureMode(val persistedValue: String) {
         get() = this == LEGACY_AUTO_EXPOSURE
 
     companion object {
-        fun resolve(usePhotonHdr: Boolean): RawAdaptiveExposureMode {
+        fun resolve(
+            usePhotonHdr: Boolean,
+            useLegacyAutoExposure: Boolean,
+        ): RawAdaptiveExposureMode {
             // Photon HDR wins when reading historical states in which both independent switches
-            // were enabled. Every new write persists a mutually exclusive pair.
-            return if (usePhotonHdr) PHOTON_HDR else LEGACY_AUTO_EXPOSURE
+            // were enabled. Every new write persists one mutually exclusive mode.
+            return when {
+                usePhotonHdr -> PHOTON_HDR
+                useLegacyAutoExposure -> LEGACY_AUTO_EXPOSURE
+                else -> OFF
+            }
         }
 
         fun fromPersistedValue(
             value: String?,
             usePhotonHdr: Boolean,
+            useLegacyAutoExposure: Boolean,
         ): RawAdaptiveExposureMode {
             return entries.firstOrNull { it.persistedValue.equals(value, ignoreCase = true) }
                 ?: when {
@@ -34,7 +44,8 @@ enum class RawAdaptiveExposureMode(val persistedValue: String) {
                     value.equals("VIEWFINDER_MATCH", ignoreCase = true) -> LEGACY_AUTO_EXPOSURE
                     value.equals("DYNAMIC_SCENE_ESTIMATION", ignoreCase = true) ->
                         LEGACY_AUTO_EXPOSURE
-                    else -> LEGACY_AUTO_EXPOSURE
+                    useLegacyAutoExposure -> LEGACY_AUTO_EXPOSURE
+                    else -> OFF
                 }
         }
     }

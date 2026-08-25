@@ -895,7 +895,8 @@
     <string name="settings_raw_photon_hdr_description">在明暗反差较大的场景中保留更多高光和暗部细节，让画面亮度过渡更自然。</string>
     <string name="settings_raw_photon_hdr_edit_description">为当前照片启用光子 HDR。即使拍摄时使用经典自动曝光，也可以重新开启。</string>
     <string name="settings_raw_adaptive_exposure_mode">RAW 自适应曝光</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">选择照片的亮度处理方式。光子 HDR 能保留更多明暗细节；经典自动曝光会尽量匹配拍摄时看到的亮度。</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">选择照片的亮度处理方式。关闭时两种功能都不使用；光子 HDR 能保留更多明暗细节；经典自动曝光会尽量匹配拍摄时看到的亮度。</string>
+    <string name="settings_raw_adaptive_exposure_mode_off">关闭</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">光子 HDR</string>
     <string name="settings_raw_adaptive_exposure_mode_legacy">经典自动曝光</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX 白色相对曝光</string>

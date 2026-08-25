@@ -176,7 +176,7 @@ data class CameraPreset(
                 rawMaxChromaNoiseReduction =
                     RawDenoiseDefaults.normalize(rawMaxChromaNoiseReduction),
                 rawExposureCompensation = rawExposureCompensation.coerceIn(-4f, 4f),
-                rawAutoExposure = !rawPhotonHdr,
+                rawAutoExposure = rawAutoExposure && !rawPhotonHdr,
                 rawHighlightsAdjustment = rawHighlightsAdjustment.coerceIn(-1f, 1f),
                 rawShadowsAdjustment = rawShadowsAdjustment.coerceIn(-1f, 1f),
                 rawBlackPointCorrection = rawBlackPointCorrection.coerceIn(-1f, 1f),

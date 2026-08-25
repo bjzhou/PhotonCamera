@@ -4451,6 +4451,7 @@ object GalleryManager {
     ): RawDngProfilePreparationOptions {
         val exposureMode = RawAdaptiveExposureMode.resolve(
             usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
+            useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
         )
         val generatePhotonPgtm = exposureMode.usesPhotonHdr
         val legacyMeteringEnabled = exposureMode.usesLegacyAutoExposure &&

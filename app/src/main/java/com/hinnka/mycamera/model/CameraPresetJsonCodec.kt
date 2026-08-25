@@ -103,7 +103,7 @@ internal object CameraPresetJsonCodec {
             ),
             rawExposureCompensation = obj.float("rawExposureCompensation", 0f)
                 .coerceIn(-4f, 4f),
-            rawAutoExposure = !rawPhotonHdr,
+            rawAutoExposure = !rawPhotonHdr && obj.boolean("rawAutoExposure", true),
             rawHighlightsAdjustment = obj.float("rawHighlightsAdjustment", 0f)
                 .coerceIn(-1f, 1f),
             rawShadowsAdjustment = obj.float("rawShadowsAdjustment", 0f)

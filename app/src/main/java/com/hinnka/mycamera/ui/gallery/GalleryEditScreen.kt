@@ -1737,6 +1737,7 @@ fun GalleryEditScreen(
                                         rawAdaptiveExposureMode = RawAdaptiveExposureMode.resolve(
                                             usePhotonHdr =
                                                 editRawToneMappingParameters.usePhotonHdr,
+                                            useLegacyAutoExposure = editRawAutoExposure,
                                         ),
                                         rawHighlightsAdjustment = editRawHighlightsAdjustment,
                                         rawShadowsAdjustment = editRawShadowsAdjustment,

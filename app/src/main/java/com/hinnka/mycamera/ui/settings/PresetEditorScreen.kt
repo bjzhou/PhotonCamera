@@ -152,6 +152,7 @@ fun PresetEditorScreen(
         mutableStateOf(
             RawAdaptiveExposureMode.resolve(
                 usePhotonHdr = sourcePreset?.rawPhotonHdr ?: false,
+                useLegacyAutoExposure = sourcePreset?.rawAutoExposure ?: true,
             )
         )
     }

@@ -227,6 +227,7 @@ object GalleryMediaStore {
             rawAutoExposure = metadata.rawAutoExposure,
             rawAutoExposureMode = RawAdaptiveExposureMode.resolve(
                 usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
+                useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
             ).persistedValue,
             rawHighlightsAdjustment = metadata.rawHighlightsAdjustment,
             rawShadowsAdjustment = metadata.rawShadowsAdjustment,

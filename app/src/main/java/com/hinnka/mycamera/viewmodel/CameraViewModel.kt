@@ -1573,6 +1573,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             .map { preferences ->
                 RawAdaptiveExposureMode.resolve(
                     usePhotonHdr = preferences.rawToneMappingParameters.usePhotonHdr,
+                    useLegacyAutoExposure = preferences.rawAutoExposure,
                 )
             }
             .stateIn(
