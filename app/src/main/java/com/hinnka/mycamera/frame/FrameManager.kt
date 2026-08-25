@@ -1,8 +1,10 @@
 package com.hinnka.mycamera.frame
 
 import android.content.Context
+import android.location.Address
+import android.location.Geocoder
 import android.net.Uri
-import android.util.Log
+import android.os.Build
 import android.util.LruCache
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -10,13 +12,18 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.data.CustomImportManager
+import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.File
+import java.util.Locale
 import java.util.UUID
+import kotlin.coroutines.resume
 
 /**
  * DataStore 扩展属性
@@ -33,6 +40,8 @@ class FrameManager(private val context: Context) {
     companion object {
         private const val TAG = "FrameManager"
         private const val CACHE_SIZE = 5
+        private const val LOCATION_CACHE_SIZE = 64
+        private const val LOCATION_COORDINATE_PRECISION = 4
 
         // 自定义属性 DataStore Key 生成函数（每个 Frame ID 独立）
         private fun customPropertiesKey(frameId: String) = stringPreferencesKey("${frameId}_customProperties")
@@ -42,6 +51,9 @@ class FrameManager(private val context: Context) {
     
     // 模板缓存
     private val templateCache = LruCache<String, FrameTemplate>(CACHE_SIZE)
+
+    // 反向地理编码结果缓存。同一照片在预览、导出 HDR/SDR 时无需重复查询。
+    private val locationCache = LruCache<String, String>(LOCATION_CACHE_SIZE)
     
     // 可用边框列表
     private var availableFrames: List<FrameInfo> = emptyList()
@@ -147,6 +159,7 @@ class FrameManager(private val context: Context) {
      */
     fun clearCache() {
         templateCache.evictAll()
+        locationCache.evictAll()
         PLog.d(TAG, "Frame template cache cleared")
     }
     
@@ -159,6 +172,109 @@ class FrameManager(private val context: Context) {
 
     fun importEditorFrameImage(uri: Uri, frameIdHint: String? = null): String? {
         return customImportManager.importEditorFrameImage(uri, frameIdHint)
+    }
+
+    /**
+     * 在模板包含地点文本时，用照片 GPS 补全可供边框渲染的地点名称。
+     *
+     * 模板或照片级 LOCATION 覆盖值优先；系统地理编码不可用时显示经纬度，
+     * 避免已经保存 GPS 的照片出现空白地点元素。
+     */
+    suspend fun resolveFrameLocation(
+        template: FrameTemplate,
+        metadata: MediaMetadata,
+    ): MediaMetadata {
+        if (!template.requiresMetadataLocation(metadata)) return metadata
+
+        val latitude = metadata.latitude?.takeIf { it in -90.0..90.0 } ?: return metadata
+        val longitude = metadata.longitude?.takeIf { it in -180.0..180.0 } ?: return metadata
+        val cacheKey = locationCacheKey(latitude, longitude)
+        val displayLocation = locationCache.get(cacheKey)
+            ?: resolveAddress(latitude, longitude)
+                ?.also { locationCache.put(cacheKey, it) }
+            ?: formatCoordinates(latitude, longitude)
+
+        return metadata.copy(location = displayLocation)
+    }
+
+    private fun FrameTemplate.requiresMetadataLocation(metadata: MediaMetadata): Boolean {
+        if (!metadata.location.isNullOrBlank() || metadata.customProperties.containsKey(TextType.LOCATION.name)) {
+            return false
+        }
+
+        return (elements + elementsTop.orEmpty())
+            .filterIsInstance<FrameElement.Text>()
+            .any { element ->
+                element.textType == TextType.LOCATION && element.overrideText == null
+            }
+    }
+
+    private suspend fun resolveAddress(latitude: Double, longitude: Double): String? {
+        if (!Geocoder.isPresent()) return null
+
+        return runCatching {
+            val geocoder = Geocoder(context, Locale.getDefault())
+            val addresses = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                getAddressesAsync(geocoder, latitude, longitude)
+            } else {
+                withContext(Dispatchers.IO) {
+                    @Suppress("DEPRECATION")
+                    geocoder.getFromLocation(latitude, longitude, 1).orEmpty()
+                }
+            }
+            addresses.firstOrNull()?.toDisplayLocation()
+        }.onFailure { error ->
+            PLog.w(TAG, "Failed to resolve frame location", error)
+        }.getOrNull()
+    }
+
+    private suspend fun getAddressesAsync(
+        geocoder: Geocoder,
+        latitude: Double,
+        longitude: Double,
+    ): List<Address> = suspendCancellableCoroutine { continuation ->
+        geocoder.getFromLocation(
+            latitude,
+            longitude,
+            1,
+            object : Geocoder.GeocodeListener {
+                override fun onGeocode(addresses: MutableList<Address>) {
+                    if (continuation.isActive) continuation.resume(addresses)
+                }
+
+                override fun onError(errorMessage: String?) {
+                    if (continuation.isActive) continuation.resume(emptyList())
+                }
+            }
+        )
+    }
+
+    private fun Address.toDisplayLocation(): String? {
+        val parts = listOf(subLocality, locality, subAdminArea, adminArea, countryName)
+            .mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+            .distinctBy { it.lowercase(Locale.getDefault()) }
+
+        return parts.takeIf { it.isNotEmpty() }?.joinToString(", ")
+            ?: getAddressLine(0)?.trim()?.takeIf(String::isNotEmpty)
+    }
+
+    private fun locationCacheKey(latitude: Double, longitude: Double): String {
+        return String.format(
+            Locale.US,
+            "%s:%.${LOCATION_COORDINATE_PRECISION}f,%.${LOCATION_COORDINATE_PRECISION}f",
+            Locale.getDefault().toLanguageTag(),
+            latitude,
+            longitude,
+        )
+    }
+
+    private fun formatCoordinates(latitude: Double, longitude: Double): String {
+        return String.format(
+            Locale.US,
+            "%.${LOCATION_COORDINATE_PRECISION}f\u00B0, %.${LOCATION_COORDINATE_PRECISION}f\u00B0",
+            latitude,
+            longitude,
+        )
     }
 
     fun saveEditorDraft(draft: FrameEditorDraft): String? {

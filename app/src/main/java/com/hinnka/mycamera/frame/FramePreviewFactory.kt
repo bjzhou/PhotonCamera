@@ -107,7 +107,7 @@ object FramePreviewFactory {
             deviceModel = DeviceUtil.model,
             brand = Build.BRAND,
             dateTaken = sampleTime,
-            location = null,
+            location = "31.2304\u00B0, 121.4737\u00B0",
             iso = 200,
             shutterSpeed = "1/250",
             focalLength = "35mm",

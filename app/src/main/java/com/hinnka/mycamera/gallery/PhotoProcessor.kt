@@ -983,7 +983,10 @@ class PhotoProcessor(
             height = if (metadata.height > 0) metadata.height else input.height,
             customProperties = metadata.customProperties.ifEmpty { customProperties }
         )
-        return ResolvedFrame(template, finalMetadata)
+        return ResolvedFrame(
+            template = template,
+            metadata = frameManager.resolveFrameLocation(template, finalMetadata),
+        )
     }
 
     private fun frameGainmapResult(

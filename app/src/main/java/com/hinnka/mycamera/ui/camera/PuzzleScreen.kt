@@ -1031,7 +1031,8 @@ suspend fun applyFrameWatermark(
     
     return withContext(Dispatchers.IO) {
         try {
-            frameRenderer.render(collageBitmap, template, metadata)
+            val resolvedMetadata = frameManager.resolveFrameLocation(template, metadata)
+            frameRenderer.render(collageBitmap, template, resolvedMetadata)
         } catch (e: Exception) {
             PLog.e("PuzzleScreen", "Failed to render frame watermark", e)
             collageBitmap
