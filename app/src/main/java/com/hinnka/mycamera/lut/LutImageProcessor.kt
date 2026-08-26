@@ -18,17 +18,7 @@ import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.DenoiseProfileNlmConfig
 import com.hinnka.mycamera.raw.DenoiseProfileShaders
-import com.hinnka.mycamera.raw.HncsFilmCurveMode
-import com.hinnka.mycamera.raw.HncsNaturalLightGl
-import com.hinnka.mycamera.raw.HncsNaturalLightOutputPassShaders
-import com.hinnka.mycamera.raw.RawProfileExposureGl
-import com.hinnka.mycamera.raw.RawRenderingEngine
-import com.hinnka.mycamera.raw.RawEngineTonePass
-import com.hinnka.mycamera.raw.RawFullscreenQuad
 import com.hinnka.mycamera.raw.RawSharpenPass
-import com.hinnka.mycamera.raw.RawSrgbPass
-import com.hinnka.mycamera.raw.RawToneMappingGl
-import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -90,21 +80,6 @@ class LutImageProcessor(context: Context? = null) {
     private var pboId = 0
     private var readbackBuffer: ByteBuffer? = null
     private var readbackBufferSize = 0
-    private val naturalLightPrograms = IntArray(RawRenderingEngine.entries.size)
-    private var naturalLightTextureId = 0
-    private var naturalLightFboId = 0
-    private var naturalLightWidth = 0
-    private var naturalLightHeight = 0
-    private var naturalLightCurveTextureId = 0
-    private var naturalLightCurveSize = 0
-    private var naturalLightDummy3DTextureId = 0
-    private var naturalLightSrgbOutputProgram = 0
-    private var naturalLightHncsOutputProgram = 0
-    private var naturalLightOutputTextureId = 0
-    private var naturalLightOutputFboId = 0
-    private var naturalLightOutputWidth = 0
-    private var naturalLightOutputHeight = 0
-    private val naturalLightHncsGl = context?.let(::HncsNaturalLightGl)
 
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
@@ -117,7 +92,6 @@ class LutImageProcessor(context: Context? = null) {
     private var bitmapDenoisePassthroughProgram = 0
     private var computeCapabilitiesChecked = false
     private var computeCapabilitiesSupported = false
-    private var naturalLightSrgbToLinearProgram = 0
     private var bitmapChromaDenoiseGuideProgram = 0
     private var bitmapChromaDenoiseProgram = 0
     private var lutSharpenProgram = 0
@@ -379,12 +353,6 @@ class LutImageProcessor(context: Context? = null) {
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
         lutMaskType: Int = 0,
-        linearInputToneMap: Boolean = false,
-        linearInputExposureEv: Float = 0f,
-        naturalLightDefaultChromaDenoise: Boolean = false,
-        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
-        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
-        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     ): Bitmap = withContext(glDispatcher) {
         currentCoroutineContext().ensureActive()
         if (!isInitialized) {
@@ -404,11 +372,7 @@ class LutImageProcessor(context: Context? = null) {
         val sharpening: Float = sharpeningValue
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
-        val applyNaturalLightToneMap = linearInputToneMap && !isHlgInput
-        val preToneMapChromaDenoise = resolvePreToneMapChromaDenoise(
-            userStrength = chromaNoiseReduction,
-            applyNaturalLightDefault = applyNaturalLightToneMap && naturalLightDefaultChromaDenoise
-        )
+        val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
 
         // 激活上下文
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -421,12 +385,12 @@ class LutImageProcessor(context: Context? = null) {
         uploadImageTextureFromArgb(argbData, width, height)
         currentCoroutineContext().ensureActive()
 
-        if (preToneMapChromaDenoise > 0) {
-            renderBitmapChromaDenoise(imageTextureId, width, height, preToneMapChromaDenoise)
+        if (chromaDenoiseStrength > 0) {
+            renderBitmapChromaDenoise(imageTextureId, width, height, chromaDenoiseStrength)
             currentCoroutineContext().ensureActive()
         }
 
-        val chromaDenoisedTexId = if (preToneMapChromaDenoise > 0) bitmapDenoiseTexId[0] else imageTextureId
+        val chromaDenoisedTexId = if (chromaDenoiseStrength > 0) bitmapDenoiseTexId[0] else imageTextureId
         if (noiseReduction > 0) {
             renderBitmapDenoiseProfile(chromaDenoisedTexId, width, height, noiseReduction)
             currentCoroutineContext().ensureActive()
@@ -443,45 +407,25 @@ class LutImageProcessor(context: Context? = null) {
             chromaDenoisedTexId
         }
 
-        val renderInputTexId = if (applyNaturalLightToneMap) {
-            renderNaturalLightToneMap(
-                inputTexId,
-                width,
-                height,
-                rawRenderingEngine,
-                rawHncsFilmCurveMode,
-                rawToneMappingParameters,
-                linearInputExposureEv
-            )
-        } else {
-            inputTexId
-        }
-        val naturalLightApplied = applyNaturalLightToneMap && renderInputTexId != inputTexId
-        val renderColorSpace = if (naturalLightApplied) {
-            ColorSpace.get(ColorSpace.Named.SRGB)
-        } else {
-            colorSpace
-        }
-
         // HDF 光晕效果预处理（在主 shader 之前，需要模糊的光晕纹理）
         if (halation > 0f) {
-            renderHDFBlur(renderInputTexId, width, height, halation)
+            renderHDFBlur(inputTexId, width, height, halation)
             currentCoroutineContext().ensureActive()
         }
         if (softLight > 0f) {
-            renderSoftLightBlur(renderInputTexId, width, height)
+            renderSoftLightBlur(inputTexId, width, height)
             currentCoroutineContext().ensureActive()
         }
         if (redHalation > 0f) {
-            renderHalationBlur(renderInputTexId, width, height, redHalation)
+            renderHalationBlur(inputTexId, width, height, redHalation)
             currentCoroutineContext().ensureActive()
         }
 
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
-            renderInputTexId,
-            renderColorSpace,
+            inputTexId,
+            colorSpace,
             isHlgInput,
             lutConfig,
             effectiveRecipeParams,
@@ -503,18 +447,11 @@ class LutImageProcessor(context: Context? = null) {
         sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
-        linearInputToneMap: Boolean = false,
-        linearInputExposureEv: Float = 0f,
-        naturalLightDefaultChromaDenoise: Boolean = false,
-        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
-        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
-        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     ): Bitmap {
         val hasBaseline = baselineLayer?.lutConfig != null || baselineLayer?.colorRecipeParams != null
         val hasCreative = creativeLayer?.lutConfig != null || creativeLayer?.colorRecipeParams != null
         return when {
             hasBaseline && hasCreative -> {
-                val runDenoiseBeforeNaturalLight = linearInputToneMap && !isHlgInput
                 val baseBitmap = applyLut(
                     argbData = argbData,
                     width = width,
@@ -523,22 +460,16 @@ class LutImageProcessor(context: Context? = null) {
                     isHlgInput = isHlgInput,
                     lutConfig = baselineLayer.lutConfig,
                     colorRecipeParams = baselineLayer.colorRecipeParams,
-                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) noiseReductionValue else 0f,
-                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) chromaNoiseReductionValue else 0f,
-                    linearInputToneMap = linearInputToneMap,
-                    linearInputExposureEv = linearInputExposureEv,
-                    naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
-                    rawRenderingEngine = rawRenderingEngine,
-                    rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                    rawToneMappingParameters = rawToneMappingParameters,
+                    noiseReductionValue = 0f,
+                    chromaNoiseReductionValue = 0f,
                 )
                 applyLut(
                     bitmap = baseBitmap,
                     lutConfig = creativeLayer.lutConfig,
                     colorRecipeParams = creativeLayer.colorRecipeParams,
                     sharpeningValue = sharpeningValue,
-                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else noiseReductionValue,
-                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else chromaNoiseReductionValue
+                    noiseReductionValue = noiseReductionValue,
+                    chromaNoiseReductionValue = chromaNoiseReductionValue
                 )
             }
             hasBaseline -> applyLut(
@@ -551,13 +482,7 @@ class LutImageProcessor(context: Context? = null) {
                 colorRecipeParams = baselineLayer.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
-                chromaNoiseReductionValue = chromaNoiseReductionValue,
-                linearInputToneMap = linearInputToneMap,
-                linearInputExposureEv = linearInputExposureEv,
-                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
-                rawRenderingEngine = rawRenderingEngine,
-                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                rawToneMappingParameters = rawToneMappingParameters
+                chromaNoiseReductionValue = chromaNoiseReductionValue
             )
             else -> applyLut(
                 argbData = argbData,
@@ -569,13 +494,7 @@ class LutImageProcessor(context: Context? = null) {
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
-                chromaNoiseReductionValue = chromaNoiseReductionValue,
-                linearInputToneMap = linearInputToneMap,
-                linearInputExposureEv = linearInputExposureEv,
-                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
-                rawRenderingEngine = rawRenderingEngine,
-                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                rawToneMappingParameters = rawToneMappingParameters
+                chromaNoiseReductionValue = chromaNoiseReductionValue
             )
         }
     }
@@ -599,13 +518,6 @@ class LutImageProcessor(context: Context? = null) {
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
         lutMaskType: Int = 0,
-        linearInputToneMap: Boolean = false,
-        naturalLightInputSrgb: Boolean = false,
-        linearInputExposureEv: Float = 0f,
-        naturalLightDefaultChromaDenoise: Boolean = false,
-        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
-        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
-        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     ): Bitmap = withContext(glDispatcher) {
         currentCoroutineContext().ensureActive()
         if (!isInitialized) {
@@ -624,11 +536,7 @@ class LutImageProcessor(context: Context? = null) {
         val sharpening: Float = sharpeningValue
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
-        val applyNaturalLightToneMap = linearInputToneMap && !isHlgInput
-        val preToneMapChromaDenoise = resolvePreToneMapChromaDenoise(
-            userStrength = chromaNoiseReduction,
-            applyNaturalLightDefault = applyNaturalLightToneMap && naturalLightDefaultChromaDenoise
-        )
+        val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
 
         // 确保上下文激活
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -644,12 +552,12 @@ class LutImageProcessor(context: Context? = null) {
         uploadImageTexture(bitmap)
         currentCoroutineContext().ensureActive()
 
-        if (preToneMapChromaDenoise > 0) {
-            renderBitmapChromaDenoise(imageTextureId, width, height, preToneMapChromaDenoise)
+        if (chromaDenoiseStrength > 0) {
+            renderBitmapChromaDenoise(imageTextureId, width, height, chromaDenoiseStrength)
             currentCoroutineContext().ensureActive()
         }
 
-        val chromaDenoisedTexId = if (preToneMapChromaDenoise > 0) bitmapDenoiseTexId[0] else imageTextureId
+        val chromaDenoisedTexId = if (chromaDenoiseStrength > 0) bitmapDenoiseTexId[0] else imageTextureId
         if (noiseReduction > 0) {
             renderBitmapDenoiseProfile(chromaDenoisedTexId, width, height, noiseReduction)
             currentCoroutineContext().ensureActive()
@@ -665,49 +573,26 @@ class LutImageProcessor(context: Context? = null) {
         } else {
             chromaDenoisedTexId
         }
-        val naturalLightSourceTexId = if (applyNaturalLightToneMap && naturalLightInputSrgb) {
-            renderSrgbInputToLinear(inputTexId, width, height)
-        } else {
-            inputTexId
-        }
-        val renderInputTexId = if (applyNaturalLightToneMap) {
-            renderNaturalLightToneMap(
-                naturalLightSourceTexId,
-                width,
-                height,
-                rawRenderingEngine,
-                rawHncsFilmCurveMode,
-                rawToneMappingParameters,
-                linearInputExposureEv
-            )
-        } else {
-            inputTexId
-        }
-        val naturalLightApplied = applyNaturalLightToneMap && renderInputTexId != inputTexId
-        val renderColorSpace = if (naturalLightApplied) {
-            ColorSpace.get(ColorSpace.Named.SRGB)
-        } else {
-            bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB)
-        }
+        val renderColorSpace = bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB)
 
         // HDF 光晕效果预处理
         if (halation > 0f) {
-            renderHDFBlur(renderInputTexId, width, height, halation)
+            renderHDFBlur(inputTexId, width, height, halation)
             currentCoroutineContext().ensureActive()
         }
         if (softLight > 0f) {
-            renderSoftLightBlur(renderInputTexId, width, height)
+            renderSoftLightBlur(inputTexId, width, height)
             currentCoroutineContext().ensureActive()
         }
         if (redHalation > 0f) {
-            renderHalationBlur(renderInputTexId, width, height, redHalation)
+            renderHalationBlur(inputTexId, width, height, redHalation)
             currentCoroutineContext().ensureActive()
         }
 
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
-            renderInputTexId,
+            inputTexId,
             renderColorSpace,
             isHlgInput,
             lutConfig,
@@ -727,39 +612,26 @@ class LutImageProcessor(context: Context? = null) {
         sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
-        linearInputToneMap: Boolean = false,
-        linearInputExposureEv: Float = 0f,
-        naturalLightDefaultChromaDenoise: Boolean = false,
-        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
-        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
-        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     ): Bitmap {
         val hasBaseline = baselineLayer?.lutConfig != null || baselineLayer?.colorRecipeParams != null
         val hasCreative = creativeLayer?.lutConfig != null || creativeLayer?.colorRecipeParams != null
         return when {
             hasBaseline && hasCreative -> {
-                val runDenoiseBeforeNaturalLight = linearInputToneMap && !isHlgInput
                 val baseBitmap = applyLut(
                     bitmap = bitmap,
                     isHlgInput = isHlgInput,
                     lutConfig = baselineLayer.lutConfig,
                     colorRecipeParams = baselineLayer.colorRecipeParams,
-                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) noiseReductionValue else 0f,
-                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) chromaNoiseReductionValue else 0f,
-                    linearInputToneMap = linearInputToneMap,
-                    linearInputExposureEv = linearInputExposureEv,
-                    naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
-                    rawRenderingEngine = rawRenderingEngine,
-                    rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                    rawToneMappingParameters = rawToneMappingParameters,
+                    noiseReductionValue = 0f,
+                    chromaNoiseReductionValue = 0f,
                 )
                 applyLut(
                     bitmap = baseBitmap,
                     lutConfig = creativeLayer.lutConfig,
                     colorRecipeParams = creativeLayer.colorRecipeParams,
                     sharpeningValue = sharpeningValue,
-                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else noiseReductionValue,
-                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else chromaNoiseReductionValue
+                    noiseReductionValue = noiseReductionValue,
+                    chromaNoiseReductionValue = chromaNoiseReductionValue
                 )
             }
             hasBaseline -> applyLut(
@@ -769,13 +641,7 @@ class LutImageProcessor(context: Context? = null) {
                 colorRecipeParams = baselineLayer.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
-                chromaNoiseReductionValue = chromaNoiseReductionValue,
-                linearInputToneMap = linearInputToneMap,
-                linearInputExposureEv = linearInputExposureEv,
-                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
-                rawRenderingEngine = rawRenderingEngine,
-                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                rawToneMappingParameters = rawToneMappingParameters
+                chromaNoiseReductionValue = chromaNoiseReductionValue
             )
             else -> applyLut(
                 bitmap = bitmap,
@@ -784,13 +650,7 @@ class LutImageProcessor(context: Context? = null) {
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
-                chromaNoiseReductionValue = chromaNoiseReductionValue,
-                linearInputToneMap = linearInputToneMap,
-                linearInputExposureEv = linearInputExposureEv,
-                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
-                rawRenderingEngine = rawRenderingEngine,
-                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                rawToneMappingParameters = rawToneMappingParameters
+                chromaNoiseReductionValue = chromaNoiseReductionValue
             )
         }
     }
@@ -808,12 +668,6 @@ class LutImageProcessor(context: Context? = null) {
         sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
-        linearInputToneMap: Boolean = false,
-        linearInputExposureEv: Float = 0f,
-        naturalLightDefaultChromaDenoise: Boolean = false,
-        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
-        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
-        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         luminanceGainDownsample: Int = 1,
     ): LutStackRenderResult {
         val rendered = applyLutStack(
@@ -824,12 +678,6 @@ class LutImageProcessor(context: Context? = null) {
             sharpeningValue = sharpeningValue,
             noiseReductionValue = noiseReductionValue,
             chromaNoiseReductionValue = chromaNoiseReductionValue,
-            linearInputToneMap = linearInputToneMap,
-            linearInputExposureEv = linearInputExposureEv,
-            naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
-            rawRenderingEngine = rawRenderingEngine,
-            rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-            rawToneMappingParameters = rawToneMappingParameters,
         )
         val luminanceGainMap = if (isHlgInput || !bitmap.colorSpace.isEncodedSrgbFamily() ||
             !rendered.colorSpace.isEncodedSrgbFamily()
@@ -1353,491 +1201,6 @@ class LutImageProcessor(context: Context? = null) {
         releaseLutSharpenFramebuffer()
     }
 
-    private fun renderNaturalLightToneMap(
-        inputTextureId: Int,
-        width: Int,
-        height: Int,
-        engine: RawRenderingEngine,
-        hncsFilmCurveMode: HncsFilmCurveMode,
-        toneMappingParameters: RawToneMappingParameters,
-        exposureCompensationEv: Float
-    ): Int {
-        val effectiveEngine = if (engine.isHncs) RawRenderingEngine.HncsCcm else engine
-        val program = getOrCreateNaturalLightProgram(effectiveEngine)
-        if (program == 0) return inputTextureId
-        setupNaturalLightFramebuffer(width, height)
-        if (naturalLightFboId == 0 || naturalLightTextureId == 0) return inputTextureId
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        GLES30.glUseProgram(program)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        setUniform1i(program, "uInputTexture", 0)
-        RawToneMappingGl.bindRawToneMappingUniforms(program, toneMappingParameters)
-        bindNaturalLightProfileExposureUniforms(program, effectiveEngine, exposureCompensationEv)
-        setUniform1f(program, "uBlacks", 0f)
-        setUniform1f(program, "uWhites", 0f)
-        bindNaturalLightColorTransforms(program, effectiveEngine)
-        if (effectiveEngine == RawRenderingEngine.AdobeCurve) {
-            bindNaturalLightDisabledDcpUniforms(program)
-            bindNaturalLightAdobeCurve(program, toneMappingParameters)
-        }
-        if (effectiveEngine == RawRenderingEngine.Spektrafilm) {
-            bindNaturalLightDummySpectralFilmUniforms(program)
-        }
-        if (effectiveEngine.isHncs) {
-            checkNotNull(naturalLightHncsGl) {
-                "HNCS Natural Light rendering requires an application Context"
-            }.bindCombinedResources(
-                program = program,
-                filmCurveMode = hncsFilmCurveMode,
-            )
-        }
-        val identityMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(program, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        // Resource uploads may leave texture unit 3 active. Reassert the image source before
-        // drawing so initial and cached HNCS renders cannot sample the FilmCurve as input.
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        setUniform1i(program, "uInputTexture", 0)
-        drawQuad(program)
-        val error = GLES30.glGetError()
-        if (error != GLES30.GL_NO_ERROR) {
-            PLog.e(TAG, "renderNaturalLightToneMap glError $error")
-            return inputTextureId
-        }
-        val outputTextureId = if (effectiveEngine.isHncs) {
-            renderNaturalLightHncsOutput(
-                inputTextureId = naturalLightTextureId,
-                width = width,
-                height = height,
-            )
-        } else {
-            renderNaturalLightSrgbOutput(
-                inputTextureId = naturalLightTextureId,
-                width = width,
-                height = height,
-            )
-        }
-        return if (outputTextureId != 0) outputTextureId else inputTextureId
-    }
-
-    private fun renderNaturalLightHncsOutput(
-        inputTextureId: Int,
-        width: Int,
-        height: Int,
-    ): Int {
-        val program = getOrCreateNaturalLightHncsOutputProgram()
-        if (program == 0) return 0
-        setupNaturalLightOutputFramebuffer(width, height)
-        if (naturalLightOutputFboId == 0 || naturalLightOutputTextureId == 0) return 0
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightOutputFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        GLES30.glUseProgram(program)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        setUniform1i(program, "uInputTexture", 0)
-        val outputTransform = RawToneMappingGl.computeWorkingToOutputTransform(
-            com.hinnka.mycamera.raw.ColorSpace.HNCS,
-            com.hinnka.mycamera.raw.ColorSpace.SRGB,
-        )
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uHncsToLinearOutput"),
-            1,
-            false,
-            RawToneMappingGl.transposeMatrix3x3(outputTransform),
-            0,
-        )
-        setUniform1f(program, "uBlacks", 0f)
-        setUniform1f(program, "uWhites", 0f)
-        val identityMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(program, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0,
-        )
-        drawQuad(program)
-        val error = GLES30.glGetError()
-        if (error != GLES30.GL_NO_ERROR) {
-            PLog.e(TAG, "renderNaturalLightHncsOutput glError $error")
-            return 0
-        }
-        return naturalLightOutputTextureId
-    }
-
-    private fun renderNaturalLightSrgbOutput(
-        inputTextureId: Int,
-        width: Int,
-        height: Int,
-    ): Int {
-        val program = getOrCreateNaturalLightSrgbOutputProgram()
-        if (program == 0) return 0
-        setupNaturalLightOutputFramebuffer(width, height)
-        if (naturalLightOutputFboId == 0 || naturalLightOutputTextureId == 0) return 0
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightOutputFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        GLES30.glUseProgram(program)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        setUniform1i(program, "uInputTexture", 0)
-        val identityMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(program, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0,
-        )
-        drawQuad(program)
-        val error = GLES30.glGetError()
-        if (error != GLES30.GL_NO_ERROR) {
-            PLog.e(TAG, "renderNaturalLightSrgbOutput glError $error")
-            return 0
-        }
-        return naturalLightOutputTextureId
-    }
-
-    private fun getOrCreateNaturalLightProgram(engine: RawRenderingEngine): Int {
-        val cached = naturalLightPrograms[engine.ordinal]
-        if (cached != 0) return cached
-        val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, RawFullscreenQuad.VERTEX_SHADER)
-        val fragmentShader = compileShader(
-            GLES30.GL_FRAGMENT_SHADER,
-            RawEngineTonePass.combinedFragmentShaderFor(engine, includeShadowsHighlights = false)
-        )
-        if (vertexShader == 0 || fragmentShader == 0) {
-            if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
-            if (fragmentShader != 0) GLES30.glDeleteShader(fragmentShader)
-            return 0
-        }
-        val program = GLES30.glCreateProgram()
-        GLES30.glAttachShader(program, vertexShader)
-        GLES30.glAttachShader(program, fragmentShader)
-        GLES30.glLinkProgram(program)
-        GLES30.glDeleteShader(vertexShader)
-        GLES30.glDeleteShader(fragmentShader)
-        val linked = IntArray(1)
-        GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, linked, 0)
-        if (linked[0] == 0) {
-            PLog.e(TAG, "Natural light program link failed: ${GLES30.glGetProgramInfoLog(program)}")
-            GLES30.glDeleteProgram(program)
-            return 0
-        }
-        naturalLightPrograms[engine.ordinal] = program
-        return program
-    }
-
-    private fun getOrCreateNaturalLightHncsOutputProgram(): Int {
-        if (naturalLightHncsOutputProgram != 0) return naturalLightHncsOutputProgram
-        naturalLightHncsOutputProgram = createFragmentProgram(
-            RawFullscreenQuad.VERTEX_SHADER,
-            HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER,
-            "NaturalLight_HncsOutput",
-        )
-        return naturalLightHncsOutputProgram
-    }
-
-    private fun getOrCreateNaturalLightSrgbOutputProgram(): Int {
-        if (naturalLightSrgbOutputProgram != 0) return naturalLightSrgbOutputProgram
-        naturalLightSrgbOutputProgram = createFragmentProgram(
-            RawFullscreenQuad.VERTEX_SHADER,
-            RawSrgbPass.FRAGMENT_SHADER,
-            "NaturalLight_SrgbOutput",
-        )
-        return naturalLightSrgbOutputProgram
-    }
-
-    private fun setupNaturalLightFramebuffer(width: Int, height: Int) {
-        if (naturalLightTextureId != 0 &&
-            naturalLightFboId != 0 &&
-            naturalLightWidth == width &&
-            naturalLightHeight == height
-        ) {
-            return
-        }
-        releaseNaturalLightFramebuffer()
-
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        naturalLightTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_RGBA16F,
-            width,
-            height,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_FLOAT,
-            null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-
-        val fbos = IntArray(1)
-        GLES30.glGenFramebuffers(1, fbos, 0)
-        naturalLightFboId = fbos[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightFboId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            naturalLightTextureId,
-            0
-        )
-        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            PLog.e(TAG, "Natural light framebuffer not complete: $status")
-            releaseNaturalLightFramebuffer()
-            return
-        }
-        naturalLightWidth = width
-        naturalLightHeight = height
-    }
-
-    private fun releaseNaturalLightFramebuffer() {
-        if (naturalLightFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(naturalLightFboId), 0)
-            naturalLightFboId = 0
-        }
-        if (naturalLightTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(naturalLightTextureId), 0)
-            naturalLightTextureId = 0
-        }
-        naturalLightWidth = 0
-        naturalLightHeight = 0
-    }
-
-    private fun setupNaturalLightOutputFramebuffer(width: Int, height: Int) {
-        if (naturalLightOutputTextureId != 0 &&
-            naturalLightOutputFboId != 0 &&
-            naturalLightOutputWidth == width &&
-            naturalLightOutputHeight == height
-        ) {
-            return
-        }
-        releaseNaturalLightOutputFramebuffer()
-
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        naturalLightOutputTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightOutputTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_RGBA16F,
-            width,
-            height,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_FLOAT,
-            null,
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-
-        val framebuffers = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffers, 0)
-        naturalLightOutputFboId = framebuffers[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightOutputFboId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            naturalLightOutputTextureId,
-            0,
-        )
-        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            PLog.e(TAG, "Natural Light output framebuffer not complete: $status")
-            releaseNaturalLightOutputFramebuffer()
-            return
-        }
-        naturalLightOutputWidth = width
-        naturalLightOutputHeight = height
-    }
-
-    private fun releaseNaturalLightOutputFramebuffer() {
-        if (naturalLightOutputFboId != 0) {
-            GLES30.glDeleteFramebuffers(
-                1,
-                intArrayOf(naturalLightOutputFboId),
-                0,
-            )
-            naturalLightOutputFboId = 0
-        }
-        if (naturalLightOutputTextureId != 0) {
-            GLES30.glDeleteTextures(
-                1,
-                intArrayOf(naturalLightOutputTextureId),
-                0,
-            )
-            naturalLightOutputTextureId = 0
-        }
-        naturalLightOutputWidth = 0
-        naturalLightOutputHeight = 0
-    }
-
-    private fun bindNaturalLightColorTransforms(program: Int, engine: RawRenderingEngine) {
-        val profileToEngine = RawToneMappingGl.computeWorkingToOutputTransform(
-            com.hinnka.mycamera.raw.ColorSpace.SRGB,
-            engine.workingColorSpace
-        )
-        val outputTransform = RawToneMappingGl.computeWorkingToOutputTransform(
-            engine.workingColorSpace,
-            com.hinnka.mycamera.raw.ColorSpace.SRGB
-        )
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uProfileToEngineTransform"),
-            1,
-            false,
-            RawToneMappingGl.transposeMatrix3x3(profileToEngine),
-            0
-        )
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uOutputTransform"),
-            1,
-            false,
-            RawToneMappingGl.transposeMatrix3x3(outputTransform),
-            0
-        )
-    }
-
-    private fun bindNaturalLightProfileExposureUniforms(
-        program: Int,
-        engine: RawRenderingEngine,
-        exposureCompensationEv: Float
-    ) {
-        val exposure = RawProfileExposureGl.compute(
-            profileExposureCompensation = exposureCompensationEv + engine.defaultExposureCompensationEv,
-            useRamp = engine == RawRenderingEngine.AdobeCurve
-        )
-        RawProfileExposureGl.bindUniforms(program, exposure)
-    }
-
-    private fun bindNaturalLightDisabledDcpUniforms(program: Int) {
-        val dummyTextureId = ensureNaturalLightDummy3DTexture()
-        setUniform1i(program, "uDcpHueSatTexture", 2)
-        setUniform1i(program, "uDcpLookTableTexture", 3)
-        setUniform1i(program, "uDcpHueSatEnabled", 0)
-        setUniform1i(program, "uDcpLookTableEnabled", 0)
-        setUniform3i(program, "uDcpHueSatDivisions", 1, 1, 1)
-        setUniform3i(program, "uDcpLookTableDivisions", 1, 1, 1)
-        setUniform1i(program, "uDcpHueSatEncoding", 0)
-        setUniform1i(program, "uDcpLookTableEncoding", 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyTextureId)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyTextureId)
-    }
-
-    private fun bindNaturalLightAdobeCurve(
-        program: Int,
-        toneMappingParameters: RawToneMappingParameters
-    ) {
-        val curve = RawToneMappingGl.adobeCurveSamplesFor(toneMappingParameters)
-        uploadNaturalLightCurveTexture(curve)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightCurveTextureId)
-        setUniform1i(program, "uCurveTexture", 1)
-        setUniform1f(program, "uCurveSize", curve.size.toFloat())
-        setUniform1i(program, "uCurveEnabled", 1)
-    }
-
-    private fun bindNaturalLightDummySpectralFilmUniforms(program: Int) {
-        setUniform1i(program, "uSpectralFilmTexture", 6)
-        setUniform1i(program, "uSpectralFilmSize", 1)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, ensureNaturalLightDummy3DTexture())
-    }
-
-    private fun uploadNaturalLightCurveTexture(curve: FloatArray) {
-        if (naturalLightCurveTextureId != 0 && naturalLightCurveSize == curve.size) return
-        if (naturalLightCurveTextureId == 0) {
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            naturalLightCurveTextureId = textures[0]
-        }
-        val buffer = ByteBuffer.allocateDirect(curve.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(curve)
-        buffer.position(0)
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightCurveTextureId)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_R16F,
-            curve.size,
-            1,
-            0,
-            GLES30.GL_RED,
-            GLES30.GL_FLOAT,
-            buffer
-        )
-        naturalLightCurveSize = curve.size
-    }
-
-    private fun ensureNaturalLightDummy3DTexture(): Int {
-        if (naturalLightDummy3DTextureId != 0) return naturalLightDummy3DTextureId
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        naturalLightDummy3DTextureId = textures[0]
-        val buffer = ByteBuffer.allocateDirect(4 * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(floatArrayOf(0f, 1f, 1f, 1f))
-        buffer.position(0)
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, naturalLightDummy3DTextureId)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexImage3D(
-            GLES30.GL_TEXTURE_3D,
-            0,
-            GLES30.GL_RGBA16F,
-            1,
-            1,
-            1,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_FLOAT,
-            buffer
-        )
-        return naturalLightDummy3DTextureId
-    }
-
     private fun setUniform1i(program: Int, name: String, value: Int) {
         val location = GLES30.glGetUniformLocation(program, name)
         if (location >= 0) GLES30.glUniform1i(location, value)
@@ -1846,11 +1209,6 @@ class LutImageProcessor(context: Context? = null) {
     private fun setUniform1f(program: Int, name: String, value: Float) {
         val location = GLES30.glGetUniformLocation(program, name)
         if (location >= 0) GLES30.glUniform1f(location, value)
-    }
-
-    private fun setUniform3i(program: Int, name: String, x: Int, y: Int, z: Int) {
-        val location = GLES30.glGetUniformLocation(program, name)
-        if (location >= 0) GLES30.glUniform3i(location, x, y, z)
     }
 
     private fun obtainReadbackBuffer(pixelSize: Int): ByteBuffer {
@@ -2080,16 +1438,6 @@ class LutImageProcessor(context: Context? = null) {
                 IMAGE_VERTEX_SHADER,
                 TEXTURE_PASSTHROUGH_SHADER,
                 "BitmapDenoise_Passthrough",
-            )
-        }
-    }
-
-    private fun ensureNaturalLightSrgbToLinearProgram() {
-        if (naturalLightSrgbToLinearProgram == 0) {
-            naturalLightSrgbToLinearProgram = createFragmentProgram(
-                IMAGE_VERTEX_SHADER,
-                SRGB_TO_LINEAR_SHADER,
-                "NaturalLight_SrgbToLinear",
             )
         }
     }
@@ -2421,17 +1769,6 @@ class LutImageProcessor(context: Context? = null) {
         checkGlError("renderBitmapChromaDenoiseEdgeGuide")
     }
 
-    private fun resolvePreToneMapChromaDenoise(
-        userStrength: Float,
-        applyNaturalLightDefault: Boolean
-    ): Float {
-        return if (applyNaturalLightDefault) {
-            ChromaDenoiseDefaults.forRawCapture(userStrength)
-        } else {
-            DenoiseStrength.clamp(userStrength)
-        }
-    }
-
     private fun renderTexturePassthrough(sourceTextureId: Int, targetFboId: Int, width: Int, height: Int) {
         GLES30.glUseProgram(bitmapDenoisePassthroughProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
@@ -2449,34 +1786,6 @@ class LutImageProcessor(context: Context? = null) {
             0
         )
         drawQuad(bitmapDenoisePassthroughProgram)
-    }
-
-    private fun renderSrgbInputToLinear(sourceTextureId: Int, width: Int, height: Int): Int {
-        ensureNaturalLightSrgbToLinearProgram()
-        setupBitmapDenoiseFramebuffers(width, height)
-        if (naturalLightSrgbToLinearProgram == 0) return sourceTextureId
-        val targetIndex = if (sourceTextureId == bitmapDenoiseTexId[0]) 1 else 0
-        val targetFboId = bitmapDenoiseFboId[targetIndex]
-        val targetTextureId = bitmapDenoiseTexId[targetIndex]
-        val identityMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-
-        GLES30.glUseProgram(naturalLightSrgbToLinearProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(naturalLightSrgbToLinearProgram, "uInputTexture"), 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(naturalLightSrgbToLinearProgram, "uMVPMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        drawQuad(naturalLightSrgbToLinearProgram)
-        checkGlError("renderSrgbInputToLinear")
-        return targetTextureId
     }
 
     private fun setupLutSharpenFramebuffer(width: Int, height: Int): Boolean {
@@ -3769,32 +3078,6 @@ class LutImageProcessor(context: Context? = null) {
         }
         basicToneTextures.release()
         releaseOutputFramebuffer()
-        releaseNaturalLightFramebuffer()
-        releaseNaturalLightOutputFramebuffer()
-        for (i in naturalLightPrograms.indices) {
-            if (naturalLightPrograms[i] != 0) {
-                GLES30.glDeleteProgram(naturalLightPrograms[i])
-                naturalLightPrograms[i] = 0
-            }
-        }
-        if (naturalLightHncsOutputProgram != 0) {
-            GLES30.glDeleteProgram(naturalLightHncsOutputProgram)
-            naturalLightHncsOutputProgram = 0
-        }
-        if (naturalLightSrgbOutputProgram != 0) {
-            GLES30.glDeleteProgram(naturalLightSrgbOutputProgram)
-            naturalLightSrgbOutputProgram = 0
-        }
-        naturalLightHncsGl?.release()
-        if (naturalLightCurveTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(naturalLightCurveTextureId), 0)
-            naturalLightCurveTextureId = 0
-            naturalLightCurveSize = 0
-        }
-        if (naturalLightDummy3DTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(naturalLightDummy3DTextureId), 0)
-            naturalLightDummy3DTextureId = 0
-        }
         if (pboId != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
             pboId = 0
@@ -3806,7 +3089,6 @@ class LutImageProcessor(context: Context? = null) {
         if (bitmapDenoiseNlmFusedAccuProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmFusedAccuProgram)
         if (bitmapDenoiseNlmFinishProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmFinishProgram)
         if (bitmapDenoisePassthroughProgram != 0) GLES30.glDeleteProgram(bitmapDenoisePassthroughProgram)
-        if (naturalLightSrgbToLinearProgram != 0) GLES30.glDeleteProgram(naturalLightSrgbToLinearProgram)
         if (bitmapChromaDenoiseGuideProgram != 0) GLES30.glDeleteProgram(bitmapChromaDenoiseGuideProgram)
         if (bitmapChromaDenoiseProgram != 0) GLES30.glDeleteProgram(bitmapChromaDenoiseProgram)
         if (lutSharpenProgram != 0) {
@@ -3942,33 +3224,6 @@ class LutImageProcessor(context: Context? = null) {
                 float afterLuma = max(dot(afterLinear, LINEAR_SRGB_LUMA), 0.0);
                 float gain = (afterLuma + uOffset) / (beforeLuma + uOffset);
                 fragColor = vec4(gain, 0.0, 0.0, 1.0);
-            }
-        """.trimIndent()
-
-        private val SRGB_TO_LINEAR_SHADER = """
-            #version 300 es
-            precision highp float;
-
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-
-            uniform sampler2D uInputTexture;
-
-            vec3 srgbToLinear(vec3 srgb) {
-                vec3 color = max(srgb, vec3(0.0));
-                bvec3 useHigh = greaterThan(color, vec3(0.04045));
-                vec3 low = color / 12.92;
-                vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
-                return vec3(
-                    useHigh.r ? high.r : low.r,
-                    useHigh.g ? high.g : low.g,
-                    useHigh.b ? high.b : low.b
-                );
-            }
-
-            void main() {
-                vec4 color = texture(uInputTexture, vTexCoord);
-                fragColor = vec4(srgbToLinear(color.rgb), color.a);
             }
         """.trimIndent()
 

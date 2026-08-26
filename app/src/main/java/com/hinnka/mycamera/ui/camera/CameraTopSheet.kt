@@ -118,10 +118,6 @@ fun CameraTopSheet(
     useRaw: Boolean,
     onRawToggle: (Boolean) -> Unit,
     isRawSupported: Boolean,
-    useNaturalLight: Boolean,
-    naturalLightWarningShown: Boolean,
-    onNaturalLightToggle: (Boolean) -> Unit,
-    onNaturalLightWarningShown: () -> Unit,
     rawDcpId: String?,
     rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     rawDcpLensOptions: List<RawDcpLensOption> = emptyList(),
@@ -175,51 +171,14 @@ fun CameraTopSheet(
 ) {
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
     var showRawSheet by rememberSaveable { mutableStateOf(false) }
-    var showNaturalLightWarning by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
     fun handleContentManagementAction(action: () -> Unit) {
         showContentManagementOptions = false
         action()
     }
 
-    fun handleNaturalLightToggle(enabled: Boolean) {
-        if (enabled && !useNaturalLight && !naturalLightWarningShown) {
-            showNaturalLightWarning = true
-        } else {
-            onNaturalLightToggle(enabled)
-        }
-    }
-
     LaunchedEffect(visible, captureMode) {
         showContentManagementOptions = false
-    }
-
-    if (showNaturalLightWarning) {
-        AlertDialog(
-            onDismissRequest = { showNaturalLightWarning = false },
-            title = {
-                Text(text = stringResource(R.string.natural_light_warning_title))
-            },
-            text = {
-                Text(text = stringResource(R.string.natural_light_warning_message))
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showNaturalLightWarning = false
-                        onNaturalLightWarningShown()
-                        onNaturalLightToggle(true)
-                    }
-                ) {
-                    Text(text = stringResource(R.string.natural_light_warning_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showNaturalLightWarning = false }) {
-                    Text(text = stringResource(R.string.cancel))
-                }
-            }
-        )
     }
 
     AnimatedVisibility(
@@ -303,18 +262,6 @@ fun CameraTopSheet(
                             title = stringResource(R.string.baseline_target_raw),
                             checked = useRaw,
                             onClick = { showRawSheet = true },
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        NaturalLightQuickSetting(
-                            checked = useNaturalLight,
-                            onCheckedChange = ::handleNaturalLightToggle,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        NaturalLightQuickSetting(
-                            checked = useNaturalLight,
-                            onCheckedChange = ::handleNaturalLightToggle,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -880,20 +827,6 @@ private fun SectionLabel(title: String) {
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
         modifier = Modifier.padding(bottom = 12.dp)
-    )
-}
-
-@Composable
-private fun NaturalLightQuickSetting(
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    QuickSettingToggle(
-        title = stringResource(R.string.settings_tonemap_mode_natural_light),
-        checked = checked,
-        onCheckedChange = onCheckedChange,
-        modifier = modifier
     )
 }
 

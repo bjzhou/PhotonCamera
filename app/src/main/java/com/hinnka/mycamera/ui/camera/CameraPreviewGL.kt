@@ -24,9 +24,6 @@ import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
-import com.hinnka.mycamera.raw.HncsFilmCurveMode
-import com.hinnka.mycamera.raw.RawRenderingEngine
-import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -68,13 +65,6 @@ fun CameraPreviewGL(
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     isHlgInput: Boolean = false,
-    naturalLightEnabled: Boolean = false,
-    rawExposureCompensation: Float = 0f,
-    rawBlackPointCorrection: Float = 0f,
-    rawWhitePointCorrection: Float = 0f,
-    rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
-    rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
-    rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     isEyeFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     isAutoFocus: Boolean = true,
@@ -283,15 +273,6 @@ fun CameraPreviewGL(
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setIsHlgInput(isHlgInput)
-                        glSurfaceView.setRawPreviewSettings(
-                            enabled = naturalLightEnabled,
-                            exposureCompensation = rawExposureCompensation,
-                            blackPointCorrection = rawBlackPointCorrection,
-                            whitePointCorrection = rawWhitePointCorrection,
-                            renderingEngine = rawRenderingEngine,
-                            hncsFilmCurveMode = rawHncsFilmCurveMode,
-                            toneMappingParameters = rawToneMappingParameters
-                        )
                         glSurfaceView.setAutoFocus(isAutoFocus)
                         glSurfaceView.setFocusPeakingEnabled(focusPeakingEnabled)
                         glSurfaceView.setEyeFocusBusy(isEyeFocusBusy)

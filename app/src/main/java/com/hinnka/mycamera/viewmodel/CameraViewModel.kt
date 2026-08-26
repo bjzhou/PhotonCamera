@@ -34,7 +34,6 @@ import com.hinnka.mycamera.frame.FramePreviewFactory
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.PhotoSavePath
-import com.hinnka.mycamera.gallery.TONEMAP_MODE_NATURAL_LIGHT
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.BakedLutExporter
 import com.hinnka.mycamera.lut.LutConfig
@@ -148,11 +147,7 @@ private fun sanitizeViewModelTonemapMode(mode: String): String {
 }
 
 private fun resolvePreviewBaselineTarget(prefs: UserPreferences): BaselineColorCorrectionTarget? {
-    return when {
-        prefs.useRaw && prefs.naturalLightEnabled -> BaselineColorCorrectionTarget.RAW
-        prefs.useRaw -> null
-        else -> BaselineColorCorrectionTarget.JPG
-    }
+    return if (prefs.useRaw) null else BaselineColorCorrectionTarget.JPG
 }
 
 private fun UserPreferences.getBaselineLutId(target: BaselineColorCorrectionTarget): String? {
@@ -1069,10 +1064,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun shouldDisableNaturalLightForJpgMax(prefs: UserPreferences): Boolean {
-        return prefs.useJpgMax
-    }
-
     private fun resolveCaptureRawRenderingEngine(userPrefs: UserPreferences?): RawRenderingEngine {
         return userPrefs?.rawRenderingEngine ?: RawRenderingEngine.AdobeCurve
     }
@@ -1085,50 +1076,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun effectiveCameraTonemapMode(prefs: UserPreferences): String {
-        return if (prefs.naturalLightEnabled) {
-            TONEMAP_MODE_SRGB
-        } else {
-            sanitizeViewModelTonemapMode(prefs.tonemapMode)
-        }
+        return sanitizeViewModelTonemapMode(prefs.tonemapMode)
     }
 
     private fun metadataTonemapMode(prefs: UserPreferences?): String {
-        return if (prefs?.naturalLightEnabled == true) {
-            TONEMAP_MODE_NATURAL_LIGHT
-        } else {
-            sanitizeViewModelTonemapMode(prefs?.tonemapMode ?: TONEMAP_MODE_SYSTEM_DEFAULT)
-        }
-    }
-
-    private suspend fun saveNaturalLightEnabledWithCameraReopen(
-        enabled: Boolean,
-        prefs: UserPreferences? = null
-    ) {
-        val currentPrefs = prefs ?: userPreferencesRepository.userPreferences.first()
-        if (currentPrefs.naturalLightEnabled == enabled) return
-
-        val previousTonemapMode = effectiveCameraTonemapMode(currentPrefs)
-        val nextPrefs = currentPrefs.copy(naturalLightEnabled = enabled)
-        val nextTonemapMode = effectiveCameraTonemapMode(nextPrefs)
-
-        userPreferencesRepository.saveNaturalLightEnabled(enabled)
-        if (previousTonemapMode != nextTonemapMode) {
-            cameraController.setTonemapMode(nextTonemapMode)
-        }
-        PLog.d(
-            TAG,
-            "Reopening camera for Natural Light change: enabled=$enabled, " +
-                "tonemap=$previousTonemapMode->$nextTonemapMode"
-        )
-        reopenCamera()
-    }
-
-    private suspend fun disableNaturalLightIfNeeded(reason: String, prefs: UserPreferences? = null) {
-        val currentPrefs = prefs ?: userPreferencesRepository.userPreferences.first()
-        if (currentPrefs.naturalLightEnabled) {
-            PLog.d(TAG, "Disabling Natural Light tone map: $reason")
-            saveNaturalLightEnabledWithCameraReopen(false, currentPrefs)
-        }
+        return sanitizeViewModelTonemapMode(prefs?.tonemapMode ?: TONEMAP_MODE_SYSTEM_DEFAULT)
     }
 
     fun savePreset(preset: com.hinnka.mycamera.model.CameraPreset) {
@@ -1738,12 +1690,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val tonemapMode: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.tonemapMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "SYSTEM_DEFAULT")
-    val naturalLightEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.naturalLightEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val naturalLightWarningShown: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.naturalLightWarningShown }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val fixTonemapPreview: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.fixTonemapPreview }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -2173,16 +2119,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (effectiveRawRenderingEngine != it.rawRenderingEngine) {
                     viewModelScope.launch {
                         userPreferencesRepository.saveRawColorEngine(effectiveRawRenderingEngine)
-                    }
-                }
-                if (it.naturalLightEnabled &&
-                    (multipleExposureEnabled || shouldDisableNaturalLightForJpgMax(it))
-                ) {
-                    viewModelScope.launch {
-                        disableNaturalLightIfNeeded(
-                            reason = "conflicting persisted camera feature state",
-                            prefs = it
-                        )
                     }
                 }
                 if (currentCameraState.useMultipleExposure != multipleExposureEnabled) {
@@ -3162,9 +3098,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setUseMultipleExposure(enabled: Boolean) {
         viewModelScope.launch {
-            if (enabled) {
-                disableNaturalLightIfNeeded("multiple exposure enabled")
-            }
             applyCameraFeatureUpdate(
                 CameraFeatureUpdate(useMultipleExposure = SettingValue(enabled))
             )
@@ -3451,10 +3384,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 开始连拍
      */
     fun startContinuousCapture() {
-        if (naturalLightEnabled.value) {
-            PLog.d(TAG, "Continuous photo burst disabled while Natural Light tone map is active")
-            return
-        }
         if (state.value.useRaw && state.value.isRawSupported) return
         generateThumbnail()
         burstImages.clear()
@@ -4581,13 +4510,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /** JPGmax：YUV 多帧降噪。 */
     fun setUseJpgMax(enabled: Boolean) {
         viewModelScope.launch {
-            if (enabled) {
-                val prefs = userPreferencesRepository.userPreferences.first()
-                disableNaturalLightIfNeeded(
-                    reason = "JPGmax enabled",
-                    prefs = prefs,
-                )
-            }
             applyCameraFeatureUpdate(
                 CameraFeatureUpdate(useJpgMax = SettingValue(enabled))
             )
@@ -6227,14 +6149,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 captureMode = captureMode,
                 multipleExposureFrameCount = expectedFrameCount,
                 baselineTarget = BaselineColorCorrectionTarget.JPG,
-            ).let { hdrMetadata ->
-                if (hdrMetadata.usesNaturalLightToneMap()) {
-                    PLog.d(TAG, "YUV HDR bracket stores SYSTEM_DEFAULT tonemap metadata")
-                    hdrMetadata.copy(tonemapMode = "SYSTEM_DEFAULT")
-                } else {
-                    hdrMetadata
-                }
-            }
+            )
 
             val photoId = GalleryManager.preparePhoto(
                 context,
@@ -6722,40 +6637,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setTonemapMode(mode: String) {
         viewModelScope.launch {
             userPreferencesRepository.saveTonemapMode(sanitizeViewModelTonemapMode(mode))
-        }
-    }
-
-    fun setNaturalLightToneMapEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            if (enabled) {
-                val prefs = userPreferencesRepository.userPreferences.first()
-                val shouldDisableMultipleExposure = prefs.useMultipleExposure
-                val shouldDisableJpgMax = shouldDisableNaturalLightForJpgMax(prefs)
-
-                if (shouldDisableMultipleExposure || shouldDisableJpgMax) {
-                    applyCameraFeatureUpdate(
-                        CameraFeatureUpdate(
-                            useMultipleExposure = if (shouldDisableMultipleExposure) {
-                                SettingValue(false)
-                            } else {
-                                null
-                            },
-                            useJpgMax = if (shouldDisableJpgMax) {
-                                SettingValue(false)
-                            } else {
-                                null
-                            }
-                        )
-                    )
-                }
-            }
-            saveNaturalLightEnabledWithCameraReopen(enabled)
-        }
-    }
-
-    fun setNaturalLightWarningShown(shown: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveNaturalLightWarningShown(shown)
         }
     }
 

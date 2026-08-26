@@ -408,10 +408,6 @@
     <string name="settings_tonemap_mode_description">Adjust the hardware tone mapping (contrast/gamma) mode</string>
     <string name="settings_tonemap_mode_system_default">System Default</string>
     <string name="settings_tonemap_mode_srgb">sRGB</string>
-    <string name="settings_tonemap_mode_natural_light">Natural Light</string>
-    <string name="natural_light_warning_title">Enable Natural Light</string>
-    <string name="natural_light_warning_message">Natural Light changes the system tone mapping path so preview and capture can use a more linear color pipeline. Some Camera2 implementations may show abnormal preview color, incorrect brightness, or abnormal captured images. If this happens, open Settings &gt; Color and HDR and enable the preview or capture tone mapping fix as needed.</string>
-    <string name="natural_light_warning_confirm">Continue</string>
     <string name="settings_fix_tonemap_preview">Fix tone mapping preview</string>
     <string name="settings_fix_tonemap_preview_description">Linearize preview input before applying custom tone curves on devices whose preview already includes sRGB gamma. Capture output is unchanged.</string>
     <string name="settings_fix_tonemap_capture">Fix tone mapping capture</string>

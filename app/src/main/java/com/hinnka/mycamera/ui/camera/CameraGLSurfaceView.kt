@@ -16,9 +16,6 @@ import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
-import com.hinnka.mycamera.raw.HncsFilmCurveMode
-import com.hinnka.mycamera.raw.RawRenderingEngine
-import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -204,29 +201,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun setIsHlgInput(isHlg: Boolean) {
         renderer.isHlgInput = isHlg
         requestRender()
-    }
-
-    fun setRawPreviewSettings(
-        enabled: Boolean,
-        exposureCompensation: Float,
-        blackPointCorrection: Float,
-        whitePointCorrection: Float,
-        renderingEngine: RawRenderingEngine,
-        hncsFilmCurveMode: HncsFilmCurveMode,
-        toneMappingParameters: RawToneMappingParameters
-    ) {
-        queueEvent {
-            renderer.setRawPreviewSettings(
-                enabled = enabled,
-                exposureCompensation = exposureCompensation,
-                blackPointCorrection = blackPointCorrection,
-                whitePointCorrection = whitePointCorrection,
-                renderingEngine = renderingEngine,
-                hncsFilmCurveMode = hncsFilmCurveMode,
-                toneMappingParameters = toneMappingParameters
-            )
-            requestRender()
-        }
     }
 
     fun setAutoFocus(auto: Boolean) {

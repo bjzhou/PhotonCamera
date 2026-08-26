@@ -218,8 +218,6 @@ data class UserPreferences(
     val captureButtonImagePath: String? = null,
     val droMode: String = "OFF", // DRO 模式
     val tonemapMode: String = "SYSTEM_DEFAULT", // 色调映射模式
-    val naturalLightEnabled: Boolean = false, // 是否启用自然光影
-    val naturalLightWarningShown: Boolean = false, // 是否已提示自然光影兼容性风险
     val fixTonemapPreview: Boolean = false, // 修复部分设备自定义色调映射预览异常
     val fixTonemapCapture: Boolean = false, // 修复部分设备自定义色调映射拍摄异常
     val applyUltraHDR: Boolean = false, // 是否应用 Ultra HDR 策略
@@ -479,8 +477,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val CAPTURE_BUTTON_IMAGE_PATH = stringPreferencesKey("capture_button_image_path")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
         private val TONEMAP_MODE = stringPreferencesKey("tonemap_mode")
-        private val NATURAL_LIGHT_ENABLED = booleanPreferencesKey("natural_light_enabled")
-        private val NATURAL_LIGHT_WARNING_SHOWN = booleanPreferencesKey("natural_light_warning_shown")
         private val FIX_TONEMAP_PREVIEW = booleanPreferencesKey("fix_tonemap_preview")
         private val FIX_TONEMAP_CAPTURE = booleanPreferencesKey("fix_tonemap_capture")
         private val APPLY_ULTRA_HDR = booleanPreferencesKey("apply_ultra_hdr")
@@ -765,8 +761,6 @@ class UserPreferencesRepository(private val context: Context) {
                     ?.takeIf { it.isNotBlank() },
                 droMode = preferences[DRO_MODE] ?: if (preferences[RAW_DRO_ENABLED_KEY] == true) "DR100" else "OFF",
                 tonemapMode = sanitizeTonemapMode(preferences[TONEMAP_MODE] ?: "SYSTEM_DEFAULT"),
-                naturalLightEnabled = preferences[NATURAL_LIGHT_ENABLED] ?: false,
-                naturalLightWarningShown = preferences[NATURAL_LIGHT_WARNING_SHOWN] ?: false,
                 fixTonemapPreview = preferences[FIX_TONEMAP_PREVIEW] ?: false,
                 fixTonemapCapture = preferences[FIX_TONEMAP_CAPTURE] ?: false,
                 applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: false,
@@ -1304,7 +1298,6 @@ class UserPreferencesRepository(private val context: Context) {
                 return@edit
             }
             preferences[TONEMAP_MODE] = "SYSTEM_DEFAULT"
-            preferences[NATURAL_LIGHT_ENABLED] = false
             val exposureMode = RawAdaptiveExposureMode.fromPersistedValue(
                 value = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
                 usePhotonHdr =
@@ -2074,21 +2067,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveTonemapMode(mode: String) {
         context.dataStore.edit { preferences ->
             preferences[TONEMAP_MODE] = sanitizeTonemapMode(mode)
-        }
-    }
-
-    /**
-     * 保存是否启用自然光影
-     */
-    suspend fun saveNaturalLightEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[NATURAL_LIGHT_ENABLED] = enabled
-        }
-    }
-
-    suspend fun saveNaturalLightWarningShown(shown: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[NATURAL_LIGHT_WARNING_SHOWN] = shown
         }
     }
 
