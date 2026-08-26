@@ -71,6 +71,7 @@ import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -492,6 +493,7 @@ private data class CameraFeatureUpdate(
     val rawShadowsAdjustment: SettingValue<Float>? = null,
     val rawBlackPointCorrection: SettingValue<Float>? = null,
     val rawWhitePointCorrection: SettingValue<Float>? = null,
+    val rawProfileToneMapMode: SettingValue<RawProfileToneMapMode>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
     val rawPhotonHdr: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
@@ -926,10 +928,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val rawToneMappingUpdate = if (
+            update.rawProfileToneMapMode != null ||
             update.rawOppoMasterToneMap != null ||
             update.rawPhotonHdr != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
+            update.rawProfileToneMapMode?.let {
+                toneMappingParameters = toneMappingParameters.withProfileToneMapMode(it.value)
+            }
             update.rawOppoMasterToneMap?.let {
                 toneMappingParameters = toneMappingParameters.withOppoMasterToneMap(it.value)
             }
@@ -2393,7 +2399,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawDcpId(dcpId: String?) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
-                CameraFeatureUpdate(rawDcpId = SettingValue(dcpId))
+                CameraFeatureUpdate(
+                    rawDcpId = SettingValue(dcpId),
+                    rawProfileToneMapMode = dcpId?.let {
+                        SettingValue(RawProfileToneMapMode.Profile)
+                    },
+                )
             )
         }
     }
@@ -2401,7 +2412,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawDcpIdsByLens(rawDcpIdsByLens: Map<String, String?>) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
-                CameraFeatureUpdate(rawDcpIdsByLens = SettingValue(rawDcpIdsByLens))
+                CameraFeatureUpdate(
+                    rawDcpIdsByLens = SettingValue(rawDcpIdsByLens),
+                    rawProfileToneMapMode = if (rawDcpIdsByLens.values.any { it != null }) {
+                        SettingValue(RawProfileToneMapMode.Profile)
+                    } else {
+                        null
+                    },
+                )
             )
         }
     }

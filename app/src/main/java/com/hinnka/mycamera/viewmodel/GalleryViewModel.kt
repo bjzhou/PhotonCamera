@@ -2738,6 +2738,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawDcpId.value = dcpId
         if (dcpId != null) {
             editRawEmbeddedDngProfileId.value = null
+            editRawToneMappingParameters.value = editRawToneMappingParameters.value
+                .withProfileToneMapMode(RawProfileToneMapMode.Profile)
         }
         persistRawEditMetadata(mediaData, onComplete)
     }
