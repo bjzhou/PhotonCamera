@@ -19,7 +19,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
-import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -50,7 +49,6 @@ fun CameraPreviewGL(
     baselineColorRecipeParams: ColorRecipeParams,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
-    focusPointSource: FocusPointSource = FocusPointSource.MANUAL,
     isFocusLocked: Boolean = false,
     isFocusing: Boolean,
     focusSuccess: Boolean?,
@@ -62,7 +60,6 @@ fun CameraPreviewGL(
     onHistogramUpdated: ((IntArray) -> Unit)? = null,
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onHighlightPointUpdated: ((Float, Float) -> Unit)? = null,
-    onAiFocusInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     onFirstPreviewFrame: (() -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
@@ -74,7 +71,6 @@ fun CameraPreviewGL(
     rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
-    isAiFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
@@ -213,7 +209,6 @@ fun CameraPreviewGL(
                         glSurfaceView.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
                         glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
                         glSurfaceView.onHighlightPointUpdated = { hx, hy -> onHighlightPointUpdated?.invoke(hx, hy) }
-                        glSurfaceView.onAiFocusInputAvailable = { onAiFocusInputAvailable?.invoke(it) }
                         glSurfaceView.onFirstPreviewFrame = {
                             if (glSurfaceViewRef === glSurfaceView) {
                                 onFirstPreviewFrame?.invoke()
@@ -291,7 +286,6 @@ fun CameraPreviewGL(
                         )
                         glSurfaceView.setAutoFocus(isAutoFocus)
                         glSurfaceView.setFocusPeakingEnabled(focusPeakingEnabled)
-                        glSurfaceView.setAiFocusBusy(isAiFocusBusy)
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -300,7 +294,6 @@ fun CameraPreviewGL(
             // 对焦指示器
             FocusIndicator(
                 position = focusPoint,
-                source = focusPointSource,
                 isFocusLocked = isFocusLocked,
                 isFocusing = isFocusing,
                 focusSuccess = focusSuccess,

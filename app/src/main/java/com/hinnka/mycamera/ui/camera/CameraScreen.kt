@@ -66,7 +66,6 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
-import com.hinnka.mycamera.data.AiFocusTargetMode
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.CameraPreset
@@ -234,7 +233,6 @@ fun CameraScreen(
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val useRawMax by viewModel.useRawMax.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
-    val aiFocusTargetMode by viewModel.aiFocusTargetMode.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
@@ -1091,7 +1089,6 @@ fun CameraScreen(
                     // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
                     if (isCameraPrepared) {
                         CameraPreviewGL(
-                            isAiFocusBusy = viewModel.isAiFocusBusy,
                             aspectRatio = previewAspectRatio,
                             previewSize = previewSize,
                             captureSize = state.currentCaptureSize,
@@ -1105,7 +1102,6 @@ fun CameraScreen(
                             baselineColorRecipeParams = currentBaselineRecipeParams,
                             colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                             focusPoint = state.focusPoint,
-                            focusPointSource = state.focusPointSource,
                             isFocusLocked = state.isFocusLocked,
                             isFocusing = state.isFocusing,
                             focusSuccess = state.focusSuccess,
@@ -1142,11 +1138,6 @@ fun CameraScreen(
                                     hx,
                                     hy
                                 )
-                            },
-                            onAiFocusInputAvailable = if (aiFocusTargetMode == AiFocusTargetMode.OFF) {
-                                null
-                            } else {
-                                { viewModel.handleAiFocusInputUpdate(it) }
                             },
                             onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
                             onGLSurfaceViewReady = {

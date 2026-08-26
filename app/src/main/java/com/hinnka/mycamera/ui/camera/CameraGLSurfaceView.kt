@@ -41,11 +41,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
-    var onAiFocusInputAvailable: ((Bitmap) -> Unit)? = null
-        set(value) {
-            field = value
-            renderer.onAiFocusInputAvailable = value
-        }
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
@@ -225,11 +220,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     fun setFocusPeakingEnabled(enabled: Boolean) {
         renderer.focusPeakingEnabled = enabled
-        requestRender()
-    }
-
-    fun setAiFocusBusy(busy: Boolean) {
-        renderer.isAiFocusBusy = busy
         requestRender()
     }
 

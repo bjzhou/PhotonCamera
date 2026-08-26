@@ -246,11 +246,6 @@ data class CameraPhysicalInfo(
     val focalLength: Float = 0f
 )
 
-enum class FocusPointSource {
-    MANUAL,
-    AI
-}
-
 data class WhiteBalanceGains(
     val red: Float,
     val greenEven: Float,
@@ -300,7 +295,6 @@ data class CameraState(
     val hyperfocalDistanceMeters: Float = 0f,
     val minimumFocusDistance: Float = 0f, // 最小对焦距离
     val focusPoint: Pair<Float, Float>? = null, // normalized coordinates (0-1)
-    val focusPointSource: FocusPointSource = FocusPointSource.MANUAL,
     val isFocusLocked: Boolean = false,
     val isFocusing: Boolean = false,
     val focusSuccess: Boolean? = null,

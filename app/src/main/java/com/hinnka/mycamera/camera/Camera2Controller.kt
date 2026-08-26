@@ -108,8 +108,6 @@ class Camera2Controller(private val context: Context) {
         private const val FOCUS_LOCK_SETTLE_FRAMES = 5        // 对焦锁定后等待镜头稳定的帧数
         private const val SCENE_CHANGE_CONFIRM_FRAMES = 3     // 连续 N 帧检测到变化才确认
         private const val MULTI_FRAME_AF_LOCK_TIMEOUT_MS = 1_200L
-        private const val AI_SUBJECT_RECENT_MS = 1800L
-        private const val AI_FOCUS_FALLBACK_FRAMES = 6
         private const val AF_REGION_WIDTH_FRACTION = 0.10f
         private const val AF_REGION_HEIGHT_FRACTION = 0.10f
         private const val SPOT_AE_REGION_FRACTION = 0.06f
@@ -276,9 +274,6 @@ class Camera2Controller(private val context: Context) {
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var imageReader: ImageReader? = null
 
-    val previewAiFocusProcessor = com.hinnka.mycamera.preview.PreviewAiFocusProcessor(context)
-
-
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto)
     private var nrLevel = 5
 
@@ -389,10 +384,6 @@ class Camera2Controller(private val context: Context) {
     private var focusLockedReferenceDistance: Float = 0f
     private var focusLockSettleFrames = 0       // 对焦锁定后等待镜头稳定的帧数
     private var sceneChangeFrameCount = 0
-    private var aiFocusFallbackFrames = 0
-    private var aiSubjectLastSeenElapsedMs: Long = 0L
-    private var aiSubjectLastSeenX: Float = -1f
-    private var aiSubjectLastSeenY: Float = -1f
     private var focusModeBeforeHyperfocal: Boolean? = null
     private var focusDistanceBeforeHyperfocal: Float? = null
 
@@ -739,7 +730,6 @@ class Camera2Controller(private val context: Context) {
             if (_state.value.isFocusing) {
                 when (afState) {
                     CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> {
-                        aiFocusFallbackFrames = 0
                         logFocusTerminalResult(result, afState)
                         _state.value = _state.value.copy(isFocusing = false, focusSuccess = true)
                         // 只在首次锁定时记录一次，后续 AF 狩猎重新锁定不再覆盖
@@ -749,22 +739,8 @@ class Camera2Controller(private val context: Context) {
                     }
 
                     CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
-                        aiFocusFallbackFrames = 0
                         logFocusTerminalResult(result, afState)
                         _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
-                        if (!_state.value.isFocusLocked && !isFocusLockedWaitingForSceneChange) {
-                            recordFocusLockExposure(result)
-                        }
-                    }
-                }
-                if (_state.value.isFocusing &&
-                    _state.value.focusPointSource == FocusPointSource.AI &&
-                    aiFocusFallbackFrames > 0
-                ) {
-                    aiFocusFallbackFrames--
-                    if (aiFocusFallbackFrames == 0) {
-                        PLog.d(TAG, "AI focus fallback complete")
-                        _state.value = _state.value.copy(isFocusing = false, focusSuccess = true)
                         if (!_state.value.isFocusLocked && !isFocusLockedWaitingForSceneChange) {
                             recordFocusLockExposure(result)
                         }
@@ -809,14 +785,9 @@ class Camera2Controller(private val context: Context) {
                     }
 
                     if (sceneChanged) {
-                        if (isAiSubjectRecentlySeen()) {
-                            updateFocusLockSceneReference(result)
-                            sceneChangeFrameCount = 0
-                        } else {
-                            sceneChangeFrameCount++
-                            if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
-                                restoreContinuousAf()
-                            }
+                        sceneChangeFrameCount++
+                        if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
+                            restoreContinuousAf()
                         }
                     } else {
                         sceneChangeFrameCount = 0
@@ -1945,7 +1916,6 @@ class Camera2Controller(private val context: Context) {
             }
             return
         }
-
         pendingCameraOpenRequest = CameraOpenRequest(surfaceTexture, preserveVideoRecording)
         when (cameraDeviceLifecycle) {
             CameraDeviceLifecycle.CLOSED -> openPendingCameraRequest()
@@ -1972,7 +1942,7 @@ class Camera2Controller(private val context: Context) {
     private fun openCameraNow(request: CameraOpenRequest) {
         val surfaceTexture = request.surfaceTexture
         val preserveVideoRecording = request.preserveVideoRecording
-        resetAiFocusForCameraOpen()
+        resetFocusForCameraOpen()
         val openGeneration = ++cameraOpenGeneration
 
         // 确保在权限已授予后才发现相机（延迟初始化）
@@ -5695,7 +5665,7 @@ class Camera2Controller(private val context: Context) {
     private fun logFocusTerminalResult(result: CaptureResult, afState: Int) {
         PLog.d(
             TAG,
-            "Focus terminal: source=${_state.value.focusPointSource} afState=$afState " +
+            "Focus terminal: afState=$afState " +
                 "afRegions=${result.get(CaptureResult.CONTROL_AF_REGIONS)?.contentToString()} " +
                 "zoom=${result.get(CaptureResult.CONTROL_ZOOM_RATIO)} " +
                 "crop=${result.get(CaptureResult.SCALER_CROP_REGION)} " +
@@ -5716,17 +5686,6 @@ class Camera2Controller(private val context: Context) {
         focusLockedReferenceDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
     }
 
-    private fun isAiSubjectRecentlySeen(): Boolean {
-        if (aiSubjectLastSeenElapsedMs <= 0L) return false
-        return SystemClock.elapsedRealtime() - aiSubjectLastSeenElapsedMs <= AI_SUBJECT_RECENT_MS
-    }
-
-    fun notifyAiSubjectSeen(x: Float, y: Float) {
-        aiSubjectLastSeenElapsedMs = SystemClock.elapsedRealtime()
-        aiSubjectLastSeenX = x
-        aiSubjectLastSeenY = y
-    }
-
     private fun restoreContinuousAf() {
         if (isCaptureFocusFrozen) {
             PLog.d(TAG, "Continuous AF restore deferred while multi-frame focus is frozen")
@@ -5738,7 +5697,6 @@ class Camera2Controller(private val context: Context) {
         focusLockedReferenceExposureNs = 0L
         focusLockedReferenceDistance = 0f
         focusLockSettleFrames = 0
-        aiFocusFallbackFrames = 0
 
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
@@ -5757,32 +5715,20 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
-    fun cancelSubjectFocus(reason: String) {
-        PLog.d(TAG, "Cancel subject focus: $reason")
-        restoreContinuousAf()
-    }
-
     fun unlockFocus() {
         PLog.d(TAG, "Unlock focus")
         restoreContinuousAf()
     }
 
-    private fun resetAiFocusForCameraOpen() {
-        PLog.d(TAG, "Reset AI focus state for camera open")
-        previewAiFocusProcessor.resetForPreviewRestart()
-        aiSubjectLastSeenElapsedMs = 0L
-        aiSubjectLastSeenX = 0.5f
-        aiSubjectLastSeenY = 0.5f
+    private fun resetFocusForCameraOpen() {
         isFocusLockedWaitingForSceneChange = false
         sceneChangeFrameCount = 0
         focusLockedReferenceIso = 0
         focusLockedReferenceExposureNs = 0L
         focusLockedReferenceDistance = 0f
         focusLockSettleFrames = 0
-        aiFocusFallbackFrames = 0
         _state.value = _state.value.copy(
             focusPoint = null,
-            focusPointSource = FocusPointSource.MANUAL,
             isFocusLocked = false,
             isFocusing = false,
             focusSuccess = null
@@ -5797,7 +5743,6 @@ class Camera2Controller(private val context: Context) {
         focusOnNormalizedPoint(
             normX = x / viewWidth,
             normY = y / viewHeight,
-            source = FocusPointSource.MANUAL,
             previewViewAspectRatio = viewWidth.toFloat() / viewHeight,
         )
     }
@@ -5808,7 +5753,6 @@ class Camera2Controller(private val context: Context) {
         focusOnNormalizedPoint(
             normX = x / viewWidth,
             normY = y / viewHeight,
-            source = FocusPointSource.MANUAL,
             lockFocus = true,
             previewViewAspectRatio = viewWidth.toFloat() / viewHeight,
         )
@@ -5817,7 +5761,6 @@ class Camera2Controller(private val context: Context) {
     fun focusOnNormalizedPoint(
         normX: Float,
         normY: Float,
-        source: FocusPointSource = FocusPointSource.AI,
         lockFocus: Boolean = false,
         previewViewAspectRatio: Float? = null,
     ) {
@@ -5827,7 +5770,6 @@ class Camera2Controller(private val context: Context) {
                 focusOnNormalizedPoint(
                     normX = normX,
                     normY = normY,
-                    source = source,
                     lockFocus = lockFocus,
                     previewViewAspectRatio = previewViewAspectRatio,
                 )
@@ -5835,7 +5777,7 @@ class Camera2Controller(private val context: Context) {
             return
         }
         if (isCaptureFocusFrozen || _state.value.isCapturing) {
-            PLog.d(TAG, "Ignoring focus update while capture focus is frozen: source=$source")
+            PLog.d(TAG, "Ignoring focus update while capture focus is frozen")
             return
         }
         val openCameraId = getActiveOpenCameraId()
@@ -5886,13 +5828,10 @@ class Camera2Controller(private val context: Context) {
             // 存储UI坐标用于显示对焦框
             _state.value = _state.value.copy(
                 focusPoint = Pair(normalizedX, normalizedY),
-                focusPointSource = source,
                 isFocusLocked = lockFocus,
                 isFocusing = true,
                 focusSuccess = null
             )
-            aiFocusFallbackFrames = if (source == FocusPointSource.AI) AI_FOCUS_FALLBACK_FRAMES else 0
-
             // AF 区域保持为可见画面的 10%，避免 SCALER_CROP_REGION 变焦后区域相对画面膨胀。
             val afRect = PreviewMeteringMapper.buildCenteredRegion(
                 mapping = mapping,
@@ -5933,7 +5872,7 @@ class Camera2Controller(private val context: Context) {
 
             PLog.d(
                 TAG,
-                "Focus mapping: source=$source ui=($normalizedX,$normalizedY) " +
+                "Focus mapping: ui=($normalizedX,$normalizedY) " +
                     "coordinateCamera=${activeOutputPhysicalCameraId ?: openCameraId} " +
                     "zoomMode=$zoomMode requestZoom=${builder.get(CaptureRequest.CONTROL_ZOOM_RATIO)} " +
                     "requestCrop=$requestedScalerCrop active=$activeRect " +
@@ -8167,7 +8106,6 @@ class Camera2Controller(private val context: Context) {
         } else {
             closeCamera()
         }
-        previewAiFocusProcessor.release()
         burstGyroRecorder.release()
         videoRecorder.release()
         stopBackgroundThread()
