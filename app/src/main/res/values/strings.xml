@@ -183,7 +183,10 @@
     <!-- Settings Restructuring Sections -->
     <string name="settings_section_assist">Assistive Tools</string>
     <string name="settings_section_focus_lens">Focus &amp; Lens</string>
+    <string name="settings_focus_lens_group_autofocus">Autofocus</string>
     <string name="settings_focus_lens_group_lens_selection">Lens Selection</string>
+    <string name="settings_eye_focus">Human Eye AF</string>
+    <string name="settings_eye_focus_description">Detect faces and prioritize a stable eye for autofocus</string>
     <string name="settings_focus_lens_group_virtual_lens_depth">Virtual Lens &amp; Depth</string>
     <string name="settings_focus_lens_group_lens_discovery">Lens Discovery</string>
     <string name="settings_focus_lens_group_camera2_extensions">Camera2 Extensions</string>

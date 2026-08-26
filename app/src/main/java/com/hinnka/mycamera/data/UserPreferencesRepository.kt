@@ -170,6 +170,7 @@ data class UserPreferences(
     val showGrid: Boolean = false,  // 网格线显示
     val showLevelIndicator: Boolean = false,  // 水平仪显示
     val focusPeakingEnabled: Boolean = true,  // 手动对焦峰值显示
+    val eyeFocusEnabled: Boolean = false,  // MediaPipe 人眼对焦
     val shutterSoundEnabled: Boolean = true,  // 快门声音
     val vibrationEnabled: Boolean = true,  // 拍摄震动
     val keepScreenOn: Boolean = false,  // 屏幕常亮
@@ -422,6 +423,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
         private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
         private val FOCUS_PEAKING_ENABLED = booleanPreferencesKey("focus_peaking_enabled")
+        private val EYE_FOCUS_ENABLED = booleanPreferencesKey("eye_focus_enabled")
         private val SHUTTER_SOUND_ENABLED = booleanPreferencesKey("shutter_sound_enabled")
         private val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
         private val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
@@ -692,6 +694,7 @@ class UserPreferencesRepository(private val context: Context) {
                 showGrid = preferences[SHOW_GRID] ?: false,
                 showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
                 focusPeakingEnabled = preferences[FOCUS_PEAKING_ENABLED] ?: true,
+                eyeFocusEnabled = preferences[EYE_FOCUS_ENABLED] ?: false,
                 shutterSoundEnabled = preferences[SHUTTER_SOUND_ENABLED] ?: true,
                 vibrationEnabled = preferences[VIBRATION_ENABLED] ?: true,
                 keepScreenOn = preferences[KEEP_SCREEN_ON] ?: false,
@@ -1541,6 +1544,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveFocusPeakingEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[FOCUS_PEAKING_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveEyeFocusEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[EYE_FOCUS_ENABLED] = enabled
         }
     }
 

@@ -66,6 +66,7 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
+import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.CameraPreset
@@ -220,6 +221,7 @@ fun CameraScreen(
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
+    val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
     val lutNameOverlayState = rememberLutNameOverlayState()
@@ -1096,6 +1098,11 @@ fun CameraScreen(
                     val currentCameraId = state.currentCameraId
                     val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
                         .collectAsState(initial = 0)
+                    val eyeFocusActive = eyeFocusEnabled &&
+                        viewModel.isEyeFocusRuntimeAvailable &&
+                        state.isAutoFocus &&
+                        !state.isHyperfocalFocusEnabled &&
+                        (state.focusPoint == null || state.focusPointSource == FocusPointSource.EYE)
 
                     // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
                     if (isCameraPrepared) {
@@ -1113,6 +1120,7 @@ fun CameraScreen(
                             baselineColorRecipeParams = currentBaselineRecipeParams,
                             colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                             focusPoint = state.focusPoint,
+                            focusPointSource = state.focusPointSource,
                             isFocusLocked = state.isFocusLocked,
                             isFocusing = state.isFocusing,
                             focusSuccess = state.focusSuccess,
@@ -1150,6 +1158,11 @@ fun CameraScreen(
                                     hy
                                 )
                             },
+                            onEyeFocusInputAvailable = if (eyeFocusActive) {
+                                viewModel::handleEyeFocusInputUpdate
+                            } else {
+                                null
+                            },
                             onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
                             onGLSurfaceViewReady = {
                                 viewModel.glSurfaceView = it
@@ -1164,6 +1177,7 @@ fun CameraScreen(
                             rawRenderingEngine = rawColorEngine,
                             rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                             rawToneMappingParameters = rawToneMappingParameters,
+                            isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
                             modifier = Modifier.fillMaxSize()

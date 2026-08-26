@@ -5,9 +5,12 @@ import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.*
+import android.os.SystemClock
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.livephoto.resolveLivePhotoRotationDegrees
 import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsNaturalLightGl
@@ -58,6 +61,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         private const val BYTES_PER_FLOAT = 4
         private const val BYTES_PER_SHORT = 2
         private const val DEFAULT_PREVIEW_CAPTURE_MAX_LONG_EDGE = 1080
+        private const val EYE_FOCUS_SAMPLE_MAX_LONG_EDGE = 480
+        private const val EYE_FOCUS_MAX_SAMPLE_FPS = 30L
+        private const val EYE_FOCUS_MIN_SAMPLE_INTERVAL_NS =
+            (1_000_000_000L + EYE_FOCUS_MAX_SAMPLE_FPS - 1L) / EYE_FOCUS_MAX_SAMPLE_FPS
+        private const val EYE_FOCUS_INITIAL_SAMPLE_INTERVAL_NS = 100_000_000L
+        private const val EYE_FOCUS_MAX_SAMPLE_INTERVAL_NS = 5_000_000_000L
+        private const val EYE_FOCUS_TIMING_EMA_ALPHA = 0.25
+        private const val EYE_FOCUS_TIMING_HEADROOM = 1.15
+        private const val EYE_FOCUS_TIMING_LOG_INTERVAL_MS = 2_000L
         private const val RAW_PREVIEW_STAGE_COUNT = 3
         private const val RAW_PREVIEW_INPUT_STAGE = 0
         private const val RAW_PREVIEW_COMBINED_STAGE = 1
@@ -310,6 +322,89 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var focusPeakingEnabled: Boolean = true
 
     @Volatile
+    var isEyeFocusBusy: Boolean = false
+
+    @Volatile
+    var onEyeFocusInputAvailable: ((EyeFocusPreviewFrame) -> Unit)? = null
+
+    private val eyeFocusTimingLock = Any()
+    @Volatile
+    private var eyeFocusSampleIntervalNanos = EYE_FOCUS_INITIAL_SAMPLE_INTERVAL_NS
+    private var eyeFocusCaptureDurationEmaNanos = 0.0
+    private var eyeFocusProcessingDurationEmaNanos = 0.0
+    private var eyeFocusEndToEndDurationEmaNanos = 0.0
+    private var lastEyeFocusTimingLogElapsedMs = 0L
+    private var lastEyeFocusSampleTimeNanos = 0L
+
+    fun updateEyeFocusTiming(timing: EyeFocusProcessingTiming) {
+        if (
+            timing.captureDurationNanos <= 0L ||
+            timing.processingDurationNanos <= 0L ||
+            timing.endToEndDurationNanos <= 0L
+        ) {
+            return
+        }
+
+        synchronized(eyeFocusTimingLock) {
+            eyeFocusCaptureDurationEmaNanos = updateTimingEma(
+                eyeFocusCaptureDurationEmaNanos,
+                timing.captureDurationNanos.toDouble(),
+            )
+            eyeFocusProcessingDurationEmaNanos = updateTimingEma(
+                eyeFocusProcessingDurationEmaNanos,
+                timing.processingDurationNanos.toDouble(),
+            )
+            eyeFocusEndToEndDurationEmaNanos = updateTimingEma(
+                eyeFocusEndToEndDurationEmaNanos,
+                timing.endToEndDurationNanos.toDouble(),
+            )
+
+            val measuredWorkNanos = maxOf(
+                eyeFocusEndToEndDurationEmaNanos,
+                eyeFocusCaptureDurationEmaNanos + eyeFocusProcessingDurationEmaNanos,
+            )
+            eyeFocusSampleIntervalNanos =
+                (measuredWorkNanos * EYE_FOCUS_TIMING_HEADROOM)
+                    .toLong()
+                    .coerceIn(
+                        EYE_FOCUS_MIN_SAMPLE_INTERVAL_NS,
+                        EYE_FOCUS_MAX_SAMPLE_INTERVAL_NS,
+                    )
+
+            val nowElapsedMs = SystemClock.elapsedRealtime()
+            if (nowElapsedMs - lastEyeFocusTimingLogElapsedMs >= EYE_FOCUS_TIMING_LOG_INTERVAL_MS) {
+                lastEyeFocusTimingLogElapsedMs = nowElapsedMs
+                PLog.d(
+                    TAG,
+                    "Eye focus cadence: intervalMs=${eyeFocusSampleIntervalNanos / 1_000_000f}, " +
+                        "captureMs=${eyeFocusCaptureDurationEmaNanos / 1_000_000.0}, " +
+                        "processingMs=${eyeFocusProcessingDurationEmaNanos / 1_000_000.0}, " +
+                        "endToEndMs=${eyeFocusEndToEndDurationEmaNanos / 1_000_000.0}",
+                )
+            }
+        }
+    }
+
+    private fun updateTimingEma(previous: Double, sample: Double): Double {
+        return if (previous <= 0.0) {
+            sample
+        } else {
+            previous + (sample - previous) * EYE_FOCUS_TIMING_EMA_ALPHA
+        }
+    }
+
+    private fun resetEyeFocusTiming() {
+        synchronized(eyeFocusTimingLock) {
+            eyeFocusSampleIntervalNanos = EYE_FOCUS_INITIAL_SAMPLE_INTERVAL_NS
+            eyeFocusCaptureDurationEmaNanos = 0.0
+            eyeFocusProcessingDurationEmaNanos = 0.0
+            eyeFocusEndToEndDurationEmaNanos = 0.0
+            lastEyeFocusTimingLogElapsedMs = 0L
+        }
+        lastEyeFocusSampleTimeNanos = 0L
+    }
+
+    @Volatile
     var baselineLutEnabled: Boolean = false
 
     // 色彩配方参数
@@ -553,6 +648,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         captureFboId = 0
         captureTextureId = 0
         passthroughProgramId = 0
+        isEyeFocusBusy = false
+        resetEyeFocusTiming()
         fboId = 0
         fboTextureId = 0
         fboWidth = 0
@@ -1553,6 +1650,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             !(lutEnabled && currentLutConfig != null)
         val filmGrainEnabled = filmGrain > 0.001f && !preLogFilmGrainEnabled
         val postProcessEffectEnabled = hdfEnabled || halationEnabled || bloomEnabled || softLightEnabled
+        val eyeFocusSamplingNeeded = onEyeFocusInputAvailable != null && isAutoFocus && !isEyeFocusBusy
         val suppressBaselineLayerForVideoLog = videoLogProfile.isEnabled
         val hasBaselineLayer = hasBaselineLayer() && !suppressBaselineLayerForVideoLog
         val hasCreativeLayer = hasCreativeLayer()
@@ -1564,6 +1662,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             postProcessEffectEnabled ||
             clarityEnabled ||
             filmGrainEnabled ||
+            eyeFocusSamplingNeeded ||
             hasDualLayer ||
             (!isAutoFocus && focusPeakingEnabled)
         if (requestedFbo && !isMainFboReady(viewportWidth, viewportHeight)) {
@@ -1712,6 +1811,35 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             val finalDisplayWidth = viewportWidth
             val finalDisplayHeight = viewportHeight
             val needsHdfCompositeForSampling = postProcessEffectEnabled && !postProcessMaterialized
+            val sampleTimeNanos = SystemClock.elapsedRealtimeNanos()
+            if (
+                cameraFrameUpdated &&
+                eyeFocusSamplingNeeded &&
+                sampleTimeNanos - lastEyeFocusSampleTimeNanos >= eyeFocusSampleIntervalNanos
+            ) {
+                lastEyeFocusSampleTimeNanos = sampleTimeNanos
+                capturePreviewFrame(
+                    maxLongEdge = EYE_FOCUS_SAMPLE_MAX_LONG_EDGE,
+                    // 检测使用未套用创意 LUT 的预览，避免极端色彩配方降低人脸置信度。
+                    source = PreviewCaptureSource.Original,
+                ) { bitmap ->
+                    val callback = onEyeFocusInputAvailable
+                    if (callback == null) {
+                        bitmap.recycle()
+                    } else {
+                        isEyeFocusBusy = true
+                        callback(
+                            EyeFocusPreviewFrame(
+                                bitmap = bitmap,
+                                sampleStartedAtNanos = sampleTimeNanos,
+                                captureDurationNanos =
+                                    (SystemClock.elapsedRealtimeNanos() - sampleTimeNanos)
+                                        .coerceAtLeast(0L),
+                            )
+                        )
+                    }
+                }
+            }
             capturePendingPreviewFrames(
                 rawPreviewSource = rawPreviewSource,
                 finalDisplayTextureId = finalDisplayTextureId,
@@ -3893,6 +4021,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         pendingBaselineLutConfig = null
         currentLutConfig = null
         currentBaselineLutConfig = null
+        onEyeFocusInputAvailable = null
+        isEyeFocusBusy = false
+        resetEyeFocusTiming()
     }
 
     /**
