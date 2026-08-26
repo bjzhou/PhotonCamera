@@ -442,8 +442,7 @@ internal object GlesMgcRawSpatialShaders {
         }
 
         void main() {
-            // GenerateRejectionTexture runs once per Bayer quad (RAW/2). The guide is
-            // independently decimated to RAW/4 and is sampled in normalized coordinates.
+            // V25 requires GenerateRejectionTexture and GuideImage to share the RAW/4 domain.
             vec2 uv = gl_FragCoord.xy / vec2(uRejectionSize);
             vec2 flowUv = uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw;
             vec4 flow = texture(uFlow, flowUv);
@@ -611,7 +610,7 @@ internal object GlesMgcRawSpatialShaders {
     /**
      * Read4xDownSample and the input preparation for
      * Downsample4xAndFilterRejectionMap from the embedded rejection.cl. These inputs are already
-     * on DilateMask's RAW/4 merge-weight grid; this pass produces the RAW/16 filter grid.
+     * on DilateMask's RAW/8 merge-weight grid; this pass produces the RAW/32 filter grid.
      */
     val rejectionFilterDownsample = """
         #version 300 es
@@ -811,8 +810,8 @@ internal object GlesMgcRawSpatialShaders {
             return texture(uRejection, p / vec2(uInputSize)).r;
         }
         void main() {
-            // Exact DilateMask mapping from the full Bayer-quad rejection domain to
-            // MergeBayer's half-sized rejection texture. The nine bilinear reads and
+            // Exact DilateMask mapping from guide-sized RAW/4 rejection to the half-sized
+            // RAW/8 merge-weight texture. The nine bilinear reads and
             // coefficients are the factored form of a 5x5 box sum.
             vec2 texCoord =
                 2.0 * floor(gl_FragCoord.xy - vec2(0.5)) + vec2(1.5);
@@ -1690,9 +1689,9 @@ internal object GlesMgcRawSpatialShaders {
                 return;
             }
 
-            // One merge-weight texel covers 2x2 Bayer quads. Use its center in reference
+            // One merge-weight texel covers 4x4 Bayer quads. Use its center in reference
             // coordinates, then inspect the 3x3 source neighborhood consumed by MergeBayer.
-            ivec2 referenceQuad = min(outputPixel * 2 + ivec2(1), uBayerSize - ivec2(1));
+            ivec2 referenceQuad = min(outputPixel * 4 + ivec2(2), uBayerSize - ivec2(1));
             vec2 referenceUv =
                 (vec2(referenceQuad) + vec2(0.5)) / vec2(uBayerSize);
             vec2 flowUv =
@@ -1844,10 +1843,9 @@ internal object GlesMgcRawSpatialShaders {
             vec2 subquadPixelOffset =
                 2.0 * (vec2(alignedTileQuad) - tilePosition);
             ivec2 anchor = alignedTileQuad + offsetWithinTile;
-            // MGC samples the quarter-resolution rejection image separately for all four
-            // Bayer phases. In normalized GLES coordinates this is exactly the RAW-pixel
-            // center, so adjacent phases retain their own linearly interpolated confidence
-            // instead of sharing one nearest 4x4 RAW block.
+            // MGC samples the final RAW/8 rejection weight separately for all four Bayer
+            // phases. Normalized GLES coordinates preserve each RAW-pixel center, so adjacent
+            // phases retain linearly interpolated confidence instead of sharing one texel.
             vec2 rawPixelUv =
                 (vec2(outputPixel) + vec2(0.5)) / vec2(uRawSize);
             float frameWeight = uUseFrameWeight != 0

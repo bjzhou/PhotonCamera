@@ -15,13 +15,14 @@ internal object MgcSabreRejectionTuning {
     private const val REFERENCE_GUIDE_WIDTH = 2016f
     private const val BASE_FLOW_VARIATION_THRESHOLD = 1e-4f
     /**
-     * V25 normalizes the captured flow-variation threshold by the rejection width and passes the
-     * same value to unblocker reduction and the extra-motion prior. The older 9.6 wrapper used a
-     * separate 70% motion-prior value; carrying that value into V25 changes rejection semantics.
+     * V25 normalizes the captured flow-variation threshold by the flow-coordinate width and
+     * passes the same value to unblocker reduction and the extra-motion prior. The older 9.6
+     * wrapper used a separate 70% motion-prior value; carrying that value into V25 changes
+     * rejection semantics.
      */
-    fun flowVariationThresholds(rejectionWidth: Int): FlowVariationThresholds {
-        require(rejectionWidth > 0)
-        val baseThreshold = REFERENCE_GUIDE_WIDTH / rejectionWidth.toFloat() *
+    fun flowVariationThresholds(flowNormalizationWidth: Int): FlowVariationThresholds {
+        require(flowNormalizationWidth > 0)
+        val baseThreshold = REFERENCE_GUIDE_WIDTH / flowNormalizationWidth.toFloat() *
             BASE_FLOW_VARIATION_THRESHOLD
         return FlowVariationThresholds(
             unblockerReduction = baseThreshold,

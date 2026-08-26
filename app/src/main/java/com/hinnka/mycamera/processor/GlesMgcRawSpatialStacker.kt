@@ -368,24 +368,27 @@ internal class GlesMgcRawSpatialStacker(
         val ultrashortClippingOverlap: Float,
     )
 
-    // GuideRaw10 samples every second extracted Bayer quad. MGC's runtime GuideImage for a
-    // 4080x3064 RAW is therefore 1020x766, while GenerateRejectionTexture still runs once per
-    // Bayer quad. Keep these domains separate: making the guide half-resolution changes the
-    // guide variance/rejection statistics and was introduced accidentally with the independent
-    // Sabre path, which owns its own half-resolution extracted guide.
-    private val guideWidth = max(1, width / 4)
-    private val guideHeight = max(1, height / 4)
+    private val rejectionGeometry = mgcSpatialRejectionGeometry(
+        imageWidth = width,
+        imageHeight = height,
+        filterDownsample = REJECTION_FILTER_DOWNSAMPLE,
+    )
+    // GuideRaw10 samples every second extracted Bayer quad. V25's Rejection implementation
+    // requires GenerateRejectionTexture's output to have exactly the same RAW/4 extents.
+    private val guideWidth = rejectionGeometry.guideWidth
+    private val guideHeight = rejectionGeometry.guideHeight
     // MergeBayerRaw16's queried AOT contract requests one alignment sample per 8x8
     // Bayer-quad tile, i.e. one sample per 16x16 sensor pixels.
     private val bayerAlignmentWidth = ceilDiv(width, MERGE_BAYER_RAW_TILE_SIZE)
     private val bayerAlignmentHeight = ceilDiv(height, MERGE_BAYER_RAW_TILE_SIZE)
-    private val rejectionWidth = ceilDiv(width, 2)
-    private val rejectionHeight = ceilDiv(height, 2)
-    // Rejection::DilateMask and Rejection::Downsample2x require floor(input / 2).
-    private val mergeWeightWidth = rejectionWidth / 2
-    private val mergeWeightHeight = rejectionHeight / 2
-    private val rejectionFilterWidth = ceilDiv(mergeWeightWidth, REJECTION_FILTER_DOWNSAMPLE)
-    private val rejectionFilterHeight = ceilDiv(mergeWeightHeight, REJECTION_FILTER_DOWNSAMPLE)
+    private val rejectionWidth = rejectionGeometry.rejectionWidth
+    private val rejectionHeight = rejectionGeometry.rejectionHeight
+    // Rejection::DilateMask and Rejection::Downsample2x require floor(input / 2), taking the
+    // guide-sized RAW/4 result to the RAW/8 merge-weight domain.
+    private val mergeWeightWidth = rejectionGeometry.mergeWeightWidth
+    private val mergeWeightHeight = rejectionGeometry.mergeWeightHeight
+    private val rejectionFilterWidth = rejectionGeometry.filterWidth
+    private val rejectionFilterHeight = rejectionGeometry.filterHeight
     private val normalizedOutputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
     private val outputWidth = if (outputMode == MgcSpatialOutputMode.RGB) {
         MultiFrameConfig.scaledRawOutputDimension(width, normalizedOutputScale)
@@ -620,8 +623,13 @@ internal class GlesMgcRawSpatialStacker(
             applyRawRenderState()
             PLog.i(
                 TAG,
-                "MGC rejection domain=${rejectionWidth}x$rejectionHeight " +
+                "MGC Spatial domains " +
+                    "bayerQuad=${rejectionGeometry.bayerQuadWidth}x" +
+                    "${rejectionGeometry.bayerQuadHeight} " +
+                    "guide=${guideWidth}x$guideHeight " +
+                    "rejection=${rejectionWidth}x$rejectionHeight " +
                     "mergeWeight=${mergeWeightWidth}x$mergeWeightHeight " +
+                    "filter=${rejectionFilterWidth}x$rejectionFilterHeight " +
                     "pixelDiff=ClippedGaussian${PIXEL_DIFFERENCE_KERNEL_SIZE}" +
                     "(sigma=$PIXEL_DIFFERENCE_SMOOTH_SIGMA) " +
                     "downsample=${REJECTION_FILTER_DOWNSAMPLE}x " +
@@ -825,6 +833,7 @@ internal class GlesMgcRawSpatialStacker(
                 rawTexture = referenceRaw,
                 calibration = referenceCalibration,
             )
+            val referenceRejectionLuma = buildRejectionBaseLuma(referenceGrayPyramid)
             val referenceAlignmentProducts = buildReferenceAlignmentProducts(
                 referenceGrayPyramid,
             )
@@ -1445,6 +1454,7 @@ internal class GlesMgcRawSpatialStacker(
                         referenceCalibration = referenceCalibration,
                         referenceGuide = referenceGuide,
                         referenceGrayPyramid = referenceGrayPyramid,
+                        referenceRejectionLuma = referenceRejectionLuma,
                         referenceAlignmentProducts = referenceAlignmentProducts,
                         currentRaw = temporalRaw,
                         currentGuide = currentGuide,
@@ -3771,6 +3781,40 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
+     * Builds the independent RAW/8 luma input required by FilterRejectionMap.
+     *
+     * The alignment pyramid's second level is RAW/4 plus one positive-edge support texel. MGC
+     * downsamples its logical RAW/4 extent once more so base luma, DilateMask output and the
+     * downsampled pixel-difference image all have identical RAW/8 extents.
+     */
+    private fun buildRejectionBaseLuma(referenceGrayPyramid: List<TextureLevel>): Int {
+        check(referenceGrayPyramid.size > 1) {
+            "FilterRejectionMap requires the RAW/4 reference-luma pyramid level"
+        }
+        val raw4 = referenceGrayPyramid[1]
+        check(raw4.width >= guideWidth && raw4.height >= guideHeight) {
+            "RAW/4 reference luma does not cover the guide/rejection domain"
+        }
+        val output = createTexture(
+            mergeWeightWidth,
+            mergeWeightHeight,
+            GLES30.GL_R16I,
+            GLES30.GL_NEAREST,
+        )
+        GLES30.glUseProgram(downsampleProgram)
+        bindTexture(downsampleProgram, "uInput", 0, raw4.texture)
+        // Exclude the pyramid's positive-edge support sample from the logical input extent.
+        uniform2i(downsampleProgram, "uInputSize", guideWidth, guideHeight)
+        draw(
+            downsampleProgram,
+            mergeWeightWidth,
+            mergeWeightHeight,
+            intArrayOf(output),
+        )
+        return output
+    }
+
+    /**
      * Computes the reference-only half of LK once for the burst.
      *
      * Gradient products depend on neither the current frame nor its initial flow. Keeping these
@@ -4229,9 +4273,11 @@ internal class GlesMgcRawSpatialStacker(
         // A flow texel belongs to the centre of logical tile (local + gridMin). Mapping the
         // normalized reference coordinate onto that sparse grid makes GL_LINEAR reproduce MGC's
         // downstream interpolation without materializing a dense, piecewise-constant flow image.
-        val scaleX = rejectionWidth.toFloat() /
+        // Flow vectors are normalized in Bayer-quad coordinates. Rejection is RAW/4, so using
+        // its extent here would compress the sparse alignment sampling transform by another 2x.
+        val scaleX = rejectionGeometry.bayerQuadWidth.toFloat() /
             (strideInBayerQuads * alignment.gridWidth.toFloat())
-        val scaleY = rejectionHeight.toFloat() /
+        val scaleY = rejectionGeometry.bayerQuadHeight.toFloat() /
             (strideInBayerQuads * alignment.gridHeight.toFloat())
         val offsetX = -alignment.gridMin.toFloat() / alignment.gridWidth.toFloat()
         val offsetY = -alignment.gridMin.toFloat() / alignment.gridHeight.toFloat()
@@ -4464,10 +4510,12 @@ internal class GlesMgcRawSpatialStacker(
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_RGB,
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_GREEN,
         )
-        // The captured 9.88235261e-5 value belongs to the 2040-wide rejection/flow domain
-        // of a 4080 RAW, not to the quarter-resolution GuideImage.
+        // The captured 9.88235261e-5 value belongs to the 2040-wide Bayer-quad flow
+        // normalization domain of a 4080 RAW, not to the RAW/4 rejection texture.
         val flowVariationThresholds =
-            MgcSabreRejectionTuning.flowVariationThresholds(rejectionWidth)
+            MgcSabreRejectionTuning.flowVariationThresholds(
+                rejectionGeometry.bayerQuadWidth,
+            )
         val diagnosticMode = RawStackRuntimeDebug.mgcSpatialDiagnosticMode
         val unblockerReductionThreshold =
             if (
@@ -4744,6 +4792,7 @@ internal class GlesMgcRawSpatialStacker(
         referenceCalibration: FrameCalibration,
         referenceGuide: Int,
         referenceGrayPyramid: List<TextureLevel>,
+        referenceRejectionLuma: Int,
         referenceAlignmentProducts: List<ReferenceAlignmentProducts>,
         currentRaw: Int,
         currentGuide: Int,
@@ -4888,7 +4937,7 @@ internal class GlesMgcRawSpatialStacker(
             pixelDifferenceTexture = rawPixelDifference,
         )
         // MGC's CPU wrapper closes this boundary before FilterRejectionMap:
-        // DilateMask converts RAW/2 rejection to RAW/4 acceptance weight, while
+        // DilateMask converts RAW/4 rejection to RAW/8 acceptance weight, while
         // Downsample2x brings pixel difference to that same merge domain.
         renderDilation(rawReverseWeight, initialWeight)
         renderPixelDifferenceDownsample(rawPixelDifference, pixelDifference)
@@ -4897,13 +4946,8 @@ internal class GlesMgcRawSpatialStacker(
             horizontal = pixelDifferenceHorizontal,
             output = smoothedPixelDifference,
         )
-        check(referenceGrayPyramid.size > 1) {
-            "FilterRejectionMap requires the RAW/4 reference-luma pyramid level"
-        }
         renderRejectionFilterDownsample(
-            // The stored pyramid keeps one positive-edge support texel. The shader's
-            // logical uInputSize clips it to MGC's floor-sized RAW/4 merge domain.
-            baseLuma = referenceGrayPyramid[1].texture,
+            baseLuma = referenceRejectionLuma,
             weight = initialWeight,
             downsampledLuma = downsampledLuma,
             downsampledRejection = downsampledRejection,
@@ -4965,8 +5009,8 @@ internal class GlesMgcRawSpatialStacker(
         uniform2i(
             findBlockTilesGatherEdgesProgram,
             "uBayerSize",
-            rejectionWidth,
-            rejectionHeight,
+            rejectionGeometry.bayerQuadWidth,
+            rejectionGeometry.bayerQuadHeight,
         )
         uniform2i(
             findBlockTilesGatherEdgesProgram,
@@ -5098,8 +5142,8 @@ internal class GlesMgcRawSpatialStacker(
         uniform2i(
             alignedRawClippingMaskProgram,
             "uBayerSize",
-            rejectionWidth,
-            rejectionHeight,
+            rejectionGeometry.bayerQuadWidth,
+            rejectionGeometry.bayerQuadHeight,
         )
         uniform2i(
             alignedRawClippingMaskProgram,

@@ -167,6 +167,11 @@ class GlesMgcRawSpatialShadersTest {
         assertTrue(clippingMask.contains("for (int phase = 0; phase < 4; ++phase)"))
         assertTrue(clippingMask.contains("rawValue >= uPhaseClippingLevels[phase]"))
         assertTrue(clippingMask.contains("vec2 sourceFlow = texture(uFlow, flowUv).xy"))
+        assertTrue(
+            clippingMask.contains(
+                "ivec2 referenceQuad = min(outputPixel * 4 + ivec2(2), uBayerSize - ivec2(1))",
+            ),
+        )
         assertFalse(clippingMask.contains("uGains"))
         assertFalse(clippingMask.contains("uExposureRatio"))
     }
