@@ -199,10 +199,7 @@ class RawNoiseModelTest {
     }
 
     @Test
-    fun defaultResolverUsesPixel3WhenCamera2ProfilesAreUnavailable() {
-        val expected = checkNotNull(
-            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR.evaluate(8000),
-        )
+    fun defaultResolverReportsUnavailableWhenCamera2ProfilesAreUnavailable() {
         val resolved = RawNoiseModelResolver.resolve(
             selection = RawNoiseProfileSelection.Camera2,
             sensitivity = 8000,
@@ -210,13 +207,13 @@ class RawNoiseModelTest {
             baseFrameCamera2Model = RawNoiseModel.EMPTY,
         )
 
-        assertEquals(RawNoiseModelSource.PIXEL3_FALLBACK, resolved.source)
-        assertArrayEquals(expected.shotNoise, resolved.model.shotNoise, 0f)
-        assertArrayEquals(expected.readNoise, resolved.model.readNoise, 0f)
+        assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)
+        assertArrayEquals(FloatArray(4), resolved.model.shotNoise, 0f)
+        assertArrayEquals(FloatArray(4), resolved.model.readNoise, 0f)
     }
 
     @Test
-    fun defaultResolverUsesPixel3WhenCamera2ReadTermsAreZero() {
+    fun defaultResolverReportsUnavailableWhenCamera2ReadTermsAreZero() {
         val shotOnlyProfile = floatArrayOf(
             1f, 0f,
             2f, 0f,
@@ -231,9 +228,9 @@ class RawNoiseModelTest {
             baseFrameCamera2Model = RawNoiseModel.fromCamera2NoiseProfile(shotOnlyProfile),
         )
 
-        assertEquals(RawNoiseModelSource.PIXEL3_FALLBACK, resolved.source)
-        assertTrue(resolved.model.shotNoise.all { it > 0f })
-        assertTrue(resolved.model.readNoise.all { it > 0f })
+        assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)
+        assertArrayEquals(FloatArray(4), resolved.model.shotNoise, 0f)
+        assertArrayEquals(FloatArray(4), resolved.model.readNoise, 0f)
     }
 
     @Test

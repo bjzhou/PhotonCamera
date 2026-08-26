@@ -198,8 +198,10 @@ class RawDemosaicProcessor {
             maxAnalogSensitivity = baseMetadata?.maxAnalogSensitivity ?: 0,
             shutterSpeed = if (dngRawData.shutterSpeed == 0L) (baseMetadata?.shutterSpeed
                 ?: 0L) else dngRawData.shutterSpeed,
-            aperture = if (dngRawData.aperture == 0f) (baseMetadata?.aperture
-                ?: 0f) else dngRawData.aperture,
+            aperture = resolveRawApertureFNumber(
+                frameAperture = dngRawData.aperture,
+                inheritedAperture = baseMetadata?.aperture,
+            ),
             activeArray = activeArray,
             channelNoiseProfile = channelNoiseProfile,
             noiseProfileLayout = noiseProfileLayout,

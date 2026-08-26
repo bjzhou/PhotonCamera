@@ -290,9 +290,7 @@ object MultiFrameStacker {
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
         whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
-        noiseProfileSelection: RawNoiseProfileSelection = RawNoiseProfileSelection.Calibrated(
-            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
-        ),
+        noiseProfileSelection: RawNoiseProfileSelection = RawNoiseProfileSelection.Camera2,
         lensShading: FloatArray? = null,
         lensShadingWidth: Int = 0,
         lensShadingHeight: Int = 0,

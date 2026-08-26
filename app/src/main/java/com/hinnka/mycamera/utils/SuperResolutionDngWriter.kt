@@ -22,6 +22,7 @@ import com.hinnka.mycamera.raw.DngWarpRectilinear
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.raw.resolveRawApertureFNumber
 import java.io.ByteArrayOutputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -522,10 +523,12 @@ object SuperResolutionDngWriter {
             ?.takeIf { it > 0L }
             ?.let { it.toDouble() / 1_000_000_000.0 }
         val iso = captureMetadataResult.get(CaptureResult.SENSOR_SENSITIVITY)?.takeIf { it > 0 }
-        val aperture = captureMetadataResult.get(CaptureResult.LENS_APERTURE)?.takeIf { it > 0f }
-            ?: characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
-                ?.firstOrNull()
-                ?.takeIf { it > 0f }
+        val aperture = resolveRawApertureFNumber(
+            frameAperture = captureMetadataResult.get(CaptureResult.LENS_APERTURE),
+            availableApertures = characteristics.get(
+                CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES,
+            ),
+        )
         val physicalFocalLength = captureMetadataResult.get(CaptureResult.LENS_FOCAL_LENGTH)
             ?.takeIf { it > 0f }
         val focalLength = effectiveFocalLengthMm?.takeIf { it > 0f } ?: physicalFocalLength
@@ -611,11 +614,9 @@ object SuperResolutionDngWriter {
 
         val exifEntries = buildList {
             exposureTimeSeconds?.let { add(rationalArray(TAG_EXPOSURE_TIME, listOf(it))) }
-            aperture?.let {
-                add(rationalArray(TAG_F_NUMBER, listOf(it.toDouble())))
-                add(rationalArray(TAG_APERTURE_VALUE, listOf(apexAperture(it).toDouble())))
-                add(rationalArray(TAG_MAX_APERTURE_VALUE, listOf(apexAperture(it).toDouble())))
-            }
+            add(rationalArray(TAG_F_NUMBER, listOf(aperture.toDouble())))
+            add(rationalArray(TAG_APERTURE_VALUE, listOf(apexAperture(aperture).toDouble())))
+            add(rationalArray(TAG_MAX_APERTURE_VALUE, listOf(apexAperture(aperture).toDouble())))
             add(short(TAG_EXPOSURE_PROGRAM, exposureProgram))
             iso?.let { add(short(TAG_ISO_SPEED_RATINGS, it.coerceIn(1, MAX_TIFF_SHORT))) }
             add(undefined(TAG_EXIF_VERSION, "0231".toByteArray(Charsets.US_ASCII)))

@@ -24,7 +24,7 @@ class RawMetadataNoiseProfileTest {
     }
 
     @Test
-    fun camera2SelectionFallsBackToPixel3WhenReadTermsAreZero() {
+    fun camera2SelectionClearsNoiseProfileWhenReadTermsAreZero() {
         val metadata = metadata(
             floatArrayOf(
                 1f, 0f,
@@ -33,33 +33,26 @@ class RawMetadataNoiseProfileTest {
                 4f, 0f,
             ),
         )
-        val expected = checkNotNull(
-            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR.evaluate(TEST_ISO),
-        )
-
         val resolved = metadata.withNoiseProfileSelection(RawNoiseProfileSelection.Camera2)
 
-        assertEquals(RawNoiseProfileLayout.CANONICAL_BAYER, resolved.noiseProfileLayout)
-        assertArrayEquals(expected.canonicalChannelPairs(), resolved.channelNoiseProfile, 0f)
+        assertEquals(RawNoiseProfileLayout.NONE, resolved.noiseProfileLayout)
+        assertEquals(0, resolved.channelNoiseProfile.size)
     }
 
     @Test
-    fun camera2SelectionFallsBackToPixel3WhenSensorProfileIsMissing() {
+    fun camera2SelectionKeepsNoiseProfileUnavailableWhenSensorProfileIsMissing() {
         val metadata = metadata(FloatArray(0)).copy(
             noiseProfileLayout = RawNoiseProfileLayout.NONE,
         )
-        val expected = checkNotNull(
-            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR.evaluate(TEST_ISO),
-        )
 
         val resolved = metadata.withNoiseProfileSelection(RawNoiseProfileSelection.Camera2)
 
-        assertEquals(RawNoiseProfileLayout.CANONICAL_BAYER, resolved.noiseProfileLayout)
-        assertArrayEquals(expected.canonicalChannelPairs(), resolved.channelNoiseProfile, 0f)
+        assertEquals(RawNoiseProfileLayout.NONE, resolved.noiseProfileLayout)
+        assertEquals(0, resolved.channelNoiseProfile.size)
     }
 
     @Test
-    fun camera2SelectionFallsBackWhenPersistedDngReadTermsAreZero() {
+    fun camera2SelectionClearsPersistedDngProfileWhenReadTermsAreZero() {
         val metadata = metadata(
             floatArrayOf(
                 1f, 0f,
@@ -67,14 +60,10 @@ class RawMetadataNoiseProfileTest {
                 3f, 0f,
             ),
         ).copy(noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB)
-        val expected = checkNotNull(
-            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR.evaluate(TEST_ISO),
-        )
-
         val resolved = metadata.withNoiseProfileSelection(RawNoiseProfileSelection.Camera2)
 
-        assertEquals(RawNoiseProfileLayout.CANONICAL_BAYER, resolved.noiseProfileLayout)
-        assertArrayEquals(expected.canonicalChannelPairs(), resolved.channelNoiseProfile, 0f)
+        assertEquals(RawNoiseProfileLayout.NONE, resolved.noiseProfileLayout)
+        assertEquals(0, resolved.channelNoiseProfile.size)
     }
 
     @Test

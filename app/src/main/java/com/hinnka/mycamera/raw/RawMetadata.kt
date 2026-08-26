@@ -8,7 +8,6 @@ import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
-import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
 import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawNoiseProfileSelection
@@ -25,6 +24,24 @@ enum class RawNoiseProfileLayout {
     /** Four (S, O) pairs in canonical R, Gr, Gb, B order. */
     CANONICAL_BAYER,
 }
+
+internal const val FALLBACK_APERTURE_F_NUMBER = 2.0f
+
+/**
+ * Resolves the physical f-number without guessing a state for variable-aperture hardware.
+ *
+ * A per-frame or inherited value is authoritative. CameraCharacteristics is authoritative only
+ * when it declares exactly one valid aperture; otherwise the physical aperture is unknown.
+ */
+internal fun resolveRawApertureFNumber(
+    frameAperture: Float?,
+    availableApertures: FloatArray? = null,
+    inheritedAperture: Float? = null,
+): Float = frameAperture
+    ?.takeIf { it.isFinite() && it > 0f }
+    ?: inheritedAperture?.takeIf { it.isFinite() && it > 0f }
+    ?: availableApertures?.singleOrNull { it.isFinite() && it > 0f }
+    ?: FALLBACK_APERTURE_F_NUMBER
 
 /**
  * RAW 图像处理所需的元数据
@@ -124,7 +141,7 @@ data class RawMetadata(
     /** CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY for GCam noise-model digital gain. */
     val maxAnalogSensitivity: Int = 0,
     val shutterSpeed: Long = 0L,
-    val aperture: Float = 0f,
+    val aperture: Float = FALLBACK_APERTURE_F_NUMBER,
     val frameCount: Int = 1,
     /**
      * MGC's normalized 128-bin power-correlation spectrum after spatial merge.
@@ -169,7 +186,10 @@ data class RawMetadata(
                     RawNoiseProfileLayout.NONE -> false
                 }
                 if (hasUsableSourceProfile) return this
-                CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
+                return copy(
+                    channelNoiseProfile = FloatArray(0),
+                    noiseProfileLayout = RawNoiseProfileLayout.NONE,
+                )
             }
         }
         val model = profile.evaluate(
@@ -398,7 +418,12 @@ data class RawMetadata(
                 CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY,
             ) ?: 0
             val shutterSpeed = captureResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
-            val aperture = captureResult.get(CaptureResult.LENS_APERTURE) ?: 0f
+            val aperture = resolveRawApertureFNumber(
+                frameAperture = captureResult.get(CaptureResult.LENS_APERTURE),
+                availableApertures = characteristics.get(
+                    CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES,
+                ),
+            )
 
             return RawMetadata(
                 width = width,

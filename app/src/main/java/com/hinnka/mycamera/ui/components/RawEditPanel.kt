@@ -1698,7 +1698,7 @@ private fun rawNoiseProfileDisplayName(
     val profile = availableProfiles.firstOrNull { it.id == profileId }
     return profile?.nameResId?.let { stringResource(it) }
         ?: profile?.getName()
-        ?: stringResource(R.string.raw_noise_profile_pixel3)
+        ?: stringResource(R.string.raw_noise_profile_system)
 }
 
 @Composable

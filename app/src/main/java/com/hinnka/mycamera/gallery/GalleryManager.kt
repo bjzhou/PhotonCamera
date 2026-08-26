@@ -3368,7 +3368,7 @@ object GalleryManager {
                         focusDistanceDiopters = frameFocusDistances.getOrNull(index)
                             ?.takeIf { it.isFinite() }
                             ?: Float.NaN,
-                        // Spatial resolves Camera2 versus Pixel 3 itself so that a calibrated
+                        // Spatial resolves Camera2 versus calibrated profiles itself so that a
                         // canonical profile is never reinterpreted as CFA-phase-ordered Camera2.
                         channelNoiseProfile = captureRawMetadata.channelNoiseProfile
                             .takeIf { it.size >= 8 },

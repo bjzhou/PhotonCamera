@@ -136,6 +136,7 @@ import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
+import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -495,6 +496,27 @@ fun SettingsScreen(
             rawChromaNoiseReductionUi = rawChromaNoiseReduction
             rawMaxNoiseReductionUi = rawMaxNoiseReduction
             rawMaxChromaNoiseReductionUi = rawMaxChromaNoiseReduction
+        }
+    }
+
+    LaunchedEffect(
+        rawNoiseProfileId,
+        rawNoiseProfileIdsByLens,
+        availableRawNoiseProfiles,
+    ) {
+        if (availableRawNoiseProfiles.isEmpty()) return@LaunchedEffect
+        val availableProfileIds = availableRawNoiseProfiles.mapTo(mutableSetOf()) { it.id }
+        val normalizedProfileId = rawNoiseProfileId.takeIf(availableProfileIds::contains)
+            ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID
+        if (normalizedProfileId != rawNoiseProfileId) {
+            viewModel.setRawNoiseProfileId(normalizedProfileId)
+        }
+        val normalizedIdsByLens = rawNoiseProfileIdsByLens.mapValues { (_, profileId) ->
+            profileId.takeIf(availableProfileIds::contains)
+                ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID
+        }
+        if (normalizedIdsByLens != rawNoiseProfileIdsByLens) {
+            viewModel.setRawNoiseProfileIdsByLens(normalizedIdsByLens)
         }
     }
 

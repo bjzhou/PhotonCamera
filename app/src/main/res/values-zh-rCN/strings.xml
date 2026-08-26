@@ -284,8 +284,9 @@
     <string name="raw_noise_profile_lens_override_value">单独配置：%1$s</string>
     <string name="raw_noise_profile_use_unified">使用统一模型（%1$s）</string>
     <string name="raw_noise_profile_system">系统默认（Camera2 API）</string>
-    <string name="raw_noise_profile_pixel3">Pixel 3</string>
     <string name="raw_noise_profile_pixel8_pro">Pixel 8 Pro</string>
+    <string name="raw_noise_profile_x9_ultra">X9 Ultra</string>
+    <string name="raw_noise_profile_x9_ultra_3x">X9 Ultra 3X</string>
     <string name="delete_raw_noise_profile_confirm_message">删除降噪模型“%s”？</string>
     <string name="settings_baseline_phantom_title">幻影模式基准色彩校正</string>
     <string name="settings_baseline_phantom_description">选择幻影模式创意 LUT 之前先应用的基准 LUT 与基准配方。</string>

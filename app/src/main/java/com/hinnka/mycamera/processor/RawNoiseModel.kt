@@ -186,7 +186,6 @@ internal enum class RawNoiseModelSource {
     GCAM_CALIBRATED,
     CAMERA2_PER_FRAME,
     CAMERA2_BASE_FRAME,
-    PIXEL3_FALLBACK,
     UNAVAILABLE,
 }
 
@@ -195,7 +194,7 @@ internal data class ResolvedRawNoiseModel(
     val source: RawNoiseModelSource,
 )
 
-/** Resolves the selected source, with Pixel 3 as the default for unusable Camera2 profiles. */
+/** Resolves the selected calibrated or Camera2 noise profile without substituting another model. */
 internal object RawNoiseModelResolver {
     fun resolve(
         selection: RawNoiseProfileSelection,
@@ -232,16 +231,9 @@ internal object RawNoiseModelResolver {
                 RawNoiseModelSource.CAMERA2_BASE_FRAME,
             )
         }
-        val fallback = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR
-            .evaluate(
-                sensitivity = sensitivity,
-                minimumSensitivityIso = minimumSensitivityIso,
-                maximumAnalogSensitivityIso = maximumAnalogSensitivityIso,
-            )
-            ?: return ResolvedRawNoiseModel(
-                RawNoiseModel.EMPTY,
-                RawNoiseModelSource.UNAVAILABLE,
-            )
-        return ResolvedRawNoiseModel(fallback, RawNoiseModelSource.PIXEL3_FALLBACK)
+        return ResolvedRawNoiseModel(
+            RawNoiseModel.EMPTY,
+            RawNoiseModelSource.UNAVAILABLE,
+        )
     }
 }

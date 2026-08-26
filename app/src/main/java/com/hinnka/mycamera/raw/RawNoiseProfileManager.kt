@@ -34,21 +34,12 @@ class RawNoiseProfileManager(context: Context) {
     fun resolveSelection(requestedId: String?): RawNoiseProfileSelection {
         val id = requestedId?.takeIf { it.isNotBlank() } ?: DEFAULT_PROFILE_ID
         if (id == SYSTEM_PROFILE_ID) return RawNoiseProfileSelection.Camera2
-        if (id == PIXEL3_PROFILE_ID) {
-            return RawNoiseProfileSelection.Calibrated(
-                CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
-                PIXEL3_PROFILE_ID,
-            )
-        }
         val info = getAvailableProfiles().firstOrNull { it.id == id }
         val calibrated = info?.let(::loadCalibratedProfile)
         if (calibrated != null) return RawNoiseProfileSelection.Calibrated(calibrated, id)
 
-        PLog.w(TAG, "RAW noise profile unavailable: $id; using Pixel 3")
-        return RawNoiseProfileSelection.Calibrated(
-            CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
-            PIXEL3_PROFILE_ID,
-        )
+        PLog.w(TAG, "RAW noise profile unavailable: $id; using Camera2 system profile")
+        return RawNoiseProfileSelection.Camera2
     }
 
     private fun loadCalibratedProfile(info: RawNoiseProfileInfo): CalibratedRawNoiseProfile? {
@@ -73,9 +64,10 @@ class RawNoiseProfileManager(context: Context) {
     companion object {
         private const val TAG = "RawNoiseProfileManager"
         const val SYSTEM_PROFILE_ID = RawNoiseProfileSelection.SYSTEM_CAMERA2_ID
-        const val PIXEL3_PROFILE_ID = "builtin_noise_pixel3"
         const val PIXEL8_PRO_PROFILE_ID = "builtin_noise_pixel8_pro"
-        const val DEFAULT_PROFILE_ID = PIXEL3_PROFILE_ID
+        const val X9_ULTRA_PROFILE_ID = "builtin_noise_x9_ultra"
+        const val X9_ULTRA_3X_PROFILE_ID = "builtin_noise_x9_ultra_3x"
+        const val DEFAULT_PROFILE_ID = SYSTEM_PROFILE_ID
 
         private val BUILT_IN_PROFILES = listOf(
             RawNoiseProfileInfo(
@@ -86,18 +78,25 @@ class RawNoiseProfileManager(context: Context) {
                 nameResId = R.string.raw_noise_profile_system,
             ),
             RawNoiseProfileInfo(
-                id = PIXEL3_PROFILE_ID,
-                nameMap = emptyMap(),
-                filePath = null,
-                isBuiltIn = true,
-                nameResId = R.string.raw_noise_profile_pixel3,
-            ),
-            RawNoiseProfileInfo(
                 id = PIXEL8_PRO_PROFILE_ID,
                 nameMap = emptyMap(),
                 filePath = "noise_profiles/Pixel8Pro.c",
                 isBuiltIn = true,
                 nameResId = R.string.raw_noise_profile_pixel8_pro,
+            ),
+            RawNoiseProfileInfo(
+                id = X9_ULTRA_PROFILE_ID,
+                nameMap = emptyMap(),
+                filePath = "noise_profiles/X9Ultra.c",
+                isBuiltIn = true,
+                nameResId = R.string.raw_noise_profile_x9_ultra,
+            ),
+            RawNoiseProfileInfo(
+                id = X9_ULTRA_3X_PROFILE_ID,
+                nameMap = emptyMap(),
+                filePath = "noise_profiles/X9Ultra3X.c",
+                isBuiltIn = true,
+                nameResId = R.string.raw_noise_profile_x9_ultra_3x,
             ),
         )
     }
