@@ -122,7 +122,6 @@ import com.hinnka.mycamera.camera.VendorCaptureKey
 import com.hinnka.mycamera.camera.VendorCaptureSettings
 import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.camera.VendorCaptureValueType
-import com.hinnka.mycamera.data.AiFocusTargetMode
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
@@ -268,20 +267,6 @@ private fun VideoRecordingPath.displayName(): String {
 }
 
 @Composable
-private fun AiFocusTargetMode.displayName(): String {
-    return when (this) {
-        AiFocusTargetMode.OFF -> stringResource(R.string.settings_ai_focus_target_off)
-        AiFocusTargetMode.AUTO -> stringResource(R.string.settings_ai_focus_target_auto)
-        AiFocusTargetMode.PERSON -> stringResource(R.string.settings_ai_focus_target_person)
-        AiFocusTargetMode.FACE -> stringResource(R.string.settings_ai_focus_target_face)
-        AiFocusTargetMode.ANIMAL -> stringResource(R.string.settings_ai_focus_target_animal)
-        AiFocusTargetMode.BIRD -> stringResource(R.string.settings_ai_focus_target_bird)
-        AiFocusTargetMode.VEHICLE -> stringResource(R.string.settings_ai_focus_target_vehicle)
-        AiFocusTargetMode.AIRPLANE -> stringResource(R.string.settings_ai_focus_target_airplane)
-    }
-}
-
-@Composable
 private fun AppLanguageSetting() {
     val selectedLanguageTag = AppCompatDelegate.getApplicationLocales()
         .get(0)
@@ -332,8 +317,6 @@ fun SettingsScreen(
     val userPreferences by viewModel.userPreferences.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
-    val aiFocusTargetMode by viewModel.aiFocusTargetMode.collectAsState()
-    val aiFocusScoreThreshold by viewModel.aiFocusScoreThreshold.collectAsState()
     val showGrid = state.showGrid
     val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
@@ -462,7 +445,6 @@ fun SettingsScreen(
     var rawChromaNoiseReductionUi by remember { mutableStateOf(rawChromaNoiseReduction) }
     var rawMaxNoiseReductionUi by remember { mutableStateOf(rawMaxNoiseReduction) }
     var rawMaxChromaNoiseReductionUi by remember { mutableStateOf(rawMaxChromaNoiseReduction) }
-    var aiFocusScoreThresholdUi by remember(aiFocusScoreThreshold) { mutableStateOf(aiFocusScoreThreshold) }
     var windowScreenBrightnessUi by remember { mutableStateOf(windowScreenBrightness ?: 1f) }
     var windowScreenBrightnessEnabled by remember { mutableStateOf(windowScreenBrightness != null) }
     var showAspectRatioDialog by remember { mutableStateOf(false) }
@@ -1130,46 +1112,6 @@ fun SettingsScreen(
 
                 SettingsPage.FOCUS_LENS -> {
                     // 对焦与镜头
-                    SettingsSection(
-                        title = stringResource(R.string.settings_focus_lens_group_ai_focus)
-                    ) {
-                        val aiFocusModeOptions = AiFocusTargetMode.entries.map { it to it.displayName() }
-                        val aiFocusModeLabels = aiFocusModeOptions.map { it.second }
-                        DropdownSettingItem(
-                            title = stringResource(R.string.settings_ai_focus_target),
-                            description = stringResource(R.string.settings_ai_focus_target_description),
-                            value = aiFocusTargetMode.displayName(),
-                            options = aiFocusModeLabels,
-                            isLoading = false,
-                            onExpanded = {},
-                            onOptionSelected = { label ->
-                                aiFocusModeOptions.firstOrNull { it.second == label }?.first?.let {
-                                    viewModel.setAiFocusTargetMode(it)
-                                }
-                            }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_ai_focus_sensitivity),
-                            description = stringResource(R.string.settings_ai_focus_sensitivity_description),
-                            value = aiFocusScoreThresholdUi,
-                            valueRange = 0.05f..0.95f,
-                            onValueChange = {
-                                aiFocusScoreThresholdUi = it
-                                viewModel.setAiFocusScoreThreshold(it)
-                            },
-                            valueTextFormatter = { String.format("%.2f", it) },
-                            resetValue = 0.5f
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
                     SettingsSection(
                         title = stringResource(R.string.settings_focus_lens_group_lens_selection)
                     ) {
@@ -2935,7 +2877,6 @@ private fun SettingsCategoryOverview(
         NavigationSettingItem(
             title = stringResource(R.string.settings_section_focus_lens),
             description = listOf(
-                stringResource(R.string.settings_ai_focus_target),
                 stringResource(R.string.settings_default_focal_length),
                 stringResource(R.string.settings_camera_orientation),
                 stringResource(R.string.settings_add_isz_lens)

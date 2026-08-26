@@ -183,7 +183,6 @@
     <!-- Settings Restructuring Sections -->
     <string name="settings_section_assist">Assistive Tools</string>
     <string name="settings_section_focus_lens">Focus &amp; Lens</string>
-    <string name="settings_focus_lens_group_ai_focus">AI Focus</string>
     <string name="settings_focus_lens_group_lens_selection">Lens Selection</string>
     <string name="settings_focus_lens_group_virtual_lens_depth">Virtual Lens &amp; Depth</string>
     <string name="settings_focus_lens_group_lens_discovery">Lens Discovery</string>
@@ -211,18 +210,6 @@
     <string name="settings_level_description">Show horizontal level indicator while shooting</string>
     <string name="settings_focus_peaking">Focus Peaking</string>
     <string name="settings_focus_peaking_description">Show focus peaking highlights during manual focus</string>
-    <string name="settings_ai_focus_target">AI Smart Focus</string>
-    <string name="settings_ai_focus_target_description">Choose which subject type AI focus should track.</string>
-    <string name="settings_ai_focus_target_off">Off</string>
-    <string name="settings_ai_focus_target_auto">Auto</string>
-    <string name="settings_ai_focus_target_person">Person</string>
-    <string name="settings_ai_focus_target_face">Face</string>
-    <string name="settings_ai_focus_target_animal">Animal</string>
-    <string name="settings_ai_focus_target_bird">Bird</string>
-    <string name="settings_ai_focus_target_vehicle">Vehicle</string>
-    <string name="settings_ai_focus_target_airplane">Airplane</string>
-    <string name="settings_ai_focus_sensitivity">AI Focus Sensitivity</string>
-    <string name="settings_ai_focus_sensitivity_description">Minimum detection score required to trigger AI focus.</string>
     <string name="settings_grid_lines">Grid Lines</string>
     <string name="settings_grid_description">Show grid lines for composition</string>
     <string name="settings_use_jpg_max">JPGmax</string>

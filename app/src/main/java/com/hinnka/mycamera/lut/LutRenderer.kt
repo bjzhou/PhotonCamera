@@ -116,24 +116,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var aPassPositionLocation: Int = 0
     private var aPassTexCoordLocation: Int = 0
     
-    private var aiFocusInputFboId: Int = 0
-    private var aiFocusInputTextureId: Int = 0
-    private val aiFocusInputPboIds = IntArray(2)
-    private val aiFocusInputPboFences = LongArray(2)
-    private var aiFocusInputPboIndex = 0
-    @Volatile
-    var isAiFocusBusy = false
-    private val AI_FOCUS_INPUT_SIZE = 640
-    private var lastRunAiFocusInputTime: Long = 0
-    var onAiFocusInputAvailable: ((Bitmap) -> Unit)? = null
-    private val inputCaptureExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread({
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            runnable.run()
-        }, "LutInputCapture")
-    }
-    private val aiFocusInputDispatchInFlight = AtomicBoolean(false)
-
     // FBO 相关
     private var fboId: Int = 0
     private var fboTextureId: Int = 0
@@ -571,11 +553,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         captureFboId = 0
         captureTextureId = 0
         passthroughProgramId = 0
-        aiFocusInputFboId = 0
-        aiFocusInputTextureId = 0
-        resetPixelPackState(aiFocusInputPboIds, aiFocusInputPboFences)
-        aiFocusInputPboIndex = 0
-        isAiFocusBusy = false
         fboId = 0
         fboTextureId = 0
         fboWidth = 0
@@ -1576,7 +1553,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             !(lutEnabled && currentLutConfig != null)
         val filmGrainEnabled = filmGrain > 0.001f && !preLogFilmGrainEnabled
         val postProcessEffectEnabled = hdfEnabled || halationEnabled || bloomEnabled || softLightEnabled
-        val aiFocusInputNeeded = onAiFocusInputAvailable != null && isAutoFocus && !isAiFocusBusy
         val suppressBaselineLayerForVideoLog = videoLogProfile.isEnabled
         val hasBaselineLayer = hasBaselineLayer() && !suppressBaselineLayerForVideoLog
         val hasCreativeLayer = hasCreativeLayer()
@@ -1588,7 +1564,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             postProcessEffectEnabled ||
             clarityEnabled ||
             filmGrainEnabled ||
-            aiFocusInputNeeded ||
             hasDualLayer ||
             (!isAutoFocus && focusPeakingEnabled)
         if (requestedFbo && !isMainFboReady(viewportWidth, viewportHeight)) {
@@ -1659,10 +1634,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     height = currentHeight,
                     strength = clarity,
                 )
-            }
-
-            if (aiFocusInputNeeded) {
-                runAiFocusInputCaptureInternal(currentTexId)
             }
 
             var postProcessMaterialized = false
@@ -2887,34 +2858,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
     }
 
-    private fun initAiFocusInputFbo() {
-        if (aiFocusInputFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(aiFocusInputFboId), 0)
-            aiFocusInputFboId = 0
-        }
-        if (aiFocusInputTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(aiFocusInputTextureId), 0)
-            aiFocusInputTextureId = 0
-        }
-
-        val fbos = IntArray(1)
-        GLES30.glGenFramebuffers(1, fbos, 0)
-        aiFocusInputFboId = fbos[0]
-
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        aiFocusInputTextureId = textures[0]
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, aiFocusInputTextureId)
-        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, AI_FOCUS_INPUT_SIZE, AI_FOCUS_INPUT_SIZE, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, aiFocusInputFboId)
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, aiFocusInputTextureId, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-    }
-
     private fun initCaptureFbo(width: Int, height: Int) {
         if (captureFboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(captureFboId), 0)
@@ -3532,79 +3475,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         dispatchMeteringCalculation(completedBytes, currentFocus, currentMode)
     }
 
-    private fun runAiFocusInputCaptureInternal(sourceTextureId: Int) {
-        if (renderingPaused || onAiFocusInputAvailable == null || sourceTextureId == 0) return
-        if (aiFocusInputFboId == 0 || aiFocusInputTextureId == 0) {
-            initAiFocusInputFbo()
-        }
-        if (aiFocusInputFboId == 0 || aiFocusInputTextureId == 0 || copyProgramId == 0) return
-        val pixelSize = AI_FOCUS_INPUT_SIZE * AI_FOCUS_INPUT_SIZE * 4
-        if (!ensurePixelPackPbos(aiFocusInputPboIds, pixelSize)) return
-
-        val writeIndex = aiFocusInputPboIndex % 2
-        val readIndex = (aiFocusInputPboIndex + 1) % 2
-        val completedBytes = if (aiFocusInputPboIndex > 0) {
-            readReadyPixelPackBuffer(aiFocusInputPboIds, aiFocusInputPboFences, readIndex, pixelSize)
-        } else {
-            null
-        }
-        dispatchInputBitmap(
-            pixelBytes = completedBytes,
-            size = AI_FOCUS_INPUT_SIZE,
-            inFlight = aiFocusInputDispatchInFlight,
-            callbackProvider = { onAiFocusInputAvailable },
-            label = "ai focus"
-        )
-
-        val now = System.currentTimeMillis()
-        if (now - lastRunAiFocusInputTime < 300) return
-        if (!isPixelPackBufferWritable(aiFocusInputPboFences, writeIndex)) return
-        lastRunAiFocusInputTime = now
-
-        try {
-            drawInputCaptureTexture(aiFocusInputFboId, AI_FOCUS_INPUT_SIZE, sourceTextureId)
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, aiFocusInputPboIds[writeIndex])
-            GLES30.glReadPixels(0, 0, AI_FOCUS_INPUT_SIZE, AI_FOCUS_INPUT_SIZE, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
-            aiFocusInputPboFences[writeIndex] = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
-            aiFocusInputPboIndex++
-        } finally {
-            restorePixelReadbackState()
-        }
-    }
-
-    private fun drawInputCaptureTexture(targetFboId: Int, targetSize: Int, sourceTextureId: Int) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
-        GLES30.glViewport(0, 0, targetSize, targetSize)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glUseProgram(copyProgramId)
-
-        val captureMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(captureMatrix, 0)
-        val flipMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(flipMatrix, 0)
-        android.opengl.Matrix.scaleM(flipMatrix, 0, 1f, -1f, 1f)
-
-        GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, flipMatrix, 0)
-        GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, captureMatrix, 0)
-        GLES30.glUniform4f(uCopyCropRectLoc, 0f, 0f, 1f, 1f)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(uCopyTextureLoc, 0)
-
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
-        GLES30.glEnableVertexAttribArray(aCopyPositionLoc)
-        GLES30.glVertexAttribPointer(aCopyPositionLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
-        GLES30.glEnableVertexAttribArray(aCopyTexCoordLoc)
-        GLES30.glVertexAttribPointer(aCopyTexCoordLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-
-        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, 0)
-    }
-
     private fun ensurePixelPackPbos(pboIds: IntArray, pixelSize: Int): Boolean {
         if (pboIds[0] != 0 && pboIds[1] != 0) return true
         if (pboIds.any { it != 0 }) {
@@ -3730,39 +3600,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         } catch (e: Exception) {
             meteringDispatchInFlight.set(false)
             PLog.e(TAG, "Failed to dispatch metering task", e)
-        }
-    }
-
-    private fun dispatchInputBitmap(
-        pixelBytes: ByteArray?,
-        size: Int,
-        inFlight: AtomicBoolean,
-        callbackProvider: () -> ((Bitmap) -> Unit)?,
-        label: String,
-    ) {
-        if (pixelBytes == null) return
-        if (!inFlight.compareAndSet(false, true)) return
-
-        try {
-            if (inputCaptureExecutor.isShutdown) {
-                inFlight.set(false)
-                return
-            }
-            inputCaptureExecutor.execute {
-                try {
-                    val callback = callbackProvider() ?: return@execute
-                    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-                    bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixelBytes))
-                    callback.invoke(bitmap)
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to dispatch $label input bitmap", e)
-                } finally {
-                    inFlight.set(false)
-                }
-            }
-        } catch (e: Exception) {
-            inFlight.set(false)
-            PLog.e(TAG, "Failed to enqueue $label input bitmap", e)
         }
     }
 
@@ -3917,11 +3754,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         } catch (e: Exception) {
             PLog.e(TAG, "Error shutting down metering executor", e)
         }
-        try {
-            inputCaptureExecutor.shutdown()
-        } catch (e: Exception) {
-            PLog.e(TAG, "Error shutting down input capture executor", e)
-        }
         // 删除纹理
         if (cameraTextureId != 0) {
             GlUtils.deleteTexture(cameraTextureId)
@@ -4009,7 +3841,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             pboId = 0
         }
         releasePixelPackPbos(meteringPboIds, meteringPboFences)
-        releasePixelPackPbos(aiFocusInputPboIds, aiFocusInputPboFences)
 
         if (meteringFboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(meteringFboId), 0)
@@ -4026,14 +3857,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (captureTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(captureTextureId), 0)
             captureTextureId = 0
-        }
-        if (aiFocusInputFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(aiFocusInputFboId), 0)
-            aiFocusInputFboId = 0
-        }
-        if (aiFocusInputTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(aiFocusInputTextureId), 0)
-            aiFocusInputTextureId = 0
         }
         if (fboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(fboId), 0)

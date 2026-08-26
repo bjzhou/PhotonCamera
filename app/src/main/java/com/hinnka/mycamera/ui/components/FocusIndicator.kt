@@ -19,7 +19,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import com.hinnka.mycamera.camera.FocusPointSource
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -29,7 +28,6 @@ import kotlin.math.roundToInt
 @Composable
 fun FocusIndicator(
     position: Pair<Float, Float>?,
-    source: FocusPointSource = FocusPointSource.MANUAL,
     isFocusLocked: Boolean = false,
     isFocusing: Boolean,
     focusSuccess: Boolean?,
@@ -62,7 +60,7 @@ fun FocusIndicator(
     val color = when (focusSuccess) {
         true -> Color.Green
         false -> Color.Red
-        else -> if (source == FocusPointSource.AI) Color(0xFF64D8FF) else Color.White
+        else -> Color.White
     }
 
     LaunchedEffect(position) {
@@ -84,11 +82,10 @@ fun FocusIndicator(
             ) {
                 val x = displayPosition.first * size.width
                 val y = displayPosition.second * size.height
-                val isAiFocus = source == FocusPointSource.AI
-                val boxSize = (if (isAiFocus) 20.dp else 60.dp).toPx() * scale
+                val boxSize = 60.dp.toPx() * scale
                 val halfSize = boxSize / 2
-                val cornerLength = (if (isAiFocus) 5.dp else 15.dp).toPx()
-                val strokeWidth = (if (isAiFocus) 1.dp else 2.dp).toPx()
+                val cornerLength = 15.dp.toPx()
+                val strokeWidth = 2.dp.toPx()
 
                 val drawColor = color.copy(alpha = alpha)
 
@@ -147,25 +144,9 @@ fun FocusIndicator(
                     end = Offset(x + halfSize, y + halfSize - cornerLength),
                     strokeWidth = strokeWidth
                 )
-
-                if (isAiFocus) {
-                    val centerTick = 3.dp.toPx()
-                    drawLine(
-                        color = drawColor,
-                        start = Offset(x - centerTick, y),
-                        end = Offset(x + centerTick, y),
-                        strokeWidth = strokeWidth
-                    )
-                    drawLine(
-                        color = drawColor,
-                        start = Offset(x, y - centerTick),
-                        end = Offset(x, y + centerTick),
-                        strokeWidth = strokeWidth
-                    )
-                }
             }
 
-            if (isFocusLocked && position != null && source == FocusPointSource.MANUAL) {
+            if (isFocusLocked && position != null) {
                 val badgeSize = 24.dp
                 val badgeSizePx = with(density) { badgeSize.toPx() }
                 val focusHalfSizePx = with(density) { 30.dp.toPx() }

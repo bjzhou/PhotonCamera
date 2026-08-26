@@ -22,7 +22,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.data.AiFocusTargetMode
 import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.PreferenceUpdateValue
@@ -1391,19 +1390,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     var isExpanded by mutableStateOf(false)
 
-    var isAiFocusBusy by mutableStateOf(false)
     private var startupPrewarmJob: Job? = null
     private var startupPrewarmAttempted = false
 
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val focusPeakingEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.focusPeakingEnabled }
-    val aiFocusTargetMode: StateFlow<AiFocusTargetMode> =
-        userPreferencesRepository.userPreferences.map { it.aiFocusTargetMode }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, AiFocusTargetMode.OFF)
-    val aiFocusScoreThreshold: StateFlow<Float> =
-        userPreferencesRepository.userPreferences.map { it.aiFocusScoreThreshold }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, 0.5f)
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
     val keepScreenOn: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.keepScreenOn }
@@ -2358,12 +2350,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     view.setAutoFocus(currentState.isAutoFocus)
                 }
-            }
-        }
-
-        cameraController.previewAiFocusProcessor.onBusyStateChanged = { busy ->
-            viewModelScope.launch(Dispatchers.Main) {
-                isAiFocusBusy = busy
             }
         }
 
@@ -4464,37 +4450,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.updateHighlightPoint(x, y)
     }
 
-    fun handleAiFocusInputUpdate(bitmap: Bitmap) {
-        if (isAiFocusBusy) return
-        if (state.value.isCapturing || !state.value.isAutoFocus || state.value.isFocusing) return
-        cameraController.previewAiFocusProcessor.targetMode = aiFocusTargetMode.value
-        cameraController.previewAiFocusProcessor.scoreThreshold = aiFocusScoreThreshold.value
-        cameraController.previewAiFocusProcessor.onFocusTarget = { target ->
-            viewModelScope.launch(Dispatchers.Main) {
-                val currentState = state.value
-                if (currentState.focusPoint != null &&
-                    currentState.focusPointSource == FocusPointSource.MANUAL
-                ) {
-                    return@launch
-                }
-                if (currentState.isCapturing || !currentState.isAutoFocus || currentState.isFocusing) {
-                    return@launch
-                }
-                cameraController.focusOnNormalizedPoint(target.x, target.y)
-            }
-        }
-        cameraController.previewAiFocusProcessor.onTargetSeen = { target ->
-            cameraController.notifyAiSubjectSeen(target.x, target.y)
-        }
-        cameraController.previewAiFocusProcessor.onTargetLost = {
-            viewModelScope.launch(Dispatchers.Main) {
-                if (state.value.isCapturing) return@launch
-                cameraController.cancelSubjectFocus("ai_target_lost")
-            }
-        }
-        cameraController.previewAiFocusProcessor.processBitmap(bitmap)
-    }
-
     // ==================== 边框相关方法 ====================
 
     /**
@@ -4788,18 +4743,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     contentRepository.refreshCustomContent()
                 }
             }
-        }
-    }
-
-    fun setAiFocusTargetMode(mode: AiFocusTargetMode) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveAiFocusTargetMode(mode)
-        }
-    }
-
-    fun setAiFocusScoreThreshold(value: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveAiFocusScoreThreshold(value)
         }
     }
 

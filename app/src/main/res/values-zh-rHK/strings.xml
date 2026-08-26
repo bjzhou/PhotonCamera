@@ -179,7 +179,6 @@
     <!-- Settings Restructuring Sections -->
     <string name="settings_section_assist">輔助工具</string>
     <string name="settings_section_focus_lens">對焦與鏡頭</string>
-    <string name="settings_focus_lens_group_ai_focus">AI 對焦</string>
     <string name="settings_focus_lens_group_lens_selection">鏡頭選擇</string>
     <string name="settings_focus_lens_group_virtual_lens_depth">虛擬鏡頭與景深</string>
     <string name="settings_focus_lens_group_lens_discovery">鏡頭偵測</string>
@@ -207,18 +206,6 @@
     <string name="settings_level_description">在拍攝時顯示水平儀，幫助保持畫面水平</string>
     <string name="settings_focus_peaking">峰值對焦</string>
     <string name="settings_focus_peaking_description">手動對焦時顯示峰值對焦高亮</string>
-    <string name="settings_ai_focus_target">AI 智慧對焦</string>
-    <string name="settings_ai_focus_target_description">選擇 AI 對焦優先追蹤的主體類型。</string>
-    <string name="settings_ai_focus_target_off">關閉</string>
-    <string name="settings_ai_focus_target_auto">自動</string>
-    <string name="settings_ai_focus_target_person">人</string>
-    <string name="settings_ai_focus_target_face">人臉</string>
-    <string name="settings_ai_focus_target_animal">動物</string>
-    <string name="settings_ai_focus_target_bird">鳥類</string>
-    <string name="settings_ai_focus_target_vehicle">車</string>
-    <string name="settings_ai_focus_target_airplane">飛機</string>
-    <string name="settings_ai_focus_sensitivity">AI 對焦靈敏度</string>
-    <string name="settings_ai_focus_sensitivity_description">觸發 AI 對焦所需的最低檢測置信度。</string>
     <string name="settings_grid_lines">網格線顯示</string>
     <string name="settings_grid_description">在拍攝時顯示網格線，輔助構圖</string>
     <string name="settings_use_jpg_max">JPGmax</string>
