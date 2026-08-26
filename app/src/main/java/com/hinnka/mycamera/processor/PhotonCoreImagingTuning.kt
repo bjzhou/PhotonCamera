@@ -11,14 +11,12 @@ package com.hinnka.mycamera.processor
 data class PhotonCoreImagingTuning(
     val fusion: PhotonFusionTuning = PhotonFusionTuning.DEFAULT,
     val denoise: PhotonDenoiseTuning = PhotonDenoiseTuning.DEFAULT,
-    val sharpen: PhotonSharpenTuning = PhotonSharpenTuning.DEFAULT,
     /** Controls the standalone low-frequency dehaze pipeline. */
     val dehaze: PhotonDehazeTuning = PhotonDehazeTuning.DEFAULT,
 ) {
     fun normalized(): PhotonCoreImagingTuning = copy(
         fusion = fusion.normalized(),
         denoise = denoise.normalized(),
-        sharpen = sharpen.normalized(),
         dehaze = dehaze.normalized(),
     )
 
@@ -54,10 +52,6 @@ data class PhotonCoreImagingTuning(
             tuning.denoise.sabreLumaNodes.toPersistedString()?.let {
                 put(DENOISE_SABRE_NODES_PROPERTY, it)
             }
-            put(
-                SHARPEN_FREQUENCY_SCALE_PROPERTY,
-                tuning.sharpen.snrInterpolationScale.toPersistedString(),
-            )
             put(DEHAZE_ENABLED_PROPERTY, tuning.dehaze.enabled.toString())
             put(DEHAZE_STRENGTH_PROPERTY, tuning.dehaze.strength.toString())
             put(
@@ -83,7 +77,6 @@ data class PhotonCoreImagingTuning(
         const val DENOISE_RESPONSE_OFFSET_PROPERTY = "photonDenoiseResponseOffset"
         const val DENOISE_RESPONSE_COSINE_OFFSET_PROPERTY = "photonDenoiseResponseCosineOffset"
         const val DENOISE_SABRE_NODES_PROPERTY = "photonDenoiseSabreLumaNodes"
-        const val SHARPEN_FREQUENCY_SCALE_PROPERTY = "photonSharpenSnrFrequencyScale"
         const val DEHAZE_ENABLED_PROPERTY = "photonDehazeEnabled"
         const val DEHAZE_STRENGTH_PROPERTY = "photonDehazeStrength"
         const val DEHAZE_DYNAMIC_HIGHLIGHT_STRENGTH_PROPERTY =
@@ -134,11 +127,6 @@ data class PhotonCoreImagingTuning(
                     ),
                     sabreLumaNodes = PhotonSabreLumaTuningNodes.fromPersistedString(
                         properties[DENOISE_SABRE_NODES_PROPERTY],
-                    ),
-                ),
-                sharpen = PhotonSharpenTuning(
-                    snrInterpolationScale = PhotonFrequencyScales.fromPersistedString(
-                        properties[SHARPEN_FREQUENCY_SCALE_PROPERTY],
                     ),
                 ),
                 dehaze = PhotonDehazeTuning(
@@ -353,48 +341,6 @@ data class PhotonSabreLumaTuningNodes(
                 snr40 = PhotonPyramidOverrides.fromPersistedString(rows[2]) ?: return DEFAULT,
             ).normalized()
         }
-    }
-}
-
-data class PhotonFrequencyScales(
-    val low: Float = 1f,
-    val medium: Float = 1f,
-    val high: Float = 1f,
-) {
-    fun toFloatArray(): FloatArray = floatArrayOf(low, medium, high)
-
-    fun normalized(): PhotonFrequencyScales = copy(
-        low = normalizeScale(low),
-        medium = normalizeScale(medium),
-        high = normalizeScale(high),
-    )
-
-    fun toPersistedString(): String = "$low,$medium,$high"
-
-    companion object {
-        val IDENTITY = PhotonFrequencyScales()
-
-        fun fromPersistedString(value: String?): PhotonFrequencyScales {
-            val values = value?.split(',')?.map(String::toFloatOrNull) ?: return IDENTITY
-            if (values.size != 3 || values.any { it == null }) return IDENTITY
-            return PhotonFrequencyScales(values[0]!!, values[1]!!, values[2]!!).normalized()
-        }
-
-        private fun normalizeScale(value: Float): Float =
-            value.takeIf(Float::isFinite)?.coerceIn(0f, 16f) ?: 1f
-    }
-}
-
-data class PhotonSharpenTuning(
-    /** Scales the SNR interpolation amount independently for low/mid/high frequency groups. */
-    val snrInterpolationScale: PhotonFrequencyScales = PhotonFrequencyScales.IDENTITY,
-) {
-    fun normalized(): PhotonSharpenTuning = copy(
-        snrInterpolationScale = snrInterpolationScale.normalized(),
-    )
-
-    companion object {
-        val DEFAULT = PhotonSharpenTuning()
     }
 }
 

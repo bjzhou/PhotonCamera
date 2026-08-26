@@ -37,17 +37,6 @@ struct SpatialStrengthResult {
     float output_weights_sum_total_diag_1[3] = {};
 };
 
-struct SharpenCurveSelection {
-    float lower_snr = 0.0f;
-    float upper_snr = 0.0f;
-    float interpolation = 0.0f;
-    // Halide layout [guide=1, point=5, frequency=3, coordinate=2].
-    float curves[30] = {};
-    // Optional CurveParams field, one value per sharpening frequency. The
-    // generic sharpen_default.binarypb profile leaves all three unset.
-    float relative_corner_acutance_correction[3] = {};
-};
-
 /**
  * Reproduces CreateLumaDenoiseNoiseBuffers for one luma noise channel.
  * correlation is MGC's 128-bin normalized power correlation spectrum.  A
@@ -219,30 +208,5 @@ int RunYuvToRgb(
     int width,
     int height,
     int16_t* output);
-
-/**
- * Reproduces SharpenTuning::BuildForSNR for MGC's generic
- * sharpen_default.binarypb profile.
- */
-bool BuildDefaultSharpenCurves(
-    float snr,
-    const float interpolation_scales[3],
-    SharpenCurveSelection* output);
-
-/**
- * Runs MGC 9.6.080's exact SharpenTo16BitHalide FinishRaw kernel.
- *
- * input_yuv must be the tone-mapped U12 YUV emitted by ProcessLowFrequency
- * and restored by GuidedUpsample. It is not compatible with RawToYuv or the
- * full-resolution denoiser's signed-Q14 linear YUV boundary.
- */
-int RunSharpenTo16Bit(
-    const int16_t* input_yuv,
-    int width,
-    int height,
-    const float curves[30],
-    const float relative_corner_acutance_correction[3],
-    float sharpen_attenuation_scale,
-    uint16_t* output_interleaved_rgb);
 
 }  // namespace photon::mgc_denoise

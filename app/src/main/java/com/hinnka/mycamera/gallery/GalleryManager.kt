@@ -2432,6 +2432,7 @@ object GalleryManager {
             suspend fun renderPersistedDng() = processor.processForHdrSources(
                 context,
                 dngFile.absolutePath,
+                includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
                 aspectRatio = aspectRatio,
                 cropRegion = updatedMetadata.cropRegion,
                 rotation = rotation,
@@ -2511,6 +2512,7 @@ object GalleryManager {
             val inMemoryResult = if (renderMetadata != null && embeddedRenderPlan != null) {
                 processor.processDngBufferForHdrSources(
                     context = context,
+                    includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
                     rawData = rawBuffer.duplicate(),
                     width = rawWidth,
                     height = rawHeight,
@@ -3440,7 +3442,6 @@ object GalleryManager {
                 mgcSabreNoiseModelScale =
                     finalStackResult.mgcSabreNoiseModelScale,
                 mgcDenoiseTuningSnr = finalStackResult.mgcDenoiseTuningSnr,
-                mgcSharpenTuningSnr = finalStackResult.mgcSharpenTuningSnr,
                 mgcSharpenAttenuationScale =
                     finalStackResult.mgcSharpenAttenuationScale,
                 coreImagingTuning = finalStackResult.coreImagingTuning,
@@ -3672,6 +3673,7 @@ object GalleryManager {
                 suspend fun renderPersistedDng() = processor.processForHdrSources(
                     context,
                     dngFile.absolutePath,
+                    includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
                     aspectRatio = aspectRatio,
                     cropRegion = updatedMetadata.cropRegion,
                     rotation = rotation,
@@ -3688,8 +3690,6 @@ object GalleryManager {
                     rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                     rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
                     sharpeningValue = rawSharpening,
-                    processLocalMgcSharpenTuningSnr =
-                        finalStackResult.mgcSharpenTuningSnr,
                     processLocalMgcSharpenAttenuationScale =
                         finalStackResult.mgcSharpenAttenuationScale,
                     processLocalCoreImagingTuning =
@@ -3754,6 +3754,7 @@ object GalleryManager {
                     val renderStartMs = System.currentTimeMillis()
                     val inMemoryResult = processor.processDngBufferForHdrSources(
                         context = context,
+                        includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
                         rawData = null,
                         width = finalStackResult.width,
                         height = finalStackResult.height,
@@ -4040,6 +4041,7 @@ object GalleryManager {
         val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
             context,
             dngFile.absolutePath,
+            includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
             aspectRatio = aspectRatio,
             cropRegion = updatedMetadata.cropRegion,
             rotation = rotation,

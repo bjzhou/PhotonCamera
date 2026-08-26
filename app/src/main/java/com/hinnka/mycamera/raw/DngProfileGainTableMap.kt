@@ -21,23 +21,31 @@ data class DngProfileGainTableMap(
     val gains: FloatArray,
     val sourceTag: Int = TAG_PROFILE_GAIN_TABLE_MAP2,
 ) {
-    val isValid: Boolean
-        get() {
-            val gainCount = mapPointsV.toLong() * mapPointsH.toLong() * mapPointsN.toLong()
-            return mapPointsV > 0 &&
-                mapPointsH > 0 &&
-                mapPointsN > 0 &&
-                mapSpacingV.isFinite() && mapSpacingV > 0.0 &&
-                mapSpacingH.isFinite() && mapSpacingH > 0.0 &&
-                mapOriginV.isFinite() &&
-                mapOriginH.isFinite() &&
-                mapInputWeights.size == MAP_INPUT_WEIGHT_COUNT &&
-                mapInputWeights.all { it.isFinite() } &&
-                gamma in MIN_GAMMA..MAX_GAMMA &&
-                gainCount in 1 until MAX_PROFILE_GAIN_TABLE_MAP_POINTS &&
-                gains.size.toLong() == gainCount &&
-                gains.all { it.isFinite() && it in MIN_GAIN_VALUE..MAX_GAIN_VALUE }
-        }
+    /**
+     * Full gain validation is intentionally performed at most once per immutable map instance.
+     * A reference Photon PGTM contains 789,504 gains; consumer-side validity queries must remain
+     * O(1) after the construction boundary instead of rescanning that array for every render pass.
+     */
+    val isValid: Boolean by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        val gainCount = mapPointsV.toLong() * mapPointsH.toLong() * mapPointsN.toLong()
+        mapPointsV > 0 &&
+            mapPointsH > 0 &&
+            mapPointsN > 0 &&
+            mapSpacingV.isFinite() && mapSpacingV > 0.0 &&
+            mapSpacingH.isFinite() && mapSpacingH > 0.0 &&
+            mapOriginV.isFinite() &&
+            mapOriginH.isFinite() &&
+            mapInputWeights.size == MAP_INPUT_WEIGHT_COUNT &&
+            mapInputWeights.all { it.isFinite() } &&
+            gamma >= MIN_GAMMA && gamma <= MAX_GAMMA &&
+            gainCount >= 1L && gainCount < MAX_PROFILE_GAIN_TABLE_MAP_POINTS &&
+            gains.size.toLong() == gainCount &&
+            DngProfileGainTableValidation.validate(
+                gains = gains,
+                minimum = MIN_GAIN_VALUE,
+                maximum = MAX_GAIN_VALUE,
+            )
+    }
 
     fun encodeProfileGainTableMap2(byteOrder: ByteOrder): ByteArray {
         require(isValid) { "Invalid ProfileGainTableMap2" }
@@ -287,7 +295,8 @@ data class DngProfileGainTableMap(
                     DATA_TYPE_FLOAT16 -> Half.toFloat(buffer.short)
                     else -> buffer.float
                 }.takeIf { value ->
-                    value.isFinite() && value in MIN_GAIN_VALUE..MAX_GAIN_VALUE
+                    value.isFinite() &&
+                        value >= MIN_GAIN_VALUE && value <= MAX_GAIN_VALUE
                 } ?: 1f
             }
             return DngProfileGainTableMap(

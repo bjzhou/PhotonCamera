@@ -1144,12 +1144,10 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
             diagnostics_ms = elapsed_ms(diagnostics_start);
         }
 
-        // This JNI boundary returns linear camera RGB to Photon. MGC invokes
-        // SharpenTo16Bit only later, after ProcessLowFrequency has converted
-        // linear Q14 YUV into FinishRaw's tone-mapped U12 domain and
-        // GuidedUpsample has restored the output resolution. Calling that
-        // kernel here would clamp Q14 samples at 4095 and corrupt exposure and
-        // saturation, so the matching operation at this boundary is YuvToRgb.
+        // This JNI boundary returns linear camera RGB to Photon. The original MGC pipeline only
+        // sharpened after tone mapping; Photon now performs final sharpening in its GLES output
+        // chain. Calling the former U12 kernel here would clamp Q14 samples at 4095 and corrupt
+        // exposure and saturation, so the matching operation at this boundary is YuvToRgb.
         const auto yuv_to_rgb_start = StageClock::now();
         const int yuv_to_rgb_result =
             photon::mgc_denoise::RunYuvToRgb(

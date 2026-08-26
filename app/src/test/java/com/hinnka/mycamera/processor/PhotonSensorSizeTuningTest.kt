@@ -64,8 +64,6 @@ class PhotonSensorSizeTuningTest {
             tuning.denoise.sabreLumaNodes.snr20.level1 ?: error("missing SNR20 L1"),
             EPSILON,
         )
-        assertEquals(0.3671875f, tuning.sharpen.snrInterpolationScale.low, EPSILON)
-        assertEquals(0f, tuning.sharpen.snrInterpolationScale.high, EPSILON)
     }
 
     @Test
@@ -92,7 +90,6 @@ class PhotonSensorSizeTuningTest {
             small.denoise.chromaStrengthScale,
             large.denoise.chromaStrengthScale,
         )
-        assertEquals(small.sharpen, large.sharpen)
     }
 
     @Test

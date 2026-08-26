@@ -80,12 +80,19 @@ class PhotonDehazeCurveTest {
     }
 
     @Test
-    fun shaderUsesBoxLowFrequencyAndSharedRgbGain() {
-        val downsample = PhotonDehazePipeline.DOWNSAMPLE_FRAGMENT_SHADER
-        val apply = PhotonDehazePipeline.APPLY_FRAGMENT_SHADER
+    fun shaderUsesGpuResidentSharedHistogramAndSharedRgbGain() {
+        val histogram = PhotonDehazePipeline.HISTOGRAM_COMPUTE_SHADER
+        val curve = PhotonDehazePipeline.CURVE_COMPUTE_SHADER
+        val apply = PhotonDehazePipeline.APPLY_COMPUTE_SHADER
 
-        assertTrue(downsample.contains("sourceBase = outputPosition * 8"))
-        assertTrue(downsample.contains("texelFetch(uLinearRgb"))
+        assertTrue(histogram.contains("layout(local_size_x = 128, local_size_y = 1)"))
+        assertTrue(histogram.contains("shared vec4 sharedLinearRgb[512]"))
+        assertTrue(histogram.contains("sharedHazeBins[previous] == hazeBin"))
+        assertTrue(histogram.contains("atomicAdd(histogram.hazeHistogram"))
+        assertTrue(histogram.contains("atomicAdd(histogram.highlightHistogram"))
+        assertTrue(curve.contains("index < 5251 && nextHighlight < 5"))
+        assertTrue(curve.contains("index < 877 && nextHaze < 20"))
+        assertTrue(apply.contains("imageStore("))
         assertTrue(apply.contains("(rgb.r + rgb.g + rgb.b) * (1.0 / 3.0)"))
         assertTrue(apply.contains("rgb * gain"))
         assertTrue(!apply.contains("pow("))

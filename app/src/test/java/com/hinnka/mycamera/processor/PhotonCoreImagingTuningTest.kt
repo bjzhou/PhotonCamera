@@ -15,9 +15,6 @@ class PhotonCoreImagingTuningTest {
                 outlierRejectionScale = PhotonPyramidScales(2f, 3f, 4f, 5f, 6f),
                 chromaStrengthScale = PhotonPyramidScales(5f, 4f, 3f, 2f, 1f),
             ),
-            sharpen = PhotonSharpenTuning(
-                snrInterpolationScale = PhotonFrequencyScales(0.5f, 1f, 1.5f),
-            ),
         )
 
         assertArrayEquals(
@@ -28,11 +25,6 @@ class PhotonCoreImagingTuningTest {
         assertArrayEquals(
             floatArrayOf(6f, 7f, 8f, 9f, 10f),
             tuning.denoise.detailReconstructionScale.toFloatArray(),
-            0f,
-        )
-        assertArrayEquals(
-            floatArrayOf(0.5f, 1f, 1.5f),
-            tuning.sharpen.snrInterpolationScale.toFloatArray(),
             0f,
         )
     }

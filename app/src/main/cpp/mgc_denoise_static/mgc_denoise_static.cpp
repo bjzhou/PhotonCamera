@@ -137,13 +137,6 @@ using YuvToRgbFn = int (*)(
     void*,
     HalideBuffer*,
     HalideBuffer*);
-using SharpenTo16BitFn = int (*)(
-    void*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    float);
 using MeasureMoireFn = int (*)(
     void*,
     HalideBuffer*,
@@ -260,13 +253,6 @@ extern "C" int photon_mgc_yuv_to_rgb_s16(
     void*,
     HalideBuffer*,
     HalideBuffer*);
-extern "C" int photon_mgc_sharpen_to_16_bit_halide(
-    void*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    float);
 extern "C" int photon_mgc_measure_moire_s16_halide(
     void*,
     HalideBuffer*,
@@ -1762,176 +1748,6 @@ int RunYuvToRgb(
     const auto function = reinterpret_cast<YuvToRgbFn>(
         &photon_mgc_yuv_to_rgb_s16);
     return function(nullptr, &input_buffer, &output_buffer);
-}
-
-bool BuildDefaultSharpenCurves(
-    float snr,
-    const float interpolation_scales[3],
-    SharpenCurveSelection* output) {
-    if (output == nullptr || interpolation_scales == nullptr ||
-        !std::isfinite(snr) || snr <= 0.0f ||
-        !std::all_of(
-            interpolation_scales,
-            interpolation_scales + 3,
-            [](float value) { return std::isfinite(value); })) {
-        return false;
-    }
-    std::fill_n(output->relative_corner_acutance_correction, 3, 0.0f);
-
-    struct Node {
-        float snr;
-        float parameters[3][5];
-    };
-    // Decoded mechanically from MGC 9.6.080's generic
-    // sharpen_default.binarypb asset. BuildForSNR converts each node to
-    // piecewise points first, then interpolates those converted points.
-    constexpr Node nodes[] = {
-        {5.0f, {{1.6f, 0.05f, 1.0f, 1.0f, 0.0f},
-                {1.8f, 0.03f, 1.0f, 1.0f, 0.0f},
-                {1.2f, 0.02f, 1.0f, 1.0f, 0.0f}}},
-        {10.0f, {{2.5f, 0.05f, 1.0f, 1.0f, 0.0f},
-                 {2.2f, 0.03f, 1.0f, 1.0f, 0.0f},
-                 {1.3f, 0.02f, 1.0f, 1.0f, 0.0f}}},
-        {20.0f, {{3.2f, 0.05f, 1.0f, 1.0f, 0.0f},
-                 {2.6f, 0.03f, 1.0f, 1.0f, 0.0f},
-                 {1.4f, 0.02f, 1.0f, 1.0f, 0.0f}}},
-        {40.0f, {{5.2f, 0.02f, 1.0f, 1.0f, 0.0f},
-                 {2.1f, 0.02f, 1.0f, 1.0f, 0.0f},
-                 {1.4f, 0.02f, 1.0f, 1.0f, 0.0f}}},
-        {80.0f, {{4.7f, 0.02f, 1.0f, 1.0f, 0.0f},
-                 {2.1f, 0.02f, 1.0f, 1.0f, 0.0f},
-                 {1.4f, 0.02f, 1.0f, 1.0f, 0.0f}}},
-    };
-    const Node* lower = &nodes[0];
-    const Node* upper = &nodes[0];
-    if (snr >= nodes[std::size(nodes) - 1].snr) {
-        lower = upper = &nodes[std::size(nodes) - 1];
-    } else if (snr > nodes[0].snr) {
-        for (size_t index = 1; index < std::size(nodes); ++index) {
-            if (snr <= nodes[index].snr) {
-                lower = &nodes[index - 1];
-                upper = &nodes[index];
-                break;
-            }
-        }
-    }
-    const float interpolation = lower == upper
-        ? 0.0f
-        : (snr - lower->snr) / (upper->snr - lower->snr);
-
-    const auto convert = [](const float parameters[5], float points[2][5]) {
-        const float gain = parameters[0];
-        const float first_x = parameters[1];
-        const float second_x = parameters[2];
-        const float transition_width = parameters[3];
-        const float transition_mix = parameters[4];
-        points[0][0] = 0.0f;
-        points[1][0] = 0.0f;
-        points[0][1] = first_x;
-        const float initial_gain = gain >= 1.0f
-            ? std::max(gain * 0.5f, 1.0f)
-            : std::min(gain * 2.0f, 1.0f);
-        points[1][1] = initial_gain * first_x;
-        points[0][2] = second_x;
-        points[1][2] = gain * second_x;
-        points[0][3] = second_x + transition_width;
-        points[1][3] =
-            transition_mix *
-                ((gain * second_x - second_x) +
-                 (second_x + transition_width)) +
-            (second_x + transition_width) * (1.0f - transition_mix);
-        points[0][4] = points[0][3] + 1.0f;
-        points[1][4] = points[1][3] + 1.0f;
-    };
-
-    for (int frequency = 0; frequency < 3; ++frequency) {
-        // Photon exposes one independent interpolation scale per sharpening frequency group.
-        const float frequency_interpolation =
-            interpolation * interpolation_scales[frequency];
-        float lower_points[2][5] = {};
-        float upper_points[2][5] = {};
-        convert(lower->parameters[frequency], lower_points);
-        convert(upper->parameters[frequency], upper_points);
-        for (int coordinate = 0; coordinate < 2; ++coordinate) {
-            for (int point = 0; point < 5; ++point) {
-                const float lower_value = lower_points[coordinate][point];
-                const float upper_value = upper_points[coordinate][point];
-                output->curves[
-                    point + 5 * frequency + 15 * coordinate] =
-                    lower_value * (1.0f - frequency_interpolation) +
-                    upper_value * frequency_interpolation;
-            }
-        }
-    }
-    output->lower_snr = lower->snr;
-    output->upper_snr = upper->snr;
-    output->interpolation = interpolation;
-    return true;
-}
-
-int RunSharpenTo16Bit(
-    const int16_t* input_yuv,
-    int width,
-    int height,
-    const float curves[30],
-    const float relative_corner_acutance_correction[3],
-    float sharpen_attenuation_scale,
-    uint16_t* output_interleaved_rgb) {
-    if (input_yuv == nullptr || curves == nullptr ||
-        relative_corner_acutance_correction == nullptr ||
-        output_interleaved_rgb == nullptr || width <= 0 || height <= 0 ||
-        !std::isfinite(sharpen_attenuation_scale)) {
-        return -1;
-    }
-    const int pixel_count = width * height;
-    const HalideDimension input_dimensions[] = {
-        {0, width, 1, 0},
-        {0, height, width, 0},
-        {0, 3, pixel_count, 0},
-    };
-    const HalideDimension curve_dimensions[] = {
-        {0, 1, 1, 0},
-        {0, 5, 1, 0},
-        {0, 3, 5, 0},
-        {0, 2, 15, 0},
-    };
-    const HalideDimension correction_dimensions[] = {
-        {0, 3, 1, 0},
-    };
-    const HalideDimension output_dimensions[] = {
-        {0, width, 3, 0},
-        {0, height, width * 3, 0},
-        {0, 3, 1, 0},
-    };
-    HalideBuffer input_buffer = MakeBuffer(
-        const_cast<int16_t*>(input_yuv),
-        {0, 16, 1},
-        3,
-        input_dimensions);
-    HalideBuffer curve_buffer = MakeBuffer(
-        const_cast<float*>(curves),
-        {2, 32, 1},
-        4,
-        curve_dimensions);
-    HalideBuffer correction_buffer = MakeBuffer(
-        const_cast<float*>(relative_corner_acutance_correction),
-        {2, 32, 1},
-        1,
-        correction_dimensions);
-    HalideBuffer output_buffer = MakeBuffer(
-        output_interleaved_rgb,
-        {1, 16, 1},
-        3,
-        output_dimensions);
-    const auto function = reinterpret_cast<SharpenTo16BitFn>(
-        &photon_mgc_sharpen_to_16_bit_halide);
-    return function(
-        nullptr,
-        &input_buffer,
-        &curve_buffer,
-        &correction_buffer,
-        &output_buffer,
-        sharpen_attenuation_scale);
 }
 
 }  // namespace photon::mgc_denoise

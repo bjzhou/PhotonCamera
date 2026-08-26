@@ -581,6 +581,7 @@ class PhotoProcessor(
         val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
             context = context,
             dngFilePath = dngPath,
+            includeHdrReference = true,
             aspectRatio = resolveRawAspectRatio(metadata),
             cropRegion = metadata.cropRegion,
             rotation = metadata.rotation,

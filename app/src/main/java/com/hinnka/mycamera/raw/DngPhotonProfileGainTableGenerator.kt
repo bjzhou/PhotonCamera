@@ -260,11 +260,7 @@ internal object DngPhotonProfileGainTableGenerator {
             PLog.e(TAG, "GPU Photon HDR gain count=${gains.size}, expected=$expected")
             return null
         }
-        if (gains.any { !it.isFinite() || it <= 0f }) {
-            PLog.e(TAG, "GPU Photon HDR contains a non-finite or non-positive gain")
-            return null
-        }
-        return DngProfileGainTableMap(
+        val map = DngProfileGainTableMap(
             mapPointsV = plan.grid.mapPointsV,
             mapPointsH = plan.grid.mapPointsH,
             mapSpacingV = plan.grid.mapSpacingV,
@@ -277,6 +273,11 @@ internal object DngPhotonProfileGainTableGenerator {
             gains = gains,
             sourceTag = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2,
         )
+        if (!map.isValid) {
+            PLog.e(TAG, "GPU Photon HDR produced an invalid ProfileGainTableMap")
+            return null
+        }
+        return map
     }
 
     data class DiagnosticBand(

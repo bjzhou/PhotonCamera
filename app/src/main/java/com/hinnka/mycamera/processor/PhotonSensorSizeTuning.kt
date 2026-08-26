@@ -112,13 +112,6 @@ object PhotonSensorSizeTuning {
                     ),
                 ),
             ),
-            sharpen = PhotonSharpenTuning(
-                snrInterpolationScale = PhotonFrequencyScales(
-                    low = 0.3671875f,
-                    medium = 0.3671875f,
-                    high = 0f,
-                ),
-            ),
             // Dehaze is intentionally independent from sensor-area fitting and remains at its
             // hidden global default.
             dehaze = PhotonDehazeTuning.DEFAULT,

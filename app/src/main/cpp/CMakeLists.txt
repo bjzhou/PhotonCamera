@@ -113,41 +113,6 @@ set_source_files_properties(
 )
 
 set(
-    MGC_SHARPEN_CAPSULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_sharpen_capsule.bin"
-)
-set(
-    MGC_SHARPEN_CAPSULE_SHA256
-    "733065cfec32ac752cc2088ea284b44a55b24a6171e5829f6971dcb098b1d7ce"
-)
-if(NOT EXISTS "${MGC_SHARPEN_CAPSULE}")
-    message(
-        FATAL_ERROR
-        "MGC SharpenTo16Bit capsule is missing; regenerate it with "
-        "scripts/research/generate_mgc_sharpen_static_asm.py"
-    )
-endif()
-file(SHA256 "${MGC_SHARPEN_CAPSULE}" MGC_SHARPEN_CAPSULE_ACTUAL_SHA256)
-if(NOT MGC_SHARPEN_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_SHARPEN_CAPSULE_SHA256)
-    message(FATAL_ERROR "MGC SharpenTo16Bit capsule hash mismatch")
-endif()
-set(
-    MGC_SHARPEN_ASM
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_sharpen_static.S"
-)
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_sharpen_static.S.in"
-    "${MGC_SHARPEN_ASM}"
-    @ONLY
-)
-set_source_files_properties(
-    "${MGC_SHARPEN_ASM}"
-    PROPERTIES
-    GENERATED TRUE
-    OBJECT_DEPENDS "${MGC_SHARPEN_CAPSULE}"
-)
-
-set(
     MGC_SPATIAL_RGB_CAPSULE
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_spatial_rgb_merge_capsule.bin"
 )
@@ -265,6 +230,7 @@ target_link_libraries(
 add_library(my-native-lib SHARED 
     native-lib.cpp
     dng_hdrnet_pgtm_jni.cpp
+    raw_signal_stats_jni.cpp
     mgc_strength_map_scaler.cpp
     jpeg_export_jni.cpp
     jpeg_r_encoder.cpp
@@ -275,12 +241,10 @@ add_library(my-native-lib SHARED
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
     mgc_denoise_static/mgc_sabre_resolve_jni.cpp
     mgc_denoise_static/mgc_spatial_rgb_merge_jni.cpp
-    mgc_denoise_static/mgc_sharpen_jni.cpp
     mgc_denoise_static/mgc_spatial_strength_jni.cpp
     "${MGC_DENOISE_ASM}"
     "${MGC_DEMOIRE_ASM}"
     "${MGC_SABRE_ASM}"
-    "${MGC_SHARPEN_ASM}"
     "${MGC_SPATIAL_RGB_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
@@ -302,17 +266,18 @@ set_source_files_properties(
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
 
-# FinishRaw builds the sharpen curves with scalar IEEE float interpolation.
-# Keep the host-side curve builder independent of the target-wide fast-math flags.
+# RAW signal statistics define MGC's physical tuning coordinate, while PGTM validation must
+# reliably reject non-finite values. Keep both independent of target-wide fast-math.
 set_source_files_properties(
-    mgc_denoise_static/mgc_denoise_static.cpp
+    raw_signal_stats_jni.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
 
-# Preserve MGC's scalar matrix and nearest-even U12 boundary conversion exactly.
+# MGC host-side tuning and noise-model builders rely on scalar IEEE behavior.
+# Keep them independent of the target-wide fast-math flags.
 set_source_files_properties(
-    mgc_denoise_static/mgc_sharpen_jni.cpp
+    mgc_denoise_static/mgc_denoise_static.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

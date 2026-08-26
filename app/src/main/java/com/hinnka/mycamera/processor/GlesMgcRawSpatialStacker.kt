@@ -1826,7 +1826,6 @@ internal class GlesMgcRawSpatialStacker(
                     ::mapSpatialStrengthToOutputCoordinates,
                 ),
                 mgcDenoiseTuningSnr = finishRawDenoiseSnr,
-                mgcSharpenTuningSnr = bayerKernelTuning.referenceSnr,
                 mgcSharpenAttenuationScale = finishRawSharpenAttenuationScale,
                 coreImagingTuning = coreImagingTuning,
                 mgcSpatialReferenceOnlyDiagnostic = referenceOnly,
@@ -2419,7 +2418,6 @@ internal class GlesMgcRawSpatialStacker(
                 mergedFrameCount = frames.size,
                 mgcSabreNoiseModelScale = sabreNoiseModelScale,
                 mgcDenoiseTuningSnr = finishRawDenoiseSnr,
-                mgcSharpenTuningSnr = kernelTuning.referenceSnr,
                 mgcSharpenAttenuationScale = sabreResolveParameters.demosaicSharpness,
                 coreImagingTuning = coreImagingTuning,
             )

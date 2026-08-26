@@ -14,7 +14,6 @@ metadata，支持 RAW 重处理复现。面积模型及标定方法见
 | --- | --- | --- |
 | 多帧融合 | `PhotonFusionTuning` | Sabre frame merge、参考帧 SNR、融合后噪声相关性 |
 | 空域降噪 | `PhotonDenoiseTuning` | 全分辨率 luma/chroma 金字塔、细节重建、离群点抑制 |
-| 锐化 | `PhotonSharpenTuning` | 低/中/高频三组锐化曲线的 SNR 自适应幅度 |
 | 除雾 | `PhotonDehazeTuning` | 独立低频线性 RGB 统计、雾幕曲线和动态高光调整 |
 
 ## 多帧融合
@@ -63,13 +62,9 @@ metadata，支持 RAW 重处理复现。面积模型及标定方法见
 
 ## 锐化
 
-`PhotonSharpenTuning.snrInterpolationScale` 是 `PhotonFrequencyScales`：
-
-- `low`
-- `medium`
-- `high`
-
-三个值独立缩放相应频率组的 SNR interpolation amount，范围 `0..16`，默认均为 `1`。它决定自适应锐化曲线如何随 SNR 变化；RAW sharpening 总强度仍由现有用户强度控制。
+最终锐化不再属于 `PhotonCoreImagingTuning`。RAW 输出保持在 GLES 管线中，以 9-tap 可分离亮度
+模糊构建自适应 USM；用户 sharpening 滑杆决定总强度，MGC 多帧合成产生的 attenuation 只缩放该
+GPU 强度。锐化不读取 SNR，不触发 RAW 像素统计或 GPU→CPU 回读。
 
 ## 除雾
 

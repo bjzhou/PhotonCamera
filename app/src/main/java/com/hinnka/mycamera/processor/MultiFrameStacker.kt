@@ -140,9 +140,7 @@ data class RawStackResult(
      * This is the linear signal-domain SNR, not ISO or sensor gain.
      */
     val mgcDenoiseTuningSnr: Float? = null,
-    /** Reference-frame SNR used by MGC FinishRaw to select the sharpen curves. */
-    val mgcSharpenTuningSnr: Float? = null,
-    /** Exact FinishRaw sharpen_attenuation_scale generated from the reference-frame TET. */
+    /** MGC-derived attenuation applied to Photon's final GLES sharpen strength. */
     val mgcSharpenAttenuationScale: Float? = null,
     /** Capture-scoped Photon controls for the core imaging chain. */
     val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,

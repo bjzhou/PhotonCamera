@@ -30,7 +30,7 @@ full-resolution denoise
   -> camera RGB to linear working RGB
   -> PhotonDehazePipeline
   -> DCP color map / engine tone / output transform
-  -> final sharpen
+  -> final GLES adaptive USM
 ```
 
 去雾不调用 HDR、高光滑杆、gamma、tone curve 或锐化实现。启用 DCP HueSatMap 时，LinearRcd
