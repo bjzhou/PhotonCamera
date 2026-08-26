@@ -180,31 +180,6 @@ object AppIcons {
             }
         }
 
-    val Bolt: ImageVector
-        get() {
-            _bolt?.let { return it }
-            return ImageVector.Builder(
-                name = "AppIcons.Bolt",
-                defaultWidth = 24f.dp,
-                defaultHeight = 24f.dp,
-                viewportWidth = 960f,
-                viewportHeight = 960f,
-                autoMirror = false,
-            ).apply {
-                group(
-                    translationY = 960f,
-                ) {
-                    addPath(
-                        pathData = addPathNodes("m320-80 40-280H160l360-520h80l-40 320h240L400-80h-80Z"),
-                        fill = SolidColor(Color.Black),
-                        pathFillType = PathFillType.NonZero,
-                    )
-                }
-            }.build().also {
-                _bolt = it
-            }
-        }
-
     val Bookmark: ImageVector
         get() {
             _bookmark?.let { return it }
@@ -1553,7 +1528,6 @@ private var _addPhotoAlternate: ImageVector? = null
 private var _article: ImageVector? = null
 private var _autoAwesome: ImageVector? = null
 private var _barChart: ImageVector? = null
-private var _bolt: ImageVector? = null
 private var _bookmark: ImageVector? = null
 private var _borderBottom: ImageVector? = null
 private var _burstMode: ImageVector? = null

@@ -1781,7 +1781,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val shouldDeleteSourceUri = metadata != null &&
                         !metadata.isImported &&
                         !sourceUri.isNullOrBlank() &&
-                        (metadata.mediaType == MediaType.VIDEO || metadata.captureMode == "quick_shot")
+                        metadata.mediaType == MediaType.VIDEO
                     if (shouldDeleteSourceUri) {
                         try {
                             allExportedUris.add(sourceUri.toUri())

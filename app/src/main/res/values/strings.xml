@@ -23,7 +23,6 @@
     <string name="unknown">Unknown</string>
     <string name="take_photo">Take Photo</string>
     <string name="capture_mode_photo">Photo</string>
-    <string name="capture_mode_quick_shot">Quick Shot</string>
     <string name="capture_mode_video">Video</string>
 
     <!-- Exposure Controls -->
@@ -43,8 +42,6 @@
     <string name="settings_custom_aspect_ratio_width">Width</string>
     <string name="settings_custom_aspect_ratio_height">Height</string>
     <string name="video_torch_chip">Torch</string>
-    <string name="quick_shot_resolution_title">Quick Shot Resolution</string>
-    <string name="quick_shot_resolution_full">Full</string>
     <string name="video_aspect_chip">Aspect</string>
     <string name="video_log_chip">Log</string>
     <string name="video_option_off">Off</string>

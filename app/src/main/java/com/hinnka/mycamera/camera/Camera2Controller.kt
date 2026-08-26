@@ -43,8 +43,6 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
-import com.hinnka.mycamera.video.QuickShotCapabilitiesResolver
-import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
@@ -1921,37 +1919,6 @@ class Camera2Controller(private val context: Context) {
         return snapshot.previewSize
     }
 
-    private fun refreshQuickShotCapabilities(characteristics: CameraCharacteristics? = null): Size {
-        val openCameraId = getCurrentOpenCameraId()
-        if (openCameraId.isEmpty()) {
-            return _state.value.currentPreviewSize
-        }
-
-        val resolvedCharacteristics = characteristics
-            ?: getCameraCharacteristicsOrNull(openCameraId, "quick-shot capabilities")
-        if (resolvedCharacteristics == null) {
-            PLog.e(TAG, "Failed to load quick-shot capabilities")
-            return _state.value.currentPreviewSize
-        }
-
-        val snapshot = QuickShotCapabilitiesResolver.resolve(
-            characteristics = resolvedCharacteristics,
-            requestedConfig = _state.value.quickShotConfig,
-            aspectRatio = _state.value.aspectRatio
-        )
-
-        _state.value = _state.value.copy(
-            quickShotConfig = snapshot.config,
-            quickShotCapabilities = snapshot.capabilities,
-            currentPreviewSize = if (_state.value.captureMode == CaptureMode.QUICK_SHOT) {
-                snapshot.previewSize
-            } else {
-                _state.value.currentPreviewSize
-            }
-        )
-        return snapshot.previewSize
-    }
-
     private fun startVideoRecordingTicker() {
         stopVideoRecordingTicker()
         videoRecordingStartElapsedMs = SystemClock.elapsedRealtime()
@@ -2184,10 +2151,8 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 val resolvedVideoPreviewSize = refreshVideoCapabilities(openCharacteristics)
-                val resolvedQuickShotPreviewSize = refreshQuickShotCapabilities(openCharacteristics)
                 previewSize = when (captureMode) {
                     CaptureMode.VIDEO -> resolvedVideoPreviewSize
-                    CaptureMode.QUICK_SHOT -> resolvedQuickShotPreviewSize
                     CaptureMode.PHOTO -> CameraUtils.getFixedPreviewSize(openCharacteristics, _state.value.aspectRatio)
                 }
                 surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
@@ -2232,9 +2197,7 @@ class Camera2Controller(private val context: Context) {
                         awbTemperatureMin = resolveAwbTemperatureRange().lower,
                         awbTemperatureMax = resolveAwbTemperatureRange().upper,
                         currentPreviewSize = previewSize,
-                        currentCaptureSize = if (
-                            captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.QUICK_SHOT
-                        ) {
+                        currentCaptureSize = if (captureMode == CaptureMode.VIDEO) {
                             previewSize
                         } else {
                             currentState.currentCaptureSize
@@ -3668,7 +3631,7 @@ class Camera2Controller(private val context: Context) {
             return CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
         }
 
-        val preferredModes = if (captureMode == CaptureMode.VIDEO || captureMode == CaptureMode.QUICK_SHOT) {
+        val preferredModes = if (captureMode == CaptureMode.VIDEO) {
             intArrayOf(
                 CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
                 CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
@@ -6008,9 +5971,6 @@ class Camera2Controller(private val context: Context) {
      */
     fun setAspectRatio(ratio: AspectRatio) {
         _state.value = _state.value.copy(aspectRatio = ratio)
-        if (_state.value.captureMode == CaptureMode.QUICK_SHOT) {
-            refreshQuickShotCapabilities()
-        }
     }
 
     /**
@@ -6056,11 +6016,6 @@ class Camera2Controller(private val context: Context) {
         if (mode == CaptureMode.VIDEO) {
             livePhotoRecorder.stopRecording()
             refreshVideoCapabilities()
-        } else if (mode == CaptureMode.QUICK_SHOT) {
-            livePhotoRecorder.stopRecording()
-            stopVideoRecordingTicker()
-            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
-            refreshQuickShotCapabilities()
         } else {
             stopVideoRecordingTicker()
             _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -6073,20 +6028,6 @@ class Camera2Controller(private val context: Context) {
     fun setVideoResolution(resolution: VideoResolutionPreset) {
         _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(resolution = resolution))
         refreshVideoCapabilities()
-    }
-
-    fun setQuickShotResolution(resolution: QuickShotResolutionPreset) {
-        _state.value = _state.value.copy(
-            quickShotConfig = _state.value.quickShotConfig.copy(resolution = resolution)
-        )
-        refreshQuickShotCapabilities()
-    }
-
-    fun setQuickShotCaptureState(isCapturing: Boolean, burstCapturing: Boolean = false) {
-        _state.value = _state.value.copy(
-            isCapturing = isCapturing,
-            burstCapturing = burstCapturing
-        )
     }
 
     fun setVideoFps(fps: VideoFpsPreset) {
