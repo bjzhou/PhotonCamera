@@ -115,9 +115,6 @@ fun CameraTopSheet(
     videoAudioInputId: String,
     videoAudioInputOptions: List<VideoAudioInputOption>,
     onVideoAudioInputChange: (String) -> Unit,
-    quickShotResolution: QuickShotResolutionPreset,
-    quickShotCapabilities: QuickShotCapabilities,
-    onQuickShotResolutionChange: (QuickShotResolutionPreset) -> Unit,
     useRaw: Boolean,
     onRawToggle: (Boolean) -> Unit,
     isRawSupported: Boolean,
@@ -379,7 +376,7 @@ fun CameraTopSheet(
                         handleContentManagementAction(onPresetManageClick)
                     }
                 )
-            } else if (captureMode == CaptureMode.VIDEO) {
+            } else {
                 SectionLabel(title = stringResource(R.string.video_aspect_chip))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -543,56 +540,9 @@ fun CameraTopSheet(
                         }
                     }
                 }
-            } else {
-                SectionLabel(title = stringResource(R.string.aspect_ratio))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios).forEach { ratio ->
-                        val isSelected = aspectRatio == ratio
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (isSelected) Color(0xFFFF6B35) else Color.White.copy(
-                                        alpha = 0.12f
-                                    )
-                                )
-                                .clickable { onAspectRatioChange(ratio) },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = ratio.getDisplayName(),
-                                color = if (isSelected) Color.Black else Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MeteringModeQuickSetting(
-                        meteringMode = meteringMode,
-                        onMeteringModeChange = onMeteringModeChange,
-                        modifier = Modifier.weight(1f)
-                    )
-                    ToolboxQuickSetting(
-                        onToolboxClick = onToolboxClick,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
             }
 
-            if (captureMode != CaptureMode.PHOTO) {
+            if (captureMode == CaptureMode.VIDEO) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 ContentManagementQuickSetting(
@@ -911,14 +861,6 @@ private fun videoAspectRatioLabel(aspectRatio: VideoAspectRatio): String {
         VideoAspectRatio.RATIO_16_9 -> stringResource(R.string.video_aspect_16_9)
         VideoAspectRatio.RATIO_21_9 -> stringResource(R.string.video_aspect_21_9)
         VideoAspectRatio.OPEN_GATE -> stringResource(R.string.video_aspect_open_gate)
-    }
-}
-
-@Composable
-private fun quickShotResolutionLabel(resolution: QuickShotResolutionPreset): String {
-    return when (resolution) {
-        QuickShotResolutionPreset.FULL -> stringResource(R.string.quick_shot_resolution_full)
-        else -> resolution.displayName
     }
 }
 

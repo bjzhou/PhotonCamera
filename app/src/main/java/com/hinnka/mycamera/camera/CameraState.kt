@@ -4,8 +4,6 @@ import android.graphics.Rect
 import android.util.Range
 import android.util.Size
 import com.hinnka.mycamera.video.CaptureMode
-import com.hinnka.mycamera.video.QuickShotCapabilities
-import com.hinnka.mycamera.video.QuickShotConfig
 import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
 import com.hinnka.mycamera.video.VideoRecordingState
@@ -378,8 +376,6 @@ data class CameraState(
     val isP3Supported: Boolean = false,
     val currentDynamicRangeProfile: String = "STANDARD",
     val captureMode: CaptureMode = CaptureMode.PHOTO,
-    val quickShotConfig: QuickShotConfig = QuickShotConfig(),
-    val quickShotCapabilities: QuickShotCapabilities = QuickShotCapabilities(),
     val videoConfig: VideoConfig = VideoConfig(),
     val videoCapabilities: VideoCapabilities = VideoCapabilities(),
     val videoRecordingState: VideoRecordingState = VideoRecordingState(),
@@ -449,8 +445,7 @@ data class CameraState(
         val sensorRange = getShutterSpeedRange()
         val upper = when (captureMode) {
             CaptureMode.VIDEO -> sensorRange.upper.coerceAtMost(MAX_VIDEO_MANUAL_SHUTTER_SPEED_NS)
-            CaptureMode.PHOTO,
-            CaptureMode.QUICK_SHOT -> sensorRange.upper
+            CaptureMode.PHOTO -> sensorRange.upper
         }.coerceAtLeast(sensorRange.lower)
         return Range(sensorRange.lower, upper)
     }
@@ -458,8 +453,7 @@ data class CameraState(
     fun getPreviewExposureTimeLimitNs(): Long {
         return when (captureMode) {
             CaptureMode.VIDEO -> MAX_VIDEO_MANUAL_SHUTTER_SPEED_NS
-            CaptureMode.PHOTO,
-            CaptureMode.QUICK_SHOT -> MAX_PHOTO_PREVIEW_SHUTTER_SPEED_NS
+            CaptureMode.PHOTO -> MAX_PHOTO_PREVIEW_SHUTTER_SPEED_NS
         }
     }
 
@@ -503,7 +497,7 @@ data class CameraState(
 
     fun getPreviewAspectRatio(): Float {
         return when (captureMode) {
-            CaptureMode.PHOTO, CaptureMode.QUICK_SHOT -> aspectRatio.getValue(isLandscape = false)
+            CaptureMode.PHOTO -> aspectRatio.getValue(isLandscape = false)
             CaptureMode.VIDEO -> videoConfig.aspectRatio.getPortraitAspectRatio(
                 videoCapabilities.openGatePortraitAspectRatio
             )

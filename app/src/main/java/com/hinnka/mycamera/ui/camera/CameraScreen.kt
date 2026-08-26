@@ -79,7 +79,6 @@ import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.video.CaptureMode
-import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -554,10 +553,6 @@ fun CameraScreen(
     }
 
     fun animateZoomStopWithPreviewTransition(targetZoom: Float) {
-        if (state.captureMode != CaptureMode.PHOTO && state.captureMode != CaptureMode.VIDEO) {
-            setZoomWithPreviewTransition(targetZoom)
-            return
-        }
         if (viewModel.isVideoLensLocked() ||
             viewModel.isCurrentLensCustomZoomRatioStop(targetZoom)
         ) {
@@ -667,8 +662,7 @@ fun CameraScreen(
     ) {
         val canRevealInitialPreview =
             canStartShutterAnimation ||
-                state.captureMode == CaptureMode.VIDEO ||
-                state.captureMode == CaptureMode.QUICK_SHOT
+                state.captureMode == CaptureMode.VIDEO
         if (hasPlayedInitialPreviewTransition || !state.isPreviewActive || !canRevealInitialPreview) return@LaunchedEffect
         previewTransitionActive = true
         delay(InitialPreviewTransitionDelayMillis)
@@ -850,11 +844,6 @@ fun CameraScreen(
                 },
                 useLivePhoto = useLivePhoto,
                 onLivePhotoToggle = { viewModel.setUseLivePhoto(!state.useLivePhoto) },
-                quickShotConfig = state.quickShotConfig,
-                quickShotCapabilities = state.quickShotCapabilities,
-                onQuickShotResolutionClick = {
-                    cycleQuickShotResolution(state)?.let(viewModel::setQuickShotResolution)
-                },
                 videoConfig = state.videoConfig,
                 videoCapabilities = state.videoCapabilities,
                 onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
@@ -1606,9 +1595,6 @@ fun CameraScreen(
             videoAudioInputId = state.videoConfig.audioInputId,
             videoAudioInputOptions = videoAudioInputOptions,
             onVideoAudioInputChange = { viewModel.setVideoAudioInputId(it) },
-            quickShotResolution = state.quickShotConfig.resolution,
-            quickShotCapabilities = state.quickShotCapabilities,
-            onQuickShotResolutionChange = { runPreviewTransition { viewModel.setQuickShotResolution(it) } },
             useRaw = useRaw && state.isRawSupported,
             onRawToggle = { viewModel.setUseRaw(it) },
             isRawSupported = state.isRawSupported,
@@ -2014,10 +2000,9 @@ fun Controls(
                     isVideoRecording = state.videoRecordingState.isRecording,
                     isVideoProcessing = state.videoRecordingState.isProcessing,
                     isPaused = state.videoRecordingState.isPaused,
-                    allowLongPress = state.captureMode == CaptureMode.QUICK_SHOT ||
-                        (!naturalLightEnabled &&
-                            state.captureMode == CaptureMode.PHOTO &&
-                            !useMultipleExposure),
+                    allowLongPress = !naturalLightEnabled &&
+                        state.captureMode == CaptureMode.PHOTO &&
+                        !useMultipleExposure,
                     multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
                     multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
                             multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
@@ -2328,7 +2313,7 @@ private fun CaptureModeSwitcher(
 
     Box(
         modifier = Modifier
-            .width(148.dp)
+            .width(100.dp)
             .height(30.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(Color.White.copy(alpha = 0.12f))
@@ -2337,9 +2322,8 @@ private fun CaptureModeSwitcher(
         val knobWidth = 48.dp
         val knobOffset by animateDpAsState(
             targetValue = when (captureMode) {
-                CaptureMode.QUICK_SHOT -> 0.dp
-                CaptureMode.PHOTO -> 48.dp
-                CaptureMode.VIDEO -> 96.dp
+                CaptureMode.PHOTO -> 0.dp
+                CaptureMode.VIDEO -> 48.dp
             },
             animationSpec = tween(durationMillis = 220),
             label = "modeSwitcher"
@@ -2356,14 +2340,6 @@ private fun CaptureModeSwitcher(
             modifier = Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ModeSwitcherItem(
-                icon = AppIcons.Bolt,
-                selected = captureMode == CaptureMode.QUICK_SHOT,
-                enabled = enabled,
-                contentDescription = stringResource(R.string.capture_mode_quick_shot),
-                onClick = { onModeSelected(CaptureMode.QUICK_SHOT) },
-                modifier = Modifier.weight(1f)
-            )
             ModeSwitcherItem(
                 icon = AppIcons.CameraAlt,
                 selected = captureMode == CaptureMode.PHOTO,
@@ -2411,10 +2387,6 @@ private fun ModeSwitcherItem(
 
 private fun cycleVideoResolution(state: CameraState): VideoResolutionPreset? {
     return nextOption(state.videoConfig.resolution, state.videoCapabilities.availableResolutions)
-}
-
-private fun cycleQuickShotResolution(state: CameraState): QuickShotResolutionPreset? {
-    return nextOption(state.quickShotConfig.resolution, state.quickShotCapabilities.availableResolutions)
 }
 
 private fun cycleVideoFps(state: CameraState): VideoFpsPreset? {

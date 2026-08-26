@@ -41,7 +41,6 @@ import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import com.hinnka.mycamera.video.CaptureMode
-import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
@@ -231,7 +230,6 @@ data class UserPreferences(
     val useHlg10: Boolean = false,
     val hlgHardwareCompatibilityEnabled: Boolean = false,
     val useP3ColorSpace: Boolean = false,
-    val quickShotResolution: QuickShotResolutionPreset = QuickShotResolutionPreset.FHD_1080P,
     val videoResolution: VideoResolutionPreset = VideoResolutionPreset.FHD_1080P,
     val videoFps: VideoFpsPreset = VideoFpsPreset.FPS_30,
     val videoAspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
@@ -492,7 +490,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_HLG10 = booleanPreferencesKey("use_hlg10")
         private val HLG_HARDWARE_COMPATIBILITY_ENABLED = booleanPreferencesKey("hlg_hardware_compatibility_enabled")
         private val USE_P3_COLOR_SPACE = booleanPreferencesKey("use_p3_color_space")
-        private val QUICK_SHOT_RESOLUTION = stringPreferencesKey("quick_shot_resolution")
         private val VIDEO_RESOLUTION = stringPreferencesKey("video_resolution")
         private val VIDEO_FPS = stringPreferencesKey("video_fps")
         private val VIDEO_ASPECT_RATIO = stringPreferencesKey("video_aspect_ratio")
@@ -589,7 +586,9 @@ class UserPreferencesRepository(private val context: Context) {
             }
             val useRawMaxHdrComposition = rawMaxSpatialMode == MgcRawMaxMode.SPATIAL
             UserPreferences(
-                captureMode = CaptureMode.valueOf(preferences[CAPTURE_MODE] ?: CaptureMode.PHOTO.name),
+                captureMode = CaptureMode.entries.firstOrNull {
+                    it.name == preferences[CAPTURE_MODE]
+                } ?: CaptureMode.PHOTO,
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
                 topSheetAspectRatios = parseTopSheetAspectRatios(
                     preferences[TOP_SHEET_ASPECT_RATIOS],
@@ -778,11 +777,6 @@ class UserPreferencesRepository(private val context: Context) {
                 useHlg10 = preferences[USE_HLG10] ?: false,
                 hlgHardwareCompatibilityEnabled = preferences[HLG_HARDWARE_COMPATIBILITY_ENABLED] ?: false,
                 useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
-                quickShotResolution = runCatching {
-                    QuickShotResolutionPreset.valueOf(
-                        preferences[QUICK_SHOT_RESOLUTION] ?: QuickShotResolutionPreset.FHD_1080P.name
-                    )
-                }.getOrDefault(QuickShotResolutionPreset.FHD_1080P),
                 videoResolution = VideoResolutionPreset.valueOf(
                     preferences[VIDEO_RESOLUTION] ?: VideoResolutionPreset.FHD_1080P.name
                 ),
@@ -2187,12 +2181,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseP3ColorSpace(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_P3_COLOR_SPACE] = enabled
-        }
-    }
-
-    suspend fun saveQuickShotResolution(resolution: QuickShotResolutionPreset) {
-        context.dataStore.edit { preferences ->
-            preferences[QUICK_SHOT_RESOLUTION] = resolution.name
         }
     }
 

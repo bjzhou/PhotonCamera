@@ -11,7 +11,6 @@ class VideoRecordingLockPolicyTest {
 
         assertFalse(config.shouldLockLens(CaptureMode.VIDEO, isRecording = false))
         assertFalse(config.shouldLockLens(CaptureMode.PHOTO, isRecording = true))
-        assertFalse(config.shouldLockLens(CaptureMode.QUICK_SHOT, isRecording = true))
         assertTrue(config.shouldLockLens(CaptureMode.VIDEO, isRecording = true))
     }
 
@@ -21,7 +20,6 @@ class VideoRecordingLockPolicyTest {
 
         assertFalse(config.shouldLockWhiteBalance(CaptureMode.VIDEO, isRecording = false))
         assertFalse(config.shouldLockWhiteBalance(CaptureMode.PHOTO, isRecording = true))
-        assertFalse(config.shouldLockWhiteBalance(CaptureMode.QUICK_SHOT, isRecording = true))
         assertTrue(config.shouldLockWhiteBalance(CaptureMode.VIDEO, isRecording = true))
     }
 

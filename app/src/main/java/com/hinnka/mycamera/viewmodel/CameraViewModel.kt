@@ -89,7 +89,6 @@ import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.ui.camera.ZoomDisplayMode
 import com.hinnka.mycamera.utils.*
 import com.hinnka.mycamera.video.CaptureMode
-import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAudioInputManager
 import com.hinnka.mycamera.video.VideoAudioInputOption
 import com.hinnka.mycamera.video.VideoAspectRatio
@@ -106,7 +105,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -522,7 +520,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private const val HDR_BRACKET_FRAME_COUNT = 3
         private const val HDR_BRACKET_ZERO_INDEX = 0
         private const val HDR_BRACKET_LOW_INDEX = 2
-        private const val QUICK_SHOT_BURST_MAX_PENDING_SAVES = 2
         private const val FIRST_PREVIEW_PREWARM_GRACE_MS = 1_000L
         private const val MIN_PREWARM_MEMORY_CLASS_MB = 384
         private const val EYE_FOCUS_MOVE_THRESHOLD = 0.035f
@@ -1904,9 +1901,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var burstPhotoId: String? = null
     var burstImageCount by mutableStateOf(0)
         private set
-    private var quickShotBurstActive = false
-    private var quickShotBurstCaptureInFlight = false
-    private val quickShotBurstPendingSaves = AtomicInteger(0)
 
     var showGhostPermissions by mutableStateOf(false)
 
@@ -2165,9 +2159,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (currentCameraState.customVendorKeySettings != it.customVendorKeySettings) {
                     cameraController.setCustomVendorKeySettings(it.customVendorKeySettings)
                 }
-                if (currentCameraState.quickShotConfig.resolution != it.quickShotResolution) {
-                    cameraController.setQuickShotResolution(it.quickShotResolution)
-                }
                 // 同步 RAW 设置到相机控制器
                 val multipleExposureEnabled = it.useMultipleExposure
                 val effectiveUseRaw = it.useRaw && !multipleExposureEnabled
@@ -2379,7 +2370,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     // 如果保存的值无效，使用默认值
                 }
                 cameraController.setCaptureMode(prefs.captureMode)
-                cameraController.setQuickShotResolution(prefs.quickShotResolution)
                 cameraController.setVideoResolution(prefs.videoResolution)
                 cameraController.setVideoFps(prefs.videoFps)
                 cameraController.setVideoAspectRatio(prefs.videoAspectRatio)
@@ -3349,11 +3339,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun capture() {
-        if (state.value.captureMode == CaptureMode.QUICK_SHOT) {
-            captureQuickShot()
-            return
-        }
-
         if (state.value.captureMode == CaptureMode.VIDEO) {
             if (state.value.videoRecordingState.isProcessing) {
                 return
@@ -3462,72 +3447,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } ?: PLog.w(TAG, "captureVideoFrame skipped: glSurfaceView unavailable")
     }
 
-    private fun captureQuickShot() {
-        val currentState = state.value
-        if (currentState.captureMode != CaptureMode.QUICK_SHOT || currentState.isCapturing) {
-            return
-        }
-
-        updateCaptureLocation()
-
-        if (isShutterSoundEnabled) {
-            shutterSoundPlayer.play()
-        }
-        if (isVibrationEnabled) {
-            vibrationHelper.vibrate()
-        }
-
-        val glView = glSurfaceView
-        if (glView == null) {
-            PLog.w(TAG, "captureQuickShot skipped: glSurfaceView unavailable")
-            return
-        }
-
-        cameraController.setQuickShotCaptureState(isCapturing = true)
-        val quickShotRotation = capturePreviewThumbnailRotation()
-        glView.capturePreviewFrame(quickShotCaptureLongEdge()) { bitmap ->
-            cameraController.setQuickShotCaptureState(isCapturing = false)
-            viewModelScope.launch {
-                var bitmapToSave = bitmap
-                try {
-                    bitmapToSave = rotatePreviewBitmapForCapture(bitmap, quickShotRotation)
-                    savePreviewBitmapCapture(
-                        bitmap = bitmapToSave,
-                        metadataCaptureMode = "quick_shot",
-                        ratio = state.value.aspectRatio,
-                        storeRenderedLookMetadata = false
-                    )
-                } finally {
-                    if (!bitmapToSave.isRecycled) {
-                        bitmapToSave.recycle()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun updateCaptureLocation() {
-        if (userPreferences.value.saveLocation) {
-            val location = locationManager.getCurrentLocation()
-            cameraController.setLocation(location?.latitude, location?.longitude)
-        } else {
-            cameraController.setLocation(null, null)
-        }
-    }
-
-    private fun quickShotCaptureLongEdge(): Int {
-        val previewSize = state.value.currentPreviewSize
-        return maxOf(previewSize.width, previewSize.height).coerceAtLeast(1)
-    }
-
     /**
      * 开始连拍
      */
     fun startContinuousCapture() {
-        if (state.value.captureMode == CaptureMode.QUICK_SHOT) {
-            startQuickShotBurst()
-            return
-        }
         if (naturalLightEnabled.value) {
             PLog.d(TAG, "Continuous photo burst disabled while Natural Light tone map is active")
             return
@@ -3550,10 +3473,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 停止连拍
      */
     fun stopContinuousCapture() {
-        if (state.value.captureMode == CaptureMode.QUICK_SHOT) {
-            stopQuickShotBurst()
-            return
-        }
         if (state.value.useRaw && state.value.isRawSupported) return
         cameraController.stopBurstCapture()
         shutterSoundPlayer.stopBurst()
@@ -3561,80 +3480,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _imageSavedEvent.emit(Unit)
         }
     }
-
-    private fun startQuickShotBurst() {
-        if (quickShotBurstActive) return
-        updateCaptureLocation()
-        generateThumbnail()
-        burstImages.clear()
-        burstImageCount = 0
-        burstPhotoId = UUID.randomUUID().toString()
-        quickShotBurstPendingSaves.set(0)
-        quickShotBurstCaptureInFlight = false
-        quickShotBurstActive = true
-        cameraController.setQuickShotCaptureState(isCapturing = true, burstCapturing = true)
-        if (isShutterSoundEnabled) {
-            shutterSoundPlayer.playBurst()
-        }
-        requestNextQuickShotBurstFrame()
-    }
-
-    private fun stopQuickShotBurst() {
-        if (!quickShotBurstActive && !state.value.burstCapturing) return
-        quickShotBurstActive = false
-        quickShotBurstCaptureInFlight = false
-        cameraController.setQuickShotCaptureState(isCapturing = false, burstCapturing = false)
-        shutterSoundPlayer.stopBurst()
-        burstImageCount = 0
-        viewModelScope.launch {
-            _imageSavedEvent.emit(Unit)
-        }
-    }
-
-    private fun requestNextQuickShotBurstFrame() {
-        if (!quickShotBurstActive || quickShotBurstCaptureInFlight) return
-        val glView = glSurfaceView ?: run {
-            PLog.w(TAG, "Quick-shot burst stopped: glSurfaceView unavailable")
-            stopQuickShotBurst()
-            return
-        }
-        quickShotBurstCaptureInFlight = true
-        val quickShotRotation = capturePreviewThumbnailRotation()
-        glView.captureNextPreviewFrame(quickShotCaptureLongEdge()) { bitmap ->
-            quickShotBurstCaptureInFlight = false
-            if (!quickShotBurstActive) {
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
-                }
-                return@captureNextPreviewFrame
-            }
-
-            val pendingSaveCount = quickShotBurstPendingSaves.incrementAndGet()
-            if (pendingSaveCount > QUICK_SHOT_BURST_MAX_PENDING_SAVES) {
-                quickShotBurstPendingSaves.decrementAndGet()
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
-                }
-                PLog.w(TAG, "Quick-shot burst frame dropped: pendingSaves=$pendingSaveCount")
-                requestNextQuickShotBurstFrame()
-                return@captureNextPreviewFrame
-            }
-
-            burstImageCount++
-            viewModelScope.launch {
-                try {
-                    saveQuickShotBurstFrame(bitmap, quickShotRotation)
-                } finally {
-                    if (!bitmap.isRecycled) {
-                        bitmap.recycle()
-                    }
-                    quickShotBurstPendingSaves.decrementAndGet()
-                }
-            }
-            requestNextQuickShotBurstFrame()
-        }
-    }
-
 
     /**
      * 切换摄像头（前后置切换）
@@ -3847,14 +3692,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reopenCamera()
         viewModelScope.launch {
             userPreferencesRepository.saveVideoResolution(resolution)
-        }
-    }
-
-    fun setQuickShotResolution(resolution: QuickShotResolutionPreset) {
-        cameraController.setQuickShotResolution(resolution)
-        reopenCamera()
-        viewModelScope.launch {
-            userPreferencesRepository.saveQuickShotResolution(resolution)
         }
     }
 
@@ -5845,16 +5682,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         savePreviewBitmapCapture(
             bitmap = bitmap,
             metadataCaptureMode = "video_snapshot",
-            ratio = mapVideoAspectRatioToPhotoAspectRatio(state.value.videoConfig.aspectRatio),
-            storeRenderedLookMetadata = true
+            ratio = mapVideoAspectRatioToPhotoAspectRatio(state.value.videoConfig.aspectRatio)
         )
     }
 
     private suspend fun savePreviewBitmapCapture(
         bitmap: Bitmap,
         metadataCaptureMode: String,
-        ratio: AspectRatio?,
-        storeRenderedLookMetadata: Boolean
+        ratio: AspectRatio?
     ) {
         try {
             val context = getApplication<Application>()
@@ -5867,11 +5702,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
                     (userPrefs?.mirrorFrontCamera ?: true)
-            val baselineMetadata = if (storeRenderedLookMetadata) {
-                resolveBaselineMetadata(BaselineColorCorrectionTarget.JPG, userPrefs)
-            } else {
-                null
-            }
+            val baselineMetadata = resolveBaselineMetadata(BaselineColorCorrectionTarget.JPG, userPrefs)
             val currentCameraId = cameraController.getCurrentCameraId()
             val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
                 userPrefs = userPrefs,
@@ -5891,9 +5722,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             val metadata = MediaMetadata(
-                lutId = if (storeRenderedLookMetadata) currentLutId.value else null,
-                frameId = if (storeRenderedLookMetadata) currentFrameId else null,
-                colorRecipeParams = if (storeRenderedLookMetadata) getMergedRecipeParams() else null,
+                lutId = currentLutId.value,
+                frameId = currentFrameId,
+                colorRecipeParams = getMergedRecipeParams(),
                 baselineTarget = baselineMetadata?.first,
                 baselineLutId = baselineMetadata?.second,
                 baselineColorRecipeParams = baselineMetadata?.third,
@@ -5929,11 +5760,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawBlackBorderCrop = currentRawBlackBorderCrop(),
                 rawRenderingEngine = resolveCaptureRawRenderingEngine(userPrefs),
                 rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs),
-                spectralFilmStock = if (storeRenderedLookMetadata) spectralFilmSettings.stock else null,
-                spectralFilmPrint = if (storeRenderedLookMetadata) spectralFilmSettings.print else null,
-                spectralFilmCDensityGain = if (storeRenderedLookMetadata) spectralFilmSettings.tuning.cDensityGain else 1f,
-                spectralFilmMDensityGain = if (storeRenderedLookMetadata) spectralFilmSettings.tuning.mDensityGain else 1f,
-                spectralFilmYDensityGain = if (storeRenderedLookMetadata) spectralFilmSettings.tuning.yDensityGain else 1f,
+                spectralFilmStock = spectralFilmSettings.stock,
+                spectralFilmPrint = spectralFilmSettings.print,
+                spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
+                spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
+                spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
                 width = bitmap.width,
                 height = bitmap.height,
                 ratio = ratio,
@@ -5959,22 +5790,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focusPointY = currentState.focusPoint?.second,
                 captureMode = metadataCaptureMode
             )
-
-            if (metadataCaptureMode == "quick_shot") {
-                val photoId = GalleryManager.saveQuickShotBitmapToSystemGallery(
-                    context = context,
-                    metadata = metadata,
-                    bitmap = bitmap,
-                    photoQuality = photoQualityValue
-                )
-                if (photoId == null) {
-                    PLog.e(TAG, "Failed to save quick-shot bitmap capture to system gallery")
-                    return
-                }
-                PLog.d(TAG, "Quick-shot bitmap capture saved to system gallery: $photoId")
-                _imageSavedEvent.emit(Unit)
-                return
-            }
 
             val photoId = GalleryManager.preparePhoto(
                 context,
@@ -6007,148 +5822,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save preview bitmap capture: $metadataCaptureMode", e)
-        }
-    }
-
-    private suspend fun saveQuickShotBurstFrame(bitmap: Bitmap, rotationDegrees: Float) {
-        var bitmapToSave: Bitmap? = null
-        try {
-            val context = getApplication<Application>()
-            val photoId = burstPhotoId ?: return
-            val captureBitmap = rotatePreviewBitmapForCapture(bitmap, rotationDegrees)
-            bitmapToSave = captureBitmap
-            val currentState = state.value
-            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = 0f
-            val noiseReductionValue = 0f
-            val chromaNoiseReductionValue = 0f
-            val photoQualityValue = photoQuality.firstOrNull() ?: 95
-            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
-            val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
-                    (userPrefs?.mirrorFrontCamera ?: true)
-            val currentCameraId = cameraController.getCurrentCameraId()
-            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(
-                userPrefs = userPrefs,
-            )
-            val captureInfo = cameraController.rebuildCaptureInfo(
-                result = null,
-                imageWidth = captureBitmap.width,
-                imageHeight = captureBitmap.height,
-                latitude = currentState.latitude,
-                longitude = currentState.longitude
-            )
-            val computationalAperture = if (currentState.isVirtualApertureEnabled) {
-                currentState.virtualAperture
-            } else {
-                null
-            }
-
-            if (GalleryManager.loadMetadata(context, photoId) == null) {
-                val metadata = MediaMetadata(
-                    lutId = null,
-                    frameId = null,
-                    colorRecipeParams = null,
-                    baselineTarget = null,
-                    baselineLutId = null,
-                    baselineColorRecipeParams = null,
-                    sharpening = sharpeningValue,
-                    noiseReduction = noiseReductionValue,
-                    chromaNoiseReduction = chromaNoiseReductionValue,
-                    captureNoiseReductionLevel = currentState.nrLevel,
-                    rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
-                    rawHncsProfileId = userPrefs?.rawHncsProfileId,
-                    rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
-                        ?: HncsRenderIntent.Standard,
-                    rawHncsFilmCurveMode = userPrefs?.rawHncsFilmCurveMode
-                        ?: HncsFilmCurveMode.Standard,
-                    rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
-                    rawAutoExposure = effectiveRawAutoExposure,
-                    customProperties = rawProcessingMetadataProperties(
-                        userPrefs,
-                        cameraController.getCurrentSensorPhysicalAreaMm2(),
-                    ),
-                    rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
-                    rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
-                    rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
-                    rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                    rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
-                    rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
-                    rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
-                    rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
-                    rawWhiteLevelMode = userPrefs?.rawWhiteLevelModes?.get(currentCameraId)
-                        ?: RawWhiteLevelCorrection.MODE_DEFAULT,
-                    rawCustomWhiteLevel = userPrefs?.rawCustomWhiteLevels?.get(currentCameraId) ?: 0f,
-                    rawCfaCorrectionMode = userPrefs?.rawCfaCorrectionModes?.get(currentCameraId) ?: RawCfaCorrection.MODE_DEFAULT,
-                    cameraId = currentCameraId,
-                    rawBlackBorderCrop = currentRawBlackBorderCrop(),
-                    rawRenderingEngine = resolveCaptureRawRenderingEngine(userPrefs),
-                    rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs),
-                    spectralFilmStock = null,
-                    spectralFilmPrint = null,
-                    spectralFilmCDensityGain = 1f,
-                    spectralFilmMDensityGain = 1f,
-                    spectralFilmYDensityGain = 1f,
-                    width = captureBitmap.width,
-                    height = captureBitmap.height,
-                    ratio = currentState.aspectRatio,
-                    rotation = 0,
-                    deviceModel = DeviceUtil.model,
-                    brand = captureInfo.make,
-                    dateTaken = captureInfo.captureTime,
-                    latitude = captureInfo.latitude,
-                    longitude = captureInfo.longitude,
-                    altitude = captureInfo.altitude,
-                    iso = captureInfo.iso,
-                    shutterSpeed = captureInfo.formatExposureTime(),
-                    focalLength = captureInfo.formatFocalLength(),
-                    focalLength35mm = captureInfo.formatFocalLength35mm(),
-                    aperture = captureInfo.formatAperture(),
-                    exposureBias = currentState.exposureBias,
-                    droMode = droMode.value,
-                    isMirrored = shouldMirror,
-                    colorSpace = captureInfo.colorSpace,
-                    dynamicRangeProfile = currentState.currentDynamicRangeProfile,
-                    computationalAperture = computationalAperture,
-                    focusPointX = currentState.focusPoint?.first,
-                    focusPointY = currentState.focusPoint?.second,
-                    captureMode = "quick_shot"
-                )
-
-                val preparedPhotoId = GalleryManager.preparePhoto(
-                    context,
-                    metadata,
-                    null,
-                    captureBitmap,
-                    false,
-                    1.0f,
-                    includeCropRegionInOutputSize = false,
-                    photoId = photoId
-                )
-                if (preparedPhotoId == null) {
-                    PLog.e(TAG, "Failed to prepare quick-shot burst photo")
-                    return
-                }
-            }
-
-            GalleryManager.saveBitmapBurstPhoto(
-                context,
-                photoId,
-                captureBitmap,
-                shouldAutoSave,
-                contentRepository.photoProcessor,
-                sharpeningValue,
-                noiseReductionValue,
-                chromaNoiseReductionValue,
-                photoQualityValue
-            )
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save quick-shot burst frame", e)
-        } finally {
-            bitmapToSave?.let { rotated ->
-                if (rotated !== bitmap && !rotated.isRecycled) {
-                    rotated.recycle()
-                }
-            }
         }
     }
 

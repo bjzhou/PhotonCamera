@@ -43,16 +43,6 @@ class LutCaptureModeSelectionTest {
                 defaultLutId = "default",
             ),
         )
-        assertEquals(
-            "photo",
-            resolveLutIdForCaptureMode(
-                photoLutId = "photo",
-                videoLutId = "video",
-                separateVideoLutEnabled = true,
-                captureMode = CaptureMode.QUICK_SHOT,
-                defaultLutId = "default",
-            ),
-        )
     }
 
     @Test

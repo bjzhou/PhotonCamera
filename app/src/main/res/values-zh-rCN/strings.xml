@@ -23,7 +23,6 @@
     <string name="unknown">未知</string>
     <string name="take_photo">拍照</string>
     <string name="capture_mode_photo">拍照</string>
-    <string name="capture_mode_quick_shot">快拍</string>
     <string name="capture_mode_video">视频</string>
 
     <!-- Exposure Controls -->
@@ -43,8 +42,6 @@
     <string name="settings_custom_aspect_ratio_width">宽</string>
     <string name="settings_custom_aspect_ratio_height">高</string>
     <string name="video_torch_chip">补光</string>
-    <string name="quick_shot_resolution_title">快拍分辨率</string>
-    <string name="quick_shot_resolution_full">全尺寸</string>
     <string name="video_aspect_chip">画幅</string>
     <string name="video_log_chip">Log</string>
     <string name="video_option_off">关</string>
