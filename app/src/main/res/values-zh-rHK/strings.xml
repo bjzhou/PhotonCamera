@@ -386,10 +386,6 @@
     <string name="settings_tonemap_mode_description">調整硬體色調映射（對比度/伽馬）模式</string>
     <string name="settings_tonemap_mode_system_default">系統預設</string>
     <string name="settings_tonemap_mode_srgb">sRGB</string>
-    <string name="settings_tonemap_mode_natural_light">自然光影</string>
-    <string name="natural_light_warning_title">開啟自然光影</string>
-    <string name="natural_light_warning_message">自然光影會修改系統色調映射路徑，讓預覽和拍攝使用更接近線性輸入的色彩處理。部分設備的 Camera2 實現可能因此出現預覽偏色、亮度異常，或拍攝結果異常。如果遇到問題，請到“設定 &gt; 色彩與 HDR”按需開啟預覽或拍攝的色調映射修復。</string>
-    <string name="natural_light_warning_confirm">繼續開啟</string>
     <string name="settings_fix_tonemap_preview">修復色調映射預覽異常</string>
     <string name="settings_fix_tonemap_preview_description">部分設備預覽已自帶 sRGB Gamma。開啟后僅在預覽中先轉為線性再應用自訂色調曲線，拍攝輸出不變。</string>
     <string name="settings_fix_tonemap_capture">修復色調映射拍攝異常</string>

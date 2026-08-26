@@ -289,7 +289,7 @@ object GalleryManager {
             }
             val metadata = baseMetadata.copy(
                 lutId = lutId,
-                tonemapMode = mgcTonemapMode(preferences?.naturalLightEnabled, preferences?.tonemapMode),
+                tonemapMode = mgcTonemapMode(preferences?.tonemapMode),
                 colorRecipeParams = lutId?.let { repository.lutManager.loadColorRecipeParams(it) },
                 baselineTarget = baselineLutId?.let { BaselineColorCorrectionTarget.RAW },
                 baselineLutId = baselineLutId,
@@ -366,8 +366,7 @@ object GalleryManager {
         }
     }
 
-    private fun mgcTonemapMode(naturalLightEnabled: Boolean?, tonemapMode: String?): String {
-        if (naturalLightEnabled == true) return TONEMAP_MODE_NATURAL_LIGHT
+    private fun mgcTonemapMode(tonemapMode: String?): String {
         return when (tonemapMode) {
             "FAST", "HIGH_QUALITY", null -> "SYSTEM_DEFAULT"
             "REC709" -> "SRGB"
@@ -2042,14 +2041,6 @@ object GalleryManager {
                 previewBitmap = mirroredPreview
             }
 
-            if (metadata.usesNaturalLightToneMap()) {
-                val sourcePreview = checkNotNull(previewBitmap)
-                val toneMappedPreview = photoProcessor.processCapturePreviewToneMap(sourcePreview, metadata)
-                if (toneMappedPreview !== sourcePreview && !sourcePreview.isRecycled) {
-                    sourcePreview.recycle()
-                }
-                previewBitmap = toneMappedPreview
-            }
             val originalFile = writeInternalOriginalPhoto(photoDir, checkNotNull(previewBitmap), photoQuality)
                 ?: return@withContext
             PLog.d(TAG, "saveYuvPhoto internal original saved=${originalFile.name}")
@@ -3107,17 +3098,11 @@ object GalleryManager {
                 result = BitmapUtils.flipHorizontal(result)
             }
 
-            var previewBitmap = result
-            if (metadata.usesNaturalLightToneMap()) {
-                previewBitmap = photoProcessor.processCapturePreviewToneMap(result, metadata)
-            }
+            val previewBitmap = result
 
             val originalFile = writeInternalOriginalPhoto(photoDir, previewBitmap, photoQuality) ?: return@withContext
             PLog.d(TAG, "saveYuvStackedPhoto internal original saved=${originalFile.name}")
             generateBokehPhoto(context, photoId, metadata, previewBitmap)
-            if (previewBitmap !== result && !previewBitmap.isRecycled) {
-                previewBitmap.recycle()
-            }
             // Auto Save
             if (shouldAutoSave) {
                 val metadata = loadMetadata(context, photoId) ?: return@withContext

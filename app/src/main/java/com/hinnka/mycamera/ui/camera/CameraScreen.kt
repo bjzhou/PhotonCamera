@@ -258,11 +258,9 @@ fun CameraScreen(
     val droMode by viewModel.droMode.collectAsState()
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
-    val naturalLightEnabled by viewModel.naturalLightEnabled.collectAsState()
     val availableHncsProfiles = remember(context) {
         HncsProfileManager(context.applicationContext).getAvailableProfiles()
     }
-    val naturalLightWarningShown by viewModel.naturalLightWarningShown.collectAsState()
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
@@ -1159,13 +1157,6 @@ fun CameraScreen(
                             livePhotoRecorder = viewModel.livePhotoRecorder,
                             videoLogProfile = state.videoConfig.logProfile,
                             isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
-                            naturalLightEnabled = naturalLightEnabled,
-                            rawExposureCompensation = rawExposureCompensation,
-                            rawBlackPointCorrection = rawBlackPointCorrection,
-                            rawWhitePointCorrection = rawWhitePointCorrection,
-                            rawRenderingEngine = rawColorEngine,
-                            rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                            rawToneMappingParameters = rawToneMappingParameters,
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
@@ -1427,7 +1418,6 @@ fun CameraScreen(
                 galleryViewModel = galleryViewModel,
                 latestPhoto = latestPhoto,
                 useMultipleExposure = useMultipleExposure,
-                naturalLightEnabled = naturalLightEnabled,
                 multipleExposureState = multipleExposureState,
                 onGalleryThumbnailBoundsChanged = { bounds ->
                     galleryThumbnailBounds = bounds
@@ -1595,14 +1585,6 @@ fun CameraScreen(
             useRaw = useRaw && state.isRawSupported,
             onRawToggle = { viewModel.setUseRaw(it) },
             isRawSupported = state.isRawSupported,
-            useNaturalLight = naturalLightEnabled,
-            naturalLightWarningShown = naturalLightWarningShown,
-            onNaturalLightToggle = {
-                runPreviewTransition {
-                    viewModel.setNaturalLightToneMapEnabled(it)
-                }
-            },
-            onNaturalLightWarningShown = { viewModel.setNaturalLightWarningShown(true) },
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
             rawDcpLensOptions = rawDcpLensOptions(state.availableCameras),
@@ -1947,7 +1929,6 @@ fun Controls(
     galleryViewModel: GalleryViewModel,
     latestPhoto: com.hinnka.mycamera.gallery.MediaData?,
     useMultipleExposure: Boolean,
-    naturalLightEnabled: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
     onSwitchCameraClick: () -> Unit,
@@ -1997,8 +1978,7 @@ fun Controls(
                     isVideoRecording = state.videoRecordingState.isRecording,
                     isVideoProcessing = state.videoRecordingState.isProcessing,
                     isPaused = state.videoRecordingState.isPaused,
-                    allowLongPress = !naturalLightEnabled &&
-                        state.captureMode == CaptureMode.PHOTO &&
+                    allowLongPress = state.captureMode == CaptureMode.PHOTO &&
                         !useMultipleExposure,
                     multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
                     multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /

@@ -1492,7 +1492,6 @@ class Camera2Controller(private val context: Context) {
                         characteristics,
                         state.aspectRatio,
                     )
-                    CaptureMode.QUICK_SHOT -> refreshQuickShotCapabilities(characteristics)
                     CaptureMode.VIDEO -> {
                         availableTonemapModes = characteristics.get(
                             CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES

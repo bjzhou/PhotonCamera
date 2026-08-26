@@ -738,26 +738,6 @@ class PhotoProcessor(
         result
     }
 
-    suspend fun processCapturePreviewToneMap(
-        input: Bitmap,
-        metadata: MediaMetadata,
-    ): Bitmap = withContext(Dispatchers.IO) {
-        if (!metadata.usesNaturalLightToneMap()) return@withContext input
-        if (shouldDecodeHlgInput(metadata)) return@withContext input
-        lutImageProcessor.applyLut(
-            bitmap = input,
-            isHlgInput = false,
-            lutConfig = null,
-            colorRecipeParams = null,
-            linearInputToneMap = true,
-            naturalLightInputSrgb = true,
-            linearInputExposureEv = metadata.rawExposureCompensation ?: 0f,
-            rawRenderingEngine = metadata.rawRenderingEngine,
-            rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode,
-            rawToneMappingParameters = metadata.rawToneMappingParameters
-        )
-    }
-
     /**
      * @param input 输入 Bitmap
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）

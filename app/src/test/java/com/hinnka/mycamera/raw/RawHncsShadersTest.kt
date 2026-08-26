@@ -42,20 +42,7 @@ class RawHncsShadersTest {
     }
 
     @Test
-    fun naturalLightHncsOutputDecodesThenTransformsThenEncodes() {
-        val shader = HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER
-        val decode = shader.indexOf("gamma22Eotf(sampleValue.rgb)")
-        val transform = shader.indexOf("uHncsToLinearOutput * gamma22Eotf")
-        val displayEncode = shader.indexOf("linearToSrgb(linearOutput)")
-
-        assertTrue(transform >= 0)
-        assertTrue(decode in transform until displayEncode)
-        assertTrue(displayEncode > transform)
-        assertTrue(shader.contains("linearOutput = applyBlackWhiteLevels(linearOutput);"))
-    }
-
-    @Test
-    fun naturalLightStandardOutputEncodesLinearRgbExactlyOnce() {
+    fun rawSrgbOutputEncodesLinearRgbExactlyOnce() {
         val shader = RawSrgbPass.FRAGMENT_SHADER
 
         assertTrue(shader.contains("vec3 color = texture(uInputTexture, vTexCoord).rgb;"))
@@ -91,7 +78,6 @@ class RawHncsShadersTest {
                 colorEngine = RawRenderingEngine.HncsLut,
                 includeShadowsHighlights = true,
             ),
-            HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER,
             RawSrgbPass.FRAGMENT_SHADER,
         )
         shaders.forEachIndexed { index, shader ->

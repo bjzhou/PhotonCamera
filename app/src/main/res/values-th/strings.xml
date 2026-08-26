@@ -254,10 +254,6 @@
     <string name="settings_tonemap_mode_description">ปรับโหมดการจับคู่โทนสีฮาร์ดแวร์ (คอนทราสต์/แกมมา)</string>
     <string name="settings_tonemap_mode_system_default">ค่าเริ่มต้นของระบบ</string>
     <string name="settings_tonemap_mode_srgb">sRGB</string>
-    <string name="settings_tonemap_mode_natural_light">แสงเงาธรรมชาติ</string>
-    <string name="natural_light_warning_title">เปิดแสงเงาธรรมชาติ</string>
-    <string name="natural_light_warning_message">แสงเงาธรรมชาติจะเปลี่ยนเส้นทางการทำแผนที่โทนของระบบ เพื่อให้ภาพตัวอย่างและภาพถ่ายใช้การประมวลผลสีที่ใกล้เคียงอินพุตเชิงเส้นมากขึ้น การใช้งาน Camera2 ของอุปกรณ์บางรุ่นอาจทำให้สีตัวอย่างผิดปกติ ความสว่างผิดปกติ หรือภาพถ่ายผิดปกติ หากพบปัญหา ให้ไปที่ ตั้งค่า &gt; สีและ HDR แล้วเปิดการแก้ไขการทำแผนที่โทนสำหรับภาพตัวอย่างหรือการถ่ายภาพตามที่จำเป็น</string>
-    <string name="natural_light_warning_confirm">ดำเนินการต่อ</string>
     <string name="settings_fix_tonemap_preview">แก้ไขข้อยกเว้นการแสดงตัวอย่างการแมปโทน</string>
     <string name="settings_fix_tonemap_preview_description">ตัวอย่างอุปกรณ์บางรุ่นมาพร้อมกับ sRGB Gamma อยู่แล้ว หลังจากเปิดใช้งาน กล้องจะแปลงเป็นเส้นตรงในหน้าตัวอย่างเท่านั้น จากนั้นจึงใช้ Tone Curve แบบกำหนดเอง และเอาต์พุตการถ่ายภาพยังคงไม่เปลี่ยนแปลง</string>
     <string name="settings_fix_tonemap_capture">แก้ไขข้อยกเว้นการถ่ายภาพการแมปโทน</string>

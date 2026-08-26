@@ -24,8 +24,6 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.log2
 
-const val TONEMAP_MODE_NATURAL_LIGHT = "NATURAL_LIGHT"
-
 private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
     if (!isNull("rawAutoExposureMode")) {
         when (optString("rawAutoExposureMode")) {
@@ -215,14 +213,6 @@ data class MediaMetadata(
     val resolution: String
         get() = "${width}x${height}"
 
-    fun usesNaturalLightToneMap(): Boolean {
-        return tonemapMode == TONEMAP_MODE_NATURAL_LIGHT
-    }
-
-    fun shouldApplyNaturalLightDefaultChromaDenoise(): Boolean {
-        return usesNaturalLightToneMap() && captureNoiseReductionLevel in LOW_HARDWARE_NOISE_REDUCTION_LEVELS
-    }
-
     /**
      * 从 RawMetadata 补齐信息
      */
@@ -271,8 +261,6 @@ data class MediaMetadata(
     companion object {
         private const val TAG = "PhotoMetadata"
         private const val RAW_ISO_FALLBACK_VALUE = 100
-        private val LOW_HARDWARE_NOISE_REDUCTION_LEVELS = setOf(0, 4)
-
         // 旧格式，以后不再更新
         fun fromLegacyJson(json: String): MediaMetadata? {
             return try {
