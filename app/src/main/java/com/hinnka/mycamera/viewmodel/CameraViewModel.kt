@@ -50,6 +50,8 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
+import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.preview.PreviewEyeFocusProcessor
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MgcMergeMethod
@@ -102,6 +104,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.hypot
 
 data class MultipleExposureFrame(
     val index: Int,
@@ -517,6 +520,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private const val HDR_BRACKET_LOW_INDEX = 2
         private const val FIRST_PREVIEW_PREWARM_GRACE_MS = 1_000L
         private const val MIN_PREWARM_MEMORY_CLASS_MB = 384
+        private const val EYE_FOCUS_MOVE_THRESHOLD = 0.035f
+        private const val EYE_FOCUS_MAX_AF_TRIGGER_FPS = 15L
+        private const val EYE_FOCUS_MIN_TRIGGER_INTERVAL_MS =
+            (1_000L + EYE_FOCUS_MAX_AF_TRIGGER_FPS - 1L) / EYE_FOCUS_MAX_AF_TRIGGER_FPS
+        private const val EYE_FOCUS_REFRESH_INTERVAL_MS = 1_800L
+        private const val EYE_FOCUS_RETRY_INTERVAL_MS = 1_200L
     }
 
     private data class HdrBracketFrame(
@@ -539,6 +548,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val presetPackageManager = PresetPackageManager(application, contentRepository)
 
     private val userPreferencesRepository = contentRepository.userPreferencesRepository
+    private val previewEyeFocusProcessor = PreviewEyeFocusProcessor(application)
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -1392,6 +1402,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val focusPeakingEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.focusPeakingEnabled }
+    val eyeFocusEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.eyeFocusEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
     val keepScreenOn: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.keepScreenOn }
@@ -1844,6 +1857,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var isVibrationEnabled = true
 
     var glSurfaceView: CameraGLSurfaceView? = null
+    var isEyeFocusBusy by mutableStateOf(false)
+        private set
+    var isEyeFocusRuntimeAvailable by mutableStateOf(true)
+        private set
+    private var lastEyeFocusTriggerPoint: Pair<Float, Float>? = null
+    private var lastEyeFocusTriggerElapsedMs = 0L
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
@@ -1879,11 +1898,64 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var showGhostPermissions by mutableStateOf(false)
 
     init {
+        previewEyeFocusProcessor.onBusyStateChanged = { busy ->
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                isEyeFocusBusy = busy
+                glSurfaceView?.setEyeFocusBusy(busy)
+            }
+        }
+        previewEyeFocusProcessor.onFrameProcessed = { timing ->
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                glSurfaceView?.updateEyeFocusTiming(timing)
+            }
+        }
+        previewEyeFocusProcessor.onEyeTarget = { target ->
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                handleEyeFocusTarget(target)
+            }
+        }
+        previewEyeFocusProcessor.onTargetLost = {
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                resetEyeFocusTracking(cancelCameraFocus = true, reason = "target_lost")
+            }
+        }
+        previewEyeFocusProcessor.onInitializationError = { error ->
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                isEyeFocusRuntimeAvailable = false
+                resetEyeFocusTracking(cancelCameraFocus = true, reason = "initialization_failed")
+                userPreferencesRepository.saveEyeFocusEnabled(false)
+                PLog.e(TAG, "Human eye autofocus is unavailable", error)
+            }
+        }
+        previewEyeFocusProcessor.onError = { error ->
+            PLog.e(TAG, "Human eye autofocus inference failed", error)
+        }
+        viewModelScope.launch {
+            eyeFocusEnabled.collect { enabled ->
+                if (enabled && isEyeFocusRuntimeAvailable) {
+                    previewEyeFocusProcessor.prewarm()
+                } else if (!enabled) {
+                    previewEyeFocusProcessor.resetTracking()
+                    resetEyeFocusTracking(cancelCameraFocus = true, reason = "disabled")
+                }
+            }
+        }
         cameraController.initialize()
         viewModelScope.launch {
             cameraController.state.collect { cameraState ->
                 if (cameraState.isPreviewActive) {
                     cameraOpenInFlight = false
+                }
+                if (
+                    cameraState.focusPointSource == FocusPointSource.EYE &&
+                    (
+                        !cameraState.isPreviewActive ||
+                            !cameraState.isAutoFocus ||
+                            cameraState.isHyperfocalFocusEnabled
+                    )
+                ) {
+                    previewEyeFocusProcessor.resetTracking()
+                    resetEyeFocusTracking(cancelCameraFocus = true, reason = "camera_state_changed")
                 }
             }
         }
@@ -4286,6 +4358,81 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.updateHighlightPoint(x, y)
     }
 
+    fun handleEyeFocusInputUpdate(frame: EyeFocusPreviewFrame) {
+        val cameraState = state.value
+        val acceptsEyeFocus = eyeFocusEnabled.value &&
+            isEyeFocusRuntimeAvailable &&
+            cameraState.isPreviewActive &&
+            cameraState.isAutoFocus &&
+            !cameraState.isHyperfocalFocusEnabled &&
+            !cameraState.isCapturing &&
+            (cameraState.focusPoint == null || cameraState.focusPointSource == FocusPointSource.EYE)
+        if (!acceptsEyeFocus) {
+            frame.bitmap.recycle()
+            completeEyeFocusInput()
+            return
+        }
+
+        if (!previewEyeFocusProcessor.processFrame(frame)) {
+            frame.bitmap.recycle()
+            completeEyeFocusInput()
+        }
+    }
+
+    private fun handleEyeFocusTarget(target: PreviewEyeFocusProcessor.EyeTarget) {
+        val cameraState = state.value
+        if (
+            !eyeFocusEnabled.value ||
+            !isEyeFocusRuntimeAvailable ||
+            !cameraState.isPreviewActive ||
+            !cameraState.isAutoFocus ||
+            cameraState.isHyperfocalFocusEnabled ||
+            cameraState.isCapturing ||
+            (cameraState.focusPoint != null && cameraState.focusPointSource == FocusPointSource.MANUAL)
+        ) {
+            return
+        }
+
+        cameraController.updateEyeFocusTarget(target.x, target.y)
+        if (!cameraState.supportsPointAutoFocus) {
+            return
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        val previousPoint = lastEyeFocusTriggerPoint
+        val elapsed = now - lastEyeFocusTriggerElapsedMs
+        val moved = previousPoint != null && hypot(
+            target.x - previousPoint.first,
+            target.y - previousPoint.second,
+        ) >= EYE_FOCUS_MOVE_THRESHOLD
+        val retryAfterFailure = cameraState.focusPointSource == FocusPointSource.EYE &&
+            cameraState.focusSuccess == false && elapsed >= EYE_FOCUS_RETRY_INTERVAL_MS
+        val periodicRefresh = previousPoint != null && elapsed >= EYE_FOCUS_REFRESH_INTERVAL_MS
+        val shouldTrigger = previousPoint == null || moved || retryAfterFailure || periodicRefresh
+        if (shouldTrigger && !cameraState.isFocusing && elapsed >= EYE_FOCUS_MIN_TRIGGER_INTERVAL_MS) {
+            lastEyeFocusTriggerPoint = Pair(target.x, target.y)
+            lastEyeFocusTriggerElapsedMs = now
+            cameraController.focusOnNormalizedPoint(
+                normX = target.x,
+                normY = target.y,
+                source = FocusPointSource.EYE,
+            )
+        }
+    }
+
+    private fun completeEyeFocusInput() {
+        isEyeFocusBusy = false
+        glSurfaceView?.setEyeFocusBusy(false)
+    }
+
+    private fun resetEyeFocusTracking(cancelCameraFocus: Boolean, reason: String) {
+        lastEyeFocusTriggerPoint = null
+        lastEyeFocusTriggerElapsedMs = 0L
+        if (cancelCameraFocus) {
+            cameraController.cancelEyeFocus(reason)
+        }
+    }
+
     // ==================== 边框相关方法 ====================
 
     /**
@@ -4544,6 +4691,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setFocusPeakingEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveFocusPeakingEnabled(enabled)
+        }
+    }
+
+    fun setEyeFocusEnabled(enabled: Boolean) {
+        if (enabled && isEyeFocusRuntimeAvailable) {
+            previewEyeFocusProcessor.prewarm()
+        } else if (!enabled) {
+            previewEyeFocusProcessor.resetTracking()
+            resetEyeFocusTracking(cancelCameraFocus = true, reason = "disabled")
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.saveEyeFocusEnabled(enabled)
         }
     }
 
@@ -6427,6 +6586,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         cameraReopenJob?.cancel()
         cameraErrorRecoveryJob?.cancel()
+        previewEyeFocusProcessor.close()
         cameraController.release()
         contentRepository.lutManager.clearCache()
         contentRepository.frameManager.clearCache()

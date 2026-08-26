@@ -107,6 +107,7 @@ class Camera2Controller(private val context: Context) {
         private const val SCENE_CHANGE_FOCUS_DISTANCE_DELTA = 0.2f // 焦距跳变阈值（diopters），对焦锁定后逐帧跟踪
         private const val FOCUS_LOCK_SETTLE_FRAMES = 5        // 对焦锁定后等待镜头稳定的帧数
         private const val SCENE_CHANGE_CONFIRM_FRAMES = 3     // 连续 N 帧检测到变化才确认
+        private const val EYE_TARGET_RECENT_MS = 1_500L
         private const val MULTI_FRAME_AF_LOCK_TIMEOUT_MS = 1_200L
         private const val AF_REGION_WIDTH_FRACTION = 0.10f
         private const val AF_REGION_HEIGHT_FRACTION = 0.10f
@@ -384,6 +385,7 @@ class Camera2Controller(private val context: Context) {
     private var focusLockedReferenceDistance: Float = 0f
     private var focusLockSettleFrames = 0       // 对焦锁定后等待镜头稳定的帧数
     private var sceneChangeFrameCount = 0
+    private var eyeTargetLastSeenElapsedMs = 0L
     private var focusModeBeforeHyperfocal: Boolean? = null
     private var focusDistanceBeforeHyperfocal: Float? = null
 
@@ -785,9 +787,16 @@ class Camera2Controller(private val context: Context) {
                     }
 
                     if (sceneChanged) {
-                        sceneChangeFrameCount++
-                        if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
-                            restoreContinuousAf()
+                        if (isEyeTargetRecentlySeen()) {
+                            // 人眼目标仍在持续更新时，以当前状态作为新的参考，避免场景变化
+                            // 检测把正在跟踪的人眼区域恢复成全画面连续对焦。
+                            updateFocusLockSceneReference(result)
+                            sceneChangeFrameCount = 0
+                        } else {
+                            sceneChangeFrameCount++
+                            if (sceneChangeFrameCount >= SCENE_CHANGE_CONFIRM_FRAMES) {
+                                restoreContinuousAf()
+                            }
                         }
                     } else {
                         sceneChangeFrameCount = 0
@@ -1853,7 +1862,29 @@ class Camera2Controller(private val context: Context) {
         val focusCharacteristics = resolveActiveFocusCharacteristics()?.second
         val minimumFocusDistance =
             focusCharacteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-        _state.value = _state.value.copy(minimumFocusDistance = minimumFocusDistance)
+        if (focusCharacteristics != null) {
+            maxAfRegions = focusCharacteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+            availableAfModes =
+                focusCharacteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        }
+        _state.value = _state.value.copy(
+            minimumFocusDistance = minimumFocusDistance,
+            supportsPointAutoFocus = supportsPointAutoFocus(
+                minimumFocusDistance = minimumFocusDistance,
+                maxRegions = maxAfRegions,
+                afModes = availableAfModes,
+            ),
+        )
+    }
+
+    private fun supportsPointAutoFocus(
+        minimumFocusDistance: Float,
+        maxRegions: Int,
+        afModes: IntArray,
+    ): Boolean {
+        return minimumFocusDistance > 0f &&
+            maxRegions > 0 &&
+            afModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO)
     }
 
     private fun refreshVideoCapabilities(characteristics: CameraCharacteristics? = null): Size {
@@ -2151,6 +2182,15 @@ class Camera2Controller(private val context: Context) {
                     ?: openCharacteristics
                 val minimumFocusDistance =
                     focusCharacteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+                maxAfRegions =
+                    focusCharacteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+                availableAfModes =
+                    focusCharacteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+                val supportsPointAutoFocus = supportsPointAutoFocus(
+                    minimumFocusDistance = minimumFocusDistance,
+                    maxRegions = maxAfRegions,
+                    afModes = availableAfModes,
+                )
 
                 _state.update { currentState ->
                     currentState.copy(
@@ -2172,7 +2212,8 @@ class Camera2Controller(private val context: Context) {
                         } else {
                             currentState.currentCaptureSize
                         },
-                        minimumFocusDistance = minimumFocusDistance
+                        minimumFocusDistance = minimumFocusDistance,
+                        supportsPointAutoFocus = supportsPointAutoFocus,
                     )
                 }
                 refreshHyperfocalFocusDistanceIfEnabled(updatePreview = false)
@@ -5666,6 +5707,7 @@ class Camera2Controller(private val context: Context) {
         PLog.d(
             TAG,
             "Focus terminal: afState=$afState " +
+                "source=${_state.value.focusPointSource} " +
                 "afRegions=${result.get(CaptureResult.CONTROL_AF_REGIONS)?.contentToString()} " +
                 "zoom=${result.get(CaptureResult.CONTROL_ZOOM_RATIO)} " +
                 "crop=${result.get(CaptureResult.SCALER_CROP_REGION)} " +
@@ -5697,6 +5739,7 @@ class Camera2Controller(private val context: Context) {
         focusLockedReferenceExposureNs = 0L
         focusLockedReferenceDistance = 0f
         focusLockSettleFrames = 0
+        eyeTargetLastSeenElapsedMs = 0L
 
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
@@ -5709,6 +5752,7 @@ class Camera2Controller(private val context: Context) {
         }
         _state.value = _state.value.copy(
             focusPoint = null,
+            focusPointSource = FocusPointSource.MANUAL,
             isFocusLocked = false,
             isFocusing = false,
             focusSuccess = null
@@ -5727,8 +5771,10 @@ class Camera2Controller(private val context: Context) {
         focusLockedReferenceExposureNs = 0L
         focusLockedReferenceDistance = 0f
         focusLockSettleFrames = 0
+        eyeTargetLastSeenElapsedMs = 0L
         _state.value = _state.value.copy(
             focusPoint = null,
+            focusPointSource = FocusPointSource.MANUAL,
             isFocusLocked = false,
             isFocusing = false,
             focusSuccess = null
@@ -5743,6 +5789,7 @@ class Camera2Controller(private val context: Context) {
         focusOnNormalizedPoint(
             normX = x / viewWidth,
             normY = y / viewHeight,
+            source = FocusPointSource.MANUAL,
             previewViewAspectRatio = viewWidth.toFloat() / viewHeight,
         )
     }
@@ -5753,6 +5800,7 @@ class Camera2Controller(private val context: Context) {
         focusOnNormalizedPoint(
             normX = x / viewWidth,
             normY = y / viewHeight,
+            source = FocusPointSource.MANUAL,
             lockFocus = true,
             previewViewAspectRatio = viewWidth.toFloat() / viewHeight,
         )
@@ -5761,6 +5809,7 @@ class Camera2Controller(private val context: Context) {
     fun focusOnNormalizedPoint(
         normX: Float,
         normY: Float,
+        source: FocusPointSource,
         lockFocus: Boolean = false,
         previewViewAspectRatio: Float? = null,
     ) {
@@ -5770,6 +5819,7 @@ class Camera2Controller(private val context: Context) {
                 focusOnNormalizedPoint(
                     normX = normX,
                     normY = normY,
+                    source = source,
                     lockFocus = lockFocus,
                     previewViewAspectRatio = previewViewAspectRatio,
                 )
@@ -5780,12 +5830,32 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Ignoring focus update while capture focus is frozen")
             return
         }
+        if (
+            source == FocusPointSource.EYE &&
+            !_state.value.supportsPointAutoFocus
+        ) {
+            PLog.d(TAG, "Ignoring eye-focus AF trigger on a fixed-focus camera")
+            return
+        }
+        if (
+            source == FocusPointSource.EYE &&
+            _state.value.focusPoint != null &&
+            _state.value.focusPointSource == FocusPointSource.MANUAL
+        ) {
+            PLog.d(TAG, "Ignoring stale eye-focus update while manual point focus is active")
+            return
+        }
         val openCameraId = getActiveOpenCameraId()
         if (openCameraId.isEmpty()) return
 
         // 重置场景变化检测状态（新的对焦覆盖旧的）
         isFocusLockedWaitingForSceneChange = false
         sceneChangeFrameCount = 0
+        if (source == FocusPointSource.MANUAL) {
+            eyeTargetLastSeenElapsedMs = 0L
+        } else {
+            eyeTargetLastSeenElapsedMs = SystemClock.elapsedRealtime()
+        }
 
         try {
             val builder = previewRequestBuilder ?: return
@@ -5828,6 +5898,7 @@ class Camera2Controller(private val context: Context) {
             // 存储UI坐标用于显示对焦框
             _state.value = _state.value.copy(
                 focusPoint = Pair(normalizedX, normalizedY),
+                focusPointSource = source,
                 isFocusLocked = lockFocus,
                 isFocusing = true,
                 focusSuccess = null
@@ -5873,6 +5944,7 @@ class Camera2Controller(private val context: Context) {
             PLog.d(
                 TAG,
                 "Focus mapping: ui=($normalizedX,$normalizedY) " +
+                    "source=$source " +
                     "coordinateCamera=${activeOutputPhysicalCameraId ?: openCameraId} " +
                     "zoomMode=$zoomMode requestZoom=${builder.get(CaptureRequest.CONTROL_ZOOM_RATIO)} " +
                     "requestCrop=$requestedScalerCrop active=$activeRect " +
@@ -5883,10 +5955,13 @@ class Camera2Controller(private val context: Context) {
             if (maxAfRegions > 0) {
                 builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(afRegion))
             }
-            if (meteringMode == MeteringMode.SYSTEM_DEFAULT) {
-                clearCustomAeRegions(builder)
-            } else if (maxAeRegions > 0 && aeRegion != null) {
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(aeRegion))
+            // 人眼跟踪只接管 AF，不移动用户当前的测光区域。
+            if (source == FocusPointSource.MANUAL) {
+                if (meteringMode == MeteringMode.SYSTEM_DEFAULT) {
+                    clearCustomAeRegions(builder)
+                } else if (maxAeRegions > 0 && aeRegion != null) {
+                    builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(aeRegion))
+                }
             }
             val afMode = CaptureRequest.CONTROL_AF_MODE_AUTO
             _state.value = _state.value.copy(currentAfMode = afMode)
@@ -5901,6 +5976,77 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to focus", e)
             _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
         }
+    }
+
+    /**
+     * 更新人眼跟踪框的位置，但不重复触发一次 AF 扫描。
+     * 实际的 AF 触发由调用方根据目标位移和节流策略决定。
+     */
+    fun updateEyeFocusTarget(normX: Float, normY: Float) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { updateEyeFocusTarget(normX, normY) }
+            return
+        }
+        if (!normX.isFinite() || !normY.isFinite()) return
+        val currentState = _state.value
+        if (currentState.focusPoint != null && currentState.focusPointSource == FocusPointSource.MANUAL) {
+            return
+        }
+        eyeTargetLastSeenElapsedMs = SystemClock.elapsedRealtime()
+        _state.value = currentState.copy(
+            focusPoint = Pair(normX.coerceIn(0f, 1f), normY.coerceIn(0f, 1f)),
+            focusPointSource = FocusPointSource.EYE,
+            isFocusLocked = false,
+        )
+    }
+
+    fun cancelEyeFocus(reason: String) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { cancelEyeFocus(reason) }
+            return
+        }
+        if (_state.value.focusPointSource != FocusPointSource.EYE) return
+        PLog.d(TAG, "Cancel eye focus: $reason")
+        if (isCaptureFocusFrozen || !_state.value.supportsPointAutoFocus) {
+            clearEyeFocusState()
+            return
+        }
+        if (_state.value.isAutoFocus) {
+            restoreContinuousAf()
+        } else {
+            previewRequestBuilder?.apply {
+                clearCustomAfRegions(this)
+                applyFocusSettings(this, _state.value)
+                applyMeteringRegions()
+                updatePreview()
+            }
+            clearEyeFocusState()
+        }
+    }
+
+    private fun isEyeTargetRecentlySeen(): Boolean {
+        return _state.value.focusPointSource == FocusPointSource.EYE &&
+            eyeTargetLastSeenElapsedMs > 0L &&
+            SystemClock.elapsedRealtime() - eyeTargetLastSeenElapsedMs <= EYE_TARGET_RECENT_MS
+    }
+
+    private fun clearEyeFocusState() {
+        isFocusLockedWaitingForSceneChange = false
+        sceneChangeFrameCount = 0
+        focusLockedReferenceIso = 0
+        focusLockedReferenceExposureNs = 0L
+        focusLockedReferenceDistance = 0f
+        focusLockSettleFrames = 0
+        eyeTargetLastSeenElapsedMs = 0L
+        _state.value = _state.value.copy(
+            focusPoint = null,
+            focusPointSource = FocusPointSource.MANUAL,
+            isFocusLocked = false,
+            isFocusing = false,
+            focusSuccess = null,
+        )
     }
 
 // ==================== 其他设置 ====================

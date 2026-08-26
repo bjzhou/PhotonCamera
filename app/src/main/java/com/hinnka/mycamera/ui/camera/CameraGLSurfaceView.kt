@@ -11,6 +11,8 @@ import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
+import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
@@ -41,6 +43,20 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
+    var onEyeFocusInputAvailable: ((EyeFocusPreviewFrame) -> Unit)? = null
+        set(value) {
+            field = value
+            renderer.onEyeFocusInputAvailable = if (value == null) {
+                renderer.isEyeFocusBusy = false
+                null
+            } else {
+                { frame ->
+                    post {
+                        field?.invoke(frame) ?: frame.bitmap.recycle()
+                    }
+                }
+            }
+        }
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
@@ -223,6 +239,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
+    fun setEyeFocusBusy(busy: Boolean) {
+        renderer.isEyeFocusBusy = busy
+        requestRender()
+    }
+
+    fun updateEyeFocusTiming(timing: EyeFocusProcessingTiming) {
+        renderer.updateEyeFocusTiming(timing)
+    }
+
     /**
      * 获取当前 LUT 强度
      */
@@ -387,6 +412,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
         // 通知 Surface 销毁
         onSurfaceDestroyed?.invoke()
+        onEyeFocusInputAvailable = null
 
         // 释放 Surface
         currentSurface?.release()

@@ -176,7 +176,10 @@
     <!-- Settings Restructuring Sections -->
     <string name="settings_section_assist">輔助工具</string>
     <string name="settings_section_focus_lens">對焦與鏡頭</string>
+    <string name="settings_focus_lens_group_autofocus">自動對焦</string>
     <string name="settings_focus_lens_group_lens_selection">鏡頭選擇</string>
+    <string name="settings_eye_focus">人眼對焦</string>
+    <string name="settings_eye_focus_description">偵測畫面中的人臉，並優先對穩定的人眼進行自動對焦</string>
     <string name="settings_focus_lens_group_virtual_lens_depth">虛擬鏡頭與景深</string>
     <string name="settings_focus_lens_group_lens_discovery">鏡頭偵測</string>
     <string name="settings_focus_lens_group_camera2_extensions">Camera2 擴充</string>

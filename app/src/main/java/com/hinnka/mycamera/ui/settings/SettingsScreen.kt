@@ -317,6 +317,7 @@ fun SettingsScreen(
     val userPreferences by viewModel.userPreferences.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
+    val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
     val showGrid = state.showGrid
     val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
@@ -1112,6 +1113,19 @@ fun SettingsScreen(
 
                 SettingsPage.FOCUS_LENS -> {
                     // 对焦与镜头
+                    SettingsSection(
+                        title = stringResource(R.string.settings_focus_lens_group_autofocus)
+                    ) {
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_eye_focus),
+                            description = stringResource(R.string.settings_eye_focus_description),
+                            checked = eyeFocusEnabled,
+                            onCheckedChange = viewModel::setEyeFocusEnabled
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
                     SettingsSection(
                         title = stringResource(R.string.settings_focus_lens_group_lens_selection)
                     ) {
@@ -2877,6 +2891,7 @@ private fun SettingsCategoryOverview(
         NavigationSettingItem(
             title = stringResource(R.string.settings_section_focus_lens),
             description = listOf(
+                stringResource(R.string.settings_eye_focus),
                 stringResource(R.string.settings_default_focal_length),
                 stringResource(R.string.settings_camera_orientation),
                 stringResource(R.string.settings_add_isz_lens)

@@ -160,6 +160,9 @@
     <!-- Settings Restructuring Sections -->
     <string name="settings_section_assist">เครื่องมือช่วย</string>
     <string name="settings_section_focus_lens">โฟกัสและเลนส์</string>
+    <string name="settings_focus_lens_group_autofocus">โฟกัสอัตโนมัติ</string>
+    <string name="settings_eye_focus">โฟกัสดวงตามนุษย์</string>
+    <string name="settings_eye_focus_description">ตรวจจับใบหน้าและให้ความสำคัญกับดวงตาที่ติดตามได้อย่างเสถียรสำหรับโฟกัสอัตโนมัติ</string>
     <string name="settings_section_capture_storage">การถ่ายภาพและการจัดเก็บ</string>
     <string name="settings_section_quality_perf">คุณภาพของภาพและประสิทธิภาพ</string>
     <string name="settings_section_color_hdr">การประมวลผลภาพและสี</string>

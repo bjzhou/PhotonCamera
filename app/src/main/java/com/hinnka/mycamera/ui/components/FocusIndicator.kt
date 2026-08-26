@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.hinnka.mycamera.camera.FocusPointSource
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -28,6 +29,7 @@ import kotlin.math.roundToInt
 @Composable
 fun FocusIndicator(
     position: Pair<Float, Float>?,
+    source: FocusPointSource = FocusPointSource.MANUAL,
     isFocusLocked: Boolean = false,
     isFocusing: Boolean,
     focusSuccess: Boolean?,
@@ -39,6 +41,7 @@ fun FocusIndicator(
     val alpha by animateFloatAsState(
         targetValue = when {
             isFocusing -> 1f
+            source == FocusPointSource.EYE && position != null -> 0.9f
             isFocusLocked && focusSuccess != false -> 0.9f
             focusSuccess == true -> 0.8f
             isFocusLocked -> 0.6f
@@ -60,7 +63,7 @@ fun FocusIndicator(
     val color = when (focusSuccess) {
         true -> Color.Green
         false -> Color.Red
-        else -> Color.White
+        else -> if (source == FocusPointSource.EYE) Color(0xFF64D8FF) else Color.White
     }
 
     LaunchedEffect(position) {
@@ -82,10 +85,10 @@ fun FocusIndicator(
             ) {
                 val x = displayPosition.first * size.width
                 val y = displayPosition.second * size.height
-                val boxSize = 60.dp.toPx() * scale
+                val boxSize = (if (source == FocusPointSource.EYE) 24.dp else 60.dp).toPx() * scale
                 val halfSize = boxSize / 2
-                val cornerLength = 15.dp.toPx()
-                val strokeWidth = 2.dp.toPx()
+                val cornerLength = (if (source == FocusPointSource.EYE) 6.dp else 15.dp).toPx()
+                val strokeWidth = (if (source == FocusPointSource.EYE) 1.5.dp else 2.dp).toPx()
 
                 val drawColor = color.copy(alpha = alpha)
 
@@ -146,7 +149,7 @@ fun FocusIndicator(
                 )
             }
 
-            if (isFocusLocked && position != null) {
+            if (source == FocusPointSource.MANUAL && isFocusLocked && position != null) {
                 val badgeSize = 24.dp
                 val badgeSizePx = with(density) { badgeSize.toPx() }
                 val focusHalfSizePx = with(density) { 30.dp.toPx() }
