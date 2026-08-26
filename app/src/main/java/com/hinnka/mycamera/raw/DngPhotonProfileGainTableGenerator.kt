@@ -16,6 +16,13 @@ internal object DngPhotonProfileGainTableGenerator {
     private const val MIN_TABLE_GAIN = 1f / 4096f
     private const val MAX_TABLE_GAIN = 4096f
 
+    // Exact uGainLimits uploaded by MGC 9.6/9.7 Fast Moments' HDRNet renderer. The network's
+    // affine luma prediction is converted to a gain and clamped to this range before it is
+    // applied. These are renderer limits, distinct from DNG's much wider legal table range.
+    private const val HDRNET_RENDER_MIN_GAIN = 0.03f
+    private const val HDRNET_RENDER_MAX_GAIN = 30f
+    private const val HDRNET_RENDER_MAX_GAIN_BLEND_THRESHOLD = 0f
+
     const val HDRNET_INPUT_WIDTH = 256
     const val HDRNET_INPUT_HEIGHT = 192
     const val HDRNET_GRID_WIDTH = 16
@@ -161,6 +168,9 @@ internal object DngPhotonProfileGainTableGenerator {
             guideShifts = HDRNET_GUIDE_SHIFTS,
             guideSlopes = HDRNET_GUIDE_SLOPES,
             acr3Curve = ACR3Curve.samples(),
+            renderMinGain = HDRNET_RENDER_MIN_GAIN,
+            renderMaxGain = HDRNET_RENDER_MAX_GAIN,
+            renderMaxGainBlendThreshold = HDRNET_RENDER_MAX_GAIN_BLEND_THRESHOLD,
             minTableGain = MIN_TABLE_GAIN,
             maxTableGain = MAX_TABLE_GAIN,
         ) ?: run {

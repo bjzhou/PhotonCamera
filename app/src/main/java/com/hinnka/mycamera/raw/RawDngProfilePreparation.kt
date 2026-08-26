@@ -89,7 +89,20 @@ data class RawDngCaptureProfileInput(
     val metadata: RawMetadata,
     val meteringRenderPlan: DcpRenderPlan,
     val gpuLinearRgbSource: GpuLinearRgbSource? = null,
+    val fastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
     val sceneExposureDeviceLimits: RawSceneExposureDeviceLimits? = null,
+)
+
+/**
+ * Full-resolution camera RGB produced while preparing a single-frame capture profile.
+ *
+ * Ownership stays with [RawDemosaicProcessor]. The next in-memory render either adopts the
+ * texture or releases it explicitly; it is never serialized into the DNG.
+ */
+data class GpuDemosaicedRawSource(
+    val textureId: Int,
+    val width: Int,
+    val height: Int,
 )
 
 data class RawDngCaptureProfileResult(
@@ -98,6 +111,7 @@ data class RawDngCaptureProfileResult(
     /** Photon HDR long/short TET ratio; always null for classic auto exposure. */
     val hdrRatio: Float?,
     val profileGainTableMap: DngProfileGainTableMap?,
+    val gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
 )
 
 /** Keeps the DNG color solution while enforcing the fixed Adobe/default metering pipeline. */
@@ -115,6 +129,7 @@ data class RawDngProfilePreparation(
     val baselineExposureEv: Float,
     val hdrRatio: Float?,
     val profileGainTableMap: DngProfileGainTableMap?,
+    val gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
 )
 
 /** Process-local capture result persisted with Photon gallery metadata for PGTM regeneration. */

@@ -563,6 +563,7 @@ object RawProcessor {
     suspend fun prepareRawDngProfile(
         rawBuffer: ByteBuffer?,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
+        fastMomentsRawStats: com.hinnka.mycamera.raw.RawSceneFastMomentsRawStats? = null,
         width: Int,
         height: Int,
         characteristics: CameraCharacteristics,
@@ -622,8 +623,16 @@ object RawProcessor {
             cfaPattern = resolvedCfaPattern,
             blackLevel = statsBlackLevel,
             whiteLevel = statsWhiteLevel,
+            // The reusable single-frame demosaic must be bit-for-bit equivalent to the
+            // demosaic that the immediate in-memory DNG render would have produced. That
+            // render consumes the serialized DNG RGB noise profile, not Camera2's CFA layout.
+            channelNoiseProfile = resolveDngWriterNoiseProfile(captureResult),
+            noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB,
+            postRawSensitivityBoost = 1f,
             baselineExposure = sourceBaselineExposureEv,
+            shadowScale = 1f,
             defaultCrop = defaultCrop,
+            frameCount = 1,
         )
         val statsMetadata = if (pixelsIncludeLensShadingCorrection) {
             cameraStatsMetadata.copy(
@@ -669,6 +678,7 @@ object RawProcessor {
                 metadata = captureProfileMetadata.copy(profileGainTableMap = null),
                 meteringRenderPlan = meteringRenderPlan,
                 gpuLinearRgbSource = gpuLinearRgbSource,
+                fastMomentsRawStats = fastMomentsRawStats,
                 sceneExposureDeviceLimits = RawSceneExposureDeviceLimits
                     .fromCameraCharacteristics(characteristics),
             )
@@ -703,6 +713,7 @@ object RawProcessor {
             baselineExposureEv = finalBaselineExposureEv,
             hdrRatio = captureProfile?.hdrRatio,
             profileGainTableMap = preparedProfileGainTableMap,
+            gpuDemosaicedRawSource = captureProfile?.gpuDemosaicedRawSource,
         ).also { finalProfile ->
             PLog.i(
                 TAG,

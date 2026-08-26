@@ -23,6 +23,7 @@ internal class RawLinearRcdPass(
         val hueSatMapSupportsOverrange: Boolean,
         val textureBounds: FloatArray = FULL_TEXTURE_BOUNDS,
         val areaSampleFootprint: FloatArray = NO_AREA_SAMPLE,
+        val useAreaSampleMaximum: Boolean = false,
         val textureRotation: Int = 0,
         val bindHueSatMap: (program: Int) -> Unit,
         val label: String,
@@ -109,6 +110,10 @@ internal class RawLinearRcdPass(
             input.areaSampleFootprint[1],
         )
         GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uUseAreaSampleMaximum"),
+            if (input.useAreaSampleMaximum) 1 else 0,
+        )
+        GLES30.glUniform1i(
             GLES30.glGetUniformLocation(activeProgram, "uTextureRotation"),
             ((input.textureRotation % 360) + 360) % 360,
         )
@@ -169,6 +174,7 @@ internal class RawLinearRcdPass(
             uniform int uLinearDcpHueSatEncoding;
             uniform vec4 uTextureBounds;
             uniform vec2 uAreaSampleFootprint;
+            uniform int uUseAreaSampleMaximum;
             uniform int uTextureRotation;
 
             ${DcpHueSatMapGl.SHADER_FUNCTIONS}
@@ -177,17 +183,24 @@ internal class RawLinearRcdPass(
                 if (max(uAreaSampleFootprint.x, uAreaSampleFootprint.y) <= 0.0) {
                     return texture(uDemosaickedTexture, center).rgb;
                 }
-                vec3 sum = vec3(0.0);
+                vec3 aggregate = uUseAreaSampleMaximum != 0
+                    ? vec3(-65504.0)
+                    : vec3(0.0);
                 for (int y = 0; y < 4; ++y) {
                     for (int x = 0; x < 4; ++x) {
                         vec2 offset = (vec2(float(x), float(y)) - vec2(1.5)) * 0.25;
-                        sum += texture(
+                        vec3 sampleValue = texture(
                             uDemosaickedTexture,
                             center + offset * uAreaSampleFootprint
                         ).rgb;
+                        aggregate = uUseAreaSampleMaximum != 0
+                            ? max(aggregate, sampleValue)
+                            : aggregate + sampleValue;
                     }
                 }
-                return sum * (1.0 / 16.0);
+                return uUseAreaSampleMaximum != 0
+                    ? aggregate
+                    : aggregate * (1.0 / 16.0);
             }
 
             void main() {

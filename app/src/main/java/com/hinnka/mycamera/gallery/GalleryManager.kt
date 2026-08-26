@@ -48,6 +48,7 @@ import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
+import com.hinnka.mycamera.raw.GpuDemosaicedRawSource
 import com.hinnka.mycamera.raw.MgcSpatialGpuDenoiseMode
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
@@ -2273,6 +2274,7 @@ object GalleryManager {
         exportDngWithRawExport: Boolean = false
     ) = withContext(Dispatchers.IO) {
         var rawBufferToRelease: ByteBuffer? = null
+        var preparedDemosaicSourceToRelease: GpuDemosaicedRawSource? = null
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -2369,6 +2371,7 @@ object GalleryManager {
                 options = profileOptions,
                 defaultCrop = writtenRawDngDefaultCrop,
             ) ?: return@withContext
+            preparedDemosaicSourceToRelease = preparedProfile.gpuDemosaicedRawSource
             updatedMetadata = updatedMetadata.copy(
                 customProperties = RawPhotonHdrRatioMetadata.write(
                     updatedMetadata.customProperties,
@@ -2518,6 +2521,7 @@ object GalleryManager {
                     height = rawHeight,
                     rowStride = rawWidth * Short.SIZE_BYTES,
                     samplesPerPixel = 1,
+                    gpuDemosaicedRawSource = preparedProfile.gpuDemosaicedRawSource,
                     metadata = renderMetadata,
                     aspectRatio = aspectRatio,
                     cropRegion = updatedMetadata.cropRegion,
@@ -2576,6 +2580,11 @@ object GalleryManager {
                 inMemoryResult
             } else {
                 PLog.w(TAG, "Single-frame in-memory RAW render unavailable; using persisted DNG fallback")
+                // A source that was not adopted by the direct render has no role in the
+                // persisted-DNG fallback. Release it before decoding to avoid keeping two
+                // full-resolution RGBA16F demosaics alive at the same time.
+                processor.releaseGpuDemosaicedRawSource(preparedDemosaicSourceToRelease)
+                preparedDemosaicSourceToRelease = null
                 if (!persistDng()) return@withContext
                 renderPersistedDng() ?: return@withContext
             }
@@ -2684,6 +2693,9 @@ object GalleryManager {
             PLog.e(TAG, "Failed to savePhoto", e)
         } finally {
             image.close()
+            RawDemosaicProcessor.getInstance().releaseGpuDemosaicedRawSource(
+                preparedDemosaicSourceToRelease,
+            )
             LargeDirectBuffer.free(rawBufferToRelease)
         }
     }
@@ -3600,6 +3612,7 @@ object GalleryManager {
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
                     rawBuffer = null,
                     gpuLinearRgbSource = defaultDenoisedGpuSource,
+                    fastMomentsRawStats = finalStackResult.fastMomentsRawStats,
                     width = finalStackResult.width,
                     height = finalStackResult.height,
                     characteristics = characteristics,

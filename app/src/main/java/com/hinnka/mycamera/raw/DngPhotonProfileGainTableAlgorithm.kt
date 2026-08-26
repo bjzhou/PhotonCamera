@@ -1373,6 +1373,9 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val streamingRowStride: Int = 0,
         val width: Int,
         val height: Int,
+        /** Dimensions of [linearRgbTextureId], which may be half-resolution for Bayer input. */
+        val linearRgbTextureWidth: Int = width,
+        val linearRgbTextureHeight: Int = height,
         val rawTextureWidth: Int = width,
         val rawTextureHeight: Int = height,
         val samplesPerPixel: Int,
@@ -1438,30 +1441,33 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val linearRgbTextureId = input.linearRgbTextureId
         val width = input.width
         val height = input.height
-        if (linearRgbTextureId == 0 || width <= 0 || height <= 0 || hdrNetInputProgram == 0) {
+        val linearRgbTextureWidth = input.linearRgbTextureWidth
+        val linearRgbTextureHeight = input.linearRgbTextureHeight
+        if (linearRgbTextureId == 0 || width <= 0 || height <= 0 ||
+            linearRgbTextureWidth <= 0 || linearRgbTextureHeight <= 0 ||
+            hdrNetInputProgram == 0
+        ) {
             PLog.e(
                 TAG,
-                "HDRNet input invalid: texture=$linearRgbTextureId size=${width}x$height " +
+                "HDRNet input invalid: texture=$linearRgbTextureId " +
+                    "source=${width}x$height linearRgb=" +
+                    "${linearRgbTextureWidth}x$linearRgbTextureHeight " +
                     "program=$hdrNetInputProgram",
             )
             return null
         }
-        val safeStatsBounds = sanitizePgtmStatsBounds(input.statsBounds, width, height) ?: run {
-            PLog.e(TAG, "HDRNet stats bounds invalid: source=${width}x$height bounds=${input.statsBounds}")
-            return null
-        }
+        // MGC's HDRNet input shader downsamples the complete input texture to 256 x 192 and
+        // exposes no crop/bounds uniform. Its renderer slices the bilateral grid over that same
+        // complete texture domain. AE statistics bounds are independent and must not turn this
+        // into a crop-relative grid inside a Stage 3 DNG image.
+        val hdrNetSourceBounds = Rect(0, 0, linearRgbTextureWidth, linearRgbTextureHeight)
         val plan = DngPhotonProfileGainTableGenerator.hdrNetPlan(
             sourceWidth = width,
             sourceHeight = height,
             baselineExposureEv = input.baselineExposureEv,
             hdrRatio = input.hdrRatio,
             diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG HDRNet capture"),
-            samplingArea = PhotonPgtmSamplingArea(
-                originH = safeStatsBounds.left.toDouble() / width,
-                originV = safeStatsBounds.top.toDouble() / height,
-                extentH = safeStatsBounds.width().toDouble() / width,
-                extentV = safeStatsBounds.height().toDouble() / height,
-            ),
+            samplingArea = PhotonPgtmSamplingArea.FULL,
         ) ?: return null
         val interpreter = ensureHdrNetInterpreter(input.context) ?: return null
         val activeWarpParameters = ArrayList<Float>()
@@ -1566,15 +1572,15 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             GLES31.glUniform2i(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uImageSize"),
-                width,
-                height,
+                linearRgbTextureWidth,
+                linearRgbTextureHeight,
             )
             GLES31.glUniform4i(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uStatsBounds"),
-                safeStatsBounds.left,
-                safeStatsBounds.top,
-                safeStatsBounds.right,
-                safeStatsBounds.bottom,
+                hdrNetSourceBounds.left,
+                hdrNetSourceBounds.top,
+                hdrNetSourceBounds.right,
+                hdrNetSourceBounds.bottom,
             )
             val safeColorCorrectionMatrix = input.colorCorrectionMatrix.takeIf { matrix ->
                 matrix.size >= 9 && matrix.take(9).all { it.isFinite() }
@@ -1659,6 +1665,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
                     "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
                     "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
+                    "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
+                    "aeStatsBounds=${input.statsBounds} " +
                     "inputMs=${(inputReadyNs - totalStartNs) / 1_000_000f} " +
                     "inferenceMs=${(inferenceReadyNs - inferenceStartNs) / 1_000_000f} " +
                     "pgtmMs=${(pgtmReadyNs - pgtmStartNs) / 1_000_000f} " +

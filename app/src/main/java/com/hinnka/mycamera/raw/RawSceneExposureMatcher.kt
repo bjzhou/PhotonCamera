@@ -32,6 +32,11 @@ internal object RawSceneExposureMatcher {
         result?.let { estimate ->
             RawSceneExposureResult(
                 hdrRatio = estimate.hdrRatio,
+                finalShortTetMs = estimate.finalShortTetMs,
+                finalLongTetMs = estimate.finalLongTetMs,
+                safeUnderexposure = estimate.safeUnderexposure,
+                fractionPixelsClippedAtFinalShortTet =
+                    estimate.fractionPixelsClippedAtFinalShortTet,
             )
         }
     }
@@ -43,8 +48,19 @@ internal fun interface RawSceneExposureRequest {
 
 internal data class RawSceneExposureResult(
     val hdrRatio: Float,
+    val finalShortTetMs: Float,
+    val finalLongTetMs: Float,
+    val safeUnderexposure: Float,
+    val fractionPixelsClippedAtFinalShortTet: Float,
 ) {
     init {
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
+        require(finalShortTetMs.isFinite() && finalShortTetMs > 0f)
+        require(finalLongTetMs.isFinite() && finalLongTetMs >= finalShortTetMs)
+        require(safeUnderexposure.isFinite() && safeUnderexposure >= 1f)
+        require(
+            fractionPixelsClippedAtFinalShortTet.isFinite() &&
+                fractionPixelsClippedAtFinalShortTet in 0f..1f,
+        )
     }
 }

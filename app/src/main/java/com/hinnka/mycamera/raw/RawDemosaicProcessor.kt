@@ -431,10 +431,18 @@ class RawDemosaicProcessor {
 
             val exposureReady = renderSceneExposureRequest(
                 request = RawSceneExposureRequest {
-                    RawSceneExposureResult(hdrRatio = 1f)
+                    RawSceneExposureResult(
+                        hdrRatio = 1f,
+                        finalShortTetMs = 1f,
+                        finalLongTetMs = 1f,
+                        safeUnderexposure = 1f,
+                        fractionPixelsClippedAtFinalShortTet = 0f,
+                    )
                 },
                 metadata = metadata,
                 sourceTextureId = demosaicTextureId,
+                rawTextureIdForStats = meteringRawTexture,
+                rawSamplesPerPixel = 1,
                 colorCorrectionMatrix = identity,
                 cameraWhite = metadata.cameraWhite,
                 profileToLinearSrgbTransform = identity,
@@ -634,6 +642,16 @@ class RawDemosaicProcessor {
             if (exportedStackTextureIds.remove(source.textureId)) {
                 GLES30.glDeleteTextures(1, intArrayOf(source.textureId), 0)
                 checkGlError("release stacked LinearRaw texture")
+            }
+        }
+    }
+
+    internal suspend fun releaseGpuDemosaicedRawSource(source: GpuDemosaicedRawSource?) {
+        if (source == null) return
+        withContext(glDispatcher) {
+            if (exportedStackTextureIds.remove(source.textureId)) {
+                GLES30.glDeleteTextures(1, intArrayOf(source.textureId), 0)
+                checkGlError("release prepared single-frame demosaic texture")
             }
         }
     }
@@ -1482,6 +1500,7 @@ class RawDemosaicProcessor {
     private val photonDehazePipeline = PhotonDehazePipeline()
     private val hdrReferencePass = RawHdrReferencePass(engineTonePass)
     private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
+    private val fastMomentsStatsAlgorithm = RawFastMomentsStatsAlgorithm()
     private val quadBayerDemosaicAlgorithm = QuadBayerDemosaicAlgorithm()
     private val vgnDemosaicAlgorithm = VgnDemosaicAlgorithm()
     private val demosaicNoisePropagationCalibrator = DemosaicNoisePropagationCalibrator(
@@ -1974,6 +1993,7 @@ class RawDemosaicProcessor {
                 rowStride = input.rowStride,
                 samplesPerPixel = input.samplesPerPixel,
                 gpuLinearRgbSource = input.gpuLinearRgbSource,
+                fastMomentsRawStats = input.fastMomentsRawStats,
                 metadata = input.metadata.copy(profileGainTableMap = null),
                 aspectRatio = aspectRatio,
                 cropRegion = cropRegion,
@@ -2115,6 +2135,7 @@ class RawDemosaicProcessor {
         rowStride: Int,
         samplesPerPixel: Int,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
+        gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
         metadata: RawMetadata,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
@@ -2207,6 +2228,7 @@ class RawDemosaicProcessor {
                 rowStride = rowStride,
                 samplesPerPixel = samplesPerPixel,
                 gpuLinearRgbSource = gpuLinearRgbSource,
+                gpuDemosaicedRawSource = gpuDemosaicedRawSource,
                 metadata = renderMetadata,
                 aspectRatio = aspectRatio,
                 cropRegion = cropRegion,
@@ -2260,6 +2282,8 @@ class RawDemosaicProcessor {
         rowStride: Int = 0,
         samplesPerPixel: Int = 1,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
+        gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
+        fastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
         metadata: RawMetadata? = null,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
@@ -2326,6 +2350,21 @@ class RawDemosaicProcessor {
                     "Ignoring invalid or stale stacked GPU source texture=${source.textureId} " +
                         "source=${source.width}x${source.height}x${source.samplesPerPixel} " +
                         "buffer=${width}x${height}x$samplesPerPixel",
+                )
+            }
+            valid
+        }
+        val borrowedDemosaicSource = gpuDemosaicedRawSource?.takeIf { source ->
+            val valid = source.textureId != 0 &&
+                source.width == width && source.height == height &&
+                samplesPerPixel == 1 &&
+                exportedStackTextureIds.contains(source.textureId)
+            if (!valid) {
+                PLog.w(
+                    TAG,
+                    "Ignoring invalid or stale prepared demosaic texture=${source.textureId} " +
+                        "source=${source.width}x${source.height} " +
+                        "buffer=${width}x$height samplesPerPixel=$samplesPerPixel",
                 )
             }
             valid
@@ -2614,6 +2653,7 @@ class RawDemosaicProcessor {
         val prepareCaptureProfile = captureProfilePass
         val useHalfResolutionMeteringDemosaic =
             sceneExposureRequest != null &&
+                !capturePhotonPgtmRequested &&
                 actualSamplesPerPixel == 1 &&
                 actualMetadata.frameCount == 1 &&
                 actualMetadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
@@ -2623,6 +2663,7 @@ class RawDemosaicProcessor {
             actualSamplesPerPixel !in setOf(1, 3, 4) ->
                 "unsupported samplesPerPixel=$actualSamplesPerPixel"
             borrowedGpuSource != null -> "GPU-resident stacked source"
+            borrowedDemosaicSource != null -> "GPU-resident prepared demosaic"
             forcePhotonPgtmRegeneration ->
                 "HDRNet PGTM regeneration requires continuous linear RGB"
             actualMetadata.coreImagingTuning.dehaze.isActive ->
@@ -2729,6 +2770,15 @@ class RawDemosaicProcessor {
                     "Using GPU-resident LinearRaw input: ${actualWidth}x${actualHeight} " +
                         "samplesPerPixel=$actualSamplesPerPixel texture=$rawTextureId",
                 )
+            } else if (borrowedDemosaicSource != null) {
+                // The capture-profile pass already consumed this exact CFA buffer and produced
+                // the full-resolution camera-RGB texture. The ordinary render has no remaining
+                // RAW-domain work, so uploading the Bayer buffer a second time is unnecessary.
+                PLog.d(
+                    TAG,
+                    "Skipping duplicate CFA upload for prepared demosaic: " +
+                        "${actualWidth}x${actualHeight} texture=${borrowedDemosaicSource.textureId}",
+                )
             } else if (actualSamplesPerPixel in 3..4) {
                 uploadLinearRawRgbTextureFromBuffer(
                     requireNotNull(actualRawData),
@@ -2745,6 +2795,7 @@ class RawDemosaicProcessor {
                     actualRowStride,
                 )
             }
+            borrowedDemosaicSource?.let(::adoptPreparedDemosaicSource)
             // Ordinary rendering is GPU-resident from this point onward. Tiled rendering keeps
             // the native decoder buffer alive and re-uploads one CFA-aligned source region.
             if (rawRenderTiles.isEmpty()) {
@@ -2909,10 +2960,23 @@ class RawDemosaicProcessor {
             val finalHeight = bounds.height()
 
             if (rawRenderTiles.isEmpty()) {
-                // 4. Full-frame demosaic is only valid for the legacy path. High-resolution
-                // rendering performs the same work from renderRawTiles() after all shared
-                // profile/exposure state has been resolved.
-                if (useHalfResolutionMeteringDemosaic) {
+                // 4. A capture-profile pass may hand its full-resolution single-frame demosaic
+                // directly to this render. Other high-resolution sources perform the same work
+                // from renderRawTiles() after shared profile/exposure state has been resolved.
+                if (borrowedDemosaicSource != null) {
+                    PLog.i(
+                        TAG,
+                        "Reusing capture-profile full-resolution demosaic: " +
+                            "${demosaicWidth}x$demosaicHeight texture=$demosaicTextureId",
+                    )
+                    if (userAdjustmentDenoiseEnabled) {
+                        userAdjustmentNoiseTransfer =
+                            demosaicNoisePropagationCalibrator.prepareUserAdjustment(
+                                actualMetadata,
+                                demosaicCalculationWbGains(actualMetadata),
+                            )
+                    }
+                } else if (useHalfResolutionMeteringDemosaic) {
                     runHalfResolutionMeteringDemosaic(
                         metadata = actualMetadata,
                         width = actualWidth,
@@ -2983,6 +3047,7 @@ class RawDemosaicProcessor {
                 }
                 applicableDngWarpRectilinear
                     ?.takeUnless {
+                        borrowedDemosaicSource != null ||
                         useHalfResolutionMeteringDemosaic ||
                             (captureProfilePreparationRequested && !captureExposureRequested)
                     }
@@ -3037,6 +3102,9 @@ class RawDemosaicProcessor {
                         request = request,
                         metadata = actualMetadata,
                         sourceTextureId = demosaicTextureId,
+                        rawTextureIdForStats = rawTextureId,
+                        rawSamplesPerPixel = actualSamplesPerPixel,
+                        suppliedFastMomentsRawStats = fastMomentsRawStats,
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         cameraWhite = linearCameraWhite,
                         profileToLinearSrgbTransform = profileToLinearSrgbTransform,
@@ -3051,7 +3119,12 @@ class RawDemosaicProcessor {
                         "RAW_SCENE_EXPOSURE stage=INFERENCE_COMPLETE " +
                             "pgtm=$capturePhotonPgtmRequested " +
                             "sourceBaselineEv=${actualMetadata.baselineExposure} " +
-                            "hdrRatio=${solution.hdrRatio}",
+                            "hdrRatio=${solution.hdrRatio} " +
+                            "finalShortTetMs=${solution.finalShortTetMs} " +
+                            "finalLongTetMs=${solution.finalLongTetMs} " +
+                            "safeUnderexposure=${solution.safeUnderexposure} " +
+                            "fractionPixelsClippedAtFinalShortTet=" +
+                            "${solution.fractionPixelsClippedAtFinalShortTet}",
                     )
                 }
                 solvedExposureEv?.let { exposureEv ->
@@ -3079,6 +3152,8 @@ class RawDemosaicProcessor {
                         streamingRowStride = actualRowStride,
                         width = actualWidth,
                         height = actualHeight,
+                        linearRgbTextureWidth = demosaicWidth,
+                        linearRgbTextureHeight = demosaicHeight,
                         samplesPerPixel = actualSamplesPerPixel,
                         metadata = actualMetadata.copy(profileGainTableMap = null),
                         statsBounds = captureProfileStatsBounds,
@@ -3103,15 +3178,27 @@ class RawDemosaicProcessor {
                     }
                     null
                 }
-                val captureResult = if (
+                val captureProfileFailed =
                     capturePhotonPgtmRequested && captureProfileGainTableMap == null
+                val reusableDemosaicSource = if (
+                    !captureProfileFailed &&
+                    actualSamplesPerPixel == 1 &&
+                    !useHalfResolutionMeteringDemosaic &&
+                    demosaicTextureId != 0 &&
+                    demosaicWidth == actualWidth && demosaicHeight == actualHeight
                 ) {
+                    exportPreparedDemosaicSource()
+                } else {
+                    null
+                }
+                val captureResult = if (captureProfileFailed) {
                     null
                 } else {
                     RawDngCaptureProfileResult(
                         exposureOffsetEv = solvedExposureEv,
                         hdrRatio = captureHdrRatio,
                         profileGainTableMap = captureProfileGainTableMap,
+                        gpuDemosaicedRawSource = reusableDemosaicSource,
                     )
                 }
                 onCaptureProfilePrepared?.invoke(captureResult)
@@ -3120,25 +3207,27 @@ class RawDemosaicProcessor {
 
             if (forcePhotonPgtmRegeneration) {
                 val persistedHdrRatio = photonHdrRatio?.takeIf { it.isFinite() && it >= 1f }
-                val estimatedHdrRatio = if (persistedHdrRatio == null) {
-                    renderSceneExposureRequest(
-                        request = RawSceneExposureMatcher.createRequest(
-                            context = context,
-                            metadata = actualMetadata,
-                        ),
+                // A forced regeneration is also the migration boundary for older captures whose
+                // persisted ratio came from the non-Fast-Moments AE path. Re-run the current true
+                // path first; retain metadata only as a fallback when the model cannot execute.
+                val estimatedExposure = renderSceneExposureRequest(
+                    request = RawSceneExposureMatcher.createRequest(
+                        context = context,
                         metadata = actualMetadata,
-                        sourceTextureId = demosaicTextureId,
-                        colorCorrectionMatrix = linearColorCorrectionMatrix,
-                        cameraWhite = linearCameraWhite,
-                        profileToLinearSrgbTransform = profileToLinearSrgbTransform,
-                        outputSourceBounds = outputSourceBounds,
-                        outputRotation = actualRotation,
-                        stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
-                    )?.hdrRatio
-                } else {
-                    null
-                }
-                val regenerationHdrRatio = persistedHdrRatio ?: estimatedHdrRatio
+                    ),
+                    metadata = actualMetadata,
+                    sourceTextureId = demosaicTextureId,
+                    rawTextureIdForStats = rawTextureId,
+                    rawSamplesPerPixel = actualSamplesPerPixel,
+                    colorCorrectionMatrix = linearColorCorrectionMatrix,
+                    cameraWhite = linearCameraWhite,
+                    profileToLinearSrgbTransform = profileToLinearSrgbTransform,
+                    outputSourceBounds = outputSourceBounds,
+                    outputRotation = actualRotation,
+                    stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
+                )
+                val estimatedHdrRatio = estimatedExposure?.hdrRatio
+                val regenerationHdrRatio = estimatedHdrRatio ?: persistedHdrRatio
                 if (regenerationHdrRatio == null) {
                     PLog.e(
                         TAG,
@@ -3150,7 +3239,13 @@ class RawDemosaicProcessor {
                 PLog.i(
                     TAG,
                     "HDRNet PGTM regeneration ratio=$regenerationHdrRatio " +
-                        "source=${if (persistedHdrRatio != null) "metadata" else "MGC_AE"}",
+                        "source=${if (estimatedHdrRatio != null) "MGC_FAST_MOMENTS_TRUE" else "metadata-fallback"} " +
+                        "persistedRatio=$persistedHdrRatio " +
+                        "finalShortTetMs=${estimatedExposure?.finalShortTetMs} " +
+                        "finalLongTetMs=${estimatedExposure?.finalLongTetMs} " +
+                        "safeUnderexposure=${estimatedExposure?.safeUnderexposure} " +
+                        "fractionPixelsClippedAtFinalShortTet=" +
+                        "${estimatedExposure?.fractionPixelsClippedAtFinalShortTet}",
                 )
                 if (rawRenderTiles.isNotEmpty() || demosaicTextureId == 0) {
                     PLog.e(
@@ -3168,6 +3263,8 @@ class RawDemosaicProcessor {
                     streamingRowStride = actualRowStride,
                     width = actualWidth,
                     height = actualHeight,
+                    linearRgbTextureWidth = demosaicWidth,
+                    linearRgbTextureHeight = demosaicHeight,
                     samplesPerPixel = actualSamplesPerPixel,
                     metadata = actualMetadata.copy(profileGainTableMap = null),
                     statsBounds = outputSourceBounds,
@@ -4256,6 +4353,8 @@ class RawDemosaicProcessor {
         streamingRowStride: Int = 0,
         width: Int,
         height: Int,
+        linearRgbTextureWidth: Int = width,
+        linearRgbTextureHeight: Int = height,
         rawTextureWidth: Int = width,
         rawTextureHeight: Int = height,
         samplesPerPixel: Int,
@@ -4293,6 +4392,8 @@ class RawDemosaicProcessor {
                 streamingRowStride = streamingRowStride,
                 width = width,
                 height = height,
+                linearRgbTextureWidth = linearRgbTextureWidth,
+                linearRgbTextureHeight = linearRgbTextureHeight,
                 rawTextureWidth = rawTextureWidth,
                 rawTextureHeight = rawTextureHeight,
                 samplesPerPixel = samplesPerPixel,
@@ -5840,6 +5941,71 @@ class RawDemosaicProcessor {
         return textures[0]
     }
 
+    /** Transfers the current full-resolution demosaic to the immediately following RAW render. */
+    private fun exportPreparedDemosaicSource(): GpuDemosaicedRawSource {
+        check(demosaicTextureId != 0 && demosaicWidth > 0 && demosaicHeight > 0) {
+            "Capture-profile demosaic is unavailable"
+        }
+        val source = GpuDemosaicedRawSource(
+            textureId = demosaicTextureId,
+            width = demosaicWidth,
+            height = demosaicHeight,
+        )
+        check(exportedStackTextureIds.add(source.textureId)) {
+            "Capture-profile demosaic texture is already exported: ${source.textureId}"
+        }
+        PLog.i(
+            TAG,
+            "Exporting capture-profile full-resolution demosaic: " +
+                "${source.width}x${source.height} texture=${source.textureId}",
+        )
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        if (linearOutputTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(linearOutputTextureId), 0)
+        }
+        if (demosaicFramebufferId != 0 || linearOutputFramebufferId != 0) {
+            GLES30.glDeleteFramebuffers(
+                2,
+                intArrayOf(demosaicFramebufferId, linearOutputFramebufferId),
+                0,
+            )
+        }
+        demosaicTextureId = 0
+        linearOutputTextureId = 0
+        demosaicFramebufferId = 0
+        linearOutputFramebufferId = 0
+        demosaicWidth = 0
+        demosaicHeight = 0
+        checkGlError("export capture-profile demosaic")
+        return source
+    }
+
+    /** Adopts an exported capture-profile texture into the ordinary renderer without copying it. */
+    private fun adoptPreparedDemosaicSource(source: GpuDemosaicedRawSource) {
+        check(demosaicWidth == source.width && demosaicHeight == source.height) {
+            "Prepared demosaic target mismatch: ${demosaicWidth}x$demosaicHeight, " +
+                "source=${source.width}x${source.height}"
+        }
+        check(exportedStackTextureIds.remove(source.textureId)) {
+            "Prepared demosaic texture is no longer owned by this renderer: ${source.textureId}"
+        }
+        if (demosaicTextureId != 0 && demosaicTextureId != source.textureId) {
+            GLES30.glDeleteTextures(1, intArrayOf(demosaicTextureId), 0)
+        }
+        demosaicTextureId = source.textureId
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            demosaicTextureId,
+            0,
+        )
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        checkGlError("adopt capture-profile demosaic")
+    }
+
     private fun setupFullResFramebuffer(width: Int, height: Int) {
         if (demosaicFramebufferId != 0 && demosaicTextureId != 0) {
             // Check if size matches, if not, recreate
@@ -7374,6 +7540,7 @@ class RawDemosaicProcessor {
         hncsCameraDomainGains: FloatArray? = null,
         textureBounds: FloatArray = floatArrayOf(0f, 0f, 1f, 1f),
         areaSampleFootprint: FloatArray = floatArrayOf(0f, 0f),
+        useAreaSampleMaximum: Boolean = false,
         textureRotation: Int = 0,
         label: String
     ) {
@@ -7419,6 +7586,7 @@ class RawDemosaicProcessor {
                     hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                     textureBounds = textureBounds,
                     areaSampleFootprint = areaSampleFootprint,
+                    useAreaSampleMaximum = useAreaSampleMaximum,
                     textureRotation = textureRotation,
                     bindHueSatMap = { program -> bindLinearDcpHueSatMap(program, hueSatMap) },
                     label = label,
@@ -7622,6 +7790,9 @@ class RawDemosaicProcessor {
         request: RawSceneExposureRequest,
         metadata: RawMetadata,
         sourceTextureId: Int,
+        rawTextureIdForStats: Int,
+        rawSamplesPerPixel: Int,
+        suppliedFastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray,
         profileToLinearSrgbTransform: FloatArray,
@@ -7669,11 +7840,140 @@ class RawDemosaicProcessor {
             GLES31.glMemoryBarrier(
                 GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
             )
-            readSceneExposureFrame(
+            val linearSrgb = readSceneExposureChannels(
                 width = width,
                 height = height,
                 stackCompletionTimeline = stackCompletionTimeline,
-            )?.let(request::solve)
+                label = "RAW scene exposure model input",
+            ) ?: return null
+
+            val fastMomentsStats = suppliedFastMomentsRawStats ?: if (
+                rawSamplesPerPixel == 1 && rawTextureIdForStats != 0
+            ) {
+                // MGC's mode-2 ProcessAeStats consumes a RAW clipping mask at 1/16 scale. Preserve
+                // all four CFA channels before demosaic/highlight reconstruction can hide a clip.
+                val statsWidth = (
+                    metadata.width + RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
+                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
+                val statsHeight = (
+                    metadata.height + RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
+                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
+                setupLinearExposurePreviewFramebuffer(statsWidth, statsHeight)
+                if (!fastMomentsStatsAlgorithm.execute(
+                        RawFastMomentsStatsAlgorithm.Input(
+                            rawTextureId = rawTextureIdForStats,
+                            outputTextureId = linearExposurePreviewTextureId,
+                            width = metadata.width,
+                            height = metadata.height,
+                            cfaPattern = metadata.cfaPattern,
+                            blackLevel = FloatArray(4) { channel ->
+                                metadata.blackLevel.getOrElse(channel) {
+                                    metadata.blackLevel.firstOrNull() ?: 0f
+                                }
+                            },
+                            whiteLevel = metadata.whiteLevel,
+                        ),
+                    )
+                ) {
+                    return null
+                }
+                val channelMax = readSceneExposureChannels(
+                    width = statsWidth,
+                    height = statsHeight,
+                    stackCompletionTimeline = null,
+                    label = "RAW Fast Moments sensor statistics",
+                    channelCount = 4,
+                ) ?: return null
+                RawSceneFastMomentsRawStats(
+                    width = statsWidth,
+                    height = statsHeight,
+                    channelMax = channelMax,
+                    sensorNormalized = true,
+                    sourceBounds = floatArrayOf(0f, 0f, 1f, 1f),
+                    sourceRotationDegrees = 0,
+                )
+            } else {
+                // LinearRaw RGB has no CFA plane. Retain the same mode-2 state machine and use the
+                // un-white-balanced camera-domain maximum surface as its explicit fallback input.
+                val quarterTurn = ((outputRotation % 180) + 180) % 180 != 0
+                val orientedSourceWidth = if (quarterTurn) {
+                    outputSourceBounds.height()
+                } else {
+                    outputSourceBounds.width()
+                }
+                val orientedSourceHeight = if (quarterTurn) {
+                    outputSourceBounds.width()
+                } else {
+                    outputSourceBounds.height()
+                }
+                val statsWidth = (
+                    orientedSourceWidth +
+                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
+                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
+                val statsHeight = (
+                    orientedSourceHeight +
+                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
+                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
+                val statsAreaSampleFootprint = floatArrayOf(
+                    (normalizedBounds[2] - normalizedBounds[0]) /
+                        (if (quarterTurn) statsHeight else statsWidth).toFloat(),
+                    (normalizedBounds[3] - normalizedBounds[1]) /
+                        (if (quarterTurn) statsWidth else statsHeight).toFloat(),
+                )
+                setupLinearExposurePreviewFramebuffer(statsWidth, statsHeight)
+                renderLinearRcdPass(
+                    metadata = metadata,
+                    sourceTextureId = sourceTextureId,
+                    targetFramebufferId = linearExposurePreviewFramebufferId,
+                    viewportWidth = statsWidth,
+                    viewportHeight = statsHeight,
+                    rawExposureCompensation = 0f,
+                    colorCorrectionMatrix = identityMatrix3x3(),
+                    cameraWhite = floatArrayOf(1f, 1f, 1f),
+                    hueSatMap = null,
+                    applyDngBaselineExposure = false,
+                    clampProfileRgb = false,
+                    hueSatMapSupportsOverrange = false,
+                    textureBounds = normalizedBounds,
+                    areaSampleFootprint = statsAreaSampleFootprint,
+                    useAreaSampleMaximum = true,
+                    textureRotation = outputRotation,
+                    label = "RawSceneExposureCameraStatsPass",
+                )
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                GLES31.glMemoryBarrier(
+                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+                )
+                val cameraRgbMax = readSceneExposureChannels(
+                    width = statsWidth,
+                    height = statsHeight,
+                    stackCompletionTimeline = null,
+                    label = "RAW scene exposure camera statistics",
+                ) ?: return null
+                val channelMax = FloatArray(statsWidth * statsHeight * 4)
+                for (pixel in 0 until statsWidth * statsHeight) {
+                    channelMax[pixel * 4] = cameraRgbMax[pixel * 3]
+                    channelMax[pixel * 4 + 1] = cameraRgbMax[pixel * 3 + 1]
+                    channelMax[pixel * 4 + 2] = cameraRgbMax[pixel * 3 + 1]
+                    channelMax[pixel * 4 + 3] = cameraRgbMax[pixel * 3 + 2]
+                }
+                RawSceneFastMomentsRawStats(
+                    width = statsWidth,
+                    height = statsHeight,
+                    channelMax = channelMax,
+                    sensorNormalized = false,
+                    sourceBounds = normalizedBounds,
+                    sourceRotationDegrees = outputRotation,
+                )
+            }
+            request.solve(
+                RawSceneLinearFrame(
+                    width = width,
+                    height = height,
+                    rgb = linearSrgb,
+                    fastMomentsStats = fastMomentsStats,
+                ),
+            )
         } catch (error: Throwable) {
             PLog.e(TAG, "Failed to prepare RAW scene exposure input", error)
             null
@@ -7823,16 +8123,19 @@ class RawDemosaicProcessor {
         )
     }
 
-    private fun readSceneExposureFrame(
+    private fun readSceneExposureChannels(
         width: Int,
         height: Int,
         stackCompletionTimeline: GpuStackCompletionTimeline?,
-    ): RawSceneLinearFrame? {
+        label: String,
+        channelCount: Int = 3,
+    ): FloatArray? {
+        require(channelCount in 1..4)
         val pixelCount = width * height
         val byteCount = pixelCount * 4 * Short.SIZE_BYTES
         val readback = LargeDirectBuffer.allocate(
             byteCount.toLong(),
-            "RAW scene exposure readback",
+            "$label readback",
         ) ?: return null
         return try {
             readback.clear()
@@ -7844,7 +8147,7 @@ class RawDemosaicProcessor {
                 checkGlError = ::checkGlError,
             )
             val queueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
-                label = "RAW scene exposure ${width}x$height",
+                label = "$label ${width}x$height",
                 checkGlError = ::checkGlError,
             )
             val transferStartNs = System.nanoTime()
@@ -7858,24 +8161,25 @@ class RawDemosaicProcessor {
                 readback,
             )
             val transferMs = (System.nanoTime() - transferStartNs) / 1_000_000L
-            checkGlError("RAW scene exposure readback")
+            checkGlError("$label readback")
             readback.position(0)
             val half = readback.order(ByteOrder.nativeOrder()).asShortBuffer()
-            val rgb = FloatArray(pixelCount * 3)
+            val channels = FloatArray(pixelCount * channelCount)
             for (pixel in 0 until pixelCount) {
                 val sourceOffset = pixel * 4
-                val targetOffset = pixel * 3
-                rgb[targetOffset] = Half.toFloat(half.get(sourceOffset))
-                rgb[targetOffset + 1] = Half.toFloat(half.get(sourceOffset + 1))
-                rgb[targetOffset + 2] = Half.toFloat(half.get(sourceOffset + 2))
+                val targetOffset = pixel * channelCount
+                for (channel in 0 until channelCount) {
+                    channels[targetOffset + channel] =
+                        Half.toFloat(half.get(sourceOffset + channel))
+                }
             }
             PLog.d(
                 TAG,
-                "RAW scene exposure timing size=${width}x$height " +
+                "$label timing size=${width}x$height " +
                     "upstreamStackGpuWait=${upstreamTiming?.totalWaitMs ?: 0L}ms " +
                     "gpuQueueWait=${queueWaitMs}ms pixelTransfer=${transferMs}ms",
             )
-            RawSceneLinearFrame(width = width, height = height, rgb = rgb)
+            channels
         } finally {
             LargeDirectBuffer.free(readback)
         }
@@ -8139,6 +8443,7 @@ class RawDemosaicProcessor {
         quadBayerDemosaicAlgorithm.release()
         profileGainTableAlgorithm.release()
         meteringDemosaicAlgorithm.release()
+        fastMomentsStatsAlgorithm.release()
         linearRcdPass.release()
         photonDehazePipeline.release()
         warpRectilinearPass.release()

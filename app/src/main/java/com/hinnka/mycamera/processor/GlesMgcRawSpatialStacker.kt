@@ -12,6 +12,7 @@ import android.util.Half
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
+import com.hinnka.mycamera.raw.RawSceneFastMomentsRawStats
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -542,8 +543,15 @@ internal class GlesMgcRawSpatialStacker(
                     }}",
             )
         }
+        // GlesMgcRawFusion has already moved the selected base frame to index zero. Preserve the
+        // same sensor-domain 1/16 maxima that Fast Moments consumes before an RGB merge discards
+        // the Bayer plane. Reconstructing these statistics from merged LinearRaw changes both
+        // clipping and lens-shading semantics.
+        val fastMomentsRawStats = frames.firstOrNull()?.let(::buildFastMomentsRawStats)
         if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
-            return processSabreFrames(frames)
+            return processSabreFrames(frames)?.copy(
+                fastMomentsRawStats = fastMomentsRawStats,
+            )
         }
         val images = frames.map { it.image }
         require(
@@ -1817,6 +1825,7 @@ internal class GlesMgcRawSpatialStacker(
                         stackCompletionTimeline = null,
                     )
                 },
+                fastMomentsRawStats = fastMomentsRawStats,
                 lensShadingCorrectionApplied = lensShadingCorrectionApplied,
                 mergedFrameCount = mergedFrames,
                 mgcDenoiseCorrelation = denoiseModel?.correlation,
@@ -3468,6 +3477,73 @@ internal class GlesMgcRawSpatialStacker(
             for (phase in 0 until 4) {
                 canonical[canonicalChannelAtPhase(phase)] = positional[phase]
             }
+        }
+    }
+
+    private fun buildFastMomentsRawStats(frame: RawStackFrame): RawSceneFastMomentsRawStats? {
+        val plane = frame.image.planes.firstOrNull() ?: return null
+        if (plane.pixelStride != RAW_BYTES_PER_PIXEL ||
+            plane.rowStride < width * RAW_BYTES_PER_PIXEL
+        ) {
+            PLog.e(
+                TAG,
+                "Fast Moments reference RAW layout is unsupported: " +
+                    "rowStride=${plane.rowStride} pixelStride=${plane.pixelStride} " +
+                    "size=${width}x$height",
+            )
+            return null
+        }
+        val source = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
+        val sourceBase = source.position()
+        val requiredEnd = sourceBase.toLong() +
+            (height - 1L) * plane.rowStride + width.toLong() * RAW_BYTES_PER_PIXEL
+        if (requiredEnd > source.limit().toLong()) {
+            PLog.e(
+                TAG,
+                "Fast Moments reference RAW plane is truncated: required=$requiredEnd " +
+                    "limit=${source.limit()}",
+            )
+            return null
+        }
+        val statsWidth = ceilDiv(width, FAST_MOMENTS_DOWNSAMPLE)
+        val statsHeight = ceilDiv(height, FAST_MOMENTS_DOWNSAMPLE)
+        val channelMax = FloatArray(statsWidth * statsHeight * 4)
+        val black = canonicalBlackLevelForFrame(frame)
+        for (statsY in 0 until statsHeight) {
+            val startY = statsY * FAST_MOMENTS_DOWNSAMPLE
+            val endY = minOf(startY + FAST_MOMENTS_DOWNSAMPLE, height)
+            for (statsX in 0 until statsWidth) {
+                val startX = statsX * FAST_MOMENTS_DOWNSAMPLE
+                val endX = minOf(startX + FAST_MOMENTS_DOWNSAMPLE, width)
+                val outputOffset = (statsY * statsWidth + statsX) * 4
+                for (y in startY until endY) {
+                    val rowOffset = sourceBase + y * plane.rowStride
+                    for (x in startX until endX) {
+                        val channel = canonicalChannelAtPhase(((y and 1) shl 1) or (x and 1))
+                        val raw = source.getShort(
+                            rowOffset + x * RAW_BYTES_PER_PIXEL,
+                        ).toInt() and 0xffff
+                        val normalized = (raw.toFloat() - black[channel]).coerceAtLeast(0f) /
+                            (sensorWhiteLevel - black[channel]).coerceAtLeast(1f)
+                        val index = outputOffset + channel
+                        if (normalized > channelMax[index]) channelMax[index] = normalized
+                    }
+                }
+            }
+        }
+        return RawSceneFastMomentsRawStats(
+            width = statsWidth,
+            height = statsHeight,
+            channelMax = channelMax,
+            sensorNormalized = true,
+            sourceBounds = floatArrayOf(0f, 0f, 1f, 1f),
+            sourceRotationDegrees = 0,
+        ).also {
+            PLog.i(
+                TAG,
+                "MGC Fast Moments reference RAW statistics ready: " +
+                    "size=${statsWidth}x$statsHeight source=selected-base-bayer",
+            )
         }
     }
 
@@ -9421,6 +9497,7 @@ internal class GlesMgcRawSpatialStacker(
         const val SABRE_SIGNAL_ROW_STEP = 8
         const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         const val RAW_BYTES_PER_PIXEL = 2
+        const val FAST_MOMENTS_DOWNSAMPLE = 16
         const val RGB_AOT_TILE_SIZE = 16
         const val RGB_AOT_MERGE_SHARPNESS_SCALE = 0.8f
         const val RGB_RAW_WINDOW_SLOTS = 2

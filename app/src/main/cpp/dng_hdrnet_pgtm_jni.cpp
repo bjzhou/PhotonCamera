@@ -11,6 +11,7 @@
 namespace {
 
 constexpr char kLogTag[] = "PLog_DngHdrNetPgtm";
+constexpr float kHdrNetGainEpsilon = 1.0e-6f;
 
 struct AxisSample {
   int lower;
@@ -164,6 +165,8 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     jint source_grid_width, jint source_grid_height, jint source_grid_depth,
     jint coefficient_count, jint output_grid_width, jint output_grid_height,
     jint point_count, jfloat hdr_ratio, jfloat baseline_gain,
+    jfloat render_min_gain, jfloat render_max_gain,
+    jfloat render_max_gain_blend_threshold,
     jfloat min_table_gain, jfloat max_table_gain,
     jfloatArray guide_shifts_array,
     jfloatArray guide_slopes_array, jfloatArray acr_curve_array,
@@ -178,6 +181,11 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       output_grid_height <= 0 || point_count <= 1 ||
       !std::isfinite(hdr_ratio) || hdr_ratio < 1.0f ||
       !std::isfinite(baseline_gain) || baseline_gain <= 0.0f ||
+      !std::isfinite(render_min_gain) || render_min_gain <= 0.0f ||
+      !std::isfinite(render_max_gain) ||
+      render_max_gain < render_min_gain ||
+      !std::isfinite(render_max_gain_blend_threshold) ||
+      render_max_gain_blend_threshold < 0.0f ||
       !std::isfinite(min_table_gain) || min_table_gain <= 0.0f ||
       !std::isfinite(max_table_gain) || max_table_gain < min_table_gain ||
       diagnostic_mode < -1 || diagnostic_mode > 1) {
@@ -283,13 +291,28 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
             coefficient_count, x_samples[static_cast<size_t>(x)],
             y_samples[static_cast<size_t>(y)], range_sample, 1);
         const float scale = raw_scale * (hdr_ratio - 1.0f) + 1.0f;
-        const float target = scale * source_luma + bias;
-        if (!std::isfinite(target)) {
+        const float predicted_luma = scale * source_luma + bias;
+        if (!std::isfinite(predicted_luma)) {
           targets_valid.store(false, std::memory_order_relaxed);
           gain_curve[point] = min_table_gain;
           continue;
         }
-        const float target_luma = std::clamp(target, 0.0f, 1.0f);
+
+        // Match MGC's HDRNet renderer: convert the unconstrained affine luma
+        // prediction to a gain first, then apply uGainLimits. Clamping the
+        // affine output itself to zero would turn negative local predictions
+        // into DNG's 1/4096 legal minimum and produce grid-shaped black areas.
+        float render_max_gain_for_luma = render_max_gain;
+        if (render_max_gain_blend_threshold > 0.0f) {
+          const float blend = std::clamp(
+              source_luma / render_max_gain_blend_threshold, 0.0f, 1.0f);
+          render_max_gain_for_luma = Lerp(1.0f, render_max_gain, blend);
+        }
+        const float render_gain = std::clamp(
+            predicted_luma / (source_luma + kHdrNetGainEpsilon),
+            render_min_gain, render_max_gain_for_luma);
+        const float target_luma =
+            std::clamp(source_luma * render_gain, 0.0f, 1.0f);
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
         float gain = std::clamp(

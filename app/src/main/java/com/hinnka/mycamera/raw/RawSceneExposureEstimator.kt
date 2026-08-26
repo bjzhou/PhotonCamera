@@ -13,14 +13,39 @@ internal data class RawSceneLinearFrame(
     val height: Int,
     /** Interleaved, colorized linear-RGB samples from the exact RAW frame. */
     val rgb: FloatArray,
+    val fastMomentsStats: RawSceneFastMomentsRawStats,
+)
+
+/** The 1/16-resolution RAW-domain statistics consumed only by Fast Moments mode 2. */
+data class RawSceneFastMomentsRawStats(
+    val width: Int,
+    val height: Int,
+    /** Per-cell component maxima in canonical [R, Gr, Gb, B] order. */
+    val channelMax: FloatArray,
+    /** True for direct black-subtracted sensor samples; false for camera-RGB fallback data. */
+    val sensorNormalized: Boolean,
+    /** Normalized source bounds represented by this statistics surface. */
+    val sourceBounds: FloatArray,
+    val sourceRotationDegrees: Int,
 )
 
 /** Capture-side value consumed by MGC HDRNet. */
 internal data class RawSceneExposureEstimate(
     val hdrRatio: Float,
+    val finalShortTetMs: Float,
+    val finalLongTetMs: Float,
+    val safeUnderexposure: Float,
+    val fractionPixelsClippedAtFinalShortTet: Float,
 ) {
     init {
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
+        require(finalShortTetMs.isFinite() && finalShortTetMs > 0f)
+        require(finalLongTetMs.isFinite() && finalLongTetMs >= finalShortTetMs)
+        require(safeUnderexposure.isFinite() && safeUnderexposure >= 1f)
+        require(
+            fractionPixelsClippedAtFinalShortTet.isFinite() &&
+                fractionPixelsClippedAtFinalShortTet in 0f..1f,
+        )
     }
 }
 
@@ -40,6 +65,9 @@ internal enum class RawSceneExposureShotMaxSource {
 }
 
 internal data class RawSceneExposureShotRange(
+    /** Lower endpoint supplied to ComputeAeResults before mode-2 RAW-stat adjustment. */
+    val requestMinTetMs: Float,
+    /** Lower endpoint reconstructed by ProcessAeStats from the current frame and request. */
     val minTetMs: Float,
     val maxTetMs: Float,
     val maxPostCaptureTetMs: Float,
@@ -51,6 +79,26 @@ internal data class RawSceneExposureBranches(
     val shortLogGain: Float,
     val longLogGain: Float,
     val portraitLogGain: Float,
+)
+
+internal data class RawSceneExposureIdeals(
+    val shortTetMs: Float,
+    val longTetMs: Float,
+    val portraitTetMs: Float,
+    val shortGain: Float,
+    val longGain: Float,
+    val portraitGain: Float,
+)
+
+/** State produced by MGC's Fast Moments process-AE-stats step (`ComputeAeResults(..., true)`). */
+internal data class RawSceneFastMomentsAeStats(
+    val processAeStatsExecuted: Boolean,
+    val statsShotMinTetMs: Float,
+    val statsShotMaxTetMs: Float,
+    val anticipatedUnderexposure: Float,
+    val safeUnderexposure: Float,
+    val adjustedShotMinTetMs: Float,
+    val fractionPixelsClippedAtBaseTet: Float,
 )
 
 /** Inputs to MGC's post-inference ComputeAeResults finalization. */
@@ -98,6 +146,7 @@ internal object RawSceneExposureMath {
     const val COLOR_CHANNELS = 4
     const val SEMANTIC_CHANNELS = 5
     const val INPUT_CHANNELS = COLOR_CHANNELS + SEMANTIC_CHANNELS
+    const val FAST_MOMENTS_RAW_STATS_DOWNSAMPLE = RawFastMomentsStatsAlgorithm.DOWNSAMPLE
 
     // Ordinary MGC/Google ZSL exposure tuning. These are finalizer constraints, not sensor limits.
     const val MAX_POST_CAPTURE_GAIN = 26.5f
@@ -118,6 +167,7 @@ internal object RawSceneExposureMath {
     private const val NANOS_PER_MILLISECOND = 1_000_000.0
     private const val MILLIS_PER_SECOND = 1_000.0
     private const val HIGHLIGHT_CLIP_LEVEL = 1.0
+    private const val RAW_CLIP_LEVEL = 1.0f
     fun measureSceneBrightness(
         frame: RawSceneLinearFrame,
         exposureTimeNs: Long,
@@ -212,6 +262,7 @@ internal object RawSceneExposureMath {
             RawSceneExposureShotMaxSource.MAX_OVERALL_GAIN
         }
         return RawSceneExposureShotRange(
+            requestMinTetMs = deviceMinTetMs,
             minTetMs = minTetMs,
             maxTetMs = maxTetMs,
             maxPostCaptureTetMs = maxPostCaptureTetMs,
@@ -278,6 +329,99 @@ internal object RawSceneExposureMath {
         return gain.takeIf { it.isFinite() && it > 0.0 }?.toFloat()
     }
 
+    fun resolveIdealExposure(
+        currentTetMs: Float,
+        branches: RawSceneExposureBranches,
+    ): RawSceneExposureIdeals? {
+        if (!currentTetMs.isFinite() || currentTetMs <= 0f) return null
+        val shortGain = modelLogGainToLinear(branches.shortLogGain) ?: return null
+        val longGain = modelLogGainToLinear(branches.longLogGain) ?: return null
+        val portraitGain = modelLogGainToLinear(branches.portraitLogGain) ?: return null
+        val shortTetMs = currentTetMs * shortGain
+        val longTetMs = currentTetMs * longGain
+        val portraitTetMs = currentTetMs * portraitGain
+        if (!validPositiveTets(shortTetMs, longTetMs, portraitTetMs)) return null
+        return RawSceneExposureIdeals(
+            shortTetMs = shortTetMs,
+            longTetMs = longTetMs,
+            portraitTetMs = portraitTetMs,
+            shortGain = shortGain,
+            longGain = longGain,
+            portraitGain = portraitGain,
+        )
+    }
+
+    /**
+     * Reproduces the extra state transition selected by Fast Moments' mode 2 request.
+     *
+     * MGC first computes the base-frame shot range and initial ML ideals. If the base frame is
+     * longer than the shortest learned ideal, `ComputeSafeUnderexposure` examines RAW-clipped
+     * samples. At every clipped CFA location it evaluates white-balance gain times spatial gain,
+     * takes the global minimum and clamps it to at least one. That factor is then used to lower the
+     * shot-min TET before the common AE finalizer runs.
+     */
+    fun processFastMomentsAeStats(
+        frame: RawSceneLinearFrame,
+        metadata: RawMetadata,
+        currentTetMs: Float,
+        shotRange: RawSceneExposureShotRange,
+        ideals: RawSceneExposureIdeals,
+    ): RawSceneFastMomentsAeStats? {
+        if (!currentTetMs.isFinite() || currentTetMs <= 0f ||
+            !validTetRange(shotRange.minTetMs, shotRange.maxTetMs)
+        ) {
+            return null
+        }
+        val shortestHdrIdealTetMs = minOf(ideals.shortTetMs, ideals.longTetMs)
+        if (!shortestHdrIdealTetMs.isFinite() || shortestHdrIdealTetMs <= 0f) return null
+        val anticipatedUnderexposure = maxOf(
+            shotRange.minTetMs / shortestHdrIdealTetMs,
+            1f,
+        )
+        val baseRawStats = measureRawClipping(
+            frame = frame,
+            metadata = metadata,
+            relativeTetGain = 1f,
+            collectSafeUnderexposure = anticipatedUnderexposure > 1f,
+        ) ?: return null
+        val safeUnderexposure = if (anticipatedUnderexposure > 1f) {
+            baseRawStats.safeUnderexposure
+        } else {
+            1f
+        }
+        // MGC's default unsafe-underexposure multiplier is 1, so the effective allowed factor is
+        // exactly ComputeSafeUnderexposure's result. The optional debug flag that permits an
+        // unbounded unsafe factor is deliberately not part of the production Fast Moments path.
+        // AArch64 `fcsel ..., mi` at MGC 9.7's ProcessAeStats boundary selects the
+        // larger endpoint: the RAW-derived underexposure may lower the base-frame
+        // minimum, but it must never cross the request/device minimum.
+        val adjustedShotMinTetMs = maxOf(
+            shotRange.requestMinTetMs,
+            shotRange.minTetMs / safeUnderexposure,
+        )
+        if (!adjustedShotMinTetMs.isFinite() || adjustedShotMinTetMs <= 0f) return null
+        return RawSceneFastMomentsAeStats(
+            processAeStatsExecuted = true,
+            statsShotMinTetMs = shotRange.minTetMs,
+            statsShotMaxTetMs = shotRange.maxTetMs,
+            anticipatedUnderexposure = anticipatedUnderexposure,
+            safeUnderexposure = safeUnderexposure,
+            adjustedShotMinTetMs = adjustedShotMinTetMs,
+            fractionPixelsClippedAtBaseTet = baseRawStats.clippedFraction,
+        )
+    }
+
+    fun fractionPixelsClippedAtTet(
+        frame: RawSceneLinearFrame,
+        metadata: RawMetadata,
+        relativeTetGain: Float,
+    ): Float? = measureRawClipping(
+        frame = frame,
+        metadata = metadata,
+        relativeTetGain = relativeTetGain,
+        collectSafeUnderexposure = false,
+    )?.clippedFraction
+
     /**
      * Reproduces the MGC ML-AE ideal-TET to final-TET state transition.
      *
@@ -298,13 +442,13 @@ internal object RawSceneExposureMath {
         ) {
             return null
         }
-        val shortIdealGain = modelLogGainToLinear(branches.shortLogGain) ?: return null
-        val longIdealGain = modelLogGainToLinear(branches.longLogGain) ?: return null
-        val portraitIdealGain = modelLogGainToLinear(branches.portraitLogGain) ?: return null
-        val idealShortTetMs = currentTetMs * shortIdealGain
-        val idealLongTetMs = currentTetMs * longIdealGain
-        val idealPortraitTetMs = currentTetMs * portraitIdealGain
-        if (!validPositiveTets(idealShortTetMs, idealLongTetMs, idealPortraitTetMs)) return null
+        val ideals = resolveIdealExposure(currentTetMs, branches) ?: return null
+        val shortIdealGain = ideals.shortGain
+        val longIdealGain = ideals.longGain
+        val portraitIdealGain = ideals.portraitGain
+        val idealShortTetMs = ideals.shortTetMs
+        val idealLongTetMs = ideals.longTetMs
+        val idealPortraitTetMs = ideals.portraitTetMs
 
         // MGC's AeResults finalizer treats every positive portrait TET as a frame-role constraint;
         // face presence never switches the displayed result from short to portrait.
@@ -427,6 +571,177 @@ internal object RawSceneExposureMath {
         return clipped.toFloat() / pixelCount.toFloat()
     }
 
+    private data class RawClippingMeasurement(
+        val clippedFraction: Float,
+        val safeUnderexposure: Float,
+    )
+
+    private fun measureRawClipping(
+        frame: RawSceneLinearFrame,
+        metadata: RawMetadata,
+        relativeTetGain: Float,
+        collectSafeUnderexposure: Boolean,
+    ): RawClippingMeasurement? {
+        val stats = frame.fastMomentsStats
+        val pixelCount = stats.width * stats.height
+        if (stats.width <= 0 || stats.height <= 0 ||
+            stats.channelMax.size != pixelCount * 4 ||
+            stats.sourceBounds.size < 4 ||
+            stats.sourceBounds.take(4).any { !it.isFinite() } ||
+            !relativeTetGain.isFinite() || relativeTetGain <= 0f
+        ) {
+            return null
+        }
+        val whiteBalance = metadata.whiteBalanceGains.takeIf { gains ->
+            gains.size >= 4 && gains.take(4).all { it.isFinite() && it > 0f }
+        } ?: return null
+
+        var clippedPixels = 0
+        var safeUnderexposure = Float.POSITIVE_INFINITY
+        for (y in 0 until stats.height) {
+            for (x in 0 until stats.width) {
+                val lscR = minimumLensShadingGain(metadata, stats, 0, x, y)
+                val lscGr = minimumLensShadingGain(metadata, stats, 1, x, y)
+                val lscGb = minimumLensShadingGain(metadata, stats, 2, x, y)
+                val lscB = minimumLensShadingGain(metadata, stats, 3, x, y)
+                if (!validPositiveTets(lscR, lscGr, lscGb, lscB)) return null
+
+                val offset = (y * stats.width + x) * 4
+                val red = stats.channelMax[offset]
+                val greenEven = stats.channelMax[offset + 1]
+                val greenOdd = stats.channelMax[offset + 2]
+                val blue = stats.channelMax[offset + 3]
+                if (!validNonNegative(red, greenEven, greenOdd, blue)) return null
+
+                var pixelClipped = false
+                fun accountChannel(value: Float, lsc: Float, whiteBalanceGain: Float) {
+                    val sensorValue = if (stats.sensorNormalized) value else value / lsc
+                    if (sensorValue * relativeTetGain >= RAW_CLIP_LEVEL) {
+                        pixelClipped = true
+                        if (collectSafeUnderexposure) {
+                            safeUnderexposure = minOf(
+                                safeUnderexposure,
+                                whiteBalanceGain * lsc,
+                            )
+                        }
+                    }
+                }
+                accountChannel(red, lscR, whiteBalance[0])
+                accountChannel(greenEven, lscGr, whiteBalance[1])
+                accountChannel(greenOdd, lscGb, whiteBalance[2])
+                accountChannel(blue, lscB, whiteBalance[3])
+                if (pixelClipped) clippedPixels++
+            }
+        }
+        val resolvedSafeUnderexposure = if (
+            collectSafeUnderexposure && safeUnderexposure.isFinite()
+        ) {
+            maxOf(safeUnderexposure, 1f)
+        } else {
+            1f
+        }
+        return RawClippingMeasurement(
+            clippedFraction = clippedPixels.toFloat() / pixelCount.toFloat(),
+            safeUnderexposure = resolvedSafeUnderexposure,
+        )
+    }
+
+    private fun minimumLensShadingGain(
+        metadata: RawMetadata,
+        stats: RawSceneFastMomentsRawStats,
+        channel: Int,
+        x: Int,
+        y: Int,
+    ): Float {
+        val sourceUv = sourceUv(stats, x, y, 0.5f, 0.5f)
+        return lensShadingGain(
+            metadata = metadata,
+            channel = channel,
+            sourceU = sourceUv.first,
+            sourceV = sourceUv.second,
+            chooseMinimumNeighbor = true,
+        )
+    }
+
+    private fun sourceUv(
+        stats: RawSceneFastMomentsRawStats,
+        x: Int,
+        y: Int,
+        cellU: Float,
+        cellV: Float,
+    ): Pair<Float, Float> {
+        val u = (x.toFloat() + cellU) / stats.width.toFloat()
+        val v = (y.toFloat() + cellV) / stats.height.toFloat()
+        val rotation = ((stats.sourceRotationDegrees % 360) + 360) % 360
+        val orientedU: Float
+        val orientedV: Float
+        when (rotation) {
+            90 -> {
+                orientedU = v
+                orientedV = 1f - u
+            }
+            180 -> {
+                orientedU = 1f - u
+                orientedV = 1f - v
+            }
+            270 -> {
+                orientedU = 1f - v
+                orientedV = u
+            }
+            else -> {
+                orientedU = u
+                orientedV = v
+            }
+        }
+        return Pair(
+            stats.sourceBounds[0] +
+                (stats.sourceBounds[2] - stats.sourceBounds[0]) * orientedU,
+            stats.sourceBounds[1] +
+                (stats.sourceBounds[3] - stats.sourceBounds[1]) * orientedV,
+        )
+    }
+
+    private fun lensShadingGain(
+        metadata: RawMetadata,
+        channel: Int,
+        sourceU: Float,
+        sourceV: Float,
+        chooseMinimumNeighbor: Boolean = false,
+    ): Float {
+        val map = metadata.lensShadingMap ?: return 1f
+        val width = metadata.lensShadingMapWidth
+        val height = metadata.lensShadingMapHeight
+        if (width <= 0 || height <= 0 || map.size != width * height * 4) return 1f
+
+        var textureU = sourceU
+        var textureV = sourceV
+        metadata.lensShadingMapGrid?.takeIf { it.size >= 8 }?.let { grid ->
+            val boundsWidth = maxOf(grid[6] - grid[4], 1f)
+            val boundsHeight = maxOf(grid[7] - grid[5], 1f)
+            val normalizedX = (sourceU * metadata.width.toFloat() - grid[4]) / boundsWidth
+            val normalizedY = (sourceV * metadata.height.toFloat() - grid[5]) / boundsHeight
+            val mapX = (normalizedX - grid[0]) / maxOf(grid[2], 1e-8f)
+            val mapY = (normalizedY - grid[1]) / maxOf(grid[3], 1e-8f)
+            textureU = (mapX + 0.5f) / width.toFloat()
+            textureV = (mapY + 0.5f) / height.toFloat()
+        }
+        val sampleX = (textureU * width.toFloat() - 0.5f).coerceIn(0f, width - 1f)
+        val sampleY = (textureV * height.toFloat() - 0.5f).coerceIn(0f, height - 1f)
+        val x0 = kotlin.math.floor(sampleX.toDouble()).toInt()
+        val y0 = kotlin.math.floor(sampleY.toDouble()).toInt()
+        val x1 = (x0 + 1).coerceAtMost(width - 1)
+        val y1 = (y0 + 1).coerceAtMost(height - 1)
+        val tx = (sampleX - kotlin.math.floor(sampleX.toDouble()).toFloat()).coerceIn(0f, 1f)
+        val ty = (sampleY - kotlin.math.floor(sampleY.toDouble()).toFloat()).coerceIn(0f, 1f)
+        fun at(px: Int, py: Int): Float = map[(py * width + px) * 4 + channel]
+        if (chooseMinimumNeighbor) {
+            return minOf(at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1))
+        }
+        val top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx
+        val bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx
+        return top + (bottom - top) * ty
+    }
+
     private fun validateInput(frame: RawSceneLinearFrame, logSceneBrightness: Float): Boolean {
         val pixelCount = INPUT_WIDTH * INPUT_HEIGHT
         if (frame.width != INPUT_WIDTH || frame.height != INPUT_HEIGHT ||
@@ -445,6 +760,9 @@ internal object RawSceneExposureMath {
 
     private fun validPositiveTets(vararg tets: Float): Boolean =
         tets.all { it.isFinite() && it > 0f }
+
+    private fun validNonNegative(vararg values: Float): Boolean =
+        values.all { it.isFinite() && it >= 0f }
 
     private fun positiveOverride(value: Float?): Float? =
         value?.takeIf { it.isFinite() && it > 0f }
@@ -547,21 +865,54 @@ internal object RawSceneExposureEstimator {
                     longLogGain = longLogGain,
                     portraitLogGain = portraitLogGain,
                 )
+                val ideals = RawSceneExposureMath.resolveIdealExposure(
+                    currentTetMs = measurement.currentTetMs,
+                    branches = branches,
+                ) ?: run {
+                    PLog.e(TAG, "RAW scene exposure ML AE ideals are invalid")
+                    return@synchronized null
+                }
+                val fastMomentsStats = RawSceneExposureMath.processFastMomentsAeStats(
+                    frame = frame,
+                    metadata = metadata,
+                    currentTetMs = measurement.currentTetMs,
+                    shotRange = shotRange,
+                    ideals = ideals,
+                ) ?: run {
+                    PLog.e(TAG, "Fast Moments process-AE-stats returned invalid values")
+                    return@synchronized null
+                }
                 val fusion = RawSceneExposureMath.finalizeAeResults(
                     frame = frame,
                     currentTetMs = measurement.currentTetMs,
                     branches = branches,
                     finalization = RawSceneExposureFinalization(
-                        shotMinTetMs = shotRange.minTetMs,
+                        shotMinTetMs = fastMomentsStats.adjustedShotMinTetMs,
                         shotMaxTetMs = shotRange.maxTetMs,
                     ),
                 ) ?: run {
                     PLog.e(TAG, "RAW scene exposure MGC AE finalization returned invalid values")
                     return@synchronized null
                 }
+                val fractionPixelsClippedAtFinalShortTet =
+                    RawSceneExposureMath.fractionPixelsClippedAtTet(
+                        frame = frame,
+                        metadata = metadata,
+                        relativeTetGain = fusion.finalShortTetMs / measurement.currentTetMs,
+                    ) ?: run {
+                        PLog.e(TAG, "Fast Moments final-short RAW clipping statistics are invalid")
+                        return@synchronized null
+                    }
+                val rawStatsSource = if (frame.fastMomentsStats.sensorNormalized) {
+                    "RAW_CFA_16X16_MAX"
+                } else {
+                    "CAMERA_RGB_FALLBACK"
+                }
                 PLog.i(
                     TAG,
-                    "RAW_SCENE_EXPOSURE stage=MGC_AE_FINALIZE " +
+                    "RAW_SCENE_EXPOSURE stage=MGC_FAST_MOMENTS_AE_FINALIZE " +
+                        "computeAeResultsProcessRawStats=true " +
+                        "processAeStatsExecuted=${fastMomentsStats.processAeStatsExecuted} " +
                         "shortLnGain=${branches.shortLogGain} " +
                         "longLnGain=${branches.longLogGain} " +
                         "portraitLnGain=${branches.portraitLogGain} " +
@@ -577,11 +928,23 @@ internal object RawSceneExposureEstimator {
                         "finalShortGain=${fusion.finalShortGain} " +
                         "finalLongGain=${fusion.finalLongGain} " +
                         "finalPortraitGain=${fusion.finalPortraitGain} " +
-                        "solver=MGC_ML_AE_ORIGINAL_TET " +
+                        "solver=MGC_FAST_MOMENTS_TRUE " +
                         "hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit} " +
                         "finalHdrRatio=${fusion.finalHdrRatio} " +
                         "hdrRatioLimited=${fusion.hdrRatioLimited} " +
                         "safeUnderexposureApplied=${fusion.safeUnderexposureApplied} " +
+                        "anticipatedUnderexposure=${fastMomentsStats.anticipatedUnderexposure} " +
+                        "safeUnderexposure=${fastMomentsStats.safeUnderexposure} " +
+                        "statsShotMinTetMs=${fastMomentsStats.statsShotMinTetMs} " +
+                        "statsShotMaxTetMs=${fastMomentsStats.statsShotMaxTetMs} " +
+                        "adjustedShotMinTetMs=${fastMomentsStats.adjustedShotMinTetMs} " +
+                        "fractionPixelsClippedAtBaseTet=" +
+                        "${fastMomentsStats.fractionPixelsClippedAtBaseTet} " +
+                        "fractionPixelsClippedAtFinalShortTet=" +
+                        "$fractionPixelsClippedAtFinalShortTet " +
+                        "rawStatsSource=$rawStatsSource " +
+                        "rawStatsSize=${frame.fastMomentsStats.width}x" +
+                        "${frame.fastMomentsStats.height} " +
                         "clipSource=${fusion.sourceClippedFraction} " +
                         "clipShort=${fusion.shortClippedFraction} " +
                         "clipLong=${fusion.longClippedFraction} " +
@@ -598,6 +961,7 @@ internal object RawSceneExposureEstimator {
                         "maxAnalogIso=${metadata.maxAnalogSensitivity} " +
                         "overallGain=${measurement.overallGain} " +
                         "currentTetMs=${measurement.currentTetMs} " +
+                        "requestShotMinTetMs=${shotRange.requestMinTetMs} " +
                         "shotMinTetMs=${shotRange.minTetMs} " +
                         "shotMaxTetMs=${shotRange.maxTetMs} " +
                         "shotMaxSource=${shotRange.maxSource} " +
@@ -609,6 +973,11 @@ internal object RawSceneExposureEstimator {
                 )
                 RawSceneExposureEstimate(
                     hdrRatio = fusion.finalHdrRatio,
+                    finalShortTetMs = fusion.finalShortTetMs,
+                    finalLongTetMs = fusion.finalLongTetMs,
+                    safeUnderexposure = fastMomentsStats.safeUnderexposure,
+                    fractionPixelsClippedAtFinalShortTet =
+                        fractionPixelsClippedAtFinalShortTet,
                 )
             } catch (error: Throwable) {
                 PLog.e(TAG, "RAW scene exposure inference failed", error)
