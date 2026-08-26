@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.sqrt
 
 class PreviewEyeFocusProcessor(context: Context) : Closeable {
 
@@ -31,6 +32,8 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
     private data class FaceCandidate(
         val faceCenterX: Float,
         val faceCenterY: Float,
+        val boxWidth: Float,
+        val boxHeight: Float,
         val area: Float,
         val confidence: Float,
         val leftEyeX: Float,
@@ -42,6 +45,9 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
     companion object {
         private const val TAG = "PreviewEyeFocus"
         private const val MODEL_ASSET = "blaze_face_full_range.tflite"
+        private const val FACE_MASK_WIDTH = 64
+        private const val FACE_MASK_HEIGHT = 64
+        private const val FACE_MASK_CORE_RADIUS = 0.58f
         private const val MIN_DETECTION_CONFIDENCE = 0.65f
         private const val MIN_TARGET_CONFIDENCE = 0.70f
         private const val REQUIRED_STABLE_RESULTS = 3
@@ -88,6 +94,8 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
     private var pendingImage: MPImage? = null
     private var pendingBitmap: Bitmap? = null
     private var pendingGeneration = 0
+    private var pendingEyeTargetRequested = false
+    private var pendingFaceMaskRequested = false
 
     private var lastFaceCenterX: Float? = null
     private var lastFaceCenterY: Float? = null
@@ -100,6 +108,7 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
     private var hasConfirmedTarget = false
 
     var onEyeTarget: ((EyeTarget) -> Unit)? = null
+    var onPortraitMask: ((PortraitMaskSnapshot) -> Unit)? = null
     var onTargetLost: (() -> Unit)? = null
     var onBusyStateChanged: ((Boolean) -> Unit)? = null
     var onFrameProcessed: ((EyeFocusProcessingTiming) -> Unit)? = null
@@ -119,8 +128,18 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         }
     }
 
-    fun processFrame(frame: EyeFocusPreviewFrame): Boolean {
-        if (released.get() || detectorInitializationFailed || !frameInFlight.compareAndSet(false, true)) {
+    fun processFrame(
+        frame: EyeFocusPreviewFrame,
+        detectEyeTarget: Boolean,
+        createFaceMask: Boolean,
+    ): Boolean {
+        val detectorPathAvailable =
+            (detectEyeTarget || createFaceMask) && !detectorInitializationFailed
+        if (
+            released.get() ||
+            !detectorPathAvailable ||
+            !frameInFlight.compareAndSet(false, true)
+        ) {
             return false
         }
 
@@ -131,7 +150,12 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         onBusyStateChanged?.invoke(true)
         try {
             inferenceExecutor.execute {
-                submitBitmap(frame.bitmap, generation)
+                submitBitmap(
+                    bitmap = frame.bitmap,
+                    generation = generation,
+                    detectEyeTarget = detectEyeTarget,
+                    createFaceMask = createFaceMask,
+                )
             }
             return true
         } catch (error: RejectedExecutionException) {
@@ -147,15 +171,13 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         }
     }
 
-    private fun submitBitmap(bitmap: Bitmap, generation: Int) {
+    private fun submitBitmap(
+        bitmap: Bitmap,
+        generation: Int,
+        detectEyeTarget: Boolean,
+        createFaceMask: Boolean,
+    ) {
         if (released.get()) {
-            bitmap.recycle()
-            finishFrame()
-            return
-        }
-
-        val detector = getOrCreateDetector()
-        if (detector == null) {
             bitmap.recycle()
             finishFrame()
             return
@@ -183,12 +205,21 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         }
         val submittedBitmap = checkNotNull(preparedBitmap)
         val submittedImage = checkNotNull(mpImage)
+        val detector = getOrCreateDetector()
+        if (detector == null) {
+            submittedImage.close()
+            submittedBitmap.recycle()
+            finishFrame()
+            return
+        }
         val timestampMs = synchronized(stateLock) {
             val now = SystemClock.uptimeMillis()
             lastTimestampMs = maxOf(now, lastTimestampMs + 1L)
             pendingImage = submittedImage
             pendingBitmap = submittedBitmap
             pendingGeneration = generation
+            pendingEyeTargetRequested = detectEyeTarget
+            pendingFaceMaskRequested = createFaceMask
             lastTimestampMs
         }
 
@@ -234,16 +265,27 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         val inputHeight = input.height
         val generation: Int
         val target: EyeTarget?
+        val faceMask: PortraitMaskSnapshot?
         var targetLost = false
         var targetConfirmed = false
         synchronized(stateLock) {
             generation = pendingGeneration
+            val eyeTargetRequested = pendingEyeTargetRequested
+            val faceMaskRequested = pendingFaceMaskRequested
             cleanupPendingInputLocked()
             if (generation != trackingGeneration.get() || released.get()) {
                 target = null
+                faceMask = null
             } else {
                 val candidate = selectCandidateLocked(result, inputWidth, inputHeight)
-                if (candidate == null) {
+                faceMask = if (faceMaskRequested && candidate != null) {
+                    createFaceMask(candidate)
+                } else {
+                    null
+                }
+                if (!eyeTargetRequested) {
+                    target = null
+                } else if (candidate == null) {
                     val nowNanos = SystemClock.elapsedRealtimeNanos()
                     if (missingResultCount == 0) {
                         missingTargetSinceNanos = nowNanos
@@ -282,6 +324,7 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         }
 
         finishFrame()
+        faceMask?.let { onPortraitMask?.invoke(it) }
         if (targetConfirmed) {
             PLog.d(TAG, "Human face confirmed: confidence=${target?.confidence}")
         }
@@ -346,6 +389,8 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
             FaceCandidate(
                 faceCenterX = centerX,
                 faceCenterY = centerY,
+                boxWidth = boxWidth,
+                boxHeight = boxHeight,
                 area = area,
                 confidence = confidence,
                 leftEyeX = eyeCoordinates[0],
@@ -368,6 +413,41 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
             }
             candidate.area * centerWeight * confidenceWeight * continuityWeight
         }
+    }
+
+    /**
+     * Converts a validated BlazeFace box into a center-weighted facial ellipse. The mask contains
+     * no preview luminance and therefore cannot carry tone-mapped brightness into RAW metering.
+     */
+    private fun createFaceMask(candidate: FaceCandidate): PortraitMaskSnapshot {
+        val confidence = FloatArray(FACE_MASK_WIDTH * FACE_MASK_HEIGHT)
+        val radiusX = (candidate.boxWidth * 0.5f).coerceAtLeast(1f / FACE_MASK_WIDTH)
+        val radiusY = (candidate.boxHeight * 0.5f).coerceAtLeast(1f / FACE_MASK_HEIGHT)
+        for (y in 0 until FACE_MASK_HEIGHT) {
+            val normalizedY = (y + 0.5f) / FACE_MASK_HEIGHT.toFloat()
+            val dy = (normalizedY - candidate.faceCenterY) / radiusY
+            for (x in 0 until FACE_MASK_WIDTH) {
+                val normalizedX = (x + 0.5f) / FACE_MASK_WIDTH.toFloat()
+                val dx = (normalizedX - candidate.faceCenterX) / radiusX
+                val radius = sqrt(dx * dx + dy * dy)
+                val weight = when {
+                    radius <= FACE_MASK_CORE_RADIUS -> 1f
+                    radius >= 1f -> 0f
+                    else -> {
+                        val t = ((1f - radius) / (1f - FACE_MASK_CORE_RADIUS))
+                            .coerceIn(0f, 1f)
+                        t * t * (3f - 2f * t)
+                    }
+                }
+                confidence[y * FACE_MASK_WIDTH + x] = weight
+            }
+        }
+        return PortraitMaskSnapshot(
+            width = FACE_MASK_WIDTH,
+            height = FACE_MASK_HEIGHT,
+            confidence = confidence,
+            sampleElapsedRealtimeNanos = activeSampleStartedAtNanos,
+        )
     }
 
     private fun isValidFaceGeometry(
@@ -488,6 +568,8 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         pendingImage = null
         pendingBitmap?.recycle()
         pendingBitmap = null
+        pendingEyeTargetRequested = false
+        pendingFaceMaskRequested = false
     }
 
     private fun resetTrackingStateLocked() {

@@ -26,7 +26,6 @@ internal class GlesMgcRawFusion(
     private val lensShading: FloatArray?,
     private val lensShadingWidth: Int,
     private val lensShadingHeight: Int,
-    private val processingBounds: Rect?,
     private val outputMode: MgcSpatialOutputMode,
     private val mergeMethod: MgcMergeMethod,
     outputScale: Float,
@@ -112,9 +111,9 @@ internal class GlesMgcRawFusion(
             cfaPattern = cfaPattern,
             canonicalBlackLevel = blackLevel,
             whiteLevel = whiteLevel,
-            processingBounds = Rect(
-                processingBounds ?: Rect(0, 0, width, height),
-            ).apply { offset(sourceBounds.left, sourceBounds.top) },
+            // MGC's non-QCOM AE receives the entire RawWriteView. The render/output crop is not
+            // part of either RawToLoResRgb or mode-2 ComputeSafeUnderexposure.
+            processingBounds = Rect(sourceBounds),
             cfaPhaseOriginX = sourceBounds.left,
             cfaPhaseOriginY = sourceBounds.top,
             coordinateBounds = sourceBounds,

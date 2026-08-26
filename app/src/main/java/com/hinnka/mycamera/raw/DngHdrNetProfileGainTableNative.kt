@@ -17,6 +17,8 @@ internal object DngHdrNetProfileGainTableNative {
         renderMaxGainBlendThreshold: Float,
         minTableGain: Float,
         maxTableGain: Float,
+        portraitRelightingGain: Float,
+        portraitRelightingWeights: FloatArray,
     ): FloatArray? {
         val outputCount = plan.cellCount.toLong() * plan.pointCount
         if (outputCount !in 1..Int.MAX_VALUE.toLong()) return null
@@ -45,6 +47,8 @@ internal object DngHdrNetProfileGainTableNative {
             diagnosticEnd = diagnosticBand?.end ?: 1f,
             diagnosticFeather = diagnosticBand?.feather ?: 0f,
             diagnosticMode = diagnosticBand?.mode?.ordinal ?: -1,
+            portraitRelightingGain = portraitRelightingGain,
+            portraitRelightingWeights = portraitRelightingWeights,
             outputGains = output,
         )
         return output.takeIf { completed }
@@ -73,6 +77,8 @@ internal object DngHdrNetProfileGainTableNative {
         diagnosticEnd: Float,
         diagnosticFeather: Float,
         diagnosticMode: Int,
+        portraitRelightingGain: Float,
+        portraitRelightingWeights: FloatArray,
         outputGains: FloatArray,
     ): Boolean
 }

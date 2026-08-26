@@ -63,9 +63,11 @@ import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawCaptureProfileCoordinator
 import com.hinnka.mycamera.raw.RawPhotonHdrRatioMetadata
+import com.hinnka.mycamera.raw.RawPhotonPortraitRelightingMetadata
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.DngBlackLevelPatcher
 import com.hinnka.mycamera.utils.DngCfaPatternPatcher
@@ -2272,7 +2274,8 @@ object GalleryManager {
         photoQuality: Int = 95,
         exposureBias: Float? = null,
         captureExposureCompensationEv: Float = 0f,
-        exportDngWithRawExport: Boolean = false
+        exportDngWithRawExport: Boolean = false,
+        capturePortraitMask: PortraitMaskSnapshot? = null,
     ) = withContext(Dispatchers.IO) {
         var rawBufferToRelease: ByteBuffer? = null
         var preparedDemosaicSourceToRelease: GpuDemosaicedRawSource? = null
@@ -2371,6 +2374,7 @@ object GalleryManager {
                 aspectRatio = aspectRatio,
                 rotation = rotation,
                 capturePreviewThumbnail = dngThumbnail,
+                capturePortraitMask = capturePortraitMask,
             )
             val preparedProfile = RawProcessor.prepareRawDngProfile(
                 rawBuffer = rawBuffer,
@@ -2394,9 +2398,14 @@ object GalleryManager {
             ) ?: return@withContext
             preparedDemosaicSourceToRelease = preparedProfile.gpuDemosaicedRawSource
             updatedMetadata = updatedMetadata.copy(
-                customProperties = RawPhotonHdrRatioMetadata.write(
-                    updatedMetadata.customProperties,
-                    preparedProfile.hdrRatio,
+                customProperties = RawPhotonPortraitRelightingMetadata.write(
+                    properties = RawPhotonHdrRatioMetadata.write(
+                        updatedMetadata.customProperties,
+                        preparedProfile.hdrRatio,
+                        preparedProfile.finalShortGain,
+                    ),
+                    gain = preparedProfile.portraitRelightingGain,
+                    mask = preparedProfile.portraitRelightingMask,
                 ),
             )
 
@@ -2746,7 +2755,8 @@ object GalleryManager {
         photoQuality: Int = 95,
         exposureBias: Float? = null,
         captureExposureCompensationEv: Float = 0f,
-        exportDngWithRawExport: Boolean = false
+        exportDngWithRawExport: Boolean = false,
+        capturePortraitMask: PortraitMaskSnapshot? = null,
     ) {
         // 根据图像格式处理
         when (val format = image.format) {
@@ -2785,6 +2795,7 @@ object GalleryManager {
                     exposureBias = exposureBias,
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport,
+                    capturePortraitMask = capturePortraitMask,
                 )
             }
 
@@ -3304,6 +3315,7 @@ object GalleryManager {
         captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
+        capturePortraitMask: PortraitMaskSnapshot? = null,
         frameExposureProducts: List<Double?> = emptyList(),
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
@@ -3456,7 +3468,6 @@ object GalleryManager {
                     lensShadingHeight = rawMetadata.lensShadingMapHeight,
                     applyLensShadingCorrection = applyRawLensShading,
                     sourceBounds = physicalRawCrop.sourceBounds,
-                    processingBounds = captureProcessingBounds,
                     useCurrentGlContext = true,
                     exportGpuLinearRgbSource = true,
                     gpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16F,
@@ -3662,6 +3673,7 @@ object GalleryManager {
                     aspectRatio = aspectRatio,
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
+                    capturePortraitMask = capturePortraitMask,
                 )
                 val profileStartMs = System.currentTimeMillis()
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
@@ -3693,9 +3705,14 @@ object GalleryManager {
                     return@withContext
                 }
                 updatedMetadata = updatedMetadata.copy(
-                    customProperties = RawPhotonHdrRatioMetadata.write(
-                        updatedMetadata.customProperties,
-                        dngProfilePreparation.hdrRatio,
+                    customProperties = RawPhotonPortraitRelightingMetadata.write(
+                        properties = RawPhotonHdrRatioMetadata.write(
+                            updatedMetadata.customProperties,
+                            dngProfilePreparation.hdrRatio,
+                            dngProfilePreparation.finalShortGain,
+                        ),
+                        gain = dngProfilePreparation.portraitRelightingGain,
+                        mask = dngProfilePreparation.portraitRelightingMask,
                     ),
                 )
                 val profileElapsedMs = System.currentTimeMillis() - profileStartMs
@@ -4455,6 +4472,7 @@ object GalleryManager {
         captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
+        capturePortraitMask: PortraitMaskSnapshot? = null,
         frameExposureProducts: List<Double?> = emptyList(),
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
@@ -4502,6 +4520,7 @@ object GalleryManager {
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport,
                     capturePreviewThumbnail = capturePreviewThumbnail,
+                    capturePortraitMask = capturePortraitMask,
                     frameExposureProducts = frameExposureProducts,
                     frameFocusDistances = frameFocusDistances,
                     rawStackFrames = rawStackFrames,
@@ -4528,6 +4547,7 @@ object GalleryManager {
         aspectRatio: AspectRatio?,
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
+        capturePortraitMask: PortraitMaskSnapshot? = null,
     ): RawDngProfilePreparationOptions {
         val exposureMode = RawAdaptiveExposureMode.resolve(
             usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
@@ -4563,6 +4583,7 @@ object GalleryManager {
                     cropRegion = cropRegion,
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
+                    capturePortraitMask = capturePortraitMask,
                     statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
@@ -4588,6 +4609,7 @@ object GalleryManager {
                 "photonPgtm=$generatePhotonPgtm processingBounds=$statsBounds " +
                 "legacyMetering=$legacyMeteringEnabled " +
                 "capturePreview=${capturePreviewThumbnail != null} " +
+                "portraitMask=${capturePortraitMask != null} " +
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
         return RawDngProfilePreparationOptions(
@@ -5669,6 +5691,9 @@ object GalleryManager {
                 val rawNoiseReduction = resolveNoiseReduction(rawMetadata, 0f)
                 val rawChromaNoiseReduction = rawMetadata.chromaNoiseReduction
                     ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
+                val persistedPortraitRelighting = RawPhotonPortraitRelightingMetadata.read(
+                    rawMetadata.customProperties,
+                )
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
@@ -5705,6 +5730,11 @@ object GalleryManager {
                     photonHdrRatio = RawPhotonHdrRatioMetadata.read(
                         rawMetadata.customProperties,
                     ),
+                    photonSourceToShortGain = RawPhotonHdrRatioMetadata.readFinalShortGain(
+                        rawMetadata.customProperties,
+                    ),
+                    photonPortraitRelightingGain = persistedPortraitRelighting?.gain,
+                    photonPortraitRelightingMask = persistedPortraitRelighting?.mask,
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,
                     rawBlackBorderCrop = rawMetadata.rawBlackBorderCrop,
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,

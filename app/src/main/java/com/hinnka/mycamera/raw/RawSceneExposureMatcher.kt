@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.content.Context
+import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.utils.PLog
 
 /**
@@ -19,26 +20,33 @@ internal object RawSceneExposureMatcher {
         context: Context,
         metadata: RawMetadata,
         deviceLimits: RawSceneExposureDeviceLimits? = null,
-    ): RawSceneExposureRequest = RawSceneExposureRequest { frame ->
-        val result = RawSceneExposureEstimator.estimate(
-            context = context.applicationContext,
-            frame = frame,
-            metadata = metadata,
-            deviceLimits = deviceLimits,
-        )
-        if (result == null) {
-            PLog.w(TAG, "RAW scene exposure unavailable; MGC AE result omitted")
-        }
-        result?.let { estimate ->
-            RawSceneExposureResult(
-                hdrRatio = estimate.hdrRatio,
-                finalShortTetMs = estimate.finalShortTetMs,
-                finalLongTetMs = estimate.finalLongTetMs,
-                finalShortGain = estimate.finalShortGain,
-                safeUnderexposure = estimate.safeUnderexposure,
-                fractionPixelsClippedAtFinalShortTet =
-                    estimate.fractionPixelsClippedAtFinalShortTet,
+        portraitMask: PortraitMaskSnapshot? = null,
+    ): RawSceneExposureRequest {
+        val faceMeteringMask = portraitMask?.let(RawSceneExposureMath::prepareFaceMeteringMask)
+        return RawSceneExposureRequest { frame ->
+            val result = RawSceneExposureEstimator.estimate(
+                context = context.applicationContext,
+                frame = frame,
+                metadata = metadata,
+                deviceLimits = deviceLimits,
+                faceMask = faceMeteringMask,
             )
+            if (result == null) {
+                PLog.w(TAG, "RAW scene exposure unavailable; MGC AE result omitted")
+            }
+            result?.let { estimate ->
+                RawSceneExposureResult(
+                    hdrRatio = estimate.hdrRatio,
+                    finalShortTetMs = estimate.finalShortTetMs,
+                    finalLongTetMs = estimate.finalLongTetMs,
+                    finalShortGain = estimate.finalShortGain,
+                    portraitRelightingGain = estimate.portraitRelightingGain,
+                    portraitRelightingMask = faceMeteringMask?.copyOf(),
+                    safeUnderexposure = estimate.safeUnderexposure,
+                    fractionPixelsClippedAtFinalShortTet =
+                        estimate.fractionPixelsClippedAtFinalShortTet,
+                )
+            }
         }
     }
 }
@@ -52,6 +60,8 @@ internal data class RawSceneExposureResult(
     val finalShortTetMs: Float,
     val finalLongTetMs: Float,
     val finalShortGain: Float,
+    val portraitRelightingGain: Float = 1f,
+    val portraitRelightingMask: FloatArray? = null,
     val safeUnderexposure: Float,
     val fractionPixelsClippedAtFinalShortTet: Float,
 ) {
@@ -60,6 +70,13 @@ internal data class RawSceneExposureResult(
         require(finalShortTetMs.isFinite() && finalShortTetMs > 0f)
         require(finalLongTetMs.isFinite() && finalLongTetMs >= finalShortTetMs)
         require(finalShortGain.isFinite() && finalShortGain > 0f)
+        require(portraitRelightingGain.isFinite() && portraitRelightingGain > 0f)
+        require(
+            portraitRelightingMask == null ||
+                (portraitRelightingMask.size ==
+                    RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT &&
+                    portraitRelightingMask.all { it.isFinite() && it in 0f..1f }),
+        )
         require(safeUnderexposure.isFinite() && safeUnderexposure >= 1f)
         require(
             fractionPixelsClippedAtFinalShortTet.isFinite() &&

@@ -1650,7 +1650,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             !(lutEnabled && currentLutConfig != null)
         val filmGrainEnabled = filmGrain > 0.001f && !preLogFilmGrainEnabled
         val postProcessEffectEnabled = hdfEnabled || halationEnabled || bloomEnabled || softLightEnabled
-        val eyeFocusSamplingNeeded = onEyeFocusInputAvailable != null && isAutoFocus && !isEyeFocusBusy
+        val eyeFocusSamplingNeeded = onEyeFocusInputAvailable != null && !isEyeFocusBusy
         val suppressBaselineLayerForVideoLog = videoLogProfile.isEnabled
         val hasBaselineLayer = hasBaselineLayer() && !suppressBaselineLayerForVideoLog
         val hasCreativeLayer = hasCreativeLayer()

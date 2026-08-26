@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
+import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 
 /** Owns the mutually exclusive capture-time Photon HDR and classic auto-exposure paths. */
 internal object RawCaptureProfileCoordinator {
@@ -17,6 +18,7 @@ internal object RawCaptureProfileCoordinator {
         cropRegion: Rect?,
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
+        capturePortraitMask: PortraitMaskSnapshot?,
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
@@ -30,6 +32,7 @@ internal object RawCaptureProfileCoordinator {
                 context = context,
                 metadata = input.metadata,
                 deviceLimits = input.sceneExposureDeviceLimits,
+                portraitMask = capturePortraitMask,
             )
         } else {
             null

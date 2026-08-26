@@ -833,6 +833,9 @@ object RawProcessor {
         return RawDngProfilePreparation(
             baselineExposureEv = finalBaselineExposureEv,
             hdrRatio = captureProfile?.hdrRatio,
+            finalShortGain = captureProfile?.finalShortGain,
+            portraitRelightingGain = captureProfile?.portraitRelightingGain ?: 1f,
+            portraitRelightingMask = captureProfile?.portraitRelightingMask?.copyOf(),
             profileGainTableMap = preparedProfileGainTableMap,
             gpuDemosaicedRawSource = captureProfile?.gpuDemosaicedRawSource,
         ).also { finalProfile ->

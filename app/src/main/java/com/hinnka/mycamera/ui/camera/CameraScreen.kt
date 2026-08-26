@@ -1103,6 +1103,10 @@ fun CameraScreen(
                         state.isAutoFocus &&
                         !state.isHyperfocalFocusEnabled &&
                         (state.focusPoint == null || state.focusPointSource == FocusPointSource.EYE)
+                    val portraitMaskActive = state.captureMode == CaptureMode.PHOTO &&
+                        state.useRaw &&
+                        state.isRawSupported &&
+                        rawToneMappingParameters.usePhotonHdr
 
                     // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
                     if (isCameraPrepared) {
@@ -1158,7 +1162,7 @@ fun CameraScreen(
                                     hy
                                 )
                             },
-                            onEyeFocusInputAvailable = if (eyeFocusActive) {
+                            onEyeFocusInputAvailable = if (eyeFocusActive || portraitMaskActive) {
                                 viewModel::handleEyeFocusInputUpdate
                             } else {
                                 null

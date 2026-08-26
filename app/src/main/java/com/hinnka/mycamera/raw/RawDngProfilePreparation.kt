@@ -4,6 +4,8 @@ import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import java.nio.ByteBuffer
+import java.util.Base64
+import kotlin.math.roundToInt
 
 /** Camera metadata needed to construct MGC's ordinary (range type 0) AE shot range. */
 data class RawSceneExposureDeviceLimits(
@@ -111,6 +113,12 @@ data class RawDngCaptureProfileResult(
     val exposureOffsetEv: Float?,
     /** Photon HDR long/short TET ratio; always null for classic auto exposure. */
     val hdrRatio: Float?,
+    /** Capture-time source/final-short TET quotient consumed by HDRNet input normalization. */
+    val finalShortGain: Float?,
+    /** MGC portrait/long TET quotient consumed by post-HDRNet local relighting. */
+    val portraitRelightingGain: Float = 1f,
+    /** Unrotated sensor-space 64 x 64 soft face mask used by local relighting. */
+    val portraitRelightingMask: FloatArray? = null,
     val profileGainTableMap: DngProfileGainTableMap?,
     val gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
 )
@@ -129,6 +137,9 @@ internal fun DcpRenderPlan.toAdobeDefaultMeteringPlan(): DcpRenderPlan {
 data class RawDngProfilePreparation(
     val baselineExposureEv: Float,
     val hdrRatio: Float?,
+    val finalShortGain: Float?,
+    val portraitRelightingGain: Float = 1f,
+    val portraitRelightingMask: FloatArray? = null,
     val profileGainTableMap: DngProfileGainTableMap?,
     val gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
 )
@@ -136,14 +147,96 @@ data class RawDngProfilePreparation(
 /** Process-local capture result persisted with Photon gallery metadata for PGTM regeneration. */
 internal object RawPhotonHdrRatioMetadata {
     private const val PROPERTY = "photonHdrNetRatio"
+    private const val CONTRACT_PROPERTY = "photonHdrNetRatioContract"
+    private const val CURRENT_CONTRACT = "mgc_fast_moments_v25_portrait_mask_v1"
+    private const val SHORT_GAIN_PROPERTY = "photonHdrNetSourceToShortGain"
+    private const val SHORT_GAIN_CONTRACT_PROPERTY = "photonHdrNetSourceToShortGainContract"
+    private const val CURRENT_SHORT_GAIN_CONTRACT = "mgc_fast_moments_v25_final_short_v1"
 
     fun read(properties: Map<String, String>): Float? = properties[PROPERTY]
         ?.toFloatOrNull()
         ?.takeIf { it.isFinite() && it >= 1f }
 
-    fun write(properties: Map<String, String>, hdrRatio: Float?): Map<String, String> {
+    fun readFinalShortGain(properties: Map<String, String>): Float? {
+        if (properties[SHORT_GAIN_CONTRACT_PROPERTY] != CURRENT_SHORT_GAIN_CONTRACT) return null
+        return properties[SHORT_GAIN_PROPERTY]
+            ?.toFloatOrNull()
+            ?.takeIf { it.isFinite() && it > 0f }
+    }
+
+    fun write(
+        properties: Map<String, String>,
+        hdrRatio: Float?,
+        finalShortGain: Float? = null,
+    ): Map<String, String> {
         val validRatio = hdrRatio?.takeIf { it.isFinite() && it >= 1f } ?: return properties
-        return properties + (PROPERTY to validRatio.toString())
+        var result = properties + mapOf(
+            PROPERTY to validRatio.toString(),
+            CONTRACT_PROPERTY to CURRENT_CONTRACT,
+        )
+        val validShortGain = finalShortGain?.takeIf { it.isFinite() && it > 0f }
+        if (validShortGain != null) {
+            result += mapOf(
+                SHORT_GAIN_PROPERTY to validShortGain.toString(),
+                SHORT_GAIN_CONTRACT_PROPERTY to CURRENT_SHORT_GAIN_CONTRACT,
+            )
+        }
+        return result
+    }
+
+    fun isCurrentCaptureContract(properties: Map<String, String>): Boolean {
+        return properties[CONTRACT_PROPERTY] == CURRENT_CONTRACT
+    }
+}
+
+internal data class RawPhotonPortraitRelighting(
+    val gain: Float,
+    val mask: FloatArray,
+)
+
+/** Capture-time portrait quotient and mask required to reproduce PGTM during gallery refresh. */
+internal object RawPhotonPortraitRelightingMetadata {
+    private const val GAIN_PROPERTY = "photonPortraitRelightingGain"
+    private const val MASK_PROPERTY = "photonPortraitRelightingMask64U8"
+    private const val MASK_WIDTH = RawSceneExposureMath.INPUT_WIDTH
+    private const val MASK_HEIGHT = RawSceneExposureMath.INPUT_HEIGHT
+    private const val MASK_SIZE = MASK_WIDTH * MASK_HEIGHT
+
+    fun read(properties: Map<String, String>): RawPhotonPortraitRelighting? {
+        val gain = properties[GAIN_PROPERTY]
+            ?.toFloatOrNull()
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?: return null
+        val encodedMask = properties[MASK_PROPERTY] ?: return null
+        val bytes = try {
+            Base64.getDecoder().decode(encodedMask)
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        if (bytes.size != MASK_SIZE) return null
+        val mask = FloatArray(MASK_SIZE) { index ->
+            (bytes[index].toInt() and 0xFF) / 255f
+        }
+        return RawPhotonPortraitRelighting(gain = gain, mask = mask)
+    }
+
+    fun write(
+        properties: Map<String, String>,
+        gain: Float,
+        mask: FloatArray?,
+    ): Map<String, String> {
+        if (!gain.isFinite() || gain <= 0f || mask == null || mask.size != MASK_SIZE ||
+            mask.any { !it.isFinite() || it !in 0f..1f }
+        ) {
+            return properties - GAIN_PROPERTY - MASK_PROPERTY
+        }
+        val bytes = ByteArray(MASK_SIZE) { index ->
+            (mask[index] * 255f).roundToInt().coerceIn(0, 255).toByte()
+        }
+        return properties + mapOf(
+            GAIN_PROPERTY to gain.toString(),
+            MASK_PROPERTY to Base64.getEncoder().withoutPadding().encodeToString(bytes),
+        )
     }
 }
 

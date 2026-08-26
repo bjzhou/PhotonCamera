@@ -34,6 +34,16 @@ internal data class MgcLegacyAeBranchResult(
     val maxSimilarity: Float,
     val candidateCount: Int,
     val contributingCount: Int,
+    val minimumContributingSimilarity: Float,
+    val aggregationWeightSum: Float,
+    val contributingTargetMinimum: Float,
+    val contributingTargetMaximum: Float,
+    val bestMatchTargetT: Float,
+    val bestMatchLogSceneBrightness: Float,
+    val bestMatchImageLogMean: Float,
+    val bestMatchFractionPixelsClipped: Float,
+    val bestMatchCategory: Int,
+    val bestMatchHistogramDescriptor: ShortArray,
 )
 
 internal data class MgcLegacyAeResult(
@@ -45,6 +55,12 @@ internal data class MgcLegacyAeResult(
     val meteringWhiteBalancedRmsMax: Float,
     val meteringNormalizationScale: Float,
     val normalizedMeteringTetMs: Float,
+    val meteringWidth: Int,
+    val meteringHeight: Int,
+    val brightMaskMean: Float,
+    val aeSmoothness: Float,
+    val shortSmoothnessTOffset: Float,
+    val longSmoothnessTOffset: Float,
 )
 
 /**
@@ -52,10 +68,9 @@ internal data class MgcLegacyAeResult(
  *
  * The binary layout, histogram packing, similarity metric, candidate weighting, T-value
  * aggregation, and log-domain TET search below follow libgcam_ae.so's AArch64 implementation.
- * Photon owns one selected base metering frame rather than MGC's two-component SplitHdrImage.
- * Supplying that frame as both components preserves the original mask-weighted sample sum while
- * allowing the two identical component values to be evaluated once per pixel. CreateFromFrame's
- * white-balanced RMS normalization is still applied exactly before the table query and RunAe.
+ * All Bayer devices use MGC's platform-independent Classic-AE contract: RawToLoResRgb builds two
+ * local-mean components and an 8-bit population mask, then CreateForClassicAe normalizes their
+ * mask blend by white-balanced RMS. Qualcomm QcStats is deliberately not part of this path.
  */
 internal class MgcLegacySceneExposureTable private constructor(
     val version: Int,
@@ -84,6 +99,11 @@ internal class MgcLegacySceneExposureTable private constructor(
         val maxSimilarity: Float,
         val candidateCount: Int,
         val contributingCount: Int,
+        val minimumContributingSimilarity: Float = 0f,
+        val aggregationWeightSum: Float = 0f,
+        val contributingTargetMinimum: Float = 0f,
+        val contributingTargetMaximum: Float = 0f,
+        val bestMatch: TrainingRecord? = null,
     )
 
     private data class PreparedQuery(
@@ -92,7 +112,11 @@ internal class MgcLegacySceneExposureTable private constructor(
     )
 
     private data class NormalizedMeteringFrame(
-        val rgb: FloatArray,
+        val width: Int,
+        val height: Int,
+        val brightRgb: FloatArray,
+        val darkRgb: FloatArray,
+        val brightMask: ByteArray,
         val rmsRgb: FloatArray,
         val whiteBalancedRmsMax: Float,
         val scale: Float,
@@ -109,7 +133,13 @@ internal class MgcLegacySceneExposureTable private constructor(
         deviceMaxTetMs: Float,
     ): MgcLegacyAeResult? {
         val legacyInput = frame.legacyAeInput ?: RawSceneLegacyAeInput(
-            cameraRgb = frame.rgb,
+            splitHdrImage = RawSceneClassicAeMeteringFrame(
+                width = frame.width,
+                height = frame.height,
+                brightRgb = frame.rgb,
+                darkRgb = FloatArray(frame.rgb.size),
+                brightMask = ByteArray(frame.width * frame.height) { 0xFF.toByte() },
+            ),
             rgbGains = UNITY_RGB_GAINS,
             rgbTransform = IDENTITY_RGB_TRANSFORM,
         )
@@ -126,25 +156,25 @@ internal class MgcLegacySceneExposureTable private constructor(
             return null
         }
         val normalizedMetering = normalizeMeteringFrame(
-            rgb = legacyInput.cameraRgb,
+            splitHdrImage = legacyInput.splitHdrImage,
             rgbGains = legacyInput.rgbGains,
             currentTetMs = currentTetMs,
         ) ?: return null
         val shortPrepared = buildQuery(
-            rgb = normalizedMetering.rgb,
-            width = frame.width,
-            height = frame.height,
+            metering = normalizedMetering,
             mode = MgcLegacyAeMode.SHORT,
+            rgbGains = legacyInput.rgbGains,
+            rgbTransform = legacyInput.rgbTransform,
             currentTetMs = normalizedMetering.tetMs,
             sensorSensitivity = sensorSensitivity,
             fractionPixelsClipped = fractionPixelsClipped,
             category = if (hasFace) 1 else 0,
         ) ?: return null
         val longPrepared = buildQuery(
-            rgb = normalizedMetering.rgb,
-            width = frame.width,
-            height = frame.height,
+            metering = normalizedMetering,
             mode = MgcLegacyAeMode.LONG,
+            rgbGains = legacyInput.rgbGains,
+            rgbTransform = legacyInput.rgbTransform,
             currentTetMs = normalizedMetering.tetMs,
             sensorSensitivity = sensorSensitivity,
             fractionPixelsClipped = fractionPixelsClipped,
@@ -152,15 +182,16 @@ internal class MgcLegacySceneExposureTable private constructor(
         ) ?: return null
         val shortTarget = lookupTarget(MgcLegacyAeMode.SHORT, shortPrepared.query)
         val longTarget = lookupTarget(MgcLegacyAeMode.LONG, longPrepared.query)
-        val evaluator = SingleFrameTValueEvaluator(
-            rgb = normalizedMetering.rgb,
+        val evaluator = SplitHdrTValueEvaluator(
+            brightRgb = normalizedMetering.brightRgb,
+            darkRgb = normalizedMetering.darkRgb,
+            brightMask = normalizedMetering.brightMask,
             rgbGains = legacyInput.rgbGains,
             rgbTransform = legacyInput.rgbTransform,
             currentTetMs = normalizedMetering.tetMs,
             shortSpatialWeights = shortPrepared.spatialWeights,
             longSpatialWeights = longPrepared.spatialWeights,
-            shortImageLogMean = shortPrepared.query.imageLogMean,
-            longImageLogMean = longPrepared.query.imageLogMean,
+            aeSmoothness = MGC_V25_AE_SMOOTHNESS,
             longShapeMetric = longShapeMetric(longPrepared.query.histogramDescriptor),
         )
         val shortTAtCurrentTet = evaluator.evaluate(MgcLegacyAeMode.SHORT, currentTetMs)
@@ -186,29 +217,48 @@ internal class MgcLegacySceneExposureTable private constructor(
             meteringWhiteBalancedRmsMax = normalizedMetering.whiteBalancedRmsMax,
             meteringNormalizationScale = normalizedMetering.scale,
             normalizedMeteringTetMs = normalizedMetering.tetMs,
+            meteringWidth = normalizedMetering.width,
+            meteringHeight = normalizedMetering.height,
+            brightMaskMean = normalizedMetering.brightMask.sumOf {
+                (it.toInt() and 0xFF).toDouble()
+            }.toFloat() / (255f * normalizedMetering.brightMask.size.toFloat()),
+            aeSmoothness = MGC_V25_AE_SMOOTHNESS,
+            shortSmoothnessTOffset = smoothnessTOffset(
+                MgcLegacyAeMode.SHORT,
+                MGC_V25_AE_SMOOTHNESS,
+            ),
+            longSmoothnessTOffset = smoothnessTOffset(
+                MgcLegacyAeMode.LONG,
+                MGC_V25_AE_SMOOTHNESS,
+            ),
         )
     }
 
     /**
-     * Transcription of SplitHdrImage::CreateFromFrame's normalization for the retained metering
-     * component. The original implementation computes per-channel RMS over the mask blend of its
-     * short and long components, multiplies those RMS values by the RGB WB gains, and maps the
-     * largest result to 1/16 of U15. It applies the same scale to the metering-frame TET, preserving
-     * the scene-brightness coordinate and absolute-TET behavior while fixing the table's image-mean
-     * coordinate.
+     * Transcription of SplitHdrImage::CreateForClassicAe. RMS is measured after blending the two
+     * float components with mask/255; the same diagonal scale is then applied to both components
+     * and to the metering-frame TET.
      */
     private fun normalizeMeteringFrame(
-        rgb: FloatArray,
+        splitHdrImage: RawSceneClassicAeMeteringFrame,
         rgbGains: FloatArray,
         currentTetMs: Float,
     ): NormalizedMeteringFrame? {
-        val pixelCount = rgb.size / 3
-        if (pixelCount <= 0 || rgb.size != pixelCount * 3 || rgbGains.size < 3) return null
+        val pixelCount = splitHdrImage.width * splitHdrImage.height
+        if (splitHdrImage.width <= 0 || splitHdrImage.height <= 0 ||
+            splitHdrImage.brightRgb.size != pixelCount * 3 ||
+            splitHdrImage.darkRgb.size != pixelCount * 3 ||
+            splitHdrImage.brightMask.size != pixelCount || rgbGains.size < 3
+        ) {
+            return null
+        }
         val squaredSums = DoubleArray(3)
         for (pixel in 0 until pixelCount) {
             val offset = pixel * 3
+            val mask = (splitHdrImage.brightMask[pixel].toInt() and 0xFF) / 255f
             for (channel in 0..2) {
-                val value = rgb[offset + channel]
+                val value = mask * splitHdrImage.brightRgb[offset + channel] +
+                    (1f - mask) * splitHdrImage.darkRgb[offset + channel]
                 squaredSums[channel] += value.toDouble() * value.toDouble()
             }
         }
@@ -227,10 +277,23 @@ internal class MgcLegacySceneExposureTable private constructor(
         ) {
             return null
         }
-        val normalizedRgb = FloatArray(rgb.size) { index -> rgb[index] * scale }
-        if (normalizedRgb.any { !it.isFinite() || it < 0f }) return null
+        val normalizedBright = FloatArray(splitHdrImage.brightRgb.size) { index ->
+            splitHdrImage.brightRgb[index] * scale
+        }
+        val normalizedDark = FloatArray(splitHdrImage.darkRgb.size) { index ->
+            splitHdrImage.darkRgb[index] * scale
+        }
+        if (normalizedBright.any { !it.isFinite() || it < 0f } ||
+            normalizedDark.any { !it.isFinite() || it < 0f }
+        ) {
+            return null
+        }
         return NormalizedMeteringFrame(
-            rgb = normalizedRgb,
+            width = splitHdrImage.width,
+            height = splitHdrImage.height,
+            brightRgb = normalizedBright,
+            darkRgb = normalizedDark,
+            brightMask = splitHdrImage.brightMask,
             rmsRgb = rmsRgb,
             whiteBalancedRmsMax = whiteBalancedRmsMax,
             scale = scale,
@@ -239,36 +302,74 @@ internal class MgcLegacySceneExposureTable private constructor(
     }
 
     private fun buildQuery(
-        rgb: FloatArray,
-        width: Int,
-        height: Int,
+        metering: NormalizedMeteringFrame,
         mode: MgcLegacyAeMode,
+        rgbGains: FloatArray,
+        rgbTransform: FloatArray,
         currentTetMs: Float,
         sensorSensitivity: Float,
         fractionPixelsClipped: Float,
         category: Int,
     ): PreparedQuery? {
-        if (width <= 0 || height <= 0 || rgb.size != width * height * 3) return null
-        val pixelCount = rgb.size / 3
-        val spatialWeights = buildDefaultSpatialWeights(mode, width, height)
-        val meteringRgb = IntArray(rgb.size)
-        val maxLog = FloatArray(pixelCount)
-        val lumaLog = FloatArray(pixelCount)
-        for (pixel in 0 until pixelCount) {
-            val offset = pixel * 3
-            val red = meteringCode(rgb[offset])
-            val green = meteringCode(rgb[offset + 1])
-            val blue = meteringCode(rgb[offset + 2])
-            meteringRgb[offset] = red
-            meteringRgb[offset + 1] = green
-            meteringRgb[offset + 2] = blue
-            val maxCode = max(red, max(green, blue))
-            val lumaCode = (77 * red + 150 * green + 29 * blue) ushr 8
-            maxLog[pixel] = mgcFastLog(maxCode + LOG_INPUT_OFFSET)
-            lumaLog[pixel] = mgcFastLog(lumaCode + LOG_INPUT_OFFSET)
+        val width = metering.width
+        val height = metering.height
+        val pixelCount = width * height
+        if (width <= 0 || height <= 0 ||
+            metering.brightRgb.size != pixelCount * 3 ||
+            metering.darkRgb.size != pixelCount * 3 ||
+            metering.brightMask.size != pixelCount
+        ) {
+            return null
         }
-
-        val blurredRgb = boxBlurRadiusOne(meteringRgb, width, height)
+        val spatialWeights = buildDefaultSpatialWeights(mode, width, height)
+        // CreateFromFrame retains two domains in SplitHdrImage. TetToAvgLdrValue reads the
+        // normalized camera-RGB components and lets ExposeHq apply WB/CCM. In contrast,
+        // HdrImageToWeightedAeSamples builds all three lookup histograms from the separately
+        // cached WB + rgb2rgb components. Using camera RGB here leaves the descriptor's high
+        // quantiles far below libgcam_ae and selects a different short target.
+        val brightCodes = transformedMeteringCodes(
+            metering.brightRgb,
+            rgbGains,
+            rgbTransform,
+        )
+        val darkCodes = transformedMeteringCodes(
+            metering.darkRgb,
+            rgbGains,
+            rgbTransform,
+        )
+        val directMaxLog = FloatArray(pixelCount * 2)
+        val directLumaLog = FloatArray(pixelCount * 2)
+        val directWeights = FloatArray(pixelCount * 2)
+        for (component in 0..1) {
+            val codes = if (component == 0) brightCodes else darkCodes
+            val componentOffset = component * pixelCount
+            for (pixel in 0 until pixelCount) {
+                val offset = pixel * 3
+                val red = codes[offset]
+                val green = codes[offset + 1]
+                val blue = codes[offset + 2]
+                directMaxLog[componentOffset + pixel] =
+                    mgcFastLog(max(red, max(green, blue)) + LOG_INPUT_OFFSET)
+                directLumaLog[componentOffset + pixel] = mgcFastLog(
+                    ((77 * red + 150 * green + 29 * blue) ushr 8) + LOG_INPUT_OFFSET,
+                )
+                val mask = metering.brightMask[pixel].toInt() and 0xFF
+                directWeights[componentOffset + pixel] = spatialWeights[pixel] *
+                    (if (component == 0) mask else 255 - mask).toFloat()
+            }
+        }
+        val mergedCodes = IntArray(pixelCount * 3)
+        for (pixel in 0 until pixelCount) {
+            val mask = metering.brightMask[pixel].toInt() and 0xFF
+            val offset = pixel * 3
+            for (channel in 0..2) {
+                mergedCodes[offset + channel] = (
+                    mask * brightCodes[offset + channel] +
+                        (256 - mask) * darkCodes[offset + channel] + 128
+                    ) ushr 8
+            }
+        }
+        val blurredRgb = boxBlurRadiusOne(mergedCodes, width, height)
         val blurredMaxLog = FloatArray(pixelCount)
         for (pixel in 0 until pixelCount) {
             val offset = pixel * 3
@@ -279,8 +380,18 @@ internal class MgcLegacySceneExposureTable private constructor(
             blurredMaxLog[pixel] = mgcFastLog(maxCode + LOG_INPUT_OFFSET)
         }
 
-        val maxDistribution = compressHistogram(maxLog, spatialWeights) ?: return null
-        val lumaDistribution = compressHistogram(lumaLog, spatialWeights) ?: return null
+        val maxDistribution = compressHistogram(
+            values = directMaxLog,
+            sampleWeights = directWeights,
+            domainMinimum = HISTOGRAM_LOG_MINIMUM,
+        ) ?: return null
+        val lumaDistribution = compressHistogram(
+            values = directLumaLog,
+            sampleWeights = directWeights,
+            domainMinimum = HISTOGRAM_LOG_MINIMUM,
+        ) ?: return null
+        // The third histogram is built after SplitHDR merge and Blur3x3Halide, so both limits are
+        // measured from the blurred image itself.
         val blurredMaxDistribution = compressHistogram(blurredMaxLog, spatialWeights) ?: return null
         var totalWeight = 0f
         var weightedMean = 0f
@@ -290,8 +401,8 @@ internal class MgcLegacySceneExposureTable private constructor(
         }
         val imageLogMean = weightedMean / max(totalWeight, MIN_HISTOGRAM_WEIGHT)
         if (!imageLogMean.isFinite()) return null
-        // RunAe does not reuse MeasureLogSceneBrightness's colorized-frame result here. The
-        // table query derives this coordinate from the mode-specific, pre-WB max-RGB log mean.
+        // RunAe derives this coordinate from the same color-transformed SplitHdrImage samples
+        // that produce the descriptor.
         val predictedSignal =
             exp(imageLogMean.toDouble()).toFloat() * ONE_OVER_U15_MAX - QUERY_SIGNAL_OFFSET
         val normalizedExposure =
@@ -303,6 +414,7 @@ internal class MgcLegacySceneExposureTable private constructor(
         if (!queryLogSceneBrightness.isFinite()) return null
         val centeredMax = centerDistribution(maxDistribution, imageLogMean)
         val centeredLuma = centerDistribution(lumaDistribution, imageLogMean)
+        // MGC merges with a 256-mask denominator, applies Blur3x3Halide, then builds histogram 3.
         val centeredBlurredMax = centerDistribution(blurredMaxDistribution, imageLogMean)
         val descriptor = ShortArray(HISTOGRAM_DESCRIPTOR_COUNT)
         writeQuantiles(centeredMax, QUANTILE_COUNTS[0], QUANTILE_OFFSETS[0], descriptor)
@@ -339,10 +451,14 @@ internal class MgcLegacySceneExposureTable private constructor(
 
         val scores = FloatArray(last - first)
         var maxSimilarity = 0f
+        var bestMatchIndex = -1
         for (index in first until last) {
             val score = similarity(mode, query, records[index])
             scores[index - first] = score
-            if (score > maxSimilarity) maxSimilarity = score
+            if (score > maxSimilarity) {
+                maxSimilarity = score
+                bestMatchIndex = index
+            }
         }
         if (!(maxSimilarity > 0f)) {
             return TargetLookup(DEFAULT_TARGET_T, 0f, last - first, 0)
@@ -362,13 +478,18 @@ internal class MgcLegacySceneExposureTable private constructor(
         var weightSum = 0f
         var targetSum = 0f
         var contributingCount = 0
+        var contributingTargetMinimum = Float.POSITIVE_INFINITY
+        var contributingTargetMaximum = Float.NEGATIVE_INFINITY
         for (candidate in scores.indices) {
             val score = scores[candidate]
             if (score < minimumScore) continue
             val baseWeight = max(offset + scale * inverseMaximum * score, 0f)
             val weight = baseWeight * baseWeight
+            val candidateTargetT = records[first + candidate].targetT
             weightSum += weight
-            targetSum += weight * records[first + candidate].targetT
+            targetSum += weight * candidateTargetT
+            contributingTargetMinimum = min(contributingTargetMinimum, candidateTargetT)
+            contributingTargetMaximum = max(contributingTargetMaximum, candidateTargetT)
             contributingCount++
         }
         val targetT = targetSum / max(weightSum, MIN_AGGREGATION_WEIGHT)
@@ -377,6 +498,11 @@ internal class MgcLegacySceneExposureTable private constructor(
             maxSimilarity = maxSimilarity,
             candidateCount = last - first,
             contributingCount = contributingCount,
+            minimumContributingSimilarity = minimumScore,
+            aggregationWeightSum = weightSum,
+            contributingTargetMinimum = contributingTargetMinimum.takeIf(Float::isFinite) ?: 0f,
+            contributingTargetMaximum = contributingTargetMaximum.takeIf(Float::isFinite) ?: 0f,
+            bestMatch = records.getOrNull(bestMatchIndex),
         )
     }
 
@@ -419,24 +545,28 @@ internal class MgcLegacySceneExposureTable private constructor(
         val distance = weightedDistance.toFloat() / activeWeightSum.toFloat()
         var score = 1f / (distance * INVERSE_DESCRIPTOR_SCALE + INVERSE_SIMILARITY_BIAS)
         if (query.category != record.category) {
-            score *= if (mode == MgcLegacyAeMode.SHORT) {
-                SHORT_CATEGORY_MISMATCH_SCALE
-            } else {
-                LONG_CATEGORY_MISMATCH_SCALE
-            }
+            if (mode == MgcLegacyAeMode.LONG) return 0f
+            score *= SHORT_CATEGORY_MISMATCH_SCALE
         }
-        return score
+        val sceneBrightnessDelta = abs(query.logSceneBrightness - record.logSceneBrightness)
+        val brightnessWeight = if (mode == MgcLegacyAeMode.SHORT) {
+            (2f * (SHORT_SCENE_BRIGHTNESS_WINDOW - sceneBrightnessDelta)).coerceIn(0f, 1f)
+        } else {
+            (2.5f * (LONG_SCENE_BRIGHTNESS_WINDOW - sceneBrightnessDelta)).coerceIn(0f, 1f)
+        }
+        return brightnessWeight * score
     }
 
-    private class SingleFrameTValueEvaluator(
-        private val rgb: FloatArray,
+    private class SplitHdrTValueEvaluator(
+        private val brightRgb: FloatArray,
+        private val darkRgb: FloatArray,
+        private val brightMask: ByteArray,
         private val rgbGains: FloatArray,
         private val rgbTransform: FloatArray,
         private val currentTetMs: Float,
         private val shortSpatialWeights: FloatArray,
         private val longSpatialWeights: FloatArray,
-        private val shortImageLogMean: Float,
-        private val longImageLogMean: Float,
+        private val aeSmoothness: Float,
         private val longShapeMetric: Float,
     ) {
         private val quantizedRgbTransform = IntArray(9) { index ->
@@ -449,7 +579,7 @@ internal class MgcLegacySceneExposureTable private constructor(
             val relativeTet = tetMs / currentTetMs
             var squaredSum = 0f
             var weightSum = 0f
-            val pixelCount = rgb.size / 3
+            val pixelCount = brightRgb.size / 3
             val spatialWeights = if (mode == MgcLegacyAeMode.SHORT) {
                 shortSpatialWeights
             } else {
@@ -457,32 +587,42 @@ internal class MgcLegacySceneExposureTable private constructor(
             }
             for (pixel in 0 until pixelCount) {
                 val offset = pixel * 3
-                val exposed = exposeHqToPackedU8(offset, relativeTet)
-                val red = exposed and 0xFF
-                val green = (exposed ushr 8) and 0xFF
-                val blue = (exposed ushr 16) and 0xFF
-                val maxRgb = max(red, max(green, blue))
-                val greenExcess = max(green - max(red, blue), 0)
-                val blueExcess = max(blue - max(2 * red, green), 0)
-                var tValue = maxRgb +
-                    (-100 * blueExcess + 120 * greenExcess) * ONE_OVER_256
-                tValue = tValue.coerceIn(0f, 255f)
-                val weight = spatialWeights[pixel]
-                weightSum += weight
-                squaredSum += weight * tValue * tValue
+                val maskWeight = (brightMask[pixel].toInt() and 0xFF) / 255f
+                for (component in 0..1) {
+                    val rgb = if (component == 0) brightRgb else darkRgb
+                    val exposed = exposeHqToPackedU8(rgb, offset, relativeTet)
+                    val red = exposed and 0xFF
+                    val green = (exposed ushr 8) and 0xFF
+                    val blue = (exposed ushr 16) and 0xFF
+                    val maxRgb = max(red, max(green, blue))
+                    val greenExcess = max(green - max(red, blue), 0)
+                    val blueExcess = max(blue - max(2 * red, green), 0)
+                    val tValue = (
+                        maxRgb + (-100 * blueExcess + 120 * greenExcess) * ONE_OVER_256
+                        ).coerceIn(0f, 255f)
+                    // SplitHdrImage::TetToAvgLdrValue evaluates kHdrLong in the
+                    // complementary LDR domain.  This is not interchangeable with the
+                    // short RMS: highlights must first become 255 - T, and the aggregate
+                    // is converted back after the RMS below.
+                    val rmsValue = if (mode == MgcLegacyAeMode.LONG) {
+                        255f - tValue
+                    } else {
+                        tValue
+                    }
+                    val componentWeight = if (component == 0) maskWeight else 1f - maskWeight
+                    val weight = spatialWeights[pixel] * componentWeight
+                    weightSum += weight
+                    squaredSum += weight * rmsValue * rmsValue
+                }
             }
             var result = sqrt(squaredSum / max(weightSum, MIN_T_VALUE_WEIGHT))
-            val imageLogMean = if (mode == MgcLegacyAeMode.SHORT) {
-                shortImageLogMean
-            } else {
-                longImageLogMean
+            if (mode == MgcLegacyAeMode.LONG) {
+                result = 255f - result
             }
-            val meanCorrectionScale = if (mode == MgcLegacyAeMode.SHORT) {
-                SHORT_NEGATIVE_LOG_MEAN_SCALE
-            } else {
-                LONG_NEGATIVE_LOG_MEAN_SCALE
-            }
-            result += min(imageLogMean, 0f) * -meanCorrectionScale
+            // SplitHdrImage::TetToAvgLdrValue receives CaptureTuning::ae_smoothness here.
+            // The previous transcription accidentally supplied query.imageLogMean, which is a
+            // different domain and normally positive, thereby dropping the V25 offsets entirely.
+            result += smoothnessTOffset(mode, aeSmoothness)
             if (mode == MgcLegacyAeMode.LONG) {
                 val shape = (longShapeMetric * LONG_SHAPE_SCALE).coerceIn(0f, 1f)
                 result += ((shape + shape) - 1f) * LONG_SHAPE_T_OFFSET
@@ -491,7 +631,11 @@ internal class MgcLegacySceneExposureTable private constructor(
         }
 
         /** Scalar transcription of libgcam_ae's generated ExposeHq Halide pipeline. */
-        private fun exposeHqToPackedU8(offset: Int, relativeTet: Float): Int {
+        private fun exposeHqToPackedU8(
+            rgb: FloatArray,
+            offset: Int,
+            relativeTet: Float,
+        ): Int {
             val inputRed = exposeCameraChannel(rgb[offset], rgbGains[0], relativeTet)
             val inputGreen = exposeCameraChannel(rgb[offset + 1], rgbGains[1], relativeTet)
             val inputBlue = exposeCameraChannel(rgb[offset + 2], rgbGains[2], relativeTet)
@@ -583,9 +727,8 @@ internal class MgcLegacySceneExposureTable private constructor(
         var highLogTet = ln(highTet.toDouble()).toFloat()
         var interpolation = (target - lowT) / (highT - lowT)
         repeat(TET_SEARCH_ITERATIONS) {
-            val biasedInterpolation = interpolation * 0.9f + 0.05f
-            val candidateLogTet = highLogTet * biasedInterpolation +
-                lowLogTet * (1f - biasedInterpolation)
+            val candidateLogTet = highLogTet * interpolation +
+                lowLogTet * (1f - interpolation)
             val candidateTet = exp(candidateLogTet.toDouble()).toFloat()
             val candidateT = evaluate(candidateTet)
             if (!candidateT.isFinite()) return null
@@ -609,6 +752,7 @@ internal class MgcLegacySceneExposureTable private constructor(
     private fun compressHistogram(
         values: FloatArray,
         sampleWeights: FloatArray,
+        domainMinimum: Float? = null,
     ): List<WeightedSample>? {
         if (values.isEmpty() || sampleWeights.size != values.size ||
             values.any { !it.isFinite() } ||
@@ -616,13 +760,20 @@ internal class MgcLegacySceneExposureTable private constructor(
         ) {
             return null
         }
-        var minimum = values[0]
-        var maximum = values[0]
+        var measuredMinimum = values[0]
+        var measuredMaximum = values[0]
         for (index in 1 until values.size) {
-            minimum = min(minimum, values[index])
-            maximum = max(maximum, values[index])
+            measuredMinimum = min(measuredMinimum, values[index])
+            measuredMaximum = max(measuredMaximum, values[index])
         }
-        val scale = if (maximum != minimum) HISTOGRAM_BIN_COUNT / (maximum - minimum) else 0f
+        val minimum = domainMinimum ?: measuredMinimum
+        val maximum = measuredMaximum
+        if (!minimum.isFinite() || !maximum.isFinite() || maximum < minimum) return null
+        val scale = if (maximum != minimum) {
+            HISTOGRAM_BIN_COUNT / (maximum - minimum)
+        } else {
+            0f
+        }
         val weightedValue = FloatArray(HISTOGRAM_BIN_COUNT)
         val weight = FloatArray(HISTOGRAM_BIN_COUNT)
         for (index in values.indices) {
@@ -643,6 +794,32 @@ internal class MgcLegacySceneExposureTable private constructor(
             }
         }
         return compacted
+    }
+
+    private fun transformedMeteringCodes(
+        rgb: FloatArray,
+        rgbGains: FloatArray,
+        rgbTransform: FloatArray,
+    ): IntArray {
+        require(rgb.size % 3 == 0 && rgbGains.size >= 3 && rgbTransform.size >= 9)
+        val result = IntArray(rgb.size)
+        var offset = 0
+        while (offset < rgb.size) {
+            val red = rgb[offset] * rgbGains[0]
+            val green = rgb[offset + 1] * rgbGains[1]
+            val blue = rgb[offset + 2] * rgbGains[2]
+            result[offset] = meteringCode(
+                rgbTransform[0] * red + rgbTransform[1] * green + rgbTransform[2] * blue,
+            )
+            result[offset + 1] = meteringCode(
+                rgbTransform[3] * red + rgbTransform[4] * green + rgbTransform[5] * blue,
+            )
+            result[offset + 2] = meteringCode(
+                rgbTransform[6] * red + rgbTransform[7] * green + rgbTransform[8] * blue,
+            )
+            offset += 3
+        }
+        return result
     }
 
     private fun buildDefaultSpatialWeights(
@@ -864,10 +1041,15 @@ internal class MgcLegacySceneExposureTable private constructor(
         deviceMinTetMs: Float,
         deviceMaxTetMs: Float,
     ): Boolean {
-        val expectedRgbSize = frame.width * frame.height * 3
+        val split = legacyInput.splitHdrImage
+        val pixelCount = split.width * split.height
+        val expectedRgbSize = pixelCount * 3
         return frame.width > 0 && frame.height > 0 &&
-            legacyInput.cameraRgb.size == expectedRgbSize &&
-            legacyInput.cameraRgb.all { it.isFinite() && it >= 0f } &&
+            split.width > 0 && split.height > 0 && pixelCount > 0 &&
+            split.brightRgb.size == expectedRgbSize &&
+            split.darkRgb.size == expectedRgbSize && split.brightMask.size == pixelCount &&
+            split.brightRgb.all { it.isFinite() && it >= 0f } &&
+            split.darkRgb.all { it.isFinite() && it >= 0f } &&
             legacyInput.rgbGains.size >= 3 &&
             legacyInput.rgbGains.take(3).all { it.isFinite() && it > 0f } &&
             legacyInput.rgbTransform.size == 9 && legacyInput.rgbTransform.all(Float::isFinite) &&
@@ -889,6 +1071,16 @@ internal class MgcLegacySceneExposureTable private constructor(
             maxSimilarity = maxSimilarity,
             candidateCount = candidateCount,
             contributingCount = contributingCount,
+            minimumContributingSimilarity = minimumContributingSimilarity,
+            aggregationWeightSum = aggregationWeightSum,
+            contributingTargetMinimum = contributingTargetMinimum,
+            contributingTargetMaximum = contributingTargetMaximum,
+            bestMatchTargetT = bestMatch?.targetT ?: 0f,
+            bestMatchLogSceneBrightness = bestMatch?.logSceneBrightness ?: 0f,
+            bestMatchImageLogMean = bestMatch?.imageLogMean ?: 0f,
+            bestMatchFractionPixelsClipped = bestMatch?.fractionPixelsClipped ?: 0f,
+            bestMatchCategory = bestMatch?.category ?: -1,
+            bestMatchHistogramDescriptor = bestMatch?.histogramDescriptor ?: ShortArray(0),
         )
 
     companion object {
@@ -903,6 +1095,7 @@ internal class MgcLegacySceneExposureTable private constructor(
         private const val MAX_RECORD_COUNT = 0x8000
         private const val HISTOGRAM_DESCRIPTOR_COUNT = 28
         private const val HISTOGRAM_BIN_COUNT = 256
+        private const val HISTOGRAM_LOG_MINIMUM = 2.3029f
         private const val LOG_INPUT_OFFSET = 10f
         private const val QUERY_SIGNAL_OFFSET = 0.00030519f
         private const val ONE_OVER_U15_MAX = 1f / 32767f
@@ -919,7 +1112,6 @@ internal class MgcLegacySceneExposureTable private constructor(
         private const val LONG_SCENE_BRIGHTNESS_WINDOW = 2f
         private const val SHORT_ALIGNMENT_FRACTION = 0.95f
         private const val SHORT_CATEGORY_MISMATCH_SCALE = 0.7f
-        private const val LONG_CATEGORY_MISMATCH_SCALE = 0.85f
         private const val SHORT_SIMILARITY_THRESHOLD = 0.38f
         private const val LONG_SIMILARITY_THRESHOLD = 0.46f
         private const val SHORT_AGGREGATION_SCALE = 1.6129f
@@ -941,7 +1133,11 @@ internal class MgcLegacySceneExposureTable private constructor(
         private const val U12_TO_U8_SHIFT = 4
         private const val U12_TO_U8_ROUNDING = 1 shl (U12_TO_U8_SHIFT - 1)
         private const val HIGHLIGHT_SATURATION = 1f
-        private const val SHADOW_SATURATION = 1f
+        // MGC 9.7 V25's generated AE tuning reports this pair as
+        // highlight_saturation=1.00, shadow_saturation=1.67.  These are consumed by
+        // ExposeHq before T-value aggregation; unity shadow saturation makes both AE
+        // curves too dark, especially the complementary-RMS long branch.
+        private const val SHADOW_SATURATION = 1.67f
         private const val SATURATION_ORIGINAL_BLEND = 0.64f
         private const val CURVE_GAMMA = 0.454545438
         private const val INVERSE_CURVE_SIZE = 128
@@ -950,8 +1146,13 @@ internal class MgcLegacySceneExposureTable private constructor(
         private const val ONE_OVER_SIX = 1f / 6f
         private const val ONE_OVER_U15 = 1f / 32768f
         private const val MIN_T_VALUE_WEIGHT = 1f
-        private const val SHORT_NEGATIVE_LOG_MEAN_SCALE = 4f
-        private const val LONG_NEGATIVE_LOG_MEAN_SCALE = 9f
+        // start_release.dat V25's paired CaptureTuning stores ae_smoothness=-2. The two arrays
+        // indexed by AE mode at libgcam_ae offsets 0x6B58F0/0x6B8FE0 are [4, 5.5] and [0, -3.5].
+        private const val MGC_V25_AE_SMOOTHNESS = -2f
+        private const val SHORT_NEGATIVE_SMOOTHNESS_SCALE = 4f
+        private const val LONG_NEGATIVE_SMOOTHNESS_SCALE = 5.5f
+        private const val SHORT_POSITIVE_SMOOTHNESS_SCALE = 0f
+        private const val LONG_POSITIVE_SMOOTHNESS_SCALE = -3.5f
         private const val LONG_SHAPE_SCALE = 90.909f
         private const val LONG_SHAPE_T_OFFSET = 8.5f
         private const val INNER_RADIUS = 0.1f
@@ -972,13 +1173,15 @@ internal class MgcLegacySceneExposureTable private constructor(
         )
         private val SHORT_HISTOGRAM_WEIGHTS = intArrayOf(
             21, 102, 286, 614, 1128, 1871, 2884, 4209, 5888, 7964, 10477, 13470,
-            16986, 21065, 20, 238, 906, 2280, 4612, 8156, 13165, 19895, 25, 539,
-            2392, 6442, 13550, 24576,
+            16986, 21065,
+            20, 238, 906, 2280, 4612, 8156, 13165, 19895,
+            25, 539, 2392, 6442, 13550, 24576,
         )
         private val LONG_HISTOGRAM_WEIGHTS = intArrayOf(
             21065, 20660, 20255, 19850, 19444, 19039, 18634, 18229, 17824, 17419,
-            17014, 16609, 16204, 15799, 19895, 19184, 18474, 17763, 17052, 16342,
-            15631, 14921, 24576, 23347, 22118, 20889, 19660, 18432,
+            17014, 16609, 16204, 15799,
+            19895, 19184, 18474, 17763, 17052, 16342, 15631, 14921,
+            24576, 23347, 22118, 20889, 19660, 18432,
         )
         private val PUNCH_CURVE_POINTS = doubleArrayOf(
             0.0, 0.013, 0.055, 0.114, 0.184, 0.263, 0.348, 0.434, 0.519,
@@ -1006,6 +1209,21 @@ internal class MgcLegacySceneExposureTable private constructor(
             IntArray(U12_MAX + 1) { code ->
                 quantizeU12(evaluateSaturationCurve(code.toDouble() / U12_MAX.toDouble()))
             }
+        }
+
+        private fun smoothnessTOffset(mode: MgcLegacyAeMode, aeSmoothness: Float): Float {
+            val negativeScale = if (mode == MgcLegacyAeMode.SHORT) {
+                SHORT_NEGATIVE_SMOOTHNESS_SCALE
+            } else {
+                LONG_NEGATIVE_SMOOTHNESS_SCALE
+            }
+            val positiveScale = if (mode == MgcLegacyAeMode.SHORT) {
+                SHORT_POSITIVE_SMOOTHNESS_SCALE
+            } else {
+                LONG_POSITIVE_SMOOTHNESS_SCALE
+            }
+            return max(-aeSmoothness, 0f) * negativeScale +
+                max(aeSmoothness - 5f, 0f) * positiveScale
         }
 
         private fun evaluateSaturationCurve(value: Double): Double =

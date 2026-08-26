@@ -51,6 +51,7 @@ import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.preview.PreviewEyeFocusProcessor
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
@@ -530,6 +531,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             (1_000L + EYE_FOCUS_MAX_AF_TRIGGER_FPS - 1L) / EYE_FOCUS_MAX_AF_TRIGGER_FPS
         private const val EYE_FOCUS_REFRESH_INTERVAL_MS = 1_800L
         private const val EYE_FOCUS_RETRY_INTERVAL_MS = 1_200L
+        private const val PORTRAIT_MASK_MAX_AGE_NS = 1_000_000_000L
     }
 
     private data class HdrBracketFrame(
@@ -1867,6 +1869,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
     private var lastEyeFocusTriggerPoint: Pair<Float, Float>? = null
     private var lastEyeFocusTriggerElapsedMs = 0L
+    @Volatile
+    private var latestPortraitMask: PortraitMaskSnapshot? = null
+    @Volatile
+    private var pendingCapturePortraitMask: PortraitMaskSnapshot? = null
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
@@ -1920,6 +1926,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 handleEyeFocusTarget(target)
             }
+        }
+        previewEyeFocusProcessor.onPortraitMask = { mask ->
+            latestPortraitMask = mask.copy(
+                confidence = mask.confidence.copyOf(),
+                cameraId = cameraController.getCurrentCameraId(),
+                sensorOrientationDegrees = cameraController.getSensorOrientation(),
+                isFrontFacing = cameraController.getLensFacing() ==
+                    CameraCharacteristics.LENS_FACING_FRONT,
+            )
         }
         previewEyeFocusProcessor.onTargetLost = {
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -1994,6 +2009,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
                     val rawMaxHdrFusionEnabled = state.value.isRawMaxHdrEnabled
+                    val capturePortraitMask = consumeCapturePortraitMask()
                     viewModelScope.launch {
                         val exposurePlan = RawmaxExposurePlanner.plan(
                             exposureProducts = chronologicalFrames.map { it.frame.exposureProduct },
@@ -2056,6 +2072,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             characteristics = characteristics,
                             captureResult = referenceCaptureResult,
                             rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
+                            capturePortraitMask = capturePortraitMask,
                         )
                     }
                 }
@@ -2064,8 +2081,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     TAG,
                     "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
                 )
+                val capturePortraitMask = consumeCapturePortraitMask()
                 viewModelScope.launch {
-                    saveImage(image, captureInfo, characteristics, captureResult)
+                    saveImage(
+                        image = image,
+                        captureInfo = captureInfo,
+                        characteristics = characteristics,
+                        captureResult = captureResult,
+                        capturePortraitMask = capturePortraitMask,
+                    )
                 }
             }
         }
@@ -3376,6 +3400,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     cameraController.setCountdownValue(i)
                     delay(1000)
                 }
+                latchCapturePortraitMask()
                 generateThumbnail()
                 // 倒计时结束，拍照
                 cameraController.setCountdownValue(0)
@@ -3389,6 +3414,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.capture()
             }
         } else {
+            latchCapturePortraitMask()
             generateThumbnail()
             pendingRawStackFrames.forEach { it.frame.image.close() }
             pendingRawStackFrames.clear()
@@ -4524,6 +4550,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun handleEyeFocusInputUpdate(frame: EyeFocusPreviewFrame) {
         val cameraState = state.value
+        val acceptsPortraitMask = cameraState.captureMode == CaptureMode.PHOTO &&
+            cameraState.useRaw &&
+            cameraState.isRawSupported &&
+            rawToneMappingParameters.value.usePhotonHdr &&
+            cameraState.isPreviewActive &&
+            !cameraState.isCapturing
         val acceptsEyeFocus = eyeFocusEnabled.value &&
             isEyeFocusRuntimeAvailable &&
             cameraState.isPreviewActive &&
@@ -4531,13 +4563,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !cameraState.isHyperfocalFocusEnabled &&
             !cameraState.isCapturing &&
             (cameraState.focusPoint == null || cameraState.focusPointSource == FocusPointSource.EYE)
-        if (!acceptsEyeFocus) {
+        if (!acceptsEyeFocus && !acceptsPortraitMask) {
             frame.bitmap.recycle()
             completeEyeFocusInput()
             return
         }
 
-        if (!previewEyeFocusProcessor.processFrame(frame)) {
+        if (
+            !previewEyeFocusProcessor.processFrame(
+                frame = frame,
+                detectEyeTarget = acceptsEyeFocus,
+                createFaceMask = acceptsPortraitMask,
+            )
+        ) {
             frame.bitmap.recycle()
             completeEyeFocusInput()
         }
@@ -4595,6 +4633,41 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (cancelCameraFocus) {
             cameraController.cancelEyeFocus(reason)
         }
+    }
+
+    private fun capturePortraitMaskSnapshot(): PortraitMaskSnapshot? {
+        val mask = latestPortraitMask ?: return null
+        val ageNanos = SystemClock.elapsedRealtimeNanos() - mask.sampleElapsedRealtimeNanos
+        if (ageNanos !in 0L..PORTRAIT_MASK_MAX_AGE_NS) return null
+        if (mask.cameraId != cameraController.getCurrentCameraId()) return null
+        if (mask.sensorOrientationDegrees != cameraController.getSensorOrientation()) return null
+        val isFrontFacing = cameraController.getLensFacing() ==
+            CameraCharacteristics.LENS_FACING_FRONT
+        if (mask.isFrontFacing != isFrontFacing) return null
+        return mask.copy(confidence = mask.confidence.copyOf())
+    }
+
+    private fun consumeCapturePortraitMask(): PortraitMaskSnapshot? {
+        return pendingCapturePortraitMask.also { pendingCapturePortraitMask = null }
+    }
+
+    private fun latchCapturePortraitMask() {
+        val snapshot = capturePortraitMaskSnapshot()
+        pendingCapturePortraitMask = snapshot
+        val ageMs = snapshot?.let { mask ->
+            (SystemClock.elapsedRealtimeNanos() - mask.sampleElapsedRealtimeNanos) / 1_000_000L
+        }
+        val size = snapshot?.let { mask -> "${mask.width}x${mask.height}" }
+        PLog.i(
+            TAG,
+            "FACE_MASK stage=CAPTURE_LATCH available=${snapshot != null} " +
+                "source=BLAZEFACE_VALIDATED_SOFT_FACE_ELLIPSE " +
+                "size=$size " +
+                "ageMs=$ageMs " +
+                "sensorOrientation=${snapshot?.sensorOrientationDegrees} " +
+                "frontFacing=${snapshot?.isFrontFacing} " +
+                "cameraId=${snapshot?.cameraId}",
+        )
     }
 
     // ==================== 边框相关方法 ====================
@@ -5549,7 +5622,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         image: SafeImage,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
-        captureResult: CaptureResult?
+        captureResult: CaptureResult?,
+        capturePortraitMask: PortraitMaskSnapshot?,
     ) {
         var ownsImage = true
         try {
@@ -5748,6 +5822,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     exposureBias = captureExposureBias,
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport.value,
+                    capturePortraitMask = capturePortraitMask,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -6138,6 +6213,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?,
         rawMaxHdrFusionEnabled: Boolean,
+        capturePortraitMask: PortraitMaskSnapshot?,
     ) {
         try {
             val images = frames.map { it.image }
@@ -6366,6 +6442,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport.value,
                     capturePreviewThumbnail = previewThumbnail,
+                    capturePortraitMask = capturePortraitMask,
                     rawStackFrames = frames,
                     rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
                     rawMaxSpatialOutputMode = rawSpatialOutputMode,

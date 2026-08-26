@@ -1396,6 +1396,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val baselineExposureEv: Float,
         val hdrRatio: Float,
         val sourceToShortGain: Float,
+        val portraitRelightingGain: Float,
+        val portraitRelightingMask: FloatArray?,
         val colorCorrectionMatrix: FloatArray,
         val hueSatMap: DcpHueSatMap?,
         val hueSatMapSupportsOverrange: Boolean,
@@ -1687,8 +1689,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
             modelOutput.asFloatBuffer().get(coefficients)
             val pgtmStartNs = System.nanoTime()
             val map = DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(
-                plan,
-                coefficients,
+                plan = plan,
+                coefficients = coefficients,
+                portraitRelightingGain = input.portraitRelightingGain,
+                portraitRelightingMask = input.portraitRelightingMask,
             ) ?: return null
             val pgtmReadyNs = System.nanoTime()
             val textureId = uploadProfileGainTableTexture(map) ?: return null
@@ -1710,6 +1714,12 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
                     "sourceToShortGain=${plan.sourceToShortGain} " +
                     "hdrNetTotalInputGain=${plan.baselineGain * plan.sourceToShortGain} " +
+                    "portraitRelightingApplied=" +
+                    "${input.portraitRelightingMask != null && input.portraitRelightingGain != 1f} " +
+                    "portraitRelightingGain=${input.portraitRelightingGain} " +
+                    "portraitRelightingMaskRms=" +
+                    "${RawSceneExposureMath.faceMaskRms(input.portraitRelightingMask)} " +
+                    "portraitRelightingDomain=POST_HDRNET_TARGET_PRE_ACR3_PRE_PGTM " +
                     "baselineAppliedToHdrNetInput=true " +
                     "pgtmGainDenominator=BASELINE_RESTORED_SOURCE_LUMA " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +

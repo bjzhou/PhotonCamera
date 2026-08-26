@@ -1512,6 +1512,7 @@ class RawDemosaicProcessor {
     private val hdrReferencePass = RawHdrReferencePass(engineTonePass)
     private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
     private val fastMomentsStatsAlgorithm = RawFastMomentsStatsAlgorithm()
+    private val classicAeSplitAlgorithm = RawClassicAeSplitAlgorithm()
     private val quadBayerDemosaicAlgorithm = QuadBayerDemosaicAlgorithm()
     private val vgnDemosaicAlgorithm = VgnDemosaicAlgorithm()
     private val demosaicNoisePropagationCalibrator = DemosaicNoisePropagationCalibrator(
@@ -1834,6 +1835,9 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         forceRegeneratePhotonPgtm: Boolean = false,
         photonHdrRatio: Float? = null,
+        photonSourceToShortGain: Float? = null,
+        photonPortraitRelightingGain: Float? = null,
+        photonPortraitRelightingMask: FloatArray? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         onMetadata: ((RawMetadata) -> Unit)? = null
@@ -1880,6 +1884,9 @@ class RawDemosaicProcessor {
                 rawToneMappingParameters = rawToneMappingParameters,
                 forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
                 photonHdrRatio = photonHdrRatio,
+                photonSourceToShortGain = photonSourceToShortGain,
+                photonPortraitRelightingGain = photonPortraitRelightingGain,
+                photonPortraitRelightingMask = photonPortraitRelightingMask,
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 dngFile = dngFile,
@@ -2330,6 +2337,9 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         forceRegeneratePhotonPgtm: Boolean = false,
         photonHdrRatio: Float? = null,
+        photonSourceToShortGain: Float? = null,
+        photonPortraitRelightingGain: Float? = null,
+        photonPortraitRelightingMask: FloatArray? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         dngFile: File? = null,
@@ -3155,6 +3165,12 @@ class RawDemosaicProcessor {
                     ?.takeIf { it.isFinite() && it >= 1f }
                 val captureSourceToShortGain = solvedSceneExposure?.finalShortGain
                     ?.takeIf { it.isFinite() && it > 0f }
+                val capturePortraitRelightingGain =
+                    solvedSceneExposure?.portraitRelightingGain
+                        ?.takeIf { it.isFinite() && it > 0f }
+                        ?: 1f
+                val capturePortraitRelightingMask =
+                    solvedSceneExposure?.portraitRelightingMask
                 val captureProfileGainTableMap = if (
                     capturePhotonPgtmRequested && captureHdrRatio != null &&
                     captureSourceToShortGain != null
@@ -3180,6 +3196,8 @@ class RawDemosaicProcessor {
                         // independent BaselineExposureOffset rendering adjustment.
                         hdrRatio = captureHdrRatio,
                         sourceToShortGain = captureSourceToShortGain,
+                        portraitRelightingGain = capturePortraitRelightingGain,
+                        portraitRelightingMask = capturePortraitRelightingMask,
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
                         hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -3217,6 +3235,9 @@ class RawDemosaicProcessor {
                     RawDngCaptureProfileResult(
                         exposureOffsetEv = solvedExposureEv,
                         hdrRatio = captureHdrRatio,
+                        finalShortGain = captureSourceToShortGain,
+                        portraitRelightingGain = capturePortraitRelightingGain,
+                        portraitRelightingMask = capturePortraitRelightingMask?.copyOf(),
                         profileGainTableMap = captureProfileGainTableMap,
                         gpuDemosaicedRawSource = reusableDemosaicSource,
                     )
@@ -3227,9 +3248,11 @@ class RawDemosaicProcessor {
 
             if (forcePhotonPgtmRegeneration) {
                 val persistedHdrRatio = photonHdrRatio?.takeIf { it.isFinite() && it >= 1f }
-                // A forced regeneration is also the migration boundary for older captures whose
-                // persisted ratio came from the non-Fast-Moments AE path. Re-run the current true
-                // path first; retain metadata only as a fallback when the model cannot execute.
+                val persistedSourceToShortGain = photonSourceToShortGain
+                    ?.takeIf { it.isFinite() && it > 0f }
+                // Forced regeneration is an explicit request to run the current AE and HDRNet
+                // algorithms against the current RAW payload. Persisted capture coordinates are
+                // only a fallback when the estimator cannot produce a complete ratio/gain pair.
                 val estimatedExposure = renderSceneExposureRequest(
                     request = RawSceneExposureMatcher.createRequest(
                         context = context,
@@ -3243,13 +3266,23 @@ class RawDemosaicProcessor {
                     profileToLinearSrgbTransform = profileToLinearSrgbTransform,
                     outputSourceBounds = outputSourceBounds,
                     stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
-                    // A gallery refresh meters the DNG payload rather than the capture-time base
-                    // frame. Restore source normalization so the pixels and Camera2 TET are in the
-                    // same exposure domain before AE is re-run.
-                    restoreSourceBaselineExposure = true,
+                    // MGC AE operates in the sensor exposure domain. DNG BaselineExposure is a
+                    // rendering coordinate and is supplied separately to PGTM generation below;
+                    // applying it to metering pixels without applying it to TET shifts the table's
+                    // log-scene-brightness coordinate by ln(baselineGain).
+                    restoreSourceBaselineExposure = false,
                 )
                 val estimatedHdrRatio = estimatedExposure?.hdrRatio
-                val regenerationHdrRatio = estimatedHdrRatio ?: persistedHdrRatio
+                    ?.takeIf { it.isFinite() && it >= 1f }
+                val estimatedSourceToShortGain = estimatedExposure?.finalShortGain
+                    ?.takeIf { it.isFinite() && it > 0f }
+                val useEstimatedAe =
+                    estimatedHdrRatio != null && estimatedSourceToShortGain != null
+                val regenerationHdrRatio = if (useEstimatedAe) {
+                    estimatedHdrRatio
+                } else {
+                    persistedHdrRatio
+                }
                 if (regenerationHdrRatio == null) {
                     PLog.e(
                         TAG,
@@ -3258,22 +3291,43 @@ class RawDemosaicProcessor {
                     )
                     return@withContext null
                 }
-                // Older captures only persisted the long/short ratio. When Fast Moments cannot
-                // be re-run, retain their historical source-domain behavior instead of inventing
-                // a short-exposure normalization that cannot be derived from the ratio alone.
-                val regenerationSourceToShortGain =
-                    estimatedExposure?.finalShortGain ?: 1f
+                val regenerationSourceToShortGain = if (useEstimatedAe) {
+                    checkNotNull(estimatedSourceToShortGain)
+                } else {
+                    persistedSourceToShortGain ?: 1f
+                }
+                val regenerationAeSource = when {
+                    useEstimatedAe -> "MGC_FAST_MOMENTS_TRUE"
+                    persistedHdrRatio != null && persistedSourceToShortGain != null ->
+                        "PERSISTED_CAPTURE_AE_FALLBACK"
+                    else -> "LEGACY_METADATA_FALLBACK"
+                }
+                val regenerationPortraitRelightingGain = photonPortraitRelightingGain
+                    ?.takeIf { it.isFinite() && it > 0f }
+                    ?: 1f
+                val regenerationPortraitRelightingMask = photonPortraitRelightingMask
+                    ?.takeIf { mask ->
+                        mask.size == RawSceneExposureMath.INPUT_WIDTH *
+                            RawSceneExposureMath.INPUT_HEIGHT &&
+                            mask.all { it.isFinite() && it in 0f..1f }
+                    }
                 PLog.i(
                     TAG,
                     "HDRNet PGTM regeneration ratio=$regenerationHdrRatio " +
                         "sourceToShortGain=$regenerationSourceToShortGain " +
+                        "aeSource=$regenerationAeSource " +
                         "sourceBaselineEv=${actualMetadata.baselineExposure} " +
                         "sourceBaselineGain=${exactDngBaselineExposureGain(actualMetadata)} " +
-                        "source=${if (estimatedHdrRatio != null) "MGC_FAST_MOMENTS_TRUE" else "metadata-fallback"} " +
                         "persistedRatio=$persistedHdrRatio " +
+                        "persistedSourceToShortGain=$persistedSourceToShortGain " +
                         "finalShortTetMs=${estimatedExposure?.finalShortTetMs} " +
                         "finalLongTetMs=${estimatedExposure?.finalLongTetMs} " +
                         "finalShortGain=${estimatedExposure?.finalShortGain} " +
+                        "portraitRelightingRestored=" +
+                        "${regenerationPortraitRelightingMask != null} " +
+                        "portraitRelightingGain=$regenerationPortraitRelightingGain " +
+                        "portraitRelightingMaskRms=" +
+                        "${RawSceneExposureMath.faceMaskRms(regenerationPortraitRelightingMask)} " +
                         "safeUnderexposure=${estimatedExposure?.safeUnderexposure} " +
                         "fractionPixelsClippedAtFinalShortTet=" +
                         "${estimatedExposure?.fractionPixelsClippedAtFinalShortTet}",
@@ -3303,6 +3357,8 @@ class RawDemosaicProcessor {
                         dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
                     hdrRatio = regenerationHdrRatio,
                     sourceToShortGain = regenerationSourceToShortGain,
+                    portraitRelightingGain = regenerationPortraitRelightingGain,
+                    portraitRelightingMask = regenerationPortraitRelightingMask,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
                     hueSatMap = activeDcpRenderPlan?.hueSatMap,
                     hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -4395,6 +4451,8 @@ class RawDemosaicProcessor {
         baselineExposureEv: Float,
         hdrRatio: Float,
         sourceToShortGain: Float,
+        portraitRelightingGain: Float = 1f,
+        portraitRelightingMask: FloatArray? = null,
         colorCorrectionMatrix: FloatArray,
         hueSatMap: DcpHueSatMap?,
         hueSatMapSupportsOverrange: Boolean,
@@ -4435,6 +4493,8 @@ class RawDemosaicProcessor {
                 baselineExposureEv = baselineExposureEv,
                 hdrRatio = hdrRatio,
                 sourceToShortGain = sourceToShortGain,
+                portraitRelightingGain = portraitRelightingGain,
+                portraitRelightingMask = portraitRelightingMask,
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 hueSatMap = hueSatMap,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -7820,6 +7880,86 @@ class RawDemosaicProcessor {
         profileGainTableTextureSource = null
     }
 
+    private fun renderRawClassicAeSplit(
+        metadata: RawMetadata,
+        rawTextureId: Int,
+        sourceBounds: Rect,
+        stackCompletionTimeline: GpuStackCompletionTimeline?,
+    ): RawSceneClassicAeMeteringFrame? {
+        val size = RawClassicAeSplitAlgorithm.outputSize(
+            sourceBounds = sourceBounds,
+            cfaPattern = metadata.cfaPattern,
+        ) ?: return null
+        setupLinearExposurePreviewFramebuffer(size.width, size.height)
+        fun renderComponent(component: Int): FloatArray? {
+            if (!classicAeSplitAlgorithm.execute(
+                    RawClassicAeSplitAlgorithm.Input(
+                        rawTextureId = rawTextureId,
+                        outputTextureId = linearExposurePreviewTextureId,
+                        imageWidth = metadata.width,
+                        imageHeight = metadata.height,
+                        sourceBounds = sourceBounds,
+                        cfaPattern = metadata.cfaPattern,
+                        blackLevel = FloatArray(4) { channel ->
+                            metadata.blackLevel.getOrElse(channel) {
+                                metadata.blackLevel.firstOrNull() ?: 0f
+                            }
+                        },
+                        whiteLevel = metadata.whiteLevel,
+                        component = component,
+                    ),
+                )
+            ) {
+                return null
+            }
+            return readSceneExposureChannels(
+                width = size.width,
+                height = size.height,
+                stackCompletionTimeline = if (component == 0) stackCompletionTimeline else null,
+                label = "RAW Classic AE split component $component",
+                channelCount = 4,
+            )
+        }
+        val brightReadback = renderComponent(0) ?: return null
+        val darkReadback = renderComponent(1) ?: return null
+        val pixelCount = size.width * size.height
+        val brightRgb = FloatArray(pixelCount * 3)
+        val darkRgb = FloatArray(pixelCount * 3)
+        val brightMask = ByteArray(pixelCount)
+        var clippedSampleCount = 0f
+        for (pixel in 0 until pixelCount) {
+            val readOffset = pixel * 4
+            val rgbOffset = pixel * 3
+            for (channel in 0..2) {
+                brightRgb[rgbOffset + channel] = brightReadback[readOffset + channel]
+                darkRgb[rgbOffset + channel] = darkReadback[readOffset + channel]
+            }
+            brightMask[pixel] = (
+                brightReadback[readOffset + 3].coerceIn(0f, 1f) * 255f + 0.5f
+                ).toInt().coerceIn(0, 255).toByte()
+            clippedSampleCount += darkReadback[readOffset + 3].coerceAtLeast(0f)
+        }
+        if (brightRgb.any { !it.isFinite() || it < 0f } ||
+            darkRgb.any { !it.isFinite() || it < 0f }
+        ) {
+            return null
+        }
+        return RawSceneClassicAeMeteringFrame(
+            width = size.width,
+            height = size.height,
+            brightRgb = brightRgb,
+            darkRgb = darkRgb,
+            brightMask = brightMask,
+            clippedFraction = (
+                clippedSampleCount /
+                    RawClassicAeSplitAlgorithm.cfaSampleCount(
+                        sourceBounds = sourceBounds,
+                        cfaPattern = metadata.cfaPattern,
+                    ).takeIf { it > 0 }?.toFloat().let { it ?: return null }
+                ).coerceIn(0f, 1f),
+        )
+    }
+
     private fun renderSceneExposureRequest(
         request: RawSceneExposureRequest,
         metadata: RawMetadata,
@@ -7841,6 +7981,19 @@ class RawDemosaicProcessor {
                 outputSourceBounds.top.toFloat() / metadata.height.toFloat(),
                 outputSourceBounds.right.toFloat() / metadata.width.toFloat(),
                 outputSourceBounds.bottom.toFloat() / metadata.height.toFloat(),
+            )
+            // RawToLoResRgb and mode-2 ComputeSafeUnderexposure consume the RawWriteView itself;
+            // DefaultCrop belongs to rendering and must not silently crop either AE input.
+            val rawAeBounds = RawDefaultCropOverride.alignToBayerPhase(
+                crop = Rect(0, 0, metadata.width, metadata.height),
+                width = metadata.width,
+                height = metadata.height,
+            ) ?: return null
+            val normalizedRawAeBounds = floatArrayOf(
+                rawAeBounds.left.toFloat() / metadata.width.toFloat(),
+                rawAeBounds.top.toFloat() / metadata.height.toFloat(),
+                rawAeBounds.right.toFloat() / metadata.width.toFloat(),
+                rawAeBounds.bottom.toFloat() / metadata.height.toFloat(),
             )
             val camera2Gains = metadata.camera2ColorCorrectionGains
                 ?.takeIf { values ->
@@ -7969,6 +8122,48 @@ class RawDemosaicProcessor {
                 metadata = meteringMetadata,
                 lensShadingStats = lensShadingStats,
             ) ?: return null
+            val rawClassicSplit = baseFrameMetering?.classicAe ?: if (
+                rawSamplesPerPixel == 1 && rawTextureIdForStats != 0
+            ) {
+                renderRawClassicAeSplit(
+                    metadata = metadata,
+                    rawTextureId = rawTextureIdForStats,
+                    sourceBounds = rawAeBounds,
+                    stackCompletionTimeline = stackCompletionTimeline,
+                )
+            } else {
+                null
+            }
+            val classicAeInput: RawSceneClassicAeMeteringFrame
+            val classicAeSource: String
+            if (rawClassicSplit != null) {
+                classicAeInput = RawSceneExposureMath.prepareMgcClassicAeMeteringFrame(
+                    split = rawClassicSplit,
+                    metadata = meteringMetadata,
+                    sourceBounds = if (baseFrameMetering != null) {
+                        normalizedBounds
+                    } else {
+                        normalizedRawAeBounds
+                    },
+                    lensShadingStats = lensShadingStats,
+                ) ?: return null
+                classicAeSource = if (baseFrameMetering?.classicAe != null) {
+                    "BASE_RAW_CLASSIC_SPLIT"
+                } else {
+                    "DNG_RAW_CLASSIC_SPLIT"
+                }
+            } else {
+                // LinearRaw/RGB sources have no CFA grid. MGC's RGB entry point is the defined
+                // non-QCOM fallback: component 0 contains RGB, component 1 is zero, mask is 255.
+                classicAeInput = RawSceneClassicAeMeteringFrame(
+                    width = width,
+                    height = height,
+                    brightRgb = legacyMeteringRgb,
+                    darkRgb = FloatArray(legacyMeteringRgb.size),
+                    brightMask = ByteArray(width * height) { 0xFF.toByte() },
+                )
+                classicAeSource = "LINEAR_RGB_CLASSIC_ENTRY"
+            }
             val meteringRgbMean = FloatArray(3)
             val meteringRgbMax = FloatArray(3)
             for (pixel in 0 until width * height) {
@@ -8001,6 +8196,10 @@ class RawDemosaicProcessor {
                     "rggbGains=${gains.contentToString()} " +
                     "rgbGains=${rgbGains.contentToString()} " +
                     "rgb2rgb=${meteringRgbTransform.contentToString()} " +
+                    "classicAeSource=$classicAeSource " +
+                    "classicAeSize=${classicAeInput.width}x${classicAeInput.height} " +
+                    "rawAeBounds=$rawAeBounds " +
+                    "classicAeClippedFraction=${classicAeInput.clippedFraction} " +
                     "meteringRgbMean=${meteringRgbMean.contentToString()} " +
                     "meteringRgbMax=${meteringRgbMax.contentToString()}",
             )
@@ -8010,11 +8209,7 @@ class RawDemosaicProcessor {
             ) {
                 // MGC's mode-2 ProcessAeStats consumes a RAW clipping mask at 1/16 scale. Preserve
                 // all four CFA channels before demosaic/highlight reconstruction can hide a clip.
-                val rawStatsBounds = RawDefaultCropOverride.alignToBayerPhase(
-                    crop = outputSourceBounds,
-                    width = metadata.width,
-                    height = metadata.height,
-                ) ?: return null
+                val rawStatsBounds = rawAeBounds
                 val statsWidth = (
                     rawStatsBounds.width() +
                         RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
@@ -8062,7 +8257,7 @@ class RawDemosaicProcessor {
                     sourceHeight = rawStatsBounds.height(),
                     channelMax = channelMax,
                     sensorNormalized = true,
-                    sourceBounds = normalizedBounds,
+                    sourceBounds = normalizedRawAeBounds,
                     sourceRotationDegrees = 0,
                 )
             } else {
@@ -8139,7 +8334,7 @@ class RawDemosaicProcessor {
                     rgb = meteringRgb,
                     fastMomentsStats = fastMomentsStats,
                     legacyAeInput = RawSceneLegacyAeInput(
-                        cameraRgb = legacyMeteringRgb,
+                        splitHdrImage = classicAeInput,
                         rgbGains = rgbGains,
                         rgbTransform = meteringRgbTransform,
                     ),
@@ -8615,6 +8810,7 @@ class RawDemosaicProcessor {
         profileGainTableAlgorithm.release()
         meteringDemosaicAlgorithm.release()
         fastMomentsStatsAlgorithm.release()
+        classicAeSplitAlgorithm.release()
         linearRcdPass.release()
         photonDehazePipeline.release()
         warpRectilinearPass.release()
