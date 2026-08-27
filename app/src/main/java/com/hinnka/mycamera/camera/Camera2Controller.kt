@@ -40,6 +40,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -342,7 +343,8 @@ class Camera2Controller(private val context: Context) {
 
     // Live Photo 录制器
     val livePhotoRecorder = LivePhotoRecorder(context)
-    val videoRecorder = VideoRecorder(context)
+    val realtimeStabilizationCoordinator = RealtimeStabilizationCoordinator(context)
+    val videoRecorder = VideoRecorder(context, realtimeStabilizationCoordinator)
     var onVideoSaved: ((Uri?) -> Unit)? = null
 
     private var videoRecordingStartElapsedMs: Long = 0L
@@ -689,6 +691,8 @@ class Camera2Controller(private val context: Context) {
             result: TotalCaptureResult
         ) {
             super.onCaptureCompleted(session, request, result)
+
+            realtimeStabilizationCoordinator.submitCaptureResult(result)
 
             val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
             if (timestamp != null && isRawCaptureReader(imageReader)) {
@@ -1911,6 +1915,8 @@ class Camera2Controller(private val context: Context) {
             availableTonemapModes = availableTonemapModes,
             availableVideoStabilizationModes = availableVideoStabilizationModes,
             availableOpticalStabilizationModes = availableOpticalStabilizationModes,
+            algorithmicStabilizationSupported =
+                realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics),
             isFlashSupported = isFlashSupported
         )
 
@@ -2082,6 +2088,10 @@ class Camera2Controller(private val context: Context) {
                         openCharacteristics
                     }
                 }
+                realtimeStabilizationCoordinator.configureCamera(
+                    characteristics = capabilityCharacteristics,
+                    timingCharacteristics = openCharacteristics,
+                )
                 isManualSensorSupported =
                     capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
                 isManualPostProcessingSupported =
@@ -4378,7 +4388,15 @@ class Camera2Controller(private val context: Context) {
         try {
             if (state.captureMode == CaptureMode.VIDEO) {
                 val mode = state.videoConfig.stabilizationMode
-                resolveVideoStabilizationRequestMode(mode)?.let { videoStabilizationMode ->
+                val enhancedSelected = mode == VideoStabilizationMode.ENHANCED
+                val requestedVideoMode = if (enhancedSelected) {
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF.takeIf {
+                        availableVideoStabilizationModes.contains(it)
+                    }
+                } else {
+                    resolveVideoStabilizationRequestMode(mode)
+                }
+                requestedVideoMode?.let { videoStabilizationMode ->
                     builder.set(
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                         videoStabilizationMode
@@ -4420,6 +4438,7 @@ class Camera2Controller(private val context: Context) {
                 else -> null
             }
 
+            VideoStabilizationMode.ENHANCED,
             VideoStabilizationMode.OIS,
             VideoStabilizationMode.OFF -> {
                 CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
@@ -6153,12 +6172,40 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setVideoResolution(resolution: VideoResolutionPreset) {
-        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(resolution = resolution))
+        val currentConfig = _state.value.videoConfig
+        val stabilizationMode = if (
+            currentConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
+            resolution != VideoResolutionPreset.FHD_1080P
+        ) {
+            preferredHardwareVideoStabilizationMode()
+        } else {
+            currentConfig.stabilizationMode
+        }
+        _state.value = _state.value.copy(
+            videoConfig = currentConfig.copy(
+                resolution = resolution,
+                stabilizationMode = stabilizationMode
+            )
+        )
         refreshVideoCapabilities()
     }
 
     fun setVideoFps(fps: VideoFpsPreset) {
-        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(fps = fps))
+        val currentConfig = _state.value.videoConfig
+        val stabilizationMode = if (
+            currentConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
+            fps != VideoFpsPreset.FPS_30
+        ) {
+            preferredHardwareVideoStabilizationMode()
+        } else {
+            currentConfig.stabilizationMode
+        }
+        _state.value = _state.value.copy(
+            videoConfig = currentConfig.copy(
+                fps = fps,
+                stabilizationMode = stabilizationMode
+            )
+        )
         refreshVideoCapabilities()
         previewRequestBuilder?.apply {
             applyBaseCameraSettings(this, isCapture = false)
@@ -6186,17 +6233,30 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
-        val previousMode = _state.value.videoConfig.stabilizationMode
+        val previousConfig = _state.value.videoConfig
         _state.value = _state.value.copy(
-            videoConfig = _state.value.videoConfig.copy(
-                stabilizationMode = mode
+            videoConfig = previousConfig.copy(
+                resolution = if (mode == VideoStabilizationMode.ENHANCED) {
+                    VideoResolutionPreset.FHD_1080P
+                } else {
+                    previousConfig.resolution
+                },
+                fps = if (mode == VideoStabilizationMode.ENHANCED) {
+                    VideoFpsPreset.FPS_30
+                } else {
+                    previousConfig.fps
+                },
+                stabilizationMode = mode,
             )
         )
         refreshVideoCapabilities()
-        val resolvedMode = _state.value.videoConfig.stabilizationMode
+        val resolvedConfig = _state.value.videoConfig
+        val outputGeometryChanged = previousConfig.resolution != resolvedConfig.resolution ||
+            previousConfig.fps != resolvedConfig.fps
         if (_state.value.captureMode == CaptureMode.VIDEO &&
             !_state.value.videoRecordingState.isRecording &&
-            previousMode != resolvedMode
+            previousConfig.stabilizationMode != resolvedConfig.stabilizationMode &&
+            !outputGeometryChanged
         ) {
             createPreviewSession()
             return
@@ -6223,6 +6283,10 @@ class Camera2Controller(private val context: Context) {
             videoConfig = _state.value.videoConfig.copy(audioInputId = normalizedAudioInputId)
         )
         videoRecorder.setPreferredAudioInputId(normalizedAudioInputId)
+    }
+
+    fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(photoPreviewStabilizationEnabled = enabled)
     }
 
     fun setVideoRecordingPath(recordingPath: VideoRecordingPath, recordingTreeUri: String? = null) {
@@ -6292,6 +6356,7 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoConfig.resolution
         ] ?: _state.value.currentPreviewSize
         val isFrontCamera = isCurrentCameraFrontFacing()
+        val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val shouldFlipEncodedFrame = isFrontCamera && mirrorFrontCameraEnabled
         val colorLayers = buildList {
             if (!_state.value.videoConfig.logProfile.isEnabled &&
@@ -6320,6 +6385,7 @@ class Camera2Controller(private val context: Context) {
                 ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
             orientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees),
             flipEncodedFrame = shouldFlipEncodedFrame,
+            enhancedStabilization = useEnhancedStabilization,
             recordingPath = _state.value.videoConfig.recordingPath,
             recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
             onError = { message ->
@@ -6340,7 +6406,6 @@ class Camera2Controller(private val context: Context) {
         if (!started) {
             return
         }
-
         _state.value = _state.value.copy(
             videoRecordingState = VideoRecordingState(isRecording = true, elapsedMs = 0L)
         )
@@ -6351,6 +6416,25 @@ class Camera2Controller(private val context: Context) {
     private fun isCurrentCameraFrontFacing(): Boolean {
         return cachedLensFacing == CameraCharacteristics.LENS_FACING_FRONT ||
             _state.value.getCurrentCameraInfo()?.lensType == LensType.FRONT
+    }
+
+    private fun shouldUseVideoEnhancedStabilization(): Boolean {
+        val state = _state.value
+        return state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
+            state.captureMode == CaptureMode.VIDEO &&
+            state.videoConfig.resolution == VideoResolutionPreset.FHD_1080P &&
+            state.videoConfig.fps == VideoFpsPreset.FPS_30 &&
+            !isCurrentCameraFrontFacing() &&
+            realtimeStabilizationCoordinator.isCurrentCameraSupported
+    }
+
+    private fun preferredHardwareVideoStabilizationMode(): VideoStabilizationMode {
+        val availableModes = _state.value.videoCapabilities.availableStabilizationModes
+        return when {
+            VideoStabilizationMode.OIS in availableModes -> VideoStabilizationMode.OIS
+            VideoStabilizationMode.EIS in availableModes -> VideoStabilizationMode.EIS
+            else -> VideoStabilizationMode.OFF
+        }
     }
 
     fun pauseVideoRecording() {

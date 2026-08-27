@@ -156,6 +156,7 @@ import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.video.VideoRecordingPath
+import com.hinnka.mycamera.video.VideoStabilizationMode
 import java.io.File
 import java.util.UUID
 import kotlin.math.roundToInt
@@ -375,6 +376,8 @@ fun SettingsScreen(
     val videoLutId by viewModel.videoLutId.collectAsState()
     val videoLensLockEnabled by viewModel.videoLensLockEnabled.collectAsState()
     val videoWhiteBalanceLockEnabled by viewModel.videoWhiteBalanceLockEnabled.collectAsState()
+    val photoPreviewStabilizationEnabled by
+        viewModel.photoPreviewStabilizationEnabled.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
     val openAIUrl by viewModel.openAIUrl.collectAsState()
     val openAIModel by viewModel.openAIModel.collectAsState()
@@ -1105,6 +1108,23 @@ fun SettingsScreen(
                             checked = focusPeakingEnabled,
                             onCheckedChange = { viewModel.setFocusPeakingEnabled(it) }
                         )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(
+                                R.string.settings_photo_preview_stabilization
+                            ),
+                            description = stringResource(
+                                R.string.settings_photo_preview_stabilization_description
+                            ),
+                            checked = photoPreviewStabilizationEnabled,
+                            onCheckedChange = viewModel::setPhotoPreviewStabilizationEnabled,
+                            enabled = viewModel.isAlgorithmicStabilizationSupported,
+                        )
                     }
                 }
 
@@ -1530,10 +1550,51 @@ fun SettingsScreen(
                 }
 
                 SettingsPage.VIDEO -> {
+                    val stabilizationModes = VideoStabilizationMode.entries.filter { mode ->
+                        mode != VideoStabilizationMode.ENHANCED ||
+                            viewModel.isAlgorithmicStabilizationSupported
+                    }
+                    val stabilizationModeLabels = stabilizationModes.map { mode ->
+                        mode to when (mode) {
+                            VideoStabilizationMode.OFF ->
+                                stringResource(R.string.settings_video_stabilization_mode_off)
+                            VideoStabilizationMode.EIS ->
+                                stringResource(R.string.settings_video_stabilization_mode_eis)
+                            VideoStabilizationMode.OIS ->
+                                stringResource(R.string.settings_video_stabilization_mode_ois)
+                            VideoStabilizationMode.ENHANCED ->
+                                stringResource(R.string.settings_video_stabilization_mode_enhanced)
+                        }
+                    }
+                    val selectedStabilizationModeLabel = stabilizationModeLabels
+                        .firstOrNull { it.first == userPreferences.videoStabilizationMode }
+                        ?.second
+                        ?: userPreferences.videoStabilizationMode.displayName
                     SettingsSection(
                         title = stringResource(R.string.settings_section_video),
                         showTitle = false
                     ) {
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_video_stabilization_default),
+                            description = stringResource(
+                                R.string.settings_video_stabilization_default_description
+                            ),
+                            value = selectedStabilizationModeLabel,
+                            options = stabilizationModeLabels.map { it.second },
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { selectedLabel ->
+                                stabilizationModeLabels.firstOrNull { it.second == selectedLabel }
+                                    ?.first
+                                    ?.let(viewModel::setVideoStabilizationMode)
+                            },
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_separate_video_lut),
                             description = stringResource(R.string.settings_separate_video_lut_description),

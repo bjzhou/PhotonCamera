@@ -14,6 +14,10 @@ import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.stabilization.AlgorithmicStabilizationTransform
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.STABILIZATION_ROW_COUNT
+import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
 import java.nio.ByteBuffer
@@ -231,6 +235,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // 相机 SurfaceTexture
     private var surfaceTexture: SurfaceTexture? = null
     private val frameAvailable = AtomicBoolean(false)
+    private var stabilizationCoordinator: RealtimeStabilizationCoordinator? = null
+    @Volatile
+    private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
+    @Volatile
+    private var stabilizationSessionStarted = false
+    private var photoPreviewStabilizationEnabled = false
+    private var currentStabilizationTransform: AlgorithmicStabilizationTransform? = null
 
     // 标记 Surface 是否已创建（GL 上下文是否可用）
     private var surfaceReady = false
@@ -818,6 +829,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
         treatSourceAsHlgInput: Boolean,
+        stabilizationTransform: AlgorithmicStabilizationTransform? = null,
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
@@ -845,6 +857,21 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             sourceCropRect[2],
             sourceCropRect[3]
         )
+        val stabilizationEnabled = stabilizationTransform != null &&
+            stabilizationTransform.rowHomographies.size == STABILIZATION_ROW_COUNT * 9
+        GLES30.glUniform1i(
+            locations.uStabilizationEnabledLocation,
+            if (stabilizationEnabled) 1 else 0,
+        )
+        if (stabilizationEnabled) {
+            GLES30.glUniformMatrix3fv(
+                locations.uStabilizationRowsLocation,
+                STABILIZATION_ROW_COUNT,
+                false,
+                stabilizationTransform.rowHomographies,
+                0,
+            )
+        }
         GLES30.glUniform1f(locations.uLutSizeLocation, lutSize)
         GLES30.glUniform1f(locations.uLutIntensityLocation, params.lutIntensity)
         GLES30.glUniform1i(locations.uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
@@ -999,6 +1026,33 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     e
                 )
             }
+        }
+
+        if (cameraFrameUpdated && photoPreviewStabilizationEnabled) {
+            val session = stabilizationSession
+            if (stabilizationSessionStarted &&
+                stabilizationCoordinator?.isCurrentCameraSupported == false
+            ) {
+                session?.stop()
+                stabilizationSessionStarted = false
+            }
+            if (!stabilizationSessionStarted) {
+                stabilizationSessionStarted = session?.start() == true
+            }
+            currentStabilizationTransform = if (stabilizationSessionStarted) {
+                surfaceTexture?.timestamp?.let { timestampNs ->
+                    session?.transformForFrame(
+                        timestampNs = timestampNs,
+                        baseCropRect = cropRect,
+                        textureAxesSwapped = isTextureTransformAxesSwapped(stMatrix),
+                        displayRotationDegrees = deviceRotation,
+                    )
+                }
+            } else {
+                null
+            }
+        } else if (!photoPreviewStabilizationEnabled) {
+            currentStabilizationTransform = null
         }
 
         val liveRecorder = livePhotoRecorder
@@ -1341,7 +1395,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
             sourceTextureId = cameraTextureId,
             sourceStMatrix = stMatrix,
-            sourceCropRect = cropRect,
+            sourceCropRect = currentStabilizationTransform?.cropRect ?: cropRect,
             targetMvpMatrix = targetMvpMatrix,
             lutConfig = layerLutConfig,
             lutTextureId = layerLutTextureId,
@@ -1351,7 +1405,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
-            treatSourceAsHlgInput = isHlgInput
+            treatSourceAsHlgInput = isHlgInput,
+            stabilizationTransform = currentStabilizationTransform,
         )
 
         // 测光和直方图（按需）
@@ -2519,6 +2574,26 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         updateCaptureSize()
     }
 
+    fun setStabilizationCoordinator(coordinator: RealtimeStabilizationCoordinator?) {
+        if (stabilizationCoordinator === coordinator) return
+        stabilizationSession?.stop()
+        stabilizationCoordinator = coordinator
+        stabilizationSession = coordinator?.createSession(StabilizationUseCase.PHOTO_PREVIEW)
+        stabilizationSessionStarted = false
+        currentStabilizationTransform = null
+    }
+
+    fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
+        if (photoPreviewStabilizationEnabled == enabled) return
+        photoPreviewStabilizationEnabled = enabled
+        PLog.i(TAG, "Photo preview stabilization enabled=$enabled")
+        if (!enabled) {
+            stabilizationSession?.stop()
+            stabilizationSessionStarted = false
+            currentStabilizationTransform = null
+        }
+    }
+
     fun setCaptureSize(width: Int, height: Int) {
         photoCaptureWidth = width.coerceAtLeast(0)
         photoCaptureHeight = height.coerceAtLeast(0)
@@ -3059,6 +3134,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     fun setRenderingPaused(paused: Boolean) {
         renderingPaused = paused
+        if (paused) {
+            stabilizationSession?.stop()
+            stabilizationSessionStarted = false
+            currentStabilizationTransform = null
+        }
     }
 
     private fun calculateMeteringResults(meteringBytes: ByteArray, focus: PointF?, mode: MeteringMode) {
@@ -3203,6 +3283,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      * 释放资源
      */
     fun release() {
+        stabilizationSession?.stop()
+        stabilizationSession = null
+        stabilizationCoordinator = null
+        stabilizationSessionStarted = false
+        currentStabilizationTransform = null
         try {
             meteringExecutor.shutdown()
         } catch (e: Exception) {

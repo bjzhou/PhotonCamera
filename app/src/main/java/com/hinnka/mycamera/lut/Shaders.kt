@@ -25,6 +25,7 @@ object Shaders {
         // 输出到片元着色器
         out vec2 vTexCoord;
         out vec2 vRawCoord; // 原始坐标用于色散计算
+        out vec2 vOutputCoord;
 
         // MVP 变换矩阵（用于 center crop 缩放）
         uniform mat4 uMVPMatrix;
@@ -40,6 +41,7 @@ object Shaders {
                 mix(uCropRect.x, uCropRect.z, aTexCoord.x),
                 mix(uCropRect.y, uCropRect.w, aTexCoord.y)
             );
+            vOutputCoord = aTexCoord;
             // 应用 SurfaceTexture 变换矩阵
             vTexCoord = (uSTMatrix * vec4(croppedCoord, 0.0, 1.0)).xy;
             vRawCoord = croppedCoord;

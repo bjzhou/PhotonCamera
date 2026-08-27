@@ -1191,6 +1191,9 @@ fun CameraScreen(
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
+                            stabilizationCoordinator = viewModel.realtimeStabilizationCoordinator,
+                            photoPreviewStabilizationEnabled =
+                                state.photoPreviewStabilizationEnabled,
                             modifier = Modifier.fillMaxSize()
                         )
                     }

@@ -17,6 +17,7 @@ import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
 
@@ -36,6 +37,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     private val renderer: LutRenderer = LutRenderer(context.applicationContext)
+    private var currentStabilizationCoordinator: RealtimeStabilizationCoordinator? = null
+    private var currentPhotoPreviewStabilizationEnabled = false
 
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
@@ -151,6 +154,24 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun setCaptureAspectRatio(aspectRatio: Float) {
         queueEvent {
             renderer.setCaptureAspectRatio(aspectRatio)
+        }
+    }
+
+    fun setStabilizationCoordinator(coordinator: RealtimeStabilizationCoordinator?) {
+        if (currentStabilizationCoordinator === coordinator) return
+        currentStabilizationCoordinator = coordinator
+        queueEvent {
+            renderer.setStabilizationCoordinator(coordinator)
+            requestRender()
+        }
+    }
+
+    fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
+        if (currentPhotoPreviewStabilizationEnabled == enabled) return
+        currentPhotoPreviewStabilizationEnabled = enabled
+        queueEvent {
+            renderer.setPhotoPreviewStabilizationEnabled(enabled)
+            requestRender()
         }
     }
 

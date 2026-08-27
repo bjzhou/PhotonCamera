@@ -24,6 +24,7 @@ import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -69,6 +70,8 @@ fun CameraPreviewGL(
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
+    stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
+    photoPreviewStabilizationEnabled: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val rotationDegrees = OrientationObserver.rotationDegrees
@@ -218,6 +221,10 @@ fun CameraPreviewGL(
                         glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                         glSurfaceView.setCalibrationOffset(calibrationOffset)
                         glSurfaceView.setCaptureAspectRatio(aspectRatio)
+                        glSurfaceView.setStabilizationCoordinator(stabilizationCoordinator)
+                        glSurfaceView.setPhotoPreviewStabilizationEnabled(
+                            photoPreviewStabilizationEnabled && captureMode == CaptureMode.PHOTO
+                        )
 
                         // 当 SurfaceTexture 准备好且尺寸已就绪时，通知外部打开相机。
                         // 对 previewSize 变化使用 key 重建 GLSurfaceView，避免旧 SurfaceTexture

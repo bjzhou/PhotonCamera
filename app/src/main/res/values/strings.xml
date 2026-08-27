@@ -196,6 +196,12 @@
     <string name="settings_video_lut_description">Selected LUT: %1$s</string>
     <string name="settings_video_lock_lens">Lock Lens</string>
     <string name="settings_video_lock_lens_description">Prevent zooming from switching cameras while video is recording.</string>
+    <string name="settings_video_stabilization_default">Default Video Stabilization</string>
+    <string name="settings_video_stabilization_default_description">Choose the stabilization mode used when video mode starts. EIS+ uses gyro-driven rolling-shutter correction on rear cameras and switches recording to 1080p/30 fps.</string>
+    <string name="settings_video_stabilization_mode_off">Off</string>
+    <string name="settings_video_stabilization_mode_eis">Electronic (EIS)</string>
+    <string name="settings_video_stabilization_mode_ois">Optical (OIS)</string>
+    <string name="settings_video_stabilization_mode_enhanced">Enhanced (EIS+)</string>
     <string name="settings_video_lock_white_balance">Lock White Balance</string>
     <string name="settings_video_lock_white_balance_description">Keep automatic white balance fixed while video is recording.</string>
     <string name="settings_section_quality_perf">Quality &amp; Performance</string>
@@ -214,6 +220,8 @@
     <string name="settings_level_description">Show horizontal level indicator while shooting</string>
     <string name="settings_focus_peaking">Focus Peaking</string>
     <string name="settings_focus_peaking_description">Show focus peaking highlights during manual focus</string>
+    <string name="settings_photo_preview_stabilization">Photo Preview Stabilization</string>
+    <string name="settings_photo_preview_stabilization_description">Stabilize the photo viewfinder using gyro motion. The saved photo is unchanged; rear cameras only.</string>
     <string name="settings_grid_lines">Grid Lines</string>
     <string name="settings_grid_description">Show grid lines for composition</string>
     <string name="settings_use_jpg_max">Multi-frame denoise</string>

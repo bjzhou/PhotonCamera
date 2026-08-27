@@ -22,6 +22,7 @@ object VideoCapabilitiesResolver {
         availableTonemapModes: IntArray = intArrayOf(),
         availableVideoStabilizationModes: IntArray = intArrayOf(),
         availableOpticalStabilizationModes: IntArray = intArrayOf(),
+        algorithmicStabilizationSupported: Boolean = false,
         isFlashSupported: Boolean = false
     ): VideoCapabilitySnapshot {
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -97,6 +98,17 @@ object VideoCapabilitiesResolver {
         }
         if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
             availableStabilizationModes.add(VideoStabilizationMode.OIS)
+        }
+        val enhancedCameraInputSize = cameraInputSizesByResolution[VideoResolutionPreset.FHD_1080P]
+        val enhancedStabilizationAvailable = algorithmicStabilizationSupported &&
+            enhancedCameraInputSize != null &&
+            resolveAvailableFps(
+                characteristics = characteristics,
+                cameraInputSize = enhancedCameraInputSize,
+                previewSize = previewSize
+            ).contains(VideoFpsPreset.FPS_30)
+        if (enhancedStabilizationAvailable) {
+            availableStabilizationModes.add(VideoStabilizationMode.ENHANCED)
         }
         
         val resolvedStabilizationMode = if (availableStabilizationModes.contains(requestedConfig.stabilizationMode)) {

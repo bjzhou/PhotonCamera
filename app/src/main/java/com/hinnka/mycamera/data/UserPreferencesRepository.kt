@@ -48,6 +48,7 @@ import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
+import com.hinnka.mycamera.video.VideoStabilizationMode
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
@@ -233,7 +234,8 @@ data class UserPreferences(
     val videoAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
     val videoRecordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
     val videoRecordingTreeUri: String? = null,
-    val videoStabilizationMode: com.hinnka.mycamera.video.VideoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.OIS,
+    val videoStabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
+    val photoPreviewStabilizationEnabled: Boolean = false,
     val videoTorchEnabled: Boolean = false,
     val videoLensLockEnabled: Boolean = false,
     val videoWhiteBalanceLockEnabled: Boolean = false,
@@ -492,6 +494,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_RECORDING_PATH = stringPreferencesKey("video_recording_path")
         private val VIDEO_RECORDING_TREE_URI = stringPreferencesKey("video_recording_tree_uri")
         private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
+        private val VIDEO_ENHANCED_STABILIZATION_ENABLED =
+            booleanPreferencesKey("video_enhanced_stabilization_enabled")
+        private val PHOTO_PREVIEW_STABILIZATION_ENABLED =
+            booleanPreferencesKey("photo_preview_stabilization_enabled")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
         private val VIDEO_LENS_LOCK_ENABLED = booleanPreferencesKey("video_lens_lock_enabled")
         private val VIDEO_WHITE_BALANCE_LOCK_ENABLED = booleanPreferencesKey("video_white_balance_lock_enabled")
@@ -568,6 +574,22 @@ class UserPreferencesRepository(private val context: Context) {
                 (preferences[USE_JPEG_444_EXPORT] ?: false) && !useHeicExport
             val hdrPlusBracketExposureEnabled = preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED]
                 ?: MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE
+            val storedVideoStabilizationMode = VideoStabilizationMode.entries.firstOrNull {
+                it.name == preferences[VIDEO_STABILIZATION_MODE]
+            } ?: VideoStabilizationMode.OIS
+            val videoStabilizationMode = if (
+                preferences[VIDEO_ENHANCED_STABILIZATION_ENABLED] == true
+            ) {
+                VideoStabilizationMode.ENHANCED
+            } else {
+                storedVideoStabilizationMode
+            }
+            val storedVideoResolution = VideoResolutionPreset.entries.firstOrNull {
+                it.name == preferences[VIDEO_RESOLUTION]
+            } ?: VideoResolutionPreset.FHD_1080P
+            val storedVideoFps = VideoFpsPreset.entries.firstOrNull {
+                it.name == preferences[VIDEO_FPS]
+            } ?: VideoFpsPreset.FPS_30
             UserPreferences(
                 captureMode = CaptureMode.entries.firstOrNull {
                     it.name == preferences[CAPTURE_MODE]
@@ -764,12 +786,16 @@ class UserPreferencesRepository(private val context: Context) {
                 useHlg10 = preferences[USE_HLG10] ?: false,
                 hlgHardwareCompatibilityEnabled = preferences[HLG_HARDWARE_COMPATIBILITY_ENABLED] ?: false,
                 useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
-                videoResolution = VideoResolutionPreset.valueOf(
-                    preferences[VIDEO_RESOLUTION] ?: VideoResolutionPreset.FHD_1080P.name
-                ),
-                videoFps = VideoFpsPreset.valueOf(
-                    preferences[VIDEO_FPS] ?: VideoFpsPreset.FPS_30.name
-                ),
+                videoResolution = if (videoStabilizationMode == VideoStabilizationMode.ENHANCED) {
+                    VideoResolutionPreset.FHD_1080P
+                } else {
+                    storedVideoResolution
+                },
+                videoFps = if (videoStabilizationMode == VideoStabilizationMode.ENHANCED) {
+                    VideoFpsPreset.FPS_30
+                } else {
+                    storedVideoFps
+                },
                 videoAspectRatio = VideoAspectRatio.valueOf(
                     preferences[VIDEO_ASPECT_RATIO] ?: VideoAspectRatio.RATIO_16_9.name
                 ),
@@ -782,9 +808,9 @@ class UserPreferencesRepository(private val context: Context) {
                 videoAudioInputId = preferences[VIDEO_AUDIO_INPUT_ID] ?: VIDEO_AUDIO_INPUT_AUTO,
                 videoRecordingPath = VideoRecordingPath.fromPersistedName(preferences[VIDEO_RECORDING_PATH]),
                 videoRecordingTreeUri = preferences[VIDEO_RECORDING_TREE_URI]?.takeIf { it.isNotBlank() },
-                videoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.valueOf(
-                    preferences[VIDEO_STABILIZATION_MODE] ?: com.hinnka.mycamera.video.VideoStabilizationMode.OIS.name
-                ),
+                videoStabilizationMode = videoStabilizationMode,
+                photoPreviewStabilizationEnabled =
+                    preferences[PHOTO_PREVIEW_STABILIZATION_ENABLED] ?: false,
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
                 videoLensLockEnabled = preferences[VIDEO_LENS_LOCK_ENABLED] ?: false,
                 videoWhiteBalanceLockEnabled = preferences[VIDEO_WHITE_BALANCE_LOCK_ENABLED] ?: false,
@@ -1573,12 +1599,22 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 保存视频防抖模式
-     */
-    suspend fun saveVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {
+    suspend fun saveVideoStabilizationConfig(
+        mode: VideoStabilizationMode,
+        resolution: VideoResolutionPreset,
+        fps: VideoFpsPreset,
+    ) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_STABILIZATION_MODE] = mode.name
+            preferences[VIDEO_RESOLUTION] = resolution.name
+            preferences[VIDEO_FPS] = fps.name
+            preferences.remove(VIDEO_ENHANCED_STABILIZATION_ENABLED)
+        }
+    }
+
+    suspend fun savePhotoPreviewStabilizationEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PHOTO_PREVIEW_STABILIZATION_ENABLED] = enabled
         }
     }
 

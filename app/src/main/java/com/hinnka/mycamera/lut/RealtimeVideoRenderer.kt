@@ -15,6 +15,10 @@ import android.util.Size
 import android.view.Surface
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.stabilization.AlgorithmicStabilizationTransform
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.STABILIZATION_ROW_COUNT
+import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoEncoderColorConfig
 import com.hinnka.mycamera.video.VideoEncodedColorPipeline
@@ -43,6 +47,8 @@ class RealtimeVideoRenderer(
     private val mirrorHorizontally: Boolean,
     private val mirrorVertically: Boolean,
     private val encoderColorConfig: VideoEncoderColorConfig,
+    private val stabilizationCoordinator: RealtimeStabilizationCoordinator?,
+    private val enhancedStabilizationEnabled: Boolean,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -115,6 +121,10 @@ class RealtimeVideoRenderer(
     private var textureCoordinateBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
     private var initialized = false
+    @Volatile
+    private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
+    @Volatile
+    private var stabilizationSessionStarted = false
 
     val inputSurface: Surface?
         get() = cameraSurface
@@ -147,12 +157,20 @@ class RealtimeVideoRenderer(
             setOnFrameAvailableListener { onFrameAvailable() }
         }
         cameraSurface = Surface(cameraSurfaceTexture)
+        if (enhancedStabilizationEnabled) {
+            stabilizationSession = stabilizationCoordinator?.createSession(StabilizationUseCase.VIDEO)
+            stabilizationSessionStarted = stabilizationSession?.start() == true
+            if (!stabilizationSessionStarted) {
+                PLog.w(TAG, "Enhanced stabilization requested but the gyro/camera session is unavailable")
+            }
+        }
         initialized = true
         PLog.i(
             TAG,
             "Initialized: camera=${cameraInputSize.width}x${cameraInputSize.height}, " +
                 "encoder=${encoderOutputSize.width}x${encoderOutputSize.height}, " +
                 "layers=${layers.size}, log=${videoLogProfile.name}, hlgInput=$hlgInput, " +
+                "enhancedStabilization=$enhancedStabilizationEnabled, " +
                 "mirrorH=$mirrorHorizontally, mirrorV=$mirrorVertically, " +
                 "color=${encoderColorConfig.debugName}"
         )
@@ -183,6 +201,15 @@ class RealtimeVideoRenderer(
         if (timestampNs <= 0L) return null
         val presentationTimeNs = mapPresentationTimeNs(timestampNs)
         if (presentationTimeNs <= 0L) return null
+        val stabilizationTransform = if (stabilizationSessionStarted) {
+            stabilizationSession?.transformForFrame(
+                timestampNs = timestampNs,
+                baseCropRect = cameraCropRect,
+                textureAxesSwapped = cameraTransformAxesSwapped == true,
+            )
+        } else {
+            null
+        }
 
         val firstLayer = layers.first()
         val grainEnabled = finalFilmGrainEnabled
@@ -194,11 +221,12 @@ class RealtimeVideoRenderer(
             textureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
             textureId = cameraTextureId,
             sourceStMatrix = stMatrix,
-            cropRect = cameraCropRect,
+            cropRect = stabilizationTransform?.cropRect ?: cameraCropRect,
             mvpMatrix = firstPassMvpMatrix,
             enableVideoLog = videoLogProfile.isEnabled,
             treatSourceAsHlgInput = hlgInput,
             presentationTimeNs = timestampNs,
+            stabilizationTransform = stabilizationTransform,
         )
 
         if (layers.size > 1) {
@@ -282,6 +310,7 @@ class RealtimeVideoRenderer(
         enableVideoLog: Boolean,
         treatSourceAsHlgInput: Boolean,
         presentationTimeNs: Long,
+        stabilizationTransform: AlgorithmicStabilizationTransform? = null,
     ) {
         val lutEnabled = layer.lutConfig != null && layer.lutTextureId != 0
         val variant = PreviewColorShaderVariant.forPass(
@@ -321,6 +350,21 @@ class RealtimeVideoRenderer(
             cropRect[2],
             cropRect[3],
         )
+        val stabilizationEnabled = stabilizationTransform != null &&
+            stabilizationTransform.rowHomographies.size == STABILIZATION_ROW_COUNT * 9
+        GLES30.glUniform1i(
+            locations.uStabilizationEnabledLocation,
+            if (stabilizationEnabled) 1 else 0,
+        )
+        if (stabilizationEnabled) {
+            GLES30.glUniformMatrix3fv(
+                locations.uStabilizationRowsLocation,
+                STABILIZATION_ROW_COUNT,
+                false,
+                stabilizationTransform.rowHomographies,
+                0,
+            )
+        }
         GLES30.glUniform1f(
             locations.uLutSizeLocation,
             layer.lutConfig?.size?.toFloat() ?: 1f,
@@ -769,7 +813,22 @@ class RealtimeVideoRenderer(
         GLES30.glDisableVertexAttribArray(textureLocation)
     }
 
+    @Synchronized
+    fun pauseStabilization() {
+        stabilizationSession?.stop()
+        stabilizationSessionStarted = false
+    }
+
+    @Synchronized
+    fun resumeStabilization() {
+        if (!enhancedStabilizationEnabled || stabilizationSessionStarted) return
+        stabilizationSessionStarted = stabilizationSession?.start() == true
+    }
+
     fun release() {
+        stabilizationSession?.stop()
+        stabilizationSession = null
+        stabilizationSessionStarted = false
         if (eglDisplay != EGL14.EGL_NO_DISPLAY &&
             eglContext != EGL14.EGL_NO_CONTEXT &&
             encoderEglSurface != EGL14.EGL_NO_SURFACE

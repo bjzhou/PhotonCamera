@@ -14,6 +14,8 @@ internal object PreviewColorShader {
         }
         val needsOklab = variant.includeOklchDensity || variant.includeLchMixer
         val needsClassifiers = variant.includeLchMixer || variant.includeLutMask
+        val supportsStabilization =
+            variant.textureSource == PreviewColorTextureSource.EXTERNAL_OES
 
         return """
             #version 300 es
@@ -22,6 +24,7 @@ internal object PreviewColorShader {
 
             in vec2 vTexCoord;
             in vec2 vRawCoord;
+            in vec2 vOutputCoord;
             out vec4 fragColor;
 
             uniform $sampler uCameraTexture;
@@ -40,6 +43,10 @@ internal object PreviewColorShader {
 
             uniform bool uColorRecipeEnabled;
             uniform mat4 uSTMatrix;
+            ${if (supportsStabilization) """
+            uniform bool uStabilizationEnabled;
+            uniform mat3 uStabilizationRows[16];
+            """ else ""}
             uniform float uExposure;
             uniform float uContrast;
             uniform float uSaturation;
@@ -178,16 +185,38 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.PRIMARY_CALIBRATION}
             ${PreviewColorShaderModules.LUT_COLOR_SPACE}
 
+            ${if (supportsStabilization) """
+            vec2 applyStabilization(vec2 coordinate, float outputRow) {
+                if (!uStabilizationEnabled) {
+                    return coordinate;
+                }
+                float rowPosition = clamp(outputRow, 0.0, 1.0) * 15.0;
+                int lowerIndex = clamp(int(floor(rowPosition)), 0, 14);
+                int upperIndex = lowerIndex + 1;
+                float amount = rowPosition - float(lowerIndex);
+                vec3 point = vec3(coordinate, 1.0);
+                vec3 lowerPoint = uStabilizationRows[lowerIndex] * point;
+                vec3 upperPoint = uStabilizationRows[upperIndex] * point;
+                vec2 lowerCoordinate = lowerPoint.xy / max(abs(lowerPoint.z), 0.000001);
+                vec2 upperCoordinate = upperPoint.xy / max(abs(upperPoint.z), 0.000001);
+                return mix(lowerCoordinate, upperCoordinate, amount);
+            }
+            """ else """
+            vec2 applyStabilization(vec2 coordinate, float outputRow) {
+                return coordinate;
+            }
+            """}
+
             void main() {
-                vec2 uvCoord = vTexCoord;
-                vec2 rcCoord = vRawCoord;
+                vec2 rcCoord = applyStabilization(vRawCoord, vOutputCoord.y);
+                vec2 uvCoord = (uSTMatrix * vec4(rcCoord, 0.0, 1.0)).xy;
                 if (uLowRes > 0.005) {
                     float blocksX = mix(512.0, 32.0, uLowRes);
                     vec2 gridSize = vec2(1.0 / blocksX, 1.0 / (blocksX / uAspectRatio));
-                    vec2 gridUV = floor(vTexCoord / gridSize) * gridSize + gridSize * 0.5;
-                    vec2 gridRC = floor(vRawCoord / gridSize) * gridSize + gridSize * 0.5;
-                    uvCoord = mix(vTexCoord, gridUV, 0.95);
-                    rcCoord = mix(vRawCoord, gridRC, 0.95);
+                    vec2 gridRC = floor(rcCoord / gridSize) * gridSize + gridSize * 0.5;
+                    vec2 gridUV = (uSTMatrix * vec4(gridRC, 0.0, 1.0)).xy;
+                    uvCoord = mix(uvCoord, gridUV, 0.95);
+                    rcCoord = mix(rcCoord, gridRC, 0.95);
                 }
 
                 vec4 color;
