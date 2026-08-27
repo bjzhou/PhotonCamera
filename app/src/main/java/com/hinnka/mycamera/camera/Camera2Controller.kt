@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.suspendCancellableCoroutine
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
@@ -61,6 +62,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.ln
@@ -132,6 +134,18 @@ class Camera2Controller(private val context: Context) {
         val captureMode: CaptureMode,
         val readerFormat: Int
     )
+
+    private data class CameraOpenRequest(
+        val surfaceTexture: SurfaceTexture,
+        val preserveVideoRecording: Boolean,
+    )
+
+    private enum class CameraDeviceLifecycle {
+        CLOSED,
+        OPENING,
+        OPEN,
+        CLOSING,
+    }
 
     private data class HyperfocalFocusResult(
         val cameraId: String,
@@ -250,6 +264,10 @@ class Camera2Controller(private val context: Context) {
     // ---------------------
 
     private var cameraDevice: CameraDevice? = null
+    private var cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSED
+    private var pendingCameraOpenRequest: CameraOpenRequest? = null
+    @Volatile
+    private var releaseCloseLatch: java.util.concurrent.CountDownLatch? = null
     private var captureSession: CameraCaptureSession? = null
     private var previewRequestBuilder: CaptureRequest.Builder? = null
     private var previewSessionGeneration: Long = 0L
@@ -1433,8 +1451,98 @@ class Camera2Controller(private val context: Context) {
     fun initialize() {
         PLog.i(TAG, "初始化相机控制器")
         startBackgroundThread()
-        // 不再在初始化时立即发现相机，延迟到第一次打开相机时
-        // discoverCameras()
+    }
+
+    private suspend fun runOnCameraThread(action: () -> Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            val handler = cameraHandler
+            if (handler == null) {
+                continuation.resume(false)
+                return@suspendCancellableCoroutine
+            }
+            handler.post {
+                val result = action()
+                if (continuation.isActive) continuation.resume(result)
+            }
+        }
+
+    /**
+     * 在首次打开前完成相机发现，让调用方可以先确定最终镜头和倍率。
+     */
+    suspend fun prepareCameras(): Boolean = runOnCameraThread {
+        if (_state.value.availableCameras.isNotEmpty()) {
+            return@runOnCameraThread true
+        }
+        try {
+            discoverCameras()
+            if (_state.value.availableCameras.isEmpty()) {
+                handleCameraOpenFailure(
+                    cameraId = "",
+                    errorCode = ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE,
+                    message = "未发现可用摄像头",
+                    error = IllegalStateException("Camera discovery returned no available camera"),
+                )
+                false
+            } else {
+                true
+            }
+        } catch (error: Exception) {
+            handleCameraOpenFailure(
+                cameraId = "",
+                errorCode = ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE,
+                message = "摄像头列表加载失败",
+                error = error,
+            )
+            false
+        }
+    }
+
+    /**
+     * 在创建预览 Surface 前确定最终尺寸，避免首次打开过程中因尺寸变化重建 Surface。
+     */
+    suspend fun preparePreviewSize(): Boolean = runOnCameraThread {
+        try {
+            val state = _state.value
+            val cameraId = state.getCurrentCameraInfo()?.getOpenCameraId()
+                ?: state.currentCameraId
+            if (cameraId.isEmpty()) {
+                false
+            } else {
+                val characteristics = getCameraCharacteristicsCached(cameraId)
+                val previewSize = when (state.captureMode) {
+                    CaptureMode.PHOTO -> CameraUtils.getFixedPreviewSize(
+                        characteristics,
+                        state.aspectRatio,
+                    )
+                    CaptureMode.QUICK_SHOT -> refreshQuickShotCapabilities(characteristics)
+                    CaptureMode.VIDEO -> {
+                        availableTonemapModes = characteristics.get(
+                            CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES
+                        ) ?: intArrayOf()
+                        availableVideoStabilizationModes = characteristics.get(
+                            CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES
+                        ) ?: intArrayOf()
+                        availableOpticalStabilizationModes = characteristics.get(
+                            CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION
+                        ) ?: intArrayOf()
+                        isFlashSupported = characteristics.get(
+                            CameraCharacteristics.FLASH_INFO_AVAILABLE
+                        ) ?: false
+                        refreshVideoCapabilities(characteristics)
+                    }
+                }
+                _state.update { it.copy(currentPreviewSize = previewSize) }
+                true
+            }
+        } catch (error: Exception) {
+            handleCameraOpenFailure(
+                cameraId = _state.value.currentCameraId,
+                errorCode = ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE,
+                message = "相机特性不可用",
+                error = error,
+            )
+            false
+        }
     }
 
     private fun startBackgroundThread() {
@@ -1653,6 +1761,26 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun closeCameraDeviceAndAwait(camera: CameraDevice, reason: String) {
+        if (cameraDevice === camera) {
+            cameraDevice = null
+        }
+        cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSING
+        closeCameraDeviceSafely(camera, reason)
+    }
+
+    private fun handleCameraDeviceClosed(camera: CameraDevice) {
+        if (cameraDevice === camera) {
+            cameraDevice = null
+        }
+        cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSED
+        PLog.d(TAG, "Camera device closed: ${camera.id}")
+        openPendingCameraRequest()
+        if (cameraDeviceLifecycle == CameraDeviceLifecycle.CLOSED) {
+            releaseCloseLatch?.countDown()
+        }
+    }
+
     private fun handleCameraDeviceUnavailable(
         camera: CameraDevice,
         reason: String,
@@ -1662,10 +1790,7 @@ class Camera2Controller(private val context: Context) {
         videoRecorder.forceStop()
         stopVideoRecordingTicker()
         clearCameraSessionState(reason)
-        closeCameraDeviceSafely(camera, reason)
-        if (cameraDevice === camera || cameraDevice?.id == camera.id) {
-            cameraDevice = null
-        }
+        closeCameraDeviceAndAwait(camera, reason)
         clearCameraCapabilityCache()
         livePhotoRecorder.stopRecording()
         setCameraInactive(resetVideoState)
@@ -1679,8 +1804,13 @@ class Camera2Controller(private val context: Context) {
     ) {
         cameraOpenGeneration++
         PLog.e(TAG, "Camera open failed for $cameraId: $message", error)
-        closeCameraDeviceSafely(cameraDevice, "open failure")
+        val device = cameraDevice
         cameraDevice = null
+        if (device != null) {
+            closeCameraDeviceAndAwait(device, "open failure")
+        } else {
+            cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSED
+        }
         clearCameraRuntimeState("open failure: $cameraId")
         livePhotoRecorder.stopRecording()
         setCameraInactive(resetVideoState = true)
@@ -1706,8 +1836,12 @@ class Camera2Controller(private val context: Context) {
             videoRecorder.forceStop()
             stopVideoRecordingTicker()
         }
-        closeCameraDeviceSafely(cameraDevice, "preview session failure: $reason")
-        cameraDevice = null
+        val device = cameraDevice
+        if (device != null) {
+            closeCameraDeviceAndAwait(device, "preview session failure: $reason")
+        } else {
+            cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSED
+        }
         clearCameraRuntimeState("preview session failure: $reason")
         livePhotoRecorder.stopRecording()
         setCameraInactive(resetVideoState = true)
@@ -1844,8 +1978,33 @@ class Camera2Controller(private val context: Context) {
             }
             return
         }
-        // 先关闭旧的相机和资源，防止资源泄漏
-        closeCamera(preserveVideoRecording = preserveVideoRecording)
+
+        pendingCameraOpenRequest = CameraOpenRequest(surfaceTexture, preserveVideoRecording)
+        when (cameraDeviceLifecycle) {
+            CameraDeviceLifecycle.CLOSED -> openPendingCameraRequest()
+            CameraDeviceLifecycle.OPENING,
+            CameraDeviceLifecycle.OPEN -> closeCameraInternal(
+                preserveVideoRecording = preserveVideoRecording,
+                clearPendingOpen = false,
+            )
+            CameraDeviceLifecycle.CLOSING -> {
+                PLog.d(TAG, "Camera open queued while previous device is closing")
+            }
+        }
+    }
+
+    private fun openPendingCameraRequest() {
+        if (cameraDeviceLifecycle != CameraDeviceLifecycle.CLOSED) return
+        val request = pendingCameraOpenRequest ?: return
+        pendingCameraOpenRequest = null
+        cameraDeviceLifecycle = CameraDeviceLifecycle.OPENING
+        openCameraNow(request)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openCameraNow(request: CameraOpenRequest) {
+        val surfaceTexture = request.surfaceTexture
+        val preserveVideoRecording = request.preserveVideoRecording
         resetAiFocusForCameraOpen()
         val openGeneration = ++cameraOpenGeneration
 
@@ -2227,12 +2386,16 @@ class Camera2Controller(private val context: Context) {
 
             cameraManager.openCamera(openCameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
-                    if (openGeneration != cameraOpenGeneration) {
+                    if (
+                        openGeneration != cameraOpenGeneration ||
+                        cameraDeviceLifecycle != CameraDeviceLifecycle.OPENING
+                    ) {
                         PLog.w(TAG, "Ignoring stale camera open callback: camera=${camera.id}")
-                        camera.close()
+                        closeCameraDeviceAndAwait(camera, "stale camera open")
                         return
                     }
                     PLog.d(TAG, "Camera opened: ${camera.id}")
+                    cameraDeviceLifecycle = CameraDeviceLifecycle.OPEN
                     cameraDevice = camera
                     if (restartCameraForRawCaptureOutputMismatch("camera opened")) {
                         return
@@ -2242,7 +2405,7 @@ class Camera2Controller(private val context: Context) {
 
                 override fun onDisconnected(camera: CameraDevice) {
                     if (openGeneration != cameraOpenGeneration) {
-                        camera.close()
+                        closeCameraDeviceAndAwait(camera, "stale camera disconnect")
                         return
                     }
                     PLog.w(TAG, "Camera disconnected: ${camera.id} - 相机被其他应用或系统接管")
@@ -2261,7 +2424,7 @@ class Camera2Controller(private val context: Context) {
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     if (openGeneration != cameraOpenGeneration) {
-                        camera.close()
+                        closeCameraDeviceAndAwait(camera, "stale camera error")
                         return
                     }
                     val errorMessage = when (error) {
@@ -2304,6 +2467,10 @@ class Camera2Controller(private val context: Context) {
                     // 通知上层
                     onCameraError?.invoke(error, errorMessage, canRetry)
                     _state.value = _state.value.copy(isCapturing = false)
+                }
+
+                override fun onClosed(camera: CameraDevice) {
+                    handleCameraDeviceClosed(camera)
                 }
             }, cameraHandler)
 
@@ -4698,18 +4865,11 @@ class Camera2Controller(private val context: Context) {
 
         targetCamera?.let { cam ->
             PLog.d(TAG, "Switching to lens: $lensType, cameraId: ${cam.cameraId}")
-
-            // 关闭当前相机
-            closeCamera(preserveVideoRecording = true)
-
-            // 更新状态
             _state.value = _state.value.copy(
                 currentCameraId = cam.cameraId,
                 currentLensType = cam.lensType,
                 zoomRatio = 1f
             )
-
-            // 注意：需要外部重新调用 openCamera
         } ?: PLog.w(TAG, "Camera with lens type $lensType not found")
     }
 
@@ -4722,11 +4882,6 @@ class Camera2Controller(private val context: Context) {
 
         targetCamera?.let { cam ->
             PLog.d(TAG, "Switching to camera ID: $cameraId")
-
-            // 关闭当前相机
-            closeCamera(preserveVideoRecording = true)
-
-            // 更新状态
             _state.value = _state.value.copy(
                 currentCameraId = cam.cameraId,
                 currentLensType = cam.lensType,
@@ -7786,7 +7941,13 @@ class Camera2Controller(private val context: Context) {
             }
             return
         }
-        if (expectedSurfaceTexture != null && previewSurfaceTexture !== expectedSurfaceTexture) {
+        val expectedSurfaceIsCurrent = previewSurfaceTexture === expectedSurfaceTexture
+        val expectedSurfaceIsPending = pendingCameraOpenRequest?.surfaceTexture === expectedSurfaceTexture
+        if (
+            expectedSurfaceTexture != null &&
+            !expectedSurfaceIsCurrent &&
+            !expectedSurfaceIsPending
+        ) {
             PLog.d(
                 TAG,
                 "closeCamera skipped for stale SurfaceTexture: expected=" +
@@ -7795,10 +7956,24 @@ class Camera2Controller(private val context: Context) {
             )
             return
         }
+        closeCameraInternal(
+            preserveVideoRecording = preserveVideoRecording,
+            clearPendingOpen = true,
+        )
+    }
+
+    private fun closeCameraInternal(
+        preserveVideoRecording: Boolean,
+        clearPendingOpen: Boolean,
+    ) {
+        if (clearPendingOpen) {
+            pendingCameraOpenRequest = null
+        }
         try {
             burstGyroRecorder.stop()
             pendingFrameMetadata.clear()
             cameraOpenGeneration++
+            val lifecycleBeforeClose = cameraDeviceLifecycle
             val keepVideoRecording = preserveVideoRecording && _state.value.videoRecordingState.isRecording
             if (keepVideoRecording) {
                 PLog.d(TAG, "Closing camera while keeping active video recording")
@@ -7816,7 +7991,7 @@ class Camera2Controller(private val context: Context) {
             }
 
             clearCameraSessionState("closeCamera")
-            closeCameraDeviceSafely(cameraDevice, "closeCamera")
+            val deviceToClose = cameraDevice
             cameraDevice = null
             clearCameraCapabilityCache()
 
@@ -7836,7 +8011,23 @@ class Camera2Controller(private val context: Context) {
             // 停止 Live Photo 录制，释放旧环境下的 EGL 资源
             livePhotoRecorder.stopRecording()
 
-            PLog.d(TAG, "Camera closed")
+            when {
+                deviceToClose != null -> {
+                    closeCameraDeviceAndAwait(deviceToClose, "closeCamera")
+                }
+                lifecycleBeforeClose == CameraDeviceLifecycle.OPENING -> {
+                    // CameraManager 没有取消打开的 API；等待其回调后立即关闭。
+                    cameraDeviceLifecycle = CameraDeviceLifecycle.OPENING
+                }
+                lifecycleBeforeClose == CameraDeviceLifecycle.CLOSING -> {
+                    cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSING
+                }
+                else -> {
+                    cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSED
+                    openPendingCameraRequest()
+                }
+            }
+            PLog.d(TAG, "Camera close requested: lifecycle=$cameraDeviceLifecycle")
         } catch (e: Exception) {
             PLog.e(TAG, "Error closing camera", e)
         }
@@ -8018,10 +8209,10 @@ class Camera2Controller(private val context: Context) {
         val handler = cameraHandler
         if (handler != null) {
             val latch = java.util.concurrent.CountDownLatch(1)
+            releaseCloseLatch = latch
             handler.post {
-                try {
-                    closeCamera()
-                } finally {
+                closeCamera()
+                if (cameraDeviceLifecycle == CameraDeviceLifecycle.CLOSED) {
                     latch.countDown()
                 }
             }
@@ -8029,6 +8220,8 @@ class Camera2Controller(private val context: Context) {
                 latch.await(2000, java.util.concurrent.TimeUnit.MILLISECONDS)
             } catch (e: InterruptedException) {
                 PLog.e(TAG, "Interrupted while waiting for camera close during release", e)
+            } finally {
+                releaseCloseLatch = null
             }
         } else {
             closeCamera()

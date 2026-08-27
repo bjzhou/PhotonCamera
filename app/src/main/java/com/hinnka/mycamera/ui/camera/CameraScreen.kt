@@ -305,14 +305,19 @@ fun CameraScreen(
     // Surface may become ready while persisted camera settings are still being restored.
     // Retain the exact instance and open only after initialization has completed.
     var previewSurfaceTexture by remember { mutableStateOf<SurfaceTexture?>(null) }
+    var isCameraPrepared by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isCameraInitialized) {
+        isCameraPrepared = isCameraInitialized && viewModel.prepareCamera()
+    }
 
     LaunchedEffect(
         isCameraInitialized,
+        isCameraPrepared,
         previewSurfaceTexture,
-        state.availableCameras.isNotEmpty()
     ) {
         val surfaceTexture = previewSurfaceTexture ?: return@LaunchedEffect
-        if (!isCameraInitialized) return@LaunchedEffect
+        if (!isCameraInitialized || !isCameraPrepared) return@LaunchedEffect
         viewModel.openCamera(surfaceTexture)
     }
 
@@ -1094,77 +1099,85 @@ fun CameraScreen(
                     val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
                         .collectAsState(initial = 0)
 
-                    // 相机预览
-                    CameraPreviewGL(
-                        isAiFocusBusy = viewModel.isAiFocusBusy,
-                        aspectRatio = previewAspectRatio,
-                        previewSize = previewSize,
-                        captureSize = state.currentCaptureSize,
-                        captureMode = state.captureMode,
-                        sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
-                        lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
-                        calibrationOffset = calibrationOffset,
-                        baselineLut = viewModel.currentBaselineLutConfig,
-                        currentLut = viewModel.currentLutConfig,
-                        baselineColorRecipeParams = currentBaselineRecipeParams,
-                        colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
-                        focusPoint = state.focusPoint,
-                        focusPointSource = state.focusPointSource,
-                        isFocusLocked = state.isFocusLocked,
-                        isFocusing = state.isFocusing,
-                        focusSuccess = state.focusSuccess,
-                        meteringMode = state.meteringMode,
-                        onSurfaceTextureReady = { surfaceTexture ->
-                            previewSurfaceTexture = surfaceTexture
-                        },
-                        onSurfaceDestroyed = { surfaceTexture ->
-                            if (previewSurfaceTexture === surfaceTexture) {
-                                previewSurfaceTexture = null
-                            }
-                            viewModel.closeCamera(surfaceTexture)
-                        },
-                        onTap = { x, y, w, h ->
-                            if (state.isFocusLocked) {
-                                viewModel.unlockFocus()
-                            } else if (activePanel != ActivePanel.NONE) {
-                                activePanel = ActivePanel.NONE
+                    // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
+                    if (isCameraPrepared) {
+                        CameraPreviewGL(
+                            isAiFocusBusy = viewModel.isAiFocusBusy,
+                            aspectRatio = previewAspectRatio,
+                            previewSize = previewSize,
+                            captureSize = state.currentCaptureSize,
+                            captureMode = state.captureMode,
+                            sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation
+                                ?: 0,
+                            lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
+                            calibrationOffset = calibrationOffset,
+                            baselineLut = viewModel.currentBaselineLutConfig,
+                            currentLut = viewModel.currentLutConfig,
+                            baselineColorRecipeParams = currentBaselineRecipeParams,
+                            colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
+                            focusPoint = state.focusPoint,
+                            focusPointSource = state.focusPointSource,
+                            isFocusLocked = state.isFocusLocked,
+                            isFocusing = state.isFocusing,
+                            focusSuccess = state.focusSuccess,
+                            meteringMode = state.meteringMode,
+                            onSurfaceTextureReady = { surfaceTexture ->
+                                previewSurfaceTexture = surfaceTexture
+                            },
+                            onSurfaceDestroyed = { surfaceTexture ->
+                                if (previewSurfaceTexture === surfaceTexture) {
+                                    previewSurfaceTexture = null
+                                }
+                                viewModel.closeCamera(surfaceTexture)
+                            },
+                            onTap = { x, y, w, h ->
+                                if (state.isFocusLocked) {
+                                    viewModel.unlockFocus()
+                                } else if (activePanel != ActivePanel.NONE) {
+                                    activePanel = ActivePanel.NONE
+                                } else {
+                                    viewModel.focusOnPoint(x, y, w, h)
+                                }
+                            },
+                            onLongPress = { x, y, w, h ->
+                                if (activePanel != ActivePanel.NONE) {
+                                    activePanel = ActivePanel.NONE
+                                } else {
+                                    viewModel.lockFocusOnPoint(x, y, w, h)
+                                }
+                            },
+                            onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
+                            onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
+                            onHighlightPointUpdated = { hx, hy ->
+                                viewModel.handleHighlightPointUpdate(
+                                    hx,
+                                    hy
+                                )
+                            },
+                            onAiFocusInputAvailable = if (aiFocusTargetMode == AiFocusTargetMode.OFF) {
+                                null
                             } else {
-                                viewModel.focusOnPoint(x, y, w, h)
-                            }
-                        },
-                        onLongPress = { x, y, w, h ->
-                            if (activePanel != ActivePanel.NONE) {
-                                activePanel = ActivePanel.NONE
-                            } else {
-                                viewModel.lockFocusOnPoint(x, y, w, h)
-                            }
-                        },
-                        onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
-                        onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
-                        onHighlightPointUpdated = { hx, hy -> viewModel.handleHighlightPointUpdate(hx, hy) },
-                        onAiFocusInputAvailable = if (aiFocusTargetMode == AiFocusTargetMode.OFF) {
-                            null
-                        } else {
-                            { viewModel.handleAiFocusInputUpdate(it) }
-                        },
-                        onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
-                        onGLSurfaceViewReady = {
-                            viewModel.glSurfaceView = it
-                        },
-                        livePhotoRecorder = viewModel.livePhotoRecorder,
-                        videoLogProfile = state.videoConfig.logProfile,
-                        isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
-                        naturalLightEnabled = naturalLightEnabled,
-                        rawExposureCompensation = rawExposureCompensation,
-                        rawBlackPointCorrection = rawBlackPointCorrection,
-                        rawWhitePointCorrection = rawWhitePointCorrection,
-                        rawRenderingEngine = rawColorEngine,
-                        rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-                        rawToneMappingParameters = rawToneMappingParameters,
-                        isAutoFocus = state.isAutoFocus,
-                        focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                                { viewModel.handleAiFocusInputUpdate(it) }
+                            },
+                            onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
+                            onGLSurfaceViewReady = {
+                                viewModel.glSurfaceView = it
+                            },
+                            livePhotoRecorder = viewModel.livePhotoRecorder,
+                            videoLogProfile = state.videoConfig.logProfile,
+                            isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
+                            naturalLightEnabled = naturalLightEnabled,
+                            rawExposureCompensation = rawExposureCompensation,
+                            rawBlackPointCorrection = rawBlackPointCorrection,
+                            rawWhitePointCorrection = rawWhitePointCorrection,
+                            rawRenderingEngine = rawColorEngine,
+                            rawHncsFilmCurveMode = rawHncsFilmCurveMode,
+                            rawToneMappingParameters = rawToneMappingParameters,
+                            isAutoFocus = state.isAutoFocus,
+                            focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
                     Box(
                         modifier = Modifier

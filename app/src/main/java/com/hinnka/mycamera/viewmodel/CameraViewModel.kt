@@ -2349,17 +2349,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 监听相机状态，用于同步预览渲染参数
         viewModelScope.launch {
             state.collect { currentState ->
-                // 同步焦段
-                val availableCameras = currentState.availableCameras
-                if (availableCameras.isNotEmpty() && !hasAppliedDefaultFocalLength) {
-                    val prefs = userPreferencesRepository.userPreferences.firstOrNull()
-                    val defaultFL = prefs?.defaultFocalLength ?: 0f
-                    if (defaultFL != 0f) {
-                        applyDefaultFocalLength(defaultFL)
-                    }
-                    hasAppliedDefaultFocalLength = true
-                }
-
                 glSurfaceView?.let { view ->
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
                     view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
@@ -2685,7 +2674,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun openCamera(surfaceTexture: SurfaceTexture) {
         PLog.d(TAG, "openCamera")
-        cameraReopenJob?.cancel()
         if (currentSurfaceTexture === surfaceTexture && (state.value.isPreviewActive || cameraOpenInFlight)) {
             PLog.d(
                 TAG,
@@ -2694,8 +2682,38 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         currentSurfaceTexture = surfaceTexture
+        requestCameraOpen(surfaceTexture)
+    }
+
+    private fun requestCameraOpen(
+        surfaceTexture: SurfaceTexture,
+        preserveVideoRecording: Boolean = false,
+    ) {
+        cameraReopenJob?.cancel()
         cameraOpenInFlight = true
-        cameraController.openCamera(surfaceTexture)
+        cameraReopenJob = viewModelScope.launch {
+            if (currentSurfaceTexture !== surfaceTexture) return@launch
+            syncVendorCaptureSettingsToController()
+            cameraController.openCamera(
+                surfaceTexture = surfaceTexture,
+                preserveVideoRecording = preserveVideoRecording,
+            )
+        }
+    }
+
+    suspend fun prepareCamera(): Boolean {
+        if (!cameraController.prepareCameras()) return false
+        if (!hasAppliedDefaultFocalLength) {
+            val defaultFocalLength = userPreferencesRepository.userPreferences
+                .firstOrNull()
+                ?.defaultFocalLength
+                ?: 0f
+            if (defaultFocalLength != 0f) {
+                applyStartupDefaultFocalLength(defaultFocalLength)
+            }
+            hasAppliedDefaultFocalLength = true
+        }
+        return cameraController.preparePreviewSize()
     }
 
     /**
@@ -2845,8 +2863,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 如果有保存的 SurfaceTexture，重新打开相机
         currentSurfaceTexture?.let { texture ->
             if (!state.value.isPreviewActive && !cameraOpenInFlight) {
-                cameraOpenInFlight = true
-                cameraController.openCamera(texture)
+                requestCameraOpen(texture)
             } else {
                 PLog.d(
                     TAG,
@@ -3576,23 +3593,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun reopenCamera(
         preserveVideoRecording: Boolean = false
     ) {
-        if (currentSurfaceTexture == null) {
+        val texture = currentSurfaceTexture
+        if (texture == null) {
             cameraOpenInFlight = false
             return
         }
-        cameraReopenJob?.cancel()
-        cameraOpenInFlight = true
-        cameraReopenJob = viewModelScope.launch {
-            val texture = currentSurfaceTexture ?: run {
-                cameraOpenInFlight = false
-                return@launch
-            }
-            syncVendorCaptureSettingsToController()
-            cameraController.openCamera(
-                surfaceTexture = texture,
-                preserveVideoRecording = preserveVideoRecording
-            )
-        }
+        requestCameraOpen(texture, preserveVideoRecording)
     }
 
     /**
@@ -5387,9 +5393,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 应用默认焦段
+     * 首次打开 CameraDevice 前选择默认焦段，避免先打开主摄再切换。
      */
-    private fun applyDefaultFocalLength(focalLength: Float) {
+    private fun applyStartupDefaultFocalLength(focalLength: Float) {
         val currentState = state.value
         val availableCameras = currentState.availableCameras
         val currentCamera = currentState.getCurrentCameraInfo() ?: return
@@ -5414,7 +5420,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 找到该变焦倍率下的最佳镜头
         val optimalLens = findOptimalLens(targetZoom, availableCameras, currentCamera.cameraId)
         if (optimalLens != null && optimalLens.cameraId != currentCamera.cameraId) {
-            switchToLensAndSetZoomRatio(optimalLens.cameraId, targetZoom)
+            cameraController.switchToCameraId(optimalLens.cameraId)
+            setZoomRatioForCamera(targetZoom, optimalLens.cameraId)
         } else {
             setZoomRatio(targetZoom)
         }
