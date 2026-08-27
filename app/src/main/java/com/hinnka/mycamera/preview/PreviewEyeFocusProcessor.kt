@@ -17,6 +17,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 import kotlin.math.hypot
 
 class PreviewEyeFocusProcessor(context: Context) : Closeable {
@@ -41,9 +42,23 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
     companion object {
         private const val TAG = "PreviewEyeFocus"
         private const val MODEL_ASSET = "blaze_face_full_range.tflite"
-        private const val MIN_DETECTION_CONFIDENCE = 0.5f
-        private const val REQUIRED_STABLE_RESULTS = 2
-        private const val TARGET_LOST_RESULT_COUNT = 4
+        private const val MIN_DETECTION_CONFIDENCE = 0.65f
+        private const val MIN_TARGET_CONFIDENCE = 0.70f
+        private const val REQUIRED_STABLE_RESULTS = 3
+        private const val TARGET_CONFIRMATION_DURATION_NS = 200_000_000L
+        private const val TARGET_LOST_MIN_RESULTS = 2
+        private const val TARGET_LOST_DURATION_NS = 200_000_000L
+        private const val MIN_FACE_WIDTH_FRACTION = 0.05f
+        private const val MIN_FACE_HEIGHT_FRACTION = 0.05f
+        private const val MIN_FACE_ASPECT_RATIO = 0.50f
+        private const val MAX_FACE_ASPECT_RATIO = 1.80f
+        private const val MIN_INTER_EYE_FACE_WIDTH_RATIO = 0.15f
+        private const val MAX_INTER_EYE_FACE_WIDTH_RATIO = 0.75f
+        private const val MAX_EYE_VERTICAL_FACE_HEIGHT_RATIO = 0.35f
+        private const val MIN_EYE_MIDPOINT_X_RATIO = 0.10f
+        private const val MAX_EYE_MIDPOINT_X_RATIO = 0.90f
+        private const val MIN_EYE_MIDPOINT_Y_RATIO = 0.05f
+        private const val MAX_EYE_MIDPOINT_Y_RATIO = 0.70f
         private const val FACE_CONTINUITY_DISTANCE = 0.22f
         private const val EYE_DISCONTINUITY_DISTANCE = 0.18f
         private const val POSITION_SMOOTHING_ALPHA = 0.42f
@@ -79,8 +94,10 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
     private var smoothedEyeX: Float? = null
     private var smoothedEyeY: Float? = null
     private var stableResultCount = 0
+    private var stableTargetSinceNanos = 0L
     private var missingResultCount = 0
-    private var targetLostNotified = true
+    private var missingTargetSinceNanos = 0L
+    private var hasConfirmedTarget = false
 
     var onEyeTarget: ((EyeTarget) -> Unit)? = null
     var onTargetLost: (() -> Unit)? = null
@@ -218,6 +235,7 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         val generation: Int
         val target: EyeTarget?
         var targetLost = false
+        var targetConfirmed = false
         synchronized(stateLock) {
             generation = pendingGeneration
             cleanupPendingInputLocked()
@@ -226,24 +244,52 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
             } else {
                 val candidate = selectCandidateLocked(result, inputWidth, inputHeight)
                 if (candidate == null) {
+                    val nowNanos = SystemClock.elapsedRealtimeNanos()
+                    if (missingResultCount == 0) {
+                        missingTargetSinceNanos = nowNanos
+                    }
                     missingResultCount++
-                    if (missingResultCount >= TARGET_LOST_RESULT_COUNT && !targetLostNotified) {
-                        targetLostNotified = true
+                    if (
+                        hasConfirmedTarget &&
+                        missingResultCount >= TARGET_LOST_MIN_RESULTS &&
+                        nowNanos - missingTargetSinceNanos >= TARGET_LOST_DURATION_NS
+                    ) {
+                        hasConfirmedTarget = false
                         targetLost = true
+                        resetSelectedTargetLocked()
+                    } else if (!hasConfirmedTarget) {
+                        // 未确认候选必须连续出现，空帧不能累计到确认窗口。
                         resetSelectedTargetLocked()
                     }
                     target = null
                 } else {
                     missingResultCount = 0
-                    targetLostNotified = false
-                    target = stabilizeCandidateLocked(candidate)
+                    missingTargetSinceNanos = 0L
+                    val previouslyConfirmed = hasConfirmedTarget
+                    val stabilizedTarget = stabilizeCandidateLocked(candidate)
+                    if (previouslyConfirmed && stableResultCount == 1) {
+                        // 目标发生不连续跳变，先撤销旧目标，再重新确认新候选。
+                        hasConfirmedTarget = false
+                        targetLost = true
+                    }
+                    if (stabilizedTarget != null) {
+                        targetConfirmed = !hasConfirmedTarget
+                        hasConfirmedTarget = true
+                    }
+                    target = stabilizedTarget
                 }
             }
         }
 
         finishFrame()
+        if (targetConfirmed) {
+            PLog.d(TAG, "Human face confirmed: confidence=${target?.confidence}")
+        }
         target?.let { onEyeTarget?.invoke(it) }
-        if (targetLost) onTargetLost?.invoke()
+        if (targetLost) {
+            PLog.d(TAG, "Human face target lost")
+            onTargetLost?.invoke()
+        }
     }
 
     private fun handleError(error: RuntimeException) {
@@ -273,11 +319,30 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
             if (eyeCoordinates.any { !it.isFinite() || it !in 0f..1f }) return@mapNotNull null
 
             val box = detection.boundingBox()
+            val boxLeft = box.left / inputWidth
+            val boxTop = box.top / inputHeight
+            val boxWidth = box.width() / inputWidth
+            val boxHeight = box.height() / inputHeight
+            val confidence = detection.categories().firstOrNull()?.score() ?: 0f
+            if (
+                confidence < MIN_TARGET_CONFIDENCE ||
+                !isValidFaceGeometry(
+                    boxLeft = boxLeft,
+                    boxTop = boxTop,
+                    boxWidth = boxWidth,
+                    boxHeight = boxHeight,
+                    leftEyeX = eyeCoordinates[0],
+                    leftEyeY = eyeCoordinates[1],
+                    rightEyeX = eyeCoordinates[2],
+                    rightEyeY = eyeCoordinates[3],
+                )
+            ) {
+                return@mapNotNull null
+            }
             val centerX = (box.centerX() / inputWidth).coerceIn(0f, 1f)
             val centerY = (box.centerY() / inputHeight).coerceIn(0f, 1f)
             val area = ((box.width() * box.height()) / (inputWidth.toFloat() * inputHeight))
                 .coerceAtLeast(0f)
-            val confidence = detection.categories().firstOrNull()?.score() ?: 0f
             FaceCandidate(
                 faceCenterX = centerX,
                 faceCenterY = centerY,
@@ -305,6 +370,44 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         }
     }
 
+    private fun isValidFaceGeometry(
+        boxLeft: Float,
+        boxTop: Float,
+        boxWidth: Float,
+        boxHeight: Float,
+        leftEyeX: Float,
+        leftEyeY: Float,
+        rightEyeX: Float,
+        rightEyeY: Float,
+    ): Boolean {
+        if (
+            !boxLeft.isFinite() ||
+            !boxTop.isFinite() ||
+            !boxWidth.isFinite() ||
+            !boxHeight.isFinite() ||
+            boxWidth < MIN_FACE_WIDTH_FRACTION ||
+            boxHeight < MIN_FACE_HEIGHT_FRACTION
+        ) {
+            return false
+        }
+        val aspectRatio = boxWidth / boxHeight
+        if (aspectRatio !in MIN_FACE_ASPECT_RATIO..MAX_FACE_ASPECT_RATIO) return false
+
+        val interEyeDistance = distance(leftEyeX, leftEyeY, rightEyeX, rightEyeY)
+        val interEyeWidthRatio = interEyeDistance / boxWidth
+        if (interEyeWidthRatio !in MIN_INTER_EYE_FACE_WIDTH_RATIO..MAX_INTER_EYE_FACE_WIDTH_RATIO) {
+            return false
+        }
+        if (abs(leftEyeY - rightEyeY) / boxHeight > MAX_EYE_VERTICAL_FACE_HEIGHT_RATIO) {
+            return false
+        }
+
+        val midpointXRatio = ((leftEyeX + rightEyeX) * 0.5f - boxLeft) / boxWidth
+        val midpointYRatio = ((leftEyeY + rightEyeY) * 0.5f - boxTop) / boxHeight
+        return midpointXRatio in MIN_EYE_MIDPOINT_X_RATIO..MAX_EYE_MIDPOINT_X_RATIO &&
+            midpointYRatio in MIN_EYE_MIDPOINT_Y_RATIO..MAX_EYE_MIDPOINT_Y_RATIO
+    }
+
     private fun stabilizeCandidateLocked(candidate: FaceCandidate): EyeTarget? {
         val previousFaceX = lastFaceCenterX
         val previousFaceY = lastFaceCenterY
@@ -327,6 +430,7 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
             smoothedEyeX = rawEyeX
             smoothedEyeY = rawEyeY
             stableResultCount = 1
+            stableTargetSinceNanos = SystemClock.elapsedRealtimeNanos()
         } else {
             smoothedEyeX = previousEyeX + (rawEyeX - previousEyeX) * POSITION_SMOOTHING_ALPHA
             smoothedEyeY = previousEyeY + (rawEyeY - previousEyeY) * POSITION_SMOOTHING_ALPHA
@@ -335,7 +439,14 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         lastFaceCenterX = candidate.faceCenterX
         lastFaceCenterY = candidate.faceCenterY
 
-        if (stableResultCount < REQUIRED_STABLE_RESULTS) return null
+        val stableDurationNanos =
+            SystemClock.elapsedRealtimeNanos() - stableTargetSinceNanos
+        if (
+            stableResultCount < REQUIRED_STABLE_RESULTS ||
+            stableDurationNanos < TARGET_CONFIRMATION_DURATION_NS
+        ) {
+            return null
+        }
         return EyeTarget(
             x = smoothedEyeX?.coerceIn(0f, 1f) ?: return null,
             y = smoothedEyeY?.coerceIn(0f, 1f) ?: return null,
@@ -381,7 +492,8 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
 
     private fun resetTrackingStateLocked() {
         missingResultCount = 0
-        targetLostNotified = true
+        missingTargetSinceNanos = 0L
+        hasConfirmedTarget = false
         resetSelectedTargetLocked()
     }
 
@@ -391,6 +503,7 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
         smoothedEyeX = null
         smoothedEyeY = null
         stableResultCount = 0
+        stableTargetSinceNanos = 0L
     }
 
     override fun close() {
