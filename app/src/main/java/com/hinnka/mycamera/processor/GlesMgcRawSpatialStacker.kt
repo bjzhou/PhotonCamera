@@ -9565,11 +9565,11 @@ internal class GlesMgcRawSpatialStacker(
         const val ALIGN_LK_GRID_MIN = 1
         const val MERGE_ALIGNMENT_GRID_MIN = 0
         const val MERGE_BAYER_RAW_TILE_SIZE = 16
-        // MGC defines the tolerance as a fraction of its 8 Bayer-quad tile. Keep
-        // interpolation only where every neighboring flow is within one raw pixel
-        // (half a Bayer quad) of the current tile; larger discontinuities retain the
-        // piecewise-constant flow and are handled by rejection.
-        const val SPATIAL_INTERPOLATION_FLOW_TOLERANCE = 1f / 16f
+        // MGC 9.7.047 V25 initializes interpolation_flow_tolerance to -1.0. Positive
+        // values are an optional SpatialBayer-only override; the default keeps every
+        // merge tile on its own flow instead of switching interpolation on and off as
+        // neighboring motion crosses a tolerance boundary.
+        const val SPATIAL_INTERPOLATION_FLOW_TOLERANCE = -1f
         val ALIGN_PYRAMID_DOWNSAMPLE_STEPS = intArrayOf(2, 4, 4)
         // Indexed from the finest one-sample-per-Bayer-quad level to the coarsest.
         val ALIGN_LEVEL_TILE_STRIDES = intArrayOf(32, 32, 16, 8)
