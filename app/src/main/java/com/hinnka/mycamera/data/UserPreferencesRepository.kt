@@ -60,7 +60,12 @@ import org.json.JSONObject
 /**
  * DataStore 扩展属性
  */
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "user_preferences")
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "user_preferences",
+    produceMigrations = {
+        listOf(OpenAiApiKeyEncryptionMigration())
+    },
+)
 
 private fun sanitizeTonemapMode(mode: String): String {
     return when (mode) {
@@ -360,6 +365,8 @@ data class CameraFeaturePreferencesUpdate(
  */
 class UserPreferencesRepository(private val context: Context) {
 
+    private val openAiApiKeyCipher = OpenAiApiKeyCipher()
+
     companion object {
         // DataStore Keys
         private val CAPTURE_MODE = stringPreferencesKey("capture_mode")
@@ -525,7 +532,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val MIRROR_FRONT_CAMERA = booleanPreferencesKey("mirror_front_camera")
         private val WIDGET_THEME = stringPreferencesKey("widget_theme")
         private val SAVE_LOCATION = booleanPreferencesKey("save_location")
-        private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
         private val OPENAI_BASE_URL = stringPreferencesKey("openai_base_url")
         private val OPENAI_MODEL = stringPreferencesKey("openai_model")
         private val USE_BUILT_IN_AI_SERVICE = booleanPreferencesKey("use_built_in_ai_service")
@@ -834,7 +840,9 @@ class UserPreferencesRepository(private val context: Context) {
                 mirrorFrontCamera = preferences[MIRROR_FRONT_CAMERA] ?: true,
                 widgetTheme = WidgetTheme.valueOf(preferences[WIDGET_THEME] ?: WidgetTheme.FOLLOW_SYSTEM.name),
                 saveLocation = preferences[SAVE_LOCATION] ?: false,
-                openAIApiKey = preferences[OPENAI_API_KEY],
+                openAIApiKey = preferences[ENCRYPTED_OPEN_AI_API_KEY_PREFERENCE]?.let { encryptedApiKey ->
+                    runCatching { openAiApiKeyCipher.decrypt(encryptedApiKey) }.getOrNull()
+                },
                 openAIBaseUrl = preferences[OPENAI_BASE_URL],
                 openAIModel = preferences[OPENAI_MODEL],
                 useBuiltInAiService = preferences[USE_BUILT_IN_AI_SERVICE] ?: false,
@@ -2363,7 +2371,11 @@ class UserPreferencesRepository(private val context: Context) {
      */
     suspend fun saveOpenAIApiKey(key: String) {
         context.dataStore.edit { preferences ->
-            preferences[OPENAI_API_KEY] = key
+            if (key.isBlank()) {
+                preferences.remove(ENCRYPTED_OPEN_AI_API_KEY_PREFERENCE)
+            } else {
+                preferences[ENCRYPTED_OPEN_AI_API_KEY_PREFERENCE] = openAiApiKeyCipher.encrypt(key)
+            }
         }
     }
 

@@ -18,21 +18,23 @@ class BackupPreferenceSanitizerTest {
     val temporaryFolder = TemporaryFolder()
 
     @Test
-    fun writeUserPreferencesWithoutUnsafeStorageKeysRemovesStoragePathsOnly() {
+    fun writeUserPreferencesWithoutNonPortableKeysRemovesDeviceBoundValues() {
         val preferencesFile = writeUserPreferencesFile(temporaryFolder.newFile("user_preferences.preferences_pb"))
 
         val output = ByteArrayOutputStream()
-        val removedCount = BackupPreferenceSanitizer.writeUserPreferencesWithoutUnsafeStorageKeys(
+        val removedCount = BackupPreferenceSanitizer.writeUserPreferencesWithoutNonPortableKeys(
             preferencesFile,
             output
         )
 
         val sanitizedMap = PreferenceMap.parseFrom(output.toByteArray())
-        assertEquals(4, removedCount)
+        assertEquals(6, removedCount)
         assertFalse(sanitizedMap.containsPreferences("photo_save_path"))
         assertFalse(sanitizedMap.containsPreferences("photo_save_tree_uri"))
         assertFalse(sanitizedMap.containsPreferences("video_recording_path"))
         assertFalse(sanitizedMap.containsPreferences("video_recording_tree_uri"))
+        assertFalse(sanitizedMap.containsPreferences("openai_api_key"))
+        assertFalse(sanitizedMap.containsPreferences("openai_api_key_encrypted_v1"))
         assertTrue(sanitizedMap.containsPreferences("keep_screen_on"))
     }
 
@@ -45,11 +47,13 @@ class BackupPreferenceSanitizerTest {
         val removedCount = BackupPreferenceSanitizer.sanitizeRestoreDirectory(restoreDir)
 
         val sanitizedMap = FileInputStream(preferencesFile).use { PreferenceMap.parseFrom(it) }
-        assertEquals(4, removedCount)
+        assertEquals(6, removedCount)
         assertFalse(sanitizedMap.containsPreferences("photo_save_path"))
         assertFalse(sanitizedMap.containsPreferences("photo_save_tree_uri"))
         assertFalse(sanitizedMap.containsPreferences("video_recording_path"))
         assertFalse(sanitizedMap.containsPreferences("video_recording_tree_uri"))
+        assertFalse(sanitizedMap.containsPreferences("openai_api_key"))
+        assertFalse(sanitizedMap.containsPreferences("openai_api_key_encrypted_v1"))
         assertTrue(sanitizedMap.containsPreferences("keep_screen_on"))
     }
 
@@ -59,6 +63,8 @@ class BackupPreferenceSanitizerTest {
             .putPreferences("photo_save_tree_uri", stringValue("content://photo/tree"))
             .putPreferences("video_recording_path", stringValue("EXTERNAL_TREE"))
             .putPreferences("video_recording_tree_uri", stringValue("content://video/tree"))
+            .putPreferences("openai_api_key", stringValue("legacy-plaintext-value"))
+            .putPreferences("openai_api_key_encrypted_v1", stringValue("keystore:v1:encrypted-value"))
             .putPreferences("keep_screen_on", booleanValue(true))
             .build()
 

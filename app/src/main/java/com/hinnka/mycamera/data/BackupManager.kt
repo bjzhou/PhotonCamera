@@ -117,11 +117,11 @@ object BackupManager {
         zos.putNextEntry(zipEntry)
         if (BackupPreferenceSanitizer.isUserPreferencesEntry(fileName)) {
             val removedPreferenceCount =
-                BackupPreferenceSanitizer.writeUserPreferencesWithoutUnsafeStorageKeys(fileToZip, zos)
+                BackupPreferenceSanitizer.writeUserPreferencesWithoutNonPortableKeys(fileToZip, zos)
             if (removedPreferenceCount > 0) {
                 PLog.d(
                     TAG,
-                    "Removed $removedPreferenceCount storage authorization preferences from backup"
+                    "Removed $removedPreferenceCount device-bound preferences from backup"
                 )
             }
         } else {
@@ -162,7 +162,7 @@ object BackupManager {
             if (sanitizedRestorePreferenceCount > 0) {
                 PLog.d(
                     TAG,
-                    "Removed $sanitizedRestorePreferenceCount storage authorization preferences during restore"
+                    "Removed $sanitizedRestorePreferenceCount device-bound preferences during restore"
                 )
             }
             val frameAssetMigration = FrameAssetPathMigrator.migrateRestoredData(

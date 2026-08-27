@@ -10,22 +10,24 @@ import java.util.UUID
 internal object BackupPreferenceSanitizer {
     private const val USER_PREFERENCES_ENTRY = "datastore/user_preferences.preferences_pb"
 
-    private val unsafeStoragePreferenceKeys = setOf(
+    private val nonPortablePreferenceKeys = setOf(
         "photo_save_path",
         "photo_save_tree_uri",
         "video_recording_path",
-        "video_recording_tree_uri"
+        "video_recording_tree_uri",
+        "openai_api_key",
+        "openai_api_key_encrypted_v1",
     )
 
     fun isUserPreferencesEntry(entryName: String): Boolean {
         return entryName.replace('\\', '/').trimStart('/') == USER_PREFERENCES_ENTRY
     }
 
-    fun writeUserPreferencesWithoutUnsafeStorageKeys(
+    fun writeUserPreferencesWithoutNonPortableKeys(
         preferencesFile: File,
         output: OutputStream
     ): Int {
-        val (preferenceMap, removedCount) = readPreferenceMapWithoutUnsafeStorageKeys(preferencesFile)
+        val (preferenceMap, removedCount) = readPreferenceMapWithoutNonPortableKeys(preferencesFile)
         preferenceMap.writeTo(output)
         return removedCount
     }
@@ -36,7 +38,7 @@ internal object BackupPreferenceSanitizer {
             return 0
         }
 
-        val (preferenceMap, removedCount) = readPreferenceMapWithoutUnsafeStorageKeys(preferencesFile)
+        val (preferenceMap, removedCount) = readPreferenceMapWithoutNonPortableKeys(preferencesFile)
         if (removedCount == 0) {
             return 0
         }
@@ -65,13 +67,13 @@ internal object BackupPreferenceSanitizer {
         return removedCount
     }
 
-    private fun readPreferenceMapWithoutUnsafeStorageKeys(file: File): Pair<PreferenceMap, Int> {
+    private fun readPreferenceMapWithoutNonPortableKeys(file: File): Pair<PreferenceMap, Int> {
         val builder = FileInputStream(file).use { input ->
             PreferenceMap.parseFrom(input).toBuilder()
         }
 
         var removedCount = 0
-        for (key in unsafeStoragePreferenceKeys) {
+        for (key in nonPortablePreferenceKeys) {
             if (builder.containsPreferences(key)) {
                 builder.removePreferences(key)
                 removedCount++

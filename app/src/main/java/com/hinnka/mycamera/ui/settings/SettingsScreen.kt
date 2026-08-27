@@ -103,6 +103,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
@@ -2393,7 +2394,8 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_openai_api_key),
                             description = stringResource(R.string.settings_openai_api_key_desc),
                             value = openAIApiKey ?: "",
-                            onValueChange = { viewModel.setOpenAIApiKey(it) }
+                            onValueChange = { viewModel.setOpenAIApiKey(it) },
+                            isSecret = true,
                         )
 
                         HorizontalDivider(
@@ -3568,7 +3570,8 @@ fun TextInputSettingItem(
     description: String? = null,
     value: String,
     onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isSecret: Boolean = false,
 ) {
     var showDialog by remember { mutableStateOf(false) }
 
@@ -3599,7 +3602,7 @@ fun TextInputSettingItem(
             if (value.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = value,
+                    text = if (isSecret) "\u2022".repeat(8) else value,
                     color = Color(0xFFE5A324), // 主题色
                     fontSize = 14.sp,
                     maxLines = 1,
@@ -3627,7 +3630,17 @@ fun TextInputSettingItem(
                     value = tempValue,
                     onValueChange = { tempValue = it },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    singleLine = true,
+                    keyboardOptions = if (isSecret) {
+                        KeyboardOptions(keyboardType = KeyboardType.Password)
+                    } else {
+                        KeyboardOptions.Default
+                    },
+                    visualTransformation = if (isSecret) {
+                        PasswordVisualTransformation()
+                    } else {
+                        androidx.compose.ui.text.input.VisualTransformation.None
+                    },
                 )
             },
             confirmButton = {
