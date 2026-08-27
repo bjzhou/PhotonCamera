@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import android.graphics.Rect
 import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
@@ -11,6 +12,7 @@ internal class RawFastMomentsStatsAlgorithm {
         val outputTextureId: Int,
         val width: Int,
         val height: Int,
+        val sourceBounds: Rect,
         val cfaPattern: Int,
         val blackLevel: FloatArray,
         val whiteLevel: Float,
@@ -29,6 +31,12 @@ internal class RawFastMomentsStatsAlgorithm {
         if (!initialize()) return false
         require(input.rawTextureId != 0 && input.outputTextureId != 0)
         require(input.width > 0 && input.height > 0)
+        require(
+            input.sourceBounds.left >= 0 && input.sourceBounds.top >= 0 &&
+                input.sourceBounds.right <= input.width &&
+                input.sourceBounds.bottom <= input.height &&
+                !input.sourceBounds.isEmpty,
+        )
         require(input.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_QUAD_8X8_BGGR)
         require(input.blackLevel.size >= 4)
         require(
@@ -38,8 +46,8 @@ internal class RawFastMomentsStatsAlgorithm {
                 },
         )
 
-        val outputWidth = (input.width + DOWNSAMPLE - 1) / DOWNSAMPLE
-        val outputHeight = (input.height + DOWNSAMPLE - 1) / DOWNSAMPLE
+        val outputWidth = (input.sourceBounds.width() + DOWNSAMPLE - 1) / DOWNSAMPLE
+        val outputHeight = (input.sourceBounds.height() + DOWNSAMPLE - 1) / DOWNSAMPLE
         try {
             GLES31.glUseProgram(program)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RAW_TEXTURE_UNIT)
@@ -57,6 +65,13 @@ internal class RawFastMomentsStatsAlgorithm {
                 GLES31.glGetUniformLocation(program, "uOutputSize"),
                 outputWidth,
                 outputHeight,
+            )
+            GLES31.glUniform4i(
+                GLES31.glGetUniformLocation(program, "uSourceBounds"),
+                input.sourceBounds.left,
+                input.sourceBounds.top,
+                input.sourceBounds.right,
+                input.sourceBounds.bottom,
             )
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(program, "uCfaPattern"),
@@ -129,6 +144,7 @@ internal class RawFastMomentsStatsAlgorithm {
             uniform highp usampler2D uRawTexture;
             uniform ivec2 uImageSize;
             uniform ivec2 uOutputSize;
+            uniform ivec4 uSourceBounds;
             uniform int uCfaPattern;
             uniform vec4 uBlackLevel;
             uniform float uWhiteLevel;
@@ -157,12 +173,13 @@ internal class RawFastMomentsStatsAlgorithm {
             void main() {
                 ivec2 outputCoord = ivec2(gl_GlobalInvocationID.xy);
                 if (any(greaterThanEqual(outputCoord, uOutputSize))) return;
-                ivec2 origin = outputCoord * ${DOWNSAMPLE};
+                ivec2 origin = uSourceBounds.xy + outputCoord * ${DOWNSAMPLE};
                 vec4 maxima = vec4(0.0);
                 for (int y = 0; y < ${DOWNSAMPLE}; ++y) {
                     for (int x = 0; x < ${DOWNSAMPLE}; ++x) {
                         ivec2 coord = origin + ivec2(x, y);
-                        if (any(greaterThanEqual(coord, uImageSize))) continue;
+                        if (any(greaterThanEqual(coord, uSourceBounds.zw)) ||
+                            any(greaterThanEqual(coord, uImageSize))) continue;
                         int channel = channelAt(uCfaPattern, coord);
                         float raw = float(texelFetch(uRawTexture, coord, 0).r);
                         float black = uBlackLevel[channel];

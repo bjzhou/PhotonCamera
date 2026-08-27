@@ -3097,6 +3097,7 @@ class RawDemosaicProcessor {
                         outputRotation = actualRotation,
                     )
                 }
+                val processingBounds = captureProfileStatsBounds ?: outputSourceBounds
                 val solvedSceneExposure = sceneExposureRequest?.let { request ->
                     renderSceneExposureRequest(
                         request = request,
@@ -3108,7 +3109,7 @@ class RawDemosaicProcessor {
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         cameraWhite = linearCameraWhite,
                         profileToLinearSrgbTransform = profileToLinearSrgbTransform,
-                        outputSourceBounds = outputSourceBounds,
+                        outputSourceBounds = processingBounds,
                         outputRotation = actualRotation,
                         stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                     )
@@ -3118,6 +3119,7 @@ class RawDemosaicProcessor {
                         TAG,
                         "RAW_SCENE_EXPOSURE stage=INFERENCE_COMPLETE " +
                             "pgtm=$capturePhotonPgtmRequested " +
+                            "processingBounds=$processingBounds " +
                             "sourceBaselineEv=${actualMetadata.baselineExposure} " +
                             "hdrRatio=${solution.hdrRatio} " +
                             "finalShortTetMs=${solution.finalShortTetMs} " +
@@ -7852,11 +7854,18 @@ class RawDemosaicProcessor {
             ) {
                 // MGC's mode-2 ProcessAeStats consumes a RAW clipping mask at 1/16 scale. Preserve
                 // all four CFA channels before demosaic/highlight reconstruction can hide a clip.
+                val rawStatsBounds = RawDefaultCropOverride.alignToBayerPhase(
+                    crop = outputSourceBounds,
+                    width = metadata.width,
+                    height = metadata.height,
+                ) ?: return null
                 val statsWidth = (
-                    metadata.width + RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
+                    rawStatsBounds.width() +
+                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
                     ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
                 val statsHeight = (
-                    metadata.height + RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
+                    rawStatsBounds.height() +
+                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
                     ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
                 setupLinearExposurePreviewFramebuffer(statsWidth, statsHeight)
                 if (!fastMomentsStatsAlgorithm.execute(
@@ -7865,6 +7874,7 @@ class RawDemosaicProcessor {
                             outputTextureId = linearExposurePreviewTextureId,
                             width = metadata.width,
                             height = metadata.height,
+                            sourceBounds = rawStatsBounds,
                             cfaPattern = metadata.cfaPattern,
                             blackLevel = FloatArray(4) { channel ->
                                 metadata.blackLevel.getOrElse(channel) {
@@ -7887,9 +7897,11 @@ class RawDemosaicProcessor {
                 RawSceneFastMomentsRawStats(
                     width = statsWidth,
                     height = statsHeight,
+                    sourceWidth = rawStatsBounds.width(),
+                    sourceHeight = rawStatsBounds.height(),
                     channelMax = channelMax,
                     sensorNormalized = true,
-                    sourceBounds = floatArrayOf(0f, 0f, 1f, 1f),
+                    sourceBounds = normalizedBounds,
                     sourceRotationDegrees = 0,
                 )
             } else {
@@ -7960,6 +7972,8 @@ class RawDemosaicProcessor {
                 RawSceneFastMomentsRawStats(
                     width = statsWidth,
                     height = statsHeight,
+                    sourceWidth = orientedSourceWidth,
+                    sourceHeight = orientedSourceHeight,
                     channelMax = channelMax,
                     sensorNormalized = false,
                     sourceBounds = normalizedBounds,

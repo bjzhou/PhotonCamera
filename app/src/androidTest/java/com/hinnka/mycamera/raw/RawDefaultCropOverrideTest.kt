@@ -71,13 +71,27 @@ class RawDefaultCropOverrideTest {
 
         assertEquals(Rect(0, 0, 6118, 3844), blackBorderDefaultCrop)
         assertEquals(
-            Rect(497, 0, 5621, 3844),
+            Rect(498, 0, 5620, 3844),
             RawDefaultCropOverride.resolveOutputSourceBounds(
                 width = 6118,
                 height = 4594,
                 aspectRatio = AspectRatio.RATIO_4_3,
                 userCrop = Rect(0, 0, 6118, 4594),
                 metadataDefaultCrop = blackBorderDefaultCrop,
+            ),
+        )
+    }
+
+    @Test
+    fun bayerAlignmentIsRelativeToTheActiveArrayPhase() {
+        assertEquals(
+            Rect(9, 11, 1009, 811),
+            RawDefaultCropOverride.alignToBayerPhase(
+                crop = Rect(8, 10, 1010, 812),
+                width = 1200,
+                height = 900,
+                phaseOriginX = 9,
+                phaseOriginY = 11,
             ),
         )
     }

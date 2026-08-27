@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.processor
 
 import android.graphics.ImageFormat
+import android.graphics.Rect
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -41,6 +42,7 @@ internal data class GlesMgcRawBaseFrameSelection(
 internal class GlesMgcRawBaseFrameSelector(
     private val width: Int,
     private val height: Int,
+    private val sourceBounds: Rect,
     private val cfaPattern: Int,
     canonicalBlackLevel: FloatArray,
     private val whiteLevel: Int,
@@ -387,26 +389,35 @@ internal class GlesMgcRawBaseFrameSelector(
         require(image.format == ImageFormat.RAW_SENSOR) {
             "$label format=${image.format}, expected RAW_SENSOR"
         }
-        require(image.width == width && image.height == height) {
-            "$label size=${image.width}x${image.height}, expected=${width}x$height"
+        require(sourceBounds.width() == width && sourceBounds.height() == height &&
+            sourceBounds.left >= 0 && sourceBounds.top >= 0 &&
+            sourceBounds.right <= image.width && sourceBounds.bottom <= image.height
+        ) {
+            "$label source=${image.width}x${image.height} crop=$sourceBounds " +
+                "expected=${width}x$height"
         }
         val plane = image.planes.firstOrNull() ?: error("$label has no RAW plane")
         require(plane.pixelStride == RAW_BYTES_PER_PIXEL) {
             "$label pixelStride=${plane.pixelStride}, expected=$RAW_BYTES_PER_PIXEL"
         }
         require(
-            plane.rowStride >= width * RAW_BYTES_PER_PIXEL &&
+            plane.rowStride >= sourceBounds.right * RAW_BYTES_PER_PIXEL &&
                 plane.rowStride % RAW_BYTES_PER_PIXEL == 0
         ) {
             "$label invalid rowStride=${plane.rowStride}"
         }
         val source = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
-        val requiredEnd = source.position().toLong() +
-            (height - 1L) * plane.rowStride.toLong() +
+        val sourceOffset = source.position().toLong() +
+            sourceBounds.top.toLong() * plane.rowStride +
+            sourceBounds.left.toLong() * RAW_BYTES_PER_PIXEL
+        val requiredEnd = sourceOffset + (height - 1L) * plane.rowStride.toLong() +
             width.toLong() * RAW_BYTES_PER_PIXEL
-        require(requiredEnd <= source.limit().toLong()) {
+        require(sourceOffset in 0..Int.MAX_VALUE.toLong() &&
+            requiredEnd <= source.limit().toLong()
+        ) {
             "$label RAW plane limit=${source.limit()} required=$requiredEnd"
         }
+        source.position(sourceOffset.toInt())
         GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)

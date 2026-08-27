@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.processor
 
+import android.graphics.Rect
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.utils.PLog
 
@@ -14,8 +15,9 @@ import com.hinnka.mycamera.utils.PLog
  * Bento's clipped-highlight path.
  */
 internal class GlesMgcRawFusion(
-    private val width: Int,
-    private val height: Int,
+    private val sourceWidth: Int,
+    private val sourceHeight: Int,
+    private val sourceBounds: Rect,
     private val cfaPattern: Int,
     private val blackLevel: FloatArray,
     private val whiteLevel: Int,
@@ -24,6 +26,7 @@ internal class GlesMgcRawFusion(
     private val lensShading: FloatArray?,
     private val lensShadingWidth: Int,
     private val lensShadingHeight: Int,
+    private val processingBounds: Rect?,
     private val outputMode: MgcSpatialOutputMode,
     private val mergeMethod: MgcMergeMethod,
     outputScale: Float,
@@ -32,6 +35,8 @@ internal class GlesMgcRawFusion(
     private val gpuLinearRgbStorage: GpuLinearRgbStorage,
     private val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
 ) {
+    private val width = sourceBounds.width()
+    private val height = sourceBounds.height()
     private val outputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
 
     fun processFrames(frames: List<RawStackFrame>): RawStackResult? {
@@ -64,6 +69,7 @@ internal class GlesMgcRawFusion(
             GlesMgcRawBaseFrameSelector(
                 width = width,
                 height = height,
+                sourceBounds = sourceBounds,
                 cfaPattern = cfaPattern,
                 canonicalBlackLevel = blackLevel,
                 whiteLevel = whiteLevel,
@@ -99,10 +105,25 @@ internal class GlesMgcRawFusion(
                     "gles_raw_sharpness"
                 },
         )
+        val fastMomentsRawStats = RawFastMomentsCpuStats.build(
+            frame = referenceFirstFrames.first(),
+            width = sourceWidth,
+            height = sourceHeight,
+            cfaPattern = cfaPattern,
+            canonicalBlackLevel = blackLevel,
+            whiteLevel = whiteLevel,
+            processingBounds = Rect(
+                processingBounds ?: Rect(0, 0, width, height),
+            ).apply { offset(sourceBounds.left, sourceBounds.top) },
+            cfaPhaseOriginX = sourceBounds.left,
+            cfaPhaseOriginY = sourceBounds.top,
+            coordinateBounds = sourceBounds,
+        )
         if (mergeMethod == MgcMergeMethod.SABRE) {
             return GlesMgcRawSabreProcessor(
                 width = width,
                 height = height,
+                sourceBounds = sourceBounds,
                 cfaPattern = cfaPattern,
                 blackLevel = blackLevel,
                 whiteLevel = whiteLevel,
@@ -116,7 +137,9 @@ internal class GlesMgcRawFusion(
                 exportGpuLinearRgbSource = exportGpuLinearRgbSource,
                 gpuLinearRgbStorage = gpuLinearRgbStorage,
                 coreImagingTuning = coreImagingTuning,
-            ).processFrames(referenceFirstFrames)
+            ).processFrames(referenceFirstFrames)?.copy(
+                fastMomentsRawStats = fastMomentsRawStats,
+            )
         }
 
         val baseIndex = referenceFirstFrames.indexOfFirst { it.role == RawBurstFrameRole.NORMAL }
@@ -192,6 +215,7 @@ internal class GlesMgcRawFusion(
         return GlesMgcRawSpatialStacker(
             width = width,
             height = height,
+            sourceBounds = sourceBounds,
             cfaPattern = cfaPattern,
             blackLevel = blackLevel,
             whiteLevel = whiteLevel,
@@ -207,7 +231,9 @@ internal class GlesMgcRawFusion(
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
             gpuLinearRgbStorage = gpuLinearRgbStorage,
             coreImagingTuning = coreImagingTuning,
-        ).processFrames(scheduledFrames)
+        ).processFrames(scheduledFrames)?.copy(
+            fastMomentsRawStats = fastMomentsRawStats,
+        )
     }
 
     private fun strictExposureProduct(frame: RawStackFrame): Double? =

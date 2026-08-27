@@ -183,24 +183,68 @@ internal class RawLinearRcdPass(
                 if (max(uAreaSampleFootprint.x, uAreaSampleFootprint.y) <= 0.0) {
                     return texture(uDemosaickedTexture, center).rgb;
                 }
+
+                // MGC constructs the ML-AE RGB surface with an area-kernel resample. Integrate
+                // every source texel overlapped by this destination pixel; a fixed sparse grid
+                // changes highlight coverage and therefore changes the learned long/short TETs.
+                ivec2 sourceSize = textureSize(uDemosaickedTexture, 0);
+                vec2 sourceSizeF = vec2(sourceSize);
+                vec2 halfFootprint = 0.5 * uAreaSampleFootprint;
+                vec2 sourceMin = clamp(
+                    (center - halfFootprint) * sourceSizeF,
+                    vec2(0.0),
+                    sourceSizeF
+                );
+                vec2 sourceMax = clamp(
+                    (center + halfFootprint) * sourceSizeF,
+                    vec2(0.0),
+                    sourceSizeF
+                );
+                if (sourceMax.x <= sourceMin.x || sourceMax.y <= sourceMin.y) {
+                    return texture(uDemosaickedTexture, center).rgb;
+                }
+
+                ivec2 firstTexel = clamp(
+                    ivec2(floor(sourceMin)),
+                    ivec2(0),
+                    sourceSize - ivec2(1)
+                );
+                ivec2 lastTexel = clamp(
+                    ivec2(ceil(sourceMax)) - ivec2(1),
+                    ivec2(0),
+                    sourceSize - ivec2(1)
+                );
                 vec3 aggregate = uUseAreaSampleMaximum != 0
                     ? vec3(-65504.0)
                     : vec3(0.0);
-                for (int y = 0; y < 4; ++y) {
-                    for (int x = 0; x < 4; ++x) {
-                        vec2 offset = (vec2(float(x), float(y)) - vec2(1.5)) * 0.25;
-                        vec3 sampleValue = texture(
+                float totalWeight = 0.0;
+                for (int sourceY = firstTexel.y; sourceY <= lastTexel.y; ++sourceY) {
+                    float weightY = max(
+                        0.0,
+                        min(sourceMax.y, float(sourceY + 1)) -
+                            max(sourceMin.y, float(sourceY))
+                    );
+                    for (int sourceX = firstTexel.x; sourceX <= lastTexel.x; ++sourceX) {
+                        float weightX = max(
+                            0.0,
+                            min(sourceMax.x, float(sourceX + 1)) -
+                                max(sourceMin.x, float(sourceX))
+                        );
+                        float sampleWeight = weightX * weightY;
+                        vec3 sampleValue = texelFetch(
                             uDemosaickedTexture,
-                            center + offset * uAreaSampleFootprint
+                            ivec2(sourceX, sourceY),
+                            0
                         ).rgb;
                         aggregate = uUseAreaSampleMaximum != 0
                             ? max(aggregate, sampleValue)
-                            : aggregate + sampleValue;
+                            : aggregate + sampleValue * sampleWeight;
+                        totalWeight += sampleWeight;
                     }
                 }
                 return uUseAreaSampleMaximum != 0
                     ? aggregate
-                    : aggregate * (1.0 / 16.0);
+                    : aggregate / max(totalWeight, 1e-12);
             }
 
             void main() {

@@ -48,7 +48,7 @@ class RawDngCropMapperTest {
             distortionOff = true,
         )
 
-        assertEquals(RawCropRect(1010, 760, 3030, 2280), crop)
+        assertEquals(RawCropRect(1002, 752, 3022, 2272), crop)
     }
 
     private fun map(

@@ -72,6 +72,7 @@ data class RawSceneExposureDeviceLimits(
 /** Metadata generated before a RAW buffer is written as DNG. */
 data class RawDngProfilePreparationOptions(
     val generatePhotonPgtm: Boolean = false,
+    /** One Bayer-phase-preserving crop shared by AE, Fast Moments, HDRNet and PGTM. */
     val statsBounds: Rect? = null,
     val captureProfilePreparer: RawDngCaptureProfilePreparer? = null,
 )

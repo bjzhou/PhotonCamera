@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.processor
 
 import android.graphics.ImageFormat
+import android.graphics.Rect
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -12,7 +13,6 @@ import android.util.Half
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
-import com.hinnka.mycamera.raw.RawSceneFastMomentsRawStats
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -53,6 +53,7 @@ internal fun resolveFusionReferenceSignal(
 internal class GlesMgcRawSpatialStacker(
     private val width: Int,
     private val height: Int,
+    private val sourceBounds: Rect = Rect(0, 0, width, height),
     private val cfaPattern: Int,
     blackLevel: FloatArray,
     whiteLevel: Int,
@@ -546,15 +547,8 @@ internal class GlesMgcRawSpatialStacker(
                     }}",
             )
         }
-        // GlesMgcRawFusion has already moved the selected base frame to index zero. Preserve the
-        // same sensor-domain 1/16 maxima that Fast Moments consumes before an RGB merge discards
-        // the Bayer plane. Reconstructing these statistics from merged LinearRaw changes both
-        // clipping and lens-shading semantics.
-        val fastMomentsRawStats = frames.firstOrNull()?.let(::buildFastMomentsRawStats)
         if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
-            return processSabreFrames(frames)?.copy(
-                fastMomentsRawStats = fastMomentsRawStats,
-            )
+            return processSabreFrames(frames)
         }
         val images = frames.map { it.image }
         require(
@@ -568,7 +562,12 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
-        if (images.any { it.width != width || it.height != height }) {
+        if (images.any {
+                sourceBounds.left < 0 || sourceBounds.top < 0 ||
+                    sourceBounds.right > it.width || sourceBounds.bottom > it.height ||
+                    sourceBounds.width() != width || sourceBounds.height() != height
+            }
+        ) {
             PLog.e(TAG, "MGC Spatial merge received mixed RAW dimensions")
             images.forEach { it.close() }
             return null
@@ -1835,7 +1834,6 @@ internal class GlesMgcRawSpatialStacker(
                         stackCompletionTimeline = null,
                     )
                 },
-                fastMomentsRawStats = fastMomentsRawStats,
                 lensShadingCorrectionApplied = lensShadingCorrectionApplied,
                 mergedFrameCount = mergedFrames,
                 mgcDenoiseCorrelation = denoiseModel?.correlation,
@@ -1889,7 +1887,12 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
-        if (images.any { it.width != width || it.height != height }) {
+        if (images.any {
+                sourceBounds.left < 0 || sourceBounds.top < 0 ||
+                    sourceBounds.right > it.width || sourceBounds.bottom > it.height ||
+                    sourceBounds.width() != width || sourceBounds.height() != height
+            }
+        ) {
             PLog.e(TAG, "MGC Sabre received mixed RAW dimensions")
             images.forEach { it.close() }
             return null
@@ -3490,73 +3493,6 @@ internal class GlesMgcRawSpatialStacker(
         }
     }
 
-    private fun buildFastMomentsRawStats(frame: RawStackFrame): RawSceneFastMomentsRawStats? {
-        val plane = frame.image.planes.firstOrNull() ?: return null
-        if (plane.pixelStride != RAW_BYTES_PER_PIXEL ||
-            plane.rowStride < width * RAW_BYTES_PER_PIXEL
-        ) {
-            PLog.e(
-                TAG,
-                "Fast Moments reference RAW layout is unsupported: " +
-                    "rowStride=${plane.rowStride} pixelStride=${plane.pixelStride} " +
-                    "size=${width}x$height",
-            )
-            return null
-        }
-        val source = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
-        val sourceBase = source.position()
-        val requiredEnd = sourceBase.toLong() +
-            (height - 1L) * plane.rowStride + width.toLong() * RAW_BYTES_PER_PIXEL
-        if (requiredEnd > source.limit().toLong()) {
-            PLog.e(
-                TAG,
-                "Fast Moments reference RAW plane is truncated: required=$requiredEnd " +
-                    "limit=${source.limit()}",
-            )
-            return null
-        }
-        val statsWidth = ceilDiv(width, FAST_MOMENTS_DOWNSAMPLE)
-        val statsHeight = ceilDiv(height, FAST_MOMENTS_DOWNSAMPLE)
-        val channelMax = FloatArray(statsWidth * statsHeight * 4)
-        val black = canonicalBlackLevelForFrame(frame)
-        for (statsY in 0 until statsHeight) {
-            val startY = statsY * FAST_MOMENTS_DOWNSAMPLE
-            val endY = minOf(startY + FAST_MOMENTS_DOWNSAMPLE, height)
-            for (statsX in 0 until statsWidth) {
-                val startX = statsX * FAST_MOMENTS_DOWNSAMPLE
-                val endX = minOf(startX + FAST_MOMENTS_DOWNSAMPLE, width)
-                val outputOffset = (statsY * statsWidth + statsX) * 4
-                for (y in startY until endY) {
-                    val rowOffset = sourceBase + y * plane.rowStride
-                    for (x in startX until endX) {
-                        val channel = canonicalChannelAtPhase(((y and 1) shl 1) or (x and 1))
-                        val raw = source.getShort(
-                            rowOffset + x * RAW_BYTES_PER_PIXEL,
-                        ).toInt() and 0xffff
-                        val normalized = (raw.toFloat() - black[channel]).coerceAtLeast(0f) /
-                            (sensorWhiteLevel - black[channel]).coerceAtLeast(1f)
-                        val index = outputOffset + channel
-                        if (normalized > channelMax[index]) channelMax[index] = normalized
-                    }
-                }
-            }
-        }
-        return RawSceneFastMomentsRawStats(
-            width = statsWidth,
-            height = statsHeight,
-            channelMax = channelMax,
-            sensorNormalized = true,
-            sourceBounds = floatArrayOf(0f, 0f, 1f, 1f),
-            sourceRotationDegrees = 0,
-        ).also {
-            PLog.i(
-                TAG,
-                "MGC Fast Moments reference RAW statistics ready: " +
-                    "size=${statsWidth}x$statsHeight source=selected-base-bayer",
-            )
-        }
-    }
-
     private fun sabreResolveBlackLevel(referenceBlackLevel: FloatArray): FloatArray =
         floatArrayOf(
             referenceBlackLevel[0] * sabreResolveRawScale,
@@ -3616,12 +3552,14 @@ internal class GlesMgcRawSpatialStacker(
         val plane = image.planes.firstOrNull() ?: return null
         if (
             plane.pixelStride != RAW_BYTES_PER_PIXEL ||
-            plane.rowStride < width * plane.pixelStride
+            plane.rowStride < sourceBounds.right * plane.pixelStride
         ) {
             return null
         }
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
-        val bufferStart = buffer.position()
+        val bufferStart = buffer.position() +
+            sourceBounds.top * plane.rowStride +
+            sourceBounds.left * plane.pixelStride
         // MeasureMeanSignalLevelNormalized (libgcastartup.so+0x5b047e8) shrinks the valid RAW
         // rectangle to its central 3/4, aligns X to four pixels and Y to two pixels, samples the
         // green phase on the first Bayer row every two columns/eight rows, and averages in the
@@ -6650,8 +6588,9 @@ internal class GlesMgcRawSpatialStacker(
             require(plane.pixelStride == RAW_BYTES_PER_PIXEL) {
                 "MGC Spatial RGB AOT frame $index pixel stride=${plane.pixelStride}, expected 2"
             }
-            require(plane.rowStride >= width * RAW_BYTES_PER_PIXEL) {
-                "MGC Spatial RGB AOT frame $index row stride=${plane.rowStride}, width=$width"
+            require(plane.rowStride >= sourceBounds.right * RAW_BYTES_PER_PIXEL) {
+                "MGC Spatial RGB AOT frame $index row stride=${plane.rowStride}, " +
+                    "crop=$sourceBounds"
             }
         }
         val rawBuffers = Array(rawPlanes.size) { index ->
@@ -6660,6 +6599,10 @@ internal class GlesMgcRawSpatialStacker(
             }
         }
         val rawOffsets = IntArray(rawBuffers.size) { index -> rawBuffers[index].position() }
+        rawOffsets.indices.forEach { index ->
+            rawOffsets[index] += sourceBounds.top * rawPlanes[index].rowStride +
+                sourceBounds.left * RAW_BYTES_PER_PIXEL
+        }
         val rawRowStrides = IntArray(rawPlanes.size) { index -> rawPlanes[index].rowStride }
         val referenceBlack = frames.first().calibration.blackLevels
         val inputBlackRgb = floatArrayOf(
@@ -8455,13 +8398,28 @@ internal class GlesMgcRawSpatialStacker(
         require(plane.pixelStride == RAW_BYTES_PER_PIXEL) {
             "$label RAW pixel stride=${plane.pixelStride}, expected 2"
         }
-        require(plane.rowStride >= width * RAW_BYTES_PER_PIXEL) {
-            "$label RAW row stride=${plane.rowStride} is smaller than width=$width"
+        require(sourceBounds.right <= image.width && sourceBounds.bottom <= image.height &&
+            sourceBounds.width() == width && sourceBounds.height() == height
+        ) {
+            "$label RAW source=${image.width}x${image.height} crop=$sourceBounds " +
+                "expected=${width}x$height"
+        }
+        require(plane.rowStride >= sourceBounds.right * RAW_BYTES_PER_PIXEL) {
+            "$label RAW row stride=${plane.rowStride} cannot address crop=$sourceBounds"
         }
         require(plane.rowStride % RAW_BYTES_PER_PIXEL == 0) {
             "$label RAW row stride is not 16-bit aligned"
         }
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
+        val sourceOffset = buffer.position().toLong() +
+            sourceBounds.top.toLong() * plane.rowStride +
+            sourceBounds.left.toLong() * RAW_BYTES_PER_PIXEL
+        val sourceEnd = sourceOffset + (height - 1L) * plane.rowStride +
+            width.toLong() * RAW_BYTES_PER_PIXEL
+        require(sourceOffset in 0..Int.MAX_VALUE.toLong() && sourceEnd <= buffer.limit()) {
+            "$label RAW crop=$sourceBounds exceeds plane limit=${buffer.limit()}"
+        }
+        buffer.position(sourceOffset.toInt())
         GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
@@ -8497,16 +8455,19 @@ internal class GlesMgcRawSpatialStacker(
         require(plane.pixelStride == RAW_BYTES_PER_PIXEL) {
             "$label RAW pixel stride=${plane.pixelStride}, expected 2"
         }
-        require(plane.rowStride >= width * RAW_BYTES_PER_PIXEL) {
-            "$label RAW row stride=${plane.rowStride} is smaller than width=$width"
+        require(sourceBounds.right <= image.width && sourceBounds.bottom <= image.height) {
+            "$label RAW source=${image.width}x${image.height} crop=$sourceBounds"
+        }
+        require(plane.rowStride >= sourceBounds.right * RAW_BYTES_PER_PIXEL) {
+            "$label RAW row stride=${plane.rowStride} cannot address crop=$sourceBounds"
         }
         require(plane.rowStride % RAW_BYTES_PER_PIXEL == 0) {
             "$label RAW row stride is not 16-bit aligned"
         }
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val sourceOffset = buffer.position().toLong() +
-            region.top.toLong() * plane.rowStride +
-            region.left.toLong() * RAW_BYTES_PER_PIXEL
+            (sourceBounds.top + region.top).toLong() * plane.rowStride +
+            (sourceBounds.left + region.left).toLong() * RAW_BYTES_PER_PIXEL
         val sourceEnd = sourceOffset +
             (region.height - 1L) * plane.rowStride +
             region.width.toLong() * RAW_BYTES_PER_PIXEL
@@ -9541,7 +9502,6 @@ internal class GlesMgcRawSpatialStacker(
         const val SABRE_SIGNAL_ROW_STEP = 8
         const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         const val RAW_BYTES_PER_PIXEL = 2
-        const val FAST_MOMENTS_DOWNSAMPLE = 16
         const val RGB_AOT_TILE_SIZE = 16
         const val RGB_AOT_MERGE_SHARPNESS_SCALE = 0.8f
         const val RGB_RAW_WINDOW_SLOTS = 2

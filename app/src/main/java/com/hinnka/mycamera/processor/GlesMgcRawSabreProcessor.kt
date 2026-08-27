@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.processor
 
+import android.graphics.Rect
 import com.hinnka.mycamera.utils.PLog
 
 /**
@@ -12,6 +13,7 @@ import com.hinnka.mycamera.utils.PLog
 internal class GlesMgcRawSabreProcessor(
     private val width: Int,
     private val height: Int,
+    private val sourceBounds: Rect,
     private val cfaPattern: Int,
     private val blackLevel: FloatArray,
     private val whiteLevel: Int,
@@ -59,6 +61,7 @@ internal class GlesMgcRawSabreProcessor(
         return GlesMgcRawSpatialStacker(
             width = width,
             height = height,
+            sourceBounds = sourceBounds,
             cfaPattern = cfaPattern,
             blackLevel = blackLevel,
             whiteLevel = whiteLevel,

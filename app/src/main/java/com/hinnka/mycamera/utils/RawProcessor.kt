@@ -16,9 +16,11 @@ import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngBaselineExposure
 import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawPhysicalCrop
 import com.hinnka.mycamera.raw.RawNoiseProfileLayout
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -195,6 +197,10 @@ object RawProcessor {
             cfaPattern = resolvedCfaPattern,
             blackLevel = resolvedBlackLevel,
             whiteLevel = resolvedWhiteLevel,
+            lensShadingMap = sourceMetadata.lensShadingMap,
+            lensShadingMapWidth = sourceMetadata.lensShadingMapWidth,
+            lensShadingMapHeight = sourceMetadata.lensShadingMapHeight,
+            lensShadingMapGrid = sourceMetadata.lensShadingMapGrid,
             postRawSensitivityBoost = 1f,
             baselineExposure = DngBaselineExposure.sanitize(profilePreparation.baselineExposureEv),
             shadowScale = 1f,
@@ -447,18 +453,95 @@ object RawProcessor {
             targetWidth = targetWidth,
             targetHeight = targetHeight,
         )
-        val defaultCrop = Rect(mapped.left, mapped.top, mapped.right, mapped.bottom)
+        val defaultCrop = RawDefaultCropOverride.alignToBayerPhase(
+            crop = Rect(mapped.left, mapped.top, mapped.right, mapped.bottom),
+            width = width,
+            height = height,
+        ) ?: Rect(0, 0, width and -2, height and -2)
         PLog.i(
             TAG,
             "RAW_CROP_TRACE stage=CAMERA2_RESULT buffer=${width}x$height " +
                 "pixelArray=$pixelArray activePre=$preCorrection activePost=$postCorrection " +
                 "scalerCrop=$scalerCropRegion scalerReturned=${scalerCropRegion != null} " +
-                "zoomRatio=$zoomRatio distortionMode=$distortionMode " +
+                "zoomRatio=$zoomRatio bufferCropSource=RAW_SENSOR_SOFTWARE " +
+                "distortionMode=$distortionMode " +
                 "distortionControl=$hasDistortionCorrectionControl " +
                 "coordinateSpace=${if (hasDistortionCorrectionControl && distortionMode == CaptureResult.DISTORTION_CORRECTION_MODE_OFF) "PRE_CORRECTION" else "POST_CORRECTION"} " +
                 "dngTarget=${targetWidth}x$targetHeight mappedDefaultCrop=$defaultCrop"
         )
         return defaultCrop
+    }
+
+    /** Resolves the Camera2 zoom crop as an addressable rectangle in the original RAW plane. */
+    internal fun resolveCameraRawPhysicalCrop(
+        width: Int,
+        height: Int,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+    ): RawPhysicalCrop {
+        val preCorrection = characteristics.get(
+            CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+        ) ?: Rect(0, 0, width, height)
+        val pixelArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+        val bufferIncludesPixelArray = pixelArray?.width == width && pixelArray.height == height
+        val activeSourceBounds = if (bufferIncludesPixelArray) {
+            Rect(preCorrection).apply { intersect(Rect(0, 0, width, height)) }
+        } else {
+            Rect(0, 0, width, height)
+        }
+        val activeLocalCrop = resolveCameraRawDefaultCrop(
+            width = width,
+            height = height,
+            characteristics = characteristics,
+            captureResult = captureResult,
+        )
+        val requestedSourceCrop = Rect(activeLocalCrop).apply {
+            if (bufferIncludesPixelArray) offset(activeSourceBounds.left, activeSourceBounds.top)
+            intersect(activeSourceBounds)
+        }
+        val phaseAlignedActiveBounds = checkNotNull(
+            RawDefaultCropOverride.alignToBayerPhase(
+                crop = activeSourceBounds,
+                width = width,
+                height = height,
+                phaseOriginX = activeSourceBounds.left,
+                phaseOriginY = activeSourceBounds.top,
+            ),
+        ) { "RAW active array cannot contain a complete Bayer cell: $activeSourceBounds" }
+        val sourceCrop = RawDefaultCropOverride.alignToBayerPhase(
+            crop = requestedSourceCrop,
+            width = width,
+            height = height,
+            phaseOriginX = activeSourceBounds.left,
+            phaseOriginY = activeSourceBounds.top,
+        ) ?: phaseAlignedActiveBounds
+        return RawPhysicalCrop(
+            sourceBounds = sourceCrop,
+            sourceWidth = width,
+            sourceHeight = height,
+            activeSourceBounds = activeSourceBounds,
+            sensorOriginX = if (bufferIncludesPixelArray) {
+                sourceCrop.left
+            } else {
+                preCorrection.left + sourceCrop.left
+            },
+            sensorOriginY = if (bufferIncludesPixelArray) {
+                sourceCrop.top
+            } else {
+                preCorrection.top + sourceCrop.top
+            },
+            activeSensorWidth = preCorrection.width(),
+            activeSensorHeight = preCorrection.height(),
+        ).also {
+            PLog.i(
+                TAG,
+                "RAW_CROP_TRACE stage=SOFTWARE_PHYSICAL source=${width}x$height " +
+                    "active=$activeSourceBounds requested=$requestedSourceCrop " +
+                    "aligned=${it.sourceBounds} output=${it.width}x${it.height} " +
+                    "cfaPhaseOffset=${it.sourceBounds.left - activeSourceBounds.left}," +
+                    "${it.sourceBounds.top - activeSourceBounds.top}",
+            )
+        }
     }
 
     private fun Rect.toRawCropRect(): RawCropRect = RawCropRect(left, top, right, bottom)
@@ -526,29 +609,38 @@ object RawProcessor {
         }
     }
 
-    internal fun copyRawSensorImageToContiguousBuffer(image: SafeImage): ByteBuffer? {
+    internal fun copyRawSensorImageToContiguousBuffer(
+        image: SafeImage,
+        sourceBounds: Rect = Rect(0, 0, image.width, image.height),
+    ): ByteBuffer? {
         val plane = image.planes.firstOrNull() ?: return null
         val rowStride = plane.rowStride
         val pixelStride = runCatching { plane.pixelStride }.getOrDefault(2).takeIf { it > 0 } ?: 2
-        val width = image.width
-        val height = image.height
+        val safeBounds = RawDefaultCropOverride.sanitizeCropWithinImage(
+            sourceBounds,
+            image.width,
+            image.height,
+        )?.takeIf { (it.width() and 1) == 0 && (it.height() and 1) == 0 } ?: return null
+        val width = safeBounds.width()
+        val height = safeBounds.height()
         val rowBytes = width * 2
 
-        if (pixelStride != 2 || rowStride < rowBytes) {
+        if (pixelStride != 2 || rowStride < safeBounds.right * pixelStride) {
             PLog.w(TAG, "Unsupported RAW_SENSOR plane stride row=$rowStride pixel=$pixelStride size=${width}x${height}")
             return null
         }
 
         val source = plane.buffer.duplicate()
+        val sourceLimit = source.limit()
         val output = LargeDirectBuffer.allocate(
             rowBytes.toLong() * height.toLong(),
             "RAW_SENSOR contiguous copy",
         )?.order(ByteOrder.nativeOrder()) ?: return null
         for (row in 0 until height) {
-            val rowOffset = row * rowStride
+            val rowOffset = (safeBounds.top + row) * rowStride + safeBounds.left * pixelStride
             val rowEnd = rowOffset + rowBytes
-            if (rowEnd > source.capacity()) {
-                PLog.w(TAG, "RAW_SENSOR plane too small row=$row rowEnd=$rowEnd capacity=${source.capacity()}")
+            if (rowEnd > sourceLimit) {
+                PLog.w(TAG, "RAW_SENSOR plane too small row=$row rowEnd=$rowEnd limit=$sourceLimit")
                 LargeDirectBuffer.free(output)
                 return null
             }
@@ -584,6 +676,7 @@ object RawProcessor {
         pixelsIncludeLensShadingCorrection: Boolean = false,
         options: RawDngProfilePreparationOptions,
         defaultCrop: Rect,
+        physicalRawCrop: RawPhysicalCrop? = null,
     ): RawDngProfilePreparation? {
         val resolvedCfaPattern = resolveCfaPatternForMode(cfaPattern, cfaCorrectionMode)
         val resolvedBlackLevel = resolveBlackLevelForMode(blackLevel, blackLevelMode, customBlackLevel)
@@ -612,12 +705,14 @@ object RawProcessor {
         } else {
             resolvedWhiteLevel.toFloat()
         }
-        val cameraStatsMetadata = buildAdobeDngColorMetadata(
+        val cameraStatsMetadataBase = buildAdobeDngColorMetadata(
             width = width,
             height = height,
             characteristics = characteristics,
             captureResult = captureResult,
-        ).copy(
+        )
+        val cameraStatsMetadata = (physicalRawCrop?.rebase(cameraStatsMetadataBase)
+            ?: cameraStatsMetadataBase).copy(
             width = width,
             height = height,
             cfaPattern = resolvedCfaPattern,
@@ -727,7 +822,8 @@ object RawProcessor {
                     "finalBaselineEv=${finalProfile.baselineExposureEv} " +
                     "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +
-                    "pgtmSource=GPU photon=${options.generatePhotonPgtm} statsBounds=${options.statsBounds}"
+                    "pgtmSource=GPU photon=${options.generatePhotonPgtm} " +
+                    "processingBounds=${options.statsBounds}"
             )
         }
     }
@@ -767,6 +863,7 @@ object RawProcessor {
         dngProfilePreparationOptions: RawDngProfilePreparationOptions? = null,
         defaultCrop: Rect,
         preparedDngProfile: RawDngProfilePreparation? = null,
+        physicalRawCrop: RawPhysicalCrop? = null,
     ): Boolean {
         val resolvedCfaPattern = resolveCfaPatternForMode(cfaPattern, cfaCorrectionMode)
         val resolvedBlackLevel = resolveBlackLevelForMode(blackLevel, blackLevelMode, customBlackLevel)
@@ -809,6 +906,7 @@ object RawProcessor {
                 pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
                 options = options,
                 defaultCrop = defaultCrop,
+                physicalRawCrop = physicalRawCrop,
             )
         }
         if (dngProfilePreparationOptions != null && preparedProfile == null) return false
@@ -871,6 +969,7 @@ object RawProcessor {
                 inputColStepSamples = inputColStepSamples,
                 pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
                 defaultCrop = defaultCrop,
+                physicalRawCrop = physicalRawCrop,
             )
         }
 

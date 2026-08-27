@@ -20,6 +20,9 @@ internal data class RawSceneLinearFrame(
 data class RawSceneFastMomentsRawStats(
     val width: Int,
     val height: Int,
+    /** Pixel extent represented before the fixed 1/16 RAW-statistics downsample. */
+    val sourceWidth: Int,
+    val sourceHeight: Int,
     /** Per-cell component maxima in canonical [R, Gr, Gb, B] order. */
     val channelMax: FloatArray,
     /** True for direct black-subtracted sensor samples; false for camera-RGB fallback data. */
@@ -151,6 +154,9 @@ internal object RawSceneExposureMath {
     // Ordinary MGC/Google ZSL exposure tuning. These are finalizer constraints, not sensor limits.
     const val MAX_POST_CAPTURE_GAIN = 26.5f
     const val MAX_OVERALL_GAIN = 102f
+    // MGC 9.7 CaptureTuning::max_hdr_ratio(kHdrPlusOn, autoNight=false, factor=-1).
+    // This limits the AE final long/short TET pair before the highlight-preservation step.
+    const val FAST_MOMENTS_MAX_HDR_RATIO = 9.8f
     // DNG exposure equations use ISO 100 as the portable reference sensitivity. Supported sensor
     // ISO ranges are not part of the DNG image contract and must not be read from the current phone.
     const val DNG_REFERENCE_SENSITIVITY_ISO = 100
@@ -168,6 +174,7 @@ internal object RawSceneExposureMath {
     private const val MILLIS_PER_SECOND = 1_000.0
     private const val HIGHLIGHT_CLIP_LEVEL = 1.0
     private const val RAW_CLIP_LEVEL = 1.0f
+    private const val HIGHLIGHT_PRESERVATION_RATIO_FLOOR = 24f
     fun measureSceneBrightness(
         frame: RawSceneLinearFrame,
         exposureTimeNs: Long,
@@ -493,11 +500,14 @@ internal object RawSceneExposureMath {
         finalization.safeUnderexposureTetMs
             ?.takeIf { it.isFinite() && it > 0f }
             ?.let { safeUnderexposureTetMs ->
-                // This is the original highlight-preservation floor. idealLongTetMs is the
-                // pre-shot-range desired long TET and 24 is MGC's hard-coded denominator floor.
+                // This is the original highlight-preservation floor. The effective HDR-ratio
+                // limit is used as the denominator, with 24 as MGC's hard-coded lower bound.
                 val preservedShortTetMs = maxOf(
                     safeUnderexposureTetMs,
-                    finalLongTetMs / maxOf(idealLongTetMs, 24f),
+                    finalLongTetMs / maxOf(
+                        finalization.maxHdrRatio ?: 0f,
+                        HIGHLIGHT_PRESERVATION_RATIO_FLOOR,
+                    ),
                 )
                 if (preservedShortTetMs < finalShortTetMs) {
                     finalShortTetMs = preservedShortTetMs
@@ -585,6 +595,7 @@ internal object RawSceneExposureMath {
         val stats = frame.fastMomentsStats
         val pixelCount = stats.width * stats.height
         if (stats.width <= 0 || stats.height <= 0 ||
+            stats.sourceWidth <= 0 || stats.sourceHeight <= 0 ||
             stats.channelMax.size != pixelCount * 4 ||
             stats.sourceBounds.size < 4 ||
             stats.sourceBounds.take(4).any { !it.isFinite() } ||
@@ -653,25 +664,40 @@ internal object RawSceneExposureMath {
         x: Int,
         y: Int,
     ): Float {
-        val sourceUv = sourceUv(stats, x, y, 0.5f, 0.5f)
+        val downsample = FAST_MOMENTS_RAW_STATS_DOWNSAMPLE.toFloat()
+        val u0 = (x.toFloat() * downsample / stats.sourceWidth.toFloat()).coerceIn(0f, 1f)
+        val u1 = ((x + 1f) * downsample / stats.sourceWidth.toFloat()).coerceIn(0f, 1f)
+        val v0 = (y.toFloat() * downsample / stats.sourceHeight.toFloat()).coerceIn(0f, 1f)
+        val v1 = ((y + 1f) * downsample / stats.sourceHeight.toFloat()).coerceIn(0f, 1f)
+        return minOf(
+            lensShadingGainAtStatsUv(metadata, stats, channel, u0, v0),
+            lensShadingGainAtStatsUv(metadata, stats, channel, u1, v0),
+            lensShadingGainAtStatsUv(metadata, stats, channel, u0, v1),
+            lensShadingGainAtStatsUv(metadata, stats, channel, u1, v1),
+        )
+    }
+
+    private fun lensShadingGainAtStatsUv(
+        metadata: RawMetadata,
+        stats: RawSceneFastMomentsRawStats,
+        channel: Int,
+        u: Float,
+        v: Float,
+    ): Float {
+        val sourceUv = sourceUv(stats, u, v)
         return lensShadingGain(
             metadata = metadata,
             channel = channel,
             sourceU = sourceUv.first,
             sourceV = sourceUv.second,
-            chooseMinimumNeighbor = true,
         )
     }
 
     private fun sourceUv(
         stats: RawSceneFastMomentsRawStats,
-        x: Int,
-        y: Int,
-        cellU: Float,
-        cellV: Float,
+        u: Float,
+        v: Float,
     ): Pair<Float, Float> {
-        val u = (x.toFloat() + cellU) / stats.width.toFloat()
-        val v = (y.toFloat() + cellV) / stats.height.toFloat()
         val rotation = ((stats.sourceRotationDegrees % 360) + 360) % 360
         val orientedU: Float
         val orientedV: Float
@@ -882,6 +908,13 @@ internal object RawSceneExposureEstimator {
                     PLog.e(TAG, "Fast Moments process-AE-stats returned invalid values")
                     return@synchronized null
                 }
+                // Fast Moments mode 2 keeps the pre-finalizer short ideal when RAW statistics
+                // lower the shot minimum. MGC's enabled production flag passes the smaller of
+                // those two TETs into ComputeAeResults as its highlight-preservation TET.
+                val highlightPreservationTetMs = minOf(
+                    ideals.shortTetMs,
+                    fastMomentsStats.adjustedShotMinTetMs,
+                )
                 val fusion = RawSceneExposureMath.finalizeAeResults(
                     frame = frame,
                     currentTetMs = measurement.currentTetMs,
@@ -889,6 +922,8 @@ internal object RawSceneExposureEstimator {
                     finalization = RawSceneExposureFinalization(
                         shotMinTetMs = fastMomentsStats.adjustedShotMinTetMs,
                         shotMaxTetMs = shotRange.maxTetMs,
+                        maxHdrRatio = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+                        safeUnderexposureTetMs = highlightPreservationTetMs,
                     ),
                 ) ?: run {
                     PLog.e(TAG, "RAW scene exposure MGC AE finalization returned invalid values")
@@ -931,7 +966,10 @@ internal object RawSceneExposureEstimator {
                         "solver=MGC_FAST_MOMENTS_TRUE " +
                         "hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit} " +
                         "finalHdrRatio=${fusion.finalHdrRatio} " +
+                        "hdrNetRatioSource=FINAL_LONG_TET_OVER_FINAL_SHORT_TET " +
+                        "maxHdrRatio=${RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO} " +
                         "hdrRatioLimited=${fusion.hdrRatioLimited} " +
+                        "highlightPreservationTetMs=$highlightPreservationTetMs " +
                         "safeUnderexposureApplied=${fusion.safeUnderexposureApplied} " +
                         "anticipatedUnderexposure=${fastMomentsStats.anticipatedUnderexposure} " +
                         "safeUnderexposure=${fastMomentsStats.safeUnderexposure} " +

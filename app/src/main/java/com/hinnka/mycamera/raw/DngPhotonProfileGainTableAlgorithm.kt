@@ -1456,18 +1456,32 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             return null
         }
-        // MGC's HDRNet input shader downsamples the complete input texture to 256 x 192 and
-        // exposes no crop/bounds uniform. Its renderer slices the bilateral grid over that same
-        // complete texture domain. AE statistics bounds are independent and must not turn this
-        // into a crop-relative grid inside a Stage 3 DNG image.
-        val hdrNetSourceBounds = Rect(0, 0, linearRgbTextureWidth, linearRgbTextureHeight)
+        val stage3Bounds = sanitizePgtmStatsBounds(input.statsBounds, width, height)
+            ?: return null
+        // The linear texture can be a scaled LinearRaw export. Map the one authoritative Stage 3
+        // crop into that texture without changing its normalized field of view.
+        val hdrNetSourceBounds = Rect(
+            floor(stage3Bounds.left.toDouble() * linearRgbTextureWidth / width).toInt(),
+            floor(stage3Bounds.top.toDouble() * linearRgbTextureHeight / height).toInt(),
+            ceil(stage3Bounds.right.toDouble() * linearRgbTextureWidth / width).toInt(),
+            ceil(stage3Bounds.bottom.toDouble() * linearRgbTextureHeight / height).toInt(),
+        ).also { bounds ->
+            bounds.intersect(Rect(0, 0, linearRgbTextureWidth, linearRgbTextureHeight))
+        }
+        if (hdrNetSourceBounds.isEmpty) return null
+        val samplingArea = PhotonPgtmSamplingArea(
+            originH = stage3Bounds.left.toDouble() / width.toDouble(),
+            originV = stage3Bounds.top.toDouble() / height.toDouble(),
+            extentH = stage3Bounds.width().toDouble() / width.toDouble(),
+            extentV = stage3Bounds.height().toDouble() / height.toDouble(),
+        )
         val plan = DngPhotonProfileGainTableGenerator.hdrNetPlan(
             sourceWidth = width,
             sourceHeight = height,
             baselineExposureEv = input.baselineExposureEv,
             hdrRatio = input.hdrRatio,
             diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG HDRNet capture"),
-            samplingArea = PhotonPgtmSamplingArea.FULL,
+            samplingArea = samplingArea,
         ) ?: return null
         val interpreter = ensureHdrNetInterpreter(input.context) ?: return null
         val activeWarpParameters = ArrayList<Float>()
@@ -1666,7 +1680,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
                     "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
-                    "aeStatsBounds=${input.statsBounds} " +
+                    "processingBounds=$stage3Bounds samplingArea=$samplingArea " +
                     "inputMs=${(inputReadyNs - totalStartNs) / 1_000_000f} " +
                     "inferenceMs=${(inferenceReadyNs - inferenceStartNs) / 1_000_000f} " +
                     "pgtmMs=${(pgtmReadyNs - pgtmStartNs) / 1_000_000f} " +

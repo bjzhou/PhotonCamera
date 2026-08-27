@@ -78,8 +78,17 @@ internal object RawDngCropMapper {
         if (crop == null) return null
         require(crop.isValid()) { "SCALER_CROP_REGION must be non-empty: $crop" }
         val localBounds = RawCropRect(0, 0, domain.width, domain.height)
+        if (domain.contains(crop)) {
+            return RawCropRect(
+                left = crop.left - domain.left,
+                top = crop.top - domain.top,
+                right = crop.right - domain.left,
+                bottom = crop.bottom - domain.top,
+            )
+        }
         require(localBounds.contains(crop)) {
-            "SCALER_CROP_REGION $crop is outside Camera2 coordinate bounds $localBounds"
+            "SCALER_CROP_REGION $crop is outside Camera2 coordinate bounds " +
+                "absolute=$domain local=$localBounds"
         }
         return crop
     }

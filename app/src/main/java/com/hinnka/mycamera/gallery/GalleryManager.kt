@@ -2299,8 +2299,8 @@ object GalleryManager {
             }
             val mainFlashFired = didMainFlashFire(resolvedCaptureResult)
             val dngThumbnail = thumbnail.takeUnless { mainFlashFired }
-            val rawWidth = image.width
-            val rawHeight = image.height
+            val sourceRawWidth = image.width
+            val sourceRawHeight = image.height
             if (mainFlashFired && thumbnail != null) {
                 PLog.i(
                     TAG,
@@ -2310,36 +2310,50 @@ object GalleryManager {
             }
 
             val captureInfo = metadata.toCaptureInfo()
-            val rawDngDefaultCrop = RawProcessor.resolveCameraRawDefaultCrop(
-                width = rawWidth,
-                height = rawHeight,
+            val physicalRawCrop = RawProcessor.resolveCameraRawPhysicalCrop(
+                width = sourceRawWidth,
+                height = sourceRawHeight,
                 characteristics = characteristics,
                 captureResult = resolvedCaptureResult,
             )
-            val writtenRawDngDefaultCrop = RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
+            val rawWidth = physicalRawCrop.width
+            val rawHeight = physicalRawCrop.height
+            val rawDngDefaultCrop = physicalRawCrop.outputBounds
+            val blackBorderDefaultCrop = RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
                 width = rawWidth,
                 height = rawHeight,
                 rawBlackBorderCrop = metadata.rawBlackBorderCrop,
                 metadataDefaultCrop = rawDngDefaultCrop,
             ) ?: rawDngDefaultCrop
-            var updatedMetadata: MediaMetadata = metadata
+            val processingRawBounds = RawDefaultCropOverride.resolveOutputSourceBounds(
+                width = rawWidth,
+                height = rawHeight,
+                aspectRatio = aspectRatio,
+                // CaptureResult's zoom crop has already been physically removed above.
+                userCrop = null,
+                metadataDefaultCrop = blackBorderDefaultCrop,
+            )
+            var updatedMetadata: MediaMetadata = metadata.copy(cropRegion = null)
             val rawSharpening = updatedMetadata.sharpening
                 ?: RawSharpeningDefaults.normalize(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
             val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
                 ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
             val sourceRawMetadata = RawMetadata.create(
-                width = rawWidth,
-                height = rawHeight,
+                width = sourceRawWidth,
+                height = sourceRawHeight,
                 characteristics = characteristics,
                 captureResult = resolvedCaptureResult,
-            ).copy(
+            ).let(physicalRawCrop::rebase).copy(
                 coreImagingTuning = PhotonCoreImagingTuning.fromCustomProperties(
                     metadata.customProperties,
                 ),
             )
             val rawBuffer = image.use {
-                RawProcessor.copyRawSensorImageToContiguousBuffer(image)
+                RawProcessor.copyRawSensorImageToContiguousBuffer(
+                    image = image,
+                    sourceBounds = physicalRawCrop.sourceBounds,
+                )
             } ?: return@withContext
             rawBufferToRelease = rawBuffer
             val processor = RawDemosaicProcessor.getInstance()
@@ -2348,7 +2362,8 @@ object GalleryManager {
                 metadata = metadata,
                 width = rawWidth,
                 height = rawHeight,
-                defaultCrop = rawDngDefaultCrop,
+                defaultCrop = processingRawBounds,
+                cropRegion = null,
                 aspectRatio = aspectRatio,
                 rotation = rotation,
                 capturePreviewThumbnail = dngThumbnail,
@@ -2369,7 +2384,8 @@ object GalleryManager {
                 customWhiteLevel = metadata.rawCustomWhiteLevel,
                 cfaCorrectionMode = metadata.rawCfaCorrectionMode,
                 options = profileOptions,
-                defaultCrop = writtenRawDngDefaultCrop,
+                defaultCrop = processingRawBounds,
+                physicalRawCrop = physicalRawCrop,
             ) ?: return@withContext
             preparedDemosaicSourceToRelease = preparedProfile.gpuDemosaicedRawSource
             updatedMetadata = updatedMetadata.copy(
@@ -2406,8 +2422,9 @@ object GalleryManager {
                             effectiveFocalLength35mm = captureInfo.focalLength35mm,
                             captureInfo = captureInfo,
                             dngProfilePreparationOptions = profileOptions,
-                            defaultCrop = writtenRawDngDefaultCrop,
+                            defaultCrop = processingRawBounds,
                             preparedDngProfile = preparedProfile,
+                            physicalRawCrop = physicalRawCrop,
                         )
                     }
                 } catch (error: Throwable) {
@@ -2437,7 +2454,7 @@ object GalleryManager {
                 dngFile.absolutePath,
                 includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
                 aspectRatio = aspectRatio,
-                cropRegion = updatedMetadata.cropRegion,
+                cropRegion = null,
                 rotation = rotation,
                 exposureBias = exposureBias ?: 0f,
                 rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
@@ -2487,7 +2504,7 @@ object GalleryManager {
                     characteristics = characteristics,
                     captureResult = resolvedCaptureResult,
                     sourceMetadata = sourceRawMetadata,
-                    defaultCrop = writtenRawDngDefaultCrop,
+                    defaultCrop = processingRawBounds,
                     rotation = rotation,
                     profilePreparation = preparedProfile,
                     blackLevelMode = metadata.rawBlackLevelMode,
@@ -2524,7 +2541,7 @@ object GalleryManager {
                     gpuDemosaicedRawSource = preparedProfile.gpuDemosaicedRawSource,
                     metadata = renderMetadata,
                     aspectRatio = aspectRatio,
-                    cropRegion = updatedMetadata.cropRegion,
+                    cropRegion = null,
                     rotation = rotation,
                     exposureBias = exposureBias ?: 0f,
                     rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
@@ -3307,6 +3324,13 @@ object GalleryManager {
             val firstImageWidth = images[0].width
             val firstImageHeight = images[0].height
 
+            val physicalRawCrop = RawProcessor.resolveCameraRawPhysicalCrop(
+                width = firstImageWidth,
+                height = firstImageHeight,
+                characteristics = characteristics,
+                captureResult = captureResult,
+            )
+
             val noiseProfileSelection = ContentRepository.getInstance(context)
                 .rawNoiseProfileManager
                 .resolveSelection(resolveRawNoiseProfileId(context, metadata))
@@ -3317,8 +3341,23 @@ object GalleryManager {
                 captureResult,
                 exposureBias,
                 RawDemosaicProcessor.getInstance().getRawColorSpace()
-            )
+            ).let(physicalRawCrop::rebase)
             val rawMetadata = captureRawMetadata.withNoiseProfileSelection(noiseProfileSelection)
+            val captureRawDefaultCrop = physicalRawCrop.outputBounds
+            val captureBlackBorderCrop =
+                RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
+                    width = physicalRawCrop.width,
+                    height = physicalRawCrop.height,
+                    rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+                    metadataDefaultCrop = captureRawDefaultCrop,
+                ) ?: captureRawDefaultCrop
+            val captureProcessingBounds = RawDefaultCropOverride.resolveOutputSourceBounds(
+                width = physicalRawCrop.width,
+                height = physicalRawCrop.height,
+                aspectRatio = aspectRatio,
+                userCrop = null,
+                metadataDefaultCrop = captureBlackBorderCrop,
+            )
             val stackBlackLevel = RawProcessor.resolveBlackLevelForMode(
                 defaultBlackLevel = rawMetadata.blackLevel,
                 blackLevelMode = metadata.rawBlackLevelMode,
@@ -3405,6 +3444,8 @@ object GalleryManager {
                     lensShadingWidth = rawMetadata.lensShadingMapWidth,
                     lensShadingHeight = rawMetadata.lensShadingMapHeight,
                     applyLensShadingCorrection = applyRawLensShading,
+                    sourceBounds = physicalRawCrop.sourceBounds,
+                    processingBounds = captureProcessingBounds,
                     useCurrentGlContext = true,
                     exportGpuLinearRgbSource = true,
                     gpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16F,
@@ -3559,6 +3600,7 @@ object GalleryManager {
             val stackedMetadata = metadata
                 .withNormalizedRawLevelCorrectionsCleared("MGC default-denoised RAW stack")
                 .copy(
+                    cropRegion = null,
                     rawBlackBorderCrop = outputRawBlackBorderCrop,
                     // These fields describe the processor-specific FinishRaw denoise already
                     // baked into LinearRaw; the merge itself remains represented by the pixels.
@@ -3592,18 +3634,20 @@ object GalleryManager {
                 val imageLayout = SuperResolutionDngWriter.ImageLayout.LINEAR_RAW_RGB
                 val inputSamplesPerPixel = 3
                 val inputRowStepSamples = finalStackResult.width * inputSamplesPerPixel
-                val dngDefaultCrop = RawProcessor.resolveCameraRawDefaultCrop(
-                    width = finalStackResult.width,
-                    height = finalStackResult.height,
-                    characteristics = characteristics,
-                    captureResult = captureResult,
-                )
+                val dngDefaultCrop = RawDefaultCropOverride.scaleToSize(
+                    crop = captureProcessingBounds,
+                    sourceWidth = physicalRawCrop.width,
+                    sourceHeight = physicalRawCrop.height,
+                    targetWidth = finalStackResult.width,
+                    targetHeight = finalStackResult.height,
+                ) ?: Rect(0, 0, finalStackResult.width and -2, finalStackResult.height and -2)
                 val profileOptions = rawDngProfilePreparationOptions(
                     context = context,
                     metadata = stackedMetadata,
                     width = finalStackResult.width,
                     height = finalStackResult.height,
                     defaultCrop = dngDefaultCrop,
+                    cropRegion = null,
                     aspectRatio = aspectRatio,
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
@@ -3677,6 +3721,7 @@ object GalleryManager {
                             baselineExposureEv = finalStackResult.baselineExposureEv,
                             preparedDngProfile = dngProfilePreparation,
                             preparedProfileOptions = profileOptions,
+                            defaultCrop = dngDefaultCrop,
                         )
                     } finally {
                         LargeDirectBuffer.free(dngBuffer)
@@ -4233,6 +4278,7 @@ object GalleryManager {
         pixelsIncludeLensShadingCorrection: Boolean = false,
         preparedDngProfile: RawDngProfilePreparation? = null,
         preparedProfileOptions: RawDngProfilePreparationOptions? = null,
+        defaultCrop: Rect? = null,
     ): Boolean {
         val tempDngFile = File(dngFile.parentFile, "temp_stacked.dng")
         val captureInfo = metadata.toCaptureInfo()
@@ -4242,12 +4288,13 @@ object GalleryManager {
             characteristics = characteristics,
             captureResult = captureResult,
         )
-        val writtenRawDngDefaultCrop = RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
-            width = width,
-            height = height,
-            rawBlackBorderCrop = metadata.rawBlackBorderCrop,
-            metadataDefaultCrop = rawDngDefaultCrop,
-        ) ?: rawDngDefaultCrop
+        val writtenRawDngDefaultCrop = defaultCrop
+            ?: RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
+                width = width,
+                height = height,
+                rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+                metadataDefaultCrop = rawDngDefaultCrop,
+            ) ?: rawDngDefaultCrop
         val dngWritten = try {
             FileOutputStream(tempDngFile).use { outputStream ->
                 RawProcessor.saveRawBufferToDng(
@@ -4462,6 +4509,7 @@ object GalleryManager {
         width: Int,
         height: Int,
         defaultCrop: Rect?,
+        cropRegion: Rect? = metadata.cropRegion,
         aspectRatio: AspectRatio?,
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
@@ -4484,7 +4532,7 @@ object GalleryManager {
             width = width,
             height = height,
             aspectRatio = aspectRatio,
-            userCrop = metadata.cropRegion,
+            userCrop = cropRegion,
             metadataDefaultCrop = blackBorderDefaultCrop ?: defaultCrop,
         ).takeUnless { it.hasSameBounds(Rect(0, 0, width, height)) }
         val captureProfileRequired = generatePhotonPgtm ||
@@ -4497,7 +4545,7 @@ object GalleryManager {
                     input = input,
                     mode = exposureMode,
                     aspectRatio = aspectRatio,
-                    cropRegion = metadata.cropRegion,
+                    cropRegion = cropRegion,
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
                     statsBounds = statsBounds,
@@ -4522,7 +4570,7 @@ object GalleryManager {
             TAG,
             "RAW_ADAPTIVE_EXPOSURE stage=DNG_PREPARE mode=$exposureMode " +
                 "curve=DEFAULT blackBorderDefaultCrop=$blackBorderDefaultCrop " +
-                "photonPgtm=$generatePhotonPgtm statsBounds=$statsBounds " +
+                "photonPgtm=$generatePhotonPgtm processingBounds=$statsBounds " +
                 "legacyMetering=$legacyMeteringEnabled " +
                 "capturePreview=${capturePreviewThumbnail != null} " +
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"

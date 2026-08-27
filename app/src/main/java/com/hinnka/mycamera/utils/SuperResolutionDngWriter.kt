@@ -6,7 +6,6 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
-import android.hardware.camera2.params.LensShadingMap
 import android.os.Build
 import android.os.SystemClock
 import com.hinnka.mycamera.camera.CaptureInfo
@@ -21,6 +20,7 @@ import com.hinnka.mycamera.raw.DcpToneCurve
 import com.hinnka.mycamera.raw.DngWarpRectilinear
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawPhysicalCrop
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.resolveRawApertureFNumber
 import java.io.ByteArrayOutputStream
@@ -298,6 +298,7 @@ object SuperResolutionDngWriter {
         inputColStepSamples: Int? = null,
         pixelsIncludeLensShadingCorrection: Boolean = false,
         defaultCrop: Rect,
+        physicalRawCrop: RawPhysicalCrop? = null,
     ): Boolean {
         if (width <= 0 || height <= 0) return false
 
@@ -409,6 +410,7 @@ object SuperResolutionDngWriter {
                 valueDomain = valueDomain,
                 pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
                 defaultCrop = defaultCrop,
+                physicalRawCrop = physicalRawCrop,
             )
             val header = buildHeader(
                 primaryEntries = directories.primaryEntries,
@@ -472,6 +474,7 @@ object SuperResolutionDngWriter {
         valueDomain: RawProcessor.RawBufferValueDomain,
         pixelsIncludeLensShadingCorrection: Boolean,
         defaultCrop: Rect,
+        physicalRawCrop: RawPhysicalCrop?,
     ): TiffDirectories {
         // The custom writer is used when the fused RAW dimensions no longer
         // match the camera sensor. The fused buffer already lives in its final
@@ -481,7 +484,13 @@ object SuperResolutionDngWriter {
         val defaultScaleX = 1.0
         val defaultScaleY = 1.0
         val cameraModel = buildCameraModel(characteristics)
-        val geometry = resolveDngGeometry(width, height, characteristics, defaultCrop)
+        val geometry = resolveDngGeometry(
+            width,
+            height,
+            characteristics,
+            defaultCrop,
+            physicalRawCrop,
+        )
         PLog.i(
             TAG,
             "RAW_CROP_TRACE stage=DNG_WRITE buffer=${width}x$height " +
@@ -575,6 +584,7 @@ object SuperResolutionDngWriter {
                 captureResult = captureResult,
                 cfaPattern = cfaPattern,
                 geometry = geometry,
+                physicalRawCrop = physicalRawCrop,
             )
         } else {
             null
@@ -1121,16 +1131,34 @@ object SuperResolutionDngWriter {
         captureResult: CaptureResult,
         cfaPattern: Int,
         geometry: DngGeometry,
+        physicalRawCrop: RawPhysicalCrop?,
     ): ByteArray? {
         val lensShadingMap = captureResult.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
         val dim = RawCfaCorrection.repeatPatternDim(cfaPattern)
         val encodedOpcodes = mutableListOf<ByteArray>()
         if (lensShadingMap != null && lensShadingMap.columnCount > 0 && lensShadingMap.rowCount > 0) {
+            val originalGains = FloatArray(
+                lensShadingMap.columnCount * lensShadingMap.rowCount * 4,
+            ).also { lensShadingMap.copyGainFactors(it, 0) }
+            val gains = physicalRawCrop?.cropLensShadingMap(
+                source = originalGains,
+                mapWidth = lensShadingMap.columnCount,
+                mapHeight = lensShadingMap.rowCount,
+            ) ?: originalGains
             for (top in 0 until dim[0]) {
                 for (left in 0 until dim[1]) {
                     val channel = RawCfaCorrection.camera2LensShadingChannelIndexForPixel(cfaPattern, left, top)
                     encodedOpcodes += buildGainMapOpcode(
-                        lensShadingMap, channel, top, left, dim[0], dim[1], geometry.width, geometry.height
+                        gains = gains,
+                        mapWidth = lensShadingMap.columnCount,
+                        mapHeight = lensShadingMap.rowCount,
+                        channel = channel,
+                        top = top,
+                        left = left,
+                        rowPitch = dim[0],
+                        colPitch = dim[1],
+                        width = geometry.width,
+                        height = geometry.height,
                     )
                 }
             }
@@ -1189,7 +1217,9 @@ object SuperResolutionDngWriter {
     }
 
     private fun buildGainMapOpcode(
-        lensShadingMap: LensShadingMap,
+        gains: FloatArray,
+        mapWidth: Int,
+        mapHeight: Int,
         channel: Int,
         top: Int,
         left: Int,
@@ -1207,17 +1237,17 @@ object SuperResolutionDngWriter {
         payload.write(beUInt(1))
         payload.write(beUInt(rowPitch.toLong()))
         payload.write(beUInt(colPitch.toLong()))
-        payload.write(beUInt(lensShadingMap.rowCount.toLong()))
-        payload.write(beUInt(lensShadingMap.columnCount.toLong()))
-        payload.write(beDouble(if (lensShadingMap.rowCount > 1) 1.0 / (lensShadingMap.rowCount - 1).toDouble() else 1.0))
-        payload.write(beDouble(if (lensShadingMap.columnCount > 1) 1.0 / (lensShadingMap.columnCount - 1).toDouble() else 1.0))
+        payload.write(beUInt(mapHeight.toLong()))
+        payload.write(beUInt(mapWidth.toLong()))
+        payload.write(beDouble(if (mapHeight > 1) 1.0 / (mapHeight - 1).toDouble() else 1.0))
+        payload.write(beDouble(if (mapWidth > 1) 1.0 / (mapWidth - 1).toDouble() else 1.0))
         payload.write(beDouble(0.0))
         payload.write(beDouble(0.0))
         payload.write(beUInt(1))
 
-        for (row in 0 until lensShadingMap.rowCount) {
-            for (col in 0 until lensShadingMap.columnCount) {
-                payload.write(beFloat(lensShadingMap.getGainFactor(channel, col, row)))
+        for (row in 0 until mapHeight) {
+            for (col in 0 until mapWidth) {
+                payload.write(beFloat(gains[(row * mapWidth + col) * 4 + channel]))
             }
         }
 
@@ -1253,8 +1283,21 @@ object SuperResolutionDngWriter {
             distortion[3].toDouble(),
             distortion[4].toDouble(),
         )
-        val normalizeCx = if (geometry.bufferIncludesPixelArray) cx + geometry.sourceOriginX else cx
-        val normalizeCy = if (geometry.bufferIncludesPixelArray) cy + geometry.sourceOriginY else cy
+        // WarpRectilinear stores its center in the DNG's local Stage 3 coordinates. The AOSP
+        // normalization step uses absolute sensor coordinates only when the payload still contains
+        // the complete pixel array (including the pre-correction active-array offset).
+        val dngCx = cx + geometry.intrinsicCenterOffsetX
+        val dngCy = cy + geometry.intrinsicCenterOffsetY
+        val normalizeCx = if (geometry.bufferIncludesPixelArray) {
+            dngCx + geometry.sourceOriginX
+        } else {
+            dngCx
+        }
+        val normalizeCy = if (geometry.bufferIncludesPixelArray) {
+            dngCy + geometry.sourceOriginY
+        } else {
+            dngCy
+        }
         val xMin = if (geometry.bufferIncludesPixelArray) geometry.sourceOriginX else 0
         val yMin = if (geometry.bufferIncludesPixelArray) geometry.sourceOriginY else 0
         if (!normalizeLensDistortion(
@@ -1272,8 +1315,8 @@ object SuperResolutionDngWriter {
             return null
         }
 
-        val maxX = maxOf(geometry.sourceWidth - cx, cx).toDouble()
-        val maxY = maxOf(geometry.sourceHeight - cy, cy).toDouble()
+        val maxX = maxOf(geometry.sourceWidth - dngCx, dngCx).toDouble()
+        val maxY = maxOf(geometry.sourceHeight - dngCy, dngCy).toDouble()
         val maxRadius = sqrt(maxX * maxX + maxY * maxY)
         if (!maxRadius.isFinite() || maxRadius <= 0.0) return null
         val coefficients = camera2DistortionToDngWarpCoefficients(
@@ -1292,8 +1335,8 @@ object SuperResolutionDngWriter {
         } else {
             geometry.height
         }
-        val centerH = (cx / geometry.sourceWidth).toDouble().coerceIn(0.0, 1.0)
-        val centerV = (cy / geometry.sourceHeight).toDouble().coerceIn(0.0, 1.0)
+        val centerH = (dngCx / geometry.sourceWidth).toDouble().coerceIn(0.0, 1.0)
+        val centerV = (dngCy / geometry.sourceHeight).toDouble().coerceIn(0.0, 1.0)
         val parameters = FloatArray(8) { index ->
             when {
                 index < 6 -> coefficients[index].toFloat()
@@ -1486,6 +1529,8 @@ object SuperResolutionDngWriter {
         val sourceWidth: Int,
         val sourceHeight: Int,
         val bufferIncludesPixelArray: Boolean,
+        val intrinsicCenterOffsetX: Float,
+        val intrinsicCenterOffsetY: Float,
         val scaleX: Double,
         val scaleY: Double,
     )
@@ -1495,6 +1540,7 @@ object SuperResolutionDngWriter {
         height: Int,
         characteristics: CameraCharacteristics,
         defaultCrop: Rect,
+        physicalRawCrop: RawPhysicalCrop?,
     ): DngGeometry {
         val pre = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
         val pixel = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
@@ -1504,7 +1550,9 @@ object SuperResolutionDngWriter {
         val matchesPreCorrection = preWidth == width && preHeight == height
         val scaleX = if (matchesPixelArray) 1.0 else width.toDouble() / preWidth.toDouble()
         val scaleY = if (matchesPixelArray) 1.0 else height.toDouble() / preHeight.toDouble()
-        val activeArea = if (matchesPixelArray && pre != null) {
+        val activeArea = if (physicalRawCrop != null) {
+            longArrayOf(0L, 0L, height.toLong(), width.toLong())
+        } else if (matchesPixelArray && pre != null) {
             longArrayOf(pre.top.toLong(), pre.left.toLong(), pre.bottom.toLong(), pre.right.toLong())
         } else {
             longArrayOf(0L, 0L, height.toLong(), width.toLong())
@@ -1524,13 +1572,23 @@ object SuperResolutionDngWriter {
             defaultCropTop = defaultCrop.top.toDouble(),
             defaultCropWidth = defaultCrop.width().toDouble(),
             defaultCropHeight = defaultCrop.height().toDouble(),
-            sourceOriginX = pre?.left ?: 0,
-            sourceOriginY = pre?.top ?: 0,
-            sourceWidth = preWidth,
-            sourceHeight = preHeight,
-            bufferIncludesPixelArray = matchesPixelArray,
-            scaleX = scaleX,
-            scaleY = scaleY,
+            sourceOriginX = physicalRawCrop?.sensorOriginX ?: (pre?.left ?: 0),
+            sourceOriginY = physicalRawCrop?.sensorOriginY ?: (pre?.top ?: 0),
+            sourceWidth = physicalRawCrop?.width ?: preWidth,
+            sourceHeight = physicalRawCrop?.height ?: preHeight,
+            bufferIncludesPixelArray = physicalRawCrop == null && matchesPixelArray,
+            intrinsicCenterOffsetX = if (physicalRawCrop != null) {
+                -(physicalRawCrop.sensorOriginX - (pre?.left ?: 0)).toFloat()
+            } else {
+                0f
+            },
+            intrinsicCenterOffsetY = if (physicalRawCrop != null) {
+                -(physicalRawCrop.sensorOriginY - (pre?.top ?: 0)).toFloat()
+            } else {
+                0f
+            },
+            scaleX = if (physicalRawCrop != null) 1.0 else scaleX,
+            scaleY = if (physicalRawCrop != null) 1.0 else scaleY,
         )
     }
 

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.processor
 
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
+import android.graphics.Rect
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import com.hinnka.mycamera.camera.AspectRatio
@@ -296,6 +297,8 @@ object MultiFrameStacker {
         lensShadingWidth: Int = 0,
         lensShadingHeight: Int = 0,
         applyLensShadingCorrection: Boolean = true,
+        sourceBounds: Rect? = null,
+        processingBounds: Rect? = null,
         useCurrentGlContext: Boolean = false,
         exportGpuLinearRgbSource: Boolean = false,
         gpuLinearRgbStorage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
@@ -304,14 +307,24 @@ object MultiFrameStacker {
     ): RawStackResult? {
         if (frames.isEmpty()) return null
         val images = frames.map { it.image }
-        val width = images[0].width
-        val height = images[0].height
+        val sourceWidth = images[0].width
+        val sourceHeight = images[0].height
+        val physicalSourceBounds = sourceBounds ?: Rect(0, 0, sourceWidth, sourceHeight)
+        require(
+            physicalSourceBounds.left >= 0 && physicalSourceBounds.top >= 0 &&
+                physicalSourceBounds.right <= sourceWidth &&
+                physicalSourceBounds.bottom <= sourceHeight &&
+                !physicalSourceBounds.isEmpty &&
+                (physicalSourceBounds.width() and 1) == 0 &&
+                (physicalSourceBounds.height() and 1) == 0
+        ) { "RAW physical crop must contain complete Bayer cells: $physicalSourceBounds" }
         // Output scaling is an RGB export transform shared by Spatial and Sabre. Only the
         // Bayer-preserving path must remain on the native sensor lattice.
         val effectiveOutputScale = resolveRawStackOutputScale(outputMode, outputScale)
         RawStackRuntimeDebug.d(TAG) {
             "Starting MGC ${if (mergeMethod == MgcMergeMethod.SABRE) "Sabre" else "Spatial ${outputMode.name}"} " +
-                "fusion for ${images.size} frames. " +
+                "fusion for ${images.size} frames source=${sourceWidth}x$sourceHeight " +
+                "physicalCrop=$physicalSourceBounds " +
                 "Pattern=$cfaPattern outputScale=$effectiveOutputScale " +
                 "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel " +
                 "noiseProfile=${noiseProfileSelection.id} " +
@@ -324,8 +337,9 @@ object MultiFrameStacker {
             enabled = applyLensShadingCorrection && outputMode == MgcSpatialOutputMode.RGB,
         )
         return GlesMgcRawFusion(
-            width = width,
-            height = height,
+            sourceWidth = sourceWidth,
+            sourceHeight = sourceHeight,
+            sourceBounds = physicalSourceBounds,
             cfaPattern = cfaPattern,
             blackLevel = masterBlackLevel,
             whiteLevel = whiteLevel,
@@ -334,6 +348,7 @@ object MultiFrameStacker {
             lensShading = stackLensShading,
             lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
+            processingBounds = processingBounds,
             outputMode = outputMode,
             mergeMethod = mergeMethod,
             outputScale = effectiveOutputScale,
