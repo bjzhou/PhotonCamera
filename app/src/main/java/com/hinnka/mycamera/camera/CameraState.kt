@@ -376,6 +376,7 @@ data class CameraState(
     val isP3Supported: Boolean = false,
     val currentDynamicRangeProfile: String = "STANDARD",
     val captureMode: CaptureMode = CaptureMode.PHOTO,
+    val photoPreviewStabilizationEnabled: Boolean = false,
     val videoConfig: VideoConfig = VideoConfig(),
     val videoCapabilities: VideoCapabilities = VideoCapabilities(),
     val videoRecordingState: VideoRecordingState = VideoRecordingState(),

@@ -56,6 +56,8 @@ internal data class ColorPassLocations(
     val uPrimaryCalibrationMatrixLocation: Int,
     val uSTMatrixFragLocation: Int,
     val uCropRectLocation: Int,
+    val uStabilizationEnabledLocation: Int,
+    val uStabilizationRowsLocation: Int,
     val uTexelSizeLocation: Int,
     val uCurveTextureLocation: Int,
     val uCurveEnabledLocation: Int,
@@ -161,6 +163,14 @@ internal class PreviewColorProgramCache {
             uPrimaryCalibrationMatrixLocation = GLES30.glGetUniformLocation(program, "uPrimaryCalibrationMatrix"),
             uSTMatrixFragLocation = GLES30.glGetUniformLocation(program, "uSTMatrix"),
             uCropRectLocation = GLES30.glGetUniformLocation(program, "uCropRect"),
+            uStabilizationEnabledLocation = GLES30.glGetUniformLocation(
+                program,
+                "uStabilizationEnabled",
+            ),
+            uStabilizationRowsLocation = GLES30.glGetUniformLocation(
+                program,
+                "uStabilizationRows[0]",
+            ),
             uTexelSizeLocation = GLES30.glGetUniformLocation(program, "uTexelSize"),
             uCurveTextureLocation = GLES30.glGetUniformLocation(program, "uCurveTexture"),
             uCurveEnabledLocation = GLES30.glGetUniformLocation(program, "uCurveEnabled"),

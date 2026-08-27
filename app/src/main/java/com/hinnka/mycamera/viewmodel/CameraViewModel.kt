@@ -560,6 +560,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val state: StateFlow<CameraState> = cameraController.state
     val livePhotoRecorder get() = cameraController.livePhotoRecorder
+    val realtimeStabilizationCoordinator get() = cameraController.realtimeStabilizationCoordinator
+    val isAlgorithmicStabilizationSupported: Boolean
+        get() = cameraController.realtimeStabilizationCoordinator.isGyroscopeAvailable
 
     // 照片保存完成事件
     private val _imageSavedEvent = MutableSharedFlow<Unit>()
@@ -1757,6 +1760,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val videoWhiteBalanceLockEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.videoWhiteBalanceLockEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val photoPreviewStabilizationEnabled: StateFlow<Boolean> =
+        userPreferencesRepository.userPreferences
+            .map { it.photoPreviewStabilizationEnabled }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val videoAudioInputOptions: StateFlow<List<VideoAudioInputOption>> = videoAudioInputManager.availableInputs
 
     val phantomButtonHidden: StateFlow<Boolean> = userPreferencesRepository.userPreferences
@@ -2144,6 +2151,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoAudioInputId(it.videoAudioInputId)
                 cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
+                cameraController.setPhotoPreviewStabilizationEnabled(
+                    it.photoPreviewStabilizationEnabled
+                )
                 cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
                 cameraController.setVideoLensLockEnabled(it.videoLensLockEnabled)
                 cameraController.setVideoWhiteBalanceLockEnabled(it.videoWhiteBalanceLockEnabled)
@@ -3587,17 +3597,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setVideoResolution(resolution: VideoResolutionPreset) {
         cameraController.setVideoResolution(resolution)
+        val resolvedConfig = state.value.videoConfig
         reopenCamera()
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoResolution(resolution)
+            userPreferencesRepository.saveVideoStabilizationConfig(
+                mode = resolvedConfig.stabilizationMode,
+                resolution = resolvedConfig.resolution,
+                fps = resolvedConfig.fps,
+            )
         }
     }
 
     fun setVideoFps(fps: VideoFpsPreset) {
         cameraController.setVideoFps(fps)
+        val resolvedConfig = state.value.videoConfig
         reopenCamera()
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoFps(fps)
+            userPreferencesRepository.saveVideoStabilizationConfig(
+                mode = resolvedConfig.stabilizationMode,
+                resolution = resolvedConfig.resolution,
+                fps = resolvedConfig.fps,
+            )
         }
     }
 
@@ -3610,9 +3630,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {
+        val previousConfig = state.value.videoConfig
         cameraController.setVideoStabilizationMode(mode)
+        val resolvedConfig = state.value.videoConfig
+        if (state.value.captureMode == CaptureMode.VIDEO &&
+            (previousConfig.resolution != resolvedConfig.resolution ||
+                previousConfig.fps != resolvedConfig.fps)
+        ) {
+            reopenCamera()
+        }
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationMode(mode)
+            userPreferencesRepository.saveVideoStabilizationConfig(
+                mode = resolvedConfig.stabilizationMode,
+                resolution = resolvedConfig.resolution,
+                fps = resolvedConfig.fps,
+            )
+        }
+    }
+
+    fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
+        cameraController.setPhotoPreviewStabilizationEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.savePhotoPreviewStabilizationEnabled(enabled)
         }
     }
 
@@ -3671,10 +3710,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val availableModes = state.value.videoCapabilities.availableStabilizationModes
         if (availableModes.isEmpty()) return
         val nextMode = availableModes[(availableModes.indexOf(currentMode) + 1) % availableModes.size]
-        cameraController.setVideoStabilizationMode(nextMode)
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationMode(nextMode)
-        }
+        setVideoStabilizationMode(nextMode)
     }
 
     fun setVideoTorchEnabled(enabled: Boolean) {

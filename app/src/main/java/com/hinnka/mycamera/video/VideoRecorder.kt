@@ -17,6 +17,7 @@ import android.view.Surface
 import androidx.core.app.ActivityCompat
 import com.hinnka.mycamera.lut.RealtimeVideoRenderer
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +35,8 @@ import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 
 class VideoRecorder(
-    private val context: Context
+    private val context: Context,
+    private val stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
 ) {
 
     companion object {
@@ -103,6 +105,7 @@ class VideoRecorder(
     private var requestedOutputSize = Size(1080, 1920)
     private var requestedCameraInputSize = Size(1920, 1080)
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
+    private var requestedEnhancedStabilization = false
     private var cameraInputStarted = false
     private var hlgCameraInput = false
     private var firstVideoPresentationTimeUs = Long.MIN_VALUE
@@ -161,6 +164,7 @@ class VideoRecorder(
         hlgInput: Boolean = false,
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
+        enhancedStabilization: Boolean = false,
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
         recordingTreeUri: String? = null,
         onError: ((String) -> Unit)? = null,
@@ -181,6 +185,7 @@ class VideoRecorder(
         requestedColorLayers = colorLayers.toList()
         hlgCameraInput = hlgInput
         requestedFlipEncodedFrame = flipEncodedFrame
+        requestedEnhancedStabilization = enhancedStabilization
         requestedRecordingPath = recordingPath
         requestedRecordingTreeUri = recordingTreeUri?.takeIf { it.isNotBlank() }
         outputDateTakenMs = System.currentTimeMillis()
@@ -220,6 +225,7 @@ class VideoRecorder(
             "Video recording prepared: encoder=${requestedSize.width}x${requestedSize.height}, " +
                 "output=${requestedOutputSize.width}x${requestedOutputSize.height} @ " +
                 "${requestedFps}fps, orientationHint=$requestedOrientationHintDegrees, " +
+                "enhancedStabilization=$requestedEnhancedStabilization, " +
                 "input=dedicated-surface-texture, " +
                 "path=${requestedRecordingPath.name}, uri=${requestedRecordingTreeUri?.take(48)}"
         )
@@ -278,6 +284,7 @@ class VideoRecorder(
     fun pauseRecording() {
         if (!isRecording || isPaused || stopRequested) return
         isPaused = true
+        renderer?.pauseStabilization()
         pauseStartTimeUs = android.os.SystemClock.elapsedRealtimeNanos() / 1000
         PLog.d(TAG, "Video recording paused")
     }
@@ -286,6 +293,7 @@ class VideoRecorder(
         if (!isRecording || !isPaused || stopRequested) return
         val nowUs = android.os.SystemClock.elapsedRealtimeNanos() / 1000
         totalPausedDurationUs += (nowUs - pauseStartTimeUs).coerceAtLeast(0L)
+        renderer?.resumeStabilization()
         isPaused = false
         PLog.d(TAG, "Video recording resumed")
     }
@@ -311,6 +319,8 @@ class VideoRecorder(
             mirrorVertically =
                 requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 != 0,
             encoderColorConfig = encoderColorConfig,
+            stabilizationCoordinator = stabilizationCoordinator,
+            enhancedStabilizationEnabled = requestedEnhancedStabilization,
         )
         renderer = realtimeRenderer
         realtimeRenderer.initialize(

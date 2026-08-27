@@ -191,6 +191,12 @@
     <string name="settings_video_lut_description">当前选择：%1$s</string>
     <string name="settings_video_lock_lens">锁定镜头</string>
     <string name="settings_video_lock_lens_description">视频录制过程中变焦不切换镜头。</string>
+    <string name="settings_video_stabilization_default">默认视频防抖模式</string>
+    <string name="settings_video_stabilization_default_description">选择进入视频模式时使用的防抖方式。EIS+ 在后摄使用陀螺仪和滚动快门校正，并会将录像规格切换为 1080p/30 fps。</string>
+    <string name="settings_video_stabilization_mode_off">关闭</string>
+    <string name="settings_video_stabilization_mode_eis">电子防抖 (EIS)</string>
+    <string name="settings_video_stabilization_mode_ois">光学防抖 (OIS)</string>
+    <string name="settings_video_stabilization_mode_enhanced">增强防抖 (EIS+)</string>
     <string name="settings_video_lock_white_balance">锁定白平衡</string>
     <string name="settings_video_lock_white_balance_description">视频录制过程中锁定白平衡。</string>
     <string name="settings_section_quality_perf">画质与性能</string>
@@ -206,6 +212,8 @@
     <string name="settings_level_description">在拍摄时显示水平仪，帮助保持画面水平</string>
     <string name="settings_focus_peaking">峰值对焦</string>
     <string name="settings_focus_peaking_description">手动对焦时显示峰值对焦高亮</string>
+    <string name="settings_photo_preview_stabilization">照片预览防抖</string>
+    <string name="settings_photo_preview_stabilization_description">使用陀螺仪稳定照片取景画面，不改变最终照片；仅支持后置相机。</string>
     <string name="settings_grid_lines">网格线显示</string>
     <string name="settings_grid_description">在拍摄时显示网格线，辅助构图</string>
     <string name="settings_use_jpg_max">JPGmax</string>

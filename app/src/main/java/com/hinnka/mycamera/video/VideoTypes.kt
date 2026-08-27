@@ -10,9 +10,10 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 enum class VideoStabilizationMode(val displayName: String) {
-    OIS("OIS"),
+    OFF("OFF"),
     EIS("EIS"),
-    OFF("OFF")
+    OIS("OIS"),
+    ENHANCED("EIS+")
 }
 
 enum class CaptureMode {
