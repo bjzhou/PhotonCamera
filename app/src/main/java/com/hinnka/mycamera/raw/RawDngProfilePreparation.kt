@@ -146,3 +146,17 @@ internal object RawPhotonHdrRatioMetadata {
         return properties + (PROPERTY to validRatio.toString())
     }
 }
+
+/** Capture-request AE compensation persisted independently from presentation ExposureBias. */
+internal object RawCaptureExposureCompensationMetadata {
+    private const val PROPERTY = "captureAeExposureCompensationEv"
+
+    fun read(properties: Map<String, String>): Float? = properties[PROPERTY]
+        ?.toFloatOrNull()
+        ?.takeIf(Float::isFinite)
+
+    fun write(properties: Map<String, String>, exposureCompensationEv: Float): Map<String, String> {
+        if (!exposureCompensationEv.isFinite()) return properties
+        return properties + (PROPERTY to exposureCompensationEv.toString())
+    }
+}

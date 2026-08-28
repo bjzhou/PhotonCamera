@@ -18,7 +18,9 @@ data class CaptureInfo(
     val aperture: Float? = null,             // 光圈值 (f-number)
     val focalLength: Float? = null,          // 焦距 (mm)
     val focalLength35mm: Int? = null,        // 等效35mm焦距
-    val exposureBias: Float? = null,         // 曝光补偿 (EV)
+    val exposureBias: Float? = null,         // 曝光偏置/EXIF 展示值 (EV)
+    /** Capture-request AE compensation in EV, distinct from manual exposure bias. */
+    val exposureCompensation: Float? = null,
     
     // 设备信息
     val make: String = Build.MANUFACTURER,

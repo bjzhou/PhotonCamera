@@ -7843,6 +7843,9 @@ class Camera2Controller(private val context: Context) {
             focalLength = resolvedFocalLength.focalLength,
             focalLength35mm = resolvedFocalLength.focalLength35mm,
             exposureBias = _state.value.exposureBias,
+            exposureCompensation = _state.value.run {
+                exposureCompensation * getExposureCompensationStep()
+            },
             whiteBalance = whiteBalance,
             flashState = flashState,
             // 传给下游的方向永远是 NORMAL (1)

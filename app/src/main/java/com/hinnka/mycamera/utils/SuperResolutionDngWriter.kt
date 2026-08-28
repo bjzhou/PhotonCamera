@@ -551,15 +551,8 @@ object SuperResolutionDngWriter {
         val exifWhiteBalance = captureMetadataResult.get(CaptureResult.CONTROL_AWB_MODE)?.let { awbMode ->
             if (awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
         }
-        val exposureBiasEv = captureInfo.exposureBias
+        val exposureCompensationEv = captureInfo.exposureCompensation
             ?.takeIf { it.isFinite() }
-            ?: captureMetadataResult.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION)
-                ?.let { compensationSteps ->
-                    characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
-                        ?.toFloat()
-                        ?.takeIf { it.isFinite() && it > 0f }
-                        ?.let { compensationSteps * it }
-                }
         val exposureProgram = if (
             captureMetadataResult.get(CaptureResult.CONTROL_AE_MODE) == CameraMetadata.CONTROL_AE_MODE_OFF
         ) {
@@ -638,7 +631,7 @@ object SuperResolutionDngWriter {
             exposureTimeSeconds?.let {
                 add(sRationalArray(TAG_SHUTTER_SPEED_VALUE, listOf(-kotlin.math.log2(it))))
             }
-            exposureBiasEv?.let {
+            exposureCompensationEv?.let {
                 add(sRationalArray(TAG_EXPOSURE_BIAS_VALUE, listOf(it.toDouble())))
             }
             add(short(TAG_FLASH, exifFlash))

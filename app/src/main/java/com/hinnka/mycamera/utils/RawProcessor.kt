@@ -126,7 +126,8 @@ object RawProcessor {
             height = height,
             characteristics = characteristics,
             captureResult = captureResult,
-            userExposureCompensation = baseMetadata.exposureBias,
+            userExposureBias = baseMetadata.exposureBias,
+            captureExposureCompensationEv = baseMetadata.exposureCompensation,
         )
         return metadata.copy(
             width = width,
@@ -146,7 +147,7 @@ object RawProcessor {
             activeArray = Rect(0, 0, width, height),
             defaultCrop = Rect(defaultCrop),
             aeMode = CaptureResult.CONTROL_AE_MODE_ON,
-            exposureCompensation = 0f,
+            exposureCompensation = baseMetadata.exposureCompensation,
             exposureBias = baseMetadata.exposureBias,
             frameCount = 1,
             mgcSharpenAttenuationScale = baseMetadata.mgcSharpenAttenuationScale,
@@ -190,7 +191,8 @@ object RawProcessor {
             height = height,
             characteristics = characteristics,
             captureResult = captureResult,
-            userExposureCompensation = sourceMetadata.exposureBias,
+            userExposureBias = sourceMetadata.exposureBias,
+            captureExposureCompensationEv = sourceMetadata.exposureCompensation,
         ).copy(
             width = width,
             height = height,
@@ -210,7 +212,7 @@ object RawProcessor {
             activeArray = Rect(0, 0, width, height),
             defaultCrop = Rect(defaultCrop),
             aeMode = CaptureResult.CONTROL_AE_MODE_ON,
-            exposureCompensation = 0f,
+            exposureCompensation = sourceMetadata.exposureCompensation,
             frameCount = 1,
             rotation = rotation,
             profileGainTableMap = profilePreparation.profileGainTableMap,
@@ -223,7 +225,8 @@ object RawProcessor {
         height: Int,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
-        userExposureCompensation: Float? = null,
+        userExposureBias: Float? = null,
+        captureExposureCompensationEv: Float = 0f,
     ): RawMetadata {
         val dngWhiteBalance = resolveDngWriterWhiteBalance(captureResult)
         return RawMetadata.create(
@@ -231,7 +234,8 @@ object RawProcessor {
             height = height,
             characteristics = characteristics,
             captureResult = captureResult,
-            userExposureCompensation = userExposureCompensation,
+            userExposureBias = userExposureBias,
+            captureExposureCompensationEv = captureExposureCompensationEv,
             colorSpace = RawRenderingEngine.AdobeCurve.workingColorSpace,
         ).copy(
             whiteBalanceGains = dngWhiteBalance,
@@ -660,6 +664,8 @@ object RawProcessor {
         height: Int,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
+        /** Capture-request AE compensation in EV; CaptureResult is not authoritative here. */
+        captureExposureCompensationEv: Float = 0f,
         cfaPattern: Int = RawMetadata.CFA_RGGB,
         blackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 65535,
@@ -678,6 +684,13 @@ object RawProcessor {
         defaultCrop: Rect,
         physicalRawCrop: RawPhysicalCrop? = null,
     ): RawDngProfilePreparation? {
+        if (!captureExposureCompensationEv.isFinite()) {
+            PLog.e(
+                TAG,
+                "Invalid capture AE exposure compensation: $captureExposureCompensationEv",
+            )
+            return null
+        }
         val resolvedCfaPattern = resolveCfaPatternForMode(cfaPattern, cfaCorrectionMode)
         val resolvedBlackLevel = resolveBlackLevelForMode(blackLevel, blackLevelMode, customBlackLevel)
         val resolvedWhiteLevel = resolveWhiteLevelForMode(
@@ -710,6 +723,7 @@ object RawProcessor {
             height = height,
             characteristics = characteristics,
             captureResult = captureResult,
+            captureExposureCompensationEv = captureExposureCompensationEv,
         )
         val cameraStatsMetadata = (physicalRawCrop?.rebase(cameraStatsMetadataBase)
             ?: cameraStatsMetadataBase).copy(
@@ -727,6 +741,7 @@ object RawProcessor {
             baselineExposure = sourceBaselineExposureEv,
             shadowScale = 1f,
             defaultCrop = defaultCrop,
+            exposureCompensation = captureExposureCompensationEv,
             frameCount = 1,
         )
         val statsMetadata = if (pixelsIncludeLensShadingCorrection) {
@@ -901,6 +916,9 @@ object RawProcessor {
                 height = height,
                 characteristics = characteristics,
                 captureResult = captureResult,
+                captureExposureCompensationEv = captureInfo.exposureCompensation
+                    ?.takeIf(Float::isFinite)
+                    ?: 0f,
                 cfaPattern = cfaPattern,
                 blackLevel = blackLevel,
                 whiteLevel = whiteLevel,

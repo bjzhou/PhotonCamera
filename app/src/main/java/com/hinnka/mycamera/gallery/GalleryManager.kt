@@ -2271,6 +2271,7 @@ object GalleryManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         exposureBias: Float? = null,
+        captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false
     ) = withContext(Dispatchers.IO) {
         var rawBufferToRelease: ByteBuffer? = null
@@ -2344,7 +2345,10 @@ object GalleryManager {
                 height = sourceRawHeight,
                 characteristics = characteristics,
                 captureResult = resolvedCaptureResult,
+                userExposureBias = exposureBias,
+                captureExposureCompensationEv = captureExposureCompensationEv,
             ).let(physicalRawCrop::rebase).copy(
+                exposureCompensation = captureExposureCompensationEv,
                 coreImagingTuning = PhotonCoreImagingTuning.fromCustomProperties(
                     metadata.customProperties,
                 ),
@@ -2374,6 +2378,7 @@ object GalleryManager {
                 height = rawHeight,
                 characteristics = characteristics,
                 captureResult = resolvedCaptureResult,
+                captureExposureCompensationEv = captureExposureCompensationEv,
                 cfaPattern = sourceRawMetadata.cfaPattern,
                 blackLevel = sourceRawMetadata.blackLevel,
                 whiteLevel = sourceRawMetadata.whiteLevel.toInt(),
@@ -2740,6 +2745,7 @@ object GalleryManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         exposureBias: Float? = null,
+        captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false
     ) {
         // 根据图像格式处理
@@ -2775,9 +2781,10 @@ object GalleryManager {
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
-                    photoQuality,
-                    exposureBias,
-                    exportDngWithRawExport
+                    photoQuality = photoQuality,
+                    exposureBias = exposureBias,
+                    captureExposureCompensationEv = captureExposureCompensationEv,
+                    exportDngWithRawExport = exportDngWithRawExport,
                 )
             }
 
@@ -3294,6 +3301,7 @@ object GalleryManager {
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
         exposureBias: Float? = null,
+        captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
         frameExposureProducts: List<Double?> = emptyList(),
@@ -3335,13 +3343,16 @@ object GalleryManager {
                 .rawNoiseProfileManager
                 .resolveSelection(resolveRawNoiseProfileId(context, metadata))
             val captureRawMetadata = RawMetadata.create(
-                firstImageWidth,
-                firstImageHeight,
-                characteristics,
-                captureResult,
-                exposureBias,
-                RawDemosaicProcessor.getInstance().getRawColorSpace()
-            ).let(physicalRawCrop::rebase)
+                width = firstImageWidth,
+                height = firstImageHeight,
+                characteristics = characteristics,
+                captureResult = captureResult,
+                userExposureBias = exposureBias,
+                captureExposureCompensationEv = captureExposureCompensationEv,
+                colorSpace = RawDemosaicProcessor.getInstance().getRawColorSpace(),
+            ).let(physicalRawCrop::rebase).copy(
+                exposureCompensation = captureExposureCompensationEv,
+            )
             val rawMetadata = captureRawMetadata.withNoiseProfileSelection(noiseProfileSelection)
             val captureRawDefaultCrop = physicalRawCrop.outputBounds
             val captureBlackBorderCrop =
@@ -3661,6 +3672,7 @@ object GalleryManager {
                     height = finalStackResult.height,
                     characteristics = characteristics,
                     captureResult = captureResult,
+                    captureExposureCompensationEv = captureExposureCompensationEv,
                     cfaPattern = rawMetadata.cfaPattern,
                     blackLevel = FloatArray(4),
                     whiteLevel = 65535,
@@ -4440,6 +4452,7 @@ object GalleryManager {
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
         exposureBias: Float? = null,
+        captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
         frameExposureProducts: List<Double?> = emptyList(),
@@ -4484,16 +4497,17 @@ object GalleryManager {
                     chromaNoiseReductionValue,
                     photoQuality,
                     useSuperResolution,
-                    superResolutionScale,
-                    exposureBias,
-                    exportDngWithRawExport,
-                    capturePreviewThumbnail,
-                    frameExposureProducts,
-                    frameFocusDistances,
-                    rawStackFrames,
-                    rawMaxHdrFusionEnabled,
-                    rawMaxSpatialOutputMode,
-                    rawMaxMergeMethod,
+                    superResolutionScale = superResolutionScale,
+                    exposureBias = exposureBias,
+                    captureExposureCompensationEv = captureExposureCompensationEv,
+                    exportDngWithRawExport = exportDngWithRawExport,
+                    capturePreviewThumbnail = capturePreviewThumbnail,
+                    frameExposureProducts = frameExposureProducts,
+                    frameFocusDistances = frameFocusDistances,
+                    rawStackFrames = rawStackFrames,
+                    rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
+                    rawMaxSpatialOutputMode = rawMaxSpatialOutputMode,
+                    rawMaxMergeMethod = rawMaxMergeMethod,
                 )
             }
 

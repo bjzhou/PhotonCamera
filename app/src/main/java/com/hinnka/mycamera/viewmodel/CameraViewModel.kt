@@ -69,6 +69,7 @@ import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawCaptureExposureCompensationMetadata
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
@@ -5515,6 +5516,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 userPrefs = userPrefs,
             )
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
+            val captureExposureBias = state.value.exposureBias
+            val captureExposureCompensationEv = state.value.run {
+                exposureCompensation * getExposureCompensationStep()
+            }
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = MediaMetadata(
@@ -5539,9 +5544,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: HncsFilmCurveMode.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
-                customProperties = rawProcessingMetadataProperties(
-                    userPrefs,
-                    cameraController.getCurrentSensorPhysicalAreaMm2(),
+                customProperties = RawCaptureExposureCompensationMetadata.write(
+                    rawProcessingMetadataProperties(
+                        userPrefs,
+                        cameraController.getCurrentSensorPhysicalAreaMm2(),
+                    ),
+                    captureExposureCompensationEv,
                 ),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
@@ -5579,7 +5587,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
-                exposureBias = state.value.exposureBias,
+                exposureBias = captureExposureBias,
                 droMode = droModeString,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
@@ -5635,7 +5643,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQualityValue,
-                    exposureBias = state.value.exposureBias,
+                    exposureBias = captureExposureBias,
+                    captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport.value,
                 )
             }
@@ -6122,6 +6131,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 userPrefs = userPrefs,
             )
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
+            val captureExposureBias = state.value.exposureBias
+            val captureExposureCompensationEv = state.value.run {
+                exposureCompensation * getExposureCompensationStep()
+            }
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = MediaMetadata(
@@ -6146,9 +6159,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: HncsFilmCurveMode.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
-                customProperties = rawProcessingMetadataProperties(
-                    userPrefs,
-                    cameraController.getCurrentSensorPhysicalAreaMm2(),
+                customProperties = RawCaptureExposureCompensationMetadata.write(
+                    rawProcessingMetadataProperties(
+                        userPrefs,
+                        cameraController.getCurrentSensorPhysicalAreaMm2(),
+                    ),
+                    captureExposureCompensationEv,
                 ),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
@@ -6186,7 +6202,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
-                exposureBias = state.value.exposureBias,
+                exposureBias = captureExposureBias,
                 droMode = droModeString,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
@@ -6244,7 +6260,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoQualityValue,
                     useSuperResolution = useSuperRes,
                     superResolutionScale = superResScale,
-                    exposureBias = state.value.exposureBias,
+                    exposureBias = captureExposureBias,
+                    captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport.value,
                     capturePreviewThumbnail = previewThumbnail,
                     rawStackFrames = frames,

@@ -18,6 +18,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.RawCaptureExposureCompensationMetadata
 import com.hinnka.mycamera.utils.DeviceUtil
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -174,6 +175,7 @@ data class MediaMetadata(
             focalLength = focalLength?.substringBefore("mm")?.toFloatOrNull(),
             focalLength35mm = focalLength35mm?.substringBefore("mm")?.toIntOrNull(),
             exposureBias = exposureBias,
+            exposureCompensation = RawCaptureExposureCompensationMetadata.read(customProperties),
             exposureTime = parseExposureTime(shutterSpeed),
             software = software ?: "PhotonCamera",
             latitude = latitude,

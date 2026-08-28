@@ -1092,7 +1092,7 @@ internal object RawSceneExposureEstimator {
                     finalization = RawSceneExposureFinalization(
                         shotMinTetMs = fastMomentsStats.adjustedShotMinTetMs,
                         shotMaxTetMs = shotRange.maxTetMs,
-                        exposureCompensationEv = metadata.exposureBias,
+                        exposureCompensationEv = metadata.exposureCompensation,
                         maxHdrRatio = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
                         safeUnderexposureTetMs = highlightPreservationTetMs,
                     ),
@@ -1126,7 +1126,7 @@ internal object RawSceneExposureEstimator {
                         "idealShortTetMs=${fusion.idealShortTetMs} " +
                         "idealLongTetMs=${fusion.idealLongTetMs} " +
                         "idealPortraitTetMs=${fusion.idealPortraitTetMs} " +
-                        "exposureCompensationEv=${metadata.exposureBias} " +
+                        "exposureCompensationEv=${metadata.exposureCompensation} " +
                         "exposureCompensationGain=${fusion.exposureCompensationGain} " +
                         "compensatedShortTetMs=${fusion.compensatedShortTetMs} " +
                         "compensatedLongTetMs=${fusion.compensatedLongTetMs} " +

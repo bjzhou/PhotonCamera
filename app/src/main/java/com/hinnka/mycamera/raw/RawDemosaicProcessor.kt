@@ -212,7 +212,12 @@ class RawDemosaicProcessor {
             channelNoiseProfile = channelNoiseProfile,
             noiseProfileLayout = noiseProfileLayout,
             postRawSensitivityBoost = baseMetadata?.postRawSensitivityBoost ?: 1.0f,
-            exposureCompensation = baseMetadata?.exposureCompensation ?: 0f,
+            // DNG persists the capture AE compensation as ExposureBiasValue. Restore it into
+            // the process-local MGC ShotParams field; downstream ML AE reads only
+            // exposureCompensation, never exposureBias.
+            exposureCompensation = baseMetadata?.exposureCompensation
+                ?: dngRawData.exposureBias.takeIf(Float::isFinite)
+                ?: 0f,
             aeMode = baseMetadata?.aeMode ?: 1,
             afRegions = baseMetadata?.afRegions,
             defaultCrop = defaultCrop,

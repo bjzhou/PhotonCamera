@@ -253,7 +253,8 @@ data class RawMetadata(
             height: Int,
             characteristics: CameraCharacteristics,
             captureResult: CaptureResult,
-            userExposureCompensation: Float? = null,
+            userExposureBias: Float? = null,
+            captureExposureCompensationEv: Float = 0f,
             colorSpace: ColorSpace = ColorSpace.SRGB
         ): RawMetadata {
             // 1. 获取 CFA 排列模式
@@ -428,11 +429,12 @@ data class RawMetadata(
             // 8. 获取噪声模型
             val channelNoiseProfile = extractChannelNoiseProfile(captureResult)
 
-            // 9. 获取 AE 模式和曝光补偿
+            // 9. 获取 AE 模式。曝光补偿来自拍摄请求状态；部分设备不会把它回写到
+            // CaptureResult，不能把结果元数据当作权威来源。
             val aeMode = captureResult.get(CaptureResult.CONTROL_AE_MODE) ?: CaptureResult.CONTROL_AE_MODE_ON
-            val evComp = captureResult.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
-            val evStep = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) ?: Rational(1, 3)
-            val exposureCompensation = evComp * evStep.toFloat()
+            val exposureCompensation = captureExposureCompensationEv
+                .takeIf(Float::isFinite)
+                ?: 0f
 
             // 10. 获取 ISO 和快门
             val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
@@ -480,7 +482,7 @@ data class RawMetadata(
                 activeArray = activeArray,
                 aeMode = aeMode,
                 exposureCompensation = exposureCompensation,
-                exposureBias = userExposureCompensation ?: exposureCompensation,
+                exposureBias = userExposureBias ?: exposureCompensation,
                 iso = iso,
                 minimumSensitivityIso = minimumSensitivityIso,
                 maxAnalogSensitivity = maxAnalogSensitivity,
