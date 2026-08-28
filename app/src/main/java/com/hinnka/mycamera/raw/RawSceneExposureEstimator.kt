@@ -185,6 +185,12 @@ internal object RawSceneExposureMath {
     private const val METERING_U15_SCALE = 32768f
     // PrepareMlAeInput converts every color channel to ln(max(linearRgb, 0) + 1e-6).
     private const val MODEL_RGB_LOG_FLOOR = 1e-6f
+    // PrepareMlAeInput's advanced-channel fallback does not clear every unavailable semantic
+    // plane. Missing saliency is initialized to 0.05 (0x3D4CCCCD); portrait mask, skin type,
+    // skin mask, and the remaining semantic plane stay at zero. The learned models distinguish
+    // this sentinel from a real all-zero saliency map.
+    private const val MISSING_SALIENCY_VALUE = 0.05f
+    private const val SALIENCY_SEMANTIC_CHANNEL = 3
     // MeasureLogSceneBrightness uses the reflected-light calibration constant directly.
     private const val SCENE_BRIGHTNESS_CALIBRATION = 14.6
     private const val SCENE_BRIGHTNESS_LOG_FLOOR = 1e-4
@@ -326,8 +332,18 @@ internal object RawSceneExposureMath {
             destination.putFloat(modelLogColor(frame.rgb[offset + 1]))
             destination.putFloat(modelLogColor(frame.rgb[offset + 2]))
             destination.putFloat(logSceneBrightness)
-            // MGC explicitly runs the advanced model with zero-valued missing semantic inputs.
-            repeat(SEMANTIC_CHANNELS) { destination.putFloat(0f) }
+            // MGC forces the advanced network when semantic inputs are unavailable. Its channel
+            // order after RGB + log-scene-brightness is [3, 4, 5, 6, 7], where enum 6 is
+            // saliency and uses the non-zero missing-map sentinel below.
+            repeat(SEMANTIC_CHANNELS) { semanticChannel ->
+                destination.putFloat(
+                    if (semanticChannel == SALIENCY_SEMANTIC_CHANNEL) {
+                        MISSING_SALIENCY_VALUE
+                    } else {
+                        0f
+                    },
+                )
+            }
         }
         destination.rewind()
         return true
@@ -354,7 +370,15 @@ internal object RawSceneExposureMath {
             colorDestination.putFloat(modelLogColor(frame.rgb[offset + 1]))
             colorDestination.putFloat(modelLogColor(frame.rgb[offset + 2]))
             colorDestination.putFloat(logSceneBrightness)
-            repeat(SEMANTIC_CHANNELS) { semanticDestination.putFloat(0f) }
+            repeat(SEMANTIC_CHANNELS) { semanticChannel ->
+                semanticDestination.putFloat(
+                    if (semanticChannel == SALIENCY_SEMANTIC_CHANNEL) {
+                        MISSING_SALIENCY_VALUE
+                    } else {
+                        0f
+                    },
+                )
+            }
         }
         colorDestination.rewind()
         semanticDestination.rewind()
@@ -717,7 +741,13 @@ internal object RawSceneExposureMath {
         } ?: return null
 
         var clippedPixels = 0
-        var safeUnderexposure = Float.POSITIVE_INFINITY
+        // MGC ComputeSafeUnderexposure initializes this reduction with FLT_MAX. No clipped RAW
+        // samples therefore leaves underexposure unrestricted; ProcessAeStats can lower shot-min
+        // to the request/device floor and the learned ideal short TET remains authoritative.
+        // Using +Infinity here is not equivalent because the finite-result validation below would
+        // reinterpret the no-clipping case as a gain of one and incorrectly clamp finalShortTet
+        // back to the actual capture TET, reducing finalLongTet / finalShortTet.
+        var safeUnderexposure = Float.MAX_VALUE
         for (y in 0 until stats.height) {
             for (x in 0 until stats.width) {
                 val lscR = minimumLensShadingGain(metadata, stats, 0, x, y)

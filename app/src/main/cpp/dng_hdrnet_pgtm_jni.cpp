@@ -164,7 +164,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     JNIEnv* env, jobject, jfloatArray coefficients_array,
     jint source_grid_width, jint source_grid_height, jint source_grid_depth,
     jint coefficient_count, jint output_grid_width, jint output_grid_height,
-    jint point_count, jfloat hdr_ratio, jfloat table_source_to_short_gain,
+    jint point_count, jfloat hdr_ratio, jfloat source_to_short_gain,
     jfloat render_min_gain, jfloat render_max_gain,
     jfloat render_max_gain_blend_threshold,
     jfloat min_table_gain, jfloat max_table_gain,
@@ -180,8 +180,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       coefficient_count != 2 || output_grid_width <= 0 ||
       output_grid_height <= 0 || point_count <= 1 ||
       !std::isfinite(hdr_ratio) || hdr_ratio < 1.0f ||
-      !std::isfinite(table_source_to_short_gain) ||
-      table_source_to_short_gain <= 0.0f ||
+      !std::isfinite(source_to_short_gain) || source_to_short_gain <= 0.0f ||
       !std::isfinite(render_min_gain) || render_min_gain <= 0.0f ||
       !std::isfinite(render_max_gain) ||
       render_max_gain < render_min_gain ||
@@ -260,11 +259,11 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       const float source_luma =
           static_cast<float>(evaluated_point) / point_count;
       source_lumas[static_cast<size_t>(point)] = source_luma;
-      // source_luma is the BaselineExposure-restored DNG lookup coordinate. MGC's HDRNet input
-      // does not consume BaselineExposure, so table_source_to_short_gain has already divided that
-      // renderer-only gain out of final_short_tet / actual_tet.
+      // source_luma is already the BaselineExposure-restored DNG lookup coordinate. Move that
+      // captured/reference-domain luma into final-short space for bilateral slicing and affine
+      // evaluation using final_short_tet / actual_tet.
       const float short_luma =
-          std::clamp(source_luma * table_source_to_short_gain, 0.0f, 1.0f);
+          std::clamp(source_luma * source_to_short_gain, 0.0f, 1.0f);
       short_lumas[static_cast<size_t>(point)] = short_luma;
       const float guide =
           EvaluateGuide(short_luma, guide_shifts.data(), guide_slopes.data(),
@@ -287,7 +286,8 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       float* const gain_curve =
           output_gains.data() + static_cast<size_t>(cell) * point_count;
       for (int point = 0; point < point_count; ++point) {
-        const float source_luma = source_lumas[static_cast<size_t>(point)];
+        const float baseline_restored_source_luma =
+            source_lumas[static_cast<size_t>(point)];
         const float short_luma = short_lumas[static_cast<size_t>(point)];
         const AxisSample& range_sample =
             range_samples[static_cast<size_t>(point)];
@@ -324,15 +324,17 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
             std::clamp(short_luma * render_gain, 0.0f, 1.0f);
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
-        // The learned target is in final-short space, but the stored table gain is applied to the
-        // original baseline-restored DNG source. Dividing by source_luma bakes the missing physical
-        // short exposure into PGTM without changing BaselineExposure ownership.
-        float gain = std::clamp(pre_curve_target / source_luma, min_table_gain,
-                                max_table_gain);
+        // HDRNet saw BaselineExposure-restored input. Divide its target by that exact same
+        // restored source coordinate when baking PGTM. The table is applied before the DNG
+        // renderer's BaselineExposure, so the baseline gain enters and leaves this construction
+        // as a matched pair instead of becoming an extra output exposure gain.
+        float gain = std::clamp(
+            pre_curve_target / baseline_restored_source_luma, min_table_gain,
+            max_table_gain);
         if (diagnostic_mode >= 0) {
           const float mask =
-              DiagnosticMask(source_luma, diagnostic_start, diagnostic_end,
-                             diagnostic_feather);
+              DiagnosticMask(baseline_restored_source_luma, diagnostic_start,
+                             diagnostic_end, diagnostic_feather);
           gain = diagnostic_mode == 0 ? Lerp(1.0f, gain, mask)
                                       : Lerp(gain, 1.0f, mask);
           gain = std::clamp(gain, min_table_gain, max_table_gain);

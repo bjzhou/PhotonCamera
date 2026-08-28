@@ -952,7 +952,8 @@ internal object DngPhotonProfileGainTableInputShader {
         uniform ivec2 uImageSize;
         uniform ivec4 uStatsBounds;
         uniform mat3 uColorCorrectionMatrix;
-        uniform float uHdrNetInputGain;
+        uniform float uBaselineGain;
+        uniform float uSourceToShortGain;
         uniform float uHdrRatio;
         uniform int uHueSatEnabled;
         uniform ivec3 uHueSatDivisions;
@@ -1051,12 +1052,12 @@ internal object DngPhotonProfileGainTableInputShader {
                     ++sampleCount;
                 }
             }
-            // Match HdrPipeline::Run: the original HDRNet input receives only
-            // final_short_tet / actual_tet (plus RAW white-level normalization upstream).
-            // BaselineExposure is DNG render metadata and is not an HDRNet input parameter.
-            vec3 cameraRgb =
-                (cameraRgbSum / float(max(sampleCount, 1))) *
-                    uHdrNetInputGain;
+            // Restore source-domain normalization first, then move that restored brightness into
+            // final-short space. PGTM generation later divides its target by the same
+            // baseline-restored source luma, so BaselineExposure cannot shift the final result.
+            vec3 storedCameraRgb = cameraRgbSum / float(max(sampleCount, 1));
+            vec3 baselineRestoredCameraRgb = storedCameraRgb * uBaselineGain;
+            vec3 cameraRgb = baselineRestoredCameraRgb * uSourceToShortGain;
             vec3 profileRgb = clamp(
                 uColorCorrectionMatrix * cameraRgb,
                 vec3(0.0),
@@ -1623,8 +1624,12 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 0,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHdrNetInputGain"),
-                plan.hdrNetInputGain,
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uBaselineGain"),
+                plan.baselineGain,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uSourceToShortGain"),
+                plan.sourceToShortGain,
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uHdrRatio"),
@@ -1696,9 +1701,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
                     "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
                     "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
-                    "hdrNetInputGain=${plan.hdrNetInputGain} " +
-                    "tableSourceToShortGain=${plan.tableSourceToShortGain} " +
-                    "baselineAppliedToHdrNetInput=false " +
+                    "sourceToShortGain=${plan.sourceToShortGain} " +
+                    "hdrNetTotalInputGain=${plan.baselineGain * plan.sourceToShortGain} " +
+                    "baselineAppliedToHdrNetInput=true " +
+                    "pgtmGainDenominator=BASELINE_RESTORED_SOURCE_LUMA " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
                     "processingBounds=$stage3Bounds samplingArea=$samplingArea " +
                     "inputMs=${(inputReadyNs - totalStartNs) / 1_000_000f} " +

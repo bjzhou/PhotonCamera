@@ -3674,6 +3674,7 @@ object GalleryManager {
                         defaultDenoised.pixelsIncludeLensShadingCorrection,
                     options = profileOptions,
                     defaultCrop = dngDefaultCrop,
+                    physicalRawCrop = physicalRawCrop,
                 )
                 if (dngProfilePreparation == null) {
                     PLog.e(TAG, "Failed to prepare shared RAW render/DNG profile")

@@ -100,9 +100,11 @@ internal object DngPhotonProfileGainTableGenerator {
     /**
      * Plans a 64 x 48 PGTM grid resampled from MGC HDRNet's fixed 16 x 12 coefficient grid.
      *
-     * MGC prepares HDRNet with short_tet / actual_tet and does not pass DNG BaselineExposure.
-     * DNG renderers nevertheless multiply the PGTM lookup coordinate by BaselineExposure, so the
-     * table-domain short gain must divide that renderer-only normalization back out.
+     * HDRNet runs in the final-short-exposure linear domain. The source DNG can carry a
+     * source-domain BaselineExposure normalization (for example, Bento's ultrashort output), so
+     * that baseline must be restored before [sourceToShortGain] moves the image into final-short
+     * space. PGTM then divides the learned target by the same baseline-restored DNG source luma;
+     * this matched multiply/divide keeps the rendered target invariant to BaselineExposure.
      */
     fun hdrNetPlan(
         sourceWidth: Int,
@@ -136,8 +138,7 @@ internal object DngPhotonProfileGainTableGenerator {
             mapInputWeights = HDRNET_LUMA_WEIGHTS.copyOf(),
             gamma = 1f,
             baselineGain = baselineGain,
-            hdrNetInputGain = sourceToShortGain,
-            tableSourceToShortGain = sourceToShortGain / baselineGain,
+            sourceToShortGain = sourceToShortGain,
             // The native MGC path builds the long-exposure guide from a ratio of at least one.
             hdrRatio = hdrRatio.coerceAtLeast(1f),
             diagnosticBand = diagnosticBand?.sanitized(),
@@ -400,10 +401,8 @@ internal data class HdrNetProfileGainTablePlan(
     val mapInputWeights: FloatArray,
     val gamma: Float,
     val baselineGain: Float,
-    /** Exact MGC HDRNet input gain: final_short_tet / actual_tet. */
-    val hdrNetInputGain: Float,
-    /** Same gain expressed against DNG's BaselineExposure-restored PGTM table coordinate. */
-    val tableSourceToShortGain: Float,
+    /** Gain from the baseline-restored captured/reference exposure to final-short exposure. */
+    val sourceToShortGain: Float,
     val hdrRatio: Float,
     val diagnosticBand: DngPhotonProfileGainTableGenerator.DiagnosticBand?,
 ) {
@@ -414,8 +413,7 @@ internal data class HdrNetProfileGainTablePlan(
         require(mapInputWeights.size == 5 && mapInputWeights.all { it.isFinite() })
         require(gamma.isFinite() && gamma in 0.125f..8f)
         require(baselineGain.isFinite() && baselineGain > 0f)
-        require(hdrNetInputGain.isFinite() && hdrNetInputGain > 0f)
-        require(tableSourceToShortGain.isFinite() && tableSourceToShortGain > 0f)
+        require(sourceToShortGain.isFinite() && sourceToShortGain > 0f)
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
     }
 
