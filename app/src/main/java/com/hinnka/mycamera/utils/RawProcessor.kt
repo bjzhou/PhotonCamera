@@ -763,6 +763,17 @@ object RawProcessor {
             colorCorrectionMatrix = meteringRenderPlan.colorCorrectionMatrix.copyOf(),
             cameraWhite = meteringRenderPlan.cameraWhite.copyOf(),
         )
+        val meteringFastMomentsRawStats = fastMomentsRawStats?.let { stats ->
+            val baseFrameMetering = stats.baseFrameMetering ?: return@let stats
+            stats.copy(
+                baseFrameMetering = baseFrameMetering.copy(
+                    lensShadingMap = cameraStatsMetadata.lensShadingMap?.copyOf(),
+                    lensShadingMapWidth = cameraStatsMetadata.lensShadingMapWidth,
+                    lensShadingMapHeight = cameraStatsMetadata.lensShadingMapHeight,
+                    lensShadingMapGrid = cameraStatsMetadata.lensShadingMapGrid?.copyOf(),
+                ),
+            )
+        }
         val captureProfile = options.captureProfilePreparer?.prepare(
             com.hinnka.mycamera.raw.RawDngCaptureProfileInput(
                 rawData = rawBuffer?.duplicate()?.order(ByteOrder.nativeOrder()),
@@ -773,7 +784,7 @@ object RawProcessor {
                 metadata = captureProfileMetadata.copy(profileGainTableMap = null),
                 meteringRenderPlan = meteringRenderPlan,
                 gpuLinearRgbSource = gpuLinearRgbSource,
-                fastMomentsRawStats = fastMomentsRawStats,
+                fastMomentsRawStats = meteringFastMomentsRawStats,
                 sceneExposureDeviceLimits = RawSceneExposureDeviceLimits
                     .fromCameraCharacteristics(characteristics),
             )

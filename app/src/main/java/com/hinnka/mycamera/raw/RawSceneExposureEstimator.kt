@@ -17,6 +17,16 @@ internal data class RawSceneLinearFrame(
 )
 
 /** The 1/16-resolution RAW-domain statistics consumed only by Fast Moments mode 2. */
+data class RawSceneFastMomentsMeteringFrame(
+    /** 64 x 64 sensor-normalized camera RGB before LSC, AWB, rgb2rgb, and U15 conversion. */
+    val sensorRgb: FloatArray,
+    /** Capture-time gain map owned by this metering frame, independent of fused-pixel LSC. */
+    val lensShadingMap: FloatArray? = null,
+    val lensShadingMapWidth: Int = 0,
+    val lensShadingMapHeight: Int = 0,
+    val lensShadingMapGrid: FloatArray? = null,
+)
+
 data class RawSceneFastMomentsRawStats(
     val width: Int,
     val height: Int,
@@ -30,6 +40,11 @@ data class RawSceneFastMomentsRawStats(
     /** Normalized source bounds represented by this statistics surface. */
     val sourceBounds: FloatArray,
     val sourceRotationDegrees: Int,
+    /**
+     * Optional metering surface from the selected base RAW. Carrying it alongside the clipping
+     * surface prevents ML AE from accidentally observing the merged LinearRaw image.
+     */
+    val baseFrameMetering: RawSceneFastMomentsMeteringFrame? = null,
 )
 
 /** Capture-side value consumed by MGC HDRNet. */
@@ -161,8 +176,11 @@ internal object RawSceneExposureMath {
     // ISO ranges are not part of the DNG image contract and must not be read from the current phone.
     const val DNG_REFERENCE_SENSITIVITY_ISO = 100
 
-    // MGC's low-resolution RGB scene measurement uses ten U15 code values as its floor.
-    private const val SIGNAL_FLOOR = 10f / 32767f
+    // MGC stores its 64 x 64 metering RGB as U15 and converts it with 1/32768. Both scene
+    // brightness measurement and PrepareMlAeInput consume that same normalized surface.
+    private const val SIGNAL_FLOOR = 10f / 32768f
+    private const val METERING_U15_MAX = 32767
+    private const val METERING_U15_SCALE = 32768f
     // PrepareMlAeInput converts every color channel to ln(max(linearRgb, 0) + 1e-6).
     private const val MODEL_RGB_LOG_FLOOR = 1e-6f
     // MeasureLogSceneBrightness uses the reflected-light calibration constant directly.
@@ -328,6 +346,84 @@ internal object RawSceneExposureMath {
         colorDestination.rewind()
         semanticDestination.rewind()
         return true
+    }
+
+    /**
+     * Reproduces RawToLoResRgb's post-box-filter color contract.
+     *
+     * [cameraRgb] is either the selected base frame's unshaded sensor RGB or an already
+     * lens-shading-corrected camera-RGB fallback. MGC applies spatial gain and AWB before its
+     * unit clamp, then applies AwbInfo.rgb2rgb and clamps again before storing U15.
+     */
+    fun prepareFastMomentsMeteringRgb(
+        cameraRgb: FloatArray,
+        width: Int,
+        height: Int,
+        metadata: RawMetadata,
+        rgbGains: FloatArray,
+        rgbTransform: FloatArray,
+        lensShadingStats: RawSceneFastMomentsRawStats? = null,
+    ): FloatArray? {
+        val pixelCount = width * height
+        if (width != INPUT_WIDTH || height != INPUT_HEIGHT ||
+            cameraRgb.size != pixelCount * 3 ||
+            rgbGains.size < 3 || rgbTransform.size != 9 ||
+            cameraRgb.any { !it.isFinite() } ||
+            rgbGains.take(3).any { !it.isFinite() || it <= 0f } ||
+            rgbTransform.any { !it.isFinite() }
+        ) {
+            return null
+        }
+        if (lensShadingStats != null && lensShadingStats.sourceBounds.size < 4) return null
+
+        val output = FloatArray(cameraRgb.size)
+        for (y in 0 until height) {
+            val v = (y + 0.5f) / height.toFloat()
+            for (x in 0 until width) {
+                val u = (x + 0.5f) / width.toFloat()
+                val inputOffset = (y * width + x) * 3
+                val lscRed = lensShadingStats?.let { stats ->
+                    lensShadingGainAtStatsUv(metadata, stats, 0, u, v)
+                } ?: 1f
+                val lscGreen = lensShadingStats?.let { stats ->
+                    0.5f * (
+                        lensShadingGainAtStatsUv(metadata, stats, 1, u, v) +
+                            lensShadingGainAtStatsUv(metadata, stats, 2, u, v)
+                        )
+                } ?: 1f
+                val lscBlue = lensShadingStats?.let { stats ->
+                    lensShadingGainAtStatsUv(metadata, stats, 3, u, v)
+                } ?: 1f
+                if (!validPositiveTets(lscRed, lscGreen, lscBlue)) return null
+
+                val red = (cameraRgb[inputOffset] * lscRed * rgbGains[0]).coerceIn(0f, 1f)
+                val green = (cameraRgb[inputOffset + 1] * lscGreen * rgbGains[1])
+                    .coerceIn(0f, 1f)
+                val blue = (cameraRgb[inputOffset + 2] * lscBlue * rgbGains[2])
+                    .coerceIn(0f, 1f)
+                val transformedRed = (
+                    rgbTransform[0] * red + rgbTransform[1] * green +
+                        rgbTransform[2] * blue
+                    ).coerceIn(0f, 1f)
+                val transformedGreen = (
+                    rgbTransform[3] * red + rgbTransform[4] * green +
+                        rgbTransform[5] * blue
+                    ).coerceIn(0f, 1f)
+                val transformedBlue = (
+                    rgbTransform[6] * red + rgbTransform[7] * green +
+                        rgbTransform[8] * blue
+                    ).coerceIn(0f, 1f)
+                if (!transformedRed.isFinite() || !transformedGreen.isFinite() ||
+                    !transformedBlue.isFinite()
+                ) {
+                    return null
+                }
+                output[inputOffset] = toMeteringU15(transformedRed)
+                output[inputOffset + 1] = toMeteringU15(transformedGreen)
+                output[inputOffset + 2] = toMeteringU15(transformedBlue)
+            }
+        }
+        return output
     }
 
     fun modelLogGainToLinear(logGain: Float): Float? {
@@ -781,6 +877,13 @@ internal object RawSceneExposureMath {
     private fun modelLogColor(linearColor: Float): Float =
         kotlin.math.ln(linearColor.coerceAtLeast(0f) + MODEL_RGB_LOG_FLOOR)
 
+    private fun toMeteringU15(value: Float): Float {
+        val code = kotlin.math.round(value * METERING_U15_MAX)
+            .toInt()
+            .coerceIn(0, METERING_U15_MAX)
+        return code.toFloat() / METERING_U15_SCALE
+    }
+
     private fun validTetRange(minTetMs: Float, maxTetMs: Float): Boolean =
         minTetMs.isFinite() && maxTetMs.isFinite() && minTetMs > 0f && maxTetMs >= minTetMs
 
@@ -908,10 +1011,10 @@ internal object RawSceneExposureEstimator {
                     PLog.e(TAG, "Fast Moments process-AE-stats returned invalid values")
                     return@synchronized null
                 }
-                // Fast Moments mode 2 keeps the pre-finalizer short ideal when RAW statistics
-                // lower the shot minimum. MGC's enabled production flag passes the smaller of
-                // those two TETs into ComputeAeResults as its highlight-preservation TET.
-                val highlightPreservationTetMs = minOf(
+                // Fast Moments mode 2 passes the higher of the learned short TET and the
+                // RAW-stat-adjusted shot minimum into the common highlight-preservation step.
+                // This is the FMAX immediately before MGC's ComputeAeResults finalizer.
+                val highlightPreservationTetMs = maxOf(
                     ideals.shortTetMs,
                     fastMomentsStats.adjustedShotMinTetMs,
                 )
@@ -946,6 +1049,7 @@ internal object RawSceneExposureEstimator {
                 PLog.i(
                     TAG,
                     "RAW_SCENE_EXPOSURE stage=MGC_FAST_MOMENTS_AE_FINALIZE " +
+                        "mode=2 " +
                         "computeAeResultsProcessRawStats=true " +
                         "processAeStatsExecuted=${fastMomentsStats.processAeStatsExecuted} " +
                         "shortLnGain=${branches.shortLogGain} " +

@@ -92,6 +92,36 @@ internal object MgcSpatialMergeTuning {
     }
 
     /**
+     * Special-exposure scale consumed by AdjustRejectionWeightsHalide.
+     *
+     * SpatialMergeUtils at libgcastartup.so+0x38b1274 compares the reference and
+     * exposure-transported alternate shadow variances and does not apply the planning-time
+     * maximum-weight cap. AdjustRejectionWeights uses this value to limit the independent
+     * RAW/4 RGB acceptance map before MergeRgbRaw16F16 applies ExpectedMergeWeight. MGC skips
+     * that stage for ordinary same-exposure frames, so callers must not apply this scale to
+     * every temporal slice.
+     */
+    fun rejectionWeightScale(
+        baseReadVariance: Float,
+        alternateReadVariance: Float,
+        exposureScale: Float,
+        frameWeightExponent: Float = DEFAULT_FRAME_WEIGHT_EXPONENT,
+    ): Float {
+        require(baseReadVariance.isFinite() && baseReadVariance >= 0f)
+        require(alternateReadVariance.isFinite() && alternateReadVariance >= 0f)
+        require(exposureScale.isFinite() && exposureScale > 0f)
+        require(frameWeightExponent.isFinite() && frameWeightExponent >= 0f)
+        val scaledAlternateRead = alternateReadVariance * exposureScale * exposureScale
+        check(scaledAlternateRead > 0f) {
+            "MGC Spatial requires positive alternate shadow/read variance"
+        }
+        return (baseReadVariance / scaledAlternateRead)
+            .pow(frameWeightExponent)
+            .takeIf { it.isFinite() && it >= 0f }
+            ?: 1f
+    }
+
+    /**
      * Spatial ExpectedMergeWeight at libgcastartup.so+0x386ba74.
      *
      * The normal Spatial path does not pass [maximumMergeWeight] to MergeBayer/Spatial RGB.

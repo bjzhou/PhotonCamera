@@ -91,6 +91,18 @@ data class RawMetadata(
      */
     val colorCorrectionMatrix: FloatArray,
 
+    /** Per-frame Camera2 COLOR_CORRECTION_GAINS in canonical [R, Gr, Gb, B] order. */
+    val camera2ColorCorrectionGains: FloatArray? = null,
+
+    /**
+     * Per-frame Camera2 COLOR_CORRECTION_TRANSFORM in row-major RGB order.
+     *
+     * This is deliberately kept separate from [colorCorrectionMatrix]. The latter is the
+     * DNG/DCP camera-to-working transform used for rendering, while MGC's RawToLoResRgb AE path
+     * consumes the CaptureResult transform together with the per-frame RGGB gains.
+     */
+    val camera2ColorCorrectionTransform: FloatArray? = null,
+
     /**
      * DNG SDK CameraWhite clip vector for camera RGB before CameraToPCS.
      */
@@ -376,6 +388,22 @@ data class RawMetadata(
             // 5. 获取色彩校正矩阵
             // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
             val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, captureResult, colorSpace)
+            val camera2ColorCorrectionGains = wbGains
+                ?.let { gains ->
+                    floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue)
+                }
+                ?.takeIf { gains ->
+                    gains.size >= 4 && gains.take(4).all { gain ->
+                        gain.isFinite() && gain > 0f
+                    }
+                }
+                ?.copyOf(4)
+            val camera2ColorCorrectionTransform = captureResult
+                .get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
+                ?.let(::extractCCM)
+                ?.takeIf { matrix ->
+                    matrix.size == 9 && matrix.all(Float::isFinite)
+                }
             val cameraWhite = computeCameraWhiteFromCharacteristics(characteristics, captureResult)
             val whitePointXy = computeWhiteXyFromCharacteristics(characteristics, captureResult)
             val colorTemperature = whitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
@@ -432,6 +460,8 @@ data class RawMetadata(
                 whiteBalanceGains = whiteBalanceGains,
                 preMul = whiteBalanceGains.copyOf(),
                 colorCorrectionMatrix = colorCorrectionMatrix,
+                camera2ColorCorrectionGains = camera2ColorCorrectionGains,
+                camera2ColorCorrectionTransform = camera2ColorCorrectionTransform,
                 cameraWhite = cameraWhite,
                 whitePointXy = whitePointXy,
                 colorTemperature = colorTemperature,
@@ -1091,6 +1121,19 @@ data class RawMetadata(
         if (whiteLevel != other.whiteLevel) return false
         if (!whiteBalanceGains.contentEquals(other.whiteBalanceGains)) return false
         if (!colorCorrectionMatrix.contentEquals(other.colorCorrectionMatrix)) return false
+        if (camera2ColorCorrectionGains != null) {
+            if (other.camera2ColorCorrectionGains == null) return false
+            if (!camera2ColorCorrectionGains.contentEquals(other.camera2ColorCorrectionGains)) {
+                return false
+            }
+        } else if (other.camera2ColorCorrectionGains != null) return false
+        if (camera2ColorCorrectionTransform != null) {
+            if (other.camera2ColorCorrectionTransform == null) return false
+            if (!camera2ColorCorrectionTransform.contentEquals(
+                    other.camera2ColorCorrectionTransform,
+                )
+            ) return false
+        } else if (other.camera2ColorCorrectionTransform != null) return false
         if (!cameraWhite.contentEquals(other.cameraWhite)) return false
         if (baselineExposure != other.baselineExposure) return false
         if (shadowScale != other.shadowScale) return false
@@ -1131,6 +1174,8 @@ data class RawMetadata(
         result = 31 * result + whiteLevel.hashCode()
         result = 31 * result + whiteBalanceGains.contentHashCode()
         result = 31 * result + colorCorrectionMatrix.contentHashCode()
+        result = 31 * result + (camera2ColorCorrectionGains?.contentHashCode() ?: 0)
+        result = 31 * result + (camera2ColorCorrectionTransform?.contentHashCode() ?: 0)
         result = 31 * result + cameraWhite.contentHashCode()
         result = 31 * result + (lensShadingMap?.contentHashCode() ?: 0)
         result = 31 * result + lensShadingMapWidth

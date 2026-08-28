@@ -8,9 +8,9 @@ import com.hinnka.mycamera.utils.PLog
  *
  * Despite the historical class name, this path no longer compares a viewfinder thumbnail with a
  * rendered RAW preview. The renderer supplies one colorized, scene-linear 64 x 64 image from the
- * exact RAW frame being written. A device-independent scene model predicts the final long/short
- * TET ratio from the full spatial image and its physical scene-brightness coordinate. This path
- * never produces or changes BaselineExposure.
+ * selected base RAW before fusion. A device-independent scene model predicts the final long/short
+ * TET ratio from the full spatial image and its physical scene-brightness coordinate. This path is
+ * Fast Moments mode 2 and never produces or changes BaselineExposure.
  */
 internal object RawSceneExposureMatcher {
     private const val TAG = "RawSceneExposureMatcher"

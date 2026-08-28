@@ -516,6 +516,35 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
+     * MergeRgbRaw16F16 consumes GenerateRejectionTexture's independent RAW/4 acceptance slice.
+     * DilateMask instead consumes the complementary rejection map and produces the separate
+     * RAW/8 Bayer/filtered weight. Keep the two products distinct at their common boundary.
+     * The caller passes an identity scale for ordinary frames because MGC bypasses
+     * AdjustRejectionWeights on its same-exposure path.
+     */
+    val rejectionAcceptance = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uReverseWeight;
+        uniform ivec2 uSize;
+        uniform float uFrameScale;
+        out float oAcceptance;
+        void main() {
+            ivec2 p = clamp(
+                ivec2(gl_FragCoord.xy),
+                ivec2(0),
+                uSize - ivec2(1)
+            );
+            float acceptance = 1.0 - texelFetch(uReverseWeight, p, 0).r;
+            // AdjustRejectionWeightsHalide never raises the original rejection acceptance.
+            // Its signal-invariant branch divides special-exposure frames by the shadow-
+            // variance ratio. Same-exposure frames reach this shader with an identity scale.
+            oAcceptance = acceptance / max(uFrameScale, 1.0);
+        }
+    """.trimIndent()
+
+    /**
      * Rejection::Downsample2x. GenerateRejectionTextureCpu applies this to pixel-difference
      * immediately after DilateMask has moved the rejection result onto the merge-weight grid.
      */
@@ -1664,6 +1693,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform ivec2 uRawSize;
         uniform ivec2 uBayerSize;
         uniform ivec2 uOutputSize;
+        uniform int uBayerQuadsPerTexel;
         uniform vec4 uPhaseClippingLevels;
 
         out float oClippingMask;
@@ -1689,9 +1719,13 @@ internal object GlesMgcRawSpatialShaders {
                 return;
             }
 
-            // One merge-weight texel covers 4x4 Bayer quads. Use its center in reference
-            // coordinates, then inspect the 3x3 source neighborhood consumed by MergeBayer.
-            ivec2 referenceQuad = min(outputPixel * 4 + ivec2(2), uBayerSize - ivec2(1));
+            // MergeBayer's RAW/8 weight covers 4x4 Bayer quads; MergeRGB's independent
+            // RAW/4 rejection slice covers 2x2. Use the selected domain's center.
+            ivec2 referenceQuad = min(
+                outputPixel * uBayerQuadsPerTexel +
+                    ivec2(uBayerQuadsPerTexel / 2),
+                uBayerSize - ivec2(1)
+            );
             vec2 referenceUv =
                 (vec2(referenceQuad) + vec2(0.5)) / vec2(uBayerSize);
             vec2 flowUv =
@@ -2751,10 +2785,11 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * ConvertAlignmentHalide (0x362479c): preserve the sparse alignment grid while converting
-     * Bayer-quad displacements to normalized UV and storing the local 3x3 flow range in B.
-     * Consumers interpolate this texture through their flow_scale_offset; guarded interpolation
-     * belongs exclusively to SpatialBayer merge.
+     * ConvertAlignmentHalide (0x362479c): preserve each final alignment vector independently
+     * while converting Bayer-quad displacements to normalized UV and storing the local 3x3 flow
+     * range in B. V25 creates this RGBA16F output with GL_NEAREST at 0x34f7d18 after invoking the
+     * AOT at 0x34f7c6c. GenerateRejectionTexture therefore observes the same tile-owned vector
+     * that MergeRgbRaw16F16 applies to each 16-RAW-pixel tile.
      */
     val convertAlignment = """
         #version 300 es
@@ -2816,15 +2851,20 @@ internal object GlesMgcRawSpatialShaders {
         #version 300 es
         precision highp float;
         precision highp int;
-        uniform sampler2D uWeight;
+        uniform sampler2D uRejection;
         uniform ivec2 uOutputSize;
         uniform ivec2 uOutputOrigin;
-        uniform int uIdentityWeight;
+        uniform int uIdentityRejection;
+        uniform int uExactDomain;
         out float oRejection;
         void main() {
             vec2 local = gl_FragCoord.xy - vec2(uOutputOrigin);
             vec2 uv = local / vec2(uOutputSize);
-            oRejection = uIdentityWeight != 0 ? 1.0 : texture(uWeight, uv).r;
+            oRejection = uIdentityRejection != 0
+                ? 1.0
+                : (uExactDomain != 0
+                    ? texelFetch(uRejection, ivec2(local), 0).r
+                    : texture(uRejection, uv).r);
         }
     """.trimIndent()
 
@@ -2844,6 +2884,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform highp usampler2D uRaw;
         uniform ivec2 uRawSize;
         uniform ivec2 uGridSize;
+        uniform ivec2 uTileOffset;
         uniform int uCfaPattern;
         uniform float uBlackLevelGreen;
         uniform float uNoiseQuadratic;
@@ -2883,7 +2924,9 @@ internal object GlesMgcRawSpatialShaders {
             return value;
         }
         void main() {
-            ivec2 tile = ivec2(gl_FragCoord.xy);
+            // The original AOT evaluates one extra cell on every side before its
+            // UnblockerBlur pass. uTileOffset is (-1, -1) for that padded domain.
+            ivec2 tile = ivec2(gl_FragCoord.xy) + uTileOffset;
             ivec2 origin = tile * 8;
             float preSum = 0.0;
             float preSquareSum = 0.0;
@@ -2932,6 +2975,53 @@ internal object GlesMgcRawSpatialShaders {
             // The AOT converts with fcvtzs before storing U8. Quantize explicitly so the
             // normalized GL_R8 conversion cannot round a boundary upward.
             oUnblocker = floor(clamp(mapped, 0.0, 1.0) * 255.0) / 255.0;
+        }
+    """.trimIndent()
+
+    /**
+     * Final UnblockerBlur stage used by both the ordinary three-stage path and the
+     * direct UnblockerRaw10Halide path. The AOT implements this as U8 NEON halving
+     * adds, so retain its intermediate floor/ceil rounding rather than replacing it
+     * with a floating-point Gaussian sample.
+     */
+    val unblockerBlur = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uPreBlur;
+        out float oUnblocker;
+
+        int valueAt(ivec2 p) {
+            return int(floor(texelFetch(uPreBlur, p, 0).r * 255.0 + 0.5));
+        }
+        int halvingAdd(int a, int b) {
+            return (a + b) >> 1;
+        }
+        int roundedHalvingAdd(int a, int b) {
+            return (a + b + 1) >> 1;
+        }
+        void main() {
+            // The output cell (x,y) is centered at (x+1,y+1) in the padded map.
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            int topLeft = valueAt(p + ivec2(0, 0));
+            int top = valueAt(p + ivec2(1, 0));
+            int topRight = valueAt(p + ivec2(2, 0));
+            int left = valueAt(p + ivec2(0, 1));
+            int center = valueAt(p + ivec2(1, 1));
+            int right = valueAt(p + ivec2(2, 1));
+            int bottomLeft = valueAt(p + ivec2(0, 2));
+            int bottom = valueAt(p + ivec2(1, 2));
+            int bottomRight = valueAt(p + ivec2(2, 2));
+
+            int leftPair = halvingAdd(topLeft, bottomLeft);
+            int rightPair = halvingAdd(topRight, bottomRight);
+            int leftColumn = roundedHalvingAdd(leftPair, left);
+            int rightColumn = roundedHalvingAdd(rightPair, right);
+            int outerColumns = roundedHalvingAdd(leftColumn, rightColumn);
+            int middlePair = halvingAdd(top, bottom);
+            int middleColumn = roundedHalvingAdd(middlePair, center);
+            int filtered = halvingAdd(outerColumns, middleColumn);
+            oUnblocker = float(filtered) / 255.0;
         }
     """.trimIndent()
 

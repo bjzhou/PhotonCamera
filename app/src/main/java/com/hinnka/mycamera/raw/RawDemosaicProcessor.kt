@@ -172,6 +172,12 @@ class RawDemosaicProcessor {
             whiteBalanceGains = whiteBalanceGains,
             preMul = preMul,
             colorCorrectionMatrix = colorCorrectionMatrix,
+            camera2ColorCorrectionGains = baseMetadata
+                ?.camera2ColorCorrectionGains
+                ?.copyOf(),
+            camera2ColorCorrectionTransform = baseMetadata
+                ?.camera2ColorCorrectionTransform
+                ?.copyOf(),
             cameraWhite = cameraWhite,
             whitePointXy = dngRawData.whitePointXy
                 .takeIf { it.size >= 2 && it.take(2).all(Float::isFinite) }
@@ -444,7 +450,6 @@ class RawDemosaicProcessor {
                 rawTextureIdForStats = meteringRawTexture,
                 rawSamplesPerPixel = 1,
                 colorCorrectionMatrix = identity,
-                cameraWhite = metadata.cameraWhite,
                 profileToLinearSrgbTransform = identity,
                 outputSourceBounds = Rect(0, 0, programSize.width, programSize.height),
             ) != null
@@ -3107,10 +3112,8 @@ class RawDemosaicProcessor {
                         rawSamplesPerPixel = actualSamplesPerPixel,
                         suppliedFastMomentsRawStats = fastMomentsRawStats,
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
-                        cameraWhite = linearCameraWhite,
                         profileToLinearSrgbTransform = profileToLinearSrgbTransform,
                         outputSourceBounds = processingBounds,
-                        outputRotation = actualRotation,
                         stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                     )
                 }
@@ -3222,10 +3225,8 @@ class RawDemosaicProcessor {
                     rawTextureIdForStats = rawTextureId,
                     rawSamplesPerPixel = actualSamplesPerPixel,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
-                    cameraWhite = linearCameraWhite,
                     profileToLinearSrgbTransform = profileToLinearSrgbTransform,
                     outputSourceBounds = outputSourceBounds,
-                    outputRotation = actualRotation,
                     stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                 )
                 val estimatedHdrRatio = estimatedExposure?.hdrRatio
@@ -7796,58 +7797,165 @@ class RawDemosaicProcessor {
         rawSamplesPerPixel: Int,
         suppliedFastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
         colorCorrectionMatrix: FloatArray,
-        cameraWhite: FloatArray,
         profileToLinearSrgbTransform: FloatArray,
         outputSourceBounds: Rect,
-        outputRotation: Int = 0,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
     ): RawSceneExposureResult? {
         return try {
             val width = RawSceneExposureMath.INPUT_WIDTH
             val height = RawSceneExposureMath.INPUT_HEIGHT
-            setupLinearExposurePreviewFramebuffer(width, height)
             val normalizedBounds = floatArrayOf(
                 outputSourceBounds.left.toFloat() / metadata.width.toFloat(),
                 outputSourceBounds.top.toFloat() / metadata.height.toFloat(),
                 outputSourceBounds.right.toFloat() / metadata.width.toFloat(),
                 outputSourceBounds.bottom.toFloat() / metadata.height.toFloat(),
             )
-            val areaSampleFootprint = floatArrayOf(
-                (normalizedBounds[2] - normalizedBounds[0]) / width.toFloat(),
-                (normalizedBounds[3] - normalizedBounds[1]) / height.toFloat(),
+            val camera2Gains = metadata.camera2ColorCorrectionGains
+                ?.takeIf { values ->
+                    values.size >= 4 && values.take(4).all { value ->
+                        value.isFinite() && value > 0f
+                    }
+                }
+            val gains = camera2Gains ?: metadata.whiteBalanceGains
+            fun positiveGain(index: Int, fallback: Float): Float {
+                val value = gains.getOrElse(index) { fallback }
+                return value.takeIf { it.isFinite() && it > 0f } ?: fallback
+            }
+            val greenEvenGain = positiveGain(1, 1f)
+            val greenOddGain = positiveGain(2, greenEvenGain)
+            val rgbGains = floatArrayOf(
+                positiveGain(0, 1f),
+                0.5f * (greenEvenGain + greenOddGain),
+                positiveGain(3, 1f),
             )
-            val cameraToLinearSrgb = multiplyMatrix3x3(
-                profileToLinearSrgbTransform,
-                colorCorrectionMatrix,
-            )
-            renderLinearRcdPass(
-                metadata = metadata,
-                sourceTextureId = sourceTextureId,
-                targetFramebufferId = linearExposurePreviewFramebufferId,
-                viewportWidth = width,
-                viewportHeight = height,
-                rawExposureCompensation = 0f,
-                colorCorrectionMatrix = cameraToLinearSrgb,
-                cameraWhite = cameraWhite,
-                hueSatMap = null,
-                applyDngBaselineExposure = false,
-                clampProfileRgb = false,
-                hueSatMapSupportsOverrange = false,
-                textureBounds = normalizedBounds,
-                areaSampleFootprint = areaSampleFootprint,
-                textureRotation = outputRotation,
-                label = "RawSceneExposureLinearPass",
-            )
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES31.glMemoryBarrier(
-                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-            )
-            val linearSrgb = readSceneExposureChannels(
+            val camera2Transform = metadata.camera2ColorCorrectionTransform
+                ?.takeIf { matrix ->
+                    matrix.size == 9 && matrix.all(Float::isFinite)
+                }
+            val meteringRgbTransform = if (camera2Transform != null) {
+                camera2Transform
+            } else {
+                // A standalone DNG does not retain Camera2's per-frame rgb2rgb matrix. Keep the
+                // DNG color-spec reconstruction as an explicit regeneration fallback. Factor its
+                // white balance out so the common path can retain MGC's pre-matrix clamp ordering.
+                val combinedTransform = multiplyMatrix3x3(
+                    profileToLinearSrgbTransform,
+                    colorCorrectionMatrix,
+                )
+                multiplyMatrix3x3(
+                    combinedTransform,
+                    floatArrayOf(
+                        1f / rgbGains[0], 0f, 0f,
+                        0f, 1f / rgbGains[1], 0f,
+                        0f, 0f, 1f / rgbGains[2],
+                    ),
+                )
+            }
+            val baseFrameMetering = suppliedFastMomentsRawStats
+                ?.baseFrameMetering
+                ?.takeIf { metering ->
+                    metering.sensorRgb.size == width * height * 3 &&
+                        metering.sensorRgb.all(Float::isFinite)
+                }
+            val meteringInputSource: String
+            val cameraRgb: FloatArray
+            val lensShadingStats: RawSceneFastMomentsRawStats?
+            if (baseFrameMetering != null) {
+                meteringInputSource = "BASE_RAW_SENSOR"
+                cameraRgb = baseFrameMetering.sensorRgb
+                lensShadingStats = suppliedFastMomentsRawStats
+            } else {
+                // Regenerated/standalone DNGs cannot recover the selected burst base frame. The
+                // demosaic output is camera RGB with LSC already applied, so only use it as an
+                // explicit fallback and keep all remaining MGC color operations on the CPU.
+                meteringInputSource = "RENDERED_CAMERA_RGB_FALLBACK"
+                lensShadingStats = null
+                val areaSampleFootprint = floatArrayOf(
+                    (normalizedBounds[2] - normalizedBounds[0]) / width.toFloat(),
+                    (normalizedBounds[3] - normalizedBounds[1]) / height.toFloat(),
+                )
+                setupLinearExposurePreviewFramebuffer(width, height)
+                renderLinearRcdPass(
+                    metadata = metadata,
+                    sourceTextureId = sourceTextureId,
+                    targetFramebufferId = linearExposurePreviewFramebufferId,
+                    viewportWidth = width,
+                    viewportHeight = height,
+                    rawExposureCompensation = 0f,
+                    colorCorrectionMatrix = identityMatrix3x3(),
+                    cameraWhite = floatArrayOf(1f, 1f, 1f),
+                    hueSatMap = null,
+                    applyDngBaselineExposure = false,
+                    clampProfileRgb = false,
+                    hueSatMapSupportsOverrange = false,
+                    textureBounds = normalizedBounds,
+                    areaSampleFootprint = areaSampleFootprint,
+                    textureRotation = 0,
+                    label = "RawSceneExposureCameraRgbPass",
+                )
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                GLES31.glMemoryBarrier(
+                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+                )
+                cameraRgb = readSceneExposureChannels(
+                    width = width,
+                    height = height,
+                    stackCompletionTimeline = stackCompletionTimeline,
+                    label = "RAW scene exposure camera RGB fallback",
+                ) ?: return null
+            }
+            val meteringMetadata = if (baseFrameMetering != null) {
+                metadata.copy(
+                    lensShadingMap = baseFrameMetering.lensShadingMap,
+                    lensShadingMapWidth = baseFrameMetering.lensShadingMapWidth,
+                    lensShadingMapHeight = baseFrameMetering.lensShadingMapHeight,
+                    lensShadingMapGrid = baseFrameMetering.lensShadingMapGrid,
+                )
+            } else {
+                metadata
+            }
+            val meteringRgb = RawSceneExposureMath.prepareFastMomentsMeteringRgb(
+                cameraRgb = cameraRgb,
                 width = width,
                 height = height,
-                stackCompletionTimeline = stackCompletionTimeline,
-                label = "RAW scene exposure model input",
+                metadata = meteringMetadata,
+                rgbGains = rgbGains,
+                rgbTransform = meteringRgbTransform,
+                lensShadingStats = lensShadingStats,
             ) ?: return null
+            val meteringRgbMean = FloatArray(3)
+            val meteringRgbMax = FloatArray(3)
+            for (pixel in 0 until width * height) {
+                for (channel in 0..2) {
+                    val value = meteringRgb[pixel * 3 + channel]
+                    meteringRgbMean[channel] += value
+                    if (value > meteringRgbMax[channel]) meteringRgbMax[channel] = value
+                }
+            }
+            for (channel in 0..2) meteringRgbMean[channel] /= (width * height).toFloat()
+            val baseFrameHasLensShading = baseFrameMetering?.let { metering ->
+                metering.lensShadingMap != null &&
+                    metering.lensShadingMapWidth > 0 && metering.lensShadingMapHeight > 0 &&
+                    metering.lensShadingMap.size >=
+                    metering.lensShadingMapWidth * metering.lensShadingMapHeight * 4
+            } == true
+            PLog.i(
+                TAG,
+                "RAW_SCENE_EXPOSURE stage=INPUT_COLOR_CONTRACT " +
+                    "meteringSource=$meteringInputSource " +
+                    "lscSource=${when {
+                        baseFrameHasLensShading -> "BASE_RAW_CAPTURE_MAP"
+                        baseFrameMetering != null -> "UNITY"
+                        else -> "RENDERED_CAMERA_RGB"
+                    }} " +
+                    "gainsSource=${if (camera2Gains != null) "CAMERA2_CAPTURE_RESULT" else "DNG_WHITE_BALANCE_FALLBACK"} " +
+                    "matrixSource=${if (camera2Transform != null) "CAMERA2_CAPTURE_RESULT" else "DNG_COLOR_SPEC_FALLBACK"} " +
+                    "rggbGains=${gains.contentToString()} " +
+                    "rgbGains=${rgbGains.contentToString()} " +
+                    "rgb2rgb=${meteringRgbTransform.contentToString()} " +
+                    "meteringRgbMean=${meteringRgbMean.contentToString()} " +
+                    "meteringRgbMax=${meteringRgbMax.contentToString()}",
+            )
 
             val fastMomentsStats = suppliedFastMomentsRawStats ?: if (
                 rawSamplesPerPixel == 1 && rawTextureIdForStats != 0
@@ -7907,17 +8015,8 @@ class RawDemosaicProcessor {
             } else {
                 // LinearRaw RGB has no CFA plane. Retain the same mode-2 state machine and use the
                 // un-white-balanced camera-domain maximum surface as its explicit fallback input.
-                val quarterTurn = ((outputRotation % 180) + 180) % 180 != 0
-                val orientedSourceWidth = if (quarterTurn) {
-                    outputSourceBounds.height()
-                } else {
-                    outputSourceBounds.width()
-                }
-                val orientedSourceHeight = if (quarterTurn) {
-                    outputSourceBounds.width()
-                } else {
-                    outputSourceBounds.height()
-                }
+                val orientedSourceWidth = outputSourceBounds.width()
+                val orientedSourceHeight = outputSourceBounds.height()
                 val statsWidth = (
                     orientedSourceWidth +
                         RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
@@ -7928,9 +8027,9 @@ class RawDemosaicProcessor {
                     ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
                 val statsAreaSampleFootprint = floatArrayOf(
                     (normalizedBounds[2] - normalizedBounds[0]) /
-                        (if (quarterTurn) statsHeight else statsWidth).toFloat(),
+                        statsWidth.toFloat(),
                     (normalizedBounds[3] - normalizedBounds[1]) /
-                        (if (quarterTurn) statsWidth else statsHeight).toFloat(),
+                        statsHeight.toFloat(),
                 )
                 setupLinearExposurePreviewFramebuffer(statsWidth, statsHeight)
                 renderLinearRcdPass(
@@ -7949,7 +8048,7 @@ class RawDemosaicProcessor {
                     textureBounds = normalizedBounds,
                     areaSampleFootprint = statsAreaSampleFootprint,
                     useAreaSampleMaximum = true,
-                    textureRotation = outputRotation,
+                    textureRotation = 0,
                     label = "RawSceneExposureCameraStatsPass",
                 )
                 GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -7977,14 +8076,14 @@ class RawDemosaicProcessor {
                     channelMax = channelMax,
                     sensorNormalized = false,
                     sourceBounds = normalizedBounds,
-                    sourceRotationDegrees = outputRotation,
+                    sourceRotationDegrees = 0,
                 )
             }
             request.solve(
                 RawSceneLinearFrame(
                     width = width,
                     height = height,
-                    rgb = linearSrgb,
+                    rgb = meteringRgb,
                     fastMomentsStats = fastMomentsStats,
                 ),
             )

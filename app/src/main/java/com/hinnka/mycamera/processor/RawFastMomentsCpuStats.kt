@@ -3,6 +3,7 @@ package com.hinnka.mycamera.processor
 import android.graphics.Rect
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawSceneExposureMath
+import com.hinnka.mycamera.raw.RawSceneFastMomentsMeteringFrame
 import com.hinnka.mycamera.raw.RawSceneFastMomentsRawStats
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteOrder
@@ -57,6 +58,33 @@ internal object RawFastMomentsCpuStats {
         val statsWidth = (bounds.width() + downsample - 1) / downsample
         val statsHeight = (bounds.height() + downsample - 1) / downsample
         val channelMax = FloatArray(statsWidth * statsHeight * 4)
+        val canBuildMeteringRgb =
+            bounds.width() >= RawSceneExposureMath.INPUT_WIDTH * 4 &&
+                bounds.height() >= RawSceneExposureMath.INPUT_HEIGHT * 4
+        val meteringRawSums = if (canBuildMeteringRgb) {
+            DoubleArray(
+                RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT * 4,
+            )
+        } else {
+            null
+        }
+        val meteringCounts = if (canBuildMeteringRgb) {
+            IntArray(
+                RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT * 4,
+            )
+        } else {
+            null
+        }
+        val meteringXBySourceX = if (canBuildMeteringRgb) {
+            buildMeteringBinMap(bounds.width(), RawSceneExposureMath.INPUT_WIDTH)
+        } else {
+            null
+        }
+        val meteringYBySourceY = if (canBuildMeteringRgb) {
+            buildMeteringBinMap(bounds.height(), RawSceneExposureMath.INPUT_HEIGHT)
+        } else {
+            null
+        }
         val black = resolvedBlackLevel(
             frame = frame,
             cfaPattern = cfaPattern,
@@ -82,9 +110,30 @@ internal object RawFastMomentsCpuStats {
                             (whiteLevel - black[channel]).coerceAtLeast(1f)
                         val index = outputOffset + channel
                         if (normalized > channelMax[index]) channelMax[index] = normalized
+                        if (meteringRawSums != null && meteringCounts != null &&
+                            meteringXBySourceX != null && meteringYBySourceY != null
+                        ) {
+                            val meteringX = meteringXBySourceX[x - bounds.left]
+                            val meteringY = meteringYBySourceY[y - bounds.top]
+                            val meteringOffset = (
+                                meteringY * RawSceneExposureMath.INPUT_WIDTH + meteringX
+                                ) * 4 + channel
+                            meteringRawSums[meteringOffset] += raw.toDouble()
+                            meteringCounts[meteringOffset]++
+                        }
                     }
                 }
             }
+        }
+        val baseFrameSensorRgb = if (meteringRawSums != null && meteringCounts != null) {
+            buildBaseFrameSensorRgb(
+                rawSums = meteringRawSums,
+                counts = meteringCounts,
+                blackLevel = black,
+                whiteLevel = whiteLevel,
+            )
+        } else {
+            null
         }
         return RawSceneFastMomentsRawStats(
             width = statsWidth,
@@ -100,14 +149,73 @@ internal object RawFastMomentsCpuStats {
                 (bounds.bottom - coordinateBounds.top).toFloat() / coordinateBounds.height(),
             ),
             sourceRotationDegrees = 0,
+            baseFrameMetering = baseFrameSensorRgb?.let { sensorRgb ->
+                RawSceneFastMomentsMeteringFrame(sensorRgb = sensorRgb)
+            },
         ).also {
             PLog.i(
                 TAG,
                 "Fast Moments reference statistics size=${statsWidth}x$statsHeight " +
                     "source=${width}x$height physical=$coordinateBounds bounds=$bounds " +
-                    "frame=${frame.frameNumber}",
+                    "frame=${frame.frameNumber} baseRgb=${if (baseFrameSensorRgb != null) {
+                        "${RawSceneExposureMath.INPUT_WIDTH}x${RawSceneExposureMath.INPUT_HEIGHT}"
+                    } else {
+                        "unavailable"
+                    }}",
             )
         }
+    }
+
+    private fun buildBaseFrameSensorRgb(
+        rawSums: DoubleArray,
+        counts: IntArray,
+        blackLevel: FloatArray,
+        whiteLevel: Int,
+    ): FloatArray? {
+        val pixelCount = RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT
+        if (rawSums.size != pixelCount * 4 || counts.size != rawSums.size) return null
+        val rgbBlack = floatArrayOf(
+            blackLevel[0],
+            0.5f * (blackLevel[1] + blackLevel[2]),
+            blackLevel[3],
+        )
+        val sensorRange = whiteLevel.toFloat() - rgbBlack.maxOrNull()!!
+        if (!sensorRange.isFinite() || sensorRange <= 0f) return null
+        val inverseSensorRange = 1f / sensorRange
+        val output = FloatArray(pixelCount * 3)
+        for (pixel in 0 until pixelCount) {
+            val rawOffset = pixel * 4
+            val redCount = counts[rawOffset]
+            val greenCount = counts[rawOffset + 1] + counts[rawOffset + 2]
+            val blueCount = counts[rawOffset + 3]
+            if (redCount <= 0 || greenCount <= 0 || blueCount <= 0) return null
+            val red = rawSums[rawOffset] / redCount.toDouble()
+            val green = (rawSums[rawOffset + 1] + rawSums[rawOffset + 2]) /
+                greenCount.toDouble()
+            val blue = rawSums[rawOffset + 3] / blueCount.toDouble()
+            val outputOffset = pixel * 3
+            output[outputOffset] = (
+                (red - rgbBlack[0].toDouble()) * inverseSensorRange
+                ).coerceAtLeast(0.0).toFloat()
+            output[outputOffset + 1] = (
+                (green - rgbBlack[1].toDouble()) * inverseSensorRange
+                ).coerceAtLeast(0.0).toFloat()
+            output[outputOffset + 2] = (
+                (blue - rgbBlack[2].toDouble()) * inverseSensorRange
+                ).coerceAtLeast(0.0).toFloat()
+        }
+        return output.takeIf { values -> values.all(Float::isFinite) }
+    }
+
+    /** Matches RawToLoResRgb's floor(i * source / destination) box boundaries exactly. */
+    private fun buildMeteringBinMap(sourceLength: Int, destinationLength: Int): IntArray {
+        val bins = IntArray(sourceLength)
+        for (destination in 0 until destinationLength) {
+            val start = destination * sourceLength / destinationLength
+            val end = (destination + 1) * sourceLength / destinationLength
+            for (source in start until end) bins[source] = destination
+        }
+        return bins
     }
 
     private fun resolvedBlackLevel(
