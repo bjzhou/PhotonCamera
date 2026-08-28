@@ -383,8 +383,8 @@ internal class GlesMgcRawSpatialStacker(
         imageHeight = height,
         filterDownsample = REJECTION_FILTER_DOWNSAMPLE,
     )
-    // GuideRaw10 samples every second extracted Bayer quad. V25's Rejection implementation
-    // requires GenerateRejectionTexture's output to have exactly the same RAW/4 extents.
+    // GuideRaw10 emits one sample per Bayer quad. V25's Rejection implementation requires
+    // GenerateRejectionTexture's output to have exactly the same RAW/2 extents.
     private val guideWidth = rejectionGeometry.guideWidth
     private val guideHeight = rejectionGeometry.guideHeight
     // MergeBayerRaw16's queried AOT contract requests one alignment sample per 8x8
@@ -394,7 +394,7 @@ internal class GlesMgcRawSpatialStacker(
     private val rejectionWidth = rejectionGeometry.rejectionWidth
     private val rejectionHeight = rejectionGeometry.rejectionHeight
     // Rejection::DilateMask and Rejection::Downsample2x require floor(input / 2), taking the
-    // guide-sized RAW/4 result to the RAW/8 merge-weight domain.
+    // guide-sized RAW/2 result to the RAW/4 acceptance/pixel-difference domain used by merge.
     private val mergeWeightWidth = rejectionGeometry.mergeWeightWidth
     private val mergeWeightHeight = rejectionGeometry.mergeWeightHeight
     private val rejectionFilterWidth = rejectionGeometry.filterWidth
@@ -872,7 +872,8 @@ internal class GlesMgcRawSpatialStacker(
                             MgcSpatialDiagnosticMode.REFERENCE_ONLY ->
                                 "temporalAndBracketedContributions=disabled"
                             MgcSpatialDiagnosticMode.IDENTITY_TEMPORAL_WEIGHTS ->
-                                "flowAndTemporalMerge=enabled rejectionWeights=identity"
+                                "flowAndTemporalMerge=enabled " +
+                                    "rejectionWeights=identity includingBento=true"
                             MgcSpatialDiagnosticMode.MAIN_REJECTION_ONLY ->
                                 "flowAndTemporalMerge=enabled rejectionWeights=measured " +
                                     "unblocker=disabled motionPrior=disabled"
@@ -1317,10 +1318,10 @@ internal class GlesMgcRawSpatialStacker(
                 bentoAccepted && outputMode == MgcSpatialOutputMode.RGB
             ) {
                 createTexture(
-                    rejectionWidth,
-                    rejectionHeight,
+                    mergeWeightWidth,
+                    mergeWeightHeight,
                     GLES30.GL_R8,
-                    GLES30.GL_NEAREST,
+                    GLES30.GL_LINEAR,
                 ).also { output ->
                     // FinishSpatialRGB masks every non-selected rejection slice with clipped
                     // highlights in RAW/4. Only the selected ultrashort slice is overwritten by
@@ -1330,8 +1331,8 @@ internal class GlesMgcRawSpatialStacker(
                         bentoMask = checkNotNull(bentoMask),
                         outputWeight = output,
                         hasExistingWeight = false,
-                        outputWidth = rejectionWidth,
-                        outputHeight = rejectionHeight,
+                        outputWidth = mergeWeightWidth,
+                        outputHeight = mergeWeightHeight,
                     )
                 }
             } else {
@@ -1361,12 +1362,22 @@ internal class GlesMgcRawSpatialStacker(
                 clearAccumulator(accumulatorColor)
             }
             if (bentoAccepted) {
+                val diagnosticBentoBaseWeight = if (identityTemporalWeights) {
+                    identityWeight
+                } else {
+                    bentoBaseWeight
+                }
+                val diagnosticBentoShortWeight = if (identityTemporalWeights) {
+                    identityWeight
+                } else {
+                    bentoShortWeight
+                }
                 if (outputMode == MgcSpatialOutputMode.BAYER) {
                     currentMergeCovariance = referenceCovariance
                     renderMerge(
                         rawTexture = referenceRaw,
                         bayerAlignmentTexture = zeroFlow,
-                        weightTexture = bentoBaseWeight,
+                        weightTexture = diagnosticBentoBaseWeight,
                         linearKernelMaskTexture = linearKernelMask,
                         calibration = referenceCalibration,
                         accumulatorColor = accumulatorColor,
@@ -1379,7 +1390,7 @@ internal class GlesMgcRawSpatialStacker(
                             imageIndex = 0,
                             calibration = referenceCalibration,
                             alignmentTexture = zeroFlow,
-                            weightTexture = bentoBaseWeight,
+                            weightTexture = diagnosticBentoBaseWeight,
                             covarianceTexture = referenceCovariance,
                             flowBounds = MgcSpatialRgbFlowBounds.Zero,
                             useFrameWeight = true,
@@ -1392,12 +1403,12 @@ internal class GlesMgcRawSpatialStacker(
                         frameIndex = capturedFrameIndex++,
                         calibration = referenceCalibration,
                         alignmentTexture = zeroFlow,
-                        rejectionTexture = if (outputMode == MgcSpatialOutputMode.RGB) {
-                            bentoRgbBaseRejection
-                        } else {
-                            bentoBaseWeight
+                        rejectionTexture = when {
+                            identityTemporalWeights -> identityWeight
+                            outputMode == MgcSpatialOutputMode.RGB -> bentoRgbBaseRejection
+                            else -> bentoBaseWeight
                         },
-                        identityRejection = false,
+                        identityRejection = identityTemporalWeights,
                     )
                 }
                 // MGC overwrites the selected ultrashort rejection slice with the Bento mask.
@@ -1406,7 +1417,7 @@ internal class GlesMgcRawSpatialStacker(
                     renderMerge(
                         rawTexture = bentoRaw,
                         bayerAlignmentTexture = bentoBayerAlignmentTexture,
-                        weightTexture = bentoShortWeight,
+                        weightTexture = diagnosticBentoShortWeight,
                         linearKernelMaskTexture = linearKernelMask,
                         calibration = checkNotNull(bentoCalibration),
                         accumulatorColor = accumulatorColor,
@@ -1419,7 +1430,7 @@ internal class GlesMgcRawSpatialStacker(
                             imageIndex = ultrashortIndex,
                             calibration = checkNotNull(bentoCalibration),
                             alignmentTexture = bentoBayerAlignmentTexture,
-                            weightTexture = bentoShortWeight,
+                            weightTexture = diagnosticBentoShortWeight,
                             covarianceTexture = bentoRgbCovarianceTexture,
                             flowBounds = conservativeRgbFlowBounds,
                             useFrameWeight = true,
@@ -1432,12 +1443,17 @@ internal class GlesMgcRawSpatialStacker(
                         frameIndex = capturedFrameIndex++,
                         calibration = checkNotNull(bentoCalibration),
                         alignmentTexture = bentoBayerAlignmentTexture,
-                        rejectionTexture = if (outputMode == MgcSpatialOutputMode.RGB) {
-                            checkNotNull(bentoMask)
-                        } else {
-                            bentoShortWeight
+                        rejectionTexture = when {
+                            identityTemporalWeights -> identityWeight
+                            // bentoMask is on the RAW/2 guide domain. RGB AOT consumes an
+                            // exact RAW/4 rejection/acceptance plane, so use the already
+                            // resampled selected-short weight instead of cropping the RAW/2
+                            // texture through strengthRejection's exact-domain texelFetch.
+                            outputMode == MgcSpatialOutputMode.RGB ->
+                                diagnosticBentoShortWeight
+                            else -> bentoShortWeight
                         },
-                        identityRejection = false,
+                        identityRejection = identityTemporalWeights,
                     )
                 }
                 mergedFrames = 2
@@ -1527,7 +1543,7 @@ internal class GlesMgcRawSpatialStacker(
                                         calibration = prepared.calibration,
                                         outputWidth = mergeWeightWidth,
                                         outputHeight = mergeWeightHeight,
-                                        bayerQuadsPerTexel = 4,
+                                        bayerQuadsPerTexel = 2,
                                     )
                                 val mergeMasks = intArrayOf(
                                     referenceHighlightMask,
@@ -1541,8 +1557,8 @@ internal class GlesMgcRawSpatialStacker(
                                             rawTexture = temporalRaw,
                                             flow = prepared.convertedAlignment,
                                             calibration = prepared.calibration,
-                                            outputWidth = rejectionWidth,
-                                            outputHeight = rejectionHeight,
+                                            outputWidth = mergeWeightWidth,
+                                            outputHeight = mergeWeightHeight,
                                             bayerQuadsPerTexel = 2,
                                         )
                                     intArrayOf(
@@ -1595,22 +1611,22 @@ internal class GlesMgcRawSpatialStacker(
                         else -> {
                             var maskedRejection = prepared.rgbAotRejectionTexture
                             check(maskedRejection != 0) {
-                                "Spatial RGB temporal frame has no RAW/4 AOT rejection slice"
+                                "Spatial RGB temporal frame has no RAW/4 AOT acceptance slice"
                             }
                             rgbAotExclusionMasks.forEach { exclusionMask ->
                                 val outputRejection = createTexture(
-                                    rejectionWidth,
-                                    rejectionHeight,
+                                    mergeWeightWidth,
+                                    mergeWeightHeight,
                                     GLES30.GL_R8,
-                                    GLES30.GL_NEAREST,
+                                    GLES30.GL_LINEAR,
                                 )
                                 renderBentoRewrittenWeight(
                                     existingWeight = maskedRejection,
                                     bentoMask = exclusionMask,
                                     outputWeight = outputRejection,
                                     hasExistingWeight = true,
-                                    outputWidth = rejectionWidth,
-                                    outputHeight = rejectionHeight,
+                                    outputWidth = mergeWeightWidth,
+                                    outputHeight = mergeWeightHeight,
                                 )
                                 maskedRejection = outputRejection
                             }
@@ -3557,11 +3573,11 @@ internal class GlesMgcRawSpatialStacker(
                 (sensorWhiteLevel * gains[2] + blackTerms[2])
             )
         val globalFrameWeight = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
-            MgcSpatialMergeTuning.expectedMergeWeight(
-                referenceSignal = kernelTuning.referenceSignal,
-                baseShotNoiseFactor = kernelTuning.referenceGreenShotNoiseFactor,
+            // V25 SpatialMerge stores sub_38B1274's shadow-domain MaximumMergeWeight in the
+            // frame_weights buffer consumed by MergeRgbRaw16F16. The signal-domain expected
+            // weight is computed only for the diagnostic table and is not the AOT input.
+            MgcSpatialMergeTuning.maximumMergeWeight(
                 baseReadVariance = kernelTuning.referenceGreenReadVariance,
-                alternateShotNoiseFactor = sourceShot.getOrElse(1) { 0f },
                 alternateReadVariance = sourceRead.getOrElse(1) { 0f },
                 exposureScale = exposureScale,
             )
@@ -3569,11 +3585,8 @@ internal class GlesMgcRawSpatialStacker(
             SPATIAL_IDENTITY_MULTIPLIER
         }
         val rejectionWeightScale = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
-            MgcSpatialMergeTuning.rejectionWeightScale(
-                baseReadVariance = kernelTuning.referenceGreenReadVariance,
-                alternateReadVariance = sourceRead.getOrElse(1) { 0f },
-                exposureScale = exposureScale,
-            )
+            // V25 reuses the same capped MaximumMergeWeight for special-exposure rejection.
+            globalFrameWeight
         } else {
             SPATIAL_IDENTITY_MULTIPLIER
         }
@@ -3855,38 +3868,18 @@ internal class GlesMgcRawSpatialStacker(
         return levels
     }
 
-    /**
-     * Builds the independent RAW/8 luma input required by FilterRejectionMap.
-     *
-     * The alignment pyramid's second level is RAW/4 plus one positive-edge support texel. MGC
-     * downsamples its logical RAW/4 extent once more so base luma, DilateMask output and the
-     * downsampled pixel-difference image all have identical RAW/8 extents.
-     */
+    /** Returns the logical RAW/4 base-luma input required by FilterRejectionMap. */
     private fun buildRejectionBaseLuma(referenceGrayPyramid: List<TextureLevel>): Int {
         check(referenceGrayPyramid.size > 1) {
             "FilterRejectionMap requires the RAW/4 reference-luma pyramid level"
         }
         val raw4 = referenceGrayPyramid[1]
-        check(raw4.width >= guideWidth && raw4.height >= guideHeight) {
-            "RAW/4 reference luma does not cover the guide/rejection domain"
+        check(raw4.width >= mergeWeightWidth && raw4.height >= mergeWeightHeight) {
+            "RAW/4 reference luma does not cover the acceptance domain: " +
+                "luma=${raw4.width}x${raw4.height} " +
+                "acceptance=${mergeWeightWidth}x$mergeWeightHeight"
         }
-        val output = createTexture(
-            mergeWeightWidth,
-            mergeWeightHeight,
-            GLES30.GL_R16I,
-            GLES30.GL_NEAREST,
-        )
-        GLES30.glUseProgram(downsampleProgram)
-        bindTexture(downsampleProgram, "uInput", 0, raw4.texture)
-        // Exclude the pyramid's positive-edge support sample from the logical input extent.
-        uniform2i(downsampleProgram, "uInputSize", guideWidth, guideHeight)
-        draw(
-            downsampleProgram,
-            mergeWeightWidth,
-            mergeWeightHeight,
-            intArrayOf(output),
-        )
-        return output
+        return raw4.texture
     }
 
     /**
@@ -4454,7 +4447,7 @@ internal class GlesMgcRawSpatialStacker(
                 integerStrideInBayerQuads % REJECTION_BAYER_QUADS_PER_PIXEL == 0
         ) {
             "ConvertAlignment cannot map Bayer-quad stride=$strideInBayerQuads " +
-                "onto the RAW/4 rejection domain"
+                "onto the RAW/2 rejection domain"
         }
         val alignmentTileSize =
             integerStrideInBayerQuads / REJECTION_BAYER_QUADS_PER_PIXEL
@@ -4466,7 +4459,7 @@ internal class GlesMgcRawSpatialStacker(
         )
         renderConvertedAlignment(alignment, output, alignmentTileSize)
 
-        // V25's ConvertAlignment output is a dense RAW/4 RGBA16F image. XY stays
+        // V25's converted flow is expanded over the dense RAW/2 rejection domain. XY stays
         // piecewise-constant over each final alignment tile, but the 3x3 range in B is
         // calculated in this dense domain and therefore remains confined to the one-pixel
         // boundary around a flow discontinuity. All downstream consumers operate in normalized
@@ -4731,7 +4724,7 @@ internal class GlesMgcRawSpatialStacker(
             MgcSabreRejectionTuning.COLOR_DIFFERENCE_GREEN,
         )
         // The captured 9.88235261e-5 value belongs to the 2040-wide Bayer-quad flow
-        // normalization domain of a 4080 RAW, not to the RAW/4 rejection texture.
+        // normalization domain of a 4080 RAW, matching the RAW/2 rejection texture.
         val flowVariationThresholds =
             MgcSabreRejectionTuning.flowVariationThresholds(
                 rejectionGeometry.bayerQuadWidth,
@@ -4783,7 +4776,7 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     private fun renderRgbAotRejectionAcceptance(
-        reverseWeight: Int,
+        acceptance: Int,
         outputAcceptance: Int,
         frameScale: Float,
     ) {
@@ -4791,12 +4784,12 @@ internal class GlesMgcRawSpatialStacker(
             "Spatial RGB rejection-acceptance program is not initialized"
         }
         GLES30.glUseProgram(rejectionAcceptanceProgram)
-        bindTexture(rejectionAcceptanceProgram, "uReverseWeight", 0, reverseWeight)
+        bindTexture(rejectionAcceptanceProgram, "uAcceptance", 0, acceptance)
         uniform2i(
             rejectionAcceptanceProgram,
             "uSize",
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
         )
         uniform1f(
             rejectionAcceptanceProgram,
@@ -4806,8 +4799,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             rejectionAcceptanceProgram,
-            rejectionWidth,
-            rejectionHeight,
+            mergeWeightWidth,
+            mergeWeightHeight,
             intArrayOf(outputAcceptance),
         )
     }
@@ -4883,13 +4876,13 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun renderRejectionFilterDownsample(
         baseLuma: Int,
-        weight: Int,
+        rejection: Int,
         downsampledLuma: Int,
         downsampledRejection: Int,
     ) {
         GLES30.glUseProgram(rejectionFilterDownsampleProgram)
         bindTexture(rejectionFilterDownsampleProgram, "uBaseLuma", 0, baseLuma)
-        bindTexture(rejectionFilterDownsampleProgram, "uWeight", 1, weight)
+        bindTexture(rejectionFilterDownsampleProgram, "uRejection", 1, rejection)
         uniform2i(
             rejectionFilterDownsampleProgram,
             "uInputSize",
@@ -5197,27 +5190,10 @@ internal class GlesMgcRawSpatialStacker(
         } else {
             SPATIAL_IDENTITY_MULTIPLIER
         }
-        val rgbAotRejectionTexture = if (outputMode == MgcSpatialOutputMode.RGB) {
-            createTexture(
-                rejectionWidth,
-                rejectionHeight,
-                GLES30.GL_R8,
-                GLES30.GL_NEAREST,
-            ).also { output ->
-                // MergeRgbRaw16F16 reads this independent RAW/4 acceptance slice directly.
-                // The RAW/8 DilateMask/filter product below belongs to MergeBayer only.
-                renderRgbAotRejectionAcceptance(
-                    reverseWeight = rawReverseWeight,
-                    outputAcceptance = output,
-                    frameScale = rgbRejectionWeightScale,
-                )
-            }
-        } else {
-            0
-        }
-        // MGC's CPU wrapper closes this boundary before FilterRejectionMap:
-        // DilateMask converts RAW/4 rejection to RAW/8 acceptance weight, while
-        // Downsample2x brings pixel difference to that same merge domain.
+        // V25 closes the GenerateRejectionTexture boundary before FilterRejectionMap:
+        // DilateMask converts RAW/2 rejection to RAW/4 acceptance, while Downsample2x
+        // brings pixel difference to that same domain. FilterRejectionMap then smooths
+        // pixel difference and postprocesses the RAW/4 acceptance in place.
         renderDilation(rawReverseWeight, initialWeight)
         renderPixelDifferenceDownsample(rawPixelDifference, pixelDifference)
         renderClippedGaussianPixelDifference(
@@ -5227,7 +5203,7 @@ internal class GlesMgcRawSpatialStacker(
         )
         renderRejectionFilterDownsample(
             baseLuma = referenceRejectionLuma,
-            weight = initialWeight,
+            rejection = initialWeight,
             downsampledLuma = downsampledLuma,
             downsampledRejection = downsampledRejection,
         )
@@ -5242,6 +5218,22 @@ internal class GlesMgcRawSpatialStacker(
             pixelDifference = smoothedPixelDifference,
             output = frameWeight,
         )
+        val rgbAotRejectionTexture = when {
+            outputMode != MgcSpatialOutputMode.RGB -> 0
+            rgbRejectionWeightScale == SPATIAL_IDENTITY_MULTIPLIER -> frameWeight
+            else -> createTexture(
+                mergeWeightWidth,
+                mergeWeightHeight,
+                GLES30.GL_R8,
+                GLES30.GL_LINEAR,
+            ).also { output ->
+                renderRgbAotRejectionAcceptance(
+                    acceptance = frameWeight,
+                    outputAcceptance = output,
+                    frameScale = rgbRejectionWeightScale,
+                )
+            }
+        }
         val rejectionNs = System.nanoTime() - rejectionStartNs
         PLog.i(
             TAG,
@@ -9888,7 +9880,7 @@ internal class GlesMgcRawSpatialStacker(
         const val GLOBAL_ALIGNMENT_HISTOGRAM_SIZE = GLOBAL_ALIGNMENT_RADIUS * 2 + 1
         const val GLOBAL_ALIGNMENT_MIN_PEAK_SUPPORT = 10
         const val MERGE_BAYER_RAW_TILE_SIZE = 16
-        const val REJECTION_BAYER_QUADS_PER_PIXEL = 2
+        const val REJECTION_BAYER_QUADS_PER_PIXEL = 1
         // MGC 9.7.047 V25 initializes interpolation_flow_tolerance to -1.0. Positive
         // values are an optional SpatialBayer-only override; the default keeps every
         // merge tile on its own flow instead of switching interpolation on and off as

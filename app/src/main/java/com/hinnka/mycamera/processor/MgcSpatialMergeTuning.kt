@@ -3,7 +3,7 @@ package com.hinnka.mycamera.processor
 import kotlin.math.pow
 import kotlin.math.sqrt
 
-/** Exact MGC 9.6.080.5 SpatialMerge parameter generation. */
+/** Exact MGC 9.7.047 V25 SpatialMerge parameter generation. */
 internal object MgcSpatialMergeTuning {
     private const val MAXIMUM_MERGE_WEIGHT_CAP = 50f
     private const val DEFAULT_FRAME_WEIGHT_EXPONENT = 1f
@@ -70,7 +70,10 @@ internal object MgcSpatialMergeTuning {
      *
      * [exposureScale] is baseTET / alternateTET. MGC first transports the alternate noise
      * model into the base exposure domain (read variance *= exposureScale^2), then compares
-     * the shadow/read variances. Normal RAW merging uses the recovered default exponent 1.
+     * the shadow/read variances. V25 derives a smaller exponent only when per-frame
+     * motion_pix_per_ms metadata is present. Missing metadata is represented as -1, clamped to
+     * zero scene motion, and therefore produces exponent 1. Photon has no equivalent motion
+     * metering metadata, so the default below follows that exact missing-metadata path.
      */
     fun maximumMergeWeight(
         baseReadVariance: Float,
@@ -95,11 +98,11 @@ internal object MgcSpatialMergeTuning {
      * Special-exposure scale consumed by AdjustRejectionWeightsHalide.
      *
      * SpatialMergeUtils at libgcastartup.so+0x38b1274 compares the reference and
-     * exposure-transported alternate shadow variances and does not apply the planning-time
-     * maximum-weight cap. AdjustRejectionWeights uses this value to limit the independent
-     * RAW/4 RGB acceptance map before MergeRgbRaw16F16 applies ExpectedMergeWeight. MGC skips
-     * that stage for ordinary same-exposure frames, so callers must not apply this scale to
-     * every temporal slice.
+     * exposure-transported alternate shadow variances, raises the ratio to the frame-weight
+     * exponent, and clamps it to the same global cap as [maximumMergeWeight]. SpatialMerge then
+     * supplies that exact value both to AdjustRejectionWeights and to MergeRgbRaw16F16. MGC skips
+     * the adjustment stage for ordinary same-exposure frames, so callers must not apply this
+     * scale to every temporal slice.
      */
     fun rejectionWeightScale(
         baseReadVariance: Float,
@@ -107,27 +110,21 @@ internal object MgcSpatialMergeTuning {
         exposureScale: Float,
         frameWeightExponent: Float = DEFAULT_FRAME_WEIGHT_EXPONENT,
     ): Float {
-        require(baseReadVariance.isFinite() && baseReadVariance >= 0f)
-        require(alternateReadVariance.isFinite() && alternateReadVariance >= 0f)
-        require(exposureScale.isFinite() && exposureScale > 0f)
-        require(frameWeightExponent.isFinite() && frameWeightExponent >= 0f)
-        val scaledAlternateRead = alternateReadVariance * exposureScale * exposureScale
-        check(scaledAlternateRead > 0f) {
-            "MGC Spatial requires positive alternate shadow/read variance"
-        }
-        return (baseReadVariance / scaledAlternateRead)
-            .pow(frameWeightExponent)
-            .takeIf { it.isFinite() && it >= 0f }
-            ?: 1f
+        return maximumMergeWeight(
+            baseReadVariance = baseReadVariance,
+            alternateReadVariance = alternateReadVariance,
+            exposureScale = exposureScale,
+            frameWeightExponent = frameWeightExponent,
+        )
     }
 
     /**
      * Spatial ExpectedMergeWeight at libgcastartup.so+0x386ba74.
      *
-     * The normal Spatial path does not pass [maximumMergeWeight] to MergeBayer/Spatial RGB.
      * MGC first transports the alternate shot/read model into the base exposure domain, then
-     * compares both models at the reference signal. The shadow-only maximum is an envelope used
-     * while constructing the parameters and is overwritten by this value for normal merging.
+     * compares both models at the reference signal. SpatialMerge reports this estimate in its
+     * diagnostics, but V25 passes the shadow-domain [maximumMergeWeight] to MergeBayer and
+     * MergeRgbRaw16F16 instead.
      */
     fun expectedMergeWeight(
         referenceSignal: Float,

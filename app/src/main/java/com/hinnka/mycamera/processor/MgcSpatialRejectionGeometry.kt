@@ -17,9 +17,11 @@ internal data class MgcSpatialRejectionGeometry(
 /**
  * Recovered V25 contract:
  *
- * - GuideImage and GenerateRejectionTexture have identical RAW/4 extents.
- * - DilateMask and Downsample2x produce an exact half-sized RAW/8 merge-weight domain.
- * - Downsample4xAndFilterRejectionMap works on a further 4x-decimated filter domain.
+ * - GuideRaw10 emits one sample per 2x2 Bayer quad, so GuideImage and
+ *   GenerateRejectionTexture have identical RAW/2 extents.
+ * - DilateMask and Downsample2x produce an exact half-sized RAW/4 acceptance/difference domain.
+ * - FilterRejectionMap smooths RAW/4 pixel difference, filters RAW/4 acceptance at 4x
+ *   decimation (RAW/16), then postprocesses back into RAW/4 for both Bayer and RGB merge.
  */
 internal fun mgcSpatialRejectionGeometry(
     imageWidth: Int,
@@ -28,8 +30,8 @@ internal fun mgcSpatialRejectionGeometry(
 ): MgcSpatialRejectionGeometry {
     require(imageWidth > 0 && imageHeight > 0)
     require(filterDownsample > 0)
-    val guideWidth = ceilDiv(imageWidth, 4)
-    val guideHeight = ceilDiv(imageHeight, 4)
+    val guideWidth = ceilDiv(imageWidth, 2)
+    val guideHeight = ceilDiv(imageHeight, 2)
     val mergeWeightWidth = guideWidth / 2
     val mergeWeightHeight = guideHeight / 2
     require(mergeWeightWidth > 0 && mergeWeightHeight > 0)

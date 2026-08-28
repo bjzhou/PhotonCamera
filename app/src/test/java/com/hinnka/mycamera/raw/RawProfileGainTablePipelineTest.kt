@@ -113,7 +113,8 @@ class RawProfileGainTablePipelineTest {
         )
         assertEquals(257, plan.pointCount)
         assertEquals(4f, plan.hdrRatio, 0f)
-        assertEquals(2f, plan.sourceToShortGain, 0f)
+        assertEquals(2f, plan.hdrNetInputGain, 0f)
+        assertEquals(0.5f, plan.tableSourceToShortGain, 0f)
         assertEquals(1.0 / 64.0, plan.grid.mapSpacingH, 1e-12)
         assertEquals(1.0 / 48.0, plan.grid.mapSpacingV, 1e-12)
         DngPhotonProfileGainTableGenerator.HDRNET_LUMA_WEIGHTS

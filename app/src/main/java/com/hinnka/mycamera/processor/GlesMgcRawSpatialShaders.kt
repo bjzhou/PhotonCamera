@@ -47,8 +47,18 @@ internal object GlesMgcRawSpatialShaders {
             return offset == 0 ? 0.5 : 0.25;
         }
 
+        int mirrorGuideCenter(int coordinate, int extent) {
+            int maximum = extent - 2;
+            coordinate = coordinate < 1 ? 2 - coordinate : coordinate;
+            return coordinate > maximum ? 2 * maximum - coordinate : coordinate;
+        }
+
         void main() {
-            ivec2 center = ivec2(gl_FragCoord.xy);
+            ivec2 outputPosition = ivec2(gl_FragCoord.xy);
+            ivec2 center = ivec2(
+                mirrorGuideCenter(outputPosition.x, uGuideSize.x),
+                mirrorGuideCenter(outputPosition.y, uGuideSize.y)
+            );
             vec3 m0Rgb = vec3(0.0);
             vec3 m1Rgb = vec3(0.0);
             float m0Green = 0.0;
@@ -57,9 +67,7 @@ internal object GlesMgcRawSpatialShaders {
             float centerGreen = 0.0;
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    // GuideImage is half the extracted-Bayer extent. Consecutive output samples
-                    // are two Bayer quads apart; the 3x3 statistics still use adjacent quads.
-                    vec4 rggb = rawQuad(center * 2 + ivec2(x, y));
+                    vec4 rggb = rawQuad(center + ivec2(x, y));
                     vec3 rgb = vec3(rggb.x, 0.5 * (rggb.y + rggb.z), rggb.w);
                     averageRgb += rgb * kernelWeight(x) * kernelWeight(y);
                     if (x == 0 && y == 0) centerGreen = rgb.y;
@@ -348,8 +356,18 @@ internal object GlesMgcRawSpatialShaders {
             return vec3(covariance[0].x, covariance[1].y, covariance[0].y);
         }
 
+        int mirrorGuideCenter(int coordinate, int extent) {
+            int maximum = extent - 2;
+            coordinate = coordinate < 1 ? 2 - coordinate : coordinate;
+            return coordinate > maximum ? 2 * maximum - coordinate : coordinate;
+        }
+
         void main() {
-            ivec2 center = ivec2(gl_FragCoord.xy);
+            ivec2 outputPosition = ivec2(gl_FragCoord.xy);
+            ivec2 center = ivec2(
+                mirrorGuideCenter(outputPosition.x, uGuideSize.x),
+                mirrorGuideCenter(outputPosition.y, uGuideSize.y)
+            );
             float green0[9];
             float green1[9];
             float greenSum = 0.0;
@@ -357,7 +375,7 @@ internal object GlesMgcRawSpatialShaders {
             vec3 averageRgb = vec3(0.0);
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    vec4 rggb = rawQuad(center * 2 + ivec2(x, y));
+                    vec4 rggb = rawQuad(center + ivec2(x, y));
                     int index = (y + 1) * 3 + x + 1;
                     if (uCfaPattern == 2 || uCfaPattern == 3) {
                         green0[index] = rggb.z;
@@ -442,7 +460,8 @@ internal object GlesMgcRawSpatialShaders {
         }
 
         void main() {
-            // V25 requires GenerateRejectionTexture and GuideImage to share the RAW/4 domain.
+            // V25 requires GenerateRejectionTexture and GuideImage to share the RAW/2
+            // Bayer-quad domain.
             vec2 uv = gl_FragCoord.xy / vec2(uRejectionSize);
             vec2 flowUv = uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw;
             vec4 flow = texture(uFlow, flowUv);
@@ -515,18 +534,12 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    /**
-     * MergeRgbRaw16F16 consumes GenerateRejectionTexture's independent RAW/4 acceptance slice.
-     * DilateMask instead consumes the complementary rejection map and produces the separate
-     * RAW/8 Bayer/filtered weight. Keep the two products distinct at their common boundary.
-     * The caller passes an identity scale for ordinary frames because MGC bypasses
-     * AdjustRejectionWeights on its same-exposure path.
-     */
+    /** Applies AdjustRejectionWeights' signal-invariant scale to RAW/4 acceptance. */
     val rejectionAcceptance = """
         #version 300 es
         precision highp float;
         precision highp int;
-        uniform sampler2D uReverseWeight;
+        uniform sampler2D uAcceptance;
         uniform ivec2 uSize;
         uniform float uFrameScale;
         out float oAcceptance;
@@ -536,7 +549,7 @@ internal object GlesMgcRawSpatialShaders {
                 ivec2(0),
                 uSize - ivec2(1)
             );
-            float acceptance = 1.0 - texelFetch(uReverseWeight, p, 0).r;
+            float acceptance = texelFetch(uAcceptance, p, 0).r;
             // AdjustRejectionWeightsHalide never raises the original rejection acceptance.
             // Its signal-invariant branch divides special-exposure frames by the shadow-
             // variance ratio. Same-exposure frames reach this shader with an identity scale.
@@ -638,8 +651,8 @@ internal object GlesMgcRawSpatialShaders {
 
     /**
      * Read4xDownSample and the input preparation for
-     * Downsample4xAndFilterRejectionMap from the embedded rejection.cl. These inputs are already
-     * on DilateMask's RAW/8 merge-weight grid; this pass produces the RAW/32 filter grid.
+     * Downsample4xAndFilterRejectionMap from the embedded rejection.cl. V25 calls it after
+     * DilateMask/Downsample2x, so it reads RAW/4 base luma and acceptance and produces RAW/16.
      */
     val rejectionFilterDownsample = """
         #version 300 es
@@ -647,7 +660,7 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uBaseLuma;
-        uniform sampler2D uWeight;
+        uniform sampler2D uRejection;
         uniform ivec2 uInputSize;
         layout(location = 0) out float oLuma;
         layout(location = 1) out float oRejection;
@@ -676,9 +689,9 @@ internal object GlesMgcRawSpatialShaders {
             );
         }
 
-        float weightLinearAt(vec2 coordinate) {
+        float rejectionLinearAt(vec2 coordinate) {
             return texture(
-                uWeight,
+                uRejection,
                 coordinate / vec2(uInputSize)
             ).r;
         }
@@ -691,17 +704,17 @@ internal object GlesMgcRawSpatialShaders {
                 vec2(uInputSize) - vec2(2.0)
             );
             float luma = 0.0;
-            float weight = 0.0;
+            float rejection = 0.0;
             for (int y = -1; y <= 1; y += 2) {
                 for (int x = -1; x <= 1; x += 2) {
                     vec2 coordinate = center + vec2(x, y);
                     luma += lumaLinearAt(coordinate);
-                    weight += weightLinearAt(coordinate);
+                    rejection += rejectionLinearAt(coordinate);
                 }
             }
             // The source reads CL_SNORM_INT16 and multiplies by 32767 / 16383.
             oLuma = 0.25 * luma / 16383.0;
-            oRejection = 0.25 * weight;
+            oRejection = 0.25 * rejection;
         }
     """.trimIndent()
 
@@ -751,7 +764,7 @@ internal object GlesMgcRawSpatialShaders {
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
             float centerLuma = valueAt(uLuma, p);
-            float centerWeight = valueAt(uRejection, p);
+            float centerRejection = valueAt(uRejection, p);
             int spatialRadius = min(uRadius, 3 * int(uSigmaSpatial));
             float weightedRejection = 0.0;
             float weightSum = 0.0;
@@ -762,9 +775,9 @@ internal object GlesMgcRawSpatialShaders {
                     if (abs(dx) > spatialRadius) continue;
                     ivec2 q = p + ivec2(dx, dy);
                     float deltaLuma = valueAt(uLuma, q);
-                    float deltaWeight = valueAt(uRejection, q);
-                    float sigma = centerWeight <
-                            deltaWeight - 1.0 / 255.0
+                    float deltaRejection = valueAt(uRejection, q);
+                    float sigma = centerRejection <
+                            deltaRejection - 1.0 / 255.0
                         ? uColorSigma
                         : uColorSigma * (
                             uClipRejection != 0 ? uColorSigmaBoost : 1.0
@@ -774,19 +787,16 @@ internal object GlesMgcRawSpatialShaders {
                         sigma
                     );
                     weight *= spatialWeight(float(dx)) * spatialWeightY;
-                    // The buffer contains acceptance weight after DilateMask has inverted the
-                    // rejection map. clip_rejection therefore prevents filtering from creating
-                    // additional rejection: it may raise a weight, but may not lower its center.
                     float value = uClipRejection != 0
-                        ? max(deltaWeight, centerWeight)
-                        : deltaWeight;
+                        ? min(deltaRejection, centerRejection)
+                        : deltaRejection;
                     weightedRejection += weight * value;
                     weightSum += weight;
                 }
             }
             oFilteredRejection = weightSum > 0.0
                 ? weightedRejection / weightSum
-                : centerWeight;
+                : centerRejection;
         }
     """.trimIndent()
 
@@ -839,8 +849,8 @@ internal object GlesMgcRawSpatialShaders {
             return texture(uRejection, p / vec2(uInputSize)).r;
         }
         void main() {
-            // Exact DilateMask mapping from guide-sized RAW/4 rejection to the half-sized
-            // RAW/8 merge-weight texture. The nine bilinear reads and
+            // Exact DilateMask mapping from guide-sized RAW/2 rejection to the half-sized
+            // RAW/4 merge-weight texture. The nine bilinear reads and
             // coefficients are the factored form of a 5x5 box sum.
             vec2 texCoord =
                 2.0 * floor(gl_FragCoord.xy - vec2(0.5)) + vec2(1.5);
@@ -1719,8 +1729,8 @@ internal object GlesMgcRawSpatialShaders {
                 return;
             }
 
-            // MergeBayer's RAW/8 weight covers 4x4 Bayer quads; MergeRGB's independent
-            // RAW/4 rejection slice covers 2x2. Use the selected domain's center.
+            // Both MergeBayer and MergeRGB consume RAW/4 acceptance: one texel covers
+            // 2x2 Bayer quads. Use that domain's center.
             ivec2 referenceQuad = min(
                 outputPixel * uBayerQuadsPerTexel +
                     ivec2(uBayerQuadsPerTexel / 2),
@@ -1877,7 +1887,7 @@ internal object GlesMgcRawSpatialShaders {
             vec2 subquadPixelOffset =
                 2.0 * (vec2(alignedTileQuad) - tilePosition);
             ivec2 anchor = alignedTileQuad + offsetWithinTile;
-            // MGC samples the final RAW/8 rejection weight separately for all four Bayer
+            // MGC samples the final RAW/4 acceptance weight separately for all four Bayer
             // phases. Normalized GLES coordinates preserve each RAW-pixel center, so adjacent
             // phases retain linearly interpolated confidence instead of sharing one texel.
             vec2 rawPixelUv =
@@ -2195,8 +2205,9 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * Raw16ToGrayHalide (0x3bbaf98): one value per Bayer quad, phase black
-     * subtraction, scalar gain, equal RGGB average and separable 1:2:1 filtering.
+     * V25 DownsampleRaw16ToGrayHalide (wrapper 0x3c0430c, worker 0x3c0108c):
+     * sum each Bayer quad, apply its asymmetric U16 separable half-add filter, then
+     * subtract the four-phase black sum and apply the scalar alignment gain.
      */
     val rawToGray = """
         #version 300 es
@@ -2211,39 +2222,47 @@ internal object GlesMgcRawSpatialShaders {
         uniform float uGain;
         layout(location = 0) out highp int oGray;
 
-        vec4 canonicalQuad(ivec2 q) {
+        uint quadSum(ivec2 q) {
+            q = clamp(q, ivec2(0), uGraySize - ivec2(1));
             ivec2 p = clamp(q * 2, ivec2(0), uRawSize - ivec2(2));
-            float p00 = float(texelFetch(uRaw, p, 0).r);
-            float p10 = float(texelFetch(uRaw, p + ivec2(1, 0), 0).r);
-            float p01 = float(texelFetch(uRaw, p + ivec2(0, 1), 0).r);
-            float p11 = float(texelFetch(uRaw, p + ivec2(1, 1), 0).r);
-            vec4 v;
-            if (uCfaPattern == 0) v = vec4(p00, p10, p01, p11);
-            else if (uCfaPattern == 1) v = vec4(p10, p00, p11, p01);
-            else if (uCfaPattern == 2) v = vec4(p01, p11, p00, p10);
-            else v = vec4(p11, p01, p10, p00);
-            // The original S16 guide keeps signed per-phase black residuals. Clipping here
-            // erases the negative half of near-black texture before alignment sees it.
-            return (v - uBlackLevels) * uGain;
+            return texelFetch(uRaw, p, 0).r +
+                texelFetch(uRaw, p + ivec2(1, 0), 0).r +
+                texelFetch(uRaw, p + ivec2(0, 1), 0).r +
+                texelFetch(uRaw, p + ivec2(1, 1), 0).r;
         }
 
-        float grayAt(ivec2 q) {
-            return dot(canonicalQuad(q), vec4(0.25));
+        uint hadd(uint a, uint b) {
+            return (a + b) >> 1;
+        }
+
+        uint rhadd(uint a, uint b) {
+            return (a + b + 1u) >> 1;
+        }
+
+        uint verticalAt(ivec2 q) {
+            // V25 uses VHADD for the two outer rows, then VRHADD with the center.
+            return rhadd(
+                hadd(quadSum(q + ivec2(0, -1)), quadSum(q + ivec2(0, 1))),
+                quadSum(q)
+            );
         }
 
         void main() {
             ivec2 q = ivec2(gl_FragCoord.xy);
-            float value = 0.0;
-            for (int y = -1; y <= 1; ++y) {
-                float wy = y == 0 ? 0.5 : 0.25;
-                for (int x = -1; x <= 1; ++x) {
-                    float wx = x == 0 ? 0.5 : 0.25;
-                    value += grayAt(q + ivec2(x, y)) * wx * wy;
-                }
-            }
-            // The AOT kernel adds 0.5 before its truncating float-to-S16 conversion and
-            // clamps the Fixed14 alignment domain symmetrically to [-16383, 16383].
-            oGray = int(clamp(value + 0.5, -16383.0, 16383.0));
+            // The horizontal stage deliberately reverses the rounding pair: VRHADD for
+            // the outer columns, then VHADD with the center. Keeping these stages in U16
+            // is observable at clipped/high-contrast edges before alignment or rejection.
+            uint filtered = hadd(
+                rhadd(verticalAt(q + ivec2(-1, 0)), verticalAt(q + ivec2(1, 0))),
+                verticalAt(q)
+            );
+            float scale = uGain * 0.25;
+            float blackSum = ((uBlackLevels.x + uBlackLevels.y) +
+                uBlackLevels.z) + uBlackLevels.w;
+            float offset = 0.5 - scale * blackSum;
+            float value = offset + scale * float(filtered);
+            // V25 truncates after the bias and clamps the Fixed14 guide symmetrically.
+            oGray = int(clamp(value, -16383.0, 16383.0));
         }
     """.trimIndent()
 
@@ -2573,15 +2592,23 @@ internal object GlesMgcRawSpatialShaders {
                 vec2(32767.0)
             );
         }
-        float currentAt(ivec2 p) {
-            return float(texelFetch(
+        int currentAt(ivec2 p) {
+            return texelFetch(
                 uCurrent,
                 clamp(p, ivec2(0), uImageSize - ivec2(1)),
                 0
-            ).r);
+            ).r;
         }
-        float q15Weight(float value) {
-            return clamp(floor(value * 32768.0), 0.0, 32767.0);
+        int q15Weight(float value) {
+            return clamp(int(floor(value * 32768.0)), 0, 32767);
+        }
+        int roundedShiftRight15(int value) {
+            // GLSL integer division truncates toward zero. Spell out floor division so
+            // negative accumulators match AArch64 SQRSHRN's signed rounded shift.
+            int biased = value + 16384;
+            return biased >= 0
+                ? biased / 32768
+                : -((-biased + 32767) / 32768);
         }
         float warpedCurrentAt(vec2 p) {
             vec2 bounded = clamp(
@@ -2591,20 +2618,19 @@ internal object GlesMgcRawSpatialShaders {
             );
             ivec2 p0 = ivec2(floor(bounded));
             vec2 fraction = fract(bounded);
-            float w00 = q15Weight((1.0 - fraction.x) * (1.0 - fraction.y));
-            float w10 = q15Weight(fraction.x * (1.0 - fraction.y));
-            float w01 = q15Weight((1.0 - fraction.x) * fraction.y);
-            float w11 = q15Weight(fraction.x * fraction.y);
-            float weighted =
+            int w00 = q15Weight((1.0 - fraction.x) * (1.0 - fraction.y));
+            int w10 = q15Weight(fraction.x * (1.0 - fraction.y));
+            int w01 = q15Weight((1.0 - fraction.x) * fraction.y);
+            int w11 = q15Weight(fraction.x * fraction.y);
+            // The non-negative bilinear weights sum to at most 32768, so four
+            // S16 products fit Int32. Keeping this integer matches SMULL/SMLAL;
+            // Float32 loses low accumulator bits on clipped/high-contrast edges.
+            int weighted =
                 currentAt(p0) * w00 +
                 currentAt(p0 + ivec2(1, 0)) * w10 +
                 currentAt(p0 + ivec2(0, 1)) * w01 +
                 currentAt(p0 + ivec2(1, 1)) * w11;
-            return clamp(
-                floor((weighted + 16384.0) / 32768.0),
-                -32768.0,
-                32767.0
-            );
+            return float(clamp(roundedShiftRight15(weighted), -32768, 32767));
         }
         void main() {
             ivec2 tile = ivec2(gl_FragCoord.xy);
@@ -2803,7 +2829,7 @@ internal object GlesMgcRawSpatialShaders {
 
     /**
      * ConvertAlignmentHalide (0x362479c): expand the final 16-RAW-pixel alignment tiles onto
-     * RAW/4, convert Bayer-quad displacements to normalized UV and store the dense 3x3 flow
+     * RAW/2, convert Bayer-quad displacements to normalized UV and store the dense 3x3 flow
      * range in B. The range is evaluated after expansion: it is nonzero only immediately beside
      * a tile-flow discontinuity, rather than across both complete neighboring tiles.
      */

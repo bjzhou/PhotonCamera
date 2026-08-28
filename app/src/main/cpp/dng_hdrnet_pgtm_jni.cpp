@@ -164,7 +164,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     JNIEnv* env, jobject, jfloatArray coefficients_array,
     jint source_grid_width, jint source_grid_height, jint source_grid_depth,
     jint coefficient_count, jint output_grid_width, jint output_grid_height,
-    jint point_count, jfloat hdr_ratio, jfloat source_to_short_gain,
+    jint point_count, jfloat hdr_ratio, jfloat table_source_to_short_gain,
     jfloat render_min_gain, jfloat render_max_gain,
     jfloat render_max_gain_blend_threshold,
     jfloat min_table_gain, jfloat max_table_gain,
@@ -180,7 +180,8 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       coefficient_count != 2 || output_grid_width <= 0 ||
       output_grid_height <= 0 || point_count <= 1 ||
       !std::isfinite(hdr_ratio) || hdr_ratio < 1.0f ||
-      !std::isfinite(source_to_short_gain) || source_to_short_gain <= 0.0f ||
+      !std::isfinite(table_source_to_short_gain) ||
+      table_source_to_short_gain <= 0.0f ||
       !std::isfinite(render_min_gain) || render_min_gain <= 0.0f ||
       !std::isfinite(render_max_gain) ||
       render_max_gain < render_min_gain ||
@@ -259,11 +260,11 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       const float source_luma =
           static_cast<float>(evaluated_point) / point_count;
       source_lumas[static_cast<size_t>(point)] = source_luma;
-      // MGC predicts and renders from an actual final-short RAW. PhotonCamera's DNG remains in
-      // the captured/reference exposure domain, so reconstruct that short-domain luma for both
-      // bilateral slicing and affine evaluation while retaining source_luma as the table domain.
+      // source_luma is the BaselineExposure-restored DNG lookup coordinate. MGC's HDRNet input
+      // does not consume BaselineExposure, so table_source_to_short_gain has already divided that
+      // renderer-only gain out of final_short_tet / actual_tet.
       const float short_luma =
-          std::clamp(source_luma * source_to_short_gain, 0.0f, 1.0f);
+          std::clamp(source_luma * table_source_to_short_gain, 0.0f, 1.0f);
       short_lumas[static_cast<size_t>(point)] = short_luma;
       const float guide =
           EvaluateGuide(short_luma, guide_shifts.data(), guide_slopes.data(),

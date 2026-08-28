@@ -75,7 +75,7 @@ internal data class RawSceneBrightnessMeasurement(
     val exposureTimeMs: Float,
     val overallGain: Float,
     val currentTetMs: Float,
-    val apertureTransmission: Float,
+    val sensorSensitivity: Float,
     val logSceneBrightness: Float,
 )
 
@@ -235,9 +235,20 @@ internal object RawSceneExposureMath {
         val overallGain = sensitivityIso.toDouble() / referenceSensitivityIso.toDouble()
         val currentTetMs = exposureTimeMs * overallGain
         if (!currentTetMs.isFinite() || currentTetMs <= 0.0) return null
-        val apertureTransmission = 1.0 / (aperture.toDouble() * aperture.toDouble())
+        // MGC does not pass bare aperture transmission to MeasureLogSceneBrightness. Its
+        // EstimateSensorSensitivity fallback is:
+        //
+        //   min_iso * min_iso_adjustment_factor / (f_number * f_number)
+        //
+        // The ordinary Camera2 path uses an adjustment factor of one. `referenceSensitivityIso`
+        // is the lower end of SENSOR_INFO_SENSITIVITY_RANGE, i.e. MGC's min_iso. Keeping this
+        // calibration term is essential: currentTet already expresses the capture ISO as gain
+        // relative to the same min ISO, while the learned scene coordinate expects absolute
+        // sensor sensitivity here.
+        val sensorSensitivity = referenceSensitivityIso.toDouble() /
+            (aperture.toDouble() * aperture.toDouble())
         val normalizedExposure =
-            (apertureTransmission / SCENE_BRIGHTNESS_CALIBRATION) *
+            (sensorSensitivity / SCENE_BRIGHTNESS_CALIBRATION) *
                 (currentTetMs / MILLIS_PER_SECOND)
         if (!normalizedExposure.isFinite() || normalizedExposure <= 0.0) return null
         val logSceneBrightness = kotlin.math.ln(
@@ -251,7 +262,7 @@ internal object RawSceneExposureMath {
             exposureTimeMs = exposureTimeMs.toFloat(),
             overallGain = overallGain.toFloat(),
             currentTetMs = currentTetMs.toFloat(),
-            apertureTransmission = apertureTransmission.toFloat(),
+            sensorSensitivity = sensorSensitivity.toFloat(),
             logSceneBrightness = logSceneBrightness.toFloat(),
         )
     }
@@ -1113,7 +1124,7 @@ internal object RawSceneExposureEstimator {
                         "maxOverallTetMs=${shotRange.maxOverallTetMs} " +
                         "maxPostCaptureGain=${RawSceneExposureMath.MAX_POST_CAPTURE_GAIN} " +
                         "tuningMaxOverallGain=${RawSceneExposureMath.MAX_OVERALL_GAIN} " +
-                        "apertureTransmission=${measurement.apertureTransmission}",
+                        "sensorSensitivity=${measurement.sensorSensitivity}",
                 )
                 RawSceneExposureEstimate(
                     hdrRatio = fusion.finalHdrRatio,

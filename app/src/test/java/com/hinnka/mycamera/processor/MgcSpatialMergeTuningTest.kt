@@ -99,7 +99,7 @@ class MgcSpatialMergeTuningTest {
     }
 
     @Test
-    fun normalMergeWeightUsesExpectedVarianceAtReferenceSignal() {
+    fun expectedWeightRemainsDiagnosticAndDiffersFromAotMaximum() {
         val maximum = MgcSpatialMergeTuning.maximumMergeWeight(
             baseReadVariance = 0.004f,
             alternateReadVariance = 0.001f,
@@ -116,6 +116,19 @@ class MgcSpatialMergeTuningTest {
 
         assertEquals(16f, maximum, 1e-6f)
         assertEquals(0.0045f / 0.01275f, expected, 1e-6f)
+    }
+
+    @Test
+    fun rejectionScaleUsesTheSameCapAsAotFrameWeight() {
+        assertEquals(
+            50f,
+            MgcSpatialMergeTuning.rejectionWeightScale(
+                baseReadVariance = 1f,
+                alternateReadVariance = 0.001f,
+                exposureScale = 1f,
+            ),
+            0f,
+        )
     }
 
     @Test
