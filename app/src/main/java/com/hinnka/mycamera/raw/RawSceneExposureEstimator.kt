@@ -125,6 +125,8 @@ internal data class RawSceneFastMomentsAeStats(
 internal data class RawSceneExposureFinalization(
     val shotMinTetMs: Float,
     val shotMaxTetMs: Float,
+    /** User-requested AE target offset. MGC applies it after ML inference, in stops. */
+    val exposureCompensationEv: Float = 0f,
     val maxHdrRatio: Float? = null,
     val weightedFractionOfPixelsFromLongExposure: Float = 0f,
     val touchRoiClipProtectionTripped: Boolean = false,
@@ -138,6 +140,9 @@ internal data class RawSceneExposureFusion(
     val idealShortTetMs: Float,
     val idealLongTetMs: Float,
     val idealPortraitTetMs: Float,
+    val exposureCompensationGain: Float,
+    val compensatedShortTetMs: Float,
+    val compensatedLongTetMs: Float,
     val finalShortTetMs: Float,
     val finalLongTetMs: Float,
     val finalPortraitTetMs: Float,
@@ -567,9 +572,10 @@ internal object RawSceneExposureMath {
      *
      * The three neural outputs are exposure gains relative to [currentTetMs]. MGC first turns
      * them into absolute ideal TETs. The final short TET starts at the shortest positive ideal TET;
-     * long and portrait remain independent capture roles. Shot-range, HDR-ratio, safe-underexposure
-     * and explicit final-TET overrides are then applied in the same order, followed by the hard
-     * invariant final_short_tet <= min(final_long_tet, final_portrait_tet).
+     * long and portrait remain independent capture roles. MGC then applies the requested exposure
+     * compensation to the desired short and long TETs. Shot-range, HDR-ratio,
+     * safe-underexposure and explicit final-TET overrides follow in that order, followed by the
+     * hard invariant final_short_tet <= min(final_long_tet, final_portrait_tet).
      */
     fun finalizeAeResults(
         frame: RawSceneLinearFrame,
@@ -578,7 +584,8 @@ internal object RawSceneExposureMath {
         finalization: RawSceneExposureFinalization,
     ): RawSceneExposureFusion? {
         if (!currentTetMs.isFinite() || currentTetMs <= 0f ||
-            !validTetRange(finalization.shotMinTetMs, finalization.shotMaxTetMs)
+            !validTetRange(finalization.shotMinTetMs, finalization.shotMaxTetMs) ||
+            !finalization.exposureCompensationEv.isFinite()
         ) {
             return null
         }
@@ -589,12 +596,26 @@ internal object RawSceneExposureMath {
         val idealShortTetMs = ideals.shortTetMs
         val idealLongTetMs = ideals.longTetMs
         val idealPortraitTetMs = ideals.portraitTetMs
+        // AeHelper::ComputeAeResults applies ShotParams::exposure_compensation after the ML
+        // ideals are decoded. The current capture TET defines the re-exposure starting point;
+        // this separate factor moves the desired output target and therefore is not already
+        // represented by the shutter/ISO of an underexposed metering frame.
+        val exposureCompensationGain = Math.pow(
+            2.0,
+            finalization.exposureCompensationEv.toDouble(),
+        ).toFloat()
+        if (!exposureCompensationGain.isFinite() || exposureCompensationGain <= 0f) return null
+        val compensatedShortTetMs =
+            minOf(idealShortTetMs, idealLongTetMs, idealPortraitTetMs) *
+                exposureCompensationGain
+        val compensatedLongTetMs = idealLongTetMs * exposureCompensationGain
+        if (!validPositiveTets(compensatedShortTetMs, compensatedLongTetMs)) return null
 
         // MGC's AeResults finalizer treats every positive portrait TET as a frame-role constraint;
         // face presence never switches the displayed result from short to portrait.
-        var finalShortTetMs = minOf(idealShortTetMs, idealLongTetMs, idealPortraitTetMs)
+        var finalShortTetMs = compensatedShortTetMs
             .coerceIn(finalization.shotMinTetMs, finalization.shotMaxTetMs)
-        var finalLongTetMs = idealLongTetMs.coerceIn(
+        var finalLongTetMs = compensatedLongTetMs.coerceIn(
             finalization.shotMinTetMs,
             finalization.shotMaxTetMs,
         )
@@ -673,6 +694,9 @@ internal object RawSceneExposureMath {
             idealShortTetMs = idealShortTetMs,
             idealLongTetMs = idealLongTetMs,
             idealPortraitTetMs = idealPortraitTetMs,
+            exposureCompensationGain = exposureCompensationGain,
+            compensatedShortTetMs = compensatedShortTetMs,
+            compensatedLongTetMs = compensatedLongTetMs,
             finalShortTetMs = finalShortTetMs,
             finalLongTetMs = finalLongTetMs,
             finalPortraitTetMs = finalPortraitTetMs,
@@ -1068,6 +1092,7 @@ internal object RawSceneExposureEstimator {
                     finalization = RawSceneExposureFinalization(
                         shotMinTetMs = fastMomentsStats.adjustedShotMinTetMs,
                         shotMaxTetMs = shotRange.maxTetMs,
+                        exposureCompensationEv = metadata.exposureBias,
                         maxHdrRatio = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
                         safeUnderexposureTetMs = highlightPreservationTetMs,
                     ),
@@ -1101,6 +1126,10 @@ internal object RawSceneExposureEstimator {
                         "idealShortTetMs=${fusion.idealShortTetMs} " +
                         "idealLongTetMs=${fusion.idealLongTetMs} " +
                         "idealPortraitTetMs=${fusion.idealPortraitTetMs} " +
+                        "exposureCompensationEv=${metadata.exposureBias} " +
+                        "exposureCompensationGain=${fusion.exposureCompensationGain} " +
+                        "compensatedShortTetMs=${fusion.compensatedShortTetMs} " +
+                        "compensatedLongTetMs=${fusion.compensatedLongTetMs} " +
                         "finalShortTetMs=${fusion.finalShortTetMs} " +
                         "finalLongTetMs=${fusion.finalLongTetMs} " +
                         "finalPortraitTetMs=${fusion.finalPortraitTetMs} " +
