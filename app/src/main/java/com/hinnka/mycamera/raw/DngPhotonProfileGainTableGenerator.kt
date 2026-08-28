@@ -100,21 +100,23 @@ internal object DngPhotonProfileGainTableGenerator {
     /**
      * Plans a 64 x 48 PGTM grid resampled from MGC HDRNet's fixed 16 x 12 coefficient grid.
      *
-     * HDRNet runs in the baseline-restored linear domain. dng_render applies
-     * TotalBaselineExposure to the ProfileGainTableMap input before lookup, so the stored luma
-     * weights remain unchanged: both the network and the DNG table range coordinate observe the
-     * same restored signal.
+     * HDRNet runs in the final-short-exposure linear domain. The source DNG remains in its
+     * captured exposure domain, so [sourceToShortGain] is applied only while preparing the model
+     * input and while evaluating the learned affine grid. The stored table remains indexed by the
+     * baseline-restored DNG source luma and encodes the complete source-to-rendered gain.
      */
     fun hdrNetPlan(
         sourceWidth: Int,
         sourceHeight: Int,
         baselineExposureEv: Float,
         hdrRatio: Float,
+        sourceToShortGain: Float,
         diagnosticBand: DiagnosticBand? = null,
         samplingArea: PhotonPgtmSamplingArea = PhotonPgtmSamplingArea.FULL,
     ): HdrNetProfileGainTablePlan? {
         if (sourceWidth <= 0 || sourceHeight <= 0 || !baselineExposureEv.isFinite() ||
-            !hdrRatio.isFinite() || hdrRatio <= 0f
+            !hdrRatio.isFinite() || hdrRatio <= 0f ||
+            !sourceToShortGain.isFinite() || sourceToShortGain <= 0f
         ) {
             return null
         }
@@ -135,6 +137,7 @@ internal object DngPhotonProfileGainTableGenerator {
             mapInputWeights = HDRNET_LUMA_WEIGHTS.copyOf(),
             gamma = 1f,
             baselineGain = baselineGain,
+            sourceToShortGain = sourceToShortGain,
             // The native MGC path builds the long-exposure guide from a ratio of at least one.
             hdrRatio = hdrRatio.coerceAtLeast(1f),
             diagnosticBand = diagnosticBand?.sanitized(),
@@ -397,6 +400,7 @@ internal data class HdrNetProfileGainTablePlan(
     val mapInputWeights: FloatArray,
     val gamma: Float,
     val baselineGain: Float,
+    val sourceToShortGain: Float,
     val hdrRatio: Float,
     val diagnosticBand: DngPhotonProfileGainTableGenerator.DiagnosticBand?,
 ) {
@@ -407,6 +411,7 @@ internal data class HdrNetProfileGainTablePlan(
         require(mapInputWeights.size == 5 && mapInputWeights.all { it.isFinite() })
         require(gamma.isFinite() && gamma in 0.125f..8f)
         require(baselineGain.isFinite() && baselineGain > 0f)
+        require(sourceToShortGain.isFinite() && sourceToShortGain > 0f)
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
     }
 

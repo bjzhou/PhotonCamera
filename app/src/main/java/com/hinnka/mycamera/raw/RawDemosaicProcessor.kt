@@ -441,6 +441,7 @@ class RawDemosaicProcessor {
                         hdrRatio = 1f,
                         finalShortTetMs = 1f,
                         finalLongTetMs = 1f,
+                        finalShortGain = 1f,
                         safeUnderexposure = 1f,
                         fractionPixelsClippedAtFinalShortTet = 0f,
                     )
@@ -3127,6 +3128,7 @@ class RawDemosaicProcessor {
                             "hdrRatio=${solution.hdrRatio} " +
                             "finalShortTetMs=${solution.finalShortTetMs} " +
                             "finalLongTetMs=${solution.finalLongTetMs} " +
+                            "finalShortGain=${solution.finalShortGain} " +
                             "safeUnderexposure=${solution.safeUnderexposure} " +
                             "fractionPixelsClippedAtFinalShortTet=" +
                             "${solution.fractionPixelsClippedAtFinalShortTet}",
@@ -3146,8 +3148,11 @@ class RawDemosaicProcessor {
                 )
                 val captureHdrRatio = solvedSceneExposure?.hdrRatio
                     ?.takeIf { it.isFinite() && it >= 1f }
+                val captureSourceToShortGain = solvedSceneExposure?.finalShortGain
+                    ?.takeIf { it.isFinite() && it > 0f }
                 val captureProfileGainTableMap = if (
-                    capturePhotonPgtmRequested && captureHdrRatio != null
+                    capturePhotonPgtmRequested && captureHdrRatio != null &&
+                    captureSourceToShortGain != null
                 ) {
                     generateProfileGainTableMapOnGpu(
                         context = context.applicationContext,
@@ -3169,6 +3174,7 @@ class RawDemosaicProcessor {
                         // HDRNet's ratio describes capture exposure, not the DCP profile's
                         // independent BaselineExposureOffset rendering adjustment.
                         hdrRatio = captureHdrRatio,
+                        sourceToShortGain = captureSourceToShortGain,
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
                         hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -3179,7 +3185,11 @@ class RawDemosaicProcessor {
                     )
                 } else {
                     if (capturePhotonPgtmRequested) {
-                        PLog.e(TAG, "Photon HDR PGTM unavailable: MGC AE HDR ratio is missing")
+                        PLog.e(
+                            TAG,
+                            "Photon HDR PGTM unavailable: MGC AE HDR ratio or final-short gain " +
+                                "is missing",
+                        )
                     }
                     null
                 }
@@ -3239,13 +3249,20 @@ class RawDemosaicProcessor {
                     )
                     return@withContext null
                 }
+                // Older captures only persisted the long/short ratio. When Fast Moments cannot
+                // be re-run, retain their historical source-domain behavior instead of inventing
+                // a short-exposure normalization that cannot be derived from the ratio alone.
+                val regenerationSourceToShortGain =
+                    estimatedExposure?.finalShortGain ?: 1f
                 PLog.i(
                     TAG,
                     "HDRNet PGTM regeneration ratio=$regenerationHdrRatio " +
+                        "sourceToShortGain=$regenerationSourceToShortGain " +
                         "source=${if (estimatedHdrRatio != null) "MGC_FAST_MOMENTS_TRUE" else "metadata-fallback"} " +
                         "persistedRatio=$persistedHdrRatio " +
                         "finalShortTetMs=${estimatedExposure?.finalShortTetMs} " +
                         "finalLongTetMs=${estimatedExposure?.finalLongTetMs} " +
+                        "finalShortGain=${estimatedExposure?.finalShortGain} " +
                         "safeUnderexposure=${estimatedExposure?.safeUnderexposure} " +
                         "fractionPixelsClippedAtFinalShortTet=" +
                         "${estimatedExposure?.fractionPixelsClippedAtFinalShortTet}",
@@ -3274,6 +3291,7 @@ class RawDemosaicProcessor {
                     baselineExposureEv = actualMetadata.baselineExposure +
                         dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
                     hdrRatio = regenerationHdrRatio,
+                    sourceToShortGain = regenerationSourceToShortGain,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
                     hueSatMap = activeDcpRenderPlan?.hueSatMap,
                     hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -4365,6 +4383,7 @@ class RawDemosaicProcessor {
         statsBounds: Rect?,
         baselineExposureEv: Float,
         hdrRatio: Float,
+        sourceToShortGain: Float,
         colorCorrectionMatrix: FloatArray,
         hueSatMap: DcpHueSatMap?,
         hueSatMapSupportsOverrange: Boolean,
@@ -4404,6 +4423,7 @@ class RawDemosaicProcessor {
                 statsBounds = statsBounds,
                 baselineExposureEv = baselineExposureEv,
                 hdrRatio = hdrRatio,
+                sourceToShortGain = sourceToShortGain,
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 hueSatMap = hueSatMap,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,

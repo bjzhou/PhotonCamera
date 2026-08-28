@@ -953,6 +953,7 @@ internal object DngPhotonProfileGainTableInputShader {
         uniform ivec4 uStatsBounds;
         uniform mat3 uColorCorrectionMatrix;
         uniform float uBaselineGain;
+        uniform float uSourceToShortGain;
         uniform float uHdrRatio;
         uniform int uHueSatEnabled;
         uniform ivec3 uHueSatDivisions;
@@ -1051,15 +1052,19 @@ internal object DngPhotonProfileGainTableInputShader {
                     ++sampleCount;
                 }
             }
-            // A Bento ultrashort output is normalized down before it reaches this texture.
-            // DNG BaselineExposure restores that source-domain normalization during rendering;
-            // HDRNet must observe the same restored linear signal or its bilateral grid changes
-            // discontinuously when Bento accepts/rejects the ultrashort frame.
+            // Restore both source-domain normalizations before HDRNet. BaselineGain reverses a
+            // Bento ultrashort normalization; SourceToShortGain moves the captured/reference RAW
+            // into the final-short TET domain that MGC supplies to its HDRNet raw processor.
             vec3 cameraRgb =
-                (cameraRgbSum / float(max(sampleCount, 1))) * uBaselineGain;
-            vec3 profileRgb = max(uColorCorrectionMatrix * cameraRgb, vec3(0.0));
+                (cameraRgbSum / float(max(sampleCount, 1))) *
+                    uBaselineGain * uSourceToShortGain;
+            vec3 profileRgb = clamp(
+                uColorCorrectionMatrix * cameraRgb,
+                vec3(0.0),
+                vec3(1.0)
+            );
             if (uHueSatEnabled != 0) {
-                profileRgb = max(
+                profileRgb = clamp(
                     dngApplyHueSatMap(
                         profileRgb,
                         uHueSatMap,
@@ -1067,7 +1072,8 @@ internal object DngPhotonProfileGainTableInputShader {
                         uHueSatEncoding,
                         uHueSatSupportOverrange != 0
                     ),
-                    vec3(0.0)
+                    vec3(0.0),
+                    vec3(1.0)
                 );
             }
 
@@ -1389,6 +1395,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val statsBounds: Rect?,
         val baselineExposureEv: Float,
         val hdrRatio: Float,
+        val sourceToShortGain: Float,
         val colorCorrectionMatrix: FloatArray,
         val hueSatMap: DcpHueSatMap?,
         val hueSatMapSupportsOverrange: Boolean,
@@ -1486,6 +1493,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
             sourceHeight = height,
             baselineExposureEv = input.baselineExposureEv,
             hdrRatio = input.hdrRatio,
+            sourceToShortGain = input.sourceToShortGain,
             diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG HDRNet capture"),
             samplingArea = samplingArea,
         ) ?: return null
@@ -1620,6 +1628,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 plan.baselineGain,
             )
             GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uSourceToShortGain"),
+                plan.sourceToShortGain,
+            )
+            GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uHdrRatio"),
                 plan.hdrRatio,
             )
@@ -1689,6 +1701,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
                     "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
                     "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
+                    "sourceToShortGain=${plan.sourceToShortGain} " +
                     "baselineAppliedToHdrNetInput=true " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
                     "processingBounds=$stage3Bounds samplingArea=$samplingArea " +

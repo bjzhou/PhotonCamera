@@ -92,13 +92,14 @@ class RawProfileGainTablePipelineTest {
     }
 
     @Test
-    fun hdrNetPlanUsesDenseGridAndPrecompensatesBaselineExposure() {
+    fun hdrNetPlanUsesDenseGridAndRestoredExposureLookupDomain() {
         val plan = checkNotNull(
             DngPhotonProfileGainTableGenerator.hdrNetPlan(
                 sourceWidth = 4000,
                 sourceHeight = 3000,
                 baselineExposureEv = 2f,
                 hdrRatio = 4f,
+                sourceToShortGain = 2f,
             ),
         )
 
@@ -112,11 +113,12 @@ class RawProfileGainTablePipelineTest {
         )
         assertEquals(257, plan.pointCount)
         assertEquals(4f, plan.hdrRatio, 0f)
+        assertEquals(2f, plan.sourceToShortGain, 0f)
         assertEquals(1.0 / 64.0, plan.grid.mapSpacingH, 1e-12)
         assertEquals(1.0 / 48.0, plan.grid.mapSpacingV, 1e-12)
         DngPhotonProfileGainTableGenerator.HDRNET_LUMA_WEIGHTS
             .forEachIndexed { index, weight ->
-                assertEquals(weight / 4f, plan.mapInputWeights[index], 1e-7f)
+                assertEquals(weight, plan.mapInputWeights[index], 1e-7f)
             }
     }
 

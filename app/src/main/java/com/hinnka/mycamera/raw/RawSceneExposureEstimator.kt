@@ -52,6 +52,7 @@ internal data class RawSceneExposureEstimate(
     val hdrRatio: Float,
     val finalShortTetMs: Float,
     val finalLongTetMs: Float,
+    val finalShortGain: Float,
     val safeUnderexposure: Float,
     val fractionPixelsClippedAtFinalShortTet: Float,
 ) {
@@ -59,6 +60,7 @@ internal data class RawSceneExposureEstimate(
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
         require(finalShortTetMs.isFinite() && finalShortTetMs > 0f)
         require(finalLongTetMs.isFinite() && finalLongTetMs >= finalShortTetMs)
+        require(finalShortGain.isFinite() && finalShortGain > 0f)
         require(safeUnderexposure.isFinite() && safeUnderexposure >= 1f)
         require(
             fractionPixelsClippedAtFinalShortTet.isFinite() &&
@@ -1117,6 +1119,7 @@ internal object RawSceneExposureEstimator {
                     hdrRatio = fusion.finalHdrRatio,
                     finalShortTetMs = fusion.finalShortTetMs,
                     finalLongTetMs = fusion.finalLongTetMs,
+                    finalShortGain = fusion.finalShortGain,
                     safeUnderexposure = fastMomentsStats.safeUnderexposure,
                     fractionPixelsClippedAtFinalShortTet =
                         fractionPixelsClippedAtFinalShortTet,

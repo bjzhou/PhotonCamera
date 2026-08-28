@@ -164,7 +164,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     JNIEnv* env, jobject, jfloatArray coefficients_array,
     jint source_grid_width, jint source_grid_height, jint source_grid_depth,
     jint coefficient_count, jint output_grid_width, jint output_grid_height,
-    jint point_count, jfloat hdr_ratio,
+    jint point_count, jfloat hdr_ratio, jfloat source_to_short_gain,
     jfloat render_min_gain, jfloat render_max_gain,
     jfloat render_max_gain_blend_threshold,
     jfloat min_table_gain, jfloat max_table_gain,
@@ -180,6 +180,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       coefficient_count != 2 || output_grid_width <= 0 ||
       output_grid_height <= 0 || point_count <= 1 ||
       !std::isfinite(hdr_ratio) || hdr_ratio < 1.0f ||
+      !std::isfinite(source_to_short_gain) || source_to_short_gain <= 0.0f ||
       !std::isfinite(render_min_gain) || render_min_gain <= 0.0f ||
       !std::isfinite(render_max_gain) ||
       render_max_gain < render_min_gain ||
@@ -244,6 +245,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     std::vector<AxisSample> y_samples(static_cast<size_t>(output_grid_height));
     std::vector<AxisSample> range_samples(static_cast<size_t>(point_count));
     std::vector<float> source_lumas(static_cast<size_t>(point_count));
+    std::vector<float> short_lumas(static_cast<size_t>(point_count));
     for (int x = 0; x < output_grid_width; ++x) {
       x_samples[static_cast<size_t>(x)] =
           MakeAxisSample(x, output_grid_width, source_grid_width);
@@ -257,8 +259,14 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       const float source_luma =
           static_cast<float>(evaluated_point) / point_count;
       source_lumas[static_cast<size_t>(point)] = source_luma;
+      // MGC predicts and renders from an actual final-short RAW. PhotonCamera's DNG remains in
+      // the captured/reference exposure domain, so reconstruct that short-domain luma for both
+      // bilateral slicing and affine evaluation while retaining source_luma as the table domain.
+      const float short_luma =
+          std::clamp(source_luma * source_to_short_gain, 0.0f, 1.0f);
+      short_lumas[static_cast<size_t>(point)] = short_luma;
       const float guide =
-          EvaluateGuide(source_luma, guide_shifts.data(), guide_slopes.data(),
+          EvaluateGuide(short_luma, guide_shifts.data(), guide_slopes.data(),
                         guide_count);
       const float range_position = guide * source_grid_depth - 0.5f;
       const float range_floor = std::floor(range_position);
@@ -279,6 +287,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
           output_gains.data() + static_cast<size_t>(cell) * point_count;
       for (int point = 0; point < point_count; ++point) {
         const float source_luma = source_lumas[static_cast<size_t>(point)];
+        const float short_luma = short_lumas[static_cast<size_t>(point)];
         const AxisSample& range_sample =
             range_samples[static_cast<size_t>(point)];
         const float raw_scale = SampleCoefficient(
@@ -290,7 +299,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
             coefficient_count, x_samples[static_cast<size_t>(x)],
             y_samples[static_cast<size_t>(y)], range_sample, 1);
         const float scale = raw_scale * (hdr_ratio - 1.0f) + 1.0f;
-        const float predicted_luma = scale * source_luma + bias;
+        const float predicted_luma = scale * short_luma + bias;
         if (!std::isfinite(predicted_luma)) {
           targets_valid.store(false, std::memory_order_relaxed);
           gain_curve[point] = min_table_gain;
@@ -304,19 +313,19 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
         float render_max_gain_for_luma = render_max_gain;
         if (render_max_gain_blend_threshold > 0.0f) {
           const float blend = std::clamp(
-              source_luma / render_max_gain_blend_threshold, 0.0f, 1.0f);
+              short_luma / render_max_gain_blend_threshold, 0.0f, 1.0f);
           render_max_gain_for_luma = Lerp(1.0f, render_max_gain, blend);
         }
         const float render_gain = std::clamp(
-            predicted_luma / (source_luma + kHdrNetGainEpsilon),
+            predicted_luma / (short_luma + kHdrNetGainEpsilon),
             render_min_gain, render_max_gain_for_luma);
         const float target_luma =
-            std::clamp(source_luma * render_gain, 0.0f, 1.0f);
+            std::clamp(short_luma * render_gain, 0.0f, 1.0f);
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
-        // source_luma is already in the BaselineExposure-restored domain. The DNG renderer
-        // applies that same baseline before PGTM lookup and after multiplying the stored gain,
-        // so dividing by baseline again here would darken every Bento-normalized capture.
+        // The learned target is in final-short space, but the stored table gain is applied to the
+        // original baseline-restored DNG source. Dividing by source_luma bakes the missing physical
+        // short exposure into PGTM without changing BaselineExposure ownership.
         float gain = std::clamp(pre_curve_target / source_luma, min_table_gain,
                                 max_table_gain);
         if (diagnostic_mode >= 0) {
