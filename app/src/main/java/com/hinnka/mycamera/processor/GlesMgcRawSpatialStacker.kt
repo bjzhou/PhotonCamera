@@ -90,7 +90,14 @@ internal class GlesMgcRawSpatialStacker(
         val gridMin: Int,
     )
 
-    /** Sparse normalized flow plus the reference-UV to alignment-texture transform. */
+    private data class GlobalAlignmentCandidate(
+        val x: Float,
+        val y: Float,
+        val peakSupport: Int,
+        val usedHistogramPeak: Boolean,
+    )
+
+    /** Normalized flow plus the reference-UV to alignment-texture transform. */
     private data class ConvertedAlignment(
         val texture: Int,
         val scaleX: Float,
@@ -4048,6 +4055,7 @@ internal class GlesMgcRawSpatialStacker(
                     "levelScale=$scale"
         }
         val finalUpsampleMode = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
+            val globalCandidate = estimateGlobalAlignmentCandidate(alignment)
             alignment = renderUpsampledAlignment(
                 reference = reference.first(),
                 current = current.first(),
@@ -4057,6 +4065,7 @@ internal class GlesMgcRawSpatialStacker(
                 targetGridMin = MERGE_ALIGNMENT_GRID_MIN,
                 targetTileStride = MERGE_BAYER_RAW_TILE_SIZE / 2,
                 targetTileSize = MERGE_BAYER_RAW_TILE_SIZE,
+                globalCandidate = globalCandidate,
             )
             schedule +=
                 "${reference.first().width}x${reference.first().height}:" +
@@ -4071,7 +4080,8 @@ internal class GlesMgcRawSpatialStacker(
             ) {
                 "Spatial AlignAlt final output does not match MergeBayerRaw16's alignment grid"
             }
-            "merge-grid"
+            "merge-grid/global-${if (globalCandidate.usedHistogramPeak) "mode" else "mean"}" +
+                "(${globalCandidate.x},${globalCandidate.y},n=${globalCandidate.peakSupport})"
         } else {
             "level-transitions-only"
         }
@@ -4095,10 +4105,10 @@ internal class GlesMgcRawSpatialStacker(
      * UpsampleAlignmentI16Halide selects a whole coarse-flow candidate rather than blending
      * neighboring motion vectors. This preserves discontinuities at moving-object boundaries.
      *
-     * The original runtime has both three- and four-candidate workers. The fourth input is an
-     * external geometric candidate; this pipeline has no geometric alignment source, so it uses
-     * the original three-candidate contract: the nearest coarse tile by tile-center distance plus
-     * the next-nearest tile on each axis, selected by target-level block L1 residual.
+     * The original runtime uses three candidates at pyramid transitions. Before the final
+     * merge-grid expansion it derives one global motion candidate from the finest LK field and
+     * invokes the four-candidate worker. The global candidate is important when all three local
+     * neighbors belong to the same erroneous motion island.
      */
     private fun renderUpsampledAlignment(
         reference: TextureLevel,
@@ -4109,6 +4119,7 @@ internal class GlesMgcRawSpatialStacker(
         targetGridMin: Int,
         targetTileStride: Int,
         targetTileSize: Int,
+        globalCandidate: GlobalAlignmentCandidate? = null,
     ): Alignment {
         require(reference.width == current.width && reference.height == current.height)
         require(targetGridWidth > 0 && targetGridHeight > 0)
@@ -4144,6 +4155,17 @@ internal class GlesMgcRawSpatialStacker(
         uniform1i(upsampleAlignmentProgram, "uTargetTileStride", targetTileStride)
         uniform1i(upsampleAlignmentProgram, "uTargetTileSize", targetTileSize)
         uniform1f(upsampleAlignmentProgram, "uInitialScale", initialScale)
+        uniform1i(
+            upsampleAlignmentProgram,
+            "uHasGlobalCandidate",
+            if (globalCandidate != null) 1 else 0,
+        )
+        uniform2f(
+            upsampleAlignmentProgram,
+            "uGlobalCandidate",
+            globalCandidate?.x ?: 0f,
+            globalCandidate?.y ?: 0f,
+        )
         draw(
             upsampleAlignmentProgram,
             targetGridWidth,
@@ -4159,6 +4181,102 @@ internal class GlesMgcRawSpatialStacker(
             scaleToBayerQuads = reference.scaleToBayerQuads,
             gridMin = targetGridMin,
         )
+    }
+
+    /**
+     * EstimateGlobalAlignment from MGC V25's final AlignPyramid::AlignAlt pass.
+     *
+     * Flow components are rounded with C llroundf semantics and accumulated into a 129x129
+     * histogram over [-64, 64]. A peak supported by at least ten tiles is used directly;
+     * otherwise the mean of the rounded, clamped samples is used. The generated four-candidate
+     * UpsampleAlignment worker then compares this vector against the three local candidates.
+     */
+    private fun estimateGlobalAlignmentCandidate(
+        alignment: Alignment,
+    ): GlobalAlignmentCandidate {
+        val pixelCount = alignment.gridWidth * alignment.gridHeight
+        require(pixelCount > 0)
+        val byteCount = pixelCount * 4 * Float.SIZE_BYTES
+        val readback = ByteBuffer.allocateDirect(byteCount).order(ByteOrder.nativeOrder())
+        val startNs = System.nanoTime()
+        bindRenderTargets(
+            intArrayOf(alignment.texture),
+            "MGC global alignment source",
+        )
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, Float.SIZE_BYTES)
+        GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
+        GLES30.glReadPixels(
+            0,
+            0,
+            alignment.gridWidth,
+            alignment.gridHeight,
+            GLES30.GL_RGBA,
+            GLES30.GL_FLOAT,
+            readback,
+        )
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        checkGlError("read MGC global alignment source")
+
+        val histogram = IntArray(GLOBAL_ALIGNMENT_HISTOGRAM_SIZE * GLOBAL_ALIGNMENT_HISTOGRAM_SIZE)
+        val values = readback.asFloatBuffer()
+        var sumX = 0L
+        var sumY = 0L
+        for (pixel in 0 until pixelCount) {
+            val flowX = values.get(pixel * 4)
+            val flowY = values.get(pixel * 4 + 1)
+            check(flowX.isFinite() && flowY.isFinite()) {
+                "MGC global alignment source contains non-finite flow at tile=$pixel"
+            }
+            val binX = roundGlobalAlignmentBin(flowX)
+                .coerceIn(-GLOBAL_ALIGNMENT_RADIUS, GLOBAL_ALIGNMENT_RADIUS)
+            val binY = roundGlobalAlignmentBin(flowY)
+                .coerceIn(-GLOBAL_ALIGNMENT_RADIUS, GLOBAL_ALIGNMENT_RADIUS)
+            histogram[
+                (binY + GLOBAL_ALIGNMENT_RADIUS) * GLOBAL_ALIGNMENT_HISTOGRAM_SIZE +
+                    binX + GLOBAL_ALIGNMENT_RADIUS
+            ]++
+            sumX += binX
+            sumY += binY
+        }
+
+        var peakSupport = 0
+        var peakX = -GLOBAL_ALIGNMENT_RADIUS
+        var peakY = -GLOBAL_ALIGNMENT_RADIUS
+        for (binY in -GLOBAL_ALIGNMENT_RADIUS..GLOBAL_ALIGNMENT_RADIUS) {
+            val row = (binY + GLOBAL_ALIGNMENT_RADIUS) * GLOBAL_ALIGNMENT_HISTOGRAM_SIZE
+            for (binX in -GLOBAL_ALIGNMENT_RADIUS..GLOBAL_ALIGNMENT_RADIUS) {
+                val support = histogram[row + binX + GLOBAL_ALIGNMENT_RADIUS]
+                if (support > peakSupport) {
+                    peakSupport = support
+                    peakX = binX
+                    peakY = binY
+                }
+            }
+        }
+        val usePeak = peakSupport >= GLOBAL_ALIGNMENT_MIN_PEAK_SUPPORT
+        val candidateX = if (usePeak) peakX.toFloat() else sumX.toFloat() / pixelCount
+        val candidateY = if (usePeak) peakY.toFloat() else sumY.toFloat() / pixelCount
+        return GlobalAlignmentCandidate(
+            x = candidateX,
+            y = candidateY,
+            peakSupport = peakSupport,
+            usedHistogramPeak = usePeak,
+        ).also { candidate ->
+            PLog.d(
+                TAG,
+                "MGC global alignment grid=${alignment.gridWidth}x${alignment.gridHeight} " +
+                    "candidate=(${candidate.x},${candidate.y}) peak=${candidate.peakSupport} " +
+                    "source=${if (candidate.usedHistogramPeak) "histogram" else "mean"} " +
+                    "readback=${elapsedMs(startNs)}ms",
+            )
+        }
+    }
+
+    private fun roundGlobalAlignmentBin(value: Float): Int = if (value >= 0f) {
+        kotlin.math.floor(value.toDouble() + 0.5).toInt()
+    } else {
+        kotlin.math.ceil(value.toDouble() - 0.5).toInt()
     }
 
     private fun renderLucasKanadeLevel(
@@ -4330,40 +4448,43 @@ internal class GlesMgcRawSpatialStacker(
         require(strideInBayerQuads.isFinite() && strideInBayerQuads > 0f) {
             "ConvertAlignment requires a positive finite Bayer-quad stride"
         }
+        val integerStrideInBayerQuads = strideInBayerQuads.toInt()
+        require(
+            strideInBayerQuads == integerStrideInBayerQuads.toFloat() &&
+                integerStrideInBayerQuads % REJECTION_BAYER_QUADS_PER_PIXEL == 0
+        ) {
+            "ConvertAlignment cannot map Bayer-quad stride=$strideInBayerQuads " +
+                "onto the RAW/4 rejection domain"
+        }
+        val alignmentTileSize =
+            integerStrideInBayerQuads / REJECTION_BAYER_QUADS_PER_PIXEL
         val output = createTexture(
-            alignment.gridWidth,
-            alignment.gridHeight,
+            rejectionWidth,
+            rejectionHeight,
             GLES30.GL_RGBA16F,
             GLES30.GL_NEAREST,
         )
-        renderConvertedAlignment(alignment, output)
+        renderConvertedAlignment(alignment, output, alignmentTileSize)
 
-        // A flow texel owns one complete final-alignment tile. V25 calls ConvertAlignmentHalide
-        // at 0x34f7c6c and creates its RGBA16F output at 0x34f7d18 with filter 0x2600
-        // (GL_NEAREST). MergeRgbRaw16F16 consumes the same tile as a piecewise-constant
-        // displacement over 16 RAW pixels; rejection, clipping and Bento gating must therefore
-        // judge that exact vector instead of an interpolation with the neighbouring tile.
-        // Flow vectors are normalized in Bayer-quad coordinates. Rejection is RAW/4, so using
-        // its extent here would compress the sparse alignment sampling transform by another 2x.
-        val scaleX = rejectionGeometry.bayerQuadWidth.toFloat() /
-            (strideInBayerQuads * alignment.gridWidth.toFloat())
-        val scaleY = rejectionGeometry.bayerQuadHeight.toFloat() /
-            (strideInBayerQuads * alignment.gridHeight.toFloat())
-        val offsetX = -alignment.gridMin.toFloat() / alignment.gridWidth.toFloat()
-        val offsetY = -alignment.gridMin.toFloat() / alignment.gridHeight.toFloat()
-        check(scaleX.isFinite() && scaleY.isFinite() && offsetX.isFinite() && offsetY.isFinite()) {
-            "ConvertAlignment produced a non-finite flow sampling transform"
-        }
+        // V25's ConvertAlignment output is a dense RAW/4 RGBA16F image. XY stays
+        // piecewise-constant over each final alignment tile, but the 3x3 range in B is
+        // calculated in this dense domain and therefore remains confined to the one-pixel
+        // boundary around a flow discontinuity. All downstream consumers operate in normalized
+        // image coordinates, so the dense texture is sampled with an identity transform.
         return ConvertedAlignment(
             texture = output,
-            scaleX = scaleX,
-            scaleY = scaleY,
-            offsetX = offsetX,
-            offsetY = offsetY,
+            scaleX = 1f,
+            scaleY = 1f,
+            offsetX = 0f,
+            offsetY = 0f,
         )
     }
 
-    private fun renderConvertedAlignment(alignment: Alignment, output: Int) {
+    private fun renderConvertedAlignment(
+        alignment: Alignment,
+        output: Int,
+        alignmentTileSize: Int,
+    ) {
         GLES30.glUseProgram(convertAlignmentProgram)
         bindTexture(convertAlignmentProgram, "uAlignment", 0, alignment.texture)
         uniform2i(
@@ -4372,6 +4493,14 @@ internal class GlesMgcRawSpatialStacker(
             alignment.gridWidth,
             alignment.gridHeight,
         )
+        uniform2i(
+            convertAlignmentProgram,
+            "uOutputSize",
+            rejectionWidth,
+            rejectionHeight,
+        )
+        uniform1i(convertAlignmentProgram, "uAlignmentTileSize", alignmentTileSize)
+        uniform1i(convertAlignmentProgram, "uAlignmentGridMin", alignment.gridMin)
         uniform1f(
             convertAlignmentProgram,
             "uAlignmentScale",
@@ -4385,8 +4514,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             convertAlignmentProgram,
-            alignment.gridWidth,
-            alignment.gridHeight,
+            rejectionWidth,
+            rejectionHeight,
             intArrayOf(output),
         )
     }
@@ -9755,7 +9884,11 @@ internal class GlesMgcRawSpatialStacker(
         const val MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS = 128f
         const val ALIGN_LK_GRID_MIN = 1
         const val MERGE_ALIGNMENT_GRID_MIN = 0
+        const val GLOBAL_ALIGNMENT_RADIUS = 64
+        const val GLOBAL_ALIGNMENT_HISTOGRAM_SIZE = GLOBAL_ALIGNMENT_RADIUS * 2 + 1
+        const val GLOBAL_ALIGNMENT_MIN_PEAK_SUPPORT = 10
         const val MERGE_BAYER_RAW_TILE_SIZE = 16
+        const val REJECTION_BAYER_QUADS_PER_PIXEL = 2
         // MGC 9.7.047 V25 initializes interpolation_flow_tolerance to -1.0. Positive
         // values are an optional SpatialBayer-only override; the default keeps every
         // merge tile on its own flow instead of switching interpolation on and off as

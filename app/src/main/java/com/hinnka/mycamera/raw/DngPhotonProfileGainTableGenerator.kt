@@ -100,9 +100,10 @@ internal object DngPhotonProfileGainTableGenerator {
     /**
      * Plans a 64 x 48 PGTM grid resampled from MGC HDRNet's fixed 16 x 12 coefficient grid.
      *
-     * dng_render multiplies MapInputWeights by TotalBaselineExposure before looking up the
-     * table. Dividing the stored weights by that exact gain keeps the table coordinate in the
-     * same source-linear luma domain used to run HDRNet.
+     * HDRNet runs in the baseline-restored linear domain. dng_render applies
+     * TotalBaselineExposure to the ProfileGainTableMap input before lookup, so the stored luma
+     * weights remain unchanged: both the network and the DNG table range coordinate observe the
+     * same restored signal.
      */
     fun hdrNetPlan(
         sourceWidth: Int,
@@ -131,9 +132,7 @@ internal object DngPhotonProfileGainTableGenerator {
                 mapOriginV = samplingArea.originV + 0.5 * spacingV,
             ),
             pointCount = TABLE_POINTS,
-            mapInputWeights = FloatArray(HDRNET_LUMA_WEIGHTS.size) { index ->
-                HDRNET_LUMA_WEIGHTS[index] / baselineGain
-            },
+            mapInputWeights = HDRNET_LUMA_WEIGHTS.copyOf(),
             gamma = 1f,
             baselineGain = baselineGain,
             // The native MGC path builds the long-exposure guide from a ratio of at least one.

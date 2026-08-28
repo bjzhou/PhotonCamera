@@ -164,7 +164,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     JNIEnv* env, jobject, jfloatArray coefficients_array,
     jint source_grid_width, jint source_grid_height, jint source_grid_depth,
     jint coefficient_count, jint output_grid_width, jint output_grid_height,
-    jint point_count, jfloat hdr_ratio, jfloat baseline_gain,
+    jint point_count, jfloat hdr_ratio,
     jfloat render_min_gain, jfloat render_max_gain,
     jfloat render_max_gain_blend_threshold,
     jfloat min_table_gain, jfloat max_table_gain,
@@ -180,7 +180,6 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       coefficient_count != 2 || output_grid_width <= 0 ||
       output_grid_height <= 0 || point_count <= 1 ||
       !std::isfinite(hdr_ratio) || hdr_ratio < 1.0f ||
-      !std::isfinite(baseline_gain) || baseline_gain <= 0.0f ||
       !std::isfinite(render_min_gain) || render_min_gain <= 0.0f ||
       !std::isfinite(render_max_gain) ||
       render_max_gain < render_min_gain ||
@@ -315,9 +314,11 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
             std::clamp(source_luma * render_gain, 0.0f, 1.0f);
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
-        float gain = std::clamp(
-            pre_curve_target / (baseline_gain * source_luma), min_table_gain,
-            max_table_gain);
+        // source_luma is already in the BaselineExposure-restored domain. The DNG renderer
+        // applies that same baseline before PGTM lookup and after multiplying the stored gain,
+        // so dividing by baseline again here would darken every Bento-normalized capture.
+        float gain = std::clamp(pre_curve_target / source_luma, min_table_gain,
+                                max_table_gain);
         if (diagnostic_mode >= 0) {
           const float mask =
               DiagnosticMask(source_luma, diagnostic_start, diagnostic_end,

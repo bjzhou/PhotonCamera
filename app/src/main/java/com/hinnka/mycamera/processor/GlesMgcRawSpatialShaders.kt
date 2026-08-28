@@ -2316,9 +2316,9 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * GradientAndGradientProductsHalide (0x3ba9244). The generated kernel stores central
-     * differences as saturated S16 and five per-tile Float32 products in this order:
-     * xx, yy, xy, base*x and base*y.
+     * GradientAndGradientProductsHalide (0x3bf25c0; worker 0x3be9a1c). The generated kernel
+     * stores central differences as saturated S16 and five per-tile Float32 products in this
+     * order: xx, yy, xy, base*x and base*y.
      */
     val alignmentGradientProducts = """
         #version 300 es
@@ -2399,7 +2399,7 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * UpsampleAlignmentI16Halide (0x3be8da0, three-candidate worker 0x3be8048).
+     * UpsampleAlignmentI16Halide (0x3c31de0; workers 0x3c31088/0x3c316a4).
      * Tile centers, rather than tile origins, determine the nearest coarse flow and
      * the next-nearest flow on each axis. The three whole candidates are evaluated
      * against the target-level S16 images, avoiding a synthesized motion vector
@@ -2421,14 +2421,16 @@ internal object GlesMgcRawSpatialShaders {
         uniform int uTargetTileStride;
         uniform int uTargetTileSize;
         uniform float uInitialScale;
+        uniform int uHasGlobalCandidate;
+        uniform vec2 uGlobalCandidate;
         out vec4 oAlignment;
 
-        float valueAt(highp isampler2D image, ivec2 p) {
-            return float(texelFetch(
+        int valueAt(highp isampler2D image, ivec2 p) {
+            return texelFetch(
                 image,
                 clamp(p, ivec2(0), uImageSize - ivec2(1)),
                 0
-            ).r);
+            ).r;
         }
         ivec2 boundedInitialTile(ivec2 p) {
             return clamp(p, ivec2(0), uInitialGridSize - ivec2(1));
@@ -2442,9 +2444,12 @@ internal object GlesMgcRawSpatialShaders {
         }
         float candidateCost(ivec2 origin, vec2 flow) {
             // The AArch64 worker rounds each candidate to an integer S16-image
-            // displacement for the block L1 comparison.
+            // displacement and accumulates the block L1 residual in 32-bit integer
+            // lanes. Converting every pixel to float first loses integer precision once
+            // a high-contrast block total exceeds 2^24 and can flip a close whole-flow
+            // candidate, exposing the mistake as a 16-pixel mosaic tile.
             ivec2 displacement = ivec2(roundEven(flow));
-            float cost = 0.0;
+            int cost = 0;
             for (int y = 0; y < 64; ++y) {
                 if (y >= uTargetTileSize) break;
                 for (int x = 0; x < 64; ++x) {
@@ -2456,7 +2461,7 @@ internal object GlesMgcRawSpatialShaders {
                     );
                 }
             }
-            return cost / float(uTargetTileSize * uTargetTileSize);
+            return float(cost) / float(uTargetTileSize * uTargetTileSize);
         }
         void main() {
             ivec2 targetTile = ivec2(gl_FragCoord.xy);
@@ -2509,15 +2514,27 @@ internal object GlesMgcRawSpatialShaders {
                 bestCost = costX;
                 candidateIndex = 2.0;
             }
+
+            // AlignPyramid::AlignAlt's final merge-grid pass supplies the robust global
+            // translation as the fourth candidate. Pyramid-level transitions leave it absent.
+            if (uHasGlobalCandidate != 0) {
+                vec2 globalFlow = uGlobalCandidate * uInitialScale;
+                float globalCost = candidateCost(origin, globalFlow);
+                if (globalCost < bestCost) {
+                    bestFlow = globalFlow;
+                    bestCost = globalCost;
+                    candidateIndex = 3.0;
+                }
+            }
             oAlignment = vec4(bestFlow, bestCost, candidateIndex);
         }
     """.trimIndent()
 
     /**
-     * BlockLucasKanadeHalide (0x3b9be68, workers 0x3b9cb5c/0x3b9e72c). One draw is
-     * one generated-kernel iteration. Its input has already been expanded onto this LK
-     * grid by UpsampleAlignment. Bilinear weights below are the image-warp S16 Q15
-     * conversion and saturating rounded shift used by the AArch64 worker.
+     * BlockLucasKanadeHalide (0x3be51e4; normalized dispatch 0x3be5ed8 and unnormalized
+     * dispatch 0x3be7aa8). One draw is one generated-kernel iteration. Its input has already
+     * been expanded onto this LK grid by UpsampleAlignment. Bilinear weights below are the
+     * image-warp S16 Q15 conversion and saturating rounded shift used by the AArch64 worker.
      */
     val blockLucasKanade = """
         #version 300 es
@@ -2785,11 +2802,10 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * ConvertAlignmentHalide (0x362479c): preserve each final alignment vector independently
-     * while converting Bayer-quad displacements to normalized UV and storing the local 3x3 flow
-     * range in B. V25 creates this RGBA16F output with GL_NEAREST at 0x34f7d18 after invoking the
-     * AOT at 0x34f7c6c. GenerateRejectionTexture therefore observes the same tile-owned vector
-     * that MergeRgbRaw16F16 applies to each 16-RAW-pixel tile.
+     * ConvertAlignmentHalide (0x362479c): expand the final 16-RAW-pixel alignment tiles onto
+     * RAW/4, convert Bayer-quad displacements to normalized UV and store the dense 3x3 flow
+     * range in B. The range is evaluated after expansion: it is nonzero only immediately beside
+     * a tile-flow discontinuity, rather than across both complete neighboring tiles.
      */
     val convertAlignment = """
         #version 300 es
@@ -2797,24 +2813,29 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         uniform sampler2D uAlignment;
         uniform ivec2 uGridSize;
+        uniform ivec2 uOutputSize;
+        uniform int uAlignmentTileSize;
+        uniform int uAlignmentGridMin;
         uniform float uAlignmentScale;
         uniform vec2 uFlowNormalizationSize;
         out vec4 oFlow;
-        vec2 flowAt(ivec2 p) {
+        vec2 denseFlowAt(ivec2 p) {
+            ivec2 dense = clamp(p, ivec2(0), uOutputSize - ivec2(1));
+            ivec2 tile = dense / uAlignmentTileSize - ivec2(uAlignmentGridMin);
             return texelFetch(
                 uAlignment,
-                clamp(p, ivec2(0), uGridSize - ivec2(1)),
+                clamp(tile, ivec2(0), uGridSize - ivec2(1)),
                 0
             ).xy * uAlignmentScale;
         }
         void main() {
-            ivec2 tile = ivec2(gl_FragCoord.xy);
-            vec2 flowPixels = flowAt(tile);
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            vec2 flowPixels = denseFlowAt(p);
             vec2 minimumFlow = vec2(1.0e20);
             vec2 maximumFlow = vec2(-1.0e20);
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    vec2 v = flowAt(tile + ivec2(x, y));
+                    vec2 v = denseFlowAt(p + ivec2(x, y));
                     minimumFlow = min(minimumFlow, v);
                     maximumFlow = max(maximumFlow, v);
                 }

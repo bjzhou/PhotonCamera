@@ -952,6 +952,7 @@ internal object DngPhotonProfileGainTableInputShader {
         uniform ivec2 uImageSize;
         uniform ivec4 uStatsBounds;
         uniform mat3 uColorCorrectionMatrix;
+        uniform float uBaselineGain;
         uniform float uHdrRatio;
         uniform int uHueSatEnabled;
         uniform ivec3 uHueSatDivisions;
@@ -1050,7 +1051,12 @@ internal object DngPhotonProfileGainTableInputShader {
                     ++sampleCount;
                 }
             }
-            vec3 cameraRgb = cameraRgbSum / float(max(sampleCount, 1));
+            // A Bento ultrashort output is normalized down before it reaches this texture.
+            // DNG BaselineExposure restores that source-domain normalization during rendering;
+            // HDRNet must observe the same restored linear signal or its bilateral grid changes
+            // discontinuously when Bento accepts/rejects the ultrashort frame.
+            vec3 cameraRgb =
+                (cameraRgbSum / float(max(sampleCount, 1))) * uBaselineGain;
             vec3 profileRgb = max(uColorCorrectionMatrix * cameraRgb, vec3(0.0));
             if (uHueSatEnabled != 0) {
                 profileRgb = max(
@@ -1610,6 +1616,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 0,
             )
             GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uBaselineGain"),
+                plan.baselineGain,
+            )
+            GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uHdrRatio"),
                 plan.hdrRatio,
             )
@@ -1679,6 +1689,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
                     "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
                     "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
+                    "baselineAppliedToHdrNetInput=true " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
                     "processingBounds=$stage3Bounds samplingArea=$samplingArea " +
                     "inputMs=${(inputReadyNs - totalStartNs) / 1_000_000f} " +
