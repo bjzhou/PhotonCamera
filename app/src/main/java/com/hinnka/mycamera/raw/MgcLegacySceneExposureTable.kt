@@ -41,6 +41,10 @@ internal data class MgcLegacyAeResult(
     val longQuery: MgcLegacyAeQuery,
     val short: MgcLegacyAeBranchResult,
     val long: MgcLegacyAeBranchResult,
+    val meteringRmsRgb: FloatArray,
+    val meteringWhiteBalancedRmsMax: Float,
+    val meteringNormalizationScale: Float,
+    val normalizedMeteringTetMs: Float,
 )
 
 /**
@@ -50,7 +54,8 @@ internal data class MgcLegacyAeResult(
  * aggregation, and log-domain TET search below follow libgcam_ae.so's AArch64 implementation.
  * Photon owns one selected base metering frame rather than MGC's two-component SplitHdrImage.
  * Supplying that frame as both components preserves the original mask-weighted sample sum while
- * allowing the two identical component values to be evaluated once per pixel.
+ * allowing the two identical component values to be evaluated once per pixel. CreateFromFrame's
+ * white-balanced RMS normalization is still applied exactly before the table query and RunAe.
  */
 internal class MgcLegacySceneExposureTable private constructor(
     val version: Int,
@@ -86,6 +91,14 @@ internal class MgcLegacySceneExposureTable private constructor(
         val spatialWeights: FloatArray,
     )
 
+    private data class NormalizedMeteringFrame(
+        val rgb: FloatArray,
+        val rmsRgb: FloatArray,
+        val whiteBalancedRmsMax: Float,
+        val scale: Float,
+        val tetMs: Float,
+    )
+
     fun solve(
         frame: RawSceneLinearFrame,
         fractionPixelsClipped: Float,
@@ -112,22 +125,27 @@ internal class MgcLegacySceneExposureTable private constructor(
         ) {
             return null
         }
-        val shortPrepared = buildQuery(
+        val normalizedMetering = normalizeMeteringFrame(
             rgb = legacyInput.cameraRgb,
+            rgbGains = legacyInput.rgbGains,
+            currentTetMs = currentTetMs,
+        ) ?: return null
+        val shortPrepared = buildQuery(
+            rgb = normalizedMetering.rgb,
             width = frame.width,
             height = frame.height,
             mode = MgcLegacyAeMode.SHORT,
-            currentTetMs = currentTetMs,
+            currentTetMs = normalizedMetering.tetMs,
             sensorSensitivity = sensorSensitivity,
             fractionPixelsClipped = fractionPixelsClipped,
             category = if (hasFace) 1 else 0,
         ) ?: return null
         val longPrepared = buildQuery(
-            rgb = legacyInput.cameraRgb,
+            rgb = normalizedMetering.rgb,
             width = frame.width,
             height = frame.height,
             mode = MgcLegacyAeMode.LONG,
-            currentTetMs = currentTetMs,
+            currentTetMs = normalizedMetering.tetMs,
             sensorSensitivity = sensorSensitivity,
             fractionPixelsClipped = fractionPixelsClipped,
             category = if (hasFace) 1 else 0,
@@ -135,10 +153,10 @@ internal class MgcLegacySceneExposureTable private constructor(
         val shortTarget = lookupTarget(MgcLegacyAeMode.SHORT, shortPrepared.query)
         val longTarget = lookupTarget(MgcLegacyAeMode.LONG, longPrepared.query)
         val evaluator = SingleFrameTValueEvaluator(
-            rgb = legacyInput.cameraRgb,
+            rgb = normalizedMetering.rgb,
             rgbGains = legacyInput.rgbGains,
             rgbTransform = legacyInput.rgbTransform,
-            currentTetMs = currentTetMs,
+            currentTetMs = normalizedMetering.tetMs,
             shortSpatialWeights = shortPrepared.spatialWeights,
             longSpatialWeights = longPrepared.spatialWeights,
             shortImageLogMean = shortPrepared.query.imageLogMean,
@@ -164,6 +182,59 @@ internal class MgcLegacySceneExposureTable private constructor(
             longQuery = longPrepared.query,
             short = shortTarget.toBranch(shortTet, shortTAtCurrentTet),
             long = longTarget.toBranch(longTet, longTAtCurrentTet),
+            meteringRmsRgb = normalizedMetering.rmsRgb,
+            meteringWhiteBalancedRmsMax = normalizedMetering.whiteBalancedRmsMax,
+            meteringNormalizationScale = normalizedMetering.scale,
+            normalizedMeteringTetMs = normalizedMetering.tetMs,
+        )
+    }
+
+    /**
+     * Transcription of SplitHdrImage::CreateFromFrame's normalization for the retained metering
+     * component. The original implementation computes per-channel RMS over the mask blend of its
+     * short and long components, multiplies those RMS values by the RGB WB gains, and maps the
+     * largest result to 1/16 of U15. It applies the same scale to the metering-frame TET, preserving
+     * the scene-brightness coordinate and absolute-TET behavior while fixing the table's image-mean
+     * coordinate.
+     */
+    private fun normalizeMeteringFrame(
+        rgb: FloatArray,
+        rgbGains: FloatArray,
+        currentTetMs: Float,
+    ): NormalizedMeteringFrame? {
+        val pixelCount = rgb.size / 3
+        if (pixelCount <= 0 || rgb.size != pixelCount * 3 || rgbGains.size < 3) return null
+        val squaredSums = DoubleArray(3)
+        for (pixel in 0 until pixelCount) {
+            val offset = pixel * 3
+            for (channel in 0..2) {
+                val value = rgb[offset + channel]
+                squaredSums[channel] += value.toDouble() * value.toDouble()
+            }
+        }
+        val rmsRgb = FloatArray(3) { channel ->
+            sqrt(squaredSums[channel] / pixelCount.toDouble()).toFloat()
+        }
+        val whiteBalancedRmsMax = max(
+            rmsRgb[0] * rgbGains[0],
+            max(rmsRgb[1] * rgbGains[1], rmsRgb[2] * rgbGains[2]),
+        )
+        if (!whiteBalancedRmsMax.isFinite() || whiteBalancedRmsMax <= 0f) return null
+        val scale = U15_NORMALIZED_MAX / (SPLIT_HDR_RMS_DENOMINATOR * whiteBalancedRmsMax)
+        val normalizedTetMs = currentTetMs * scale
+        if (!scale.isFinite() || scale <= 0f ||
+            !normalizedTetMs.isFinite() || normalizedTetMs <= 0f
+        ) {
+            return null
+        }
+        val normalizedRgb = FloatArray(rgb.size) { index -> rgb[index] * scale }
+        if (normalizedRgb.any { !it.isFinite() || it < 0f }) return null
+        return NormalizedMeteringFrame(
+            rgb = normalizedRgb,
+            rmsRgb = rmsRgb,
+            whiteBalancedRmsMax = whiteBalancedRmsMax,
+            scale = scale,
+            tetMs = normalizedTetMs,
         )
     }
 
@@ -835,6 +906,8 @@ internal class MgcLegacySceneExposureTable private constructor(
         private const val LOG_INPUT_OFFSET = 10f
         private const val QUERY_SIGNAL_OFFSET = 0.00030519f
         private const val ONE_OVER_U15_MAX = 1f / 32767f
+        private const val U15_NORMALIZED_MAX = 32767f / 32768f
+        private const val SPLIT_HDR_RMS_DENOMINATOR = 16f
         private const val SCENE_BRIGHTNESS_CALIBRATION = 14.6f
         private const val MILLIS_TO_SECONDS = 0.001f
         private const val SCENE_BRIGHTNESS_LOG_FLOOR = 0.0001f

@@ -317,6 +317,9 @@ class Camera2Controller(private val context: Context) {
     private var availableVideoStabilizationModes: IntArray = intArrayOf()
     private var availableOpticalStabilizationModes: IntArray = intArrayOf()
     private var availableLensShadingMapModes: IntArray = intArrayOf()
+    private var availableFaceDetectModes: IntArray = intArrayOf()
+    private var maxFaceCount: Int = 0
+    private var faceDetectMode: Int = CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF
     private var availableColorCorrectionModes: IntArray = intArrayOf()
     private var awbColorTemperatureRange: Range<Int>? = null
     private var lastWhiteBalanceResult: WhiteBalanceResultSnapshot? = null
@@ -1677,6 +1680,9 @@ class Camera2Controller(private val context: Context) {
         availableVideoStabilizationModes = intArrayOf()
         availableOpticalStabilizationModes = intArrayOf()
         availableLensShadingMapModes = intArrayOf()
+        availableFaceDetectModes = intArrayOf()
+        maxFaceCount = 0
+        faceDetectMode = CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF
         availableColorCorrectionModes = intArrayOf()
         awbColorTemperatureRange = null
         lastWhiteBalanceResult = null
@@ -2148,6 +2154,12 @@ class Camera2Controller(private val context: Context) {
                 availableLensShadingMapModes =
                     openCharacteristics.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)
                         ?: intArrayOf()
+                availableFaceDetectModes =
+                    openCharacteristics.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES)
+                        ?: intArrayOf()
+                maxFaceCount =
+                    openCharacteristics.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0
+                faceDetectMode = resolveFaceDetectMode(availableFaceDetectModes, maxFaceCount)
                 availableColorCorrectionModes = loadAvailableColorCorrectionModes(openCharacteristics)
                 awbColorTemperatureRange = loadAwbColorTemperatureRange(openCharacteristics)
                 lastWhiteBalanceResult = null
@@ -2168,6 +2180,11 @@ class Camera2Controller(private val context: Context) {
                             "alwaysFlash=${availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)}, " +
                             "aeOn=${availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)}, " +
                             "aeOff=${availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)}"
+                )
+                PLog.i(
+                    TAG,
+                    "Face detection: available=${availableFaceDetectModes.joinToString()}, " +
+                            "maxFaces=$maxFaceCount, selected=${faceDetectModeName(faceDetectMode)}"
                 )
 
                 isP010Supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
@@ -3212,6 +3229,29 @@ class Camera2Controller(private val context: Context) {
 
 // ==================== 统一参数配置 ====================
 
+    private fun resolveFaceDetectMode(availableModes: IntArray, maximumFaceCount: Int): Int {
+        if (maximumFaceCount <= 0) {
+            return CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF
+        }
+        return when {
+            availableModes.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL) ->
+                CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL
+
+            availableModes.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE) ->
+                CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE
+
+            else -> CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF
+        }
+    }
+
+    private fun faceDetectModeName(mode: Int): String {
+        return when (mode) {
+            CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL -> "FULL"
+            CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE -> "SIMPLE"
+            else -> "OFF"
+        }
+    }
+
     /**
      * 将当前状态中的相机参数应用到 CaptureRequest.Builder
      *
@@ -3276,6 +3316,9 @@ class Camera2Controller(private val context: Context) {
                 CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,
                 CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON
             )
+        }
+        if (faceDetectMode != CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF) {
+            builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, faceDetectMode)
         }
 
         if (disableZslForHdrCapture) {

@@ -3243,6 +3243,10 @@ class RawDemosaicProcessor {
                     profileToLinearSrgbTransform = profileToLinearSrgbTransform,
                     outputSourceBounds = outputSourceBounds,
                     stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
+                    // A gallery refresh meters the DNG payload rather than the capture-time base
+                    // frame. Restore source normalization so the pixels and Camera2 TET are in the
+                    // same exposure domain before AE is re-run.
+                    restoreSourceBaselineExposure = true,
                 )
                 val estimatedHdrRatio = estimatedExposure?.hdrRatio
                 val regenerationHdrRatio = estimatedHdrRatio ?: persistedHdrRatio
@@ -3263,6 +3267,8 @@ class RawDemosaicProcessor {
                     TAG,
                     "HDRNet PGTM regeneration ratio=$regenerationHdrRatio " +
                         "sourceToShortGain=$regenerationSourceToShortGain " +
+                        "sourceBaselineEv=${actualMetadata.baselineExposure} " +
+                        "sourceBaselineGain=${exactDngBaselineExposureGain(actualMetadata)} " +
                         "source=${if (estimatedHdrRatio != null) "MGC_FAST_MOMENTS_TRUE" else "metadata-fallback"} " +
                         "persistedRatio=$persistedHdrRatio " +
                         "finalShortTetMs=${estimatedExposure?.finalShortTetMs} " +
@@ -7825,6 +7831,7 @@ class RawDemosaicProcessor {
         profileToLinearSrgbTransform: FloatArray,
         outputSourceBounds: Rect,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
+        restoreSourceBaselineExposure: Boolean = false,
     ): RawSceneExposureResult? {
         return try {
             val width = RawSceneExposureMath.INPUT_WIDTH
@@ -7882,6 +7889,13 @@ class RawDemosaicProcessor {
                     metering.sensorRgb.size == width * height * 3 &&
                         metering.sensorRgb.all(Float::isFinite)
                 }
+            val restoreFallbackBaselineExposure =
+                baseFrameMetering == null && restoreSourceBaselineExposure
+            val sourceBaselineGain = if (restoreFallbackBaselineExposure) {
+                exactDngBaselineExposureGain(metadata)
+            } else {
+                1f
+            }
             val meteringInputSource: String
             val cameraRgb: FloatArray
             val lensShadingStats: RawSceneFastMomentsRawStats?
@@ -7910,7 +7924,7 @@ class RawDemosaicProcessor {
                     colorCorrectionMatrix = identityMatrix3x3(),
                     cameraWhite = floatArrayOf(1f, 1f, 1f),
                     hueSatMap = null,
-                    applyDngBaselineExposure = false,
+                    applyDngBaselineExposure = restoreFallbackBaselineExposure,
                     clampProfileRgb = false,
                     hueSatMapSupportsOverrange = false,
                     textureBounds = normalizedBounds,
@@ -7975,6 +7989,8 @@ class RawDemosaicProcessor {
                 TAG,
                 "RAW_SCENE_EXPOSURE stage=INPUT_COLOR_CONTRACT " +
                     "meteringSource=$meteringInputSource " +
+                    "sourceBaselineRestored=$restoreFallbackBaselineExposure " +
+                    "sourceBaselineGain=$sourceBaselineGain " +
                     "lscSource=${when {
                         baseFrameHasLensShading -> "BASE_RAW_CAPTURE_MAP"
                         baseFrameMetering != null -> "UNITY"
@@ -8034,6 +8050,11 @@ class RawDemosaicProcessor {
                     label = "RAW Fast Moments sensor statistics",
                     channelCount = 4,
                 ) ?: return null
+                if (restoreFallbackBaselineExposure) {
+                    for (index in channelMax.indices) {
+                        channelMax[index] *= sourceBaselineGain
+                    }
+                }
                 RawSceneFastMomentsRawStats(
                     width = statsWidth,
                     height = statsHeight,
@@ -8074,7 +8095,7 @@ class RawDemosaicProcessor {
                     colorCorrectionMatrix = identityMatrix3x3(),
                     cameraWhite = floatArrayOf(1f, 1f, 1f),
                     hueSatMap = null,
-                    applyDngBaselineExposure = false,
+                    applyDngBaselineExposure = restoreFallbackBaselineExposure,
                     clampProfileRgb = false,
                     hueSatMapSupportsOverrange = false,
                     textureBounds = normalizedBounds,

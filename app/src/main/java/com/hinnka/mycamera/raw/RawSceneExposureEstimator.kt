@@ -1195,6 +1195,11 @@ internal object RawSceneExposureEstimator {
                         "processAeStatsExecuted=${fastMomentsStats.processAeStatsExecuted} " +
                         "shortLongSource=MGC_9_7_V25_START_RELEASE_TABLE " +
                         "tableVersion=0x${Integer.toUnsignedString(activeEngines.legacyTable.version, 16)} " +
+                        "tableInputNormalization=MGC_SPLIT_HDR_WB_RMS_1_OVER_16 " +
+                        "tableInputRmsRgb=${legacyResult.meteringRmsRgb.contentToString()} " +
+                        "tableInputWhiteBalancedRmsMax=${legacyResult.meteringWhiteBalancedRmsMax} " +
+                        "tableInputNormalizationScale=${legacyResult.meteringNormalizationScale} " +
+                        "tableInputNormalizedTetMs=${legacyResult.normalizedMeteringTetMs} " +
                         "shortQueryImageLogMean=${legacyResult.shortQuery.imageLogMean} " +
                         "longQueryImageLogMean=${legacyResult.longQuery.imageLogMean} " +
                         "shortQueryLogSceneBrightness=${legacyResult.shortQuery.logSceneBrightness} " +
