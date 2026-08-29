@@ -1663,6 +1663,13 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 PLog.e(TAG, "HDRNet input contains a non-finite value")
                 return null
             }
+            logHdrNetInputContract(
+                input = input,
+                plan = plan,
+                colorCorrectionMatrix = safeColorCorrectionMatrix,
+                hueSatEnabled = activeHueSatMap != null,
+                values = inputFloats,
+            )
             val modelInput = ByteBuffer.allocateDirect(inputFloats.size * Float.SIZE_BYTES)
                 .order(ByteOrder.nativeOrder())
             modelInput.asFloatBuffer().put(inputFloats)
@@ -3220,6 +3227,61 @@ internal class DngPhotonProfileGainTableAlgorithm {
         } finally {
             GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
         }
+    }
+
+    private fun logHdrNetInputContract(
+        input: Input,
+        plan: HdrNetProfileGainTablePlan,
+        colorCorrectionMatrix: FloatArray,
+        hueSatEnabled: Boolean,
+        values: FloatArray,
+    ) {
+        val whiteBalance = input.metadata.whiteBalanceGains
+        val redGain = whiteBalance.getOrElse(0) { 1f }.coerceAtLeast(1e-6f)
+        val greenEven = whiteBalance.getOrElse(1) { 1f }.coerceAtLeast(1e-6f)
+        val greenOdd = whiteBalance.getOrElse(2) { greenEven }.coerceAtLeast(1e-6f)
+        val blueGain = whiteBalance.getOrElse(3) {
+            whiteBalance.getOrElse(2) { 1f }
+        }.coerceAtLeast(1e-6f)
+        val greenGain = (greenEven + greenOdd) * 0.5f
+        val cameraNeutral = floatArrayOf(greenGain / redGain, 1f, greenGain / blueGain)
+        val mappedNeutral = FloatArray(3) { row ->
+            colorCorrectionMatrix[row * 3] * cameraNeutral[0] +
+                colorCorrectionMatrix[row * 3 + 1] * cameraNeutral[1] +
+                colorCorrectionMatrix[row * 3 + 2] * cameraNeutral[2]
+        }
+        val minimums = FloatArray(4) { Float.POSITIVE_INFINITY }
+        val maximums = FloatArray(4) { Float.NEGATIVE_INFINITY }
+        val sums = DoubleArray(4)
+        val rgbClipped = LongArray(3)
+        for (index in values.indices) {
+            val channel = index and 3
+            val value = values[index]
+            minimums[channel] = minOf(minimums[channel], value)
+            maximums[channel] = maxOf(maximums[channel], value)
+            sums[channel] += value.toDouble()
+            if (channel < 3 && value >= 0.999999f) rgbClipped[channel]++
+        }
+        val pixelCount = (values.size / 4).coerceAtLeast(1)
+        val means = FloatArray(4) { channel ->
+            (sums[channel] / pixelCount).toFloat()
+        }
+        val clippedFractions = FloatArray(3) { channel ->
+            rgbClipped[channel].toFloat() / pixelCount
+        }
+        PLog.d(
+            TAG,
+            "HDRNet input contract: wb=${whiteBalance.contentToString()} " +
+                "cameraNeutral=${cameraNeutral.contentToString()} " +
+                "mappedNeutral=${mappedNeutral.contentToString()} " +
+                "matrix=${colorCorrectionMatrix.take(9)} hueSat=$hueSatEnabled " +
+                "baselineGain=${plan.baselineGain} sourceToShort=${plan.sourceToShortGain} " +
+                "hdrRatio=${plan.hdrRatio} mapWeights=${plan.mapInputWeights.contentToString()} " +
+                "channelMin=${minimums.contentToString()} " +
+                "channelMean=${means.contentToString()} " +
+                "channelMax=${maximums.contentToString()} " +
+                "rgbClipped=${clippedFractions.contentToString()}",
+        )
     }
 
     private companion object {

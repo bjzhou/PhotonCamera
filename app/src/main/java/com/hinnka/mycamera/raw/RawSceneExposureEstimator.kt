@@ -14,6 +14,17 @@ internal data class RawSceneLinearFrame(
     /** Interleaved, colorized linear-RGB samples from the exact RAW frame. */
     val rgb: FloatArray,
     val fastMomentsStats: RawSceneFastMomentsRawStats,
+    /** Camera RGB and WB gains retained for MGC 9.7's pre-ML table AE path. */
+    val legacyAeInput: RawSceneLegacyAeInput? = null,
+)
+
+internal data class RawSceneLegacyAeInput(
+    /** Interleaved U15 camera RGB after lens shading, before WB and rgb2rgb. */
+    val cameraRgb: FloatArray,
+    /** MGC ExposeHq's [R, average-G, B] gain vector. */
+    val rgbGains: FloatArray,
+    /** Row-major camera-RGB transform consumed by MGC ExposeHq after exposure and WB. */
+    val rgbTransform: FloatArray,
 )
 
 /** The 1/16-resolution RAW-domain statistics consumed only by Fast Moments mode 2. */
@@ -468,10 +479,64 @@ internal object RawSceneExposureMath {
         return output
     }
 
+    /** Reconstructs the camera-RGB surface consumed by MGC 9.7's table AE. */
+    fun prepareMgcLegacyMeteringRgb(
+        cameraRgb: FloatArray,
+        width: Int,
+        height: Int,
+        metadata: RawMetadata,
+        lensShadingStats: RawSceneFastMomentsRawStats? = null,
+    ): FloatArray? {
+        val pixelCount = width * height
+        if (width != INPUT_WIDTH || height != INPUT_HEIGHT ||
+            cameraRgb.size != pixelCount * 3 || cameraRgb.any { !it.isFinite() } ||
+            (lensShadingStats != null && lensShadingStats.sourceBounds.size < 4)
+        ) {
+            return null
+        }
+        val output = FloatArray(cameraRgb.size)
+        for (y in 0 until height) {
+            val v = (y + 0.5f) / height.toFloat()
+            for (x in 0 until width) {
+                val u = (x + 0.5f) / width.toFloat()
+                val offset = (y * width + x) * 3
+                val lscRed = lensShadingStats?.let { stats ->
+                    lensShadingGainAtStatsUv(metadata, stats, 0, u, v)
+                } ?: 1f
+                val lscGreen = lensShadingStats?.let { stats ->
+                    0.5f * (
+                        lensShadingGainAtStatsUv(metadata, stats, 1, u, v) +
+                            lensShadingGainAtStatsUv(metadata, stats, 2, u, v)
+                        )
+                } ?: 1f
+                val lscBlue = lensShadingStats?.let { stats ->
+                    lensShadingGainAtStatsUv(metadata, stats, 3, u, v)
+                } ?: 1f
+                if (!validPositiveTets(lscRed, lscGreen, lscBlue)) return null
+                output[offset] = toMeteringU15(
+                    (cameraRgb[offset] * lscRed).coerceIn(0f, 1f),
+                )
+                output[offset + 1] = toMeteringU15(
+                    (cameraRgb[offset + 1] * lscGreen).coerceIn(0f, 1f),
+                )
+                output[offset + 2] = toMeteringU15(
+                    (cameraRgb[offset + 2] * lscBlue).coerceIn(0f, 1f),
+                )
+            }
+        }
+        return output
+    }
+
     fun modelLogGainToLinear(logGain: Float): Float? {
         if (!logGain.isFinite()) return null
         val gain = kotlin.math.exp(logGain.toDouble()) - MODEL_LINEAR_GAIN_EPSILON
         return gain.takeIf { it.isFinite() && it > 0.0 }?.toFloat()
+    }
+
+    fun linearGainToModelLog(gain: Float): Float? {
+        if (!gain.isFinite() || gain <= 0f) return null
+        val logGain = kotlin.math.ln(gain + MODEL_LINEAR_GAIN_EPSILON)
+        return logGain.takeIf(Double::isFinite)?.toFloat()
     }
 
     fun resolveIdealExposure(
@@ -967,25 +1032,20 @@ internal object RawSceneExposureMath {
 /** Device-independent, capture-side multi-branch scene exposure model. */
 internal object RawSceneExposureEstimator {
     private const val TAG = "RawSceneExposureEstimator"
-    private const val SHORT_MODEL_ASSET = "mgc_ae/short_scene_exposure.tflite"
-    private const val LONG_MODEL_ASSET = "mgc_ae/long_scene_exposure.tflite"
     private const val PORTRAIT_MODEL_ASSET = "mgc_ae/portrait_scene_exposure.tflite"
     private val lock = Any()
 
-    private data class ModelSet(
-        val short: Interpreter,
-        val long: Interpreter,
+    private data class ExposureEngines(
+        val legacyTable: MgcLegacySceneExposureTable,
         val portrait: Interpreter,
     ) {
         fun close() {
-            short.close()
-            long.close()
             portrait.close()
         }
     }
 
     @Volatile
-    private var models: ModelSet? = null
+    private var engines: ExposureEngines? = null
 
     fun estimate(
         context: Context,
@@ -1026,36 +1086,49 @@ internal object RawSceneExposureEstimator {
             RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
                 RawSceneExposureMath.INPUT_CHANNELS,
         )
-        val colorInput = directFloatBuffer(
-            RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
-                RawSceneExposureMath.COLOR_CHANNELS,
-        )
-        val semanticInput = directFloatBuffer(
-            RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
-                RawSceneExposureMath.SEMANTIC_CHANNELS,
-        )
         if (!RawSceneExposureMath.writeCombinedModelInput(
                 frame = frame,
                 logSceneBrightness = measurement.logSceneBrightness,
                 destination = combinedInput,
-            ) || !RawSceneExposureMath.writeSplitModelInputs(
-                frame = frame,
-                logSceneBrightness = measurement.logSceneBrightness,
-                colorDestination = colorInput,
-                semanticDestination = semanticInput,
             )
         ) {
-            PLog.e(TAG, "Unable to construct RAW scene exposure model inputs")
+            PLog.e(TAG, "Unable to construct RAW portrait exposure model input")
             return null
         }
+        val fractionPixelsClippedAtBaseTet = RawSceneExposureMath.fractionPixelsClippedAtTet(
+            frame = frame,
+            metadata = metadata,
+            relativeTetGain = 1f,
+        ) ?: run {
+            PLog.e(TAG, "Unable to construct MGC legacy AE clipped-pixel input")
+            return null
+        }
+        val tableTetMaxMs = resolvedDeviceLimits?.deviceMaxTetMs ?: shotRange.maxTetMs
 
         return synchronized(lock) {
-            val activeModels = models ?: createModels(context)?.also { models = it }
+            val activeEngines = engines ?: createEngines(context)?.also { engines = it }
                 ?: return@synchronized null
             try {
-                val shortLogGain = runCombinedModel(activeModels.short, combinedInput)
-                val longLogGain = runLongModel(activeModels.long, semanticInput, colorInput)
-                val portraitLogGain = runCombinedModel(activeModels.portrait, combinedInput)
+                val legacyResult = activeEngines.legacyTable.solve(
+                    frame = frame,
+                    fractionPixelsClipped = fractionPixelsClippedAtBaseTet,
+                    hasFace = metadata.sceneHasFace,
+                    currentTetMs = measurement.currentTetMs,
+                    sensorSensitivity = measurement.sensorSensitivity,
+                    deviceMinTetMs = resolvedDeviceLimits?.minTetMs
+                        ?: RawSceneExposureDeviceLimits.MIN_TET_MS,
+                    deviceMaxTetMs = tableTetMaxMs,
+                ) ?: run {
+                    PLog.e(TAG, "MGC legacy AE table lookup returned invalid values")
+                    return@synchronized null
+                }
+                val shortLogGain = RawSceneExposureMath.linearGainToModelLog(
+                    legacyResult.short.idealTetMs / measurement.currentTetMs,
+                ) ?: return@synchronized null
+                val longLogGain = RawSceneExposureMath.linearGainToModelLog(
+                    legacyResult.long.idealTetMs / measurement.currentTetMs,
+                ) ?: return@synchronized null
+                val portraitLogGain = runCombinedModel(activeEngines.portrait, combinedInput)
                 val branches = RawSceneExposureBranches(
                     shortLogGain = shortLogGain,
                     longLogGain = longLogGain,
@@ -1065,7 +1138,7 @@ internal object RawSceneExposureEstimator {
                     currentTetMs = measurement.currentTetMs,
                     branches = branches,
                 ) ?: run {
-                    PLog.e(TAG, "RAW scene exposure ML AE ideals are invalid")
+                    PLog.e(TAG, "RAW scene exposure legacy-table AE ideals are invalid")
                     return@synchronized null
                 }
                 val fastMomentsStats = RawSceneExposureMath.processFastMomentsAeStats(
@@ -1120,6 +1193,27 @@ internal object RawSceneExposureEstimator {
                         "mode=2 " +
                         "computeAeResultsProcessRawStats=true " +
                         "processAeStatsExecuted=${fastMomentsStats.processAeStatsExecuted} " +
+                        "shortLongSource=MGC_9_7_V25_START_RELEASE_TABLE " +
+                        "tableVersion=0x${Integer.toUnsignedString(activeEngines.legacyTable.version, 16)} " +
+                        "shortQueryImageLogMean=${legacyResult.shortQuery.imageLogMean} " +
+                        "longQueryImageLogMean=${legacyResult.longQuery.imageLogMean} " +
+                        "shortQueryLogSceneBrightness=${legacyResult.shortQuery.logSceneBrightness} " +
+                        "longQueryLogSceneBrightness=${legacyResult.longQuery.logSceneBrightness} " +
+                        "tableQueryClippedFraction=${legacyResult.shortQuery.fractionPixelsClipped} " +
+                        "tableQueryCategory=${legacyResult.shortQuery.category} " +
+                        "tableSpatialWeights=MGC_DEFAULT_RADIAL " +
+                        "shortTargetT=${legacyResult.short.targetT} " +
+                        "longTargetT=${legacyResult.long.targetT} " +
+                        "shortTAtCurrentTet=${legacyResult.short.tAtCurrentTet} " +
+                        "longTAtCurrentTet=${legacyResult.long.tAtCurrentTet} " +
+                        "shortMaxSimilarity=${legacyResult.short.maxSimilarity} " +
+                        "longMaxSimilarity=${legacyResult.long.maxSimilarity} " +
+                        "shortCandidateCount=${legacyResult.short.candidateCount} " +
+                        "longCandidateCount=${legacyResult.long.candidateCount} " +
+                        "shortContributingCount=${legacyResult.short.contributingCount} " +
+                        "longContributingCount=${legacyResult.long.contributingCount} " +
+                        "tableTetMinMs=${resolvedDeviceLimits?.minTetMs ?: RawSceneExposureDeviceLimits.MIN_TET_MS} " +
+                        "tableTetMaxMs=$tableTetMaxMs " +
                         "shortLnGain=${branches.shortLogGain} " +
                         "longLnGain=${branches.longLogGain} " +
                         "portraitLnGain=${branches.portraitLogGain} " +
@@ -1208,50 +1302,31 @@ internal object RawSceneExposureEstimator {
         return output[0][0].also { check(it.isFinite()) }
     }
 
-    private fun runLongModel(
-        interpreter: Interpreter,
-        semanticInput: ByteBuffer,
-        colorInput: ByteBuffer,
-    ): Float {
-        semanticInput.rewind()
-        colorInput.rewind()
-        val output = Array(1) { FloatArray(1) }
-        interpreter.runForMultipleInputsOutputs(
-            arrayOf(semanticInput, colorInput),
-            mutableMapOf<Int, Any>(0 to output),
-        )
-        return output[0][0].also { check(it.isFinite()) }
-    }
-
-    private fun createModels(context: Context): ModelSet? {
-        var short: Interpreter? = null
-        var long: Interpreter? = null
+    private fun createEngines(context: Context): ExposureEngines? {
         var portrait: Interpreter? = null
-        var candidate: ModelSet? = null
+        var candidate: ExposureEngines? = null
         return try {
-            val loadedShort = createInterpreter(context, SHORT_MODEL_ASSET).also { short = it }
-            val loadedLong = createInterpreter(context, LONG_MODEL_ASSET).also { long = it }
+            val legacyTable = MgcLegacySceneExposureTable.load(context)
+            check(legacyTable.version == MgcLegacySceneExposureTable.EXPECTED_VERSION) {
+                "Unexpected start_release.dat version: " +
+                    "0x${Integer.toUnsignedString(legacyTable.version, 16)}"
+            }
             val loadedPortrait = createInterpreter(context, PORTRAIT_MODEL_ASSET).also {
                 portrait = it
             }
-            candidate = ModelSet(
-                short = loadedShort,
-                long = loadedLong,
+            candidate = ExposureEngines(
+                legacyTable = legacyTable,
                 portrait = loadedPortrait,
             )
-            validateCombinedModel(candidate.short, "short")
-            validateLongModel(candidate.long)
             validateCombinedModel(candidate.portrait, "portrait")
             candidate
         } catch (error: Throwable) {
             if (candidate != null) {
                 candidate.close()
             } else {
-                short?.close()
-                long?.close()
                 portrait?.close()
             }
-            PLog.e(TAG, "Unable to initialize RAW scene exposure models", error)
+            PLog.e(TAG, "Unable to initialize MGC legacy AE and portrait model", error)
             null
         }
     }
@@ -1271,18 +1346,6 @@ internal object RawSceneExposureEstimator {
         check(input.dataType() == DataType.FLOAT32)
         check(input.shape().contentEquals(intArrayOf(1, 64, 64, 9)))
         validateScalarOutput(output.dataType(), output.shape(), name)
-    }
-
-    private fun validateLongModel(interpreter: Interpreter) {
-        check(interpreter.inputTensorCount == 2) { "long AE model input count changed" }
-        val semantic = interpreter.getInputTensor(0)
-        val color = interpreter.getInputTensor(1)
-        val output = interpreter.getOutputTensor(0)
-        check(semantic.dataType() == DataType.FLOAT32)
-        check(semantic.shape().contentEquals(intArrayOf(1, 64, 64, 5)))
-        check(color.dataType() == DataType.FLOAT32)
-        check(color.shape().contentEquals(intArrayOf(1, 64, 64, 4)))
-        validateScalarOutput(output.dataType(), output.shape(), "long")
     }
 
     private fun validateScalarOutput(type: DataType, shape: IntArray, name: String) {

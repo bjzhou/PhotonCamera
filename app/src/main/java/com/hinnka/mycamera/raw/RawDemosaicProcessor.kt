@@ -7948,6 +7948,13 @@ class RawDemosaicProcessor {
                 rgbTransform = meteringRgbTransform,
                 lensShadingStats = lensShadingStats,
             ) ?: return null
+            val legacyMeteringRgb = RawSceneExposureMath.prepareMgcLegacyMeteringRgb(
+                cameraRgb = cameraRgb,
+                width = width,
+                height = height,
+                metadata = meteringMetadata,
+                lensShadingStats = lensShadingStats,
+            ) ?: return null
             val meteringRgbMean = FloatArray(3)
             val meteringRgbMax = FloatArray(3)
             for (pixel in 0 until width * height) {
@@ -8110,6 +8117,11 @@ class RawDemosaicProcessor {
                     height = height,
                     rgb = meteringRgb,
                     fastMomentsStats = fastMomentsStats,
+                    legacyAeInput = RawSceneLegacyAeInput(
+                        cameraRgb = legacyMeteringRgb,
+                        rgbGains = rgbGains,
+                        rgbTransform = meteringRgbTransform,
+                    ),
                 ),
             )
         } catch (error: Throwable) {

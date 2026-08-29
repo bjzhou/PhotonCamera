@@ -18,5 +18,6 @@ app/release.jks
 __pycache__
 /scripts/research/*
 !/scripts/research/generate_mgc_spatial_rgb_merge_static_asm.py
+!/scripts/research/compare_hdrnet_pgtm.py
 .codex-tmp
 .tmp
