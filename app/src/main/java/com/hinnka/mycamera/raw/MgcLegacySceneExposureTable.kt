@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.content.Context
+import com.hinnka.mycamera.utils.PLog
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -132,6 +133,7 @@ internal class MgcLegacySceneExposureTable private constructor(
         deviceMinTetMs: Float,
         deviceMaxTetMs: Float,
     ): MgcLegacyAeResult? {
+        val solveStartedNs = System.nanoTime()
         val legacyInput = frame.legacyAeInput ?: RawSceneLegacyAeInput(
             splitHdrImage = RawSceneClassicAeMeteringFrame(
                 width = frame.width,
@@ -160,6 +162,7 @@ internal class MgcLegacySceneExposureTable private constructor(
             rgbGains = legacyInput.rgbGains,
             currentTetMs = currentTetMs,
         ) ?: return null
+        val normalizationCompletedNs = System.nanoTime()
         val shortPrepared = buildQuery(
             metering = normalizedMetering,
             mode = MgcLegacyAeMode.SHORT,
@@ -170,6 +173,7 @@ internal class MgcLegacySceneExposureTable private constructor(
             fractionPixelsClipped = fractionPixelsClipped,
             category = if (hasFace) 1 else 0,
         ) ?: return null
+        val shortQueryCompletedNs = System.nanoTime()
         val longPrepared = buildQuery(
             metering = normalizedMetering,
             mode = MgcLegacyAeMode.LONG,
@@ -180,8 +184,10 @@ internal class MgcLegacySceneExposureTable private constructor(
             fractionPixelsClipped = fractionPixelsClipped,
             category = if (hasFace) 1 else 0,
         ) ?: return null
+        val longQueryCompletedNs = System.nanoTime()
         val shortTarget = lookupTarget(MgcLegacyAeMode.SHORT, shortPrepared.query)
         val longTarget = lookupTarget(MgcLegacyAeMode.LONG, longPrepared.query)
+        val lookupCompletedNs = System.nanoTime()
         val evaluator = SplitHdrTValueEvaluator(
             brightRgb = normalizedMetering.brightRgb,
             darkRgb = normalizedMetering.darkRgb,
@@ -196,19 +202,22 @@ internal class MgcLegacySceneExposureTable private constructor(
         )
         val shortTAtCurrentTet = evaluator.evaluate(MgcLegacyAeMode.SHORT, currentTetMs)
         val longTAtCurrentTet = evaluator.evaluate(MgcLegacyAeMode.LONG, currentTetMs)
+        val currentTetCompletedNs = System.nanoTime()
         val shortTet = solveTet(
             desiredT = shortTarget.targetT,
             minTetMs = deviceMinTetMs,
             maxTetMs = deviceMaxTetMs,
             evaluate = { tet -> evaluator.evaluate(MgcLegacyAeMode.SHORT, tet) },
         ) ?: return null
+        val shortTetCompletedNs = System.nanoTime()
         val longTet = solveTet(
             desiredT = longTarget.targetT,
             minTetMs = deviceMinTetMs,
             maxTetMs = deviceMaxTetMs,
             evaluate = { tet -> evaluator.evaluate(MgcLegacyAeMode.LONG, tet) },
         ) ?: return null
-        return MgcLegacyAeResult(
+        val longTetCompletedNs = System.nanoTime()
+        val result = MgcLegacyAeResult(
             shortQuery = shortPrepared.query,
             longQuery = longPrepared.query,
             short = shortTarget.toBranch(shortTet, shortTAtCurrentTet),
@@ -232,6 +241,20 @@ internal class MgcLegacySceneExposureTable private constructor(
                 MGC_V25_AE_SMOOTHNESS,
             ),
         )
+        PLog.i(
+            TAG,
+            "RAW_SCENE_EXPOSURE stage=MGC_CLASSIC_SOLVE_TIMING " +
+                "normalizeMs=${elapsedMs(solveStartedNs, normalizationCompletedNs)} " +
+                "shortQueryMs=${elapsedMs(normalizationCompletedNs, shortQueryCompletedNs)} " +
+                "longQueryMs=${elapsedMs(shortQueryCompletedNs, longQueryCompletedNs)} " +
+                "lookupMs=${elapsedMs(longQueryCompletedNs, lookupCompletedNs)} " +
+                "currentTetMs=${elapsedMs(lookupCompletedNs, currentTetCompletedNs)} " +
+                "shortTetMs=${elapsedMs(currentTetCompletedNs, shortTetCompletedNs)} " +
+                "longTetMs=${elapsedMs(shortTetCompletedNs, longTetCompletedNs)} " +
+                "evaluateCount=${evaluator.evaluationCount} " +
+                "totalMs=${elapsedMs(solveStartedNs, longTetCompletedNs)}",
+        )
+        return result
     }
 
     /**
@@ -569,6 +592,9 @@ internal class MgcLegacySceneExposureTable private constructor(
         private val aeSmoothness: Float,
         private val longShapeMetric: Float,
     ) {
+        var evaluationCount: Int = 0
+            private set
+
         private val quantizedRgbTransform = IntArray(9) { index ->
             round(rgbTransform[index] * CCM_QUANTIZATION_SCALE)
                 .toInt()
@@ -576,6 +602,7 @@ internal class MgcLegacySceneExposureTable private constructor(
         }
 
         fun evaluate(mode: MgcLegacyAeMode, tetMs: Float): Float {
+            evaluationCount++
             val relativeTet = tetMs / currentTetMs
             var squaredSum = 0f
             var weightSum = 0f
@@ -1084,6 +1111,7 @@ internal class MgcLegacySceneExposureTable private constructor(
         )
 
     companion object {
+        private const val TAG = "MgcLegacySceneExposureTable"
         const val ASSET_PATH = "mgc_ae/start_release.dat"
         const val EXPECTED_VERSION = 0xF957B82B.toInt()
 
@@ -1210,6 +1238,15 @@ internal class MgcLegacySceneExposureTable private constructor(
                 quantizeU12(evaluateSaturationCurve(code.toDouble() / U12_MAX.toDouble()))
             }
         }
+
+        /** Builds the immutable ExposeHq curves before a capture enters Classic AE. */
+        fun warmUpRuntime() {
+            check(PUNCH_CURVE_LUT.size == U12_MAX + 1)
+            check(SATURATION_CURVE_LUT.size == U12_MAX + 1)
+        }
+
+        private fun elapsedMs(startedNs: Long, completedNs: Long): Float =
+            (completedNs - startedNs).toFloat() / 1_000_000f
 
         private fun smoothnessTOffset(mode: MgcLegacyAeMode, aeSmoothness: Float): Float {
             val negativeScale = if (mode == MgcLegacyAeMode.SHORT) {

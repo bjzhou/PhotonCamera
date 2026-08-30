@@ -8,12 +8,14 @@ import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.phantom.PhantomShortcutActivity
+import com.hinnka.mycamera.raw.RawSceneExposureEstimator
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -27,6 +29,9 @@ class MyCameraApplication : Application() {
         super.onCreate()
         StartupTrace.mark("Application.onCreate start")
         instance = this
+        applicationScope.launch(Dispatchers.Default) {
+            RawSceneExposureEstimator.warmUp(this@MyCameraApplication)
+        }
         StartupTrace.measure("BuglyHelper.init") {
             BuglyHelper.init(this)
         }

@@ -11,7 +11,7 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
-import com.hinnka.mycamera.raw.RawSceneFastMomentsRawStats
+import com.hinnka.mycamera.raw.RawSceneAERawStats
 import com.hinnka.mycamera.utils.BitmapUtils
 
 enum class RawStackBufferLayout {
@@ -109,7 +109,7 @@ data class RawStackResult(
     val gpuLinearRgbSource: GpuLinearRgbSource? = null,
     val gpuBayerSource: GpuBayerSource? = null,
     /** Reference-frame sensor maxima used by MGC Fast Moments after a LinearRaw merge. */
-    val fastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
+    val fastMomentsRawStats: RawSceneAERawStats? = null,
     /** True only when lens-shading gain has already been multiplied into the fused pixels. */
     val lensShadingCorrectionApplied: Boolean = false,
     val mergedFrameCount: Int = 1,

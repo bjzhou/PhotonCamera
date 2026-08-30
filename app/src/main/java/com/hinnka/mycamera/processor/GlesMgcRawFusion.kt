@@ -57,27 +57,18 @@ internal class GlesMgcRawFusion(
             frames.forEach { it.image.close() }
             return null
         }
-        val baseFrameSelection = if (normalIndicesBeforeSelection.size == 1) {
-            GlesMgcRawBaseFrameSelection(
-                referenceIndex = normalIndicesBeforeSelection.single(),
-                candidateIndices = normalIndicesBeforeSelection.toIntArray(),
-                prunedLatestIndex = null,
-                measurements = emptyMap(),
-            )
-        } else {
-            GlesMgcRawBaseFrameSelector(
-                width = width,
-                height = height,
-                sourceBounds = sourceBounds,
-                cfaPattern = cfaPattern,
-                canonicalBlackLevel = blackLevel,
-                whiteLevel = whiteLevel,
-                noiseProfileSelection = noiseProfileSelection,
-                useCurrentGlContext = useCurrentGlContext,
-            ).select(
-                frames = frames,
-            )
-        }
+        val baseFrameSelection = GlesMgcRawBaseFrameSelector(
+            width = width,
+            height = height,
+            sourceBounds = sourceBounds,
+            cfaPattern = cfaPattern,
+            canonicalBlackLevel = blackLevel,
+            whiteLevel = whiteLevel,
+            noiseProfileSelection = noiseProfileSelection,
+            useCurrentGlContext = useCurrentGlContext,
+        ).select(
+            frames = frames,
+        )
         if (baseFrameSelection == null) {
             PLog.e(TAG, "MGC Spatial ${outputMode.name} RAW-content base-frame selection failed")
             frames.forEach { it.image.close() }
@@ -104,20 +95,7 @@ internal class GlesMgcRawFusion(
                     "gles_raw_sharpness"
                 },
         )
-        val fastMomentsRawStats = RawFastMomentsCpuStats.build(
-            frame = referenceFirstFrames.first(),
-            width = sourceWidth,
-            height = sourceHeight,
-            cfaPattern = cfaPattern,
-            canonicalBlackLevel = blackLevel,
-            whiteLevel = whiteLevel,
-            // MGC's non-QCOM AE receives the entire RawWriteView. The render/output crop is not
-            // part of either RawToLoResRgb or mode-2 ComputeSafeUnderexposure.
-            processingBounds = Rect(sourceBounds),
-            cfaPhaseOriginX = sourceBounds.left,
-            cfaPhaseOriginY = sourceBounds.top,
-            coordinateBounds = sourceBounds,
-        )
+        val fastMomentsRawStats = baseFrameSelection.fastMomentsRawStats
         if (mergeMethod == MgcMergeMethod.SABRE) {
             return GlesMgcRawSabreProcessor(
                 width = width,

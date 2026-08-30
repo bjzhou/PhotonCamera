@@ -92,7 +92,7 @@ data class RawDngCaptureProfileInput(
     val metadata: RawMetadata,
     val meteringRenderPlan: DcpRenderPlan,
     val gpuLinearRgbSource: GpuLinearRgbSource? = null,
-    val fastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
+    val fastMomentsRawStats: RawSceneAERawStats? = null,
     val sceneExposureDeviceLimits: RawSceneExposureDeviceLimits? = null,
 )
 

@@ -15,12 +15,10 @@ import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
 import android.util.Half
-import android.util.Log
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.lut.ChromaDenoiseAlgorithm
 import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.processor.GlesGpuCompletion
@@ -35,7 +33,6 @@ import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackResult
-import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -52,9 +49,6 @@ import java.nio.ByteOrder
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.abs
-import kotlin.math.ceil
-import kotlin.math.exp
-import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -1511,7 +1505,7 @@ class RawDemosaicProcessor {
     private val photonDehazePipeline = PhotonDehazePipeline()
     private val hdrReferencePass = RawHdrReferencePass(engineTonePass)
     private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
-    private val fastMomentsStatsAlgorithm = RawFastMomentsStatsAlgorithm()
+    private val fastMomentsStatsAlgorithm = RawAEStatsAlgorithm()
     private val classicAeSplitAlgorithm = RawClassicAeSplitAlgorithm()
     private val quadBayerDemosaicAlgorithm = QuadBayerDemosaicAlgorithm()
     private val vgnDemosaicAlgorithm = VgnDemosaicAlgorithm()
@@ -2301,7 +2295,7 @@ class RawDemosaicProcessor {
         samplesPerPixel: Int = 1,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
         gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
-        fastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
+        fastMomentsRawStats: RawSceneAERawStats? = null,
         metadata: RawMetadata? = null,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
@@ -7971,13 +7965,14 @@ class RawDemosaicProcessor {
         sourceTextureId: Int,
         rawTextureIdForStats: Int,
         rawSamplesPerPixel: Int,
-        suppliedFastMomentsRawStats: RawSceneFastMomentsRawStats? = null,
+        suppliedFastMomentsRawStats: RawSceneAERawStats? = null,
         colorCorrectionMatrix: FloatArray,
         profileToLinearSrgbTransform: FloatArray,
         outputSourceBounds: Rect,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
         restoreSourceBaselineExposure: Boolean = false,
     ): RawSceneExposureResult? {
+        val inputPreparationStartedNs = System.nanoTime()
         return try {
             val width = RawSceneExposureMath.INPUT_WIDTH
             val height = RawSceneExposureMath.INPUT_HEIGHT
@@ -8056,7 +8051,7 @@ class RawDemosaicProcessor {
             }
             val meteringInputSource: String
             val cameraRgb: FloatArray
-            val lensShadingStats: RawSceneFastMomentsRawStats?
+            val lensShadingStats: RawSceneAERawStats?
             if (baseFrameMetering != null) {
                 meteringInputSource = "BASE_RAW_SENSOR"
                 cameraRgb = baseFrameMetering.sensorRgb
@@ -8111,6 +8106,7 @@ class RawDemosaicProcessor {
             } else {
                 metadata
             }
+            val meteringStartedNs = System.nanoTime()
             val meteringRgb = RawSceneExposureMath.prepareFastMomentsMeteringRgb(
                 cameraRgb = cameraRgb,
                 width = width,
@@ -8120,6 +8116,7 @@ class RawDemosaicProcessor {
                 rgbTransform = meteringRgbTransform,
                 lensShadingStats = lensShadingStats,
             ) ?: return null
+            val meteringCompletedNs = System.nanoTime()
             val legacyMeteringRgb = RawSceneExposureMath.prepareMgcLegacyMeteringRgb(
                 cameraRgb = cameraRgb,
                 width = width,
@@ -8127,6 +8124,7 @@ class RawDemosaicProcessor {
                 metadata = meteringMetadata,
                 lensShadingStats = lensShadingStats,
             ) ?: return null
+            val legacyMeteringCompletedNs = System.nanoTime()
             val rawClassicSplit = baseFrameMetering?.classicAe ?: if (
                 rawSamplesPerPixel == 1 && rawTextureIdForStats != 0
             ) {
@@ -8169,6 +8167,7 @@ class RawDemosaicProcessor {
                 )
                 classicAeSource = "LINEAR_RGB_CLASSIC_ENTRY"
             }
+            val classicCompletedNs = System.nanoTime()
             val meteringRgbMean = FloatArray(3)
             val meteringRgbMax = FloatArray(3)
             for (pixel in 0 until width * height) {
@@ -8185,6 +8184,20 @@ class RawDemosaicProcessor {
                     metering.lensShadingMap.size >=
                     metering.lensShadingMapWidth * metering.lensShadingMapHeight * 4
             } == true
+            val diagnosticsCompletedNs = System.nanoTime()
+            fun elapsedMs(startedNs: Long, completedNs: Long): Float =
+                (completedNs - startedNs).toFloat() / 1_000_000f
+            PLog.i(
+                TAG,
+                "RAW_SCENE_EXPOSURE stage=INPUT_PREP_TIMING " +
+                    "setupMs=${elapsedMs(inputPreparationStartedNs, meteringStartedNs)} " +
+                    "fastMeteringMs=${elapsedMs(meteringStartedNs, meteringCompletedNs)} " +
+                    "legacyMeteringMs=" +
+                    "${elapsedMs(meteringCompletedNs, legacyMeteringCompletedNs)} " +
+                    "classicMs=${elapsedMs(legacyMeteringCompletedNs, classicCompletedNs)} " +
+                    "diagnosticsMs=${elapsedMs(classicCompletedNs, diagnosticsCompletedNs)} " +
+                    "totalMs=${elapsedMs(inputPreparationStartedNs, diagnosticsCompletedNs)}",
+            )
             PLog.i(
                 TAG,
                 "RAW_SCENE_EXPOSURE stage=INPUT_COLOR_CONTRACT " +
@@ -8225,7 +8238,7 @@ class RawDemosaicProcessor {
                     ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
                 setupLinearExposurePreviewFramebuffer(statsWidth, statsHeight)
                 if (!fastMomentsStatsAlgorithm.execute(
-                        RawFastMomentsStatsAlgorithm.Input(
+                        RawAEStatsAlgorithm.Input(
                             rawTextureId = rawTextureIdForStats,
                             outputTextureId = linearExposurePreviewTextureId,
                             width = metadata.width,
@@ -8255,7 +8268,7 @@ class RawDemosaicProcessor {
                         channelMax[index] *= sourceBaselineGain
                     }
                 }
-                RawSceneFastMomentsRawStats(
+                RawSceneAERawStats(
                     width = statsWidth,
                     height = statsHeight,
                     sourceWidth = rawStatsBounds.width(),
@@ -8321,7 +8334,7 @@ class RawDemosaicProcessor {
                     channelMax[pixel * 4 + 2] = cameraRgbMax[pixel * 3 + 1]
                     channelMax[pixel * 4 + 3] = cameraRgbMax[pixel * 3 + 2]
                 }
-                RawSceneFastMomentsRawStats(
+                RawSceneAERawStats(
                     width = statsWidth,
                     height = statsHeight,
                     sourceWidth = orientedSourceWidth,

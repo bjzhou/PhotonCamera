@@ -27,6 +27,7 @@ internal data class GlesMgcRawBaseFrameSelection(
     val candidateIndices: IntArray,
     val prunedLatestIndex: Int?,
     val measurements: Map<Int, GlesMgcRawSharpnessMeasurement>,
+    val fastMomentsRawStats: com.hinnka.mycamera.raw.RawSceneAERawStats? = null,
 )
 
 /**
@@ -66,14 +67,6 @@ internal class GlesMgcRawBaseFrameSelector(
     fun select(frames: List<RawStackFrame>): GlesMgcRawBaseFrameSelection? {
         val normalIndices = frames.indices.filter { frames[it].role == RawBurstFrameRole.NORMAL }
         if (normalIndices.isEmpty()) return null
-        if (normalIndices.size == 1) {
-            return GlesMgcRawBaseFrameSelection(
-                referenceIndex = normalIndices.single(),
-                candidateIndices = normalIndices.toIntArray(),
-                prunedLatestIndex = null,
-                measurements = emptyMap(),
-            )
-        }
         if (width < 8 || height < 8 || cfaPattern !in 0..3 || whiteLevel <= 0) {
             PLog.e(
                 TAG,
@@ -86,14 +79,27 @@ internal class GlesMgcRawBaseFrameSelector(
         return try {
             if (useCurrentGlContext) attachCurrentEgl() else initEgl()
             ensureGles31()
-            val measurements = measureFrames(frames, normalIndices)
-            val selection = selectFromMeasurements(
-                normalIndices = normalIndices.toIntArray(),
-                timestampsNs = LongArray(frames.size) { frames[it].sensorTimestampNs },
-                measurements = measurements,
-            ) ?: return null
-            logSelection(frames, normalIndices, selection)
-            selection
+            val selection = if (normalIndices.size == 1) {
+                GlesMgcRawBaseFrameSelection(
+                    referenceIndex = normalIndices.single(),
+                    candidateIndices = normalIndices.toIntArray(),
+                    prunedLatestIndex = null,
+                    measurements = emptyMap(),
+                )
+            } else {
+                val measurements = measureFrames(frames, normalIndices)
+                selectFromMeasurements(
+                    normalIndices = normalIndices.toIntArray(),
+                    timestampsNs = LongArray(frames.size) { frames[it].sensorTimestampNs },
+                    measurements = measurements,
+                ) ?: return null
+            }
+            if (normalIndices.size > 1) logSelection(frames, normalIndices, selection)
+            selection.copy(
+                fastMomentsRawStats = buildFastMomentsRawStats(
+                    frames[selection.referenceIndex],
+                ),
+            )
         } catch (error: RuntimeException) {
             PLog.e(TAG, "MGC GLES RAW base-frame selection failed", error)
             null
@@ -282,8 +288,64 @@ internal class GlesMgcRawBaseFrameSelector(
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
             GLES31.glUseProgram(0)
+            releaseTextures(rawTextures)
         }
     }
+
+    private fun buildFastMomentsRawStats(frame: RawStackFrame):
+        com.hinnka.mycamera.raw.RawSceneAERawStats? {
+        val totalStartNs = System.nanoTime()
+        val rawTexture = createRawTexture()
+        val uploadStartNs = System.nanoTime()
+        uploadRaw(frame, rawTexture, "Fast Moments reference ${frame.frameNumber}")
+        val uploadMs = elapsedMs(uploadStartNs)
+        return try {
+            val result = GlesRawAEStats(
+                width = width,
+                height = height,
+                cfaPattern = cfaPattern,
+                blackLevel = canonicalBlackLevelForFrame(frame),
+                whiteLevel = whiteLevel,
+                maxShaderStorageBlockBytes = maxShaderStorageBlockBytes,
+            ).build(rawTexture)
+            val totalMs = elapsedMs(totalStartNs)
+            PLog.i(
+                TAG,
+                "Fast Moments GPU reference statistics size=${result.stats.width}x" +
+                    "${result.stats.height} source=${width}x$height frame=${frame.frameNumber} " +
+                    "baseRgb=${result.stats.baseFrameMetering?.let {
+                        "${com.hinnka.mycamera.raw.RawSceneExposureMath.INPUT_WIDTH}x" +
+                            com.hinnka.mycamera.raw.RawSceneExposureMath.INPUT_HEIGHT
+                    } ?: "unavailable"} " +
+                    "classicAe=${result.stats.baseFrameMetering?.classicAe?.let {
+                        "${it.width}x${it.height}"
+                    } ?: "unavailable"} uploadMs=$uploadMs submitMs=${result.submitMs} " +
+                    "gpuWaitMs=${result.gpuWaitMs} mapMs=${result.mapMs} totalMs=$totalMs " +
+                    "budgetMs=$FAST_MOMENTS_BUDGET_MS",
+            )
+            if (totalMs > FAST_MOMENTS_BUDGET_MS) {
+                PLog.w(
+                    TAG,
+                    "Fast Moments GPU statistics exceeded budget: totalMs=$totalMs " +
+                        "budgetMs=$FAST_MOMENTS_BUDGET_MS frame=${frame.frameNumber}",
+                )
+            }
+            result.stats
+        } finally {
+            releaseTextures(intArrayOf(rawTexture))
+        }
+    }
+
+    private fun releaseTextures(textureIds: IntArray) {
+        if (textureIds.isEmpty()) return
+        GLES30.glDeleteTextures(textureIds.size, textureIds, 0)
+        val released = textureIds.toSet()
+        textures.removeAll(released)
+        checkGlError("release MGC RAW selector textures")
+    }
+
+    private fun elapsedMs(startNs: Long): Long =
+        (System.nanoTime() - startNs) / 1_000_000L
 
     private fun reduceFrameMetrics(
         program: Int,
@@ -786,6 +848,7 @@ internal class GlesMgcRawBaseFrameSelector(
         private const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         private const val RAW_BYTES_PER_PIXEL = 2
         private const val RAW_TEXTURE_RING_SIZE = 2
+        private const val FAST_MOMENTS_BUDGET_MS = 200L
         private const val PRUNE_LATEST_AT_CANDIDATE_COUNT = 8
         private const val NO_MOTION_NOISE_CORRECTION_SCALE = 0.95
 

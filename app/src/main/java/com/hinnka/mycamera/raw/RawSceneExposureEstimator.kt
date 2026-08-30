@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.content.Context
+import android.os.SystemClock
 import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.utils.PLog
 import org.tensorflow.lite.DataType
@@ -14,7 +15,7 @@ internal data class RawSceneLinearFrame(
     val height: Int,
     /** Interleaved, colorized linear-RGB samples from the exact RAW frame. */
     val rgb: FloatArray,
-    val fastMomentsStats: RawSceneFastMomentsRawStats,
+    val fastMomentsStats: RawSceneAERawStats,
     /** Camera RGB and WB gains retained for MGC 9.7's pre-ML table AE path. */
     val legacyAeInput: RawSceneLegacyAeInput? = null,
 )
@@ -59,7 +60,7 @@ data class RawSceneFastMomentsMeteringFrame(
     internal val classicAe: RawSceneClassicAeMeteringFrame? = null,
 )
 
-data class RawSceneFastMomentsRawStats(
+data class RawSceneAERawStats(
     val width: Int,
     val height: Int,
     /** Pixel extent represented before the fixed 1/16 RAW-statistics downsample. */
@@ -210,7 +211,7 @@ internal object RawSceneExposureMath {
     const val COLOR_CHANNELS = 4
     const val SEMANTIC_CHANNELS = 5
     const val INPUT_CHANNELS = COLOR_CHANNELS + SEMANTIC_CHANNELS
-    const val FAST_MOMENTS_RAW_STATS_DOWNSAMPLE = RawFastMomentsStatsAlgorithm.DOWNSAMPLE
+    const val FAST_MOMENTS_RAW_STATS_DOWNSAMPLE = RawAEStatsAlgorithm.DOWNSAMPLE
 
     // Ordinary MGC/Google ZSL exposure tuning. These are finalizer constraints, not sensor limits.
     const val MAX_POST_CAPTURE_GAIN = 26.5f
@@ -517,7 +518,7 @@ internal object RawSceneExposureMath {
         metadata: RawMetadata,
         rgbGains: FloatArray,
         rgbTransform: FloatArray,
-        lensShadingStats: RawSceneFastMomentsRawStats? = null,
+        lensShadingStats: RawSceneAERawStats? = null,
     ): FloatArray? {
         val pixelCount = width * height
         if (width != INPUT_WIDTH || height != INPUT_HEIGHT ||
@@ -549,7 +550,11 @@ internal object RawSceneExposureMath {
                 val lscBlue = lensShadingStats?.let { stats ->
                     lensShadingGainAtStatsUv(metadata, stats, 3, u, v)
                 } ?: 1f
-                if (!validPositiveTets(lscRed, lscGreen, lscBlue)) return null
+                if (!validPositive(lscRed) || !validPositive(lscGreen) ||
+                    !validPositive(lscBlue)
+                ) {
+                    return null
+                }
 
                 val red = (cameraRgb[inputOffset] * lscRed * rgbGains[0]).coerceIn(0f, 1f)
                 val green = (cameraRgb[inputOffset + 1] * lscGreen * rgbGains[1])
@@ -587,7 +592,7 @@ internal object RawSceneExposureMath {
         width: Int,
         height: Int,
         metadata: RawMetadata,
-        lensShadingStats: RawSceneFastMomentsRawStats? = null,
+        lensShadingStats: RawSceneAERawStats? = null,
     ): FloatArray? {
         val pixelCount = width * height
         if (width != INPUT_WIDTH || height != INPUT_HEIGHT ||
@@ -614,7 +619,11 @@ internal object RawSceneExposureMath {
                 val lscBlue = lensShadingStats?.let { stats ->
                     lensShadingGainAtStatsUv(metadata, stats, 3, u, v)
                 } ?: 1f
-                if (!validPositiveTets(lscRed, lscGreen, lscBlue)) return null
+                if (!validPositive(lscRed) || !validPositive(lscGreen) ||
+                    !validPositive(lscBlue)
+                ) {
+                    return null
+                }
                 output[offset] = toMeteringU15(
                     (cameraRgb[offset] * lscRed).coerceIn(0f, 1f),
                 )
@@ -634,7 +643,7 @@ internal object RawSceneExposureMath {
         split: RawSceneClassicAeMeteringFrame,
         metadata: RawMetadata,
         sourceBounds: FloatArray,
-        lensShadingStats: RawSceneFastMomentsRawStats? = null,
+        lensShadingStats: RawSceneAERawStats? = null,
     ): RawSceneClassicAeMeteringFrame? {
         val pixelCount = split.width * split.height
         if (split.width <= 0 || split.height <= 0 ||
@@ -661,19 +670,25 @@ internal object RawSceneExposureMath {
             val v = (y + 0.5f) / split.height.toFloat()
             for (x in 0 until split.width) {
                 val u = (x + 0.5f) / split.width.toFloat()
-                val gains = floatArrayOf(
-                    gain(0, u, v),
-                    0.5f * (gain(1, u, v) + gain(2, u, v)),
-                    gain(3, u, v),
-                )
-                if (gains.any { !it.isFinite() || it <= 0f }) return null
-                val offset = (y * split.width + x) * 3
-                for (channel in 0..2) {
-                    bright[offset + channel] =
-                        (split.brightRgb[offset + channel] * gains[channel]).coerceAtLeast(0f)
-                    dark[offset + channel] =
-                        (split.darkRgb[offset + channel] * gains[channel]).coerceAtLeast(0f)
+                val redGain = gain(0, u, v)
+                val greenGain = 0.5f * (gain(1, u, v) + gain(2, u, v))
+                val blueGain = gain(3, u, v)
+                if (!validPositive(redGain) || !validPositive(greenGain) ||
+                    !validPositive(blueGain)
+                ) {
+                    return null
                 }
+                val offset = (y * split.width + x) * 3
+                bright[offset] = (split.brightRgb[offset] * redGain).coerceAtLeast(0f)
+                bright[offset + 1] =
+                    (split.brightRgb[offset + 1] * greenGain).coerceAtLeast(0f)
+                bright[offset + 2] =
+                    (split.brightRgb[offset + 2] * blueGain).coerceAtLeast(0f)
+                dark[offset] = (split.darkRgb[offset] * redGain).coerceAtLeast(0f)
+                dark[offset + 1] =
+                    (split.darkRgb[offset + 1] * greenGain).coerceAtLeast(0f)
+                dark[offset + 2] =
+                    (split.darkRgb[offset + 2] * blueGain).coerceAtLeast(0f)
             }
         }
         return RawSceneClassicAeMeteringFrame(
@@ -1021,27 +1036,14 @@ internal object RawSceneExposureMath {
         var safeUnderexposure = Float.MAX_VALUE
         for (y in 0 until stats.height) {
             for (x in 0 until stats.width) {
-                val lscR = minimumLensShadingGain(metadata, stats, 0, x, y)
-                val lscGr = minimumLensShadingGain(metadata, stats, 1, x, y)
-                val lscGb = minimumLensShadingGain(metadata, stats, 2, x, y)
-                val lscB = minimumLensShadingGain(metadata, stats, 3, x, y)
-                if (!validPositiveTets(lscR, lscGr, lscGb, lscB)) {
-                    PLog.e(
-                        TAG,
-                        "Invalid mode-2 LSC gain at ($x,$y): " +
-                            "[${lscR}, ${lscGr}, ${lscGb}, ${lscB}] " +
-                            "map=${metadata.lensShadingMapWidth}x" +
-                            "${metadata.lensShadingMapHeight}",
-                    )
-                    return null
-                }
-
                 val offset = (y * stats.width + x) * 4
                 val red = stats.channelMax[offset]
                 val greenEven = stats.channelMax[offset + 1]
                 val greenOdd = stats.channelMax[offset + 2]
                 val blue = stats.channelMax[offset + 3]
-                if (!validNonNegative(red, greenEven, greenOdd, blue)) {
+                if (!validNonNegative(red) || !validNonNegative(greenEven) ||
+                    !validNonNegative(greenOdd) || !validNonNegative(blue)
+                ) {
                     PLog.e(
                         TAG,
                         "Invalid mode-2 CFA maximum at ($x,$y): " +
@@ -1050,24 +1052,68 @@ internal object RawSceneExposureMath {
                     return null
                 }
 
-                var pixelClipped = false
-                fun accountChannel(value: Float, lsc: Float, whiteBalanceGain: Float) {
-                    val sensorValue = if (stats.sensorNormalized) value else value / lsc
-                    if (sensorValue * relativeTetGain >= RAW_CLIP_LEVEL) {
-                        pixelClipped = true
-                        if (collectSafeUnderexposure) {
-                            safeUnderexposure = minOf(
-                                safeUnderexposure,
-                                whiteBalanceGain * lsc,
-                            )
-                        }
+                if (stats.sensorNormalized) {
+                    val redClipped = red * relativeTetGain >= RAW_CLIP_LEVEL
+                    val greenEvenClipped =
+                        greenEven * relativeTetGain >= RAW_CLIP_LEVEL
+                    val greenOddClipped = greenOdd * relativeTetGain >= RAW_CLIP_LEVEL
+                    val blueClipped = blue * relativeTetGain >= RAW_CLIP_LEVEL
+                    if (!redClipped && !greenEvenClipped && !greenOddClipped && !blueClipped) {
+                        continue
                     }
+                    clippedPixels++
+                    if (!collectSafeUnderexposure) continue
+
+                    val lscR = minimumLensShadingGain(metadata, stats, 0, x, y)
+                    val lscGr = minimumLensShadingGain(metadata, stats, 1, x, y)
+                    val lscGb = minimumLensShadingGain(metadata, stats, 2, x, y)
+                    val lscB = minimumLensShadingGain(metadata, stats, 3, x, y)
+                    if (!validLensShadingGains(lscR, lscGr, lscGb, lscB, x, y, metadata)) {
+                        return null
+                    }
+                    if (redClipped) {
+                        safeUnderexposure = minOf(safeUnderexposure, whiteBalance[0] * lscR)
+                    }
+                    if (greenEvenClipped) {
+                        safeUnderexposure = minOf(safeUnderexposure, whiteBalance[1] * lscGr)
+                    }
+                    if (greenOddClipped) {
+                        safeUnderexposure = minOf(safeUnderexposure, whiteBalance[2] * lscGb)
+                    }
+                    if (blueClipped) {
+                        safeUnderexposure = minOf(safeUnderexposure, whiteBalance[3] * lscB)
+                    }
+                    continue
                 }
-                accountChannel(red, lscR, whiteBalance[0])
-                accountChannel(greenEven, lscGr, whiteBalance[1])
-                accountChannel(greenOdd, lscGb, whiteBalance[2])
-                accountChannel(blue, lscB, whiteBalance[3])
-                if (pixelClipped) clippedPixels++
+
+                val lscR = minimumLensShadingGain(metadata, stats, 0, x, y)
+                val lscGr = minimumLensShadingGain(metadata, stats, 1, x, y)
+                val lscGb = minimumLensShadingGain(metadata, stats, 2, x, y)
+                val lscB = minimumLensShadingGain(metadata, stats, 3, x, y)
+                if (!validLensShadingGains(lscR, lscGr, lscGb, lscB, x, y, metadata)) {
+                    return null
+                }
+                val redClipped = red / lscR * relativeTetGain >= RAW_CLIP_LEVEL
+                val greenEvenClipped = greenEven / lscGr * relativeTetGain >= RAW_CLIP_LEVEL
+                val greenOddClipped = greenOdd / lscGb * relativeTetGain >= RAW_CLIP_LEVEL
+                val blueClipped = blue / lscB * relativeTetGain >= RAW_CLIP_LEVEL
+                if (!redClipped && !greenEvenClipped && !greenOddClipped && !blueClipped) {
+                    continue
+                }
+                clippedPixels++
+                if (!collectSafeUnderexposure) continue
+                if (redClipped) {
+                    safeUnderexposure = minOf(safeUnderexposure, whiteBalance[0] * lscR)
+                }
+                if (greenEvenClipped) {
+                    safeUnderexposure = minOf(safeUnderexposure, whiteBalance[1] * lscGr)
+                }
+                if (greenOddClipped) {
+                    safeUnderexposure = minOf(safeUnderexposure, whiteBalance[2] * lscGb)
+                }
+                if (blueClipped) {
+                    safeUnderexposure = minOf(safeUnderexposure, whiteBalance[3] * lscB)
+                }
             }
         }
         val resolvedSafeUnderexposure = if (
@@ -1085,7 +1131,7 @@ internal object RawSceneExposureMath {
 
     private fun minimumLensShadingGain(
         metadata: RawMetadata,
-        stats: RawSceneFastMomentsRawStats,
+        stats: RawSceneAERawStats,
         channel: Int,
         x: Int,
         y: Int,
@@ -1105,26 +1151,12 @@ internal object RawSceneExposureMath {
 
     private fun lensShadingGainAtStatsUv(
         metadata: RawMetadata,
-        stats: RawSceneFastMomentsRawStats,
+        stats: RawSceneAERawStats,
         channel: Int,
         u: Float,
         v: Float,
     ): Float {
-        val sourceUv = sourceUv(stats, u, v)
-        return lensShadingGain(
-            metadata = metadata,
-            channel = channel,
-            sourceU = sourceUv.first,
-            sourceV = sourceUv.second,
-        )
-    }
-
-    private fun sourceUv(
-        stats: RawSceneFastMomentsRawStats,
-        u: Float,
-        v: Float,
-    ): Pair<Float, Float> {
-        val rotation = ((stats.sourceRotationDegrees % 360) + 360) % 360
+        val rotation = Math.floorMod(stats.sourceRotationDegrees, 360)
         val orientedU: Float
         val orientedV: Float
         when (rotation) {
@@ -1145,12 +1177,39 @@ internal object RawSceneExposureMath {
                 orientedV = v
             }
         }
-        return Pair(
-            stats.sourceBounds[0] +
-                (stats.sourceBounds[2] - stats.sourceBounds[0]) * orientedU,
-            stats.sourceBounds[1] +
-                (stats.sourceBounds[3] - stats.sourceBounds[1]) * orientedV,
+        val sourceU = stats.sourceBounds[0] +
+            (stats.sourceBounds[2] - stats.sourceBounds[0]) * orientedU
+        val sourceV = stats.sourceBounds[1] +
+            (stats.sourceBounds[3] - stats.sourceBounds[1]) * orientedV
+        return lensShadingGain(
+            metadata = metadata,
+            channel = channel,
+            sourceU = sourceU,
+            sourceV = sourceV,
         )
+    }
+
+    private fun validLensShadingGains(
+        red: Float,
+        greenEven: Float,
+        greenOdd: Float,
+        blue: Float,
+        x: Int,
+        y: Int,
+        metadata: RawMetadata,
+    ): Boolean {
+        if (validPositive(red) && validPositive(greenEven) &&
+            validPositive(greenOdd) && validPositive(blue)
+        ) {
+            return true
+        }
+        PLog.e(
+            TAG,
+            "Invalid mode-2 LSC gain at ($x,$y): " +
+                "[$red, $greenEven, $greenOdd, $blue] " +
+                "map=${metadata.lensShadingMapWidth}x${metadata.lensShadingMapHeight}",
+        )
+        return false
     }
 
     private fun lensShadingGain(
@@ -1217,11 +1276,11 @@ internal object RawSceneExposureMath {
     private fun validTetRange(minTetMs: Float, maxTetMs: Float): Boolean =
         minTetMs.isFinite() && maxTetMs.isFinite() && minTetMs > 0f && maxTetMs >= minTetMs
 
-    private fun validPositiveTets(vararg tets: Float): Boolean =
-        tets.all { it.isFinite() && it > 0f }
+    private fun validPositive(value: Float): Boolean = value.isFinite() && value > 0f
 
-    private fun validNonNegative(vararg values: Float): Boolean =
-        values.all { it.isFinite() && it >= 0f }
+    private fun validPositiveTets(vararg tets: Float): Boolean = tets.all(::validPositive)
+
+    private fun validNonNegative(value: Float): Boolean = value.isFinite() && value >= 0f
 
     private fun positiveOverride(value: Float?): Float? =
         value?.takeIf { it.isFinite() && it > 0f }
@@ -1231,6 +1290,7 @@ internal object RawSceneExposureMath {
 internal object RawSceneExposureEstimator {
     private const val TAG = "RawSceneExposureEstimator"
     private const val PORTRAIT_MODEL_ASSET = "mgc_ae/portrait_scene_exposure.tflite"
+    private const val SOLVE_BUDGET_MS = 200f
     private val lock = Any()
 
     private data class ExposureEngines(
@@ -1245,6 +1305,30 @@ internal object RawSceneExposureEstimator {
     @Volatile
     private var engines: ExposureEngines? = null
 
+    /**
+     * Moves table parsing, ExposeHq curve construction, and the first delegated model inference
+     * out of the post-capture critical path. Calls are idempotent and share the inference lock.
+     */
+    fun warmUp(context: Context) {
+        if (engines != null) return
+        val startedNs = SystemClock.elapsedRealtimeNanos()
+        val initialized = synchronized(lock) {
+            if (engines != null) {
+                false
+            } else {
+                createEngines(context.applicationContext)?.let { created ->
+                    engines = created
+                    true
+                } ?: false
+            }
+        }
+        PLog.i(
+            TAG,
+            "RAW_SCENE_EXPOSURE stage=ENGINE_WARMUP initialized=$initialized " +
+                "totalMs=${elapsedMs(startedNs)}",
+        )
+    }
+
     fun estimate(
         context: Context,
         frame: RawSceneLinearFrame,
@@ -1252,6 +1336,7 @@ internal object RawSceneExposureEstimator {
         deviceLimits: RawSceneExposureDeviceLimits?,
         faceMask: FloatArray? = null,
     ): RawSceneExposureEstimate? {
+        val estimateStartedNs = SystemClock.elapsedRealtimeNanos()
         val resolvedDeviceLimits = deviceLimits?.takeIf(RawSceneExposureDeviceLimits::isValid)
         val referenceSensitivityIso = resolvedDeviceLimits?.referenceSensitivityIso
             ?: RawSceneExposureMath.DNG_REFERENCE_SENSITIVITY_ISO
@@ -1312,11 +1397,17 @@ internal object RawSceneExposureEstimator {
         val faceMaskRms = RawSceneExposureMath.faceMaskRms(faceMask)
         val detectedFaceMaskEvidence = faceMaskRms
             ?.let { it > RawSceneExposureMath.FACE_MASK_RMS_FLOOR } == true
+        val preparationCompletedNs = SystemClock.elapsedRealtimeNanos()
 
         return synchronized(lock) {
+            val lockAcquiredNs = SystemClock.elapsedRealtimeNanos()
+            val engineWasCold = engines == null
+            val engineStartedNs = lockAcquiredNs
             val activeEngines = engines ?: createEngines(context)?.also { engines = it }
                 ?: return@synchronized null
+            val engineCompletedNs = SystemClock.elapsedRealtimeNanos()
             try {
+                val tableStartedNs = engineCompletedNs
                 val legacyResult = activeEngines.legacyTable.solve(
                     frame = frame,
                     fractionPixelsClipped = tableQueryClippedFraction,
@@ -1330,13 +1421,16 @@ internal object RawSceneExposureEstimator {
                     PLog.e(TAG, "MGC legacy AE table lookup returned invalid values")
                     return@synchronized null
                 }
+                val tableCompletedNs = SystemClock.elapsedRealtimeNanos()
                 val shortLogGain = RawSceneExposureMath.linearGainToModelLog(
                     legacyResult.short.idealTetMs / measurement.currentTetMs,
                 ) ?: return@synchronized null
                 val longLogGain = RawSceneExposureMath.linearGainToModelLog(
                     legacyResult.long.idealTetMs / measurement.currentTetMs,
                 ) ?: return@synchronized null
+                val portraitStartedNs = SystemClock.elapsedRealtimeNanos()
                 val portraitLogGain = runCombinedModel(activeEngines.portrait, combinedInput)
+                val portraitCompletedNs = SystemClock.elapsedRealtimeNanos()
                 val branches = RawSceneExposureBranches(
                     shortLogGain = shortLogGain,
                     longLogGain = longLogGain,
@@ -1404,6 +1498,20 @@ internal object RawSceneExposureEstimator {
                 } else {
                     "CAMERA_RGB_FALLBACK"
                 }
+                val finalizationCompletedNs = SystemClock.elapsedRealtimeNanos()
+                PLog.i(
+                    TAG,
+                    "RAW_SCENE_EXPOSURE stage=SOLVE_TIMING " +
+                        "prepareMs=${elapsedMs(estimateStartedNs, preparationCompletedNs)} " +
+                        "lockWaitMs=${elapsedMs(preparationCompletedNs, lockAcquiredNs)} " +
+                        "engineCold=$engineWasCold " +
+                        "engineMs=${elapsedMs(engineStartedNs, engineCompletedNs)} " +
+                        "tableMs=${elapsedMs(tableStartedNs, tableCompletedNs)} " +
+                        "portraitMs=${elapsedMs(portraitStartedNs, portraitCompletedNs)} " +
+                        "finalizeMs=${elapsedMs(portraitCompletedNs, finalizationCompletedNs)} " +
+                        "totalMs=${elapsedMs(estimateStartedNs, finalizationCompletedNs)} " +
+                        "budgetMs=$SOLVE_BUDGET_MS",
+                )
                 PLog.i(
                     TAG,
                     "RAW_SCENE_EXPOSURE stage=MGC_CLASSIC_SHORT_QUERY_DIAGNOSTIC " +
@@ -1688,6 +1796,7 @@ internal object RawSceneExposureEstimator {
                 "Unexpected start_release.dat version: " +
                     "0x${Integer.toUnsignedString(legacyTable.version, 16)}"
             }
+            MgcLegacySceneExposureTable.warmUpRuntime()
             val loadedPortrait = createInterpreter(context, PORTRAIT_MODEL_ASSET).also {
                 portrait = it
             }
@@ -1696,6 +1805,7 @@ internal object RawSceneExposureEstimator {
                 portrait = loadedPortrait,
             )
             validateCombinedModel(candidate.portrait, "portrait")
+            warmCombinedModel(candidate.portrait)
             candidate
         } catch (error: Throwable) {
             if (candidate != null) {
@@ -1724,6 +1834,17 @@ internal object RawSceneExposureEstimator {
         check(input.shape().contentEquals(intArrayOf(1, 64, 64, 9)))
         validateScalarOutput(output.dataType(), output.shape(), name)
     }
+
+    private fun warmCombinedModel(interpreter: Interpreter) {
+        val input = directFloatBuffer(
+            RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
+                RawSceneExposureMath.INPUT_CHANNELS,
+        )
+        check(runCombinedModel(interpreter, input).isFinite())
+    }
+
+    private fun elapsedMs(startedNs: Long, completedNs: Long = SystemClock.elapsedRealtimeNanos()): Float =
+        (completedNs - startedNs).toFloat() / 1_000_000f
 
     private fun validateScalarOutput(type: DataType, shape: IntArray, name: String) {
         check(type == DataType.FLOAT32) { "$name AE model output type changed" }

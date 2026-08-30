@@ -6,7 +6,7 @@ import android.opengl.GLES31
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 
 /** Builds MGC Fast Moments' 1/16-resolution per-CFA-channel RAW maximum surface. */
-internal class RawFastMomentsStatsAlgorithm {
+internal class RawAEStatsAlgorithm {
     data class Input(
         val rawTextureId: Int,
         val outputTextureId: Int,

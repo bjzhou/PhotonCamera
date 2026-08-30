@@ -5,7 +5,6 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.DngCreator
 import android.media.ExifInterface
-import android.media.Image
 import android.util.Log
 import android.util.Size
 import com.hinnka.mycamera.camera.AspectRatio
@@ -22,16 +21,13 @@ import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawPhysicalCrop
 import com.hinnka.mycamera.raw.RawNoiseProfileLayout
-import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawSceneExposureDeviceLimits
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.toAdobeDefaultMeteringPlan
 import java.io.File
-import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.ShortBuffer
 
 /**
  * RAW 图像处理器
@@ -659,7 +655,7 @@ object RawProcessor {
     suspend fun prepareRawDngProfile(
         rawBuffer: ByteBuffer?,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
-        fastMomentsRawStats: com.hinnka.mycamera.raw.RawSceneFastMomentsRawStats? = null,
+        fastMomentsRawStats: com.hinnka.mycamera.raw.RawSceneAERawStats? = null,
         width: Int,
         height: Int,
         characteristics: CameraCharacteristics,
