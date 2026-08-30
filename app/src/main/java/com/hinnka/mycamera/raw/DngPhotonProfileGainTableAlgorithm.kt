@@ -1052,12 +1052,11 @@ internal object DngPhotonProfileGainTableInputShader {
                     ++sampleCount;
                 }
             }
-            // Restore source-domain normalization first, then move that restored brightness into
-            // final-short space. PGTM generation later divides its target by the same
-            // baseline-restored source luma, so BaselineExposure cannot shift the final result.
+            // Restore the multi-frame source from its shorter-exposure normalization before
+            // moving it into final-short space. This BaselineExposure is source-domain metadata,
+            // not the additional appearance exposure used by Pixel's DNG pipeline.
             vec3 storedCameraRgb = cameraRgbSum / float(max(sampleCount, 1));
-            vec3 baselineRestoredCameraRgb = storedCameraRgb * uBaselineGain;
-            vec3 cameraRgb = baselineRestoredCameraRgb * uSourceToShortGain;
+            vec3 cameraRgb = storedCameraRgb * uBaselineGain * uSourceToShortGain;
             vec3 profileRgb = clamp(
                 uColorCorrectionMatrix * cameraRgb,
                 vec3(0.0),
@@ -1393,7 +1392,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val samplesPerPixel: Int,
         val metadata: RawMetadata,
         val statsBounds: Rect?,
-        val baselineExposureEv: Float,
+        /** BaselineExposure that restores the stored multi-frame RAW normalization. */
+        val sourceBaselineExposureEv: Float,
+        /** Total BaselineExposure used by DNG ProfileGainTableMap lookup. */
+        val rendererBaselineExposureEv: Float,
         val hdrRatio: Float,
         val sourceToShortGain: Float,
         val portraitRelightingGain: Float,
@@ -1493,7 +1495,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val plan = DngPhotonProfileGainTableGenerator.hdrNetPlan(
             sourceWidth = width,
             sourceHeight = height,
-            baselineExposureEv = input.baselineExposureEv,
+            sourceBaselineExposureEv = input.sourceBaselineExposureEv,
+            rendererBaselineExposureEv = input.rendererBaselineExposureEv,
             hdrRatio = input.hdrRatio,
             sourceToShortGain = input.sourceToShortGain,
             diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG HDRNet capture"),
@@ -1627,7 +1630,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uBaselineGain"),
-                plan.baselineGain,
+                plan.sourceBaselineGain,
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uSourceToShortGain"),
@@ -1711,9 +1714,15 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_HEIGHT}x" +
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
                     "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
-                    "hdrRatio=${plan.hdrRatio} baselineGain=${plan.baselineGain} " +
+                    "hdrRatio=${plan.hdrRatio} " +
+                    "sourceBaselineGain=${plan.sourceBaselineGain} " +
+                    "rendererBaselineGain=${plan.rendererBaselineGain} " +
                     "sourceToShortGain=${plan.sourceToShortGain} " +
-                    "hdrNetTotalInputGain=${plan.baselineGain * plan.sourceToShortGain} " +
+                    "hdrNetTotalInputGain=${plan.hdrNetInputScale} " +
+                    "mapInputWeightSum=${plan.mapInputWeightSum} " +
+                    "mapInputEffectiveScale=${plan.rendererMapInputEffectiveScale} " +
+                    "mapInputInvariantError=" +
+                    "${plan.rendererMapInputEffectiveScale - plan.hdrNetInputScale} " +
                     "portraitRelightingApplied=" +
                     "${input.portraitRelightingMask != null && input.portraitRelightingGain != 1f} " +
                     "portraitRelightingGain=${input.portraitRelightingGain} " +
@@ -1721,7 +1730,9 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${RawSceneExposureMath.faceMaskRms(input.portraitRelightingMask)} " +
                     "portraitRelightingDomain=POST_HDRNET_TARGET_PRE_ACR3_PRE_PGTM " +
                     "baselineAppliedToHdrNetInput=true " +
-                    "pgtmGainDenominator=BASELINE_RESTORED_SOURCE_LUMA " +
+                    "baselineRole=MULTIFRAME_SOURCE_NORMALIZATION_RESTORE " +
+                    "mapInputDomain=FINAL_SHORT_RIMM_PXL_INTENSITY_AFTER_SOURCE_RESTORE " +
+                    "pgtmGainDenominator=BASELINE_RESTORED_SOURCE_PXL_INTENSITY " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
                     "processingBounds=$stage3Bounds samplingArea=$samplingArea " +
                     "inputMs=${(inputReadyNs - totalStartNs) / 1_000_000f} " +
@@ -1758,7 +1769,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val samplesPerPixel = input.samplesPerPixel
         val metadata = input.metadata
         val statsBounds = input.statsBounds
-        val baselineExposureEv = input.baselineExposureEv
+        val baselineExposureEv = input.rendererBaselineExposureEv
         val colorCorrectionMatrix = input.colorCorrectionMatrix
         val hueSatMap = input.hueSatMap
         val hueSatMapSupportsOverrange = input.hueSatMapSupportsOverrange
@@ -3285,8 +3296,14 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 "cameraNeutral=${cameraNeutral.contentToString()} " +
                 "mappedNeutral=${mappedNeutral.contentToString()} " +
                 "matrix=${colorCorrectionMatrix.take(9)} hueSat=$hueSatEnabled " +
-                "baselineGain=${plan.baselineGain} sourceToShort=${plan.sourceToShortGain} " +
+                "sourceBaselineGain=${plan.sourceBaselineGain} " +
+                "rendererBaselineGain=${plan.rendererBaselineGain} " +
+                "sourceToShort=${plan.sourceToShortGain} " +
                 "hdrRatio=${plan.hdrRatio} mapWeights=${plan.mapInputWeights.contentToString()} " +
+                "mapWeightSum=${plan.mapInputWeightSum} " +
+                "mapInputEffectiveScale=${plan.rendererMapInputEffectiveScale} " +
+                "mapInputInvariantError=" +
+                "${plan.rendererMapInputEffectiveScale - plan.hdrNetInputScale} " +
                 "channelMin=${minimums.contentToString()} " +
                 "channelMean=${means.contentToString()} " +
                 "channelMax=${maximums.contentToString()} " +

@@ -263,8 +263,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     std::vector<AxisSample> x_samples(static_cast<size_t>(output_grid_width));
     std::vector<AxisSample> y_samples(static_cast<size_t>(output_grid_height));
     std::vector<AxisSample> range_samples(static_cast<size_t>(point_count));
-    std::vector<float> source_lumas(static_cast<size_t>(point_count));
-    std::vector<float> short_lumas(static_cast<size_t>(point_count));
+    std::vector<float> short_intensities(static_cast<size_t>(point_count));
     for (int x = 0; x < output_grid_width; ++x) {
       x_samples[static_cast<size_t>(x)] =
           MakeAxisSample(x, output_grid_width, source_grid_width);
@@ -275,17 +274,13 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     }
     for (int point = 0; point < point_count; ++point) {
       const int evaluated_point = point == 0 ? 1 : point;
-      const float source_luma =
+      // Adobe indexes a table with weight * tableSize, so entry p represents p / tableSize.
+      // MapInputWeights already reparameterizes this N axis into Pixel's final-short intensity.
+      const float short_intensity =
           static_cast<float>(evaluated_point) / point_count;
-      source_lumas[static_cast<size_t>(point)] = source_luma;
-      // source_luma is already the BaselineExposure-restored DNG lookup coordinate. Move that
-      // captured/reference-domain luma into final-short space for bilateral slicing and affine
-      // evaluation using final_short_tet / actual_tet.
-      const float short_luma =
-          std::clamp(source_luma * source_to_short_gain, 0.0f, 1.0f);
-      short_lumas[static_cast<size_t>(point)] = short_luma;
+      short_intensities[static_cast<size_t>(point)] = short_intensity;
       const float guide =
-          EvaluateGuide(short_luma, guide_shifts.data(), guide_slopes.data(),
+          EvaluateGuide(short_intensity, guide_shifts.data(), guide_slopes.data(),
                         guide_count);
       const float range_position = guide * source_grid_depth - 0.5f;
       const float range_floor = std::floor(range_position);
@@ -309,9 +304,8 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       float* const gain_curve =
           output_gains.data() + static_cast<size_t>(cell) * point_count;
       for (int point = 0; point < point_count; ++point) {
-        const float baseline_restored_source_luma =
-            source_lumas[static_cast<size_t>(point)];
-        const float short_luma = short_lumas[static_cast<size_t>(point)];
+        const float short_intensity =
+            short_intensities[static_cast<size_t>(point)];
         const AxisSample& range_sample =
             range_samples[static_cast<size_t>(point)];
         const float raw_scale = SampleCoefficient(
@@ -323,7 +317,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
             coefficient_count, x_samples[static_cast<size_t>(x)],
             y_samples[static_cast<size_t>(y)], range_sample, 1);
         const float scale = raw_scale * (hdr_ratio - 1.0f) + 1.0f;
-        const float predicted_luma = scale * short_luma + bias;
+        const float predicted_luma = scale * short_intensity + bias;
         if (!std::isfinite(predicted_luma)) {
           targets_valid.store(false, std::memory_order_relaxed);
           gain_curve[point] = min_table_gain;
@@ -337,30 +331,31 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
         float render_max_gain_for_luma = render_max_gain;
         if (render_max_gain_blend_threshold > 0.0f) {
           const float blend = std::clamp(
-              short_luma / render_max_gain_blend_threshold, 0.0f, 1.0f);
+              short_intensity / render_max_gain_blend_threshold, 0.0f, 1.0f);
           render_max_gain_for_luma = Lerp(1.0f, render_max_gain, blend);
         }
         const float render_gain = std::clamp(
-            predicted_luma / (short_luma + kHdrNetGainEpsilon),
+            predicted_luma / (short_intensity + kHdrNetGainEpsilon),
             render_min_gain, render_max_gain_for_luma);
         // MGC keeps portrait_tet_gain out of long TET when downstream relighting is expected.
         // Apply that quotient locally in HDRNet's target domain. The soft mask exponent makes
         // the blend linear in log exposure and leaves the long/short HDR ratio untouched.
         const float target_luma = std::clamp(
-            short_luma * render_gain * portrait_relighting_quotient,
+            short_intensity * render_gain * portrait_relighting_quotient,
             0.0f, 1.0f);
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
-        // HDRNet saw BaselineExposure-restored input. Divide its target by that exact same
-        // restored source coordinate when baking PGTM. The table is applied before the DNG
-        // renderer's BaselineExposure, so the baseline gain enters and leaves this construction
-        // as a matched pair instead of becoming an extra output exposure gain.
+        // The N axis is final-short intensity = stored source * baselineGain * sourceToShortGain.
+        // BaselineExposure restores the normalized source in both the table coordinate and final
+        // rendering, so the corresponding restored-source denominator is short / shortGain.
+        const float baseline_restored_source_intensity =
+            short_intensity / source_to_short_gain;
         float gain = std::clamp(
-            pre_curve_target / baseline_restored_source_luma, min_table_gain,
+            pre_curve_target / baseline_restored_source_intensity, min_table_gain,
             max_table_gain);
         if (diagnostic_mode >= 0) {
           const float mask =
-              DiagnosticMask(baseline_restored_source_luma, diagnostic_start,
+              DiagnosticMask(short_intensity, diagnostic_start,
                              diagnostic_end, diagnostic_feather);
           gain = diagnostic_mode == 0 ? Lerp(1.0f, gain, mask)
                                       : Lerp(gain, 1.0f, mask);

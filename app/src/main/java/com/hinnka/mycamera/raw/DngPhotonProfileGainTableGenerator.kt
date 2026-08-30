@@ -83,6 +83,21 @@ internal object DngPhotonProfileGainTableGenerator {
         0f,
     )
 
+    /**
+     * Normalized ProfileGainTableMap intensity direction written by Pixel's MGC pipeline.
+     *
+     * This is deliberately distinct from [HDRNET_LUMA_WEIGHTS]. HDRNet keeps its learned luma
+     * definition for its guide and fourth input channel, while the DNG table N axis combines
+     * half of standard RGB luma with one eighth of min-RGB and three eighths of max-RGB.
+     */
+    internal val PXL_PROFILE_GAIN_TABLE_INPUT_WEIGHTS = floatArrayOf(
+        0.1495f,
+        0.2935f,
+        0.057f,
+        0.125f,
+        0.375f,
+    )
+
     /** Paris et al. intensity retained by the legacy CPU/reference implementation below. */
     internal val LOCAL_LAPLACIAN_INPUT_WEIGHTS = floatArrayOf(
         20f / 61f,
@@ -100,29 +115,47 @@ internal object DngPhotonProfileGainTableGenerator {
     /**
      * Plans a 64 x 48 PGTM grid resampled from MGC HDRNet's fixed 16 x 12 coefficient grid.
      *
-     * HDRNet runs in the final-short-exposure linear domain. The source DNG can carry a
-     * source-domain BaselineExposure normalization (for example, Bento's ultrashort output), so
-     * that baseline must be restored before [sourceToShortGain] moves the image into final-short
-     * space. PGTM then divides the learned target by the same baseline-restored DNG source luma;
-     * this matched multiply/divide keeps the rendered target invariant to BaselineExposure.
+     * HDRNet runs in the final-short-exposure linear domain. In this pipeline BaselineExposure
+     * restores a multi-frame source normalized to a shorter exposure; it is not an additional
+     * appearance gain. The desired effective N-axis scale is
+     * `sourceBaselineGain * sourceToShortGain`; the stored weights account for the renderer's
+     * total BaselineExposure so Adobe reconstructs exactly that same final-short domain.
      */
     fun hdrNetPlan(
         sourceWidth: Int,
         sourceHeight: Int,
-        baselineExposureEv: Float,
+        sourceBaselineExposureEv: Float,
+        rendererBaselineExposureEv: Float,
         hdrRatio: Float,
         sourceToShortGain: Float,
         diagnosticBand: DiagnosticBand? = null,
         samplingArea: PhotonPgtmSamplingArea = PhotonPgtmSamplingArea.FULL,
     ): HdrNetProfileGainTablePlan? {
-        if (sourceWidth <= 0 || sourceHeight <= 0 || !baselineExposureEv.isFinite() ||
+        if (sourceWidth <= 0 || sourceHeight <= 0 ||
+            !sourceBaselineExposureEv.isFinite() ||
+            !rendererBaselineExposureEv.isFinite() ||
             !hdrRatio.isFinite() || hdrRatio <= 0f ||
             !sourceToShortGain.isFinite() || sourceToShortGain <= 0f
         ) {
             return null
         }
-        val baselineGain = DngBaselineExposure.exactGain(baselineExposureEv)
-        if (!baselineGain.isFinite() || baselineGain <= 0f) return null
+        val sourceBaselineGain = DngBaselineExposure.exactGain(sourceBaselineExposureEv)
+        val rendererBaselineGain = DngBaselineExposure.exactGain(rendererBaselineExposureEv)
+        if (!sourceBaselineGain.isFinite() || sourceBaselineGain <= 0f ||
+            !rendererBaselineGain.isFinite() || rendererBaselineGain <= 0f
+        ) {
+            return null
+        }
+        // The model sees the fused source after restoring only its physical normalization.
+        // Adobe evaluates MapInputWeights with TotalBaselineExposure, which can additionally
+        // include a profile offset. Remove only that extra renderer factor from the stored
+        // weights so the table N axis and HDRNet input remain in the identical exposure domain.
+        val mapInputScale =
+            sourceToShortGain * sourceBaselineGain / rendererBaselineGain
+        if (!mapInputScale.isFinite() || mapInputScale <= 0f) return null
+        val mapInputWeights = FloatArray(PXL_PROFILE_GAIN_TABLE_INPUT_WEIGHTS.size) { index ->
+            PXL_PROFILE_GAIN_TABLE_INPUT_WEIGHTS[index] * mapInputScale
+        }
         val spacingH = samplingArea.extentH / HDRNET_PGTM_GRID_WIDTH
         val spacingV = samplingArea.extentV / HDRNET_PGTM_GRID_HEIGHT
         return HdrNetProfileGainTablePlan(
@@ -135,9 +168,10 @@ internal object DngPhotonProfileGainTableGenerator {
                 mapOriginV = samplingArea.originV + 0.5 * spacingV,
             ),
             pointCount = TABLE_POINTS,
-            mapInputWeights = HDRNET_LUMA_WEIGHTS.copyOf(),
+            mapInputWeights = mapInputWeights,
             gamma = 1f,
-            baselineGain = baselineGain,
+            sourceBaselineGain = sourceBaselineGain,
+            rendererBaselineGain = rendererBaselineGain,
             sourceToShortGain = sourceToShortGain,
             // The native MGC path builds the long-exposure guide from a ratio of at least one.
             hdrRatio = hdrRatio.coerceAtLeast(1f),
@@ -477,8 +511,11 @@ internal data class HdrNetProfileGainTablePlan(
     val pointCount: Int,
     val mapInputWeights: FloatArray,
     val gamma: Float,
-    val baselineGain: Float,
-    /** Gain from the baseline-restored captured/reference exposure to final-short exposure. */
+    /** Restores the physical multi-frame normalization present in the stored RAW pixels. */
+    val sourceBaselineGain: Float,
+    /** Total gain a conforming DNG renderer folds into the MapInputWeights coordinate. */
+    val rendererBaselineGain: Float,
+    /** Gain from the BaselineExposure-restored captured/reference exposure to final short. */
     val sourceToShortGain: Float,
     val hdrRatio: Float,
     val diagnosticBand: DngPhotonProfileGainTableGenerator.DiagnosticBand?,
@@ -489,13 +526,28 @@ internal data class HdrNetProfileGainTablePlan(
         require(pointCount > 1)
         require(mapInputWeights.size == 5 && mapInputWeights.all { it.isFinite() })
         require(gamma.isFinite() && gamma in 0.125f..8f)
-        require(baselineGain.isFinite() && baselineGain > 0f)
+        require(sourceBaselineGain.isFinite() && sourceBaselineGain > 0f)
+        require(rendererBaselineGain.isFinite() && rendererBaselineGain > 0f)
         require(sourceToShortGain.isFinite() && sourceToShortGain > 0f)
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
+        require(
+            kotlin.math.abs(rendererMapInputEffectiveScale - hdrNetInputScale) <=
+                maxOf(1e-6f, hdrNetInputScale * 1e-5f)
+        )
     }
 
     val cellCount: Int
         get() = grid.mapPointsH * grid.mapPointsV
+
+    val mapInputWeightSum: Float
+        get() = mapInputWeights.sum()
+
+    /** Effective neutral-axis scale after a conforming renderer restores BaselineExposure. */
+    val rendererMapInputEffectiveScale: Float
+        get() = mapInputWeightSum * rendererBaselineGain
+
+    val hdrNetInputScale: Float
+        get() = sourceBaselineGain * sourceToShortGain
 }
 
 internal data class PhotonPgtmGrid(

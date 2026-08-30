@@ -3190,7 +3190,8 @@ class RawDemosaicProcessor {
                         statsBounds = captureProfileStatsBounds,
                         // Photon HDR preserves the source BaselineExposure. Classic auto exposure
                         // is mutually exclusive and is the only path that can contribute an EV.
-                        baselineExposureEv = finalBaselineExposureEv +
+                        sourceBaselineExposureEv = finalBaselineExposureEv,
+                        rendererBaselineExposureEv = finalBaselineExposureEv +
                             dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
                         // HDRNet's ratio describes capture exposure, not the DCP profile's
                         // independent BaselineExposureOffset rendering adjustment.
@@ -3353,7 +3354,8 @@ class RawDemosaicProcessor {
                     samplesPerPixel = actualSamplesPerPixel,
                     metadata = actualMetadata.copy(profileGainTableMap = null),
                     statsBounds = outputSourceBounds,
-                    baselineExposureEv = actualMetadata.baselineExposure +
+                    sourceBaselineExposureEv = actualMetadata.baselineExposure,
+                    rendererBaselineExposureEv = actualMetadata.baselineExposure +
                         dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
                     hdrRatio = regenerationHdrRatio,
                     sourceToShortGain = regenerationSourceToShortGain,
@@ -4448,7 +4450,8 @@ class RawDemosaicProcessor {
         samplesPerPixel: Int,
         metadata: RawMetadata,
         statsBounds: Rect?,
-        baselineExposureEv: Float,
+        sourceBaselineExposureEv: Float,
+        rendererBaselineExposureEv: Float,
         hdrRatio: Float,
         sourceToShortGain: Float,
         portraitRelightingGain: Float = 1f,
@@ -4490,7 +4493,8 @@ class RawDemosaicProcessor {
                 samplesPerPixel = samplesPerPixel,
                 metadata = metadata,
                 statsBounds = statsBounds,
-                baselineExposureEv = baselineExposureEv,
+                sourceBaselineExposureEv = sourceBaselineExposureEv,
+                rendererBaselineExposureEv = rendererBaselineExposureEv,
                 hdrRatio = hdrRatio,
                 sourceToShortGain = sourceToShortGain,
                 portraitRelightingGain = portraitRelightingGain,
