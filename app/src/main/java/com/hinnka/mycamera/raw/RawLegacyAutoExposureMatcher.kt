@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.raw
 
 import android.graphics.Bitmap
-import android.graphics.Rect
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.max
 
@@ -18,15 +17,16 @@ internal data class RawLegacyAutoExposureRequest(
 )
 
 /**
- * Classic capture-side auto exposure restored from the implementation immediately before
- * 6c09a4da72f0aec065b9e4afdc35a73fcde42eac.
+ * Classic capture-side auto exposure derived from the adaptive spatial grid matcher in
+ * PhotonCamera 1.27.1. The RAW renderer supplies default-curve preview candidates while native
+ * code owns endpoint reliability weighting, robust scoring, adaptive search and final selection.
  */
 internal object RawLegacyAutoExposureMatcher {
     private const val TAG = "RawLegacyAutoExposureMatcher"
     private const val PREVIEW_LONG_EDGE = 256
 
     private data class ViewfinderReference(
-        val analysis: RawLegacyAutoExposureMath.Reference,
+        val frame: RawLegacyExposurePreviewFrame,
     )
 
     fun createRequest(capturePreviewThumbnail: Bitmap?): RawLegacyAutoExposureRequest? {
@@ -36,8 +36,8 @@ internal object RawLegacyAutoExposureMatcher {
         }
         return reference?.let {
             RawLegacyAutoExposureRequest(
-                width = it.analysis.width,
-                height = it.analysis.height,
+                width = it.frame.width,
+                height = it.frame.height,
                 solve = { renderSample -> solve(it, renderSample) },
             )
         }
@@ -48,17 +48,13 @@ internal object RawLegacyAutoExposureMatcher {
         return try {
             val size = longEdgeSize(bitmap.width, bitmap.height, PREVIEW_LONG_EDGE)
             val pixels = sampleBitmap(bitmap, size.width, size.height)
-            val bounds = centerTwoThirdsBounds(size.width, size.height) ?: return null
-            val analysis = RawLegacyAutoExposureMath.buildReference(
-                pixels = pixels,
-                width = size.width,
-                height = size.height,
-                left = bounds.left,
-                top = bounds.top,
-                right = bounds.right,
-                bottom = bounds.bottom,
-            ) ?: return null
-            ViewfinderReference(analysis = analysis)
+            ViewfinderReference(
+                frame = RawLegacyExposurePreviewFrame(
+                    width = size.width,
+                    height = size.height,
+                    argbPixels = pixels,
+                ),
+            )
         } catch (error: Throwable) {
             PLog.e(TAG, "Failed to analyze capture preview", error)
             null
@@ -69,35 +65,51 @@ internal object RawLegacyAutoExposureMatcher {
         reference: ViewfinderReference,
         renderSample: (Float) -> RawLegacyExposurePreviewFrame?,
     ): Float? {
-        return RawLegacyAutoExposureMath.solve { exposureEv ->
-            evaluate(reference.analysis, exposureEv, renderSample(exposureEv))
+        val solver = RawLegacyAutoExposureNativeBridge.Solver.create(reference.frame)
+            ?: run {
+                PLog.w(
+                    TAG,
+                    "Classic auto exposure skipped: insufficient reliable non-endpoint cells",
+                )
+                return null
+            }
+        return solver.use {
+            while (true) {
+                val exposureEv = solver.nextExposureEv() ?: break
+                val frame = renderSample(exposureEv) ?: return@use null
+                if (!solver.submitCandidate(exposureEv, frame)) return@use null
+                solver.lastSample()?.let { sample ->
+                    PLog.d(
+                        TAG,
+                        "Classic auto exposure sample: exposureEv=${sample.exposureEv} " +
+                            "matchedCells=${sample.matchedCellCount}/${sample.validCellCount} " +
+                            "matchRate=${sample.matchRate} " +
+                            "meanAbsoluteLog2Ratio=${sample.meanAbsoluteLog2Ratio} " +
+                            "medianLog2Ratio=${sample.medianLog2Ratio} " +
+                            "robustLog2Loss=${sample.robustLog2Loss} " +
+                            "referenceWeightSum=${sample.referenceWeightSum}",
+                    )
+                }
+            }
+            val result = solver.result() ?: return@use null
+            PLog.i(
+                TAG,
+                "Classic auto exposure result: exposureEv=${result.best.exposureEv} " +
+                    "matchedCells=${result.best.matchedCellCount}/${result.best.validCellCount} " +
+                    "matchRate=${result.best.matchRate} " +
+                    "meanAbsoluteLog2Ratio=${result.best.meanAbsoluteLog2Ratio} " +
+                    "medianLog2Ratio=${result.best.medianLog2Ratio} " +
+                    "robustLog2Loss=${result.best.robustLog2Loss} " +
+                    "referenceWeightSum=${result.best.referenceWeightSum} " +
+                    "sampleCount=${result.evaluatedSampleCount} " +
+                    "excludedShadowCells=${result.excludedShadowCellCount} " +
+                    "excludedHighlightCells=${result.excludedHighlightCellCount} " +
+                    "shadowWeightZeroLinear=${result.shadowWeightZeroLinear} " +
+                    "highlightWeightZeroLinear=${result.highlightWeightZeroLinear} " +
+                    "huberDeltaEv=${result.huberDeltaEv}",
+            )
+            result.best.exposureEv
         }
-    }
-
-    private fun evaluate(
-        reference: RawLegacyAutoExposureMath.Reference,
-        exposureEv: Float,
-        frame: RawLegacyExposurePreviewFrame?,
-    ): Float? {
-        if (frame == null || frame.width != reference.width || frame.height != reference.height) {
-            return null
-        }
-        val match = RawLegacyAutoExposureMath.evaluate(
-            reference = reference,
-            pixels = frame.argbPixels,
-            width = frame.width,
-            height = frame.height,
-        ) ?: return null
-        PLog.d(
-            TAG,
-            "Classic auto exposure sample: exposureEv=$exposureEv " +
-                "meteringLog2Error=${match.meanBrightnessLog2Error} " +
-                "quantileBlendLog2Error=${match.matchLog2Error} " +
-                "quantileSpreadLog2=${match.quantileSpreadLog2} " +
-                "referenceSampleCount=${match.referenceSampleCount} " +
-                "candidateSampleCount=${match.candidateSampleCount}",
-        )
-        return match.meanBrightnessLog2Error
     }
 
     private data class Size(val width: Int, val height: Int)
@@ -133,17 +145,5 @@ internal object RawLegacyAutoExposureMatcher {
             }
         }
         return pixels
-    }
-
-    private fun centerTwoThirdsBounds(width: Int, height: Int): Rect? {
-        if (width <= 0 || height <= 0) return null
-        val left = width / 6
-        val top = height / 6
-        return Rect(
-            left,
-            top,
-            (width * 5 / 6).coerceAtLeast(left + 1),
-            (height * 5 / 6).coerceAtLeast(top + 1),
-        )
     }
 }

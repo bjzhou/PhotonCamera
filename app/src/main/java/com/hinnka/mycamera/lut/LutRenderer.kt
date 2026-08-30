@@ -374,13 +374,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             val nowElapsedMs = SystemClock.elapsedRealtime()
             if (nowElapsedMs - lastEyeFocusTimingLogElapsedMs >= EYE_FOCUS_TIMING_LOG_INTERVAL_MS) {
                 lastEyeFocusTimingLogElapsedMs = nowElapsedMs
-                PLog.d(
+                /*PLog.d(
                     TAG,
                     "Eye focus cadence: intervalMs=${eyeFocusSampleIntervalNanos / 1_000_000f}, " +
                         "captureMs=${eyeFocusCaptureDurationEmaNanos / 1_000_000.0}, " +
                         "processingMs=${eyeFocusProcessingDurationEmaNanos / 1_000_000.0}, " +
                         "endToEndMs=${eyeFocusEndToEndDurationEmaNanos / 1_000_000.0}",
-                )
+                )*/
             }
         }
     }

@@ -231,6 +231,7 @@ add_library(my-native-lib SHARED
     native-lib.cpp
     dng_hdrnet_pgtm_jni.cpp
     raw_signal_stats_jni.cpp
+    raw_legacy_auto_exposure_solver.cpp
     mgc_strength_map_scaler.cpp
     jpeg_export_jni.cpp
     jpeg_r_encoder.cpp
@@ -270,6 +271,13 @@ set_source_files_properties(
 # reliably reject non-finite values. Keep both independent of target-wide fast-math.
 set_source_files_properties(
     raw_signal_stats_jni.cpp
+    PROPERTIES
+    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
+)
+
+# The robust exposure solver relies on finite/NaN state and deterministic score comparisons.
+set_source_files_properties(
+    raw_legacy_auto_exposure_solver.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
