@@ -945,20 +945,14 @@ internal object DngPhotonProfileGainTableInputShader {
         precision highp float;
         precision highp int;
         precision highp sampler2D;
-        precision highp sampler3D;
 
         uniform sampler2D uLinearRgbTexture;
-        uniform sampler3D uHueSatMap;
         uniform ivec2 uImageSize;
         uniform ivec4 uStatsBounds;
         uniform mat3 uColorCorrectionMatrix;
         uniform float uBaselineGain;
         uniform float uSourceToShortGain;
         uniform float uHdrRatio;
-        uniform int uHueSatEnabled;
-        uniform ivec3 uHueSatDivisions;
-        uniform int uHueSatEncoding;
-        uniform int uHueSatSupportOverrange;
         uniform int uWarpCount;
 
         layout(std430, binding = 0) writeonly buffer HdrNetInputBuffer {
@@ -967,8 +961,6 @@ internal object DngPhotonProfileGainTableInputShader {
         layout(std430, binding = 1) readonly buffer WarpRectilinearBuffer {
             float warpParameters[];
         };
-
-        ${DcpHueSatMapGl.SHADER_FUNCTIONS}
 
         vec2 warpDestinationToSource(vec2 destinationPixel) {
             vec2 sourcePixel = destinationPixel;
@@ -1038,56 +1030,53 @@ internal object DngPhotonProfileGainTableInputShader {
             sourceStart = clamp(sourceStart, ivec2(0), uImageSize - ivec2(1));
             sourceEnd = clamp(sourceEnd, sourceStart + ivec2(1), uImageSize);
 
-            vec3 cameraRgbSum = vec3(0.0);
+            vec3 profileRgbSum = vec3(0.0);
             int sampleCount = 0;
             for (int y = sourceStart.y; y < sourceEnd.y; ++y) {
                 for (int x = sourceStart.x; x < sourceEnd.x; ++x) {
                     ivec2 sourceCoordinate = ivec2(round(
                         warpDestinationToSource(vec2(x, y))
                     ));
-                    cameraRgbSum += max(
-                        texelFetch(uLinearRgbTexture, sourceCoordinate, 0).rgb,
-                        vec3(0.0)
-                    );
+                    vec3 storedCameraRgb = texelFetch(
+                        uLinearRgbTexture,
+                        sourceCoordinate,
+                        0
+                    ).rgb;
+                    // The demosaic texture is un-white-balanced camera RGB. The render-stage
+                    // camera-to-working matrix includes the selected camera white, matching
+                    // MGC's uCcm contract without applying WB a second time.
+                    vec3 cameraRgb = storedCameraRgb * uBaselineGain * uSourceToShortGain;
+                    // MGC clamps only positive overrange before box downsampling. Negative
+                    // samples remain in the average and are clamped by the final box pass.
+                    vec3 profileRgb = min(uColorCorrectionMatrix * cameraRgb, vec3(1.0));
+                    profileRgbSum += profileRgb;
                     ++sampleCount;
                 }
             }
-            // Restore the multi-frame source from its shorter-exposure normalization before
-            // moving it into final-short space. This BaselineExposure is source-domain metadata,
-            // not the additional appearance exposure used by Pixel's DNG pipeline.
-            vec3 storedCameraRgb = cameraRgbSum / float(max(sampleCount, 1));
-            vec3 cameraRgb = storedCameraRgb * uBaselineGain * uSourceToShortGain;
-            vec3 profileRgb = clamp(
-                uColorCorrectionMatrix * cameraRgb,
-                vec3(0.0),
+            // MGC deliberately preserves negative black-referenced samples through the box
+            // downsample and into HDRNet. Only positive overrange is clipped. Clearing the
+            // negative tail here changes the first convolution's dark-region response and can
+            // drive the recovered affine grid to its 0.03 minimum-gain floor.
+            vec3 modelRgb = min(
+                profileRgbSum / float(max(sampleCount, 1)),
                 vec3(1.0)
             );
-            if (uHueSatEnabled != 0) {
-                profileRgb = clamp(
-                    dngApplyHueSatMap(
-                        profileRgb,
-                        uHueSatMap,
-                        uHueSatDivisions,
-                        uHueSatEncoding,
-                        uHueSatSupportOverrange != 0
-                    ),
-                    vec3(0.0),
-                    vec3(1.0)
-                );
-            }
-
+            // This TFLite is the 1x2 normal HDRNet model recovered from MGC's TensorFlow
+            // graph. Its original fused first-convolution shader constructs channel four from
+            // Rec.601 luma and the HDR ratio, clamped to the training maximum of 12.
             const vec3 HDRNET_LUMA_WEIGHTS = vec3(
                 0.298828125,
                 0.5869140625,
                 0.1142578125
             );
-            float shortLuma = max(dot(profileRgb, HDRNET_LUMA_WEIGHTS), 0.0);
+            float longLuma = min(dot(modelRgb, HDRNET_LUMA_WEIGHTS) * uHdrRatio, 12.0);
+
             int outputIndex =
                 (outputPosition.y * OUTPUT_SIZE.x + outputPosition.x) * 4;
-            hdrNetInput[outputIndex] = profileRgb.r;
-            hdrNetInput[outputIndex + 1] = profileRgb.g;
-            hdrNetInput[outputIndex + 2] = profileRgb.b;
-            hdrNetInput[outputIndex + 3] = min(shortLuma * uHdrRatio, 12.0);
+            hdrNetInput[outputIndex] = modelRgb.r;
+            hdrNetInput[outputIndex + 1] = modelRgb.g;
+            hdrNetInput[outputIndex + 2] = modelRgb.b;
+            hdrNetInput[outputIndex + 3] = longLuma;
         }
     """.trimIndent()
 
@@ -1398,8 +1387,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val rendererBaselineExposureEv: Float,
         val hdrRatio: Float,
         val sourceToShortGain: Float,
-        val portraitRelightingGain: Float,
-        val portraitRelightingMask: FloatArray?,
         val colorCorrectionMatrix: FloatArray,
         val hueSatMap: DcpHueSatMap?,
         val hueSatMapSupportsOverrange: Boolean,
@@ -1576,33 +1563,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 LINEAR_RGB_TEXTURE_UNIT,
             )
 
-            val activeHueSatMap = input.hueSatMap?.takeIf { it.isValid }
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + HUE_SAT_TEXTURE_UNIT)
-            val hueSatTextureId = activeHueSatMap?.let(input.ensureHueSatTexture)
-                ?: input.ensureDummyHueSatTexture()
-            GLES31.glBindTexture(GLES30.GL_TEXTURE_3D, hueSatTextureId)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatMap"),
-                HUE_SAT_TEXTURE_UNIT,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatEnabled"),
-                if (activeHueSatMap != null) 1 else 0,
-            )
-            GLES31.glUniform3i(
-                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatDivisions"),
-                activeHueSatMap?.hueDivisions ?: 1,
-                activeHueSatMap?.satDivisions ?: 1,
-                activeHueSatMap?.valueDivisions ?: 1,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatEncoding"),
-                activeHueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHueSatSupportOverrange"),
-                if (input.hueSatMapSupportsOverrange) 1 else 0,
-            )
             GLES31.glUniform2i(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uImageSize"),
                 linearRgbTextureWidth,
@@ -1672,7 +1632,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 input = input,
                 plan = plan,
                 colorCorrectionMatrix = safeColorCorrectionMatrix,
-                hueSatEnabled = activeHueSatMap != null,
                 values = inputFloats,
             )
             val modelInput = ByteBuffer.allocateDirect(inputFloats.size * Float.SIZE_BYTES)
@@ -1690,13 +1649,13 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
             )
             modelOutput.asFloatBuffer().get(coefficients)
+            logHdrNetOutputContract(coefficients, plan.hdrRatio)
             val pgtmStartNs = System.nanoTime()
             val map = DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(
                 plan = plan,
                 coefficients = coefficients,
-                portraitRelightingGain = input.portraitRelightingGain,
-                portraitRelightingMask = input.portraitRelightingMask,
             ) ?: return null
+//            logHdrNetGainTableContract(map)
             val pgtmReadyNs = System.nanoTime()
             val textureId = uploadProfileGainTableTexture(map) ?: return null
             try {
@@ -1723,12 +1682,11 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "mapInputEffectiveScale=${plan.rendererMapInputEffectiveScale} " +
                     "mapInputInvariantError=" +
                     "${plan.rendererMapInputEffectiveScale - plan.hdrNetInputScale} " +
-                    "portraitRelightingApplied=" +
-                    "${input.portraitRelightingMask != null && input.portraitRelightingGain != 1f} " +
-                    "portraitRelightingGain=${input.portraitRelightingGain} " +
-                    "portraitRelightingMaskRms=" +
-                    "${RawSceneExposureMath.faceMaskRms(input.portraitRelightingMask)} " +
-                    "portraitRelightingDomain=POST_HDRNET_TARGET_PRE_ACR3_PRE_PGTM " +
+                    "modelInputChannels=R_G_B_LONG_LUMA " +
+                    "modelInputFinalClamp=UPPER_ONE_ONLY_NEGATIVE_PRESERVED " +
+                    "modelInputHueSat=false " +
+                    "modelInputAux=MIN_REC601_LUMA_X_HDR_RATIO_12 " +
+                    "hdrRatioDomain=MODEL_AUX_AND_POST_INFERENCE_COEFFICIENT_UNROLL " +
                     "baselineAppliedToHdrNetInput=true " +
                     "baselineRole=MULTIFRAME_SOURCE_NORMALIZATION_RESTORE " +
                     "mapInputDomain=FINAL_SHORT_RIMM_PXL_INTENSITY_AFTER_SOURCE_RESTORE " +
@@ -3254,7 +3212,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
         input: Input,
         plan: HdrNetProfileGainTablePlan,
         colorCorrectionMatrix: FloatArray,
-        hueSatEnabled: Boolean,
         values: FloatArray,
     ) {
         val whiteBalance = input.metadata.whiteBalanceGains
@@ -3295,7 +3252,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
             "HDRNet input contract: wb=${whiteBalance.contentToString()} " +
                 "cameraNeutral=${cameraNeutral.contentToString()} " +
                 "mappedNeutral=${mappedNeutral.contentToString()} " +
-                "matrix=${colorCorrectionMatrix.take(9)} hueSat=$hueSatEnabled " +
+                "matrix=${colorCorrectionMatrix.take(9)} " +
+                "whiteBalanceDomain=BAKED_IN_COLOR_CORRECTION_MATRIX " +
+                "modelInputChannels=R_G_B_LONG_LUMA " +
+                "modelInputFinalClamp=UPPER_ONE_ONLY_NEGATIVE_PRESERVED hueSat=false " +
                 "sourceBaselineGain=${plan.sourceBaselineGain} " +
                 "rendererBaselineGain=${plan.rendererBaselineGain} " +
                 "sourceToShort=${plan.sourceToShortGain} " +
@@ -3304,10 +3264,98 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 "mapInputEffectiveScale=${plan.rendererMapInputEffectiveScale} " +
                 "mapInputInvariantError=" +
                 "${plan.rendererMapInputEffectiveScale - plan.hdrNetInputScale} " +
+                "modelInputAux=MIN_REC601_LUMA_X_HDR_RATIO_12 " +
+                "hdrRatioDomain=MODEL_AUX_AND_POST_INFERENCE_COEFFICIENT_UNROLL " +
                 "channelMin=${minimums.contentToString()} " +
                 "channelMean=${means.contentToString()} " +
                 "channelMax=${maximums.contentToString()} " +
                 "rgbClipped=${clippedFractions.contentToString()}",
+        )
+    }
+
+    private fun logHdrNetOutputContract(coefficients: FloatArray, hdrRatio: Float) {
+        if (coefficients.size % DngPhotonProfileGainTableGenerator.HDRNET_COEFFICIENT_COUNT != 0) {
+            return
+        }
+        val minimums = floatArrayOf(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+        val maximums = floatArrayOf(Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY)
+        val sums = DoubleArray(2)
+        var pairCount = 0
+        for (offset in coefficients.indices step 2) {
+            for (component in 0..1) {
+                val value = coefficients[offset + component]
+                minimums[component] = minOf(minimums[component], value)
+                maximums[component] = maxOf(maximums[component], value)
+                sums[component] += value.toDouble()
+            }
+            ++pairCount
+        }
+        val means = FloatArray(2) { component ->
+            (sums[component] / pairCount.coerceAtLeast(1)).toFloat()
+        }
+        val affineScaleMinimum = minimums[0] * (hdrRatio - 1f) + 1f
+        val affineScaleMean = means[0] * (hdrRatio - 1f) + 1f
+        val affineScaleMaximum = maximums[0] * (hdrRatio - 1f) + 1f
+        PLog.d(
+            TAG,
+            "HDRNet model output contract: layout=Y_X_Z_ONE_SCALE_RESIDUAL_BIAS " +
+                "coefficientMin=${minimums.contentToString()} " +
+                "coefficientMean=${means.contentToString()} " +
+                "coefficientMax=${maximums.contentToString()} " +
+                "affineScaleAfterRatio=[$affineScaleMinimum,$affineScaleMean,$affineScaleMaximum] " +
+                "hdrRatio=$hdrRatio",
+        )
+    }
+
+    private fun logHdrNetGainTableContract(map: DngProfileGainTableMap) {
+        val pointCount = map.mapPointsN
+        if (pointCount <= 0 || map.gains.isEmpty()) return
+        val requestedPoints = intArrayOf(0, 1, 4, 16, 64, 128, pointCount - 1)
+        val points = requestedPoints.distinct().filter { it in 0 until pointCount }
+        val pointMin = FloatArray(points.size) { Float.POSITIVE_INFINITY }
+        val pointMax = FloatArray(points.size) { Float.NEGATIVE_INFINITY }
+        val pointSum = DoubleArray(points.size)
+        var gainMin = Float.POSITIVE_INFINITY
+        var gainMax = Float.NEGATIVE_INFINITY
+        var gainSum = 0.0
+        var finiteCount = 0
+        var nonFiniteCount = 0
+        var renderFloorCount = 0
+        var belowPointOneCount = 0
+        map.gains.forEachIndexed { index, gain ->
+            if (!gain.isFinite()) {
+                nonFiniteCount++
+                return@forEachIndexed
+            }
+            gainMin = min(gainMin, gain)
+            gainMax = max(gainMax, gain)
+            gainSum += gain
+            finiteCount++
+            if (gain <= 0.031f) renderFloorCount++
+            if (gain <= 0.1f) belowPointOneCount++
+            val point = index % pointCount
+            val selected = points.indexOf(point)
+            if (selected >= 0) {
+                pointMin[selected] = min(pointMin[selected], gain)
+                pointMax[selected] = max(pointMax[selected], gain)
+                pointSum[selected] += gain
+            }
+        }
+        val cellCount = map.gains.size / pointCount
+        val pointSummary = points.indices.joinToString(prefix = "[", postfix = "]") { index ->
+            val mean = if (cellCount > 0) pointSum[index] / cellCount else Double.NaN
+            "${points[index]}:${pointMin[index]}/$mean/${pointMax[index]}"
+        }
+        PLog.i(
+            TAG,
+            "HDRNet PGTM gain contract: gainMin=$gainMin " +
+                "gainMean=${if (finiteCount > 0) gainSum / finiteCount else Double.NaN} " +
+                "gainMax=$gainMax finiteCount=$finiteCount nonFiniteCount=$nonFiniteCount " +
+                "atOrBelowRenderFloorFraction=" +
+                "${renderFloorCount.toDouble() / map.gains.size.coerceAtLeast(1)} " +
+                "atOrBelowPointOneFraction=" +
+                "${belowPointOneCount.toDouble() / map.gains.size.coerceAtLeast(1)} " +
+                "pointGainMinMeanMax=$pointSummary",
         )
     }
 

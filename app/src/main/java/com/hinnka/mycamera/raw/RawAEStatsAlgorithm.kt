@@ -150,6 +150,13 @@ internal class RawAEStatsAlgorithm {
             uniform float uWhiteLevel;
             layout(rgba16f, binding = 0) writeonly uniform image2D uOutput;
 
+            // Preserve MGC CountClippedPixels' exact integer predicate across the RGBA16F
+            // readback boundary. Values in the upper half-ULP below 1.0 otherwise round to
+            // 1.0 and turn merely near-white RAW samples into clipped samples. 0.99951171875
+            // is the largest binary16 value below one, so the two states remain distinct after
+            // imageStore: raw < white -> at most 0x3bff, raw >= white -> exactly 0x3c00.
+            const float FP16_MAX_BELOW_ONE = 0.99951171875;
+
             int channelAt(int pattern, ivec2 coord) {
                 int basePattern = pattern >= 8 ? pattern - 8 :
                     (pattern >= 4 ? pattern - 4 : pattern);
@@ -183,8 +190,12 @@ internal class RawAEStatsAlgorithm {
                         int channel = channelAt(uCfaPattern, coord);
                         float raw = float(texelFetch(uRawTexture, coord, 0).r);
                         float black = uBlackLevel[channel];
-                        float sensor = max(raw - black, 0.0) /
-                            max(uWhiteLevel - black, 1.0);
+                        bool rawClipped = raw >= uWhiteLevel;
+                        float sensor = rawClipped ? 1.0 : min(
+                            max(raw - black, 0.0) /
+                                max(uWhiteLevel - black, 1.0),
+                            FP16_MAX_BELOW_ONE
+                        );
                         maxima[channel] = max(maxima[channel], sensor);
                     }
                 }

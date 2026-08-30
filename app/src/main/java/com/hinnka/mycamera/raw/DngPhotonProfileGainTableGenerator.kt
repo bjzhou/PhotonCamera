@@ -74,21 +74,13 @@ internal object DngPhotonProfileGainTableGenerator {
         0.051524382f,
     )
 
-    /** Luma definition used by MGC's HDRNet input preparation and bilateral-grid guide. */
-    internal val HDRNET_LUMA_WEIGHTS = floatArrayOf(
-        0.298828125f,
-        0.5869140625f,
-        0.1142578125f,
-        0f,
-        0f,
-    )
-
     /**
      * Normalized ProfileGainTableMap intensity direction written by Pixel's MGC pipeline.
      *
-     * This is deliberately distinct from [HDRNET_LUMA_WEIGHTS]. HDRNet keeps its learned luma
-     * definition for its guide and fourth input channel, while the DNG table N axis combines
-     * half of standard RGB luma with one eighth of min-RGB and three eighths of max-RGB.
+     * This is deliberately distinct from the HDRNet tensor, whose channels are Y, U, V, 1.
+     * The DNG table N axis combines half of standard RGB luma with one eighth of min-RGB and
+     * three eighths of max-RGB. Pixel DNGs scale all five values together for final-short space;
+     * [hdrNetPlan] performs the same scale after accounting for renderer BaselineExposure.
      */
     internal val PXL_PROFILE_GAIN_TABLE_INPUT_WEIGHTS = floatArrayOf(
         0.1495f,
@@ -191,29 +183,11 @@ internal object DngPhotonProfileGainTableGenerator {
     fun mapFromHdrNetCoefficients(
         plan: HdrNetProfileGainTablePlan,
         coefficients: FloatArray,
-        portraitRelightingGain: Float = 1f,
-        portraitRelightingMask: FloatArray? = null,
     ): DngProfileGainTableMap? {
         if (coefficients.size != HDRNET_OUTPUT_FLOAT_COUNT) {
             PLog.e(
                 TAG,
                 "HDRNet coefficient count=${coefficients.size}, expected=$HDRNET_OUTPUT_FLOAT_COUNT",
-            )
-            return null
-        }
-        if (!portraitRelightingGain.isFinite() || portraitRelightingGain <= 0f) {
-            PLog.e(TAG, "Rejected invalid portrait relighting gain=$portraitRelightingGain")
-            return null
-        }
-        val portraitRelightingWeights = buildPortraitRelightingWeights(
-            plan = plan,
-            mask = portraitRelightingMask,
-        ) ?: if (portraitRelightingMask == null) {
-            FloatArray(plan.cellCount)
-        } else {
-            PLog.e(
-                TAG,
-                "Rejected invalid portrait relighting mask size=${portraitRelightingMask.size}",
             )
             return null
         }
@@ -228,8 +202,6 @@ internal object DngPhotonProfileGainTableGenerator {
             renderMaxGainBlendThreshold = HDRNET_RENDER_MAX_GAIN_BLEND_THRESHOLD,
             minTableGain = MIN_TABLE_GAIN,
             maxTableGain = MAX_TABLE_GAIN,
-            portraitRelightingGain = portraitRelightingGain,
-            portraitRelightingWeights = portraitRelightingWeights,
         ) ?: run {
             PLog.e(TAG, "Native HDRNet ProfileGainTableMap generation failed")
             return null
@@ -248,63 +220,6 @@ internal object DngPhotonProfileGainTableGenerator {
             gains = gains,
             sourceTag = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2,
         )
-    }
-
-    /**
-     * Resamples the unrotated sensor-space 64 x 64 face mask at the PGTM cell centers.
-     *
-     * Native PGTM generation interprets each value as an exponent for the portrait exposure
-     * quotient. That is, the local quotient is `portraitGain ^ mask`, which blends exposure in
-     * the same logarithmic domain as MGC's portrait-TET migration rather than linearly mixing
-     * gain values. The actual quotient is applied to HDRNet's target luma before ACR3 inversion.
-     */
-    private fun buildPortraitRelightingWeights(
-        plan: HdrNetProfileGainTablePlan,
-        mask: FloatArray?,
-    ): FloatArray? {
-        if (mask == null) return FloatArray(plan.cellCount)
-        val maskWidth = RawSceneExposureMath.INPUT_WIDTH
-        val maskHeight = RawSceneExposureMath.INPUT_HEIGHT
-        if (mask.size != maskWidth * maskHeight ||
-            mask.any { !it.isFinite() || it !in 0f..1f }
-        ) {
-            return null
-        }
-        return FloatArray(plan.cellCount) { cell ->
-            val x = cell % plan.grid.mapPointsH
-            val y = cell / plan.grid.mapPointsH
-            bilinearMaskSample(
-                mask = mask,
-                width = maskWidth,
-                height = maskHeight,
-                normalizedX = plan.grid.mapOriginH + x * plan.grid.mapSpacingH,
-                normalizedY = plan.grid.mapOriginV + y * plan.grid.mapSpacingV,
-            )
-        }
-    }
-
-    private fun bilinearMaskSample(
-        mask: FloatArray,
-        width: Int,
-        height: Int,
-        normalizedX: Double,
-        normalizedY: Double,
-    ): Float {
-        val sampleX = (normalizedX.coerceIn(0.0, 1.0) * width - 0.5)
-            .coerceIn(0.0, width - 1.0)
-        val sampleY = (normalizedY.coerceIn(0.0, 1.0) * height - 0.5)
-            .coerceIn(0.0, height - 1.0)
-        val x0 = sampleX.toInt().coerceIn(0, width - 1)
-        val y0 = sampleY.toInt().coerceIn(0, height - 1)
-        val x1 = (x0 + 1).coerceAtMost(width - 1)
-        val y1 = (y0 + 1).coerceAtMost(height - 1)
-        val xAmount = (sampleX - x0).toFloat()
-        val yAmount = (sampleY - y0).toFloat()
-        val top = mask[y0 * width + x0] * (1f - xAmount) +
-            mask[y0 * width + x1] * xAmount
-        val bottom = mask[y1 * width + x0] * (1f - xAmount) +
-            mask[y1 * width + x1] * xAmount
-        return (top * (1f - yAmount) + bottom * yAmount).coerceIn(0f, 1f)
     }
 
     /** Exact MGC HDRNet guide: sum(slopes * relu(luma - shifts)), then clamp for slicing. */

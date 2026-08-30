@@ -64,7 +64,6 @@ import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawCaptureProfileCoordinator
 import com.hinnka.mycamera.raw.RawPhotonHdrRatioMetadata
-import com.hinnka.mycamera.raw.RawPhotonPortraitRelightingMetadata
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -2400,14 +2399,10 @@ object GalleryManager {
             ) ?: return@withContext
             preparedDemosaicSourceToRelease = preparedProfile.gpuDemosaicedRawSource
             updatedMetadata = updatedMetadata.copy(
-                customProperties = RawPhotonPortraitRelightingMetadata.write(
-                    properties = RawPhotonHdrRatioMetadata.write(
-                        updatedMetadata.customProperties,
-                        preparedProfile.hdrRatio,
-                        preparedProfile.finalShortGain,
-                    ),
-                    gain = preparedProfile.portraitRelightingGain,
-                    mask = preparedProfile.portraitRelightingMask,
+                customProperties = RawPhotonHdrRatioMetadata.write(
+                    updatedMetadata.customProperties,
+                    preparedProfile.hdrRatio,
+                    preparedProfile.finalShortGain,
                 ),
             )
 
@@ -3707,14 +3702,10 @@ object GalleryManager {
                     return@withContext
                 }
                 updatedMetadata = updatedMetadata.copy(
-                    customProperties = RawPhotonPortraitRelightingMetadata.write(
-                        properties = RawPhotonHdrRatioMetadata.write(
-                            updatedMetadata.customProperties,
-                            dngProfilePreparation.hdrRatio,
-                            dngProfilePreparation.finalShortGain,
-                        ),
-                        gain = dngProfilePreparation.portraitRelightingGain,
-                        mask = dngProfilePreparation.portraitRelightingMask,
+                    customProperties = RawPhotonHdrRatioMetadata.write(
+                        updatedMetadata.customProperties,
+                        dngProfilePreparation.hdrRatio,
+                        dngProfilePreparation.finalShortGain,
                     ),
                 )
                 val profileElapsedMs = System.currentTimeMillis() - profileStartMs
@@ -5693,9 +5684,6 @@ object GalleryManager {
                 val rawNoiseReduction = resolveNoiseReduction(rawMetadata, 0f)
                 val rawChromaNoiseReduction = rawMetadata.chromaNoiseReduction
                     ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
-                val persistedPortraitRelighting = RawPhotonPortraitRelightingMetadata.read(
-                    rawMetadata.customProperties,
-                )
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
@@ -5735,8 +5723,6 @@ object GalleryManager {
                     photonSourceToShortGain = RawPhotonHdrRatioMetadata.readFinalShortGain(
                         rawMetadata.customProperties,
                     ),
-                    photonPortraitRelightingGain = persistedPortraitRelighting?.gain,
-                    photonPortraitRelightingMask = persistedPortraitRelighting?.mask,
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,
                     rawBlackBorderCrop = rawMetadata.rawBlackBorderCrop,
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,

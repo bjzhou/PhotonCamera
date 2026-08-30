@@ -16,35 +16,6 @@ internal data class RawSceneLinearFrame(
     /** Interleaved, colorized linear-RGB samples from the exact RAW frame. */
     val rgb: FloatArray,
     val fastMomentsStats: RawSceneAERawStats,
-    /** Camera RGB and WB gains retained for MGC 9.7's pre-ML table AE path. */
-    val legacyAeInput: RawSceneLegacyAeInput? = null,
-)
-
-internal data class RawSceneLegacyAeInput(
-    /** MGC Classic AE's two-component, mask-weighted U15 camera-RGB surface. */
-    val splitHdrImage: RawSceneClassicAeMeteringFrame,
-    /** MGC ExposeHq's [R, average-G, B] gain vector. */
-    val rgbGains: FloatArray,
-    /** Row-major camera-RGB transform consumed by MGC ExposeHq after exposure and WB. */
-    val rgbTransform: FloatArray,
-)
-
-/** Platform-independent equivalent of MGC's Classic-AE SplitHdrImage. */
-data class RawSceneClassicAeMeteringFrame(
-    val width: Int,
-    val height: Int,
-    /** Interleaved camera RGB for samples brighter than the local box mean. */
-    val brightRgb: FloatArray,
-    /** Interleaved camera RGB for the remaining samples. */
-    val darkRgb: FloatArray,
-    /** Exact unsigned-byte bright-sample ratio used by MGC's weighted histograms. */
-    val brightMask: ByteArray,
-    /**
-     * Fraction reported by RawToLoResRgb before box resampling, black subtraction, and spatial
-     * gain: a complete CFA period is clipped when any of its RAW samples reaches white level.
-     * This is the Classic table-query field, not the mode-2 1/16 RAW clipping mask.
-     */
-    val clippedFraction: Float? = null,
 )
 
 /** The 1/16-resolution RAW-domain statistics consumed only by Fast Moments mode 2. */
@@ -56,8 +27,6 @@ data class RawSceneFastMomentsMeteringFrame(
     val lensShadingMapWidth: Int = 0,
     val lensShadingMapHeight: Int = 0,
     val lensShadingMapGrid: FloatArray? = null,
-    /** Selected base RAW converted through the same non-QCOM Classic path as DNG refresh. */
-    internal val classicAe: RawSceneClassicAeMeteringFrame? = null,
 )
 
 data class RawSceneAERawStats(
@@ -86,7 +55,6 @@ internal data class RawSceneExposureEstimate(
     val finalShortTetMs: Float,
     val finalLongTetMs: Float,
     val finalShortGain: Float,
-    val portraitRelightingGain: Float,
     val safeUnderexposure: Float,
     val fractionPixelsClippedAtFinalShortTet: Float,
     /** Capture-time MGC AE inputs and outputs embedded in the DNG as photon:SummaryText. */
@@ -97,7 +65,6 @@ internal data class RawSceneExposureEstimate(
         require(finalShortTetMs.isFinite() && finalShortTetMs > 0f)
         require(finalLongTetMs.isFinite() && finalLongTetMs >= finalShortTetMs)
         require(finalShortGain.isFinite() && finalShortGain > 0f)
-        require(portraitRelightingGain.isFinite() && portraitRelightingGain > 0f)
         require(safeUnderexposure.isFinite() && safeUnderexposure >= 1f)
         require(
             fractionPixelsClippedAtFinalShortTet.isFinite() &&
@@ -167,8 +134,6 @@ internal data class RawSceneExposureFinalization(
     /** User-requested AE target offset. MGC applies it after ML inference, in stops. */
     val exposureCompensationEv: Float = 0f,
     val maxHdrRatio: Float? = null,
-    val weightedFractionOfPixelsFromLongExposure: Float = 0f,
-    val touchRoiClipProtectionTripped: Boolean = false,
     val safeUnderexposureTetMs: Float? = null,
     val finalShortTetOverrideMs: Float? = null,
     val finalLongTetOverrideMs: Float? = null,
@@ -219,6 +184,8 @@ internal object RawSceneExposureMath {
     // MGC 9.7 CaptureTuning::max_hdr_ratio(kHdrPlusOn, autoNight=false, factor=-1).
     // This limits the AE final long/short TET pair before the highlight-preservation step.
     const val FAST_MOMENTS_MAX_HDR_RATIO = 9.8f
+    const val LARGE_FACE_MAX_HDR_RATIO_FLOOR = 6f
+    const val HDR_RATIO_LIMIT_SHORT_POWER = 0.5f
     const val MGC_DEFAULT_UNSAFE_UNDEREXPOSURE_MULTIPLIER = 1.1f
     const val FACE_MASK_RMS_FLOOR = 0.02f
     // DNG exposure equations use ISO 100 as the portable reference sensitivity. Supported sensor
@@ -233,19 +200,20 @@ internal object RawSceneExposureMath {
     // PrepareMlAeInput converts every color channel to ln(max(linearRgb, 0) + 1e-6).
     private const val MODEL_RGB_LOG_FLOOR = 1e-6f
     // PrepareMlAeInput's advanced-channel fallback does not clear every unavailable semantic
-    // plane. Missing saliency is initialized to 0.05 (0x3D4CCCCD); portrait mask, skin type,
-    // skin mask, and the remaining semantic plane stay at zero. The learned models distinguish
-    // this sentinel from a real all-zero saliency map.
+    // plane. Missing saliency is initialized to 0.05 (0x3D4CCCCD); face map, portrait mask,
+    // skin type and skin mask stay at zero. The learned models distinguish this sentinel from
+    // a real all-zero saliency map.
     private const val MISSING_SALIENCY_VALUE = 0.05f
-    // Semantic enum 3 is MGC's portrait mask; the combined model stores enums 3..7 after RGB/SB.
-    private const val PORTRAIT_MASK_SEMANTIC_CHANNEL = 0
+    // Semantic enum 3 is MGC's float face map; enum 4 is the byte portrait-segmentation mask.
+    // The combined model stores enums 3..7 after RGB and log-scene-brightness.
+    private const val FACE_MAP_SEMANTIC_CHANNEL = 0
     private const val SALIENCY_SEMANTIC_CHANNEL = 3
     // MeasureLogSceneBrightness uses the reflected-light calibration constant directly.
     private const val SCENE_BRIGHTNESS_CALIBRATION = 14.6
-    // MGC 9.7 V25's blueline tuning supplies a positive hard-coded sensor_sensitivity, so
-    // EstimateSensorSensitivity does not enter its min_iso / f_number^2 fallback. Running the
-    // original libgcam_ae.so on the PXL reference SplitHdrImage reports 17.61 and reproduces the
-    // MakerNote short/long scene coordinates to within 0.003 natural-log units.
+    // ComputeAeResults resolves sensor sensitivity before selecting RunMlAeCore or the classic
+    // RunAe fallback. MGC 9.7 V25's tuning supplies this positive hard-coded value, so the
+    // min_iso / f_number^2 fallback is not entered for these bundled V25 ML models either.
+    // Calling the original V25 AE capsule reports 17.61 for the same capture metadata.
     private const val MGC_V25_SENSOR_SENSITIVITY = 17.61
     private const val SCENE_BRIGHTNESS_LOG_FLOOR = 1e-4
     // RunMlAeCore performs expf(model_output) - 1e-6 before using every branch gain.
@@ -255,6 +223,8 @@ internal object RawSceneExposureMath {
     private const val HIGHLIGHT_CLIP_LEVEL = 1.0
     private const val RAW_CLIP_LEVEL = 1.0f
     private const val HIGHLIGHT_PRESERVATION_RATIO_FLOOR = 24f
+    private const val LARGE_FACE_QUANTITY_START = 0.045f
+    private const val LARGE_FACE_QUANTITY_SCALE = 33.333f
     fun measureSceneBrightness(
         frame: RawSceneLinearFrame,
         exposureTimeNs: Long,
@@ -366,13 +336,13 @@ internal object RawSceneExposureMath {
         frame: RawSceneLinearFrame,
         logSceneBrightness: Float,
         destination: ByteBuffer,
-        portraitMask: FloatArray? = null,
+        faceMap: FloatArray? = null,
     ): Boolean {
         if (!validateInput(frame, logSceneBrightness) ||
             destination.capacity() < frame.width * frame.height * INPUT_CHANNELS * Float.SIZE_BYTES ||
-            (portraitMask != null &&
-                (portraitMask.size != frame.width * frame.height ||
-                    portraitMask.any { !it.isFinite() || it !in 0f..1f }))
+            (faceMap != null &&
+                (faceMap.size != frame.width * frame.height ||
+                    faceMap.any { !it.isFinite() || it !in 0f..1f }))
         ) {
             return false
         }
@@ -389,7 +359,7 @@ internal object RawSceneExposureMath {
             repeat(SEMANTIC_CHANNELS) { semanticChannel ->
                 destination.putFloat(
                     when (semanticChannel) {
-                        PORTRAIT_MASK_SEMANTIC_CHANNEL -> portraitMask?.get(pixel) ?: 0f
+                        FACE_MAP_SEMANTIC_CHANNEL -> faceMap?.get(pixel) ?: 0f
                         SALIENCY_SEMANTIC_CHANNEL -> MISSING_SALIENCY_VALUE
                         else -> 0f
                     },
@@ -405,11 +375,15 @@ internal object RawSceneExposureMath {
         logSceneBrightness: Float,
         colorDestination: ByteBuffer,
         semanticDestination: ByteBuffer,
+        faceMap: FloatArray? = null,
     ): Boolean {
         val pixelCount = frame.width * frame.height
         if (!validateInput(frame, logSceneBrightness) ||
             colorDestination.capacity() < pixelCount * COLOR_CHANNELS * Float.SIZE_BYTES ||
-            semanticDestination.capacity() < pixelCount * SEMANTIC_CHANNELS * Float.SIZE_BYTES
+            semanticDestination.capacity() < pixelCount * SEMANTIC_CHANNELS * Float.SIZE_BYTES ||
+            (faceMap != null &&
+                (faceMap.size != pixelCount ||
+                    faceMap.any { !it.isFinite() || it !in 0f..1f }))
         ) {
             return false
         }
@@ -423,10 +397,10 @@ internal object RawSceneExposureMath {
             colorDestination.putFloat(logSceneBrightness)
             repeat(SEMANTIC_CHANNELS) { semanticChannel ->
                 semanticDestination.putFloat(
-                    if (semanticChannel == SALIENCY_SEMANTIC_CHANNEL) {
-                        MISSING_SALIENCY_VALUE
-                    } else {
-                        0f
+                    when (semanticChannel) {
+                        FACE_MAP_SEMANTIC_CHANNEL -> faceMap?.get(pixel) ?: 0f
+                        SALIENCY_SEMANTIC_CHANNEL -> MISSING_SALIENCY_VALUE
+                        else -> 0f
                     },
                 )
             }
@@ -482,6 +456,61 @@ internal object RawSceneExposureMath {
         }
         return kotlin.math.sqrt(sumSquares / mask.size.toDouble()).toFloat()
             .takeIf(Float::isFinite)
+    }
+
+    /**
+     * Approximates MGC's per-face `quantity of face pixels` for the single selected face mask.
+     *
+     * The native large-face limiter takes the L2 norm of one scalar coverage value per face. Our
+     * preview detector deliberately retains only one face, so the matching quantity is the mean
+     * mask coverage. Pixel RMS would instead turn a hard 8% mask into sqrt(0.08), changing the
+     * native 0.045 threshold by an entire unit of measure.
+     */
+    fun facePixelQuantity(mask: FloatArray?): Float? {
+        if (mask == null || mask.isEmpty()) return null
+        var sum = 0.0
+        for (value in mask) {
+            if (!value.isFinite() || value !in 0f..1f) return null
+            sum += value.toDouble()
+        }
+        return (sum / mask.size.toDouble()).toFloat().takeIf(Float::isFinite)
+    }
+
+    /** MGC ReduceMaxHdrRatioForLargeFaces' normalized face-quantity coordinate. */
+    fun largeFaceHdrRatioReductionStrength(facePixelQuantity: Float?): Float {
+        if (facePixelQuantity == null ||
+            !facePixelQuantity.isFinite() || facePixelQuantity < 0f
+        ) {
+            return 0f
+        }
+        return ((facePixelQuantity - LARGE_FACE_QUANTITY_START) *
+            LARGE_FACE_QUANTITY_SCALE)
+            .coerceIn(0f, 1f)
+    }
+
+    /**
+     * Reduces the ordinary shot max-HDR ratio continuously as the large-face signal grows.
+     *
+     * MGC uses the same face coordinate, a power-law reduction, and a hard floor of six. Its
+     * reduction power is a runtime flag rather than a function of face size. The requested dynamic
+     * behavior interpolates in the same logarithmic ratio domain: no large face keeps the
+     * configured ratio, while a saturated large-face signal reaches the six-to-one floor.
+     */
+    fun maxHdrRatioForLargeFace(baseMaxHdrRatio: Float, reductionStrength: Float): Float? {
+        if (!baseMaxHdrRatio.isFinite() || baseMaxHdrRatio <= 0f ||
+            !reductionStrength.isFinite() || reductionStrength !in 0f..1f
+        ) {
+            return null
+        }
+        if (reductionStrength == 0f || baseMaxHdrRatio <= LARGE_FACE_MAX_HDR_RATIO_FLOOR) {
+            return baseMaxHdrRatio
+        }
+        val reduced = Math.exp(
+            kotlin.math.ln(baseMaxHdrRatio.toDouble()) * (1f - reductionStrength) +
+                kotlin.math.ln(LARGE_FACE_MAX_HDR_RATIO_FLOOR.toDouble()) * reductionStrength,
+        ).toFloat()
+        if (!reduced.isFinite() || reduced <= 0f) return null
+        return maxOf(reduced, LARGE_FACE_MAX_HDR_RATIO_FLOOR)
     }
 
     private fun bilinearMaskSample(
@@ -586,131 +615,10 @@ internal object RawSceneExposureMath {
         return output
     }
 
-    /** Reconstructs the camera-RGB surface consumed by MGC 9.7's table AE. */
-    fun prepareMgcLegacyMeteringRgb(
-        cameraRgb: FloatArray,
-        width: Int,
-        height: Int,
-        metadata: RawMetadata,
-        lensShadingStats: RawSceneAERawStats? = null,
-    ): FloatArray? {
-        val pixelCount = width * height
-        if (width != INPUT_WIDTH || height != INPUT_HEIGHT ||
-            cameraRgb.size != pixelCount * 3 || cameraRgb.any { !it.isFinite() } ||
-            (lensShadingStats != null && lensShadingStats.sourceBounds.size < 4)
-        ) {
-            return null
-        }
-        val output = FloatArray(cameraRgb.size)
-        for (y in 0 until height) {
-            val v = (y + 0.5f) / height.toFloat()
-            for (x in 0 until width) {
-                val u = (x + 0.5f) / width.toFloat()
-                val offset = (y * width + x) * 3
-                val lscRed = lensShadingStats?.let { stats ->
-                    lensShadingGainAtStatsUv(metadata, stats, 0, u, v)
-                } ?: 1f
-                val lscGreen = lensShadingStats?.let { stats ->
-                    0.5f * (
-                        lensShadingGainAtStatsUv(metadata, stats, 1, u, v) +
-                            lensShadingGainAtStatsUv(metadata, stats, 2, u, v)
-                        )
-                } ?: 1f
-                val lscBlue = lensShadingStats?.let { stats ->
-                    lensShadingGainAtStatsUv(metadata, stats, 3, u, v)
-                } ?: 1f
-                if (!validPositive(lscRed) || !validPositive(lscGreen) ||
-                    !validPositive(lscBlue)
-                ) {
-                    return null
-                }
-                output[offset] = toMeteringU15(
-                    (cameraRgb[offset] * lscRed).coerceIn(0f, 1f),
-                )
-                output[offset + 1] = toMeteringU15(
-                    (cameraRgb[offset + 1] * lscGreen).coerceIn(0f, 1f),
-                )
-                output[offset + 2] = toMeteringU15(
-                    (cameraRgb[offset + 2] * lscBlue).coerceIn(0f, 1f),
-                )
-            }
-        }
-        return output
-    }
-
-    /** Applies MGC RawToLoResRgb's spatial-gain stage to both Classic split components. */
-    fun prepareMgcClassicAeMeteringFrame(
-        split: RawSceneClassicAeMeteringFrame,
-        metadata: RawMetadata,
-        sourceBounds: FloatArray,
-        lensShadingStats: RawSceneAERawStats? = null,
-    ): RawSceneClassicAeMeteringFrame? {
-        val pixelCount = split.width * split.height
-        if (split.width <= 0 || split.height <= 0 ||
-            split.brightRgb.size != pixelCount * 3 || split.darkRgb.size != pixelCount * 3 ||
-            split.brightMask.size != pixelCount || sourceBounds.size < 4 ||
-            split.brightRgb.any { !it.isFinite() || it < 0f } ||
-            split.darkRgb.any { !it.isFinite() || it < 0f }
-        ) {
-            return null
-        }
-        fun gain(channel: Int, u: Float, v: Float): Float {
-            return lensShadingStats?.let { stats ->
-                lensShadingGainAtStatsUv(metadata, stats, channel, u, v)
-            } ?: lensShadingGain(
-                metadata = metadata,
-                channel = channel,
-                sourceU = sourceBounds[0] + (sourceBounds[2] - sourceBounds[0]) * u,
-                sourceV = sourceBounds[1] + (sourceBounds[3] - sourceBounds[1]) * v,
-            )
-        }
-        val bright = FloatArray(split.brightRgb.size)
-        val dark = FloatArray(split.darkRgb.size)
-        for (y in 0 until split.height) {
-            val v = (y + 0.5f) / split.height.toFloat()
-            for (x in 0 until split.width) {
-                val u = (x + 0.5f) / split.width.toFloat()
-                val redGain = gain(0, u, v)
-                val greenGain = 0.5f * (gain(1, u, v) + gain(2, u, v))
-                val blueGain = gain(3, u, v)
-                if (!validPositive(redGain) || !validPositive(greenGain) ||
-                    !validPositive(blueGain)
-                ) {
-                    return null
-                }
-                val offset = (y * split.width + x) * 3
-                bright[offset] = (split.brightRgb[offset] * redGain).coerceAtLeast(0f)
-                bright[offset + 1] =
-                    (split.brightRgb[offset + 1] * greenGain).coerceAtLeast(0f)
-                bright[offset + 2] =
-                    (split.brightRgb[offset + 2] * blueGain).coerceAtLeast(0f)
-                dark[offset] = (split.darkRgb[offset] * redGain).coerceAtLeast(0f)
-                dark[offset + 1] =
-                    (split.darkRgb[offset + 1] * greenGain).coerceAtLeast(0f)
-                dark[offset + 2] =
-                    (split.darkRgb[offset + 2] * blueGain).coerceAtLeast(0f)
-            }
-        }
-        return RawSceneClassicAeMeteringFrame(
-            width = split.width,
-            height = split.height,
-            brightRgb = bright,
-            darkRgb = dark,
-            brightMask = split.brightMask,
-            clippedFraction = split.clippedFraction,
-        )
-    }
-
     fun modelLogGainToLinear(logGain: Float): Float? {
         if (!logGain.isFinite()) return null
         val gain = kotlin.math.exp(logGain.toDouble()) - MODEL_LINEAR_GAIN_EPSILON
         return gain.takeIf { it.isFinite() && it > 0.0 }?.toFloat()
-    }
-
-    fun linearGainToModelLog(gain: Float): Float? {
-        if (!gain.isFinite() || gain <= 0f) return null
-        val logGain = kotlin.math.ln(gain + MODEL_LINEAR_GAIN_EPSILON)
-        return logGain.takeIf(Double::isFinite)?.toFloat()
     }
 
     fun resolveIdealExposure(
@@ -762,26 +670,37 @@ internal object RawSceneExposureMath {
             shotRange.minTetMs / shortestHdrIdealTetMs,
             1f,
         )
+        // ComputeSafeUnderexposure is defined on sensor-normalized CFA maxima: a value of one
+        // means that the original RAW sample reached the channel white level. The LinearRaw
+        // fallback is already a rendered camera-RGB surface, so values near/above one no longer
+        // carry that predicate. It remains useful for table/clipping diagnostics, but using it to
+        // constrain shot-min fabricates a RAW saturation event and can erase the learned ideal TET.
+        val hasSensorClippingContract = frame.fastMomentsStats.sensorNormalized
         val baseRawStats = measureRawClipping(
             frame = frame,
             metadata = metadata,
             relativeTetGain = 1f,
-            collectSafeUnderexposure = anticipatedUnderexposure > 1f,
+            collectSafeUnderexposure =
+                anticipatedUnderexposure > 1f && hasSensorClippingContract,
         ) ?: return null
-        val safeUnderexposure = if (anticipatedUnderexposure > 1f) {
-            baseRawStats.safeUnderexposure
-        } else {
-            1f
+        val safeUnderexposure = when {
+            anticipatedUnderexposure <= 1f -> 1f
+            hasSensorClippingContract -> baseRawStats.safeUnderexposure
+            // Linear RGB cannot distinguish an unclipped sensor sample from a clipped sample
+            // reconstructed by the upstream render. It therefore cannot justify MGC's FLT_MAX
+            // "no clipped RAW sample" result. Keep only ProcessAeStats' production unsafe
+            // multiplier below; otherwise refresh incorrectly treats missing CFA evidence as
+            // proof that arbitrary underexposure is safe.
+            else -> 1f
         }
         // ProcessAeStats multiplies ComputeSafeUnderexposure by the default unsafe-underexposure
         // factor (1.1). The optional debug flag replaces this multiplier with infinity, but is not
         // enabled by the V25 production path.
         val allowedUnderexposure =
             safeUnderexposure * MGC_DEFAULT_UNSAFE_UNDEREXPOSURE_MULTIPLIER
-        // ComputeSafeUnderexposure deliberately returns FLT_MAX when no RAW sample is clipped.
-        // Multiplying that sentinel by 1.1 overflows to +Infinity, which still means unrestricted
-        // underexposure in MGC: shotMin / +Infinity becomes zero and requestMin remains the floor.
-        // Reject NaN/negative state, but do not reinterpret this valid sentinel as an AE failure.
+        // Sensor-normalized RAW may legitimately return FLT_MAX when no sample is clipped.
+        // Multiplication by 1.1 then produces +Infinity, which preserves MGC's unrestricted
+        // underexposure result. Linear RGB never manufactures that sentinel.
         if (allowedUnderexposure.isNaN() || allowedUnderexposure < 1f) return null
         // AArch64 `fcsel ..., mi` at MGC 9.7's ProcessAeStats boundary selects the
         // larger endpoint: the RAW-derived underexposure may lower the base-frame
@@ -873,13 +792,9 @@ internal object RawSceneExposureMath {
             ?.takeIf { it.isFinite() && it > 0f && hdrRatioBeforeLimit > it }
             ?.let { maxHdrRatio ->
                 val reduction = hdrRatioBeforeLimit / maxHdrRatio
-                // Exact MGC migration curve: 0 at 32% long contribution, 1 at 42%.
-                val shortMigrationPower = if (finalization.touchRoiClipProtectionTripped) {
-                    0f
-                } else {
-                    ((finalization.weightedFractionOfPixelsFromLongExposure - 0.32f) / 0.10f)
-                        .coerceIn(0f, 1f)
-                }
+                // Split an excessive HDR ratio symmetrically in log-exposure space. Both short
+                // and long therefore move by sqrt(reduction), preserving their geometric mean.
+                val shortMigrationPower = HDR_RATIO_LIMIT_SHORT_POWER
                 finalShortTetMs *= Math.pow(
                     reduction.toDouble(),
                     shortMigrationPower.toDouble(),
@@ -1267,7 +1182,9 @@ internal object RawSceneExposureMath {
         kotlin.math.ln(linearColor.coerceAtLeast(0f) + MODEL_RGB_LOG_FLOOR)
 
     private fun toMeteringU15(value: Float): Float {
-        val code = kotlin.math.round(value * METERING_U15_MAX)
+        // RawToLoResRgb uses llroundf. Inputs are non-negative here, so floor(x + 0.5)
+        // preserves its half-away-from-zero behavior; kotlin.math.round uses ties-to-even.
+        val code = kotlin.math.floor(value * METERING_U15_MAX + 0.5f)
             .toInt()
             .coerceIn(0, METERING_U15_MAX)
         return code.toFloat() / METERING_U15_SCALE
@@ -1289,35 +1206,50 @@ internal object RawSceneExposureMath {
 /** Device-independent, capture-side multi-branch scene exposure model. */
 internal object RawSceneExposureEstimator {
     private const val TAG = "RawSceneExposureEstimator"
+    private const val SHORT_MODEL_ASSET = "mgc_ae/short_scene_exposure.tflite"
+    private const val LONG_MODEL_ASSET = "mgc_ae/long_scene_exposure.tflite"
     private const val PORTRAIT_MODEL_ASSET = "mgc_ae/portrait_scene_exposure.tflite"
     private const val SOLVE_BUDGET_MS = 200f
     private val lock = Any()
 
-    private data class ExposureEngines(
-        val legacyTable: MgcLegacySceneExposureTable,
+    private data class LongModelInputContract(
+        val semanticInputIndex: Int,
+        val colorInputIndex: Int,
+        val semanticInputName: String,
+        val colorInputName: String,
+    )
+
+    private data class ModelSet(
+        val short: Interpreter,
+        val long: Interpreter,
         val portrait: Interpreter,
+        val shortInputName: String,
+        val longInputContract: LongModelInputContract,
+        val portraitInputName: String,
     ) {
         fun close() {
+            short.close()
+            long.close()
             portrait.close()
         }
     }
 
     @Volatile
-    private var engines: ExposureEngines? = null
+    private var models: ModelSet? = null
 
     /**
-     * Moves table parsing, ExposeHq curve construction, and the first delegated model inference
-     * out of the post-capture critical path. Calls are idempotent and share the inference lock.
+     * Moves interpreter creation and the first short/long/portrait inference out of the
+     * post-capture critical path. Calls are idempotent and share the inference lock.
      */
     fun warmUp(context: Context) {
-        if (engines != null) return
+        if (models != null) return
         val startedNs = SystemClock.elapsedRealtimeNanos()
         val initialized = synchronized(lock) {
-            if (engines != null) {
+            if (models != null) {
                 false
             } else {
-                createEngines(context.applicationContext)?.let { created ->
-                    engines = created
+                createModels(context.applicationContext)?.let { created ->
+                    models = created
                     true
                 } ?: false
             }
@@ -1370,66 +1302,64 @@ internal object RawSceneExposureEstimator {
             RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
                 RawSceneExposureMath.INPUT_CHANNELS,
         )
+        val colorInput = directFloatBuffer(
+            RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
+                RawSceneExposureMath.COLOR_CHANNELS,
+        )
+        val semanticInput = directFloatBuffer(
+            RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
+                RawSceneExposureMath.SEMANTIC_CHANNELS,
+        )
         if (!RawSceneExposureMath.writeCombinedModelInput(
                 frame = frame,
                 logSceneBrightness = measurement.logSceneBrightness,
                 destination = combinedInput,
-                portraitMask = faceMask,
+                faceMap = faceMask,
+            ) || !RawSceneExposureMath.writeSplitModelInputs(
+                frame = frame,
+                logSceneBrightness = measurement.logSceneBrightness,
+                colorDestination = colorInput,
+                semanticDestination = semanticInput,
+                faceMap = faceMask,
             )
         ) {
-            PLog.e(TAG, "Unable to construct RAW portrait exposure model input")
+            PLog.e(TAG, "Unable to construct RAW scene exposure ML inputs")
             return null
         }
-        val fractionPixelsClippedAtBaseTet = RawSceneExposureMath.fractionPixelsClippedAtTet(
-            frame = frame,
-            metadata = metadata,
-            relativeTetGain = 1f,
-        ) ?: run {
-            PLog.e(TAG, "Unable to construct MGC legacy AE clipped-pixel input")
-            return null
-        }
-        val tableQueryClippedFraction = frame.legacyAeInput
-            ?.splitHdrImage
-            ?.clippedFraction
-            ?.takeIf { it.isFinite() && it in 0f..1f }
-            ?: fractionPixelsClippedAtBaseTet
-        val tableTetMaxMs = resolvedDeviceLimits?.deviceMaxTetMs ?: shotRange.maxTetMs
         val faceMaskRms = RawSceneExposureMath.faceMaskRms(faceMask)
+        val facePixelQuantity = RawSceneExposureMath.facePixelQuantity(faceMask)
         val detectedFaceMaskEvidence = faceMaskRms
             ?.let { it > RawSceneExposureMath.FACE_MASK_RMS_FLOOR } == true
+        val largeFaceHdrRatioReductionStrength =
+            RawSceneExposureMath.largeFaceHdrRatioReductionStrength(facePixelQuantity)
+        val effectiveMaxHdrRatio = RawSceneExposureMath.maxHdrRatioForLargeFace(
+            baseMaxHdrRatio = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+            reductionStrength = largeFaceHdrRatioReductionStrength,
+        ) ?: run {
+            PLog.e(TAG, "Unable to resolve the large-face max HDR ratio")
+            return null
+        }
         val preparationCompletedNs = SystemClock.elapsedRealtimeNanos()
 
         return synchronized(lock) {
             val lockAcquiredNs = SystemClock.elapsedRealtimeNanos()
-            val engineWasCold = engines == null
+            val engineWasCold = models == null
             val engineStartedNs = lockAcquiredNs
-            val activeEngines = engines ?: createEngines(context)?.also { engines = it }
+            val activeModels = models ?: createModels(context)?.also { models = it }
                 ?: return@synchronized null
             val engineCompletedNs = SystemClock.elapsedRealtimeNanos()
             try {
-                val tableStartedNs = engineCompletedNs
-                val legacyResult = activeEngines.legacyTable.solve(
-                    frame = frame,
-                    fractionPixelsClipped = tableQueryClippedFraction,
-                    hasFace = metadata.sceneHasFace || detectedFaceMaskEvidence,
-                    currentTetMs = measurement.currentTetMs,
-                    sensorSensitivity = measurement.sensorSensitivity,
-                    deviceMinTetMs = resolvedDeviceLimits?.minTetMs
-                        ?: RawSceneExposureDeviceLimits.MIN_TET_MS,
-                    deviceMaxTetMs = tableTetMaxMs,
-                ) ?: run {
-                    PLog.e(TAG, "MGC legacy AE table lookup returned invalid values")
-                    return@synchronized null
-                }
-                val tableCompletedNs = SystemClock.elapsedRealtimeNanos()
-                val shortLogGain = RawSceneExposureMath.linearGainToModelLog(
-                    legacyResult.short.idealTetMs / measurement.currentTetMs,
-                ) ?: return@synchronized null
-                val longLogGain = RawSceneExposureMath.linearGainToModelLog(
-                    legacyResult.long.idealTetMs / measurement.currentTetMs,
-                ) ?: return@synchronized null
-                val portraitStartedNs = SystemClock.elapsedRealtimeNanos()
-                val portraitLogGain = runCombinedModel(activeEngines.portrait, combinedInput)
+                val shortStartedNs = engineCompletedNs
+                val shortLogGain = runCombinedModel(activeModels.short, combinedInput)
+                val shortCompletedNs = SystemClock.elapsedRealtimeNanos()
+                val longLogGain = runLongModel(
+                    interpreter = activeModels.long,
+                    contract = activeModels.longInputContract,
+                    semanticInput = semanticInput,
+                    colorInput = colorInput,
+                )
+                val longCompletedNs = SystemClock.elapsedRealtimeNanos()
+                val portraitLogGain = runCombinedModel(activeModels.portrait, combinedInput)
                 val portraitCompletedNs = SystemClock.elapsedRealtimeNanos()
                 val branches = RawSceneExposureBranches(
                     shortLogGain = shortLogGain,
@@ -1440,7 +1370,7 @@ internal object RawSceneExposureEstimator {
                     currentTetMs = measurement.currentTetMs,
                     branches = branches,
                 ) ?: run {
-                    PLog.e(TAG, "RAW scene exposure legacy-table AE ideals are invalid")
+                    PLog.e(TAG, "RAW scene exposure ML AE ideals are invalid")
                     return@synchronized null
                 }
                 val fastMomentsStats = RawSceneExposureMath.processFastMomentsAeStats(
@@ -1468,7 +1398,7 @@ internal object RawSceneExposureEstimator {
                         shotMinTetMs = fastMomentsStats.adjustedShotMinTetMs,
                         shotMaxTetMs = shotRange.maxTetMs,
                         exposureCompensationEv = metadata.exposureCompensation,
-                        maxHdrRatio = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+                        maxHdrRatio = effectiveMaxHdrRatio,
                         safeUnderexposureTetMs = highlightPreservationTetMs,
                     ),
                 ) ?: run {
@@ -1484,19 +1414,15 @@ internal object RawSceneExposureEstimator {
                         PLog.e(TAG, "Fast Moments final-short RAW clipping statistics are invalid")
                         return@synchronized null
                     }
-                val portraitRelightingGain = if (detectedFaceMaskEvidence) {
-                    fusion.finalPortraitTetMs / fusion.finalLongTetMs
-                } else {
-                    1f
-                }
-                if (!portraitRelightingGain.isFinite() || portraitRelightingGain <= 0f) {
-                    PLog.e(TAG, "MGC portrait relighting gain is invalid")
-                    return@synchronized null
-                }
                 val rawStatsSource = if (frame.fastMomentsStats.sensorNormalized) {
                     "RAW_CFA_16X16_MAX"
                 } else {
                     "CAMERA_RGB_FALLBACK"
+                }
+                val safeUnderexposureSource = if (frame.fastMomentsStats.sensorNormalized) {
+                    "RAW_CFA_WHITE_LEVEL"
+                } else {
+                    "LINEAR_RGB_CONSERVATIVE_ONE"
                 }
                 val finalizationCompletedNs = SystemClock.elapsedRealtimeNanos()
                 PLog.i(
@@ -1506,98 +1432,35 @@ internal object RawSceneExposureEstimator {
                         "lockWaitMs=${elapsedMs(preparationCompletedNs, lockAcquiredNs)} " +
                         "engineCold=$engineWasCold " +
                         "engineMs=${elapsedMs(engineStartedNs, engineCompletedNs)} " +
-                        "tableMs=${elapsedMs(tableStartedNs, tableCompletedNs)} " +
-                        "portraitMs=${elapsedMs(portraitStartedNs, portraitCompletedNs)} " +
+                        "shortMs=${elapsedMs(shortStartedNs, shortCompletedNs)} " +
+                        "longMs=${elapsedMs(shortCompletedNs, longCompletedNs)} " +
+                        "portraitMs=${elapsedMs(longCompletedNs, portraitCompletedNs)} " +
                         "finalizeMs=${elapsedMs(portraitCompletedNs, finalizationCompletedNs)} " +
                         "totalMs=${elapsedMs(estimateStartedNs, finalizationCompletedNs)} " +
                         "budgetMs=$SOLVE_BUDGET_MS",
                 )
                 PLog.i(
                     TAG,
-                    "RAW_SCENE_EXPOSURE stage=MGC_CLASSIC_SHORT_QUERY_DIAGNOSTIC " +
-                        "tableInputPath=NON_QCOM_RAW_TO_LO_RES_RGB " +
-                        "tableInputSize=${legacyResult.meteringWidth}x${legacyResult.meteringHeight} " +
-                        "tableBrightMaskMean=${legacyResult.brightMaskMean} " +
-                        "tableDescriptorContract=MGC_V25_SPLIT_HDR_14_8_6 " +
-                        "rawClippingStatsSource=$rawStatsSource " +
-                        "tableClippingStatsSource=${if (
-                            frame.legacyAeInput?.splitHdrImage?.clippedFraction != null
-                        ) {
-                            "RAW_TO_LO_RES_RGB"
-                        } else {
-                            rawStatsSource
-                        }} " +
-                        "shortQueryHistogramDescriptor=" +
-                        "${legacyResult.shortQuery.histogramDescriptor.contentToString()} " +
-                        "longQueryHistogramDescriptor=" +
-                        "${legacyResult.longQuery.histogramDescriptor.contentToString()} " +
-                        "shortMinimumContributingSimilarity=" +
-                        "${legacyResult.short.minimumContributingSimilarity} " +
-                        "shortAggregationWeightSum=${legacyResult.short.aggregationWeightSum} " +
-                        "shortContributingTargetRange=" +
-                        "[${legacyResult.short.contributingTargetMinimum}, " +
-                        "${legacyResult.short.contributingTargetMaximum}] " +
-                        "shortBestMatchTargetT=${legacyResult.short.bestMatchTargetT} " +
-                        "shortBestMatchLogSceneBrightness=" +
-                        "${legacyResult.short.bestMatchLogSceneBrightness} " +
-                        "shortBestMatchImageLogMean=${legacyResult.short.bestMatchImageLogMean} " +
-                        "shortBestMatchClippedFraction=" +
-                        "${legacyResult.short.bestMatchFractionPixelsClipped} " +
-                        "shortBestMatchCategory=${legacyResult.short.bestMatchCategory} " +
-                        "shortBestMatchHistogramDescriptor=" +
-                        legacyResult.short.bestMatchHistogramDescriptor.contentToString(),
-                )
-                PLog.i(
-                    TAG,
-                    "RAW_SCENE_EXPOSURE stage=MGC_CLASSIC_AE_FINALIZE " +
+                    "RAW_SCENE_EXPOSURE stage=MGC_ML_AE_FINALIZE " +
                         "mode=2 " +
                         "computeAeResultsProcessRawStats=true " +
                         "processAeStatsExecuted=${fastMomentsStats.processAeStatsExecuted} " +
-                        "shortLongSource=MGC_9_7_V25_START_RELEASE_TABLE " +
-                        "tableVersion=0x${Integer.toUnsignedString(activeEngines.legacyTable.version, 16)} " +
-                        "tableInputPath=NON_QCOM_RAW_TO_LO_RES_RGB " +
-                        "tableInputNormalization=MGC_CLASSIC_SPLIT_HDR_WB_RMS_1_OVER_16 " +
-                        "tableQueryColorDomain=MGC_SPLIT_HDR_NORMALIZED_CAMERA_RGB_U15 " +
-                        "tableInputSize=${legacyResult.meteringWidth}x${legacyResult.meteringHeight} " +
-                        "tableBrightMaskMean=${legacyResult.brightMaskMean} " +
-                        "tableDescriptorContract=MGC_V25_SPLIT_HDR_14_8_6 " +
-                        "tableInputRmsRgb=${legacyResult.meteringRmsRgb.contentToString()} " +
-                        "tableInputWhiteBalancedRmsMax=${legacyResult.meteringWhiteBalancedRmsMax} " +
-                        "tableInputNormalizationScale=${legacyResult.meteringNormalizationScale} " +
-                        "tableInputNormalizedTetMs=${legacyResult.normalizedMeteringTetMs} " +
-                        "shortQueryImageLogMean=${legacyResult.shortQuery.imageLogMean} " +
-                        "longQueryImageLogMean=${legacyResult.longQuery.imageLogMean} " +
-                        "shortQueryLogSceneBrightness=${legacyResult.shortQuery.logSceneBrightness} " +
-                        "longQueryLogSceneBrightness=${legacyResult.longQuery.logSceneBrightness} " +
-                        "tableQueryClippedFraction=${legacyResult.shortQuery.fractionPixelsClipped} " +
-                        "tableQueryCategory=${legacyResult.shortQuery.category} " +
-                        "tableSpatialWeights=MGC_DEFAULT_RADIAL " +
-                        "aeSmoothness=${legacyResult.aeSmoothness} " +
-                        "shortSmoothnessTOffset=${legacyResult.shortSmoothnessTOffset} " +
-                        "longSmoothnessTOffset=${legacyResult.longSmoothnessTOffset} " +
-                        "shortTargetT=${legacyResult.short.targetT} " +
-                        "longTargetT=${legacyResult.long.targetT} " +
-                        "shortTAtCurrentTet=${legacyResult.short.tAtCurrentTet} " +
-                        "longTAtCurrentTet=${legacyResult.long.tAtCurrentTet} " +
-                        "shortMaxSimilarity=${legacyResult.short.maxSimilarity} " +
-                        "longMaxSimilarity=${legacyResult.long.maxSimilarity} " +
-                        "shortCandidateCount=${legacyResult.short.candidateCount} " +
-                        "longCandidateCount=${legacyResult.long.candidateCount} " +
-                        "shortContributingCount=${legacyResult.short.contributingCount} " +
-                        "longContributingCount=${legacyResult.long.contributingCount} " +
-                        "tableTetMinMs=${resolvedDeviceLimits?.minTetMs ?: RawSceneExposureDeviceLimits.MIN_TET_MS} " +
-                        "tableTetMaxMs=$tableTetMaxMs " +
+                        "shortLongSource=MGC_9_7_V25_TFLITE " +
+                        "modelInputContract=RUN_ML_AE_CORE_ADVANCED_64X64 " +
+                        "modelColorContract=LN_R_G_B_PLUS_1E_6_AND_LOG_SCENE_BRIGHTNESS " +
+                        "modelSemanticEnums=[3,4,5,6,7] " +
+                        "modelFaceMapEnum=3 " +
+                        "modelPortraitMaskEnum=4 " +
+                        "modelMissingSaliency=0.05 " +
+                        "shortInputName=${activeModels.shortInputName} " +
+                        "longSemanticInputName=${activeModels.longInputContract.semanticInputName} " +
+                        "longColorInputName=${activeModels.longInputContract.colorInputName} " +
+                        "portraitInputName=${activeModels.portraitInputName} " +
                         "shortLnGain=${branches.shortLogGain} " +
                         "longLnGain=${branches.longLogGain} " +
                         "portraitLnGain=${branches.portraitLogGain} " +
-                        "tableIdealShortTetMs=${legacyResult.short.idealTetMs} " +
-                        "tableIdealLongTetMs=${legacyResult.long.idealTetMs} " +
                         "idealShortTetMs=${fusion.idealShortTetMs} " +
                         "idealLongTetMs=${fusion.idealLongTetMs} " +
-                        "shortIdealRoundTripDeltaMs=" +
-                        "${fusion.idealShortTetMs - legacyResult.short.idealTetMs} " +
-                        "longIdealRoundTripDeltaMs=" +
-                        "${fusion.idealLongTetMs - legacyResult.long.idealTetMs} " +
                         "idealPortraitTetMs=${fusion.idealPortraitTetMs} " +
                         "exposureCompensationEv=${metadata.exposureCompensation} " +
                         "exposureCompensationGain=${fusion.exposureCompensationGain} " +
@@ -1614,23 +1477,28 @@ internal object RawSceneExposureEstimator {
                         "finalPortraitGain=${fusion.finalPortraitGain} " +
                         "faceMaskAvailable=${faceMask != null} " +
                         "faceMaskRms=$faceMaskRms " +
+                        "facePixelQuantity=$facePixelQuantity " +
                         "faceMaskSource=${if (faceMask != null) "BLAZEFACE_VALIDATED_SOFT_FACE_ELLIPSE" else "NONE"} " +
+                        "shortModelMaskApplied=$detectedFaceMaskEvidence " +
+                        "longModelMaskApplied=$detectedFaceMaskEvidence " +
                         "portraitModelMaskApplied=$detectedFaceMaskEvidence " +
-                        "relightingExpected=$detectedFaceMaskEvidence " +
-                        "portraitRelightingGain=$portraitRelightingGain " +
-                        "portraitRelightingGainSource=FINAL_PORTRAIT_TET_OVER_FINAL_LONG_TET " +
                         "portraitGainMigrationApplied=false " +
-                        "solver=MGC_CLASSIC_TABLE_RUN_AE " +
+                        "solver=MGC_RUN_ML_AE_CORE " +
                         "rawStatsFinalizer=MGC_MODE_2 " +
                         "hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit} " +
                         "finalHdrRatio=${fusion.finalHdrRatio} " +
                         "hdrNetRatioSource=FINAL_LONG_TET_OVER_FINAL_SHORT_TET " +
-                        "maxHdrRatio=${RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO} " +
+                        "baseMaxHdrRatio=${RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO} " +
+                        "effectiveMaxHdrRatio=$effectiveMaxHdrRatio " +
+                        "largeFaceHdrRatioReductionStrength=$largeFaceHdrRatioReductionStrength " +
+                        "hdrRatioLimitShortPower=${RawSceneExposureMath.HDR_RATIO_LIMIT_SHORT_POWER} " +
+                        "hdrRatioLimitLongPower=${1f - RawSceneExposureMath.HDR_RATIO_LIMIT_SHORT_POWER} " +
                         "hdrRatioLimited=${fusion.hdrRatioLimited} " +
                         "highlightPreservationTetMs=$highlightPreservationTetMs " +
                         "safeUnderexposureApplied=${fusion.safeUnderexposureApplied} " +
                         "anticipatedUnderexposure=${fastMomentsStats.anticipatedUnderexposure} " +
                         "safeUnderexposure=${fastMomentsStats.safeUnderexposure} " +
+                        "safeUnderexposureSource=$safeUnderexposureSource " +
                         "unsafeUnderexposureMultiplier=${RawSceneExposureMath.MGC_DEFAULT_UNSAFE_UNDEREXPOSURE_MULTIPLIER} " +
                         "allowedUnderexposure=${fastMomentsStats.allowedUnderexposure} " +
                         "statsShotMinTetMs=${fastMomentsStats.statsShotMinTetMs} " +
@@ -1677,22 +1545,26 @@ internal object RawSceneExposureEstimator {
                     finalShortTetMs = fusion.finalShortTetMs,
                     finalLongTetMs = fusion.finalLongTetMs,
                     finalShortGain = fusion.finalShortGain,
-                    portraitRelightingGain = portraitRelightingGain,
                     safeUnderexposure = fastMomentsStats.safeUnderexposure,
                     fractionPixelsClippedAtFinalShortTet =
                         fractionPixelsClippedAtFinalShortTet,
                     summaryText = buildSummaryText(
-                        tableVersion = activeEngines.legacyTable.version,
-                        legacyResult = legacyResult,
+                        models = activeModels,
                         frame = frame,
                         metadata = metadata,
                         measurement = measurement,
                         referenceSensitivityIso = referenceSensitivityIso,
                         shotRange = shotRange,
-                        tableTetMaxMs = tableTetMaxMs,
+                        branches = branches,
                         fastMomentsStats = fastMomentsStats,
                         fusion = fusion,
                         rawStatsSource = rawStatsSource,
+                        faceMaskRms = faceMaskRms,
+                        facePixelQuantity = facePixelQuantity,
+                        faceMaskApplied = detectedFaceMaskEvidence,
+                        largeFaceHdrRatioReductionStrength =
+                            largeFaceHdrRatioReductionStrength,
+                        effectiveMaxHdrRatio = effectiveMaxHdrRatio,
                         fractionPixelsClippedAtFinalShortTet =
                             fractionPixelsClippedAtFinalShortTet,
                     ),
@@ -1711,83 +1583,103 @@ internal object RawSceneExposureEstimator {
         return output[0][0].also { check(it.isFinite()) }
     }
 
+    private fun runLongModel(
+        interpreter: Interpreter,
+        contract: LongModelInputContract,
+        semanticInput: ByteBuffer,
+        colorInput: ByteBuffer,
+    ): Float {
+        semanticInput.rewind()
+        colorInput.rewind()
+        val inputs = Array<Any>(interpreter.inputTensorCount) { colorInput }
+        inputs[contract.semanticInputIndex] = semanticInput
+        inputs[contract.colorInputIndex] = colorInput
+        val output = Array(1) { FloatArray(1) }
+        interpreter.runForMultipleInputsOutputs(
+            inputs,
+            mutableMapOf<Int, Any>(0 to output),
+        )
+        return output[0][0].also { check(it.isFinite()) }
+    }
+
     private fun buildSummaryText(
-        tableVersion: Int,
-        legacyResult: MgcLegacyAeResult,
+        models: ModelSet,
         frame: RawSceneLinearFrame,
         metadata: RawMetadata,
         measurement: RawSceneBrightnessMeasurement,
         referenceSensitivityIso: Int,
         shotRange: RawSceneExposureShotRange,
-        tableTetMaxMs: Float,
+        branches: RawSceneExposureBranches,
         fastMomentsStats: RawSceneFastMomentsAeStats,
         fusion: RawSceneExposureFusion,
         rawStatsSource: String,
+        faceMaskRms: Float?,
+        facePixelQuantity: Float?,
+        faceMaskApplied: Boolean,
+        largeFaceHdrRatioReductionStrength: Float,
+        effectiveMaxHdrRatio: Float,
         fractionPixelsClippedAtFinalShortTet: Float,
     ): String = buildString(3_500) {
         appendLine("PhotonCamera RAW AE SummaryText v1")
-        appendLine("stage=MGC_CLASSIC_AE_FINALIZE")
+        appendLine("stage=MGC_ML_AE_FINALIZE")
         appendLine("mode=2")
-        appendLine("shortLongSource=MGC_9_7_V25_START_RELEASE_TABLE")
-        appendLine("tableVersion=0x${Integer.toUnsignedString(tableVersion, 16)}")
-        appendLine("tableInputPath=NON_QCOM_RAW_TO_LO_RES_RGB_POST_CAPTURE_LSC")
-        appendLine("tableInputNormalization=MGC_CLASSIC_SPLIT_HDR_WB_RMS_1_OVER_16")
-        appendLine("tableQueryColorDomain=MGC_SPLIT_HDR_NORMALIZED_CAMERA_RGB_U15")
-        appendLine("tableDescriptorContract=MGC_V25_SPLIT_HDR_14_8_6")
-        appendLine("tableInputSize=${legacyResult.meteringWidth}x${legacyResult.meteringHeight}")
-        appendLine("tableBrightMaskMean=${legacyResult.brightMaskMean}")
-        appendLine("tableInputRmsRgb=${legacyResult.meteringRmsRgb.contentToString()}")
-        appendLine("tableInputWhiteBalancedRmsMax=${legacyResult.meteringWhiteBalancedRmsMax}")
-        appendLine("tableInputNormalizationScale=${legacyResult.meteringNormalizationScale}")
-        appendLine("tableInputNormalizedTetMs=${legacyResult.normalizedMeteringTetMs}")
-        appendLine("rgbGains=${frame.legacyAeInput?.rgbGains?.contentToString()}")
-        appendLine("rgbTransform=${frame.legacyAeInput?.rgbTransform?.contentToString()}")
+        appendLine("shortLongSource=MGC_9_7_V25_TFLITE")
+        appendLine("solver=MGC_RUN_ML_AE_CORE")
+        appendLine("rawStatsFinalizer=MGC_MODE_2")
+        appendLine("modelInputContract=RUN_ML_AE_CORE_ADVANCED_64X64")
+        appendLine("modelColorChannels=[LN_R_PLUS_1E_6,LN_G_PLUS_1E_6,LN_B_PLUS_1E_6,LOG_SCENE_BRIGHTNESS]")
+        appendLine("modelSemanticChannelEnums=[3,4,5,6,7]")
+        appendLine("modelTensorLayout=NHWC_Y_X_CHANNEL")
+        appendLine("modelFaceMapEnum=3")
+        appendLine("modelPortraitMaskEnum=4")
+        appendLine("modelMissingSaliencyEnum=6")
+        appendLine("modelMissingSaliencyValue=0.05")
+        appendLine("shortModelAsset=$SHORT_MODEL_ASSET")
+        appendLine("longModelAsset=$LONG_MODEL_ASSET")
+        appendLine("portraitModelAsset=$PORTRAIT_MODEL_ASSET")
+        appendLine("shortInputName=${models.shortInputName}")
+        appendLine("longSemanticInputName=${models.longInputContract.semanticInputName}")
+        appendLine("longSemanticInputIndex=${models.longInputContract.semanticInputIndex}")
+        appendLine("longColorInputName=${models.longInputContract.colorInputName}")
+        appendLine("longColorInputIndex=${models.longInputContract.colorInputIndex}")
+        appendLine("portraitInputName=${models.portraitInputName}")
         appendLine("camera2ColorCorrectionMode=${metadata.camera2ColorCorrectionMode}")
-        appendLine("shortQueryHistogramDescriptor=${legacyResult.shortQuery.histogramDescriptor.contentToString()}")
-        appendLine("longQueryHistogramDescriptor=${legacyResult.longQuery.histogramDescriptor.contentToString()}")
-        appendLine("shortQueryImageLogMean=${legacyResult.shortQuery.imageLogMean}")
-        appendLine("longQueryImageLogMean=${legacyResult.longQuery.imageLogMean}")
-        appendLine("shortQueryLogSceneBrightness=${legacyResult.shortQuery.logSceneBrightness}")
-        appendLine("longQueryLogSceneBrightness=${legacyResult.longQuery.logSceneBrightness}")
-        appendLine("tableQueryClippedFraction=${legacyResult.shortQuery.fractionPixelsClipped}")
-        appendLine("tableQueryCategory=${legacyResult.shortQuery.category}")
-        appendLine("shortTargetT=${legacyResult.short.targetT}")
-        appendLine("longTargetT=${legacyResult.long.targetT}")
-        appendLine("shortTAtCurrentTet=${legacyResult.short.tAtCurrentTet}")
-        appendLine("longTAtCurrentTet=${legacyResult.long.tAtCurrentTet}")
-        appendLine("shortMaxSimilarity=${legacyResult.short.maxSimilarity}")
-        appendLine("longMaxSimilarity=${legacyResult.long.maxSimilarity}")
-        appendLine("shortCandidateCount=${legacyResult.short.candidateCount}")
-        appendLine("longCandidateCount=${legacyResult.long.candidateCount}")
-        appendLine("shortContributingCount=${legacyResult.short.contributingCount}")
-        appendLine("longContributingCount=${legacyResult.long.contributingCount}")
-        appendLine("shortMinimumContributingSimilarity=${legacyResult.short.minimumContributingSimilarity}")
-        appendLine("longMinimumContributingSimilarity=${legacyResult.long.minimumContributingSimilarity}")
-        appendLine("shortBestMatchTargetT=${legacyResult.short.bestMatchTargetT}")
-        appendLine("longBestMatchTargetT=${legacyResult.long.bestMatchTargetT}")
-        appendLine("tableIdealShortTetMs=${legacyResult.short.idealTetMs}")
-        appendLine("tableIdealLongTetMs=${legacyResult.long.idealTetMs}")
+        appendLine("shortLnGain=${branches.shortLogGain}")
+        appendLine("longLnGain=${branches.longLogGain}")
+        appendLine("portraitLnGain=${branches.portraitLogGain}")
         appendLine("idealShortTetMs=${fusion.idealShortTetMs}")
         appendLine("idealLongTetMs=${fusion.idealLongTetMs}")
-        appendLine(
-            "shortIdealRoundTripDeltaMs=" +
-                (fusion.idealShortTetMs - legacyResult.short.idealTetMs),
-        )
-        appendLine(
-            "longIdealRoundTripDeltaMs=" +
-                (fusion.idealLongTetMs - legacyResult.long.idealTetMs),
-        )
+        appendLine("idealPortraitTetMs=${fusion.idealPortraitTetMs}")
+        appendLine("shortIdealGain=${fusion.shortIdealGain}")
+        appendLine("longIdealGain=${fusion.longIdealGain}")
+        appendLine("portraitIdealGain=${fusion.portraitIdealGain}")
+        appendLine("exposureCompensationEv=${metadata.exposureCompensation}")
+        appendLine("exposureCompensationGain=${fusion.exposureCompensationGain}")
         appendLine("compensatedShortTetMs=${fusion.compensatedShortTetMs}")
         appendLine("compensatedLongTetMs=${fusion.compensatedLongTetMs}")
         appendLine("finalShortTetMs=${fusion.finalShortTetMs}")
         appendLine("finalLongTetMs=${fusion.finalLongTetMs}")
+        appendLine("finalPortraitTetMs=${fusion.finalPortraitTetMs}")
         appendLine("finalShortGain=${fusion.finalShortGain}")
         appendLine("finalLongGain=${fusion.finalLongGain}")
+        appendLine("finalPortraitGain=${fusion.finalPortraitGain}")
         appendLine("hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit}")
         appendLine("finalHdrRatio=${fusion.finalHdrRatio}")
+        appendLine("baseMaxHdrRatio=${RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO}")
+        appendLine("effectiveMaxHdrRatio=$effectiveMaxHdrRatio")
+        appendLine("largeFaceHdrRatioReductionStrength=$largeFaceHdrRatioReductionStrength")
+        appendLine("hdrRatioLimitShortPower=${RawSceneExposureMath.HDR_RATIO_LIMIT_SHORT_POWER}")
+        appendLine("hdrRatioLimitLongPower=${1f - RawSceneExposureMath.HDR_RATIO_LIMIT_SHORT_POWER}")
+        appendLine("hdrRatioLimited=${fusion.hdrRatioLimited}")
+        appendLine("faceMaskRms=$faceMaskRms")
+        appendLine("facePixelQuantity=$facePixelQuantity")
+        appendLine("shortModelMaskApplied=$faceMaskApplied")
+        appendLine("longModelMaskApplied=$faceMaskApplied")
+        appendLine("portraitModelMaskApplied=$faceMaskApplied")
         appendLine("sourceClippedFraction=${fusion.sourceClippedFraction}")
         appendLine("shortClippedFraction=${fusion.shortClippedFraction}")
         appendLine("longClippedFraction=${fusion.longClippedFraction}")
+        appendLine("portraitClippedFraction=${fusion.portraitClippedFraction}")
         appendLine("fractionPixelsClippedAtBaseTet=${fastMomentsStats.fractionPixelsClippedAtBaseTet}")
         appendLine("fractionPixelsClippedAtFinalShortTet=$fractionPixelsClippedAtFinalShortTet")
         appendLine("rawStatsSource=$rawStatsSource")
@@ -1796,43 +1688,72 @@ internal object RawSceneExposureEstimator {
         appendLine("iso=${metadata.iso}")
         appendLine("referenceIso=$referenceSensitivityIso")
         appendLine("sensorSensitivity=${measurement.sensorSensitivity}")
+        appendLine("sensorSensitivitySource=MGC_9_7_V25_TUNING")
+        appendLine("geometricSignal=${measurement.geometricSignal}")
+        appendLine("predictedImageBrightness=${measurement.predictedImageBrightness}")
         appendLine("currentTetMs=${measurement.currentTetMs}")
         appendLine("logSceneBrightness=${measurement.logSceneBrightness}")
         appendLine("requestShotMinTetMs=${shotRange.requestMinTetMs}")
         appendLine("shotMinTetMs=${shotRange.minTetMs}")
         appendLine("shotMaxTetMs=${shotRange.maxTetMs}")
-        appendLine("tableTetMaxMs=$tableTetMaxMs")
+        appendLine("anticipatedUnderexposure=${fastMomentsStats.anticipatedUnderexposure}")
+        appendLine("allowedUnderexposure=${fastMomentsStats.allowedUnderexposure}")
         appendLine("adjustedShotMinTetMs=${fastMomentsStats.adjustedShotMinTetMs}")
         appendLine("safeUnderexposure=${fastMomentsStats.safeUnderexposure}")
+        appendLine(
+            "safeUnderexposureSource=" + if (frame.fastMomentsStats.sensorNormalized) {
+                "RAW_CFA_WHITE_LEVEL"
+            } else {
+                "LINEAR_RGB_CONSERVATIVE_ONE"
+            },
+        )
     }.trimEnd()
 
-    private fun createEngines(context: Context): ExposureEngines? {
+    private fun createModels(context: Context): ModelSet? {
+        var short: Interpreter? = null
+        var long: Interpreter? = null
         var portrait: Interpreter? = null
-        var candidate: ExposureEngines? = null
+        var candidate: ModelSet? = null
         return try {
-            val legacyTable = MgcLegacySceneExposureTable.load(context)
-            check(legacyTable.version == MgcLegacySceneExposureTable.EXPECTED_VERSION) {
-                "Unexpected start_release.dat version: " +
-                    "0x${Integer.toUnsignedString(legacyTable.version, 16)}"
-            }
-            MgcLegacySceneExposureTable.warmUpRuntime()
+            val loadedShort = createInterpreter(context, SHORT_MODEL_ASSET).also { short = it }
+            val loadedLong = createInterpreter(context, LONG_MODEL_ASSET).also { long = it }
             val loadedPortrait = createInterpreter(context, PORTRAIT_MODEL_ASSET).also {
                 portrait = it
             }
-            candidate = ExposureEngines(
-                legacyTable = legacyTable,
+            val shortInputName = validateCombinedModel(loadedShort, "short")
+            val longInputContract = validateLongModel(loadedLong)
+            val portraitInputName = validateCombinedModel(loadedPortrait, "portrait")
+            candidate = ModelSet(
+                short = loadedShort,
+                long = loadedLong,
                 portrait = loadedPortrait,
+                shortInputName = shortInputName,
+                longInputContract = longInputContract,
+                portraitInputName = portraitInputName,
             )
-            validateCombinedModel(candidate.portrait, "portrait")
+            warmCombinedModel(candidate.short)
+            warmLongModel(candidate.long, candidate.longInputContract)
             warmCombinedModel(candidate.portrait)
+            PLog.i(
+                TAG,
+                "RAW_SCENE_EXPOSURE stage=ML_MODEL_CONTRACT " +
+                    "short=${candidate.shortInputName}:[1,64,64,9] " +
+                    "longSemantic=${candidate.longInputContract.semanticInputName}:" +
+                    "[1,64,64,5]@${candidate.longInputContract.semanticInputIndex} " +
+                    "longColor=${candidate.longInputContract.colorInputName}:" +
+                    "[1,64,64,4]@${candidate.longInputContract.colorInputIndex} " +
+                    "portrait=${candidate.portraitInputName}:[1,64,64,9]",
+            )
             candidate
         } catch (error: Throwable) {
             if (candidate != null) {
                 candidate.close()
             } else {
+                short?.close()
+                long?.close()
                 portrait?.close()
             }
-            PLog.e(TAG, "Unable to initialize MGC legacy AE and portrait model", error)
+            PLog.e(TAG, "Unable to initialize RAW scene exposure ML models", error)
             null
         }
     }
@@ -1845,13 +1766,67 @@ internal object RawSceneExposureEstimator {
         },
     )
 
-    private fun validateCombinedModel(interpreter: Interpreter, name: String) {
+    private fun validateCombinedModel(interpreter: Interpreter, name: String): String {
         check(interpreter.inputTensorCount == 1) { "$name AE model input count changed" }
+        check(interpreter.outputTensorCount == 1) { "$name AE model output count changed" }
         val input = interpreter.getInputTensor(0)
         val output = interpreter.getOutputTensor(0)
-        check(input.dataType() == DataType.FLOAT32)
-        check(input.shape().contentEquals(intArrayOf(1, 64, 64, 9)))
+        check(input.dataType() == DataType.FLOAT32) { "$name AE model input type changed" }
+        check(input.shape().contentEquals(intArrayOf(1, 64, 64, 9))) {
+            "$name AE model input shape changed: ${input.shape().contentToString()}"
+        }
+        check(input.name() == "serving_default_combined_input:0") {
+            "$name AE model input name changed: ${input.name()}"
+        }
         validateScalarOutput(output.dataType(), output.shape(), name)
+        return input.name()
+    }
+
+    private fun validateLongModel(interpreter: Interpreter): LongModelInputContract {
+        check(interpreter.inputTensorCount == 2) { "long AE model input count changed" }
+        check(interpreter.outputTensorCount == 1) { "long AE model output count changed" }
+        var semanticInputIndex = -1
+        var colorInputIndex = -1
+        var semanticInputName = ""
+        var colorInputName = ""
+        repeat(interpreter.inputTensorCount) { index ->
+            val input = interpreter.getInputTensor(index)
+            check(input.dataType() == DataType.FLOAT32) {
+                "long AE model input $index type changed"
+            }
+            when {
+                input.shape().contentEquals(intArrayOf(1, 64, 64, 5)) -> {
+                    check(semanticInputIndex == -1) { "long AE semantic input is ambiguous" }
+                    semanticInputIndex = index
+                    semanticInputName = input.name()
+                }
+                input.shape().contentEquals(intArrayOf(1, 64, 64, 4)) -> {
+                    check(colorInputIndex == -1) { "long AE color input is ambiguous" }
+                    colorInputIndex = index
+                    colorInputName = input.name()
+                }
+                else -> error(
+                    "long AE model input $index shape changed: ${input.shape().contentToString()}",
+                )
+            }
+        }
+        check(semanticInputIndex >= 0 && colorInputIndex >= 0) {
+            "long AE model semantic/color inputs are incomplete"
+        }
+        check(semanticInputName == "serving_default_combined_channels:0") {
+            "long AE semantic input name changed: $semanticInputName"
+        }
+        check(colorInputName == "serving_default_color_channels_and_log_scene_brightness:0") {
+            "long AE color input name changed: $colorInputName"
+        }
+        val output = interpreter.getOutputTensor(0)
+        validateScalarOutput(output.dataType(), output.shape(), "long")
+        return LongModelInputContract(
+            semanticInputIndex = semanticInputIndex,
+            colorInputIndex = colorInputIndex,
+            semanticInputName = semanticInputName,
+            colorInputName = colorInputName,
+        )
     }
 
     private fun warmCombinedModel(interpreter: Interpreter) {
@@ -1860,6 +1835,21 @@ internal object RawSceneExposureEstimator {
                 RawSceneExposureMath.INPUT_CHANNELS,
         )
         check(runCombinedModel(interpreter, input).isFinite())
+    }
+
+    private fun warmLongModel(
+        interpreter: Interpreter,
+        contract: LongModelInputContract,
+    ) {
+        val semanticInput = directFloatBuffer(
+            RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
+                RawSceneExposureMath.SEMANTIC_CHANNELS,
+        )
+        val colorInput = directFloatBuffer(
+            RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT *
+                RawSceneExposureMath.COLOR_CHANNELS,
+        )
+        check(runLongModel(interpreter, contract, semanticInput, colorInput).isFinite())
     }
 
     private fun elapsedMs(startedNs: Long, completedNs: Long = SystemClock.elapsedRealtimeNanos()): Float =

@@ -40,8 +40,6 @@ internal object RawSceneExposureMatcher {
                     finalShortTetMs = estimate.finalShortTetMs,
                     finalLongTetMs = estimate.finalLongTetMs,
                     finalShortGain = estimate.finalShortGain,
-                    portraitRelightingGain = estimate.portraitRelightingGain,
-                    portraitRelightingMask = faceMeteringMask?.copyOf(),
                     safeUnderexposure = estimate.safeUnderexposure,
                     fractionPixelsClippedAtFinalShortTet =
                         estimate.fractionPixelsClippedAtFinalShortTet,
@@ -61,8 +59,6 @@ internal data class RawSceneExposureResult(
     val finalShortTetMs: Float,
     val finalLongTetMs: Float,
     val finalShortGain: Float,
-    val portraitRelightingGain: Float = 1f,
-    val portraitRelightingMask: FloatArray? = null,
     val safeUnderexposure: Float,
     val fractionPixelsClippedAtFinalShortTet: Float,
     val summaryText: String? = null,
@@ -72,13 +68,6 @@ internal data class RawSceneExposureResult(
         require(finalShortTetMs.isFinite() && finalShortTetMs > 0f)
         require(finalLongTetMs.isFinite() && finalLongTetMs >= finalShortTetMs)
         require(finalShortGain.isFinite() && finalShortGain > 0f)
-        require(portraitRelightingGain.isFinite() && portraitRelightingGain > 0f)
-        require(
-            portraitRelightingMask == null ||
-                (portraitRelightingMask.size ==
-                    RawSceneExposureMath.INPUT_WIDTH * RawSceneExposureMath.INPUT_HEIGHT &&
-                    portraitRelightingMask.all { it.isFinite() && it in 0f..1f }),
-        )
         require(safeUnderexposure.isFinite() && safeUnderexposure >= 1f)
         require(
             fractionPixelsClippedAtFinalShortTet.isFinite() &&

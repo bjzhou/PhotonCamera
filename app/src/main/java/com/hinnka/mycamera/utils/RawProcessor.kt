@@ -830,8 +830,6 @@ object RawProcessor {
             baselineExposureEv = finalBaselineExposureEv,
             hdrRatio = captureProfile?.hdrRatio,
             finalShortGain = captureProfile?.finalShortGain,
-            portraitRelightingGain = captureProfile?.portraitRelightingGain ?: 1f,
-            portraitRelightingMask = captureProfile?.portraitRelightingMask?.copyOf(),
             rawSceneExposureSummaryText = captureProfile?.rawSceneExposureSummaryText,
             profileGainTableMap = preparedProfileGainTableMap,
             gpuDemosaicedRawSource = captureProfile?.gpuDemosaicedRawSource,

@@ -172,12 +172,9 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     jfloatArray guide_slopes_array, jfloatArray acr_curve_array,
     jfloat diagnostic_start, jfloat diagnostic_end,
     jfloat diagnostic_feather, jint diagnostic_mode,
-    jfloat portrait_relighting_gain,
-    jfloatArray portrait_relighting_weights_array,
     jfloatArray output_gains_array) {
   if (coefficients_array == nullptr || guide_shifts_array == nullptr ||
       guide_slopes_array == nullptr || acr_curve_array == nullptr ||
-      portrait_relighting_weights_array == nullptr ||
       output_gains_array == nullptr || source_grid_width <= 0 ||
       source_grid_height <= 0 || source_grid_depth <= 0 ||
       coefficient_count != 2 || output_grid_width <= 0 ||
@@ -191,8 +188,6 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       render_max_gain_blend_threshold < 0.0f ||
       !std::isfinite(min_table_gain) || min_table_gain <= 0.0f ||
       !std::isfinite(max_table_gain) || max_table_gain < min_table_gain ||
-      !std::isfinite(portrait_relighting_gain) ||
-      portrait_relighting_gain <= 0.0f ||
       diagnostic_mode < -1 || diagnostic_mode > 1) {
     LogError("Rejected invalid HDRNet PGTM parameters");
     return JNI_FALSE;
@@ -212,7 +207,6 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       env->GetArrayLength(coefficients_array) != coefficient_values ||
       env->GetArrayLength(guide_slopes_array) != guide_count ||
       acr_curve_count < 2 ||
-      env->GetArrayLength(portrait_relighting_weights_array) != cell_count ||
       env->GetArrayLength(output_gains_array) != output_values) {
     LogError("Rejected mismatched HDRNet PGTM array geometry");
     return JNI_FALSE;
@@ -231,12 +225,9 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
   ScopedFloatArray guide_shifts(env, guide_shifts_array);
   ScopedFloatArray guide_slopes(env, guide_slopes_array);
   ScopedFloatArray acr_curve(env, acr_curve_array);
-  ScopedFloatArray portrait_relighting_weights(
-      env, portrait_relighting_weights_array);
   ScopedFloatArray output_gains(env, output_gains_array);
   if (coefficients.data() == nullptr || guide_shifts.data() == nullptr ||
       guide_slopes.data() == nullptr || acr_curve.data() == nullptr ||
-      portrait_relighting_weights.data() == nullptr ||
       output_gains.data() == nullptr) {
     LogError("Unable to acquire HDRNet PGTM arrays");
     return JNI_FALSE;
@@ -244,22 +235,12 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
   if (!IsFiniteArray(coefficients.data(), static_cast<int>(coefficient_values)) ||
       !IsFiniteArray(guide_shifts.data(), guide_count) ||
       !IsFiniteArray(guide_slopes.data(), guide_count) ||
-      !IsFiniteArray(portrait_relighting_weights.data(),
-                     static_cast<int>(cell_count)) ||
       !IsValidAcrCurve(acr_curve.data(), acr_curve_count)) {
     LogError("Rejected non-finite HDRNet PGTM input");
     return JNI_FALSE;
   }
 
   try {
-    for (int64_t cell = 0; cell < cell_count; ++cell) {
-      const float weight =
-          portrait_relighting_weights.data()[static_cast<size_t>(cell)];
-      if (weight < 0.0f || weight > 1.0f) {
-        LogError("Rejected out-of-range portrait relighting weight");
-        return JNI_FALSE;
-      }
-    }
     std::vector<AxisSample> x_samples(static_cast<size_t>(output_grid_width));
     std::vector<AxisSample> y_samples(static_cast<size_t>(output_grid_height));
     std::vector<AxisSample> range_samples(static_cast<size_t>(point_count));
@@ -297,10 +278,6 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     for (int cell = 0; cell < cell_count; ++cell) {
       const int x = cell % output_grid_width;
       const int y = cell / output_grid_width;
-      const float portrait_relighting_weight =
-          portrait_relighting_weights.data()[static_cast<size_t>(cell)];
-      const float portrait_relighting_quotient = std::pow(
-          portrait_relighting_gain, portrait_relighting_weight);
       float* const gain_curve =
           output_gains.data() + static_cast<size_t>(cell) * point_count;
       for (int point = 0; point < point_count; ++point) {
@@ -337,12 +314,8 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
         const float render_gain = std::clamp(
             predicted_luma / (short_intensity + kHdrNetGainEpsilon),
             render_min_gain, render_max_gain_for_luma);
-        // MGC keeps portrait_tet_gain out of long TET when downstream relighting is expected.
-        // Apply that quotient locally in HDRNet's target domain. The soft mask exponent makes
-        // the blend linear in log exposure and leaves the long/short HDR ratio untouched.
         const float target_luma = std::clamp(
-            short_intensity * render_gain * portrait_relighting_quotient,
-            0.0f, 1.0f);
+            short_intensity * render_gain, 0.0f, 1.0f);
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
         // The N axis is final-short intensity = stored source * baselineGain * sourceToShortGain.

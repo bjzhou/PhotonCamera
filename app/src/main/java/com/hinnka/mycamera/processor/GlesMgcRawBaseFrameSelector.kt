@@ -316,9 +316,6 @@ internal class GlesMgcRawBaseFrameSelector(
                     "baseRgb=${result.stats.baseFrameMetering?.let {
                         "${com.hinnka.mycamera.raw.RawSceneExposureMath.INPUT_WIDTH}x" +
                             com.hinnka.mycamera.raw.RawSceneExposureMath.INPUT_HEIGHT
-                    } ?: "unavailable"} " +
-                    "classicAe=${result.stats.baseFrameMetering?.classicAe?.let {
-                        "${it.width}x${it.height}"
                     } ?: "unavailable"} uploadMs=$uploadMs submitMs=${result.submitMs} " +
                     "gpuWaitMs=${result.gpuWaitMs} mapMs=${result.mapMs} totalMs=$totalMs " +
                     "budgetMs=$FAST_MOMENTS_BUDGET_MS",
