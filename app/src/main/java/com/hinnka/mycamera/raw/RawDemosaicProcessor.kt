@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.media.Image
+import android.hardware.camera2.CameraMetadata
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -8015,7 +8016,9 @@ class RawDemosaicProcessor {
             )
             val camera2Transform = metadata.camera2ColorCorrectionTransform
                 ?.takeIf { matrix ->
-                    matrix.size == 9 && matrix.all(Float::isFinite)
+                    metadata.camera2ColorCorrectionMode ==
+                        CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX &&
+                        matrix.size == 9 && matrix.all(Float::isFinite)
                 }
             val meteringRgbTransform = if (camera2Transform != null) {
                 camera2Transform
@@ -8211,6 +8214,7 @@ class RawDemosaicProcessor {
                     }} " +
                     "gainsSource=${if (camera2Gains != null) "CAMERA2_CAPTURE_RESULT" else "DNG_WHITE_BALANCE_FALLBACK"} " +
                     "matrixSource=${if (camera2Transform != null) "CAMERA2_CAPTURE_RESULT" else "DNG_COLOR_SPEC_FALLBACK"} " +
+                    "camera2ColorCorrectionMode=${metadata.camera2ColorCorrectionMode} " +
                     "rggbGains=${gains.contentToString()} " +
                     "rgbGains=${rgbGains.contentToString()} " +
                     "rgb2rgb=${meteringRgbTransform.contentToString()} " +

@@ -99,9 +99,18 @@ data class RawMetadata(
      *
      * This is deliberately kept separate from [colorCorrectionMatrix]. The latter is the
      * DNG/DCP camera-to-working transform used for rendering, while MGC's RawToLoResRgb AE path
-     * consumes the CaptureResult transform together with the per-frame RGGB gains.
+     * consumes this CaptureResult transform only when [camera2ColorCorrectionMode] is
+     * TRANSFORM_MATRIX. Automatic FAST/HIGH_QUALITY modes use the render color solution.
      */
     val camera2ColorCorrectionTransform: FloatArray? = null,
+
+    /**
+     * Per-frame Camera2 color-correction operating mode.
+     *
+     * COLOR_CORRECTION_TRANSFORM is an authoritative matrix only in TRANSFORM_MATRIX mode.
+     * FAST/HIGH_QUALITY let the HAL own color correction and may report an identity placeholder.
+     */
+    val camera2ColorCorrectionMode: Int? = null,
 
     /**
      * DNG SDK CameraWhite clip vector for camera RGB before CameraToPCS.
@@ -405,6 +414,8 @@ data class RawMetadata(
                 ?.takeIf { matrix ->
                     matrix.size == 9 && matrix.all(Float::isFinite)
                 }
+            val camera2ColorCorrectionMode = captureResult
+                .get(CaptureResult.COLOR_CORRECTION_MODE)
             val cameraWhite = computeCameraWhiteFromCharacteristics(characteristics, captureResult)
             val whitePointXy = computeWhiteXyFromCharacteristics(characteristics, captureResult)
             val colorTemperature = whitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
@@ -464,6 +475,7 @@ data class RawMetadata(
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 camera2ColorCorrectionGains = camera2ColorCorrectionGains,
                 camera2ColorCorrectionTransform = camera2ColorCorrectionTransform,
+                camera2ColorCorrectionMode = camera2ColorCorrectionMode,
                 cameraWhite = cameraWhite,
                 whitePointXy = whitePointXy,
                 colorTemperature = colorTemperature,
@@ -1136,6 +1148,7 @@ data class RawMetadata(
                 )
             ) return false
         } else if (other.camera2ColorCorrectionTransform != null) return false
+        if (camera2ColorCorrectionMode != other.camera2ColorCorrectionMode) return false
         if (!cameraWhite.contentEquals(other.cameraWhite)) return false
         if (baselineExposure != other.baselineExposure) return false
         if (shadowScale != other.shadowScale) return false

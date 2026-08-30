@@ -1590,8 +1590,14 @@ internal object RawSceneExposureEstimator {
                         "shortLnGain=${branches.shortLogGain} " +
                         "longLnGain=${branches.longLogGain} " +
                         "portraitLnGain=${branches.portraitLogGain} " +
+                        "tableIdealShortTetMs=${legacyResult.short.idealTetMs} " +
+                        "tableIdealLongTetMs=${legacyResult.long.idealTetMs} " +
                         "idealShortTetMs=${fusion.idealShortTetMs} " +
                         "idealLongTetMs=${fusion.idealLongTetMs} " +
+                        "shortIdealRoundTripDeltaMs=" +
+                        "${fusion.idealShortTetMs - legacyResult.short.idealTetMs} " +
+                        "longIdealRoundTripDeltaMs=" +
+                        "${fusion.idealLongTetMs - legacyResult.long.idealTetMs} " +
                         "idealPortraitTetMs=${fusion.idealPortraitTetMs} " +
                         "exposureCompensationEv=${metadata.exposureCompensation} " +
                         "exposureCompensationGain=${fusion.exposureCompensationGain} " +
@@ -1736,6 +1742,7 @@ internal object RawSceneExposureEstimator {
         appendLine("tableInputNormalizedTetMs=${legacyResult.normalizedMeteringTetMs}")
         appendLine("rgbGains=${frame.legacyAeInput?.rgbGains?.contentToString()}")
         appendLine("rgbTransform=${frame.legacyAeInput?.rgbTransform?.contentToString()}")
+        appendLine("camera2ColorCorrectionMode=${metadata.camera2ColorCorrectionMode}")
         appendLine("shortQueryHistogramDescriptor=${legacyResult.shortQuery.histogramDescriptor.contentToString()}")
         appendLine("longQueryHistogramDescriptor=${legacyResult.longQuery.histogramDescriptor.contentToString()}")
         appendLine("shortQueryImageLogMean=${legacyResult.shortQuery.imageLogMean}")
@@ -1758,8 +1765,20 @@ internal object RawSceneExposureEstimator {
         appendLine("longMinimumContributingSimilarity=${legacyResult.long.minimumContributingSimilarity}")
         appendLine("shortBestMatchTargetT=${legacyResult.short.bestMatchTargetT}")
         appendLine("longBestMatchTargetT=${legacyResult.long.bestMatchTargetT}")
+        appendLine("tableIdealShortTetMs=${legacyResult.short.idealTetMs}")
+        appendLine("tableIdealLongTetMs=${legacyResult.long.idealTetMs}")
         appendLine("idealShortTetMs=${fusion.idealShortTetMs}")
         appendLine("idealLongTetMs=${fusion.idealLongTetMs}")
+        appendLine(
+            "shortIdealRoundTripDeltaMs=" +
+                (fusion.idealShortTetMs - legacyResult.short.idealTetMs),
+        )
+        appendLine(
+            "longIdealRoundTripDeltaMs=" +
+                (fusion.idealLongTetMs - legacyResult.long.idealTetMs),
+        )
+        appendLine("compensatedShortTetMs=${fusion.compensatedShortTetMs}")
+        appendLine("compensatedLongTetMs=${fusion.compensatedLongTetMs}")
         appendLine("finalShortTetMs=${fusion.finalShortTetMs}")
         appendLine("finalLongTetMs=${fusion.finalLongTetMs}")
         appendLine("finalShortGain=${fusion.finalShortGain}")
