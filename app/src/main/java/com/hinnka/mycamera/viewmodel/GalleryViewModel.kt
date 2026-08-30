@@ -37,6 +37,7 @@ import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
@@ -429,6 +430,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // Computational Bokeh editing state
     var editComputationalAperture = MutableStateFlow<Float?>(null)
         private set
+    var editBokehStyle = MutableStateFlow(BokehStyle.DEFAULT)
+        private set
     var editFocusPointX = MutableStateFlow<Float?>(null)
         private set
     var editFocusPointY = MutableStateFlow<Float?>(null)
@@ -459,6 +462,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun setComputationalAperture(value: Float?) {
         editComputationalAperture.value = value
+        updateBokehPhoto()
+    }
+
+    fun setBokehStyle(value: BokehStyle) {
+        if (editBokehStyle.value == value) return
+        editBokehStyle.value = value
         updateBokehPhoto()
     }
 
@@ -542,7 +551,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 bitmap,
                 focusPointX,
                 focusPointY,
-                aperture
+                aperture,
+                editBokehStyle.value,
             )
             if (!isActive) return@launch
             GalleryManager.saveBokehPhoto(context, photoData.id, bokeh)
@@ -616,7 +626,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         denoised,
                         metadata.focusPointX,
                         metadata.focusPointY,
-                        aperture
+                        aperture,
+                        BokehStyle.fromPersistedName(metadata.computationalBokehStyle),
                     )
                     GalleryManager.saveBokehPhoto(context, photo.id, bokeh)
                     if (bokeh !== denoised && !bokeh.isRecycled) {
@@ -2048,6 +2059,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawCfaCorrectionMode.value = metadata.rawCfaCorrectionMode ?: RawCfaCorrection.MODE_DEFAULT
                 editRawDROMode.value = RawProcessingPreferences.DROMode.fromPersistedName(metadata.droMode).name
                 editComputationalAperture.value = metadata.computationalAperture
+                editBokehStyle.value = BokehStyle.fromPersistedName(
+                    metadata.computationalBokehStyle
+                )
                 editFocusPointX.value = metadata.focusPointX
                 editFocusPointY.value = metadata.focusPointY
             }
@@ -2090,6 +2104,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editStraightenDegrees.value = 0f
                 editMirrorHorizontal.value = false
                 editComputationalAperture.value = null
+                editBokehStyle.value = BokehStyle.DEFAULT
                 editFocusPointX.value = null
                 editFocusPointY.value = null
                 restoreCropEditState(targetPhoto, null)
@@ -2328,6 +2343,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 frameId = editFrameId.value,
                 customProperties = customProperties.toMap(),
                 computationalAperture = editComputationalAperture.value,
+                computationalBokehStyle = editBokehStyle.value.persistedName,
                 focusPointX = editFocusPointX.value,
                 focusPointY = editFocusPointY.value,
                 postRotationDegrees = editRotationDegrees.value,
@@ -2401,6 +2417,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         frameId = metadata.frameId,
                         customProperties = metadata.customProperties.toMap(),
                         computationalAperture = metadata.computationalAperture,
+                        computationalBokehStyle = metadata.computationalBokehStyle,
                         focusPointX = metadata.focusPointX,
                         focusPointY = metadata.focusPointY,
                         postRotationDegrees = metadata.postRotationDegrees,
@@ -2446,6 +2463,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         editComputationalAperture.value = settings.computationalAperture
+        editBokehStyle.value = BokehStyle.fromPersistedName(
+            settings.computationalBokehStyle
+        )
         editFocusPointX.value = settings.focusPointX
         editFocusPointY.value = settings.focusPointY
         editRotationDegrees.value =
@@ -3202,6 +3222,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         spectralFilmMDensityGain = editRawSpectralFilmMDensityGain.value,
                         spectralFilmYDensityGain = editRawSpectralFilmYDensityGain.value,
                         computationalAperture = editComputationalAperture.value,
+                        computationalBokehStyle = editBokehStyle.value.persistedName,
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
                         postCropRegion = editCropRect.value?.let { rectF ->
@@ -3596,6 +3617,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         spectralFilmMDensityGain = editRawSpectralFilmMDensityGain.value,
                         spectralFilmYDensityGain = editRawSpectralFilmYDensityGain.value,
                         computationalAperture = editComputationalAperture.value,
+                        computationalBokehStyle = editBokehStyle.value.persistedName,
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
                         postCropRegion = finalCropRegion,
@@ -3918,6 +3940,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     current.chromaNoiseReduction
                 },
             computationalAperture = settings.computationalAperture,
+            computationalBokehStyle = settings.computationalBokehStyle,
             focusPointX = settings.focusPointX,
             focusPointY = settings.focusPointY,
             postCropRegion = cropRegion,

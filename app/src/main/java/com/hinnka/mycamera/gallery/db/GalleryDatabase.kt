@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 37,
+    version = 38,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -326,6 +326,15 @@ abstract class GalleryDatabase : RoomDatabase() {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE gallery_media ADD COLUMN rawEmbeddedDngProfileId TEXT"
+                )
+            }
+        }
+
+        private val MIGRATION_37_38 = object : androidx.room.migration.Migration(37, 38) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN computationalBokehStyle " +
+                        "TEXT NOT NULL DEFAULT 'DEFAULT'"
                 )
             }
         }
@@ -698,7 +707,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_33_34,
                         MIGRATION_34_35,
                         MIGRATION_35_36,
-                        MIGRATION_36_37
+                        MIGRATION_36_37,
+                        MIGRATION_37_38
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

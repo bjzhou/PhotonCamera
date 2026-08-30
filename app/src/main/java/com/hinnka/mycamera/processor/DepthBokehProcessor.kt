@@ -31,6 +31,7 @@ class DepthBokehProcessor(context: Context) {
      * @param originalImage The high resolution RGB image (e.g. 12MP).
      * @param focusPoint The normalized coordinates (0.0 - 1.0) where the user focused.
      * @param aperture The simulated aperture value (e.g., 1.4 for heavy blur, 16.0 for none).
+     * @param bokehStyle The optical point-spread profile used for defocused highlights.
      * @return A new Bitmap with the bokeh applied.
      */
     suspend fun applyHighQualityBokeh(
@@ -39,7 +40,8 @@ class DepthBokehProcessor(context: Context) {
         originalImage: Bitmap,
         focusX: Float?,
         focusY: Float?,
-        aperture: Float
+        aperture: Float,
+        bokehStyle: BokehStyle = BokehStyle.DEFAULT,
     ): Bitmap = mutex.withLock {
         if (aperture > 16.0f || aperture <= 0f) {
             return originalImage
@@ -109,7 +111,8 @@ class DepthBokehProcessor(context: Context) {
                 originalImage,
                 preparedDepth.depthMap,
                 preparedDepth.focusDepth,
-                aperture
+                aperture,
+                bokehStyle,
             )
             result = bokehResult
         }

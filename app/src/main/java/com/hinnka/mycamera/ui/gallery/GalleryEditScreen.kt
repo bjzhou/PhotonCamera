@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -45,6 +46,7 @@ import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +76,7 @@ import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.components.*
@@ -157,6 +160,7 @@ private data class PreviewRenderSignature(
     val editRawBaselineLutId: String?,
     val editRawBaselineRecipeParams: ColorRecipeParams?,
     val editComputationalAperture: Float?,
+    val editBokehStyle: BokehStyle,
     val editFocusX: Float?,
     val editFocusY: Float?,
     val editRotationDegrees: Int,
@@ -291,6 +295,7 @@ fun GalleryEditScreen(
     }
     
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
+    val editBokehStyle by viewModel.editBokehStyle.collectAsState()
     val editFocusX by viewModel.editFocusPointX.collectAsState()
     val editFocusY by viewModel.editFocusPointY.collectAsState()
 
@@ -435,6 +440,7 @@ fun GalleryEditScreen(
             editRawBaselineLutId = editRawBaselineLutId,
             editRawBaselineRecipeParams = editRawBaselineRecipeParams,
             editComputationalAperture = if (fast) 0f else editComputationalAperture,
+            editBokehStyle = editBokehStyle,
             editFocusX = editFocusX,
             editFocusY = editFocusY,
             editRotationDegrees = editRotationDegrees,
@@ -1673,6 +1679,16 @@ fun GalleryEditScreen(
                                                 }
                                             }
                                         )
+                                        if (
+                                            isDepthModelInstalled &&
+                                            aperture != null &&
+                                            aperture > 0f
+                                        ) {
+                                            BokehStyleSelector(
+                                                selectedStyle = editBokehStyle,
+                                                onStyleSelected = viewModel::setBokehStyle,
+                                            )
+                                        }
                                     }
                                     SliderSettingItem(
                                         title = stringResource(R.string.settings_sharpening),
@@ -2005,6 +2021,92 @@ private fun Context.findActivity(): Activity? {
         context = context.baseContext
     }
     return null
+}
+
+@Composable
+private fun BokehStyleSelector(
+    selectedStyle: BokehStyle,
+    onStyleSelected: (BokehStyle) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.gallery_bokeh_style_title),
+            color = Color.White.copy(alpha = 0.72f),
+            fontSize = 13.sp,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            BokehStyle.entries.forEach { style ->
+                BokehStyleButton(
+                    style = style,
+                    selected = selectedStyle == style,
+                    onClick = { onStyleSelected(style) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BokehStyleButton(
+    style: BokehStyle,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(10.dp)
+    val previewResource = when (style) {
+        BokehStyle.DEFAULT -> R.drawable.bokeh_style_swirl_preview
+        BokehStyle.NATURAL -> R.drawable.bokeh_style_natural_preview
+        BokehStyle.BUBBLE -> R.drawable.bokeh_style_bubble_preview
+    }
+    val labelResource = when (style) {
+        BokehStyle.DEFAULT -> R.string.gallery_bokeh_style_default
+        BokehStyle.NATURAL -> R.string.gallery_bokeh_style_natural
+        BokehStyle.BUBBLE -> R.string.gallery_bokeh_style_bubble
+    }
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(Color(0xFF121212))
+            .border(
+                width = if (selected) 3.dp else 1.dp,
+                color = if (selected) AccentOrange else Color.White.copy(alpha = 0.22f),
+                shape = shape,
+            )
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .padding(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Image(
+            painter = painterResource(previewResource),
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .clip(RoundedCornerShape(7.dp)),
+            contentScale = ContentScale.Crop,
+        )
+        Text(
+            text = stringResource(labelResource),
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(vertical = 6.dp),
+        )
+    }
 }
 
 @Composable

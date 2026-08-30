@@ -45,7 +45,7 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 32,
+    val version: Int = 33,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -119,6 +119,7 @@ data class MediaMetadata(
     val exportedUris: List<String> = emptyList(),
     // 计算摄影光圈与焦点
     val computationalAperture: Float? = null,
+    val computationalBokehStyle: String = "DEFAULT",
     val focusPointX: Float? = null,
     val focusPointY: Float? = null,
     val postCropRegion: Rect? = null,
@@ -483,6 +484,10 @@ data class MediaMetadata(
                     exportedUris = exportedUris,
                     computationalAperture = if (obj.isNull("computationalAperture")) null else obj.optDouble("computationalAperture")
                         .toFloat(),
+                    computationalBokehStyle = obj.optString(
+                        "computationalBokehStyle",
+                        "DEFAULT",
+                    ),
                     focusPointX = if (obj.isNull("focusPointX")) null else obj.optDouble("focusPointX").toFloat(),
                     focusPointY = if (obj.isNull("focusPointY")) null else obj.optDouble("focusPointY").toFloat(),
                     presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs"),

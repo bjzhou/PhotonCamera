@@ -1064,6 +1064,10 @@
     <string name="virtual_aperture_depth_model_description">Uses the installed compatible depth model. Download the default model or import another compatible TFLite model on first use.</string>
     <string name="gallery_large_aperture_blur_title">Wide-Aperture Blur</string>
     <string name="gallery_large_aperture_blur_description">Uses the installed compatible depth model to estimate scene depth and simulate a shallow depth of field, background blur, and soft bokeh highlights. Tap the image to change the focus point. Lower f-numbers produce stronger blur. Download the default model or import another compatible TFLite model on first use.</string>
+    <string name="gallery_bokeh_style_title">Bokeh style</string>
+    <string name="gallery_bokeh_style_default">Swirl</string>
+    <string name="gallery_bokeh_style_natural">Natural</string>
+    <string name="gallery_bokeh_style_bubble">Bubble</string>
     <string name="edit_panel_title">Editing Controls</string>
     <string name="edit_panel_expand">Expand editing controls</string>
     <string name="edit_panel_minimize">Minimize editing controls</string>

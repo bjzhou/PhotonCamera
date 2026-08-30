@@ -544,8 +544,8 @@ object Shaders {
         uniform sampler2D uHighResGuide; 
         uniform vec2 uLowResTexelSize;   
 
-        const float SIGMA_S = 0.85;
-        const float SIGMA_R = 0.12;
+        const float SIGMA_S = 1.05;
+        const float SIGMA_R = 0.22;
 
         void main() {
             vec3 guideColor = texture(uHighResGuide, vTexCoord).rgb;
@@ -596,12 +596,7 @@ object Shaders {
         }
     """.trimIndent()
 
-    /**
-     * 有界深度反锐化。
-     *
-     * 使用 3x3 高斯低通提取真实高频分量，只在存在局部深度对比时增强，并将
-     * 结果限制在邻域极值内，避免制造新的前后景层级或数值过冲。
-     */
+    /** 对深度边缘做有界软化，避免单目深度的离散台阶直接进入 CoC 合成。 */
     val DEPTH_REFINE_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
@@ -612,37 +607,30 @@ object Shaders {
 
         void main() {
             float center = texture(uDepthTexture, vTexCoord).r;
-            float n = texture(uDepthTexture, vTexCoord + vec2(0, uTexelSize.y)).r;
-            float s = texture(uDepthTexture, vTexCoord - vec2(0, uTexelSize.y)).r;
-            float e = texture(uDepthTexture, vTexCoord + vec2(uTexelSize.x, 0)).r;
-            float w = texture(uDepthTexture, vTexCoord - vec2(uTexelSize.x, 0)).r;
-            float ne = texture(uDepthTexture, vTexCoord + uTexelSize).r;
-            float nw = texture(
-                uDepthTexture,
-                vTexCoord + vec2(-uTexelSize.x, uTexelSize.y)
-            ).r;
-            float se = texture(
-                uDepthTexture,
-                vTexCoord + vec2(uTexelSize.x, -uTexelSize.y)
-            ).r;
-            float sw = texture(uDepthTexture, vTexCoord - uTexelSize).r;
-
-            float blurred = (
-                center * 4.0 +
-                (n + s + e + w) * 2.0 +
-                ne + nw + se + sw
-            ) * (1.0 / 16.0);
-            float localMin = min(
-                min(min(center, n), min(s, e)),
-                min(min(w, ne), min(min(nw, se), sw))
-            );
-            float localMax = max(
-                max(max(center, n), max(s, e)),
-                max(max(w, ne), max(max(nw, se), sw))
-            );
+            float weightedDepth = 0.0;
+            float totalWeight = 0.0;
+            float localMin = center;
+            float localMax = center;
+            for (int y = -2; y <= 2; y++) {
+                for (int x = -2; x <= 2; x++) {
+                    vec2 offset = vec2(float(x), float(y))
+                        * uTexelSize * 2.0;
+                    float sampleDepth = texture(
+                        uDepthTexture,
+                        clamp(vTexCoord + offset, 0.0, 1.0)
+                    ).r;
+                    float radiusSquared = float(x * x + y * y);
+                    float spatialWeight = exp(-radiusSquared * 0.38);
+                    weightedDepth += sampleDepth * spatialWeight;
+                    totalWeight += spatialWeight;
+                    localMin = min(localMin, sampleDepth);
+                    localMax = max(localMax, sampleDepth);
+                }
+            }
+            float blurred = weightedDepth / max(totalWeight, 0.001);
             float edgeGate = smoothstep(0.004, 0.035, localMax - localMin);
             float refined = clamp(
-                center + (center - blurred) * (0.65 * edgeGate),
+                mix(center, blurred, 0.60 * edgeGate),
                 localMin,
                 localMax
             );
@@ -672,6 +660,7 @@ object Shaders {
      */
     val COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER = """
         #version 300 es
+        #define SOAP_BUBBLE_BOKEH 0
         precision highp float;
 
         in vec2 vTexCoord;
@@ -719,10 +708,16 @@ object Shaders {
         }
 
         float computeCoc(float depth) {
-            float gap = max(uFocusDepth - depth - 0.015, 0.0);
-            float defocus = pow(gap, 1.1);
+            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float availableFocusSpan = max(
+                max(uFocusDepth, 1.0 - uFocusDepth) - 0.015,
+                0.15
+            );
+            float normalizedGap = clamp(gap / availableFocusSpan, 0.0, 1.0);
+            float defocus = pow(normalizedGap, 1.25);
+            float apertureScale = min(1.4 / max(uAperture, 0.7), 1.25);
             return clamp(
-                defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)),
+                defocus * uMaxBlurRadius * apertureScale,
                 0.0,
                 uMaxBlurRadius
             );
@@ -778,7 +773,8 @@ object Shaders {
                 0.0,
                 1.0
             );
-            float coc = computeCoc(texture(uDepthTexture, depthUV).r);
+            float centerDepth = texture(uDepthTexture, depthUV).r;
+            float coc = computeCoc(centerDepth);
             if (coc < 1.5) {
                 fragColor = vec4(0.0);
                 return;
@@ -786,7 +782,7 @@ object Shaders {
 
             vec3 centerLinear = toLinear(textureLod(uInputTexture, vTexCoord, 0.0).rgb);
             float centerLuma = luminance(centerLinear);
-            if (centerLuma <= 0.24) {
+            if (centerLuma <= 0.50) {
                 fragColor = vec4(0.0);
                 return;
             }
@@ -865,6 +861,51 @@ object Shaders {
                 return;
             }
 
+            float peakProbeRadius = clamp(coc * 0.10, 5.0, 12.0);
+            float localPeakSurroundLuma = 0.0;
+            for (int i = 0; i < 16; i++) {
+                vec2 peakProbeUV = vTexCoord + PROBE_DIRECTIONS[i]
+                    * peakProbeRadius * uTexelSize;
+                localPeakSurroundLuma += luminance(toLinear(
+                    textureLod(uInputTexture, peakProbeUV, 0.0).rgb
+                ));
+            }
+            localPeakSurroundLuma *= 1.0 / 16.0;
+            float localPeakContrast = max(
+                centerLuma - localPeakSurroundLuma,
+                0.0
+            );
+            float compactCoreGate = smoothstep(
+                0.008,
+                0.055,
+                localPeakContrast
+            );
+            float removalCoreGate = smoothstep(
+                0.002,
+                0.025,
+                localPeakContrast
+            );
+
+            float maximumCoreDepthDelta = 0.0;
+            for (int i = 0; i < 16; i++) {
+                vec2 coreDepthUV = clamp(
+                    depthUV + PROBE_DIRECTIONS[i]
+                        * MIN_HIGHLIGHT_CORE_RADIUS_PIXELS * uTexelSize,
+                    0.0,
+                    1.0
+                );
+                float coreDepth = texture(uDepthTexture, coreDepthUV).r;
+                maximumCoreDepthDelta = max(
+                    maximumCoreDepthDelta,
+                    abs(coreDepth - centerDepth)
+                );
+            }
+            float depthCoherenceGate = 1.0 - smoothstep(
+                0.035,
+                0.10,
+                maximumCoreDepthDelta
+            );
+
             float contrast = max(centerLuma - surroundLuma, 0.0);
             float relativeContrast = contrast / max(centerLuma, 0.06);
             float neighborhoodContrastGate = smoothstep(
@@ -875,18 +916,18 @@ object Shaders {
 
             // Brightness and local contrast decide whether a response can be a
             // highlight after the complete dark-ring invariant has passed.
-            float mediumHighlightGate = smoothstep(0.18, 0.50, centerLuma)
+            float mediumHighlightGate = smoothstep(0.34, 0.62, centerLuma)
                 * max(
-                    smoothstep(0.06, 0.18, contrast),
-                    smoothstep(0.18, 0.38, relativeContrast)
+                    smoothstep(0.10, 0.24, contrast),
+                    smoothstep(0.22, 0.44, relativeContrast)
                 );
 
             // Strong point lights use a higher absolute floor. Their local
             // contrast may be slightly lower after sensor clipping.
-            float strongPointGate = smoothstep(0.65, 0.90, centerLuma)
+            float strongPointGate = smoothstep(0.68, 0.92, centerLuma)
                 * max(
-                    smoothstep(0.04, 0.14, contrast),
-                    smoothstep(0.12, 0.30, relativeContrast)
+                    smoothstep(0.08, 0.20, contrast),
+                    smoothstep(0.18, 0.38, relativeContrast)
                 );
 
             // Non-maximum suppression for an already-soft highlight disc.
@@ -914,27 +955,41 @@ object Shaders {
             // brightness, while CPU spacing handles neighboring valid lights.
             float pointShapeGate = localMaximumGate
                 * mix(0.35, 1.0, centerednessGate);
-            float compactHighlight = highlightGate
+            float classifiedHighlight = highlightGate
                 * pointShapeGate
-                * neighborhoodContrastGate;
+                * neighborhoodContrastGate
+                * depthCoherenceGate;
+            #if SOAP_BUBBLE_BOKEH == 1
+            float broadHighlightSignal = classifiedHighlight
+                * removalCoreGate;
+            float compactHighlight = classifiedHighlight * compactCoreGate;
+            compactHighlight = pow(clamp(compactHighlight, 0.0, 1.0), 1.6);
 
+            fragColor = vec4(
+                centerLinear * broadHighlightSignal,
+                compactHighlight
+            );
+            #else
             vec3 residual = max(centerLinear - surroundLinear, vec3(0.0));
-            // LDR point lights have already been clipped and blurred by the
-            // taking lens. Preserve part of their observed color as well as the
-            // local residual so the later PSF can recover a visible disc.
-            vec3 sourceSignal = mix(residual, centerLinear, 0.35);
-            fragColor = vec4(sourceSignal * compactHighlight, compactHighlight);
+            vec3 sourceSignal = mix(residual, centerLinear, 0.24);
+            fragColor = vec4(
+                sourceSignal * classifiedHighlight,
+                classifiedHighlight
+            );
+            #endif
         }
     """.trimIndent()
 
     /**
      * 后期处理专用的圆形 PSF gather。
      *
-     * Vogel 分布只负责普通景深模糊，并始终保留完整输入辐射。解析光斑由独立层
-     * 叠加，不能为了避免重复能量而从本层扣除信号，否则误分类会在图像中挖暗坑。
+     * Vogel 分布保留完整输入辐射；自然与泡泡模式使用中心亮、边缘暗的径向 PSF，
+     * 泡泡模式再由真实高光位置生成解析光环，避免随机贴片产生悬浮感。
      */
     val PSF_SPLAT_FRAGMENT_SHADER = """
         #version 300 es
+        #define NATURAL_BOKEH 0
+        #define SOAP_BUBBLE_BOKEH 0
         precision highp float;
 
         in vec2 vTexCoord;
@@ -942,6 +997,7 @@ object Shaders {
 
         uniform sampler2D uInputTexture;
         uniform sampler2D uDepthTexture;
+        uniform sampler2D uHighlightSourceTexture;
 
         uniform mat4 uDepthMatrix;
         uniform float uMaxBlurRadius;
@@ -955,27 +1011,122 @@ object Shaders {
         const float LENS_GAMMA = 2.2;
 
         float computeCoc(float depth) {
-            float gap = max(uFocusDepth - depth - 0.015, 0.0);
-            float defocus = pow(gap, 1.1);
-            return clamp(defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)), 0.0, uMaxBlurRadius);
+            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float availableFocusSpan = max(
+                max(uFocusDepth, 1.0 - uFocusDepth) - 0.015,
+                0.15
+            );
+            float normalizedGap = clamp(gap / availableFocusSpan, 0.0, 1.0);
+            float defocus = pow(normalizedGap, 1.25);
+            float apertureScale = min(1.4 / max(uAperture, 0.7), 1.25);
+            return clamp(
+                defocus * uMaxBlurRadius * apertureScale,
+                0.0,
+                uMaxBlurRadius
+            );
         }
 
-        float apertureWeight(vec2 offsetPixels, float coc) {
-            vec2 p = offsetPixels / max(coc, 0.001);
+        vec2 biotarAperturePosition(
+            vec2 offsetPixels,
+            vec2 sourceUV,
+            float coc
+        ) {
+            vec2 imageSize = vec2(textureSize(uInputTexture, 0));
+            float aspect = imageSize.x / max(imageSize.y, 1.0);
+            vec2 field = (sourceUV * 2.0 - 1.0) * vec2(aspect, 1.0);
+            float fieldRadius = length(field);
+            vec2 radial = fieldRadius > 0.0001
+                ? field / fieldRadius
+                : vec2(0.0, 1.0);
+            vec2 tangential = vec2(-radial.y, radial.x);
+            float fieldStrength = smoothstep(0.12, 1.15, fieldRadius);
+
+            vec2 normalizedOffset = offsetPixels / max(coc, 0.001);
+            float tangentialCoordinate = dot(normalizedOffset, tangential);
+            float radialCoordinate = dot(normalizedOffset, radial);
+
+            // Biotar-type mechanical vignetting progressively compresses the
+            // radial axis while retaining the tangential extent. The mild
+            // tangential shear turns the off-axis ellipses into a continuous
+            // swirl instead of a collection of unrelated oval stamps.
+            #if NATURAL_BOKEH == 1
+            float radialScale = mix(1.0, 0.78, fieldStrength);
+            float tangentialScale = mix(1.0, 1.02, fieldStrength);
+            float swirlShear = 0.03;
+            #else
+            float radialScale = mix(1.0, 0.54, fieldStrength);
+            float tangentialScale = mix(1.0, 1.08, fieldStrength);
+            float swirlShear = 0.10;
+            #endif
+            radialCoordinate += tangentialCoordinate * swirlShear * fieldStrength;
+            return vec2(
+                tangentialCoordinate / tangentialScale,
+                radialCoordinate / radialScale
+            );
+        }
+
+        float apertureWeight(
+            vec2 offsetPixels,
+            vec2 sourceUV,
+            float coc
+        ) {
+            vec2 p = biotarAperturePosition(offsetPixels, sourceUV, coc);
             float lenP = length(p);
 
-            // Keep a coherent disc interior like a real aperture image, then
-            // feather only its outer band. The previous wide fade behaved like
-            // Gaussian haze and erased the circle itself.
-            float support = 1.0 - smoothstep(0.86, 1.0, lenP);
-            float radialTransmission = mix(
+            #if SOAP_BUBBLE_BOKEH == 1
+            float softEdge = 1.0 - smoothstep(0.68, 1.06, lenP);
+            float radialEnergy = exp(-lenP * lenP * 1.48);
+            return softEdge * mix(
+                0.14,
                 1.0,
-                0.90,
-                smoothstep(0.0, 0.86, lenP)
+                radialEnergy
             );
-            float rim = smoothstep(0.70, 0.82, lenP)
-                * (1.0 - smoothstep(0.88, 0.97, lenP));
-            return support * radialTransmission * (1.0 + rim * 0.10);
+            #elif NATURAL_BOKEH == 1
+            float softEdge = 1.0 - smoothstep(0.70, 1.05, lenP);
+            float radialEnergy = exp(-lenP * lenP * 1.55);
+            float centerWeightedTransmission = mix(
+                0.16,
+                1.0,
+                radialEnergy
+            );
+            return softEdge * centerWeightedTransmission;
+            #else
+            // A broad feather and restrained bright rim reproduce the soft,
+            // luminous reference bokeh without returning to a hard cut-out disc.
+            float support = 1.0 - smoothstep(0.64, 1.0, lenP);
+            float radialTransmission = mix(
+                0.62,
+                0.42,
+                smoothstep(0.0, 0.82, lenP)
+            );
+            float shoulder = smoothstep(0.48, 0.72, lenP)
+                * (1.0 - smoothstep(0.76, 1.0, lenP));
+            return support * (radialTransmission + shoulder * 0.075);
+            #endif
+        }
+
+        float bubbleOpticalRimWeight(
+            vec2 offsetPixels,
+            vec2 sourceUV,
+            float coc
+        ) {
+            vec2 p = biotarAperturePosition(offsetPixels, sourceUV, coc);
+            float lenP = length(p);
+            float support = 1.0 - smoothstep(0.90, 1.05, lenP);
+            float transparentCore = mix(
+                0.16,
+                0.09,
+                smoothstep(0.0, 0.70, lenP)
+            );
+            float innerShoulder = smoothstep(0.54, 0.76, lenP)
+                * (1.0 - smoothstep(0.90, 1.02, lenP));
+            float broadOpticalRim = smoothstep(0.70, 0.84, lenP)
+                * (1.0 - smoothstep(0.97, 1.05, lenP));
+            return support * (
+                transparentCore
+                    + innerShoulder * 0.18
+                    + broadOpticalRim * 0.64
+            );
         }
 
         vec3 toLinear(vec3 color) {
@@ -988,6 +1139,41 @@ object Shaders {
             return pow(max(color, vec3(0.0)), vec3(1.0 / LENS_GAMMA));
         }
 
+        float foregroundDefocusPotential(vec2 depthUV, float centerDepth) {
+            float weightedPotential = 0.0;
+            float totalWeight = 0.0;
+            float sampleSpacing = max(uMaxBlurRadius * 0.16, 2.0);
+            for (int y = -2; y <= 2; y++) {
+                for (int x = -2; x <= 2; x++) {
+                    vec2 sampleDepthUV = clamp(
+                        depthUV + vec2(float(x), float(y))
+                            * uTexelSize * sampleSpacing,
+                        0.0,
+                        1.0
+                    );
+                    float sampleDepth = texture(
+                        uDepthTexture,
+                        sampleDepthUV
+                    ).r;
+                    float nearer = smoothstep(
+                        0.012,
+                        0.075,
+                        sampleDepth - centerDepth
+                    );
+                    float sampleDefocus = smoothstep(
+                        0.25,
+                        2.2,
+                        computeCoc(sampleDepth)
+                    );
+                    float radiusSquared = float(x * x + y * y);
+                    float spatialWeight = exp(-radiusSquared * 0.26);
+                    weightedPotential += nearer * sampleDefocus * spatialWeight;
+                    totalWeight += spatialWeight;
+                }
+            }
+            return weightedPotential / max(totalWeight, 0.001);
+        }
+
         void main() {
             vec2 depthUV = clamp((uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy, 0.0, 1.0);
             vec4 centerColor = texture(uInputTexture, vTexCoord);
@@ -995,7 +1181,10 @@ object Shaders {
 
             float centerCoc = computeCoc(centerDepth);
 
-            if (centerCoc < 0.2) {
+            float foregroundPotential = centerCoc < 0.2
+                ? foregroundDefocusPotential(depthUV, centerDepth)
+                : 0.0;
+            if (centerCoc < 0.2 && foregroundPotential < 0.008) {
                 fragColor = centerColor;
                 return;
             }
@@ -1005,7 +1194,12 @@ object Shaders {
             // turns a circular footprint into a noisy, irregular union.
             const float rotation = 0.0;
 
-            float centerWeight = 4.0 / (centerCoc * 0.3 + 1.0);
+            float focusedCenterWeight = mix(
+                4.0,
+                2.2,
+                clamp(foregroundPotential * 2.4, 0.0, 1.0)
+            );
+            float centerWeight = focusedCenterWeight / (centerCoc * 0.3 + 1.0);
             float sampleFootprintUv = uMaxBlurRadius
                 * 1.8
                 * uTexelSize.x
@@ -1014,11 +1208,23 @@ object Shaders {
                 0.0,
                 log2(sampleFootprintUv * float(textureSize(uInputTexture, 0).x))
             );
+            #if SOAP_BUBBLE_BOKEH == 1
+            float sceneIntegrationLod = inputIntegrationLod;
+            #else
+            float sceneIntegrationLod = inputIntegrationLod;
+            #endif
             vec3 centerLinear = toLinear(centerColor.rgb);
-            vec3 accColor = centerLinear * centerWeight;
+            vec3 centerBaseLinear = centerLinear;
+            vec3 accColor = centerBaseLinear * centerWeight;
             float accWeight = centerWeight;
 
+            #if SOAP_BUBBLE_BOKEH == 1
+            float softBase = max(4.5, uMaxBlurRadius * 0.16);
+            #elif NATURAL_BOKEH == 1
+            float softBase = max(3.5, uMaxBlurRadius * 0.12);
+            #else
             float softBase = max(2.5, uMaxBlurRadius * 0.08);
+            #endif
 
             for (int i = 0; i < SAMPLES; i++) {
                 float f = float(i + 1);
@@ -1035,7 +1241,7 @@ object Shaders {
                 vec3 sColor = textureLod(
                     uInputTexture,
                     sampleUV,
-                    inputIntegrationLod
+                    sceneIntegrationLod
                 ).rgb;
                 vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
                 float sDepth = texture(uDepthTexture, sDepthUV).r;
@@ -1059,23 +1265,100 @@ object Shaders {
                     0.075,
                     centerDepth - sDepth
                 );
-                float sourceVisibility = 1.0 - centerOccludesSource;
+                float focusedSurfaceProtection = 1.0 - smoothstep(
+                    0.8,
+                    4.0,
+                    centerCoc
+                );
+                float occlusionStrength = mix(
+                    0.28,
+                    1.0,
+                    focusedSurfaceProtection
+                );
+                float sourceVisibility = 1.0
+                    - centerOccludesSource * occlusionStrength;
 
-                float weight = mix(bW, fW, sourceIsNearer);
-                weight *= apertureWeight(offsetPixels, max(sCoc, centerCoc));
-                weight *= sourceVisibility;
+                float commonWeight = mix(bW, fW, sourceIsNearer)
+                    * sourceVisibility;
+                vec3 sLinear = toLinear(sColor);
+                float sampleLuma = dot(
+                    sLinear,
+                    vec3(0.2126, 0.7152, 0.0722)
+                );
+                float apertureResponse = apertureWeight(
+                    offsetPixels,
+                    sampleUV,
+                    max(sCoc, centerCoc)
+                );
+                #if SOAP_BUBBLE_BOKEH == 1
+                float compactSignalLod = clamp(
+                    inputIntegrationLod - 0.25,
+                    0.0,
+                    2.5
+                );
+                float compactHighlightConfidence = textureLod(
+                    uHighlightSourceTexture,
+                    sampleUV,
+                    compactSignalLod
+                ).a;
+                float expandedCompactConfidence = smoothstep(
+                    0.006,
+                    0.16,
+                    compactHighlightConfidence
+                );
+                float broadHighlightHint = smoothstep(
+                    0.42,
+                    0.86,
+                    sampleLuma
+                ) * 0.34;
+                float bubbleMix = clamp(
+                    expandedCompactConfidence * 0.88
+                        + broadHighlightHint,
+                    0.0,
+                    1.0
+                );
+                float bubbleRimResponse = bubbleOpticalRimWeight(
+                    offsetPixels,
+                    sampleUV,
+                    max(sCoc, centerCoc)
+                );
+                apertureResponse = mix(
+                    apertureResponse,
+                    bubbleRimResponse,
+                    bubbleMix
+                );
+                #endif
+                float weight = commonWeight * apertureResponse;
 
                 if (weight > 0.0001) {
-                    vec3 sLinear = toLinear(sColor);
-                    accColor += sLinear * weight;
+                    vec3 baseLinear = sLinear;
+                    float highlightRecovery = smoothstep(
+                        0.38,
+                        0.92,
+                        sampleLuma
+                    ) * smoothstep(8.0, 24.0, max(sCoc, centerCoc));
+                    #if SOAP_BUBBLE_BOKEH == 1
+                    float radianceWeight = mix(
+                        1.0,
+                        1.68,
+                        highlightRecovery * bubbleMix
+                    );
+                    #else
+                    float radianceWeight = mix(
+                        1.0,
+                        1.35,
+                        highlightRecovery
+                    );
+                    #endif
+                    accColor += baseLinear * weight * radianceWeight;
                     accWeight += weight;
                 }
+
             }
 
             vec3 finalLinear = accWeight > 0.001
                 ? accColor / accWeight
                 : toLinear(centerColor.rgb);
-
             vec3 finalColor = toDisplay(finalLinear);
             if (uLinearInput == 0) {
                 finalColor = clamp(finalColor, 0.0, 1.0);
@@ -1091,6 +1374,7 @@ object Shaders {
      */
     val ANALYTIC_BOKEH_HIGHLIGHT_VERTEX_SHADER = """
         #version 300 es
+        #define SOAP_BUBBLE_BOKEH 0
         precision highp float;
 
         in vec2 aPosition;
@@ -1100,16 +1384,42 @@ object Shaders {
 
         uniform vec2 uImageSize;
 
-        out vec2 vOffsetPixels;
+        out vec2 vAperturePosition;
+        out float vFieldStrength;
+        flat out float vBubblePhase;
         flat out float vCocPixels;
         flat out vec3 vSignal;
 
         void main() {
-            vec2 offsetPixels = aPosition * aCocPixels;
+            float aspect = uImageSize.x / max(uImageSize.y, 1.0);
+            vec2 field = (aCenterUv * 2.0 - 1.0) * vec2(aspect, 1.0);
+            float fieldRadius = length(field);
+            vec2 radial = fieldRadius > 0.0001
+                ? field / fieldRadius
+                : vec2(0.0, 1.0);
+            vec2 tangential = vec2(-radial.y, radial.x);
+            float fieldStrength = smoothstep(0.12, 1.15, fieldRadius);
+            #if SOAP_BUBBLE_BOKEH == 1
+            float radialScale = mix(1.0, 0.78, fieldStrength);
+            float tangentialScale = mix(1.0, 1.02, fieldStrength);
+            float swirlShear = 0.03;
+            #else
+            float radialScale = mix(1.0, 0.54, fieldStrength);
+            float tangentialScale = mix(1.0, 1.08, fieldStrength);
+            float swirlShear = 0.10;
+            #endif
+            float shearedRadial = aPosition.y * radialScale
+                - aPosition.x * swirlShear * fieldStrength * radialScale;
+            vec2 offsetPixels = (
+                tangential * aPosition.x * tangentialScale
+                + radial * shearedRadial
+            ) * aCocPixels;
             vec2 centerNdc = aCenterUv * 2.0 - 1.0;
             vec2 offsetNdc = offsetPixels * 2.0 / uImageSize;
             gl_Position = vec4(centerNdc + offsetNdc, 0.0, 1.0);
-            vOffsetPixels = offsetPixels;
+            vAperturePosition = aPosition;
+            vFieldStrength = fieldStrength;
+            vBubblePhase = dot(aCenterUv, vec2(17.0, 29.0)) * 6.28318531;
             vCocPixels = aCocPixels;
             vSignal = aSignal;
         }
@@ -1117,56 +1427,188 @@ object Shaders {
 
     val ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER = """
         #version 300 es
+        #define SOAP_BUBBLE_BOKEH 0
         precision highp float;
 
-        in vec2 vOffsetPixels;
+        in vec2 vAperturePosition;
+        in float vFieldStrength;
+        flat in float vBubblePhase;
         flat in float vCocPixels;
         flat in vec3 vSignal;
         out vec4 fragColor;
 
         uniform int uLinearInput;
 
-        float apertureTransmission(float normalizedDistance) {
-            float support = 1.0 - smoothstep(0.86, 1.0, normalizedDistance);
-            float radialTransmission = mix(
-                1.0,
-                0.90,
-                smoothstep(0.0, 0.86, normalizedDistance)
+        float apertureTransmission(vec2 aperturePosition) {
+            float normalizedDistance = length(aperturePosition);
+            #if SOAP_BUBBLE_BOKEH == 1
+            float edgeWidth = max(
+                fwidth(normalizedDistance) * 1.10,
+                0.0025
             );
-            float rim = smoothstep(0.70, 0.82, normalizedDistance)
-                * (1.0 - smoothstep(0.88, 0.97, normalizedDistance));
-            return support * radialTransmission * (1.0 + rim * 0.10);
+            float support = 1.0 - smoothstep(
+                0.992 - edgeWidth,
+                1.0 + edgeWidth,
+                normalizedDistance
+            );
+            float angle = atan(aperturePosition.y, aperturePosition.x);
+            float profileVariation = 0.5 + 0.5 * sin(vBubblePhase * 1.37);
+            float ringModulation = clamp(
+                0.92
+                    + 0.08 * sin(angle * 2.0 + vBubblePhase)
+                    + 0.04 * cos(angle * 3.0 - vBubblePhase * 0.7),
+                0.80,
+                1.08
+            );
+            float transparentCore = mix(
+                0.085,
+                0.052,
+                smoothstep(0.0, 0.84, normalizedDistance)
+            );
+            float innerGlow = smoothstep(
+                mix(0.62, 0.72, profileVariation) - edgeWidth,
+                mix(0.78, 0.84, profileVariation) + edgeWidth,
+                normalizedDistance
+            ) * (1.0 - smoothstep(
+                0.955 - edgeWidth,
+                0.99 + edgeWidth,
+                normalizedDistance
+            ));
+            float rimBody = smoothstep(
+                mix(0.74, 0.82, profileVariation) - edgeWidth,
+                mix(0.86, 0.90, profileVariation) + edgeWidth,
+                normalizedDistance
+            ) * (1.0 - smoothstep(
+                0.985 - edgeWidth,
+                1.0 + edgeWidth,
+                normalizedDistance
+            ));
+            float rimPeak = smoothstep(
+                0.89 - edgeWidth,
+                0.94 + edgeWidth,
+                normalizedDistance
+            ) * (1.0 - smoothstep(
+                0.982 - edgeWidth,
+                0.998 + edgeWidth,
+                normalizedDistance
+            ));
+            return support * (
+                transparentCore + innerGlow * 0.12
+                    + (rimBody * 0.42 + rimPeak * 0.30)
+                        * ringModulation
+            );
+            #else
+            float support = 1.0 - smoothstep(0.38, 1.0, normalizedDistance);
+            float softInterior = mix(
+                0.34,
+                0.18,
+                smoothstep(0.0, 0.82, normalizedDistance)
+            );
+            float shoulder = smoothstep(0.34, 0.62, normalizedDistance)
+                * (1.0 - smoothstep(0.68, 1.0, normalizedDistance));
+            float shoulderStrength = mix(0.025, 0.045, vFieldStrength);
+            return support * (softInterior + shoulder * shoulderStrength);
+            #endif
         }
 
         void main() {
-            float normalizedDistance = length(vOffsetPixels)
-                / max(vCocPixels, 0.001);
+            float normalizedDistance = length(vAperturePosition);
             if (normalizedDistance >= 1.0) discard;
 
-            float transmission = apertureTransmission(normalizedDistance);
+            float transmission = apertureTransmission(vAperturePosition);
+            #if SOAP_BUBBLE_BOKEH == 1
+            float signalLuma = dot(vSignal, vec3(0.2126, 0.7152, 0.0722));
+            float instanceVariation = 0.78 + 0.22 * (
+                0.5 + 0.5 * sin(vBubblePhase * 2.17 + 0.73)
+            );
+            float sourceTransmission = mix(
+                0.48,
+                1.0,
+                smoothstep(0.04, 0.72, signalLuma)
+            ) * instanceVariation;
+            transmission *= sourceTransmission;
+            #endif
             if (uLinearInput != 0) {
                 // HDR keeps linear scene radiance; overlapping discs add energy.
+                #if SOAP_BUBBLE_BOKEH == 1
+                float edgeTintAmount = smoothstep(
+                    0.72,
+                    0.96,
+                    normalizedDistance
+                );
+                float spectralMix = 0.5 + 0.5 * sin(
+                    atan(vAperturePosition.y, vAperturePosition.x)
+                        + vBubblePhase
+                );
+                vec3 spectralTint = mix(
+                    vec3(1.05, 1.01, 0.94),
+                    vec3(0.93, 1.02, 1.08),
+                    spectralMix
+                );
+                vec3 edgeTint = mix(
+                    vec3(1.0),
+                    spectralTint,
+                    edgeTintAmount * 0.24
+                );
+                fragColor = vec4(
+                    vSignal * edgeTint * (0.44 * transmission),
+                    0.0
+                );
+                #else
                 fragColor = vec4(vSignal * transmission, 0.0);
+                #endif
             } else {
                 // LDR uses the same bounded highlight reconstruction as the
                 // previous path, but the opacity now comes from one analytic disc.
-                vec3 reconstructedHighlight = vSignal * (0.72 * transmission);
+                #if SOAP_BUBBLE_BOKEH == 1
+                float edgeTintAmount = smoothstep(
+                    0.72,
+                    0.96,
+                    normalizedDistance
+                );
+                float spectralMix = 0.5 + 0.5 * sin(
+                    atan(vAperturePosition.y, vAperturePosition.x)
+                        + vBubblePhase
+                );
+                vec3 spectralTint = mix(
+                    vec3(1.05, 1.01, 0.94),
+                    vec3(0.93, 1.02, 1.08),
+                    spectralMix
+                );
+                vec3 edgeTint = mix(
+                    vec3(1.0),
+                    spectralTint,
+                    edgeTintAmount * 0.24
+                );
+                vec3 reconstructedHighlight = vSignal
+                    * edgeTint
+                    * (0.50 * transmission);
+                #else
+                vec3 reconstructedHighlight = vSignal * (0.55 * transmission);
+                #endif
                 vec3 compressedHighlight = reconstructedHighlight
                     / (vec3(1.0) + reconstructedHighlight * 2.0);
+                #if SOAP_BUBBLE_BOKEH == 1
                 vec3 highlightOpacity = min(
-                    vec3(0.52),
-                    vec3(1.0) - exp(-compressedHighlight * 2.8)
+                    vec3(0.24),
+                    vec3(1.0) - exp(-compressedHighlight * 1.18)
                 );
+                #else
+                vec3 highlightOpacity = min(
+                    vec3(0.18),
+                    vec3(1.0) - exp(-compressedHighlight * 1.8)
+                );
+                #endif
                 fragColor = vec4(highlightOpacity, 0.0);
             }
         }
     """.trimIndent()
 
     /**
-     * 三层最终合成：普通虚化背景、解析光斑、原图主体前景。
+     * 三层最终合成：普通双向虚化、解析光斑、原图焦平面细节。
      *
-     * 光斑只与背景层结合，随后由前景遮挡层统一覆盖。前景判定使用局部最大视差，
-     * 对深度边缘做保守遮挡，避免单个被误分到背景的主体像素暴露后方图层。
+     * 光斑先与虚化层结合，再以局部 CoC 覆盖率连续混合原图和虚化图。
+     * 覆盖率在深度边缘跨多个采样点渐变，避免离散保护区形成抠图断层。
      */
     val BOKEH_COMPOSITE_FRAGMENT_SHADER = """
         #version 300 es
@@ -1187,31 +1629,51 @@ object Shaders {
         uniform int uLinearInput;
 
         float computeCoc(float depth) {
-            float gap = max(uFocusDepth - depth - 0.015, 0.0);
-            float defocus = pow(gap, 1.1);
+            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float availableFocusSpan = max(
+                max(uFocusDepth, 1.0 - uFocusDepth) - 0.015,
+                0.15
+            );
+            float normalizedGap = clamp(gap / availableFocusSpan, 0.0, 1.0);
+            float defocus = pow(normalizedGap, 1.25);
+            float apertureScale = min(1.4 / max(uAperture, 0.7), 1.25);
             return clamp(
-                defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)),
+                defocus * uMaxBlurRadius * apertureScale,
                 0.0,
                 uMaxBlurRadius
             );
         }
 
-        float protectedForegroundDepth(vec2 depthUV) {
-            float protectedDepth = 0.0;
-            for (int y = -1; y <= 1; y++) {
-                for (int x = -1; x <= 1; x++) {
+        float foregroundDefocusCoverage(vec2 depthUV, float centerDepth) {
+            float weightedCoverage = 0.0;
+            float totalWeight = 0.0;
+            float spillRadius = clamp(uMaxBlurRadius * 0.18, 3.0, 18.0);
+            for (int y = -2; y <= 2; y++) {
+                for (int x = -2; x <= 2; x++) {
                     vec2 sampleUV = clamp(
-                        depthUV + vec2(float(x), float(y)) * uDepthTexelSize,
+                        depthUV + vec2(float(x), float(y))
+                            * uDepthTexelSize * (spillRadius * 0.5),
                         0.0,
                         1.0
                     );
-                    protectedDepth = max(
-                        protectedDepth,
-                        texture(uDepthTexture, sampleUV).r
+                    float sampleDepth = texture(uDepthTexture, sampleUV).r;
+                    float nearer = smoothstep(
+                        0.012,
+                        0.075,
+                        sampleDepth - centerDepth
                     );
+                    float sampleDefocus = smoothstep(
+                        0.25,
+                        2.2,
+                        computeCoc(sampleDepth)
+                    );
+                    float radiusSquared = float(x * x + y * y);
+                    float spatialWeight = exp(-radiusSquared * 0.24);
+                    weightedCoverage += nearer * sampleDefocus * spatialWeight;
+                    totalWeight += spatialWeight;
                 }
             }
-            return protectedDepth;
+            return weightedCoverage / max(totalWeight, 0.001);
         }
 
         void main() {
@@ -1224,15 +1686,19 @@ object Shaders {
                 1.0
             );
             float centerDepth = texture(uDepthTexture, depthUV).r;
-            float protectedDepth = protectedForegroundDepth(depthUV);
             float coc = computeCoc(centerDepth);
-            float backgroundMix = smoothstep(0.2, 1.2, coc);
-            float foregroundOcclusion = smoothstep(
-                uFocusDepth - 0.035,
-                uFocusDepth - 0.015,
-                protectedDepth
+            float defocusMix = smoothstep(0.2, 1.2, coc);
+            float foregroundCoverage = foregroundDefocusCoverage(
+                depthUV,
+                centerDepth
             );
-            backgroundMix *= 1.0 - foregroundOcclusion;
+            float foregroundSpill = smoothstep(
+                0.01,
+                0.65,
+                foregroundCoverage
+            ) * 0.76;
+            float bokehMix = 1.0
+                - (1.0 - defocusMix) * (1.0 - foregroundSpill);
 
             vec3 backgroundWithHighlights;
             if (uLinearInput != 0) {
@@ -1243,9 +1709,42 @@ object Shaders {
                     + (vec3(1.0) - backgroundColor) * highlightOpacity;
             }
             fragColor = vec4(
-                mix(originalColor.rgb, backgroundWithHighlights, backgroundMix),
+                mix(originalColor.rgb, backgroundWithHighlights, bokehMix),
                 originalColor.a
             );
         }
     """.trimIndent()
+
+    fun psfSplatFragmentShader(
+        naturalStyle: Boolean,
+        soapBubbleStyle: Boolean = false,
+    ): String =
+        PSF_SPLAT_FRAGMENT_SHADER
+            .withBokehStyleDefine("NATURAL_BOKEH", naturalStyle)
+            .withBokehStyleDefine("SOAP_BUBBLE_BOKEH", soapBubbleStyle)
+
+    fun compactBokehHighlightFragmentShader(soapBubbleStyle: Boolean): String =
+        COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER.withBokehStyleDefine(
+            "SOAP_BUBBLE_BOKEH",
+            soapBubbleStyle,
+        )
+
+    fun analyticBokehHighlightVertexShader(soapBubbleStyle: Boolean): String =
+        ANALYTIC_BOKEH_HIGHLIGHT_VERTEX_SHADER.withBokehStyleDefine(
+            "SOAP_BUBBLE_BOKEH",
+            soapBubbleStyle,
+        )
+
+    fun analyticBokehHighlightFragmentShader(soapBubbleStyle: Boolean): String =
+        ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER.withBokehStyleDefine(
+            "SOAP_BUBBLE_BOKEH",
+            soapBubbleStyle,
+        )
+
+    private fun String.withBokehStyleDefine(define: String, enabled: Boolean): String =
+        if (enabled) {
+            replace("#define $define 0", "#define $define 1")
+        } else {
+            this
+        }
 }

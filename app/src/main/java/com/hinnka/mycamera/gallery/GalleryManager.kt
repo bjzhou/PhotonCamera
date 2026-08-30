@@ -35,6 +35,7 @@ import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.lut.applyEffectsToVideoFile
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.processor.GpuBayerSource
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.processor.GpuLinearRgbStorage
@@ -2118,7 +2119,8 @@ object GalleryManager {
             bitmap,
             focusPointX,
             focusPointY,
-            aperture
+            aperture,
+            BokehStyle.fromPersistedName(metadata.computationalBokehStyle),
         )
         saveBokehPhoto(context, photoId, bokeh)
         return bokeh

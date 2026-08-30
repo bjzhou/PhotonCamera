@@ -1061,6 +1061,10 @@
     <string name="virtual_aperture_depth_model_description">使用当前已安装的兼容深度模型。首次使用时可下载默认模型，或导入其他兼容的 TFLite 模型。</string>
     <string name="gallery_large_aperture_blur_title">大光圈虚化</string>
     <string name="gallery_large_aperture_blur_description">使用当前已安装的兼容深度模型估计画面深度，模拟大光圈的浅景深、背景虚化和柔和散景光斑。轻点画面可改变对焦位置；光圈值越小，虚化越强。首次使用时可下载默认模型，或导入其他兼容的 TFLite 模型。</string>
+    <string name="gallery_bokeh_style_title">光斑风格</string>
+    <string name="gallery_bokeh_style_default">旋焦</string>
+    <string name="gallery_bokeh_style_natural">自然</string>
+    <string name="gallery_bokeh_style_bubble">泡泡</string>
     <string name="edit_panel_title">编辑面板</string>
     <string name="edit_panel_expand">展开编辑面板</string>
     <string name="edit_panel_minimize">最小化编辑面板</string>

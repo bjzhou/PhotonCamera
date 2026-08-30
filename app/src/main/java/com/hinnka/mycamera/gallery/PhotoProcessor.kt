@@ -25,6 +25,7 @@ import com.hinnka.mycamera.lut.ColorCorrectionPipelineResolver
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.processor.DepthBokehProcessor
+import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawHdrRenderResult
@@ -302,7 +303,8 @@ class PhotoProcessor(
                     sdrBitmap,
                     metadata.focusPointX,
                     metadata.focusPointY,
-                    aperture
+                    aperture,
+                    BokehStyle.fromPersistedName(metadata.computationalBokehStyle),
                 )
                 photoId?.let { id -> GalleryManager.saveBokehPhoto(context, id, sdrBitmap) }
             }
@@ -313,7 +315,8 @@ class PhotoProcessor(
                     it,
                     metadata.focusPointX,
                     metadata.focusPointY,
-                    aperture
+                    aperture,
+                    BokehStyle.fromPersistedName(metadata.computationalBokehStyle),
                 )
             }
         }
@@ -714,7 +717,8 @@ class PhotoProcessor(
             metadata.computationalAperture?.let { aperture ->
                 b = depthBokehProcessor.applyHighQualityBokeh(
                     context, photoId, b,
-                    metadata.focusPointX, metadata.focusPointY, aperture
+                    metadata.focusPointX, metadata.focusPointY, aperture,
+                    BokehStyle.fromPersistedName(metadata.computationalBokehStyle)
                 )
                 photoId?.let { photoId -> GalleryManager.saveBokehPhoto(context, photoId, b) }
             }
@@ -794,7 +798,8 @@ class PhotoProcessor(
             metadata.computationalAperture?.let { aperture ->
                 result = depthBokehProcessor.applyHighQualityBokeh(
                     context, photoId, result,
-                    metadata.focusPointX, metadata.focusPointY, aperture
+                    metadata.focusPointX, metadata.focusPointY, aperture,
+                    BokehStyle.fromPersistedName(metadata.computationalBokehStyle)
                 )
                 photoId?.let { photoId -> GalleryManager.saveBokehPhoto(context, photoId, result) }
             }

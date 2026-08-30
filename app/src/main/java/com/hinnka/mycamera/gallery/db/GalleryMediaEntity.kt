@@ -111,6 +111,7 @@ data class GalleryMediaEntity(
     val customProperties: String?,
     val exportedUris: String?,
     val computationalAperture: Float?,
+    val computationalBokehStyle: String,
     val focusPointX: Float?,
     val focusPointY: Float?,
     val postCropLeft: Int?,
