@@ -9,6 +9,7 @@
 | 主题 | 状态 | 强制结论 |
 | --- | --- | --- |
 | Compute work-group | 已确认，且受 GLES 3.1 最低保证约束 | 通用 2D 使用 `8x8`，1D 使用 `128x1`，invocation 总数不得超过 128 |
+| GLSL `#version` 位置 | 已确认，Mali | 动态与多行字符串源码必须让 `#version` 从第一个字节开始，前面不得有换行 |
 | Graphics GLSL ES 版本 | 已确认 | 同一 program 的 vertex/fragment `#version` 必须一致 |
 | SSBO binding | 跨驱动约束 | 查询上限；不同 program 复用低编号槽位 |
 | PBO 热路径回读 | 已确认存在驱动差异 | 优先 compute 打包到 SSBO，超限或编译失败时回退 framebuffer readback |
@@ -78,6 +79,24 @@ Max number of total work group invocations exceeded.
 - 一个 work group 写固定 cell 的多分量 SSBO 时，lane 必须覆盖所有分量，超出有效分量的 lane 显式退出。`glBufferData(..., null, ...)` 内容未定义，不能依赖新 buffer 恰好为零。
 
 `DNG_PGTM_CELL_STATS` 的每个 cell 必须排序 256 个样本：保留 256 项共享数组，由 128 个 lane 各装载两个样本，并在 bitonic sort 每阶段各处理两个 comparator。不得减少样本或只执行半个排序网络。
+
+## GLSL `#version` 必须从源码首字节开始
+
+**证据**：vivo V2509A，Mali-G1-Ultra MC12，驱动 `v1.r54p1`。
+
+该驱动拒绝在 `#version` 前包含换行的空白前导，原始错误为：
+
+```text
+#version must be on the first line in a program and only whitespace are allowed in the declaration
+```
+
+实现契约：
+
+- Kotlin 多行字符串使用 `.trimIndent()` 去除首尾空行和公共缩进；若必须使用
+  `const val`，则直接写成 `"""#version 310 es`。两种方式都必须保证传给驱动的源码
+  从 `#version` 开始。
+- 动态拼接 shader 时，统一校验源码以 `#version ` 开头；不要依赖驱动接受 BOM、空行或注释前导。
+- 桌面编译成功不能替代目标 Mali 驱动的实际 compile/link 验证。
 
 ## Graphics program：两端 GLSL ES 版本一致
 

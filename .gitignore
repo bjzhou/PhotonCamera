@@ -19,5 +19,8 @@ __pycache__
 /scripts/research/*
 !/scripts/research/generate_mgc_spatial_rgb_merge_static_asm.py
 !/scripts/research/compare_hdrnet_pgtm.py
+!/scripts/research/decompile_mgc_spatial_rgb_aot.py
+!/scripts/research/mgc_spatial_rgb_oracle.py
+!/scripts/research/validate_mgc_spatial_rgb_green_outer.py
 .codex-tmp
 .tmp

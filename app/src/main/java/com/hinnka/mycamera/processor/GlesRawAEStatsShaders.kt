@@ -6,7 +6,7 @@ internal object GlesRawAEStatsShaders {
      * The only pass that reads the RAW texture. Each invocation owns one 16x16 source block and
      * emits both its exact CFA maxima and camera-RGB mean for all downstream low-resolution work.
      */
-    const val FAST_MOMENTS = """
+    val FAST_MOMENTS = """
         #version 310 es
         precision highp float;
         precision highp int;
@@ -95,9 +95,9 @@ internal object GlesRawAEStatsShaders {
             outputCells.cells[outputIndex].cameraRgb =
                 vec4(cameraRgb, float(clippedCfaSamples));
         }
-    """
+    """.trimIndent()
 
-    const val BASE_METERING = """
+    val BASE_METERING = """
         #version 310 es
         precision highp float;
         precision highp int;
@@ -147,9 +147,9 @@ internal object GlesRawAEStatsShaders {
             outputValues.values[outputCoord.y * uOutputSize.x + outputCoord.x] =
                 vec4(normalized, 0.0);
         }
-    """
+    """.trimIndent()
 
-    const val CLASSIC_SPLIT = """
+    val CLASSIC_SPLIT = """
         #version 310 es
         precision highp float;
         precision highp int;
@@ -237,5 +237,5 @@ internal object GlesRawAEStatsShaders {
             outputCells.cells[outputIndex].bright = vec4(bright / sensorRange, maskCode);
             outputCells.cells[outputIndex].dark = vec4(dark / sensorRange, 0.0);
         }
-    """
+    """.trimIndent()
 }
