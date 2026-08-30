@@ -70,4 +70,27 @@ class DngCameraRawProfileXmpTest {
         assertTrue(xmp.contains("crs:ProfileToneCurve=\"100\""))
         assertFalse(xmp.contains("crs:ProfileGainTableMap=\"100\""))
     }
+
+    @Test
+    fun `RAW AE SummaryText is preserved as readable XMP text`() {
+        val summary = "PhotonCamera RAW AE SummaryText v1\nshortTargetT=63.8 & longTargetT=<119.3>"
+        val document = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+        }.newDocumentBuilder().parse(
+            ByteArrayInputStream(
+                DngCameraRawProfileXmp.build(
+                    profileLookName = "Embedded",
+                    includeProfileGainTableMap = false,
+                    includeProfileToneCurve = false,
+                    rawSceneExposureSummaryText = summary,
+                ),
+            ),
+        )
+
+        val summaryNode = document.getElementsByTagNameNS(
+            "https://hinnka.github.io/PhotonCamera/xmp/1.0/",
+            "SummaryText",
+        ).item(0)
+        assertEquals(summary, summaryNode.textContent)
+    }
 }

@@ -45,6 +45,7 @@ internal object RawSceneExposureMatcher {
                     safeUnderexposure = estimate.safeUnderexposure,
                     fractionPixelsClippedAtFinalShortTet =
                         estimate.fractionPixelsClippedAtFinalShortTet,
+                    summaryText = estimate.summaryText,
                 )
             }
         }
@@ -64,6 +65,7 @@ internal data class RawSceneExposureResult(
     val portraitRelightingMask: FloatArray? = null,
     val safeUnderexposure: Float,
     val fractionPixelsClippedAtFinalShortTet: Float,
+    val summaryText: String? = null,
 ) {
     init {
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
@@ -82,5 +84,6 @@ internal data class RawSceneExposureResult(
             fractionPixelsClippedAtFinalShortTet.isFinite() &&
                 fractionPixelsClippedAtFinalShortTet in 0f..1f,
         )
+        require(summaryText == null || summaryText.isNotBlank())
     }
 }

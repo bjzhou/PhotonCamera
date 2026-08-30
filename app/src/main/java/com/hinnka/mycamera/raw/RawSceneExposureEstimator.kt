@@ -88,6 +88,8 @@ internal data class RawSceneExposureEstimate(
     val portraitRelightingGain: Float,
     val safeUnderexposure: Float,
     val fractionPixelsClippedAtFinalShortTet: Float,
+    /** Capture-time MGC AE inputs and outputs embedded in the DNG as photon:SummaryText. */
+    val summaryText: String,
 ) {
     init {
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
@@ -100,6 +102,7 @@ internal data class RawSceneExposureEstimate(
             fractionPixelsClippedAtFinalShortTet.isFinite() &&
                 fractionPixelsClippedAtFinalShortTet in 0f..1f,
         )
+        require(summaryText.isNotBlank())
     }
 }
 
@@ -1564,6 +1567,21 @@ internal object RawSceneExposureEstimator {
                     safeUnderexposure = fastMomentsStats.safeUnderexposure,
                     fractionPixelsClippedAtFinalShortTet =
                         fractionPixelsClippedAtFinalShortTet,
+                    summaryText = buildSummaryText(
+                        tableVersion = activeEngines.legacyTable.version,
+                        legacyResult = legacyResult,
+                        frame = frame,
+                        metadata = metadata,
+                        measurement = measurement,
+                        referenceSensitivityIso = referenceSensitivityIso,
+                        shotRange = shotRange,
+                        tableTetMaxMs = tableTetMaxMs,
+                        fastMomentsStats = fastMomentsStats,
+                        fusion = fusion,
+                        rawStatsSource = rawStatsSource,
+                        fractionPixelsClippedAtFinalShortTet =
+                            fractionPixelsClippedAtFinalShortTet,
+                    ),
                 )
             } catch (error: Throwable) {
                 PLog.e(TAG, "RAW scene exposure inference failed", error)
@@ -1578,6 +1596,88 @@ internal object RawSceneExposureEstimator {
         interpreter.run(input, output)
         return output[0][0].also { check(it.isFinite()) }
     }
+
+    private fun buildSummaryText(
+        tableVersion: Int,
+        legacyResult: MgcLegacyAeResult,
+        frame: RawSceneLinearFrame,
+        metadata: RawMetadata,
+        measurement: RawSceneBrightnessMeasurement,
+        referenceSensitivityIso: Int,
+        shotRange: RawSceneExposureShotRange,
+        tableTetMaxMs: Float,
+        fastMomentsStats: RawSceneFastMomentsAeStats,
+        fusion: RawSceneExposureFusion,
+        rawStatsSource: String,
+        fractionPixelsClippedAtFinalShortTet: Float,
+    ): String = buildString(3_500) {
+        appendLine("PhotonCamera RAW AE SummaryText v1")
+        appendLine("stage=MGC_CLASSIC_AE_FINALIZE")
+        appendLine("mode=2")
+        appendLine("shortLongSource=MGC_9_7_V25_START_RELEASE_TABLE")
+        appendLine("tableVersion=0x${Integer.toUnsignedString(tableVersion, 16)}")
+        appendLine("tableInputPath=NON_QCOM_RAW_TO_LO_RES_RGB_POST_CAPTURE_LSC")
+        appendLine("tableInputNormalization=MGC_CLASSIC_SPLIT_HDR_WB_RMS_1_OVER_16")
+        appendLine("tableQueryColorDomain=MGC_SPLIT_HDR_NORMALIZED_CAMERA_RGB_U15")
+        appendLine("tableDescriptorContract=MGC_V25_SPLIT_HDR_14_8_6")
+        appendLine("tableInputSize=${legacyResult.meteringWidth}x${legacyResult.meteringHeight}")
+        appendLine("tableBrightMaskMean=${legacyResult.brightMaskMean}")
+        appendLine("tableInputRmsRgb=${legacyResult.meteringRmsRgb.contentToString()}")
+        appendLine("tableInputWhiteBalancedRmsMax=${legacyResult.meteringWhiteBalancedRmsMax}")
+        appendLine("tableInputNormalizationScale=${legacyResult.meteringNormalizationScale}")
+        appendLine("tableInputNormalizedTetMs=${legacyResult.normalizedMeteringTetMs}")
+        appendLine("rgbGains=${frame.legacyAeInput?.rgbGains?.contentToString()}")
+        appendLine("rgbTransform=${frame.legacyAeInput?.rgbTransform?.contentToString()}")
+        appendLine("shortQueryHistogramDescriptor=${legacyResult.shortQuery.histogramDescriptor.contentToString()}")
+        appendLine("longQueryHistogramDescriptor=${legacyResult.longQuery.histogramDescriptor.contentToString()}")
+        appendLine("shortQueryImageLogMean=${legacyResult.shortQuery.imageLogMean}")
+        appendLine("longQueryImageLogMean=${legacyResult.longQuery.imageLogMean}")
+        appendLine("shortQueryLogSceneBrightness=${legacyResult.shortQuery.logSceneBrightness}")
+        appendLine("longQueryLogSceneBrightness=${legacyResult.longQuery.logSceneBrightness}")
+        appendLine("tableQueryClippedFraction=${legacyResult.shortQuery.fractionPixelsClipped}")
+        appendLine("tableQueryCategory=${legacyResult.shortQuery.category}")
+        appendLine("shortTargetT=${legacyResult.short.targetT}")
+        appendLine("longTargetT=${legacyResult.long.targetT}")
+        appendLine("shortTAtCurrentTet=${legacyResult.short.tAtCurrentTet}")
+        appendLine("longTAtCurrentTet=${legacyResult.long.tAtCurrentTet}")
+        appendLine("shortMaxSimilarity=${legacyResult.short.maxSimilarity}")
+        appendLine("longMaxSimilarity=${legacyResult.long.maxSimilarity}")
+        appendLine("shortCandidateCount=${legacyResult.short.candidateCount}")
+        appendLine("longCandidateCount=${legacyResult.long.candidateCount}")
+        appendLine("shortContributingCount=${legacyResult.short.contributingCount}")
+        appendLine("longContributingCount=${legacyResult.long.contributingCount}")
+        appendLine("shortMinimumContributingSimilarity=${legacyResult.short.minimumContributingSimilarity}")
+        appendLine("longMinimumContributingSimilarity=${legacyResult.long.minimumContributingSimilarity}")
+        appendLine("shortBestMatchTargetT=${legacyResult.short.bestMatchTargetT}")
+        appendLine("longBestMatchTargetT=${legacyResult.long.bestMatchTargetT}")
+        appendLine("idealShortTetMs=${fusion.idealShortTetMs}")
+        appendLine("idealLongTetMs=${fusion.idealLongTetMs}")
+        appendLine("finalShortTetMs=${fusion.finalShortTetMs}")
+        appendLine("finalLongTetMs=${fusion.finalLongTetMs}")
+        appendLine("finalShortGain=${fusion.finalShortGain}")
+        appendLine("finalLongGain=${fusion.finalLongGain}")
+        appendLine("hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit}")
+        appendLine("finalHdrRatio=${fusion.finalHdrRatio}")
+        appendLine("sourceClippedFraction=${fusion.sourceClippedFraction}")
+        appendLine("shortClippedFraction=${fusion.shortClippedFraction}")
+        appendLine("longClippedFraction=${fusion.longClippedFraction}")
+        appendLine("fractionPixelsClippedAtBaseTet=${fastMomentsStats.fractionPixelsClippedAtBaseTet}")
+        appendLine("fractionPixelsClippedAtFinalShortTet=$fractionPixelsClippedAtFinalShortTet")
+        appendLine("rawStatsSource=$rawStatsSource")
+        appendLine("rawStatsSize=${frame.fastMomentsStats.width}x${frame.fastMomentsStats.height}")
+        appendLine("exposureTimeMs=${measurement.exposureTimeMs}")
+        appendLine("iso=${metadata.iso}")
+        appendLine("referenceIso=$referenceSensitivityIso")
+        appendLine("sensorSensitivity=${measurement.sensorSensitivity}")
+        appendLine("currentTetMs=${measurement.currentTetMs}")
+        appendLine("logSceneBrightness=${measurement.logSceneBrightness}")
+        appendLine("requestShotMinTetMs=${shotRange.requestMinTetMs}")
+        appendLine("shotMinTetMs=${shotRange.minTetMs}")
+        appendLine("shotMaxTetMs=${shotRange.maxTetMs}")
+        appendLine("tableTetMaxMs=$tableTetMaxMs")
+        appendLine("adjustedShotMinTetMs=${fastMomentsStats.adjustedShotMinTetMs}")
+        appendLine("safeUnderexposure=${fastMomentsStats.safeUnderexposure}")
+    }.trimEnd()
 
     private fun createEngines(context: Context): ExposureEngines? {
         var portrait: Interpreter? = null

@@ -292,6 +292,7 @@ object SuperResolutionDngWriter {
         profileGainTableMap: DngProfileGainTableMap? = null,
         profileName: String? = null,
         profileToneCurve: FloatArray? = null,
+        rawSceneExposureSummaryText: String? = null,
         imageLayout: ImageLayout = ImageLayout.CFA,
         compression: Compression = Compression.UNCOMPRESSED,
         inputRowStepSamples: Int? = null,
@@ -405,6 +406,7 @@ object SuperResolutionDngWriter {
                 profileGainTableMap = writtenProfileGainTableMap,
                 profileName = profileName,
                 profileToneCurve = writtenProfileToneCurve,
+                rawSceneExposureSummaryText = rawSceneExposureSummaryText,
                 imageLayout = imageLayout,
                 compression = compression,
                 valueDomain = valueDomain,
@@ -434,6 +436,7 @@ object SuperResolutionDngWriter {
                     "ifdLayout=raw-ifd0 preview=none " +
                     "defaultBlackRender=${if (writtenProfileGainTableMap != null) "none" else "default"} " +
                     "profileToneCurvePoints=${writtenProfileToneCurve?.size?.div(2) ?: 0} " +
+                    "rawAeSummary=${rawSceneExposureSummaryText != null} " +
                     "cameraRawLook=${when {
                         writtenProfileGainTableMap != null && writtenProfileToneCurve != null ->
                             "pgtm=100,toneCurve=100"
@@ -469,6 +472,7 @@ object SuperResolutionDngWriter {
         profileGainTableMap: DngProfileGainTableMap?,
         profileName: String?,
         profileToneCurve: FloatArray?,
+        rawSceneExposureSummaryText: String?,
         imageLayout: ImageLayout,
         compression: Compression,
         valueDomain: RawProcessor.RawBufferValueDomain,
@@ -605,11 +609,15 @@ object SuperResolutionDngWriter {
         }
         val profileLookName = profileName?.takeIf { it.isNotBlank() }
             ?: "Embedded"
-        val cameraRawProfileXmp = if (profileGainTableMap != null || profileToneCurve != null) {
+        val cameraRawProfileXmp = if (
+            profileGainTableMap != null || profileToneCurve != null ||
+            !rawSceneExposureSummaryText.isNullOrBlank()
+        ) {
             DngCameraRawProfileXmp.build(
                 profileLookName = profileLookName,
                 includeProfileGainTableMap = profileGainTableMap != null,
                 includeProfileToneCurve = profileToneCurve != null,
+                rawSceneExposureSummaryText = rawSceneExposureSummaryText,
             )
         } else {
             null

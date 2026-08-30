@@ -3239,6 +3239,7 @@ class RawDemosaicProcessor {
                         finalShortGain = captureSourceToShortGain,
                         portraitRelightingGain = capturePortraitRelightingGain,
                         portraitRelightingMask = capturePortraitRelightingMask?.copyOf(),
+                        rawSceneExposureSummaryText = solvedSceneExposure?.summaryText,
                         profileGainTableMap = captureProfileGainTableMap,
                         gpuDemosaicedRawSource = reusableDemosaicSource,
                     )

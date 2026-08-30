@@ -119,6 +119,8 @@ data class RawDngCaptureProfileResult(
     val portraitRelightingGain: Float = 1f,
     /** Unrotated sensor-space 64 x 64 soft face mask used by local relighting. */
     val portraitRelightingMask: FloatArray? = null,
+    /** Capture-time MGC AE inputs and results serialized as photon:SummaryText in the DNG XMP. */
+    val rawSceneExposureSummaryText: String? = null,
     val profileGainTableMap: DngProfileGainTableMap?,
     val gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
 )
@@ -140,6 +142,7 @@ data class RawDngProfilePreparation(
     val finalShortGain: Float?,
     val portraitRelightingGain: Float = 1f,
     val portraitRelightingMask: FloatArray? = null,
+    val rawSceneExposureSummaryText: String? = null,
     val profileGainTableMap: DngProfileGainTableMap?,
     val gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
 )

@@ -836,6 +836,7 @@ object RawProcessor {
             finalShortGain = captureProfile?.finalShortGain,
             portraitRelightingGain = captureProfile?.portraitRelightingGain ?: 1f,
             portraitRelightingMask = captureProfile?.portraitRelightingMask?.copyOf(),
+            rawSceneExposureSummaryText = captureProfile?.rawSceneExposureSummaryText,
             profileGainTableMap = preparedProfileGainTableMap,
             gpuDemosaicedRawSource = captureProfile?.gpuDemosaicedRawSource,
         ).also { finalProfile ->
@@ -995,6 +996,7 @@ object RawProcessor {
                 profileGainTableMap = writtenProfileGainTableMap,
                 profileName = writtenProfileName,
                 profileToneCurve = writtenProfileToneCurve,
+                rawSceneExposureSummaryText = preparedProfile?.rawSceneExposureSummaryText,
                 imageLayout = imageLayout,
                 compression = compression,
                 inputRowStepSamples = inputRowStepSamples,
