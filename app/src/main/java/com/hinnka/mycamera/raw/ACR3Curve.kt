@@ -263,6 +263,16 @@ object ACR3Curve {
 
     fun samples(): FloatArray = ACR3_DEFAULT_CURVE
 
+    /** Returns the linearly interpolated ACR3 output for a normalized linear input. */
+    internal fun outputForInput(input: Float): Float {
+        val position = input.coerceIn(0f, 1f) * ACR3_DEFAULT_CURVE.lastIndex
+        val lowerIndex = position.toInt().coerceIn(0, ACR3_DEFAULT_CURVE.lastIndex)
+        val upperIndex = (lowerIndex + 1).coerceAtMost(ACR3_DEFAULT_CURVE.lastIndex)
+        val amount = position - lowerIndex
+        return ACR3_DEFAULT_CURVE[lowerIndex] +
+            (ACR3_DEFAULT_CURVE[upperIndex] - ACR3_DEFAULT_CURVE[lowerIndex]) * amount
+    }
+
     /** Returns the input whose linearly interpolated ACR3 output equals [output]. */
     internal fun inputForOutput(output: Float): Float {
         val target = output.coerceIn(ACR3_DEFAULT_CURVE.first(), ACR3_DEFAULT_CURVE.last())

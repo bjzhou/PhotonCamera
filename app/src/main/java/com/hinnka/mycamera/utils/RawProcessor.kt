@@ -842,7 +842,7 @@ object RawProcessor {
                     "sourceBaselineEv=$sourceBaselineExposureEv " +
                     "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
                     "legacyExposureOffsetEv=$legacyExposureOffsetEv " +
-                    "sourceBaselinePreserved=true " +
+                    "baselineExposureSource=SOURCE_PLUS_LEGACY_AE " +
                     "finalBaselineEv=${finalProfile.baselineExposureEv} " +
                     "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +

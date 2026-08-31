@@ -17,8 +17,9 @@ object DngBaselineExposure {
      * Resolves ownership of the BaselineExposure written for a captured RAW.
      *
      * [sourceBaselineEv] preserves source-domain normalization such as a multi-frame stack that
-     * was normalized to its ultra-short frame. The classic viewfinder matcher returns an offset
-     * relative to that source baseline. Photon HDR never supplies this offset.
+     * was normalized to its ultra-short frame. The legacy viewfinder matcher returns the display
+     * exposure offset relative to that source baseline for both classic AE and Photon HDR. Photon
+     * HDR then uses the written total as its reproducible global-exposure anchor.
      */
     fun resolveCaptureBaseline(
         sourceBaselineEv: Float,

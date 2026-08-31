@@ -165,6 +165,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     jint source_grid_width, jint source_grid_height, jint source_grid_depth,
     jint coefficient_count, jint output_grid_width, jint output_grid_height,
     jint point_count, jfloat hdr_ratio, jfloat source_to_short_gain,
+    jfloat renderer_baseline_gain,
     jfloat render_min_gain, jfloat render_max_gain,
     jfloat render_max_gain_blend_threshold,
     jfloat min_table_gain, jfloat max_table_gain,
@@ -181,6 +182,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       output_grid_height <= 0 || point_count <= 1 ||
       !std::isfinite(hdr_ratio) || hdr_ratio < 1.0f ||
       !std::isfinite(source_to_short_gain) || source_to_short_gain <= 0.0f ||
+      !std::isfinite(renderer_baseline_gain) || renderer_baseline_gain <= 0.0f ||
       !std::isfinite(render_min_gain) || render_min_gain <= 0.0f ||
       !std::isfinite(render_max_gain) ||
       render_max_gain < render_min_gain ||
@@ -318,13 +320,13 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
             short_intensity * render_gain, 0.0f, 1.0f);
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
-        // The N axis is final-short intensity = stored source * baselineGain * sourceToShortGain.
-        // BaselineExposure restores the normalized source in both the table coordinate and final
-        // rendering, so the corresponding restored-source denominator is short / shortGain.
-        const float baseline_restored_source_intensity =
-            short_intensity / source_to_short_gain;
+        // The N axis is final-short intensity = stored source * sourceToShortGain. PGTM itself is
+        // applied before the renderer's BaselineExposure, so divide by the source value after that
+        // pending exposure. The subsequent exposure ramp then restores pre_curve_target exactly.
+        const float baseline_applied_source_intensity =
+            short_intensity * renderer_baseline_gain / source_to_short_gain;
         float gain = std::clamp(
-            pre_curve_target / baseline_restored_source_intensity, min_table_gain,
+            pre_curve_target / baseline_applied_source_intensity, min_table_gain,
             max_table_gain);
         if (diagnostic_mode >= 0) {
           const float mask =

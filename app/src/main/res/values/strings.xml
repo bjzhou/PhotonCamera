@@ -865,11 +865,11 @@
     <string name="settings_raw_photon_hdr">Photon HDR</string>
     <string name="settings_raw_photon_hdr_description">Preserves more highlight and shadow detail in high-contrast scenes for more natural tonal transitions.</string>
     <string name="settings_raw_photon_hdr_edit_description">Enable Photon HDR for this photo. It can also be enabled for photos captured with Classic Auto Exposure.</string>
-    <string name="settings_raw_adaptive_exposure_mode">Adaptive RAW Exposure</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">Choose how the photo’s brightness is handled. Off skips both options; Photon HDR preserves more highlight and shadow detail; Classic Auto Exposure aims to match the brightness seen while shooting.</string>
+    <string name="settings_raw_adaptive_exposure_mode">RAW Auto Exposure &amp; HDR</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">Both modes meter the scene to establish an exposure baseline, then apply different HDR mapping: Photon HDR uses ML AE with HDRNet, while Classic HDR uses Local Laplacian mapping. Off disables automatic metering and HDR mapping.</string>
     <string name="settings_raw_adaptive_exposure_mode_off">Off</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">Photon HDR</string>
-    <string name="settings_raw_adaptive_exposure_mode_legacy">Classic Auto Exposure</string>
+    <string name="settings_raw_adaptive_exposure_mode_legacy">Classic HDR</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX Black Relative Exposure</string>
     <string name="settings_raw_agx_shoulder">AgX Shoulder</string>

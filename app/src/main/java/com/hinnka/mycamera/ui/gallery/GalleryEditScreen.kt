@@ -55,7 +55,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.request.ImageRequest
-import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
@@ -282,8 +281,7 @@ fun GalleryEditScreen(
     val editRawBaselineRecipeParams by viewModel.editRawBaselineRecipeParams.collectAsState()
     val editRawColorEngine by viewModel.editRawRenderingEngine.collectAsState()
     val editRawToneMappingParameters by viewModel.editRawToneMappingParameters.collectAsState()
-    val forceRegeneratePhotonPgtmOnRefresh =
-        BuildConfig.DEBUG && editRawToneMappingParameters.usePhotonHdr
+    val forceRegeneratePhotonPgtmOnRefresh = editRawToneMappingParameters.usePhotonHdr
     val editRawSpectralFilmStock by viewModel.editRawSpectralFilmStock.collectAsState()
     val editRawSpectralFilmPrint by viewModel.editRawSpectralFilmPrint.collectAsState()
     val editRawSpectralFilmCDensityGain by viewModel.editRawSpectralFilmCDensityGain.collectAsState()

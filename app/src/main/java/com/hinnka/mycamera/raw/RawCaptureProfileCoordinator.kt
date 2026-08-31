@@ -7,7 +7,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 
-/** Owns the mutually exclusive capture-time Photon HDR and classic auto-exposure paths. */
+/** Routes capture-time adaptive exposure into one complete, mutually exclusive processing path. */
 internal object RawCaptureProfileCoordinator {
     suspend fun prepareCaptureProfile(
         renderer: RawDemosaicProcessor,
@@ -37,7 +37,7 @@ internal object RawCaptureProfileCoordinator {
         } else {
             null
         }
-        val legacyRequest = if (mode.usesLegacyAutoExposure) {
+        val legacyRequest = if (mode.usesLegacyAutoExposure || mode.usesPhotonHdr) {
             RawLegacyAutoExposureMatcher.createRequest(capturePreviewThumbnail)
         } else {
             null
@@ -50,7 +50,7 @@ internal object RawCaptureProfileCoordinator {
             rotation = rotation,
             sceneExposureRequest = photonRequest,
             legacyAutoExposureRequest = legacyRequest,
-            generatePhotonPgtm = mode.usesPhotonHdr,
+            generatePhotonPgtm = mode.usesPhotonHdr || mode.usesLegacyAutoExposure,
             statsBounds = statsBounds,
             rawBlackPointCorrection = rawBlackPointCorrection,
             rawWhitePointCorrection = rawWhitePointCorrection,
