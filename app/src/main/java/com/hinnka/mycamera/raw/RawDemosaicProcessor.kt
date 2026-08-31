@@ -3758,7 +3758,17 @@ class RawDemosaicProcessor {
                             profileToEngineTransform = combinedProfileToEngineTransform,
                             profileExposureUniforms = combinedProfileExposureUniforms,
                             rawToneMappingParameters = rawToneMappingParameters,
-                            applyProfileGainTableMap = false,
+                            applyProfileGainTableMap = hasProfileGainTableMap,
+                            coordinateInput = if (hasProfileGainTableMap) {
+                                RawEngineTonePass.HdrCoordinateInput(
+                                    textureId = demosaicTextureId,
+                                    profileToEngineTransform = profileToEngineTransform,
+                                    profileExposureLinearGain =
+                                        profileExposureUniforms.linearGain,
+                                )
+                            } else {
+                                null
+                            },
                         )
                         true
                     } catch (cancellation: CancellationException) {
@@ -7237,6 +7247,7 @@ class RawDemosaicProcessor {
         profileExposureUniforms: ProfileExposureUniforms,
         rawToneMappingParameters: RawToneMappingParameters,
         applyProfileGainTableMap: Boolean,
+        coordinateInput: RawEngineTonePass.HdrCoordinateInput? = null,
         globalOriginX: Int = 0,
         globalOriginY: Int = 0,
         fullImageWidth: Int = metadata.width,
@@ -7283,6 +7294,7 @@ class RawDemosaicProcessor {
                         },
                     ),
                     sdrLinearTextureId = sdrLinearTextureId,
+                    coordinateInput = coordinateInput,
                 ),
             ),
         ) { "RAW HDR reference pass failed" }

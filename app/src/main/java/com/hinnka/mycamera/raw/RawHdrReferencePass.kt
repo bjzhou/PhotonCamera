@@ -12,6 +12,7 @@ internal class RawHdrReferencePass(
     data class Input(
         val engineInput: RawEngineTonePass.Input,
         val sdrLinearTextureId: Int,
+        val coordinateInput: RawEngineTonePass.HdrCoordinateInput? = null,
     )
 
     data class Output(val textureId: Int, val width: Int, val height: Int)
@@ -22,6 +23,7 @@ internal class RawHdrReferencePass(
         return engineTonePass.renderHdrReference(
             input = input.engineInput,
             sdrLinearTextureId = input.sdrLinearTextureId,
+            coordinateInput = input.coordinateInput,
         )?.let { Output(it.textureId, it.width, it.height) }
     }
 

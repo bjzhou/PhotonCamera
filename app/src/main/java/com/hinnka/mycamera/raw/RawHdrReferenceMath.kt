@@ -2,6 +2,7 @@ package com.hinnka.mycamera.raw
 
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.pow
 
 /**
  * Builds the highlight extension used by the RAW HDR reference.
@@ -9,16 +10,21 @@ import kotlin.math.max
  * This follows Phocus' HDR-gradation construction in normalized coordinates. The selected
  * engine's neutral SDR response is the base curve. The HDR curve follows that curve through the
  * low and middle range, leaves the SDR shoulder at a tangent-compatible point, reaches +0.5 stop
- * at scene white, and then keeps the endpoint tangent for over-range highlights.
+ * at scene white, and then keeps the endpoint tangent for over-range highlights. Independently,
+ * the rendering pass keeps PGTM unchanged through the reference search shoulder, linearly returns
+ * an attenuated shoulder to uncompressed white, and continues linearly above white. PGTM
+ * compression is therefore removed before the measured engine curve reaches its own
+ * tangent-compatible join; HDR does not switch to a different non-PGTM rendering.
  *
  * Phocus constructs its LUT with `BaseCurve(index * gain)` and later reads that LUT at
  * `sceneValue / gain`; those factors cancel in scene coordinates. The implementation below works
- * directly in those scene coordinates, so exposure/PGTM gain is neither omitted nor applied twice.
+ * directly in those scene coordinates, so exposure gain is neither omitted nor applied twice.
  */
 object RawHdrReferenceMath {
     const val BASE_CURVE_SAMPLE_COUNT = 1024
     const val SCENE_WHITE = 1f
     const val SEARCH_START = 20_000f / 65_535f
+    const val PGTM_LINEAR_EXTENSION_START = SEARCH_START
     const val HDR_WHITE_MULTIPLIER = 1.41421356237f
 
     private const val MIN_INTERVAL = 1e-4f
@@ -126,11 +132,43 @@ object RawHdrReferenceMath {
         return lower + (upper - lower) * fraction
     }
 
-    private fun sanitizeCurve(baseCurve: FloatArray): FloatArray {
+    /** Produces the curve uploaded to the HDR pass, including the monotonicity contract. */
+    internal fun sanitizeCurve(baseCurve: FloatArray): FloatArray {
         var previous = 0f
         return FloatArray(baseCurve.size) { index ->
-            baseCurve[index].finiteOr(previous).coerceAtLeast(0f).also { previous = it }
+            baseCurve[index].finiteOr(previous).coerceAtLeast(previous).also { previous = it }
         }
+    }
+
+    /** CPU reference for the shader's PGTM highlight extension. */
+    internal fun pgtmHighlightGain(
+        linearInput: Float,
+        gamma: Float = 1f,
+        sampleGain: (Float) -> Float,
+    ): Float {
+        val input = linearInput.finiteOr(0f).coerceAtLeast(0f)
+        val safeGamma = gamma.finiteOr(1f).coerceIn(0.125f, 8f)
+        val tableInput = input.coerceAtMost(1f).pow(safeGamma)
+        if (tableInput <= PGTM_LINEAR_EXTENSION_START) {
+            return sampleGain(tableInput).finiteOr(0f).coerceAtLeast(0f)
+        }
+
+        val shoulderLinearInput =
+            PGTM_LINEAR_EXTENSION_START.pow(1f / safeGamma)
+        val shoulderGain = sampleGain(PGTM_LINEAR_EXTENSION_START)
+            .finiteOr(0f)
+            .coerceAtLeast(0f)
+        val shoulderOutput = shoulderLinearInput * shoulderGain
+        val mappedWhiteGain = sampleGain(1f).finiteOr(0f).coerceAtLeast(0f)
+        val whiteGain = max(max(shoulderGain, mappedWhiteGain), 1f)
+        val recoverySlope = (whiteGain - shoulderOutput) /
+            max(1f - shoulderLinearInput, 1e-6f)
+        val extendedOutput = if (input <= 1f) {
+            shoulderOutput + recoverySlope * (input - shoulderLinearInput)
+        } else {
+            input * whiteGain
+        }
+        return (extendedOutput / max(input, 1e-6f)).finiteOr(0f).coerceAtLeast(0f)
     }
 
     private fun Float.finiteOr(fallback: Float): Float = if (isFinite()) this else fallback

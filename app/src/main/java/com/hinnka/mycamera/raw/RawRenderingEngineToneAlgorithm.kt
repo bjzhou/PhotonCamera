@@ -78,6 +78,7 @@ internal abstract class RawRenderingEngineToneAlgorithm(
     fun renderHdrReference(
         input: RawEngineTonePass.Input,
         sdrLinearTextureId: Int,
+        coordinateInput: RawEngineTonePass.HdrCoordinateInput?,
     ): RawEngineTonePass.Output? {
         val activeProgram = ensureHdrReferenceProgram()
         if (activeProgram == 0) return null
@@ -103,6 +104,7 @@ internal abstract class RawRenderingEngineToneAlgorithm(
             HDR_BASE_CURVE_TEXTURE_UNIT,
         )
         bindSharedPipelineResources(activeProgram, input)
+        bindHdrCoordinateInput(activeProgram, input, coordinateInput)
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(activeProgram, "uHdrCurveJoinInput"),
             curveExtension.joinInput,
@@ -143,9 +145,72 @@ internal abstract class RawRenderingEngineToneAlgorithm(
             GLES30.glGetUniformLocation(activeProgram, "uHdrSdrLinearTexture"),
             HDR_SDR_LINEAR_TEXTURE_UNIT,
         )
+        if (coordinateInput != null) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + HDR_COORDINATE_TEXTURE_UNIT)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, coordinateInput.textureId)
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(activeProgram, "uHdrCoordinateTexture"),
+                HDR_COORDINATE_TEXTURE_UNIT,
+            )
+        }
         quad.draw(activeProgram)
         RawGlesProgram.logErrors("${javaClass.simpleName}.renderHdrReference")
         return RawEngineTonePass.Output(input.targetTextureId, input.width, input.height)
+    }
+
+    private fun bindHdrCoordinateInput(
+        program: Int,
+        input: RawEngineTonePass.Input,
+        coordinateInput: RawEngineTonePass.HdrCoordinateInput?,
+    ) {
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uHdrInputIsPreparedEngineRgb"),
+            if (coordinateInput != null) 1 else 0,
+        )
+        if (coordinateInput == null) {
+            // Keep the inactive sampler explicit and valid on drivers that validate every
+            // declared sampler regardless of the uniform branch taken by the draw.
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(program, "uHdrCoordinateTexture"),
+                0,
+            )
+            GLES30.glUniformMatrix3fv(
+                GLES30.glGetUniformLocation(program, "uHdrCoordinateProfileToEngineTransform"),
+                1,
+                false,
+                transpose3x3(input.profileToEngineTransform),
+                0,
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(program, "uHdrCoordinateExposureGain"),
+                input.profileExposure.linearGain,
+            )
+            return
+        }
+
+        require(coordinateInput.textureId != 0) { "HDR coordinate texture is unavailable" }
+        require(coordinateInput.profileToEngineTransform.size == 9) {
+            "HDR coordinate transform must be 3x3"
+        }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + HDR_COORDINATE_TEXTURE_UNIT)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, coordinateInput.textureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uHdrCoordinateTexture"),
+            HDR_COORDINATE_TEXTURE_UNIT,
+        )
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uHdrCoordinateProfileToEngineTransform"),
+            1,
+            false,
+            transpose3x3(coordinateInput.profileToEngineTransform),
+            0,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uHdrCoordinateExposureGain"),
+            coordinateInput.profileExposureLinearGain
+                .takeIf { it.isFinite() && it > 0f }
+                ?: 1f,
+        )
     }
 
     private fun analyzeHdrBaseCurve(
@@ -195,9 +260,11 @@ internal abstract class RawRenderingEngineToneAlgorithm(
             )
             return null
         }
-        val samples = FloatArray(sampleCount) { index ->
+        val measuredSamples = FloatArray(sampleCount) { index ->
             Half.toFloat(readback.get(index * 4))
         }
+        val samples = RawHdrReferenceMath.sanitizeCurve(measuredSamples)
+        if (!uploadHdrBaseCurve(samples)) return null
         return runCatching { RawHdrReferenceMath.solve(samples) }
             .onFailure { PLog.e(TAG, "Unable to solve ${javaClass.simpleName} HDR curve", it) }
             .getOrNull()
@@ -210,6 +277,42 @@ internal abstract class RawRenderingEngineToneAlgorithm(
                         "whiteSlope=${curve.whiteSlope}",
                 )
             }
+    }
+
+    private fun uploadHdrBaseCurve(samples: FloatArray): Boolean {
+        val upload = ByteBuffer.allocateDirect(samples.size * 4 * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        samples.forEach { sample ->
+            upload.put(sample)
+            upload.put(0f)
+            upload.put(0f)
+            upload.put(1f)
+        }
+        upload.position(0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + HDR_BASE_CURVE_TEXTURE_UNIT)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdrBaseCurveTextureId)
+        GLES30.glTexSubImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            0,
+            0,
+            samples.size,
+            1,
+            GLES30.GL_RGBA,
+            GLES30.GL_FLOAT,
+            upload,
+        )
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(
+                TAG,
+                "Unable to upload monotonic HDR base curve: " +
+                    "glError=0x${Integer.toHexString(error)}",
+            )
+            return false
+        }
+        return true
     }
 
     private fun ensureHdrBaseCurveTarget(): Boolean {
@@ -350,9 +453,10 @@ internal abstract class RawRenderingEngineToneAlgorithm(
     }
 
     companion object {
-        // GLES 3.0 guarantees at least eight fragment texture units. Existing engine resources
-        // use 0..3 and 6; the shared ProfileGainTableMap uses 7.
+        // Unit 2 is reused for the separate coordinate source only by Filmic, whose engine has no
+        // texture resource there. Existing engines otherwise use 0..3 and 6; PGTM uses 7.
         private const val TAG = "RawRenderingEngineToneAlgorithm"
+        private const val HDR_COORDINATE_TEXTURE_UNIT = 2
         private const val HDR_BASE_CURVE_TEXTURE_UNIT = 4
         private const val HDR_SDR_LINEAR_TEXTURE_UNIT = 5
     }

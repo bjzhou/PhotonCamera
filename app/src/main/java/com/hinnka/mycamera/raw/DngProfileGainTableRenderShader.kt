@@ -26,18 +26,23 @@ internal object DngProfileGainTableRenderShader {
             return mix(gain0, gain1, amount);
         }
 
-        float profileGainTableInput(vec3 profileRgb) {
+        float profileGainTableLinearInput(vec3 profileRgb) {
             float rgbMin = min(profileRgb.r, min(profileRgb.g, profileRgb.b));
             float rgbMax = max(profileRgb.r, max(profileRgb.g, profileRgb.b));
             float weighted = dot(vec4(profileRgb, rgbMin), uProfileGainWeights0) +
                 rgbMax * uProfileGainWeightMax;
-            // dng_render applies PGTM before its exposure ramp and scales the five-element
-            // MapInputWeights result by TotalBaselineExposure to preserve post-exposure lookup.
-            return pow(clamp(weighted * uProfileGainBaselineGain, 0.0, 1.0), uProfileGainGamma);
+            return max(weighted * uProfileGainBaselineGain, 0.0);
         }
 
-        vec3 applyProfileGainTableMap(vec3 profileRgb) {
-            if (uProfileGainEnabled == 0) return profileRgb;
+        float profileGainTableInput(vec3 profileRgb) {
+            // dng_render applies PGTM before its exposure ramp and scales the five-element
+            // MapInputWeights result by TotalBaselineExposure to preserve post-exposure lookup.
+            return pow(clamp(profileGainTableLinearInput(profileRgb), 0.0, 1.0),
+                uProfileGainGamma);
+        }
+
+        float profileGainTableGainAtInput(float normalizedInput) {
+            if (uProfileGainEnabled == 0) return 1.0;
             int mapH = max(uProfileGainTableSize.x, 1);
             int mapV = max(uProfileGainTableSize.y, 1);
             vec2 spacing = max(uProfileGainGrid.zw, vec2(1e-8));
@@ -52,14 +57,50 @@ internal object DngProfileGainTableRenderShader {
             float ty = position.y - float(y0);
             // Match Adobe DNG SDK RefBaselineProfileGainTableMap exactly: weightScaled =
             // weight * tableSize, followed by clamping integer indices to tableSize - 1.
-            float tableIndex = profileGainTableInput(profileRgb) *
+            float tableIndex = clamp(normalizedInput, 0.0, 1.0) *
                 float(max(uProfileGainTableSize.z, 1));
             float gain00 = profileGainTableValue(x0, y0, tableIndex);
             float gain10 = profileGainTableValue(x1, y0, tableIndex);
             float gain01 = profileGainTableValue(x0, y1, tableIndex);
             float gain11 = profileGainTableValue(x1, y1, tableIndex);
-            float gain = mix(mix(gain00, gain10, tx), mix(gain01, gain11, tx), ty);
-            return profileRgb * max(gain, 0.0);
+            return max(mix(mix(gain00, gain10, tx), mix(gain01, gain11, tx), ty), 0.0);
+        }
+
+        vec3 applyProfileGainTableMap(vec3 profileRgb) {
+            if (uProfileGainEnabled == 0) return profileRgb;
+            float gain = profileGainTableGainAtInput(profileGainTableInput(profileRgb));
+            return profileRgb * gain;
+        }
+
+        vec3 applyProfileGainTableMapWithLinearHighlights(
+            vec3 profileRgb,
+            float linearStart
+        ) {
+            if (uProfileGainEnabled == 0) return profileRgb;
+            // PGTM is a scalar local response, but a compressed table does not imply that its
+            // gain itself decreases. Build the extension in the pre-gamma linear input domain:
+            // preserve the exact mapped value at the shoulder, reach an unattenuated (or locally
+            // boosted) white, then continue with that positive linear white slope.
+            float linearInput = profileGainTableLinearInput(profileRgb);
+            float tableInput = pow(clamp(linearInput, 0.0, 1.0), uProfileGainGamma);
+            float shoulderTableInput = clamp(linearStart, 0.0, 1.0);
+            if (tableInput <= shoulderTableInput) {
+                return profileRgb * profileGainTableGainAtInput(tableInput);
+            }
+
+            float inverseGamma = 1.0 / max(uProfileGainGamma, 0.000001);
+            float shoulderLinearInput = pow(shoulderTableInput, inverseGamma);
+            float shoulderGain = profileGainTableGainAtInput(shoulderTableInput);
+            float shoulderOutput = shoulderLinearInput * shoulderGain;
+            float mappedWhiteGain = profileGainTableGainAtInput(1.0);
+            float whiteGain = max(max(shoulderGain, mappedWhiteGain), 1.0);
+            float recoverySlope = (whiteGain - shoulderOutput) /
+                max(1.0 - shoulderLinearInput, 0.000001);
+            float extendedOutput = linearInput <= 1.0
+                ? shoulderOutput + recoverySlope * (linearInput - shoulderLinearInput)
+                : linearInput * whiteGain;
+            float extendedGain = extendedOutput / max(linearInput, 0.000001);
+            return profileRgb * max(extendedGain, 0.0);
         }
     """.trimIndent()
 }

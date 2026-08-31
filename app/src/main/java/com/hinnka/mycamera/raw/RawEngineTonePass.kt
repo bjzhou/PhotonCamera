@@ -32,6 +32,13 @@ internal class RawEngineTonePass(
 
     data class Output(val textureId: Int, val width: Int, val height: Int)
 
+    /** Raw profile-domain source used when the main HDR input is already prepared engine RGB. */
+    data class HdrCoordinateInput(
+        val textureId: Int,
+        val profileToEngineTransform: FloatArray,
+        val profileExposureLinearGain: Float,
+    )
+
     private val adobeCurveAlgorithm = AdobeCurveToneAlgorithm(quad, dcpTextures, curveTextures)
     private val agxAlgorithm = AgXToneAlgorithm(quad)
     private val spektrafilmAlgorithm = SpektrafilmToneAlgorithm(quad)
@@ -44,9 +51,11 @@ internal class RawEngineTonePass(
     fun renderHdrReference(
         input: Input,
         sdrLinearTextureId: Int,
+        coordinateInput: HdrCoordinateInput?,
     ): Output? = algorithmFor(input.colorEngine).renderHdrReference(
         input = input,
         sdrLinearTextureId = sdrLinearTextureId,
+        coordinateInput = coordinateInput,
     )
 
     fun release() {
@@ -126,6 +135,10 @@ internal class RawEngineTonePass(
 
             uniform sampler2D uHdrSdrLinearTexture;
             uniform sampler2D uHdrBaseCurveTexture;
+            uniform sampler2D uHdrCoordinateTexture;
+            uniform int uHdrInputIsPreparedEngineRgb;
+            uniform mat3 uHdrCoordinateProfileToEngineTransform;
+            uniform float uHdrCoordinateExposureGain;
             uniform float uHdrCurveJoinInput;
             uniform float uHdrCurveJoinOutput;
             uniform float uHdrCurveJoinSlope;
@@ -136,6 +149,8 @@ internal class RawEngineTonePass(
             const float HDR_SCENE_WHITE = 1.0;
             const float HDR_EPSILON = 0.000001;
             const float HDR_BASE_CURVE_SIZE = ${RawHdrReferenceMath.BASE_CURVE_SAMPLE_COUNT}.0;
+            const float HDR_PGTM_LINEAR_START =
+                ${RawHdrReferenceMath.PGTM_LINEAR_EXTENSION_START};
 
             float sampleHdrBaseCurve(float inputValue) {
                 float normalized = clamp(inputValue, 0.0, HDR_SCENE_WHITE);
@@ -164,17 +179,45 @@ internal class RawEngineTonePass(
 
             void main() {
                 vec3 profileColor = texture(uInputTexture, vTexCoord).rgb;
-                profileColor = applyProfileGainTableMap(profileColor);
-                vec3 engineColor = prepareEngineInput(profileColor);
-                vec3 sdrLinear = max(texture(uHdrSdrLinearTexture, vTexCoord).rgb, vec3(0.0));
-                float toneInput = max(max(engineColor.r, engineColor.g), engineColor.b);
-                if (toneInput <= uHdrCurveJoinInput) {
-                    fragColor = vec4(sdrLinear, 1.0);
-                    return;
+                vec3 sdrEngineColor;
+                vec3 hdrEngineColor;
+                if (uHdrInputIsPreparedEngineRgb != 0) {
+                    // Filmic highlight reconstruction has already baked PGTM, exposure and the
+                    // profile transform into the main input. Rebuild only the HDR coordinate
+                    // from its raw profile-domain source so PGTM can be extended exactly once.
+                    sdrEngineColor = prepareEngineInput(profileColor);
+                    vec3 coordinateProfileColor = texture(uHdrCoordinateTexture, vTexCoord).rgb;
+                    coordinateProfileColor = applyProfileGainTableMapWithLinearHighlights(
+                        coordinateProfileColor,
+                        HDR_PGTM_LINEAR_START
+                    );
+                    hdrEngineColor = uHdrCoordinateProfileToEngineTransform *
+                        (coordinateProfileColor * uHdrCoordinateExposureGain);
+                } else {
+                    sdrEngineColor = prepareEngineInput(applyProfileGainTableMap(profileColor));
+                    hdrEngineColor = prepareEngineInput(
+                        applyProfileGainTableMapWithLinearHighlights(
+                            profileColor,
+                            HDR_PGTM_LINEAR_START
+                        )
+                    );
                 }
-
-                float baseCurveOutput = max(sampleHdrBaseCurve(toneInput), HDR_EPSILON);
-                float extendedCurveOutput = max(applyHdrExtendedCurve(toneInput), 0.0);
+                vec3 sdrLinear = max(texture(uHdrSdrLinearTexture, vTexCoord).rgb, vec3(0.0));
+                float sdrToneInput = max(
+                    max(sdrEngineColor.r, sdrEngineColor.g),
+                    sdrEngineColor.b
+                );
+                float hdrToneInput = max(
+                    max(hdrEngineColor.r, hdrEngineColor.g),
+                    hdrEngineColor.b
+                );
+                float baseCurveOutput = max(sampleHdrBaseCurve(sdrToneInput), HDR_EPSILON);
+                // The exact SDR is still the color base. This scalar only replaces PGTM's
+                // highlight shoulder and the engine shoulder; it can never reduce SDR output.
+                float extendedCurveOutput = max(
+                    applyHdrExtendedCurve(hdrToneInput),
+                    baseCurveOutput
+                );
                 float gain = extendedCurveOutput / baseCurveOutput;
                 fragColor = vec4(sdrLinear * gain, 1.0);
             }
