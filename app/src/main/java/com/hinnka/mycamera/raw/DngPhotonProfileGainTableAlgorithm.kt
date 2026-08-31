@@ -1822,15 +1822,15 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "mapInputDomain=RAW_X_FINAL_SHORT_GAIN " +
                     "pgtmBaselineCancelledFromInputCoordinate=true " +
                     "exposureSolve=${exposureResult != null} " +
-                    "exposureMetric=SHARED_CLASSIC_NATIVE_SOLVER " +
+                    "exposureMetric=NATIVE_PAIRED_P20_P50_P80_CURVE_FIT " +
                     "exposureCandidateDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
                     "exposureReferenceDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
                     "exposureSpatialWeight=CLASSIC_REFERENCE_ENDPOINT_RELIABILITY " +
                     "exposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL " +
                     "exposureReferenceAvailable=${input.viewfinderReference != null} " +
                     "exposureOutputRotation=${input.outputRotation} " +
-                    "exposureAdjustmentMode=CLASSIC_NATIVE_SEARCH_SHORT_ONLY_BOUNDS " +
-                    "exposureConvergenceCondition=SHARED_ROBUST_CORRECTION " +
+                    "exposureAdjustmentMode=DAMPED_NEWTON_SHORT_AND_HDR_RATIO_EV " +
+                    "exposureConvergenceCondition=P50_AND_P20_P80_SPAN_WITH_HUBER_GUARD " +
                     "exposureBaseShortGain=$baseShortGain " +
                     "exposureBaseLongGain=$baseLongGain " +
                     "exposureBaseHdrRatio=${basePlan.hdrRatio} " +
@@ -1841,6 +1841,14 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "exposureFinalHdrRatio=${plan.hdrRatio} " +
                     "exposureMedianLog2Ratio=" +
                     "${exposureResult?.evaluation?.medianLog2Ratio} " +
+                    "exposureCenterErrorEv=" +
+                    "${exposureResult?.evaluation?.centerErrorEv} " +
+                    "exposureSpanErrorEv=" +
+                    "${exposureResult?.evaluation?.spanErrorEv} " +
+                    "exposureCurveSlopeError=" +
+                    "${exposureResult?.evaluation?.curveSlopeError} " +
+                    "exposureReferenceSpanEv=" +
+                    "${exposureResult?.evaluation?.referenceSpanEv} " +
                     "exposureRobustLog2Loss=" +
                     "${exposureResult?.evaluation?.robustLog2Loss} " +
                     "exposureMeanAbsoluteLog2Ratio=" +
@@ -1849,6 +1857,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "exposureRecommendedCorrectionEv=" +
                     "${exposureResult?.evaluation?.recommendedExposureCorrectionEv} " +
                     "exposureConverged=${exposureResult?.evaluation?.converged} " +
+                    "exposureFallback1d=" +
+                    "${exposureResult?.evaluation?.usedOneDimensionalFallback} " +
+                    "exposureJacobianNormalizedDeterminant=" +
+                    "${exposureResult?.evaluation?.jacobianNormalizedDeterminant} " +
                     "exposureCandidateCount=" +
                     "${exposureResult?.evaluation?.evaluatedCandidateCount} " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +

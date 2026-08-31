@@ -3,7 +3,6 @@ package com.hinnka.mycamera.raw
 import android.graphics.Bitmap
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
 
@@ -22,6 +21,10 @@ internal data class RawLegacyAutoExposureRequest(
 )
 
 internal data class RawHdrNetExposureEvaluation(
+    val centerErrorEv: Float,
+    val spanErrorEv: Float,
+    val curveSlopeError: Float,
+    val referenceSpanEv: Float,
     val medianLog2Ratio: Float,
     val robustLog2Loss: Float,
     val meanAbsoluteLog2Ratio: Float,
@@ -29,6 +32,8 @@ internal data class RawHdrNetExposureEvaluation(
     val recommendedExposureCorrectionEv: Float,
     val evaluatedCandidateCount: Int,
     val converged: Boolean,
+    val usedOneDimensionalFallback: Boolean,
+    val jacobianNormalizedDeterminant: Float,
 )
 
 internal data class RawHdrNetExposureCandidate<T>(
@@ -40,8 +45,8 @@ internal data class RawHdrNetExposureCandidate<T>(
 
 /**
  * Capture-side viewfinder matching derived from PhotonCamera 1.27.1's spatial solver. Native code
- * owns reference linearization and reliable-grid statistics. Classic HDR retains adaptive search;
- * Photon HDR uses the same robust grid residual statistics while solving only its short gain.
+ * owns reference linearization, robust grid statistics and both exposure solvers. Kotlin only
+ * evaluates the HDRNet candidates requested by native code and retains their inference payloads.
  */
 internal object RawLegacyAutoExposureMatcher {
     private const val TAG = "RawLegacyAutoExposureMatcher"
@@ -51,23 +56,18 @@ internal object RawLegacyAutoExposureMatcher {
         val frame: RawLegacyExposurePreviewFrame,
     )
 
-    private enum class HdrNetSolveDirection {
-        LOWER_SHORT,
-        RAISE_SHORT,
-    }
-
-    private data class HdrNetProbe<T>(
-        val adjustmentEv: Float,
+    private data class HdrNetInference<T>(
+        val shortEv: Float,
+        val hdrRatioEv: Float,
         val shortGain: Float,
+        val longGain: Float,
         val payload: T,
     )
 
     fun createRequest(
         capturePreviewThumbnail: Bitmap?,
     ): RawLegacyAutoExposureRequest? {
-        val reference = capturePreviewThumbnail?.let {
-            buildReference(it)
-        }
+        val reference = capturePreviewThumbnail?.let(::buildReference)
         if (capturePreviewThumbnail != null && reference == null) {
             PLog.w(TAG, "Viewfinder matching skipped: capture preview is unavailable")
         }
@@ -85,12 +85,11 @@ internal object RawLegacyAutoExposureMatcher {
         if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return null
         return try {
             val size = longEdgeSize(bitmap.width, bitmap.height, PREVIEW_LONG_EDGE)
-            val pixels = sampleBitmap(bitmap, size.width, size.height)
             ViewfinderReference(
                 frame = RawLegacyExposurePreviewFrame(
                     width = size.width,
                     height = size.height,
-                    argbPixels = pixels,
+                    argbPixels = sampleBitmap(bitmap, size.width, size.height),
                 ),
             )
         } catch (error: Throwable) {
@@ -100,12 +99,11 @@ internal object RawLegacyAutoExposureMatcher {
     }
 
     /**
-     * Matches Photon HDR directly against the complete capture-time viewfinder image.
+     * Drives the native two-dimensional HDRNet matcher.
      *
-     * The HDRNet candidate and classic ARGB image are both converted to display-linear Rec.709
-     * luma grids before entering the same native solver. Search, convergence, weighting and final
-     * selection therefore have one implementation. HDRNet only constrains the native exposure-EV
-     * search to one side of zero and maps that EV exclusively to short while long remains fixed.
+     * Native code owns P20-P80 curve fitting, the damped Newton/Broyden state, convergence,
+     * step limits, Huber-loss guarding and the one-dimensional fallback. This method only maps
+     * native `(short EV, HDR-ratio EV)` requests to gains and runs the expensive model callback.
      */
     fun <T> solveHdrNetExposure(
         referenceFrame: RawLegacyExposurePreviewFrame,
@@ -118,70 +116,65 @@ internal object RawLegacyAutoExposureMatcher {
         ) {
             return null
         }
+        val initialHdrRatio = initialLongGain / initialShortGain
+        if (!initialHdrRatio.isFinite() || initialHdrRatio < 1f) return null
+        val maximumHdrRatio = maxOf(
+            initialHdrRatio,
+            RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+        )
         val solver = RawLegacyAutoExposureNativeBridge.Solver.create(referenceFrame)
             ?: run {
                 PLog.w(TAG, "Photon HDR matching skipped: viewfinder grid is unreliable")
                 return null
             }
         return solver.use {
-            val probes = ArrayList<HdrNetProbe<T>>()
-            var solveDirection: HdrNetSolveDirection? = null
+            if (!solver.startHdrNetSolve(initialHdrRatio, maximumHdrRatio)) {
+                return@use null
+            }
+            val inferences = ArrayList<HdrNetInference<T>>()
             while (true) {
-                val adjustmentEv = solver.nextExposureEv() ?: break
-                val adjustedShortGain = initialShortGain * 2.0f.pow(adjustmentEv)
-                if (!adjustedShortGain.isFinite() || adjustedShortGain <= 0f) break
-                val shortGain = minOf(adjustedShortGain, initialLongGain)
-                val probeStartNs = System.nanoTime()
-                val candidate = evaluateCandidate(shortGain, initialLongGain) ?: break
-                val candidateReadyNs = System.nanoTime()
-                if (!solver.submitCandidate(
-                        exposureEv = adjustmentEv,
-                        displayLinearLumas = candidate.second,
-                        columns = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_WIDTH,
-                        rows = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_HEIGHT,
-                    )
+                val parameters = solver.nextHdrNetParameters() ?: break
+                val shortGain = initialShortGain * 2.0f.pow(parameters.shortEv)
+                val hdrRatio = (initialHdrRatio * 2.0f.pow(parameters.hdrRatioEv))
+                    .coerceAtLeast(1f)
+                val longGain = shortGain * hdrRatio
+                if (!shortGain.isFinite() || !longGain.isFinite() ||
+                    shortGain <= 0f || longGain < shortGain
                 ) {
-                    return null
+                    return@use null
                 }
-                val sample = solver.lastSample() ?: return null
-                probes += HdrNetProbe(
-                    adjustmentEv = adjustmentEv,
+                val probeStartNs = System.nanoTime()
+                val candidate = evaluateCandidate(shortGain, longGain) ?: return@use null
+                val candidateReadyNs = System.nanoTime()
+                val sample = solver.submitHdrNetCandidate(
+                    parameters = parameters,
+                    displayLinearLumas = candidate.second,
+                    columns = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_WIDTH,
+                    rows = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_HEIGHT,
+                ) ?: return@use null
+                inferences += HdrNetInference(
+                    shortEv = parameters.shortEv,
+                    hdrRatioEv = parameters.hdrRatioEv,
                     shortGain = shortGain,
+                    longGain = longGain,
                     payload = candidate.first,
                 )
-                if (solveDirection == null) {
-                    val direction = when {
-                        sample.recommendedExposureCorrectionEv < 0f ->
-                            HdrNetSolveDirection.LOWER_SHORT
-                        sample.recommendedExposureCorrectionEv > 0f ->
-                            HdrNetSolveDirection.RAISE_SHORT
-                        sample.medianLog2Ratio >= 0f -> HdrNetSolveDirection.LOWER_SHORT
-                        else -> HdrNetSolveDirection.RAISE_SHORT
-                    }
-                    solveDirection = direction
-                    val maximumRaiseEv = log2Ratio(initialLongGain, initialShortGain)
-                        .coerceAtLeast(0f)
-                    val boundsConfigured = when (direction) {
-                        HdrNetSolveDirection.LOWER_SHORT ->
-                            solver.configureExposureBounds(-Float.MAX_VALUE, 0f)
-                        HdrNetSolveDirection.RAISE_SHORT ->
-                            solver.configureExposureBounds(0f, maximumRaiseEv)
-                    }
-                    if (!boundsConfigured) return null
-                }
                 val probeReadyNs = System.nanoTime()
                 PLog.d(
                     TAG,
-                    "HDRNet viewfinder probe: index=${probes.size} " +
-                        "adjustmentAxis=${if (adjustmentEv == 0f) "BASE" else "SHORT"} " +
-                        "adjustmentEv=$adjustmentEv " +
-                        "shortGain=$shortGain longGain=$initialLongGain " +
-                        "hdrRatio=${initialLongGain / shortGain} " +
-                        "solveDirection=$solveDirection " +
+                    "HDRNet viewfinder probe: index=${inferences.size} " +
+                        "adjustmentAxis=${parameters.axis} " +
+                        "shortEv=${parameters.shortEv} ratioEv=${parameters.hdrRatioEv} " +
+                        "shortGain=$shortGain longGain=$longGain hdrRatio=$hdrRatio " +
                         "matchedCells=${sample.matchedCellCount}/${sample.validCellCount} " +
-                        "medianLog2Ratio=${sample.medianLog2Ratio} " +
+                        "curveFitCells=${sample.curveFitCellCount} " +
+                        "centerErrorEv=${sample.centerErrorEv} " +
+                        "spanErrorEv=${sample.spanErrorEv} " +
+                        "curveSlopeError=${sample.curveSlopeError} " +
+                        "referenceP20Ev=${sample.referenceP20Ev} " +
+                        "referenceP50Ev=${sample.referenceP50Ev} " +
+                        "referenceP80Ev=${sample.referenceP80Ev} " +
                         "robustLog2Loss=${sample.robustLog2Loss} " +
-                        "meanAbsoluteLog2Ratio=${sample.meanAbsoluteLog2Ratio} " +
                         "matchRate=${sample.matchRate} " +
                         "recommendedExposureCorrectionEv=" +
                         "${sample.recommendedExposureCorrectionEv} " +
@@ -190,25 +183,36 @@ internal object RawLegacyAutoExposureMatcher {
                         "totalMs=${(probeReadyNs - probeStartNs) / 1_000_000f}",
                 )
             }
-            val result = solver.result() ?: return@use null
-            val selectedProbe = probes.minByOrNull {
-                abs(it.adjustmentEv - result.best.exposureEv)
+            val result = solver.hdrNetResult() ?: return@use null
+            val selectedInference = inferences.minByOrNull {
+                abs(it.shortEv - result.shortEv) +
+                    abs(it.hdrRatioEv - result.hdrRatioEv)
             }?.takeIf {
-                abs(it.adjustmentEv - result.best.exposureEv) < HDRNET_PROBE_LOOKUP_TOLERANCE_EV
+                abs(it.shortEv - result.shortEv) < HDRNET_PAYLOAD_LOOKUP_TOLERANCE_EV &&
+                    abs(it.hdrRatioEv - result.hdrRatioEv) <
+                    HDRNET_PAYLOAD_LOOKUP_TOLERANCE_EV
             } ?: return@use null
+            val sample = result.sample
             val selected = RawHdrNetExposureCandidate(
-                shortGain = selectedProbe.shortGain,
-                longGain = initialLongGain,
-                payload = selectedProbe.payload,
+                shortGain = selectedInference.shortGain,
+                longGain = selectedInference.longGain,
+                payload = selectedInference.payload,
                 evaluation = RawHdrNetExposureEvaluation(
-                    medianLog2Ratio = result.best.medianLog2Ratio,
-                    robustLog2Loss = result.best.robustLog2Loss,
-                    meanAbsoluteLog2Ratio = result.best.meanAbsoluteLog2Ratio,
-                    matchRate = result.best.matchRate,
+                    centerErrorEv = sample.centerErrorEv,
+                    spanErrorEv = sample.spanErrorEv,
+                    curveSlopeError = sample.curveSlopeError,
+                    referenceSpanEv = sample.referenceSpanEv,
+                    medianLog2Ratio = sample.medianLog2Ratio,
+                    robustLog2Loss = sample.robustLog2Loss,
+                    meanAbsoluteLog2Ratio = sample.meanAbsoluteLog2Ratio,
+                    matchRate = sample.matchRate,
                     recommendedExposureCorrectionEv =
-                        result.best.recommendedExposureCorrectionEv,
-                    evaluatedCandidateCount = result.evaluatedSampleCount,
-                    converged = solver.hasConverged(),
+                        sample.recommendedExposureCorrectionEv,
+                    evaluatedCandidateCount = result.evaluatedCandidateCount,
+                    converged = result.converged,
+                    usedOneDimensionalFallback = result.usedOneDimensionalFallback,
+                    jacobianNormalizedDeterminant =
+                        result.jacobianNormalizedDeterminant,
                 ),
             )
             PLog.i(
@@ -216,16 +220,18 @@ internal object RawLegacyAutoExposureMatcher {
                 "HDRNet viewfinder result: shortGain=${selected.shortGain} " +
                     "longGain=${selected.longGain} " +
                     "hdrRatio=${selected.longGain / selected.shortGain} " +
-                    "solveDirection=$solveDirection " +
-                    "medianLog2Ratio=${selected.evaluation.medianLog2Ratio} " +
-                    "robustLog2Loss=${selected.evaluation.robustLog2Loss} " +
-                    "meanAbsoluteLog2Ratio=${selected.evaluation.meanAbsoluteLog2Ratio} " +
-                    "matchRate=${selected.evaluation.matchRate} " +
-                    "recommendedExposureCorrectionEv=" +
-                    "${selected.evaluation.recommendedExposureCorrectionEv} " +
-                    "converged=${selected.evaluation.converged} " +
-                    "candidateCount=${selected.evaluation.evaluatedCandidateCount} " +
-                    "convergenceCondition=SHARED_ROBUST_CORRECTION",
+                    "shortEv=${result.shortEv} ratioEv=${result.hdrRatioEv} " +
+                    "centerErrorEv=${sample.centerErrorEv} " +
+                    "spanErrorEv=${sample.spanErrorEv} " +
+                    "curveSlopeError=${sample.curveSlopeError} " +
+                    "referenceSpanEv=${sample.referenceSpanEv} " +
+                    "robustLog2Loss=${sample.robustLog2Loss} " +
+                    "matchRate=${sample.matchRate} " +
+                    "jacobianNormalizedDeterminant=" +
+                    "${result.jacobianNormalizedDeterminant} " +
+                    "fallback1d=${result.usedOneDimensionalFallback} " +
+                    "converged=${result.converged} " +
+                    "candidateCount=${result.evaluatedCandidateCount}",
             )
             selected
         }
@@ -288,10 +294,7 @@ internal object RawLegacyAutoExposureMatcher {
 
     private data class Size(val width: Int, val height: Int)
 
-    private const val HDRNET_PROBE_LOOKUP_TOLERANCE_EV = 0.001f
-
-    private fun log2Ratio(value: Float, reference: Float): Float =
-        (ln((value / reference).toDouble()) / ln(2.0)).toFloat()
+    private const val HDRNET_PAYLOAD_LOOKUP_TOLERANCE_EV = 0.001f
 
     private fun longEdgeSize(sourceWidth: Int, sourceHeight: Int, maxLongEdge: Int): Size {
         val longEdge = minOf(max(sourceWidth, sourceHeight), maxLongEdge.coerceAtLeast(1))

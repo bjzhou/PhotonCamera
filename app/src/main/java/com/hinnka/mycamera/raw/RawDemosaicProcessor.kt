@@ -3251,7 +3251,7 @@ class RawDemosaicProcessor {
                         append(summary.trimEnd())
                         appendLine()
                         appendLine("hdrNetExposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL")
-                        appendLine("hdrNetExposureGrid=64x48_SHARED_CLASSIC_NATIVE_SOLVER")
+                        appendLine("hdrNetExposureGrid=64x48_PAIRED_LOG2_REC709")
                         appendLine(
                             "hdrNetShortExposureAdjustmentEv=" +
                                 output.hdrNetShortExposureAdjustmentEv,
@@ -3264,6 +3264,20 @@ class RawDemosaicProcessor {
                         appendLine("hdrNetFinalLongGain=${outputShortGain * outputHdrRatio}")
                         appendLine("hdrNetFinalHdrRatio=$outputHdrRatio")
                         output.hdrNetExposureEvaluation?.let { evaluation ->
+                            appendLine(
+                                "hdrNetExposureCenterErrorEv=${evaluation.centerErrorEv}",
+                            )
+                            appendLine(
+                                "hdrNetExposureSpanErrorEv=${evaluation.spanErrorEv}",
+                            )
+                            appendLine(
+                                "hdrNetExposureCurveSlopeError=" +
+                                    evaluation.curveSlopeError,
+                            )
+                            appendLine(
+                                "hdrNetExposureReferenceSpanEv=" +
+                                    evaluation.referenceSpanEv,
+                            )
                             appendLine(
                                 "hdrNetExposureMedianLog2Ratio=${evaluation.medianLog2Ratio}",
                             )
@@ -3280,6 +3294,14 @@ class RawDemosaicProcessor {
                                     evaluation.recommendedExposureCorrectionEv,
                             )
                             appendLine("hdrNetExposureConverged=${evaluation.converged}")
+                            appendLine(
+                                "hdrNetExposureFallback1d=" +
+                                    evaluation.usedOneDimensionalFallback,
+                            )
+                            appendLine(
+                                "hdrNetExposureJacobianNormalizedDeterminant=" +
+                                    evaluation.jacobianNormalizedDeterminant,
+                            )
                             appendLine(
                                 "hdrNetExposureCandidateCount=" +
                                     evaluation.evaluatedCandidateCount,
