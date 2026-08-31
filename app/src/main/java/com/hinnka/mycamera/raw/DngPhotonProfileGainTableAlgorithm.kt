@@ -1045,7 +1045,8 @@ internal object DngPhotonProfileGainTableInputShader {
                     // The demosaic texture is un-white-balanced camera RGB. The render-stage
                     // camera-to-working matrix includes the selected camera white, matching
                     // MGC's uCcm contract without applying WB a second time.
-                    // BaselineExposure is the display/middle-gray target, not an HDRNet input.
+                    // BaselineExposure remains DNG render metadata. It is neither an HDRNet input
+                    // nor the viewfinder-matching target.
                     vec3 cameraRgb = storedCameraRgb * uSourceToShortGain;
                     // MGC clamps only positive overrange before box downsampling. Negative
                     // samples remain in the average and are clamped by the final box pass.
@@ -1388,10 +1389,12 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val samplesPerPixel: Int,
         val metadata: RawMetadata,
         val statsBounds: Rect?,
-        /** DNG BaselineExposure used only by the robust exposure target and final DNG render. */
-        val sourceBaselineExposureEv: Float,
         /** Total BaselineExposure used by DNG ProfileGainTableMap lookup. */
         val rendererBaselineExposureEv: Float,
+        /** Complete capture-time viewfinder target; null when regenerating without capture state. */
+        val viewfinderReference: RawLegacyExposurePreviewFrame?,
+        /** Rotation that maps the sensor/model grid into [viewfinderReference] orientation. */
+        val outputRotation: Int,
         val hdrRatio: Float,
         val sourceToShortGain: Float,
         val colorCorrectionMatrix: FloatArray,
@@ -1412,8 +1415,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val map: DngProfileGainTableMap,
         val hdrRatio: Float? = null,
         val sourceToShortGain: Float? = null,
-        val hdrNetExposureAdjustmentEv: Float,
-        val hdrNetExposureTargetEv: Float? = null,
+        val hdrNetShortExposureAdjustmentEv: Float,
+        val hdrNetLongExposureAdjustmentEv: Float,
         val hdrNetExposureEvaluation: RawHdrNetExposureEvaluation? = null,
     )
 
@@ -1425,7 +1428,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
     private data class HdrNetInferenceCandidate(
         val plan: HdrNetProfileGainTablePlan,
         val coefficients: FloatArray,
-        val adjustmentEv: Float,
+        val shortAdjustmentEv: Float,
+        val longAdjustmentEv: Float,
     )
 
     private var cellSamplesProgram = 0
@@ -1472,7 +1476,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
             Mode.LOCAL_LAPLACIAN -> generateLocalLaplacian(input)?.let { map ->
                 Output(
                     map = map,
-                    hdrNetExposureAdjustmentEv = 0f,
+                    hdrNetShortExposureAdjustmentEv = 0f,
+                    hdrNetLongExposureAdjustmentEv = 0f,
                 )
             }
         }
@@ -1532,7 +1537,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val basePlan = DngPhotonProfileGainTableGenerator.hdrNetPlan(
             sourceWidth = width,
             sourceHeight = height,
-            sourceBaselineExposureEv = input.sourceBaselineExposureEv,
             rendererBaselineExposureEv = input.rendererBaselineExposureEv,
             hdrRatio = input.hdrRatio,
             sourceToShortGain = input.sourceToShortGain,
@@ -1644,35 +1648,42 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             val baseShortGain = basePlan.sourceToShortGain
             val baseLongGain = baseShortGain * basePlan.hdrRatio
-            val exposureTargetEv = input.sourceBaselineExposureEv
             var totalInputNs = 0L
             var totalInferenceNs = 0L
-            var baseCandidate: HdrNetInferenceCandidate? = null
-            var exposureSourceLumaByCell: FloatArray? = null
+            var totalMatchGridNs = 0L
+            val modelInputBuffer = ByteBuffer.allocateDirect(inputFloatCount * Float.SIZE_BYTES)
+                .order(ByteOrder.nativeOrder())
+            val modelOutputBuffer = ByteBuffer.allocateDirect(
+                DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT * Float.SIZE_BYTES,
+            ).order(ByteOrder.nativeOrder())
 
-            fun runCandidate(adjustmentEv: Float): Pair<HdrNetInferenceCandidate, FloatArray>? {
-                // This solve moves the overall exposure anchor. Dynamic range remains the ML AE
-                // result, so short and long must receive the same gain on every candidate.
-                val adjustmentGain = 2.0f.pow(adjustmentEv)
-                val shortGain = baseShortGain * adjustmentGain
-                val longGain = baseLongGain * adjustmentGain
-                if (!shortGain.isFinite() || shortGain <= 0f ||
-                    !longGain.isFinite() || longGain < shortGain
-                ) {
-                    return null
-                }
-                val candidatePlan = DngPhotonProfileGainTableGenerator.hdrNetPlan(
+            fun planCandidate(shortGain: Float, longGain: Float): HdrNetProfileGainTablePlan? {
+                if (!shortGain.isFinite() || !longGain.isFinite() ||
+                    shortGain <= 0f || longGain < shortGain
+                ) return null
+                val candidateHdrRatio = longGain / shortGain
+                if (!candidateHdrRatio.isFinite() || candidateHdrRatio < 1f) return null
+                return DngPhotonProfileGainTableGenerator.hdrNetPlan(
                     sourceWidth = width,
                     sourceHeight = height,
-                    sourceBaselineExposureEv = input.sourceBaselineExposureEv,
                     rendererBaselineExposureEv = input.rendererBaselineExposureEv,
-                    hdrRatio = basePlan.hdrRatio,
+                    hdrRatio = candidateHdrRatio,
                     sourceToShortGain = shortGain,
                     diagnosticBand = DngPgtmDiagnostic.activeBandForSource(
                         "$TAG HDRNet capture",
                     ),
                     samplingArea = samplingArea,
-                ) ?: return null
+                )
+            }
+
+            fun exposureAdjustmentEv(gain: Float, baseGain: Float): Float =
+                (ln((gain / baseGain).toDouble()) / ln(2.0)).toFloat()
+
+            fun runCandidate(
+                shortGain: Float,
+                longGain: Float,
+            ): Pair<HdrNetInferenceCandidate, FloatArray>? {
+                val candidatePlan = planCandidate(shortGain, longGain) ?: return null
 
                 val inputStartNs = System.nanoTime()
                 GLES31.glUseProgram(hdrNetInputProgram)
@@ -1717,52 +1728,55 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     colorCorrectionMatrix = safeColorCorrectionMatrix,
                     values = inputFloats,
                 )
-                val candidateSourceLumaByCell = exposureSourceLumaByCell
-                    ?: DngPhotonProfileGainTableGenerator.hdrNetExposureSourceLumaByCell(
-                        plan = candidatePlan,
-                        modelInput = inputFloats,
-                    )?.also { exposureSourceLumaByCell = it }
-                    ?: return null
 
-                val modelInput = ByteBuffer.allocateDirect(inputFloats.size * Float.SIZE_BYTES)
-                    .order(ByteOrder.nativeOrder())
-                modelInput.asFloatBuffer().put(inputFloats)
-                modelInput.rewind()
-                val modelOutput = ByteBuffer.allocateDirect(
-                    DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT * Float.SIZE_BYTES,
-                ).order(ByteOrder.nativeOrder())
+                modelInputBuffer.clear()
+                modelInputBuffer.asFloatBuffer().put(inputFloats)
+                modelInputBuffer.rewind()
+                modelOutputBuffer.clear()
                 val inferenceStartNs = System.nanoTime()
-                interpreter.run(modelInput, modelOutput)
+                interpreter.run(modelInputBuffer, modelOutputBuffer)
                 totalInferenceNs += System.nanoTime() - inferenceStartNs
-                modelOutput.rewind()
+                modelOutputBuffer.rewind()
                 val coefficients = FloatArray(
                     DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
                 )
-                modelOutput.asFloatBuffer().get(coefficients)
+                modelOutputBuffer.asFloatBuffer().get(coefficients)
                 logHdrNetOutputContract(coefficients, candidatePlan.hdrRatio)
-                val effectiveExposureEvs =
-                    DngPhotonProfileGainTableGenerator.hdrNetEffectiveExposureEvs(
+                val matchGridStartNs = System.nanoTime()
+                val displayLinearLumaGrid =
+                    DngPhotonProfileGainTableGenerator.hdrNetDisplayLinearLumaGrid(
                         plan = candidatePlan,
                         coefficients = coefficients,
-                        sourceLumaByCell = candidateSourceLumaByCell,
-                    ) ?: return null
+                        modelInput = inputFloats,
+                        outputRotation = input.outputRotation,
+                    )
+                val matchGridNs = System.nanoTime() - matchGridStartNs
+                totalMatchGridNs += matchGridNs
+                PLog.d(
+                    TAG,
+                    "HDRNet viewfinder grid: shortGain=$shortGain longGain=$longGain " +
+                        "hdrRatio=${candidatePlan.hdrRatio} " +
+                        "gridMs=${matchGridNs / 1_000_000f}",
+                )
+                if (displayLinearLumaGrid == null) return null
                 return HdrNetInferenceCandidate(
                     plan = candidatePlan,
                     coefficients = coefficients,
-                    adjustmentEv = adjustmentEv,
-                ).also { candidate ->
-                    if (abs(adjustmentEv) < 1e-6f) baseCandidate = candidate
-                } to effectiveExposureEvs
+                    shortAdjustmentEv = exposureAdjustmentEv(shortGain, baseShortGain),
+                    longAdjustmentEv = exposureAdjustmentEv(longGain, baseLongGain),
+                ) to displayLinearLumaGrid
             }
 
-            val exposureResult = RawLegacyAutoExposureMatcher.solveHdrNetExposure(
-                targetExposureEv = exposureTargetEv,
-                maxAdjustmentEv = HDRNET_EXPOSURE_MAX_ADJUSTMENT_EV,
-                evaluateCandidate = ::runCandidate,
-            )
+            val exposureResult = input.viewfinderReference?.let { reference ->
+                RawLegacyAutoExposureMatcher.solveHdrNetExposure(
+                    referenceFrame = reference,
+                    initialShortGain = baseShortGain,
+                    initialLongGain = baseLongGain,
+                    evaluateCandidate = ::runCandidate,
+                )
+            }
             val selectedCandidate = exposureResult?.payload
-                ?: baseCandidate
-                ?: runCandidate(0f)?.first
+                ?: runCandidate(baseShortGain, baseLongGain)?.first
                 ?: return null
             val plan = selectedCandidate.plan
             val coefficients = selectedCandidate.coefficients
@@ -1781,14 +1795,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 throw error
             }
             val totalReadyNs = System.nanoTime()
-            val retainedSourceLumas = exposureSourceLumaByCell
-                ?.filter { it.isFinite() }
-                ?.sorted()
-                .orEmpty()
-            val sourceLumaMedian = retainedSourceLumas.takeIf { it.isNotEmpty() }?.let {
-                val upper = it.size / 2
-                if (it.size % 2 == 0) (it[upper - 1] + it[upper]) * 0.5f else it[upper]
-            }
             PLog.d(
                 TAG,
                 "HDRNet PGTM ready: input=${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH}x" +
@@ -1798,7 +1804,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
                     "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
                     "hdrRatio=${plan.hdrRatio} " +
-                    "baselineTargetGain=${plan.sourceBaselineGain} " +
                     "rendererBaselineGain=${plan.rendererBaselineGain} " +
                     "sourceToShortGain=${plan.sourceToShortGain} " +
                     "hdrNetTotalInputGain=${plan.hdrNetInputScale} " +
@@ -1812,32 +1817,45 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "modelInputAux=MIN_REC601_LUMA_X_HDR_RATIO_12 " +
                     "hdrRatioDomain=MODEL_AUX_AND_POST_INFERENCE_COEFFICIENT_UNROLL " +
                     "baselineAppliedToHdrNetInput=false " +
-                    "baselineRole=ROBUST_EXPOSURE_TARGET_AND_DNG_RENDER_ONLY " +
+                    "baselineAppliedToViewfinderMatch=false " +
+                    "baselineRole=DNG_RENDER_COORDINATE_ONLY " +
                     "mapInputDomain=RAW_X_FINAL_SHORT_GAIN " +
                     "pgtmBaselineCancelledFromInputCoordinate=true " +
                     "exposureSolve=${exposureResult != null} " +
-                    "exposureMetric=ROBUST_LOG2_ACR3_INVERSE_H_OVER_ACTUAL_SOURCE_LUMA " +
-                    "exposureSourceDomain=MODEL_RGB_16X12_CENTRAL_LUMA_POPULATION " +
-                    "exposureSourceSamples=${retainedSourceLumas.size} " +
-                    "exposureSourceLumaMin=${retainedSourceLumas.firstOrNull()} " +
-                    "exposureSourceLumaMedian=$sourceLumaMedian " +
-                    "exposureSourceLumaMax=${retainedSourceLumas.lastOrNull()} " +
-                    "exposureTargetEv=$exposureTargetEv " +
-                    "exposureTargetGain=${basePlan.sourceBaselineGain} " +
-                    "exposureAdjustmentMode=COMMON_SHORT_LONG_GAIN " +
+                    "exposureMetric=SHARED_CLASSIC_NATIVE_SOLVER " +
+                    "exposureCandidateDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
+                    "exposureReferenceDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
+                    "exposureSpatialWeight=CLASSIC_REFERENCE_ENDPOINT_RELIABILITY " +
+                    "exposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL " +
+                    "exposureReferenceAvailable=${input.viewfinderReference != null} " +
+                    "exposureOutputRotation=${input.outputRotation} " +
+                    "exposureAdjustmentMode=CLASSIC_NATIVE_SEARCH_SHORT_ONLY_BOUNDS " +
+                    "exposureConvergenceCondition=SHARED_ROBUST_CORRECTION " +
                     "exposureBaseShortGain=$baseShortGain " +
                     "exposureBaseLongGain=$baseLongGain " +
                     "exposureBaseHdrRatio=${basePlan.hdrRatio} " +
-                    "exposureAdjustmentEv=${selectedCandidate.adjustmentEv} " +
+                    "exposureShortAdjustmentEv=${selectedCandidate.shortAdjustmentEv} " +
+                    "exposureLongAdjustmentEv=${selectedCandidate.longAdjustmentEv} " +
+                    "exposureFinalShortGain=${plan.sourceToShortGain} " +
+                    "exposureFinalLongGain=${plan.sourceToShortGain * plan.hdrRatio} " +
                     "exposureFinalHdrRatio=${plan.hdrRatio} " +
-                    "exposureHdrRatioInvariantError=${plan.hdrRatio - basePlan.hdrRatio} " +
-                    "exposureMedianErrorEv=" +
-                    "${exposureResult?.evaluation?.medianExposureErrorEv} " +
-                    "exposureScore=${exposureResult?.evaluation?.score} " +
+                    "exposureMedianLog2Ratio=" +
+                    "${exposureResult?.evaluation?.medianLog2Ratio} " +
+                    "exposureRobustLog2Loss=" +
+                    "${exposureResult?.evaluation?.robustLog2Loss} " +
+                    "exposureMeanAbsoluteLog2Ratio=" +
+                    "${exposureResult?.evaluation?.meanAbsoluteLog2Ratio} " +
+                    "exposureMatchRate=${exposureResult?.evaluation?.matchRate} " +
+                    "exposureRecommendedCorrectionEv=" +
+                    "${exposureResult?.evaluation?.recommendedExposureCorrectionEv} " +
+                    "exposureConverged=${exposureResult?.evaluation?.converged} " +
+                    "exposureCandidateCount=" +
+                    "${exposureResult?.evaluation?.evaluatedCandidateCount} " +
                     "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
                     "processingBounds=$stage3Bounds samplingArea=$samplingArea " +
                     "inputMs=${totalInputNs / 1_000_000f} " +
                     "inferenceMs=${totalInferenceNs / 1_000_000f} " +
+                    "matchGridMs=${totalMatchGridNs / 1_000_000f} " +
                     "pgtmMs=${(pgtmReadyNs - pgtmStartNs) / 1_000_000f} " +
                     "totalMs=${(totalReadyNs - totalStartNs) / 1_000_000f}",
             )
@@ -1845,8 +1863,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 map = map,
                 hdrRatio = plan.hdrRatio,
                 sourceToShortGain = plan.sourceToShortGain,
-                hdrNetExposureAdjustmentEv = selectedCandidate.adjustmentEv,
-                hdrNetExposureTargetEv = exposureTargetEv,
+                hdrNetShortExposureAdjustmentEv = selectedCandidate.shortAdjustmentEv,
+                hdrNetLongExposureAdjustmentEv = selectedCandidate.longAdjustmentEv,
                 hdrNetExposureEvaluation = exposureResult?.evaluation,
             )
         } catch (error: Throwable) {
@@ -3405,8 +3423,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 "whiteBalanceDomain=BAKED_IN_COLOR_CORRECTION_MATRIX " +
                 "modelInputChannels=R_G_B_LONG_LUMA " +
                 "modelInputFinalClamp=UPPER_ONE_ONLY_NEGATIVE_PRESERVED hueSat=false " +
-                "baselineTargetGain=${plan.sourceBaselineGain} " +
                 "baselineAppliedToModelInput=false " +
+                "baselineAppliedToViewfinderMatch=false " +
                 "rendererBaselineGain=${plan.rendererBaselineGain} " +
                 "sourceToShort=${plan.sourceToShortGain} " +
                 "hdrRatio=${plan.hdrRatio} mapWeights=${plan.mapInputWeights.contentToString()} " +
@@ -3512,7 +3530,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
     private companion object {
         const val TAG = "PhotonPGTM"
         const val HDRNET_MODEL_ASSET = "mgc_hdrnet/hdrnet_coefficients.tflite"
-        const val HDRNET_EXPOSURE_MAX_ADJUSTMENT_EV = 4f
         const val LINEAR_RGB_TEXTURE_UNIT = 0
         const val RAW_TEXTURE_UNIT = 0
         const val LENS_SHADING_TEXTURE_UNIT = 1

@@ -27,11 +27,13 @@ constexpr int kMinimumReliableCellCount = 32;
 constexpr float kMinimumReferenceWeightSum = 16.0f;
 constexpr float kHuberDeltaEv = 0.25f;
 constexpr float kMaximumAbsoluteLog2Residual = 4.0f;
-constexpr float kMinimumLumaDeltaEv = 0.01f;
 constexpr float kMinimumCandidateStepEv = 0.01f;
 constexpr float kMinimumInitialStepEv = 0.25f;
 constexpr float kMaximumInitialStepEv = 2.0f;
-constexpr int kMaximumSampleCount = 16;
+constexpr float kRobustCorrectionToleranceEv = 0.025f;
+constexpr float kMinimumUsefulResponseSlope = 0.05f;
+constexpr int kMaximumSampleCount = 6;
+constexpr int kMinimumModelConvergenceSampleCount = 2;
 constexpr float kHighConfidenceMatchRate = 0.85f;
 constexpr float kMatchRateTrendEpsilon = 0.002f;
 constexpr float kScoreEqualityEpsilon = 0.000001f;
@@ -40,7 +42,7 @@ constexpr float kSrgbLinearScale = 12.92f;
 constexpr float kSrgbTransferA = 0.055f;
 constexpr float kSrgbTransferGamma = 2.4f;
 constexpr float kDisplayLinearLumaFloor = 1.0f / (255.0f * 12.92f);
-constexpr int kNativeResultSize = 15;
+constexpr int kNativeResultSize = 16;
 
 float SrgbToLinear(float value) {
     const float clamped = std::clamp(value, 0.0f, 1.0f);
@@ -166,6 +168,40 @@ float WeightedMedian(std::vector<WeightedValue>* values, float weight_sum) {
     return values->back().value;
 }
 
+float RobustExposureCorrection(
+    const std::vector<WeightedValue>& residuals,
+    float weight_sum) {
+    if (residuals.empty() || !(weight_sum > 0.0f)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    // This is the zero of the derivative of the same Huber loss used by IsBetter().
+    // Predicting this correction keeps candidate generation and final selection aligned.
+    const auto huber_score = [&](float correction_ev) {
+        double score = 0.0;
+        for (const WeightedValue& residual : residuals) {
+            score += residual.weight * std::clamp(
+                residual.value + correction_ev,
+                -kHuberDeltaEv,
+                kHuberDeltaEv);
+        }
+        return score;
+    };
+
+    float lower = -kMaximumAbsoluteLog2Residual;
+    float upper = kMaximumAbsoluteLog2Residual;
+    if (huber_score(lower) >= 0.0) return lower;
+    if (huber_score(upper) <= 0.0) return upper;
+    for (int iteration = 0; iteration < 24; ++iteration) {
+        const float midpoint = (lower + upper) * 0.5f;
+        if (huber_score(midpoint) > 0.0) {
+            upper = midpoint;
+        } else {
+            lower = midpoint;
+        }
+    }
+    return (lower + upper) * 0.5f;
+}
+
 struct MatchResult {
     int matched_cell_count = 0;
     int valid_cell_count = 0;
@@ -174,6 +210,8 @@ struct MatchResult {
     float mean_absolute_log2_ratio = std::numeric_limits<float>::infinity();
     float median_log2_ratio = std::numeric_limits<float>::quiet_NaN();
     float robust_log2_loss = std::numeric_limits<float>::infinity();
+    float recommended_exposure_correction_ev =
+        std::numeric_limits<float>::quiet_NaN();
     float reference_weight_sum = 0.0f;
 };
 
@@ -210,10 +248,7 @@ public:
         }
         if (samples_.empty()) return IssueCandidate(0.0f);
 
-        const Sample& best = BestSample();
-        if (best.match.match_rate >= kHighConfidenceMatchRate &&
-            std::isfinite(best.match.median_log2_ratio) &&
-            std::abs(best.match.median_log2_ratio) <= kMinimumLumaDeltaEv) {
+        if (HasConverged()) {
             finished_ = true;
             return std::nullopt;
         }
@@ -231,19 +266,63 @@ public:
         const jint* pixels,
         int width,
         int height) {
-        if (!pending_exposure_ev_.has_value() ||
-            std::abs(*pending_exposure_ev_ - exposure_ev) > kMinimumCandidateStepEv * 0.1f ||
+        if (!IsExpectedCandidate(exposure_ev) ||
             width != width_ || height != height_) {
             return false;
         }
         MatchResult match;
         if (!Evaluate(pixels, width, height, &match)) return false;
-        samples_.push_back(Sample{exposure_ev, match});
-        pending_exposure_ev_.reset();
+        return CommitCandidate(exposure_ev, match);
+    }
+
+    bool SubmitCandidate(
+        float exposure_ev,
+        const float* display_linear_lumas,
+        int columns,
+        int rows) {
+        if (!IsExpectedCandidate(exposure_ev) || display_linear_lumas == nullptr ||
+            columns != kGridColumns || rows != kGridRows) {
+            return false;
+        }
+        MatchResult match;
+        if (!EvaluateGridLumas(
+                display_linear_lumas,
+                columns * rows,
+                &match)) {
+            return false;
+        }
+        return CommitCandidate(exposure_ev, match);
+    }
+
+    bool ConfigureExposureBounds(float minimum_ev, float maximum_ev) {
+        if (!std::isfinite(minimum_ev) || !std::isfinite(maximum_ev) ||
+            pending_exposure_ev_.has_value()) {
+            return false;
+        }
+        const float safe_minimum = std::clamp(minimum_ev, kMinExposureEv, kMaxExposureEv);
+        const float safe_maximum = std::clamp(maximum_ev, kMinExposureEv, kMaxExposureEv);
+        if (safe_minimum > safe_maximum || safe_minimum > 0.0f || safe_maximum < 0.0f) {
+            return false;
+        }
+        minimum_exposure_ev_ = safe_minimum;
+        maximum_exposure_ev_ = safe_maximum;
         return true;
     }
 
     bool HasResult() const { return !samples_.empty(); }
+
+    bool HasConverged() const {
+        if (!HasResult()) return false;
+        const MatchResult& match = LastSample().match;
+        if (!std::isfinite(match.recommended_exposure_correction_ev) ||
+            std::abs(match.recommended_exposure_correction_ev) >
+                kRobustCorrectionToleranceEv) {
+            return false;
+        }
+        return static_cast<int>(samples_.size()) >=
+                kMinimumModelConvergenceSampleCount ||
+            match.match_rate >= kHighConfidenceMatchRate;
+    }
 
     const Sample& BestSample() const {
         return *std::max_element(
@@ -258,6 +337,18 @@ public:
     int ExcludedHighlightCellCount() const { return excluded_highlight_cell_count_; }
 
 private:
+    bool IsExpectedCandidate(float exposure_ev) const {
+        return pending_exposure_ev_.has_value() && std::isfinite(exposure_ev) &&
+            std::abs(*pending_exposure_ev_ - exposure_ev) <=
+                kMinimumCandidateStepEv * 0.1f;
+    }
+
+    bool CommitCandidate(float exposure_ev, const MatchResult& match) {
+        samples_.push_back(Sample{exposure_ev, match});
+        pending_exposure_ev_.reset();
+        return true;
+    }
+
     bool Initialize(const jint* pixels, int width, int height) {
         if (!BuildGridLumas(pixels, width, height, &reference_grid_lumas_)) {
             return false;
@@ -296,6 +387,20 @@ private:
         }
         std::vector<float> candidate_grid_lumas;
         if (!BuildGridLumas(pixels, width, height, &candidate_grid_lumas)) {
+            return false;
+        }
+        return EvaluateGridLumas(
+            candidate_grid_lumas.data(),
+            static_cast<int>(candidate_grid_lumas.size()),
+            output);
+    }
+
+    bool EvaluateGridLumas(
+        const float* candidate_grid_lumas,
+        int candidate_count,
+        MatchResult* output) const {
+        if (candidate_grid_lumas == nullptr || output == nullptr ||
+            candidate_count != kGridCellCount) {
             return false;
         }
         const int valid_count = static_cast<int>(eligible_cell_indices_.size());
@@ -348,11 +453,15 @@ private:
             static_cast<float>(compared_weight_sum));
         output->robust_log2_loss =
             static_cast<float>(robust_log2_loss_sum / compared_weight_sum);
+        output->recommended_exposure_correction_ev = RobustExposureCorrection(
+            log2_ratios,
+            static_cast<float>(compared_weight_sum));
         output->reference_weight_sum = static_cast<float>(compared_weight_sum);
         return std::isfinite(output->match_rate) &&
             std::isfinite(output->mean_absolute_log2_ratio) &&
             std::isfinite(output->median_log2_ratio) &&
             std::isfinite(output->robust_log2_loss) &&
+            std::isfinite(output->recommended_exposure_correction_ev) &&
             std::isfinite(output->reference_weight_sum);
     }
 
@@ -381,7 +490,8 @@ private:
     }
 
     std::optional<float> IssueCandidate(float exposure_ev) {
-        const float safe_ev = std::clamp(exposure_ev, kMinExposureEv, kMaxExposureEv);
+        const float safe_ev =
+            std::clamp(exposure_ev, minimum_exposure_ev_, maximum_exposure_ev_);
         if (IsAlreadySampled(safe_ev)) return std::nullopt;
         pending_exposure_ev_ = safe_ev;
         return pending_exposure_ev_;
@@ -398,7 +508,8 @@ private:
         float acquisition_score,
         std::vector<Candidate>* candidates) const {
         if (!std::isfinite(exposure_ev) || !std::isfinite(acquisition_score)) return;
-        const float safe_ev = std::clamp(exposure_ev, kMinExposureEv, kMaxExposureEv);
+        const float safe_ev =
+            std::clamp(exposure_ev, minimum_exposure_ev_, maximum_exposure_ev_);
         if (IsAlreadySampled(safe_ev)) return;
         auto duplicate = std::find_if(candidates->begin(), candidates->end(), [&](const Candidate& c) {
             return std::abs(c.exposure_ev - safe_ev) < kMinimumCandidateStepEv;
@@ -413,16 +524,23 @@ private:
     std::optional<float> SelectNextCandidate() const {
         std::vector<Candidate> candidates;
         const Sample& best = BestSample();
+        const Sample& last = LastSample();
 
         for (const Sample& sample : samples_) {
-            if (!std::isfinite(sample.match.median_log2_ratio)) continue;
+            const float correction =
+                sample.match.recommended_exposure_correction_ev;
+            if (!std::isfinite(correction)) continue;
+            const float predicted_correction = samples_.size() == 1
+                ? std::clamp(
+                    correction,
+                    -kMaximumInitialStepEv,
+                    kMaximumInitialStepEv)
+                : correction;
             const float predicted_ev =
-                sample.exposure_ev - sample.match.median_log2_ratio;
-            const float prediction_distance =
-                std::abs(predicted_ev - sample.exposure_ev);
-            const float score =
-                0.40f + sample.match.match_rate * 0.45f +
-                std::min(prediction_distance, 1.0f) * 0.05f;
+                sample.exposure_ev + predicted_correction;
+            const float score = 2.0f +
+                (sample.exposure_ev == last.exposure_ev ? 0.5f : 0.0f) +
+                0.1f / (0.05f + std::abs(correction));
             AddCandidate(predicted_ev, score, &candidates);
         }
 
@@ -441,92 +559,62 @@ private:
             const Sample& upper = *sorted_samples[index + 1];
             const float width = upper.exposure_ev - lower.exposure_ev;
             if (width < kMinimumCandidateStepEv * 2.0f) continue;
-            const bool crosses_luma_target =
-                std::isfinite(lower.match.median_log2_ratio) &&
-                std::isfinite(upper.match.median_log2_ratio) &&
-                ((lower.match.median_log2_ratio <= 0.0f &&
-                    upper.match.median_log2_ratio >= 0.0f) ||
-                    (lower.match.median_log2_ratio >= 0.0f &&
-                        upper.match.median_log2_ratio <= 0.0f));
-            float candidate_ev;
-            if (crosses_luma_target &&
-                std::abs(upper.match.median_log2_ratio -
-                    lower.match.median_log2_ratio) > 0.0001f) {
-                candidate_ev = lower.exposure_ev -
-                    lower.match.median_log2_ratio * width /
-                    (upper.match.median_log2_ratio -
-                        lower.match.median_log2_ratio);
-                const float margin = width * 0.15f;
+            const float lower_correction =
+                lower.match.recommended_exposure_correction_ev;
+            const float upper_correction =
+                upper.match.recommended_exposure_correction_ev;
+            if (!std::isfinite(lower_correction) ||
+                !std::isfinite(upper_correction)) {
+                continue;
+            }
+            const float response_slope =
+                (upper_correction - lower_correction) / width;
+            if (!(response_slope < -kMinimumUsefulResponseSlope)) continue;
+            // Calibrate the next step from the measured exposure response instead of assuming
+            // that an input EV change always produces an identical output-luma EV change.
+            float candidate_ev =
+                lower.exposure_ev - lower_correction / response_slope;
+            const bool brackets_optimum =
+                (lower_correction >= 0.0f && upper_correction <= 0.0f) ||
+                (lower_correction <= 0.0f && upper_correction >= 0.0f);
+            if (brackets_optimum) {
                 candidate_ev = std::clamp(
                     candidate_ev,
-                    lower.exposure_ev + margin,
-                    upper.exposure_ev - margin);
-            } else if (lower.match.match_rate > upper.match.match_rate) {
-                candidate_ev = lower.exposure_ev + width * 0.382f;
-            } else if (upper.match.match_rate > lower.match.match_rate) {
-                candidate_ev = lower.exposure_ev + width * 0.618f;
+                    lower.exposure_ev,
+                    upper.exposure_ev);
             } else {
-                candidate_ev = (lower.exposure_ev + upper.exposure_ev) * 0.5f;
+                candidate_ev = std::clamp(
+                    candidate_ev,
+                    lower.exposure_ev - width,
+                    upper.exposure_ev + width);
             }
-            const float endpoint_rate =
-                std::max(lower.match.match_rate, upper.match.match_rate);
-            const float rate_gradient =
-                std::abs(lower.match.match_rate - upper.match.match_rate);
-            const float acquisition = endpoint_rate +
-                std::min(width, 1.0f) * 0.20f +
-                rate_gradient * 0.35f +
-                (crosses_luma_target ? 0.10f : 0.0f);
+            const float acquisition =
+                (brackets_optimum ? 4.0f : 3.0f) +
+                0.1f / (0.05f +
+                    std::min(std::abs(lower_correction),
+                        std::abs(upper_correction)));
             AddCandidate(candidate_ev, acquisition, &candidates);
         }
 
         if (sorted_samples.size() == 1) {
             const Sample& sample = *sorted_samples.front();
-            float direction = -sample.match.median_log2_ratio;
-            if (!std::isfinite(direction) || std::abs(direction) <= kMinimumLumaDeltaEv) {
-                direction = 1.0f;
-            }
-            const float step = std::clamp(
-                std::abs(direction),
-                kMinimumInitialStepEv,
-                kMaximumInitialStepEv);
-            AddCandidate(
-                sample.exposure_ev + std::copysign(step, direction),
-                1.0f,
-                &candidates);
-        } else {
-            const Sample& left = *sorted_samples.front();
-            const Sample& left_neighbor = *sorted_samples[1];
-            const float left_improvement =
-                left.match.match_rate - left_neighbor.match.match_rate;
-            if (left_improvement > kMatchRateTrendEpsilon ||
-                (std::isfinite(left.match.median_log2_ratio) &&
-                    left.match.median_log2_ratio > kMinimumLumaDeltaEv)) {
+            float direction = sample.match.recommended_exposure_correction_ev;
+            const bool needs_validation_probe = !std::isfinite(direction) ||
+                std::abs(direction) <= kRobustCorrectionToleranceEv;
+            if (needs_validation_probe) {
+                if (!std::isfinite(direction) || direction == 0.0f) {
+                    direction = -sample.match.median_log2_ratio;
+                }
+                if (!std::isfinite(direction) || direction == 0.0f) {
+                    direction = -kMinimumInitialStepEv;
+                }
                 const float step = std::clamp(
-                    left_neighbor.exposure_ev - left.exposure_ev,
+                    std::abs(direction),
                     kMinimumInitialStepEv,
-                    1.0f);
+                    kMaximumInitialStepEv);
                 AddCandidate(
-                    left.exposure_ev - step,
-                    left.match.match_rate + 0.30f +
-                        std::max(left_improvement, 0.0f),
-                    &candidates);
-            }
-
-            const Sample& right = *sorted_samples.back();
-            const Sample& right_neighbor = *sorted_samples[sorted_samples.size() - 2];
-            const float right_improvement =
-                right.match.match_rate - right_neighbor.match.match_rate;
-            if (right_improvement > kMatchRateTrendEpsilon ||
-                (std::isfinite(right.match.median_log2_ratio) &&
-                    right.match.median_log2_ratio < -kMinimumLumaDeltaEv)) {
-                const float step = std::clamp(
-                    right.exposure_ev - right_neighbor.exposure_ev,
-                    kMinimumInitialStepEv,
-                    1.0f);
-                AddCandidate(
-                    right.exposure_ev + step,
-                    right.match.match_rate + 0.30f +
-                        std::max(right_improvement, 0.0f),
+                    sample.exposure_ev + std::copysign(step, direction),
+                    5.0f,
                     &candidates);
             }
         }
@@ -551,6 +639,8 @@ private:
     int excluded_shadow_cell_count_ = 0;
     int excluded_highlight_cell_count_ = 0;
     float reference_weight_sum_ = 0.0f;
+    float minimum_exposure_ev_ = kMinExposureEv;
+    float maximum_exposure_ev_ = kMaxExposureEv;
     bool finished_ = false;
     std::optional<float> pending_exposure_ev_;
     std::vector<float> reference_grid_lumas_;
@@ -574,9 +664,10 @@ jfloatArray CreateSampleArray(JNIEnv* env, const Sample& sample) {
         sample.match.median_log2_ratio,
         sample.match.robust_log2_loss,
         sample.match.reference_weight_sum,
+        sample.match.recommended_exposure_correction_ev,
     };
-    jfloatArray result = env->NewFloatArray(9);
-    if (result != nullptr) env->SetFloatArrayRegion(result, 0, 9, values);
+    jfloatArray result = env->NewFloatArray(10);
+    if (result != nullptr) env->SetFloatArrayRegion(result, 0, 10, values);
     return result;
 }
 
@@ -646,6 +737,61 @@ Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeSubmitCandi
     return submitted ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeSubmitGridCandidate(
+    JNIEnv* env,
+    jobject,
+    jlong handle,
+    jfloat exposure_ev,
+    jfloatArray candidate_display_linear_lumas,
+    jint columns,
+    jint rows) {
+    ExposureSolver* solver = FromHandle(handle);
+    if (solver == nullptr || candidate_display_linear_lumas == nullptr ||
+        columns != kGridColumns || rows != kGridRows ||
+        env->GetArrayLength(candidate_display_linear_lumas) != kGridCellCount) {
+        return JNI_FALSE;
+    }
+    jfloat* lumas =
+        env->GetFloatArrayElements(candidate_display_linear_lumas, nullptr);
+    if (lumas == nullptr) return JNI_FALSE;
+    bool submitted = false;
+    try {
+        submitted = solver->SubmitCandidate(
+            exposure_ev,
+            lumas,
+            columns,
+            rows);
+    } catch (const std::bad_alloc&) {
+        submitted = false;
+    }
+    env->ReleaseFloatArrayElements(candidate_display_linear_lumas, lumas, JNI_ABORT);
+    return submitted ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeConfigureExposureBounds(
+    JNIEnv*,
+    jobject,
+    jlong handle,
+    jfloat minimum_ev,
+    jfloat maximum_ev) {
+    ExposureSolver* solver = FromHandle(handle);
+    if (solver == nullptr) return JNI_FALSE;
+    return solver->ConfigureExposureBounds(minimum_ev, maximum_ev)
+        ? JNI_TRUE
+        : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeHasConverged(
+    JNIEnv*,
+    jobject,
+    jlong handle) {
+    ExposureSolver* solver = FromHandle(handle);
+    return solver != nullptr && solver->HasConverged() ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeGetLastSample(
     JNIEnv* env,
@@ -674,6 +820,7 @@ Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeGetResult(
         best.match.median_log2_ratio,
         best.match.robust_log2_loss,
         best.match.reference_weight_sum,
+        best.match.recommended_exposure_correction_ev,
         static_cast<float>(solver->SampleCount()),
         static_cast<float>(solver->ExcludedShadowCellCount()),
         static_cast<float>(solver->ExcludedHighlightCellCount()),

@@ -18,6 +18,7 @@ internal object RawLegacyAutoExposureNativeBridge {
         val medianLog2Ratio: Float,
         val robustLog2Loss: Float,
         val referenceWeightSum: Float,
+        val recommendedExposureCorrectionEv: Float,
     )
 
     data class Result(
@@ -49,6 +50,35 @@ internal object RawLegacyAutoExposureNativeBridge {
             )
         }
 
+        fun submitCandidate(
+            exposureEv: Float,
+            displayLinearLumas: FloatArray,
+            columns: Int,
+            rows: Int,
+        ): Boolean {
+            check(handle != 0L) { "Native exposure solver is closed" }
+            if (columns <= 0 || rows <= 0 || displayLinearLumas.size != columns * rows) {
+                return false
+            }
+            return nativeSubmitGridCandidate(
+                handle = handle,
+                exposureEv = exposureEv,
+                candidateDisplayLinearLumas = displayLinearLumas,
+                columns = columns,
+                rows = rows,
+            )
+        }
+
+        fun configureExposureBounds(minimumEv: Float, maximumEv: Float): Boolean {
+            check(handle != 0L) { "Native exposure solver is closed" }
+            return nativeConfigureExposureBounds(handle, minimumEv, maximumEv)
+        }
+
+        fun hasConverged(): Boolean {
+            check(handle != 0L) { "Native exposure solver is closed" }
+            return nativeHasConverged(handle)
+        }
+
         fun lastSample(): Sample? {
             check(handle != 0L) { "Native exposure solver is closed" }
             return nativeGetLastSample(handle)?.toSample()
@@ -60,12 +90,12 @@ internal object RawLegacyAutoExposureNativeBridge {
             if (values.size != RESULT_VALUE_COUNT) return null
             return Result(
                 best = values.toSample() ?: return null,
-                evaluatedSampleCount = values[9].roundToInt(),
-                excludedShadowCellCount = values[10].roundToInt(),
-                excludedHighlightCellCount = values[11].roundToInt(),
-                shadowWeightZeroLinear = values[12],
-                highlightWeightZeroLinear = values[13],
-                huberDeltaEv = values[14],
+                evaluatedSampleCount = values[10].roundToInt(),
+                excludedShadowCellCount = values[11].roundToInt(),
+                excludedHighlightCellCount = values[12].roundToInt(),
+                shadowWeightZeroLinear = values[13],
+                highlightWeightZeroLinear = values[14],
+                huberDeltaEv = values[15],
             )
         }
 
@@ -100,6 +130,7 @@ internal object RawLegacyAutoExposureNativeBridge {
             medianLog2Ratio = this[6],
             robustLog2Loss = this[7],
             referenceWeightSum = this[8],
+            recommendedExposureCorrectionEv = this[9],
         )
     }
 
@@ -119,10 +150,26 @@ internal object RawLegacyAutoExposureNativeBridge {
         height: Int,
     ): Boolean
 
+    private external fun nativeSubmitGridCandidate(
+        handle: Long,
+        exposureEv: Float,
+        candidateDisplayLinearLumas: FloatArray,
+        columns: Int,
+        rows: Int,
+    ): Boolean
+
+    private external fun nativeConfigureExposureBounds(
+        handle: Long,
+        minimumEv: Float,
+        maximumEv: Float,
+    ): Boolean
+
+    private external fun nativeHasConverged(handle: Long): Boolean
+
     private external fun nativeGetLastSample(handle: Long): FloatArray?
     private external fun nativeGetResult(handle: Long): FloatArray?
     private external fun nativeDestroy(handle: Long)
 
-    private const val SAMPLE_VALUE_COUNT = 9
-    private const val RESULT_VALUE_COUNT = 15
+    private const val SAMPLE_VALUE_COUNT = 10
+    private const val RESULT_VALUE_COUNT = 16
 }

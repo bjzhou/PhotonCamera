@@ -107,11 +107,11 @@ data class GpuDemosaicedRawSource(
 )
 
 data class RawDngCaptureProfileResult(
-    /** Legacy auto-exposure EV relative to the source baseline; used by classic AE and Photon HDR. */
+    /** Legacy auto-exposure EV relative to the source baseline; null for Photon HDR. */
     val exposureOffsetEv: Float?,
     /** Photon HDR long/short TET ratio; always null for classic auto exposure. */
     val hdrRatio: Float?,
-    /** Capture-time source/final-short TET quotient consumed by HDRNet input normalization. */
+    /** Final source/short gain after Photon HDR's capture-viewfinder grid match. */
     val finalShortGain: Float?,
     /** Capture-time MGC AE inputs and results serialized as photon:SummaryText in the DNG XMP. */
     val rawSceneExposureSummaryText: String? = null,

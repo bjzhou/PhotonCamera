@@ -3,7 +3,9 @@ package com.hinnka.mycamera.raw
 import android.graphics.Bitmap
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
+import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.pow
 
 internal data class RawLegacyExposurePreviewFrame(
     val width: Int,
@@ -14,29 +16,32 @@ internal data class RawLegacyExposurePreviewFrame(
 internal data class RawLegacyAutoExposureRequest(
     val width: Int,
     val height: Int,
+    /** Complete capture-time viewfinder image retained for Photon HDR spatial matching. */
+    val referenceFrame: RawLegacyExposurePreviewFrame,
     val solve: ((Float) -> RawLegacyExposurePreviewFrame?) -> Float?,
 )
 
 internal data class RawHdrNetExposureEvaluation(
-    val matchedSpatialSampleCount: Int,
-    val spatialSampleCount: Int,
+    val medianLog2Ratio: Float,
+    val robustLog2Loss: Float,
+    val meanAbsoluteLog2Ratio: Float,
     val matchRate: Float,
-    val medianExposureErrorEv: Float,
-    val meanAbsoluteExposureErrorEv: Float,
-    val robustExposureLoss: Float,
-    val score: Float,
+    val recommendedExposureCorrectionEv: Float,
+    val evaluatedCandidateCount: Int,
+    val converged: Boolean,
 )
 
 internal data class RawHdrNetExposureCandidate<T>(
-    val adjustmentEv: Float,
+    val shortGain: Float,
+    val longGain: Float,
     val payload: T,
     val evaluation: RawHdrNetExposureEvaluation,
 )
 
 /**
- * Classic capture-side auto exposure derived from the adaptive spatial grid matcher in
- * PhotonCamera 1.27.1. The RAW renderer supplies default-curve preview candidates while native
- * code owns endpoint reliability weighting, robust scoring, adaptive search and final selection.
+ * Capture-side viewfinder matching derived from PhotonCamera 1.27.1's spatial solver. Native code
+ * owns reference linearization and reliable-grid statistics. Classic HDR retains adaptive search;
+ * Photon HDR uses the same robust grid residual statistics while solving only its short gain.
  */
 internal object RawLegacyAutoExposureMatcher {
     private const val TAG = "RawLegacyAutoExposureMatcher"
@@ -46,6 +51,17 @@ internal object RawLegacyAutoExposureMatcher {
         val frame: RawLegacyExposurePreviewFrame,
     )
 
+    private enum class HdrNetSolveDirection {
+        LOWER_SHORT,
+        RAISE_SHORT,
+    }
+
+    private data class HdrNetProbe<T>(
+        val adjustmentEv: Float,
+        val shortGain: Float,
+        val payload: T,
+    )
+
     fun createRequest(
         capturePreviewThumbnail: Bitmap?,
     ): RawLegacyAutoExposureRequest? {
@@ -53,12 +69,13 @@ internal object RawLegacyAutoExposureMatcher {
             buildReference(it)
         }
         if (capturePreviewThumbnail != null && reference == null) {
-            PLog.w(TAG, "Classic auto exposure skipped: capture preview is unavailable")
+            PLog.w(TAG, "Viewfinder matching skipped: capture preview is unavailable")
         }
         return reference?.let {
             RawLegacyAutoExposureRequest(
                 width = it.frame.width,
                 height = it.frame.height,
+                referenceFrame = it.frame,
                 solve = { renderSample -> solve(it, renderSample) },
             )
         }
@@ -83,197 +100,134 @@ internal object RawLegacyAutoExposureMatcher {
     }
 
     /**
-     * Searches the one-dimensional Photon exposure bracket without rendering a PGTM candidate.
-     * Each EV candidate applies one common gain to short and long, preserving the ML AE HDR ratio.
-     * [evaluateCandidate] returns the spatial effective exposure of the actual image in stops:
-     * `log2(ACR3^-1(H) / sourceLuma)`. Its robust center is matched directly to the legacy
-     * BaselineExposure EV, so local HDR shaping does not turn a synthetic 18% gray into a second
-     * global exposure target.
+     * Matches Photon HDR directly against the complete capture-time viewfinder image.
+     *
+     * The HDRNet candidate and classic ARGB image are both converted to display-linear Rec.709
+     * luma grids before entering the same native solver. Search, convergence, weighting and final
+     * selection therefore have one implementation. HDRNet only constrains the native exposure-EV
+     * search to one side of zero and maps that EV exclusively to short while long remains fixed.
      */
     fun <T> solveHdrNetExposure(
-        targetExposureEv: Float,
-        maxAdjustmentEv: Float,
-        evaluateCandidate: (Float) -> Pair<T, FloatArray>?,
+        referenceFrame: RawLegacyExposurePreviewFrame,
+        initialShortGain: Float,
+        initialLongGain: Float,
+        evaluateCandidate: (shortGain: Float, longGain: Float) -> Pair<T, FloatArray>?,
     ): RawHdrNetExposureCandidate<T>? {
-        if (!targetExposureEv.isFinite()) return null
-        val limit = maxAdjustmentEv.takeIf { it.isFinite() && it > MIN_SEARCH_STEP_EV }
-            ?.coerceAtMost(MAX_SEARCH_RANGE_EV)
-            ?: 0f
-        val samples = ArrayList<RawHdrNetExposureCandidate<T>>(MAX_HDRNET_SAMPLE_COUNT)
-        var nextEv = 0f
-        var searchMinimumEv = -limit
-        var searchMaximumEv = limit
-        while (samples.size < MAX_HDRNET_SAMPLE_COUNT) {
-            val candidate = evaluateCandidate(nextEv) ?: break
-            val evaluation = evaluateHdrNetExposure(targetExposureEv, candidate.second) ?: break
-            val sample = RawHdrNetExposureCandidate(
-                adjustmentEv = nextEv,
-                payload = candidate.first,
-                evaluation = evaluation,
-            )
-            samples += sample
-            PLog.d(
-                TAG,
-                "HDRNet exposure sample: adjustmentEv=$nextEv " +
-                    "matchedSpatialSamples=${evaluation.matchedSpatialSampleCount}/" +
-                    "${evaluation.spatialSampleCount} " +
-                    "targetExposureEv=$targetExposureEv " +
-                    "medianExposureErrorEv=${evaluation.medianExposureErrorEv} " +
-                    "meanAbsoluteExposureErrorEv=${evaluation.meanAbsoluteExposureErrorEv} " +
-                    "robustExposureLoss=${evaluation.robustExposureLoss} " +
-                    "matchRate=${evaluation.matchRate} " +
-                    "score=${evaluation.score}",
-            )
-            if (limit == 0f ||
-                abs(evaluation.medianExposureErrorEv) <= CONVERGED_RESIDUAL_EV
-            ) {
-                break
-            }
-            if (samples.size == 1) {
-                // Lock the search direction from the first response. The controlled variable is
-                // one common exposure EV, so this restriction never changes the short/long ratio.
-                if (evaluation.medianExposureErrorEv > 0f) {
-                    searchMaximumEv = 0f
-                } else {
-                    searchMinimumEv = 0f
-                }
-            }
-            val proposed = nextHdrNetAdjustment(
-                samples = samples,
-                minimumEv = searchMinimumEv,
-                maximumEv = searchMaximumEv,
-            ) ?: break
-            if (samples.any { abs(it.adjustmentEv - proposed) < MIN_SEARCH_STEP_EV }) break
-            nextEv = proposed
-        }
-        val best = samples.minWithOrNull(
-            compareBy<RawHdrNetExposureCandidate<T>> { it.evaluation.robustExposureLoss }
-                .thenBy { it.evaluation.meanAbsoluteExposureErrorEv }
-                .thenByDescending { it.evaluation.matchRate }
-                .thenBy { abs(it.adjustmentEv) },
-        ) ?: return null
-        PLog.i(
-            TAG,
-            "HDRNet exposure result: adjustmentEv=${best.adjustmentEv} " +
-                "matchedSpatialSamples=${best.evaluation.matchedSpatialSampleCount}/" +
-                "${best.evaluation.spatialSampleCount} " +
-                "targetExposureEv=$targetExposureEv " +
-                "medianExposureErrorEv=${best.evaluation.medianExposureErrorEv} " +
-                "meanAbsoluteExposureErrorEv=${best.evaluation.meanAbsoluteExposureErrorEv} " +
-                "robustExposureLoss=${best.evaluation.robustExposureLoss} " +
-                "matchRate=${best.evaluation.matchRate} " +
-                "score=${best.evaluation.score} sampleCount=${samples.size}",
-        )
-        return best
-    }
-
-    private fun evaluateHdrNetExposure(
-        targetExposureEv: Float,
-        candidateExposureEvs: FloatArray,
-    ): RawHdrNetExposureEvaluation? {
-        if (candidateExposureEvs.isEmpty() || candidateExposureEvs.any { !it.isFinite() }) {
+        if (!initialShortGain.isFinite() || !initialLongGain.isFinite() ||
+            initialShortGain <= 0f || initialLongGain < initialShortGain
+        ) {
             return null
         }
-        val residualHistogram = FloatArray(RESIDUAL_HISTOGRAM_BINS)
-        var matchedSpatialSampleCount = 0
-        var absoluteResidualSum = 0.0
-        var robustLossSum = 0.0
-        for (candidateExposureEv in candidateExposureEvs) {
-            val residual = (candidateExposureEv - targetExposureEv)
-                .coerceIn(-MAX_RESIDUAL_EV, MAX_RESIDUAL_EV)
-            val absoluteResidual = abs(residual)
-            val matched = absoluteResidual <= MATCH_RESIDUAL_EV
-            if (matched) matchedSpatialSampleCount++
-            absoluteResidualSum += absoluteResidual
-            robustLossSum += huberLoss(residual)
-            val histogramPosition = ((residual + MAX_RESIDUAL_EV) /
-                (2f * MAX_RESIDUAL_EV) * (RESIDUAL_HISTOGRAM_BINS - 1))
-                .toInt()
-                .coerceIn(0, RESIDUAL_HISTOGRAM_BINS - 1)
-            residualHistogram[histogramPosition] += 1f
-        }
-        val medianTarget = candidateExposureEvs.size * 0.5
-        var cumulative = 0.0
-        var medianBin = 0
-        for (bin in residualHistogram.indices) {
-            cumulative += residualHistogram[bin]
-            if (cumulative >= medianTarget) {
-                medianBin = bin
-                break
+        val solver = RawLegacyAutoExposureNativeBridge.Solver.create(referenceFrame)
+            ?: run {
+                PLog.w(TAG, "Photon HDR matching skipped: viewfinder grid is unreliable")
+                return null
             }
-        }
-        val medianResidual = -MAX_RESIDUAL_EV +
-            (medianBin + 0.5f) * (2f * MAX_RESIDUAL_EV / RESIDUAL_HISTOGRAM_BINS)
-        val meanAbsoluteResidual = (absoluteResidualSum / candidateExposureEvs.size).toFloat()
-        val robustLoss = (robustLossSum / candidateExposureEvs.size).toFloat()
-        val matchRate = matchedSpatialSampleCount.toFloat() / candidateExposureEvs.size
-        return RawHdrNetExposureEvaluation(
-            matchedSpatialSampleCount = matchedSpatialSampleCount,
-            spatialSampleCount = candidateExposureEvs.size,
-            matchRate = matchRate,
-            medianExposureErrorEv = medianResidual,
-            meanAbsoluteExposureErrorEv = meanAbsoluteResidual,
-            robustExposureLoss = robustLoss,
-            score = 1f / (1f + robustLoss),
-        )
-    }
-
-    private fun <T> nextHdrNetAdjustment(
-        samples: List<RawHdrNetExposureCandidate<T>>,
-        minimumEv: Float,
-        maximumEv: Float,
-    ): Float? {
-        val sorted = samples.sortedBy { it.adjustmentEv }
-        var narrowestBracket: Pair<RawHdrNetExposureCandidate<T>, RawHdrNetExposureCandidate<T>>? =
-            null
-        for (index in 0 until sorted.lastIndex) {
-            val lower = sorted[index]
-            val upper = sorted[index + 1]
-            if (lower.evaluation.medianExposureErrorEv *
-                upper.evaluation.medianExposureErrorEv > 0f
-            ) {
-                continue
+        return solver.use {
+            val probes = ArrayList<HdrNetProbe<T>>()
+            var solveDirection: HdrNetSolveDirection? = null
+            while (true) {
+                val adjustmentEv = solver.nextExposureEv() ?: break
+                val adjustedShortGain = initialShortGain * 2.0f.pow(adjustmentEv)
+                if (!adjustedShortGain.isFinite() || adjustedShortGain <= 0f) break
+                val shortGain = minOf(adjustedShortGain, initialLongGain)
+                val probeStartNs = System.nanoTime()
+                val candidate = evaluateCandidate(shortGain, initialLongGain) ?: break
+                val candidateReadyNs = System.nanoTime()
+                if (!solver.submitCandidate(
+                        exposureEv = adjustmentEv,
+                        displayLinearLumas = candidate.second,
+                        columns = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_WIDTH,
+                        rows = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_HEIGHT,
+                    )
+                ) {
+                    return null
+                }
+                val sample = solver.lastSample() ?: return null
+                probes += HdrNetProbe(
+                    adjustmentEv = adjustmentEv,
+                    shortGain = shortGain,
+                    payload = candidate.first,
+                )
+                if (solveDirection == null) {
+                    val direction = when {
+                        sample.recommendedExposureCorrectionEv < 0f ->
+                            HdrNetSolveDirection.LOWER_SHORT
+                        sample.recommendedExposureCorrectionEv > 0f ->
+                            HdrNetSolveDirection.RAISE_SHORT
+                        sample.medianLog2Ratio >= 0f -> HdrNetSolveDirection.LOWER_SHORT
+                        else -> HdrNetSolveDirection.RAISE_SHORT
+                    }
+                    solveDirection = direction
+                    val maximumRaiseEv = log2Ratio(initialLongGain, initialShortGain)
+                        .coerceAtLeast(0f)
+                    val boundsConfigured = when (direction) {
+                        HdrNetSolveDirection.LOWER_SHORT ->
+                            solver.configureExposureBounds(-Float.MAX_VALUE, 0f)
+                        HdrNetSolveDirection.RAISE_SHORT ->
+                            solver.configureExposureBounds(0f, maximumRaiseEv)
+                    }
+                    if (!boundsConfigured) return null
+                }
+                val probeReadyNs = System.nanoTime()
+                PLog.d(
+                    TAG,
+                    "HDRNet viewfinder probe: index=${probes.size} " +
+                        "adjustmentAxis=${if (adjustmentEv == 0f) "BASE" else "SHORT"} " +
+                        "adjustmentEv=$adjustmentEv " +
+                        "shortGain=$shortGain longGain=$initialLongGain " +
+                        "hdrRatio=${initialLongGain / shortGain} " +
+                        "solveDirection=$solveDirection " +
+                        "matchedCells=${sample.matchedCellCount}/${sample.validCellCount} " +
+                        "medianLog2Ratio=${sample.medianLog2Ratio} " +
+                        "robustLog2Loss=${sample.robustLog2Loss} " +
+                        "meanAbsoluteLog2Ratio=${sample.meanAbsoluteLog2Ratio} " +
+                        "matchRate=${sample.matchRate} " +
+                        "recommendedExposureCorrectionEv=" +
+                        "${sample.recommendedExposureCorrectionEv} " +
+                        "candidateMs=${(candidateReadyNs - probeStartNs) / 1_000_000f} " +
+                        "matchStatsMs=${(probeReadyNs - candidateReadyNs) / 1_000_000f} " +
+                        "totalMs=${(probeReadyNs - probeStartNs) / 1_000_000f}",
+                )
             }
-            val currentWidth = upper.adjustmentEv - lower.adjustmentEv
-            val selectedWidth = narrowestBracket?.let { it.second.adjustmentEv - it.first.adjustmentEv }
-            if (selectedWidth == null || currentWidth < selectedWidth) {
-                narrowestBracket = lower to upper
-            }
-        }
-        narrowestBracket?.let { (lower, upper) ->
-            val lowerResidual = lower.evaluation.medianExposureErrorEv
-            val upperResidual = upper.evaluation.medianExposureErrorEv
-            val width = upper.adjustmentEv - lower.adjustmentEv
-            val denominator = upperResidual - lowerResidual
-            val secant = if (abs(denominator) > 1e-4f) {
-                lower.adjustmentEv - lowerResidual * width / denominator
-            } else {
-                (lower.adjustmentEv + upper.adjustmentEv) * 0.5f
-            }
-            val margin = minOf(width * 0.15f, 0.05f)
-            return secant.coerceIn(
-                lower.adjustmentEv + margin,
-                upper.adjustmentEv - margin,
-            ).coerceIn(minimumEv, maximumEv)
-        }
-        val anchor = samples.minWithOrNull(
-            compareBy<RawHdrNetExposureCandidate<T>> {
-                abs(it.evaluation.medianExposureErrorEv)
-            }.thenBy { it.evaluation.robustExposureLoss },
-        ) ?: return null
-        val residual = anchor.evaluation.medianExposureErrorEv
-        if (!residual.isFinite() || abs(residual) <= CONVERGED_RESIDUAL_EV) return null
-        val stepMagnitude = abs(residual).coerceIn(MIN_DIRECTIONAL_STEP_EV, MAX_DIRECTIONAL_STEP_EV)
-        return (anchor.adjustmentEv - kotlin.math.sign(residual) * stepMagnitude)
-            .coerceIn(minimumEv, maximumEv)
-    }
-
-    private fun huberLoss(residualEv: Float): Float {
-        val absolute = abs(residualEv)
-        return if (absolute <= HUBER_DELTA_EV) {
-            0.5f * absolute * absolute / HUBER_DELTA_EV
-        } else {
-            absolute - 0.5f * HUBER_DELTA_EV
+            val result = solver.result() ?: return@use null
+            val selectedProbe = probes.minByOrNull {
+                abs(it.adjustmentEv - result.best.exposureEv)
+            }?.takeIf {
+                abs(it.adjustmentEv - result.best.exposureEv) < HDRNET_PROBE_LOOKUP_TOLERANCE_EV
+            } ?: return@use null
+            val selected = RawHdrNetExposureCandidate(
+                shortGain = selectedProbe.shortGain,
+                longGain = initialLongGain,
+                payload = selectedProbe.payload,
+                evaluation = RawHdrNetExposureEvaluation(
+                    medianLog2Ratio = result.best.medianLog2Ratio,
+                    robustLog2Loss = result.best.robustLog2Loss,
+                    meanAbsoluteLog2Ratio = result.best.meanAbsoluteLog2Ratio,
+                    matchRate = result.best.matchRate,
+                    recommendedExposureCorrectionEv =
+                        result.best.recommendedExposureCorrectionEv,
+                    evaluatedCandidateCount = result.evaluatedSampleCount,
+                    converged = solver.hasConverged(),
+                ),
+            )
+            PLog.i(
+                TAG,
+                "HDRNet viewfinder result: shortGain=${selected.shortGain} " +
+                    "longGain=${selected.longGain} " +
+                    "hdrRatio=${selected.longGain / selected.shortGain} " +
+                    "solveDirection=$solveDirection " +
+                    "medianLog2Ratio=${selected.evaluation.medianLog2Ratio} " +
+                    "robustLog2Loss=${selected.evaluation.robustLog2Loss} " +
+                    "meanAbsoluteLog2Ratio=${selected.evaluation.meanAbsoluteLog2Ratio} " +
+                    "matchRate=${selected.evaluation.matchRate} " +
+                    "recommendedExposureCorrectionEv=" +
+                    "${selected.evaluation.recommendedExposureCorrectionEv} " +
+                    "converged=${selected.evaluation.converged} " +
+                    "candidateCount=${selected.evaluation.evaluatedCandidateCount} " +
+                    "convergenceCondition=SHARED_ROBUST_CORRECTION",
+            )
+            selected
         }
     }
 
@@ -303,6 +257,8 @@ internal object RawLegacyAutoExposureMatcher {
                             "meanAbsoluteLog2Ratio=${sample.meanAbsoluteLog2Ratio} " +
                             "medianLog2Ratio=${sample.medianLog2Ratio} " +
                             "robustLog2Loss=${sample.robustLog2Loss} " +
+                            "recommendedExposureCorrectionEv=" +
+                            "${sample.recommendedExposureCorrectionEv} " +
                             "referenceWeightSum=${sample.referenceWeightSum}",
                     )
                 }
@@ -316,6 +272,8 @@ internal object RawLegacyAutoExposureMatcher {
                     "meanAbsoluteLog2Ratio=${result.best.meanAbsoluteLog2Ratio} " +
                     "medianLog2Ratio=${result.best.medianLog2Ratio} " +
                     "robustLog2Loss=${result.best.robustLog2Loss} " +
+                    "recommendedExposureCorrectionEv=" +
+                    "${result.best.recommendedExposureCorrectionEv} " +
                     "referenceWeightSum=${result.best.referenceWeightSum} " +
                     "sampleCount=${result.evaluatedSampleCount} " +
                     "excludedShadowCells=${result.excludedShadowCellCount} " +
@@ -330,16 +288,10 @@ internal object RawLegacyAutoExposureMatcher {
 
     private data class Size(val width: Int, val height: Int)
 
-    private const val MATCH_RESIDUAL_EV = 0.13750352f
-    private const val HUBER_DELTA_EV = 0.25f
-    private const val MAX_RESIDUAL_EV = 4f
-    private const val RESIDUAL_HISTOGRAM_BINS = 512
-    private const val CONVERGED_RESIDUAL_EV = 0.03f
-    private const val MIN_SEARCH_STEP_EV = 0.02f
-    private const val MIN_DIRECTIONAL_STEP_EV = 0.125f
-    private const val MAX_DIRECTIONAL_STEP_EV = 1f
-    private const val MAX_SEARCH_RANGE_EV = 4f
-    private const val MAX_HDRNET_SAMPLE_COUNT = 8
+    private const val HDRNET_PROBE_LOOKUP_TOLERANCE_EV = 0.001f
+
+    private fun log2Ratio(value: Float, reference: Float): Float =
+        (ln((value / reference).toDouble()) / ln(2.0)).toFloat()
 
     private fun longEdgeSize(sourceWidth: Int, sourceHeight: Int, maxLongEdge: Int): Size {
         val longEdge = minOf(max(sourceWidth, sourceHeight), maxLongEdge.coerceAtLeast(1))

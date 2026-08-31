@@ -3,11 +3,11 @@ package com.hinnka.mycamera.raw
 /**
  * The mutually exclusive capture/development modes for adaptive RAW exposure handling.
  *
- * [OFF] leaves both paths disabled. [PHOTON_HDR] writes the legacy AE result into
- * BaselineExposure, then runs ML AE plus HDRNet using that value as its reproducible exposure
- * anchor. [LEGACY_AUTO_EXPOSURE] writes the same legacy AE result and generates the historical
- * Local Laplacian profile gain table. Both enabled modes therefore combine automatic metering
- * with HDR mapping; only the mapping implementation differs.
+ * [OFF] leaves both paths disabled. [PHOTON_HDR] runs ML AE plus HDRNet and spatially matches the
+ * HDRNet result to the complete capture-time viewfinder thumbnail. [LEGACY_AUTO_EXPOSURE] writes
+ * its scalar viewfinder-matched exposure into BaselineExposure and generates the historical Local
+ * Laplacian profile gain table. Both enabled modes combine automatic metering with HDR mapping;
+ * only the target representation and mapping implementation differ.
  */
 enum class RawAdaptiveExposureMode(val persistedValue: String) {
     OFF("OFF"),

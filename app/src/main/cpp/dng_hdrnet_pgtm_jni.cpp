@@ -12,6 +12,12 @@ namespace {
 
 constexpr char kLogTag[] = "PLog_DngHdrNetPgtm";
 constexpr float kHdrNetGainEpsilon = 1.0e-6f;
+constexpr float kHdrNetLumaRed = 0.298828125f;
+constexpr float kHdrNetLumaGreen = 0.5869140625f;
+constexpr float kHdrNetLumaBlue = 0.1142578125f;
+constexpr float kDisplayLumaRed = 0.2126f;
+constexpr float kDisplayLumaGreen = 0.7152f;
+constexpr float kDisplayLumaBlue = 0.0722f;
 
 struct AxisSample {
   int lower;
@@ -63,6 +69,45 @@ AxisSample MakeAxisSample(int output_index, int output_size, int source_size) {
       std::clamp(lower_unclamped + 1, 0, source_size - 1),
       source_position - source_floor,
   };
+}
+
+AxisSample MakeNormalizedAxisSample(float coordinate, int source_size) {
+  const float source_position =
+      std::clamp(coordinate, 0.0f, 1.0f) * source_size - 0.5f;
+  const float source_floor = std::floor(source_position);
+  const int lower_unclamped = static_cast<int>(source_floor);
+  return {
+      std::clamp(lower_unclamped, 0, source_size - 1),
+      std::clamp(lower_unclamped + 1, 0, source_size - 1),
+      source_position - source_floor,
+  };
+}
+
+struct RgbSample {
+  float red;
+  float green;
+  float blue;
+};
+
+RgbSample SampleModelRgb(const float* model_input, int input_width,
+                         int input_channels, const AxisSample& sample_x,
+                         const AxisSample& sample_y) {
+  const auto channel_at = [&](int x, int y, int channel) {
+    return model_input[
+        (static_cast<size_t>(y) * input_width + x) * input_channels + channel];
+  };
+  const auto sample_channel = [&](int channel) {
+    const float top =
+        Lerp(channel_at(sample_x.lower, sample_y.lower, channel),
+             channel_at(sample_x.upper, sample_y.lower, channel),
+             sample_x.amount);
+    const float bottom =
+        Lerp(channel_at(sample_x.lower, sample_y.upper, channel),
+             channel_at(sample_x.upper, sample_y.upper, channel),
+             sample_x.amount);
+    return Lerp(top, bottom, sample_y.amount);
+  };
+  return {sample_channel(0), sample_channel(1), sample_channel(2)};
 }
 
 float SampleCoefficient(const float* coefficients, int source_width,
@@ -158,6 +203,164 @@ bool IsValidAcrCurve(const float* curve, int count) {
 }
 
 }  // namespace
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeEvaluateDisplayLinearLumaGrid(
+    JNIEnv* env, jobject, jfloatArray coefficients_array,
+    jint source_grid_width, jint source_grid_height, jint source_grid_depth,
+    jint coefficient_count, jfloatArray model_input_array,
+    jint input_width, jint input_height, jint input_channels,
+    jint output_grid_width, jint output_grid_height,
+    jint footprint_samples_per_axis, jfloat hdr_ratio,
+    jfloat render_min_gain, jfloat render_max_gain, jint output_rotation,
+    jfloatArray guide_shifts_array, jfloatArray guide_slopes_array,
+    jfloatArray output_lumas_array) {
+  if (coefficients_array == nullptr || model_input_array == nullptr ||
+      guide_shifts_array == nullptr || guide_slopes_array == nullptr ||
+      output_lumas_array == nullptr || source_grid_width <= 0 ||
+      source_grid_height <= 0 || source_grid_depth <= 0 ||
+      coefficient_count != 2 || input_width <= 0 || input_height <= 0 ||
+      input_channels < 3 || output_grid_width <= 0 || output_grid_height <= 0 ||
+      footprint_samples_per_axis <= 0 || footprint_samples_per_axis > 16 ||
+      !std::isfinite(hdr_ratio) ||
+      hdr_ratio < 1.0f || !std::isfinite(render_min_gain) ||
+      render_min_gain <= 0.0f || !std::isfinite(render_max_gain) ||
+      render_max_gain < render_min_gain ||
+      (output_rotation != 0 && output_rotation != 90 &&
+       output_rotation != 180 && output_rotation != 270)) {
+    LogError("Rejected invalid HDRNet display-grid parameters");
+    return JNI_FALSE;
+  }
+
+  const int64_t coefficient_values =
+      static_cast<int64_t>(source_grid_width) * source_grid_height *
+      source_grid_depth * coefficient_count;
+  const int64_t input_values =
+      static_cast<int64_t>(input_width) * input_height * input_channels;
+  const int64_t output_values =
+      static_cast<int64_t>(output_grid_width) * output_grid_height;
+  const int guide_count = env->GetArrayLength(guide_shifts_array);
+  if (coefficient_values <= 0 || input_values <= 0 || output_values <= 0 ||
+      coefficient_values > std::numeric_limits<jsize>::max() ||
+      input_values > std::numeric_limits<jsize>::max() ||
+      output_values > std::numeric_limits<jsize>::max() || guide_count <= 0 ||
+      env->GetArrayLength(coefficients_array) != coefficient_values ||
+      env->GetArrayLength(model_input_array) != input_values ||
+      env->GetArrayLength(guide_slopes_array) != guide_count ||
+      env->GetArrayLength(output_lumas_array) != output_values) {
+    LogError("Rejected mismatched HDRNet display-grid geometry");
+    return JNI_FALSE;
+  }
+
+  ScopedFloatArray coefficients(env, coefficients_array);
+  ScopedFloatArray model_input(env, model_input_array);
+  ScopedFloatArray guide_shifts(env, guide_shifts_array);
+  ScopedFloatArray guide_slopes(env, guide_slopes_array);
+  ScopedFloatArray output_lumas(env, output_lumas_array);
+  if (coefficients.data() == nullptr || model_input.data() == nullptr ||
+      guide_shifts.data() == nullptr || guide_slopes.data() == nullptr ||
+      output_lumas.data() == nullptr) {
+    LogError("Unable to acquire HDRNet display-grid arrays");
+    return JNI_FALSE;
+  }
+  if (!IsFiniteArray(coefficients.data(), static_cast<int>(coefficient_values)) ||
+      !IsFiniteArray(model_input.data(), static_cast<int>(input_values)) ||
+      !IsFiniteArray(guide_shifts.data(), guide_count) ||
+      !IsFiniteArray(guide_slopes.data(), guide_count)) {
+    LogError("Rejected non-finite HDRNet display-grid input");
+    return JNI_FALSE;
+  }
+
+  const int output_count = static_cast<int>(output_values);
+  const int footprint_sample_count =
+      footprint_samples_per_axis * footprint_samples_per_axis;
+  std::atomic<bool> output_valid{true};
+#pragma omp parallel for schedule(static)
+  for (int cell = 0; cell < output_count; ++cell) {
+    const int grid_x = cell % output_grid_width;
+    const int grid_y = cell / output_grid_width;
+    double luma_sum = 0.0;
+    for (int sample_y = 0; sample_y < footprint_samples_per_axis; ++sample_y) {
+      const float output_v_top =
+          (grid_y + (sample_y + 0.5f) / footprint_samples_per_axis) /
+          output_grid_height;
+      for (int sample_x = 0; sample_x < footprint_samples_per_axis; ++sample_x) {
+        const float output_u =
+            (grid_x + (sample_x + 0.5f) / footprint_samples_per_axis) /
+            output_grid_width;
+        const float gl_v = 1.0f - output_v_top;
+        float source_u = output_u;
+        float source_v = gl_v;
+        if (output_rotation == 90) {
+          source_u = gl_v;
+          source_v = 1.0f - output_u;
+        } else if (output_rotation == 180) {
+          source_u = 1.0f - output_u;
+          source_v = 1.0f - gl_v;
+        } else if (output_rotation == 270) {
+          source_u = 1.0f - gl_v;
+          source_v = output_u;
+        }
+
+        const AxisSample input_x =
+            MakeNormalizedAxisSample(source_u, input_width);
+        const AxisSample input_y =
+            MakeNormalizedAxisSample(source_v, input_height);
+        const RgbSample short_rgb = SampleModelRgb(
+            model_input.data(), input_width, input_channels, input_x, input_y);
+        const float short_intensity = std::clamp(
+            short_rgb.red * kHdrNetLumaRed +
+                short_rgb.green * kHdrNetLumaGreen +
+                short_rgb.blue * kHdrNetLumaBlue,
+            0.0f, 1.0f);
+        const float guide =
+            EvaluateGuide(short_intensity, guide_shifts.data(),
+                          guide_slopes.data(), guide_count);
+        const AxisSample grid_x_sample =
+            MakeNormalizedAxisSample(source_u, source_grid_width);
+        const AxisSample grid_y_sample =
+            MakeNormalizedAxisSample(source_v, source_grid_height);
+        const AxisSample range_sample =
+            MakeNormalizedAxisSample(guide, source_grid_depth);
+        const float raw_scale = SampleCoefficient(
+            coefficients.data(), source_grid_width, source_grid_depth,
+            coefficient_count, grid_x_sample, grid_y_sample, range_sample, 0);
+        const float bias = SampleCoefficient(
+            coefficients.data(), source_grid_width, source_grid_depth,
+            coefficient_count, grid_x_sample, grid_y_sample, range_sample, 1);
+        const float scale = raw_scale * (hdr_ratio - 1.0f) + 1.0f;
+        const float predicted_luma = scale * short_intensity + bias;
+        if (!std::isfinite(predicted_luma)) {
+          output_valid.store(false, std::memory_order_relaxed);
+          continue;
+        }
+        const float render_gain = std::clamp(
+            predicted_luma / (short_intensity + kHdrNetGainEpsilon),
+            render_min_gain, render_max_gain);
+        // Match the classic ARGB path after its per-channel sRGB EOTF: clamp the rendered
+        // linear RGB channels, compute Rec.709 display-linear luma, then average the footprint.
+        // This is exactly the domain consumed by the shared exposure solver.
+        const float display_red = std::clamp(short_rgb.red * render_gain, 0.0f, 1.0f);
+        const float display_green =
+            std::clamp(short_rgb.green * render_gain, 0.0f, 1.0f);
+        const float display_blue =
+            std::clamp(short_rgb.blue * render_gain, 0.0f, 1.0f);
+        luma_sum += display_red * kDisplayLumaRed +
+            display_green * kDisplayLumaGreen +
+            display_blue * kDisplayLumaBlue;
+      }
+    }
+    output_lumas.data()[cell] =
+        static_cast<float>(luma_sum / footprint_sample_count);
+  }
+  if (!output_valid.load(std::memory_order_relaxed) ||
+      !IsFiniteArray(output_lumas.data(), static_cast<int>(output_values))) {
+    LogError("HDRNet display-linear grid evaluation produced a non-finite value");
+    return JNI_FALSE;
+  }
+  output_lumas.CommitOnRelease();
+  return env->ExceptionCheck() ? JNI_FALSE : JNI_TRUE;
+}
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains(

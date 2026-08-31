@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.raw
 
 import com.hinnka.mycamera.utils.PLog
-import kotlin.math.floor
 import kotlin.math.ln
 
 /** Builds a DNG ProfileGainTableMap2 from MGC HDRNet's bilateral affine coefficient grid. */
@@ -109,15 +108,14 @@ internal object DngPhotonProfileGainTableGenerator {
      * Plans a 64 x 48 PGTM grid resampled from MGC HDRNet's fixed 16 x 12 coefficient grid.
      *
      * HDRNet runs in the final-short-exposure linear domain: `RAW * sourceToShortGain`.
-     * BaselineExposure supplies only the robust global-exposure target and final DNG exposure; it
-     * is not part of the model tensor. A conforming renderer folds its total BaselineExposure into
-     * the ProfileGainTableMap N coordinate, so the stored weights cancel that renderer gain and
-     * reconstruct the same `RAW * sourceToShortGain` coordinate used to build the table.
+     * A conforming renderer folds its total BaselineExposure into the ProfileGainTableMap N
+     * coordinate, so the stored weights cancel that renderer gain and reconstruct the same
+     * `RAW * sourceToShortGain` coordinate used to build the table. BaselineExposure has no role
+     * in HDRNet inference or viewfinder matching.
      */
     fun hdrNetPlan(
         sourceWidth: Int,
         sourceHeight: Int,
-        sourceBaselineExposureEv: Float,
         rendererBaselineExposureEv: Float,
         hdrRatio: Float,
         sourceToShortGain: Float,
@@ -125,18 +123,14 @@ internal object DngPhotonProfileGainTableGenerator {
         samplingArea: PhotonPgtmSamplingArea = PhotonPgtmSamplingArea.FULL,
     ): HdrNetProfileGainTablePlan? {
         if (sourceWidth <= 0 || sourceHeight <= 0 ||
-            !sourceBaselineExposureEv.isFinite() ||
             !rendererBaselineExposureEv.isFinite() ||
             !hdrRatio.isFinite() || hdrRatio <= 0f ||
             !sourceToShortGain.isFinite() || sourceToShortGain <= 0f
         ) {
             return null
         }
-        val sourceBaselineGain = DngBaselineExposure.exactGain(sourceBaselineExposureEv)
         val rendererBaselineGain = DngBaselineExposure.exactGain(rendererBaselineExposureEv)
-        if (!sourceBaselineGain.isFinite() || sourceBaselineGain <= 0f ||
-            !rendererBaselineGain.isFinite() || rendererBaselineGain <= 0f
-        ) {
+        if (!rendererBaselineGain.isFinite() || rendererBaselineGain <= 0f) {
             return null
         }
         // Adobe evaluates MapInputWeights after applying TotalBaselineExposure (including any
@@ -161,7 +155,6 @@ internal object DngPhotonProfileGainTableGenerator {
             pointCount = TABLE_POINTS,
             mapInputWeights = mapInputWeights,
             gamma = 1f,
-            sourceBaselineGain = sourceBaselineGain,
             rendererBaselineGain = rendererBaselineGain,
             sourceToShortGain = sourceToShortGain,
             // The native MGC path builds the long-exposure guide from a ratio of at least one.
@@ -232,176 +225,37 @@ internal object DngPhotonProfileGainTableGenerator {
     }
 
     /**
-     * Reduces the actual 256 x 192 HDRNet RGB tensor to one reliable source-luma sample for each
-     * 16 x 12 affine-grid cell. The tensor is already in final-short space, so division by the
-     * candidate short gain restores the common source domain used by BaselineExposure.
-     *
-     * Endpoint and clipped samples do not represent global exposure. After rejecting those
-     * samples, the central source-luma population is retained so large highlight or deep-shadow
-     * regions cannot dominate the exposure anchor merely through their local HDR gain.
+     * Evaluates HDRNet on the complete 64 x 48 PGTM spatial grid and returns clipped
+     * display-linear Rec.709 luma. This is the same post-EOTF domain built from the classic
+     * matcher's ARGB_8888 candidate and reference images.
      */
-    fun hdrNetExposureSourceLumaByCell(
-        plan: HdrNetProfileGainTablePlan,
-        modelInput: FloatArray,
-    ): FloatArray? {
-        val expectedCount = HDRNET_INPUT_WIDTH * HDRNET_INPUT_HEIGHT * 4
-        if (modelInput.size != expectedCount) return null
-        if (HDRNET_INPUT_WIDTH % HDRNET_GRID_WIDTH != 0 ||
-            HDRNET_INPUT_HEIGHT % HDRNET_GRID_HEIGHT != 0
-        ) {
-            return null
-        }
-        val cellWidth = HDRNET_INPUT_WIDTH / HDRNET_GRID_WIDTH
-        val cellHeight = HDRNET_INPUT_HEIGHT / HDRNET_GRID_HEIGHT
-        val cellPixelCount = cellWidth * cellHeight
-        val minimumValidPixels = (cellPixelCount * HDRNET_EXPOSURE_MIN_VALID_PIXEL_FRACTION)
-            .toInt()
-            .coerceAtLeast(1)
-        val pixelLumas = FloatArray(cellPixelCount)
-        val sourceLumaByCell = FloatArray(HDRNET_GRID_WIDTH * HDRNET_GRID_HEIGHT) { Float.NaN }
-        for (cellY in 0 until HDRNET_GRID_HEIGHT) {
-            for (cellX in 0 until HDRNET_GRID_WIDTH) {
-                var validPixelCount = 0
-                val startX = cellX * cellWidth
-                val startY = cellY * cellHeight
-                for (pixelY in startY until startY + cellHeight) {
-                    for (pixelX in startX until startX + cellWidth) {
-                        val offset = (pixelY * HDRNET_INPUT_WIDTH + pixelX) * 4
-                        val red = modelInput[offset]
-                        val green = modelInput[offset + 1]
-                        val blue = modelInput[offset + 2]
-                        if (!red.isFinite() || !green.isFinite() || !blue.isFinite() ||
-                            maxOf(red, green, blue) >= HDRNET_EXPOSURE_INPUT_CLIP
-                        ) {
-                            continue
-                        }
-                        val shortLuma = red * HDRNET_LUMA_RED +
-                            green * HDRNET_LUMA_GREEN + blue * HDRNET_LUMA_BLUE
-                        val sourceLuma = shortLuma / plan.hdrNetInputScale
-                        if (!sourceLuma.isFinite() || sourceLuma <= HDRNET_EXPOSURE_SOURCE_FLOOR) {
-                            continue
-                        }
-                        pixelLumas[validPixelCount++] = sourceLuma
-                    }
-                }
-                if (validPixelCount < minimumValidPixels) continue
-                pixelLumas.sort(0, validPixelCount)
-                sourceLumaByCell[cellY * HDRNET_GRID_WIDTH + cellX] =
-                    median(pixelLumas, validPixelCount)
-            }
-        }
-
-        val validCellLumas = sourceLumaByCell.filter { it.isFinite() }.toFloatArray()
-        if (validCellLumas.size < HDRNET_EXPOSURE_MIN_VALID_CELL_COUNT) return null
-        validCellLumas.sort()
-        val lowerLuma = percentile(validCellLumas, HDRNET_EXPOSURE_LOWER_PERCENTILE)
-        val upperLuma = percentile(validCellLumas, HDRNET_EXPOSURE_UPPER_PERCENTILE)
-        var retainedCellCount = 0
-        for (index in sourceLumaByCell.indices) {
-            val sourceLuma = sourceLumaByCell[index]
-            if (!sourceLuma.isFinite() || sourceLuma < lowerLuma || sourceLuma > upperLuma) {
-                sourceLumaByCell[index] = Float.NaN
-            } else {
-                retainedCellCount++
-            }
-        }
-        return sourceLumaByCell.takeIf {
-            retainedCellCount >= HDRNET_EXPOSURE_MIN_VALID_CELL_COUNT
-        }
-    }
-
-    /**
-     * Evaluates HDRNet at the actual source luma of every retained spatial cell and returns its
-     * equivalent pre-tone exposure in stops: `log2(ACR3^-1(H) / sourceLuma)`. This deliberately
-     * measures the robust global exposure produced by HDRNet while leaving its local spatial and
-     * range-dependent shaping intact.
-     */
-    fun hdrNetEffectiveExposureEvs(
+    fun hdrNetDisplayLinearLumaGrid(
         plan: HdrNetProfileGainTablePlan,
         coefficients: FloatArray,
-        sourceLumaByCell: FloatArray,
+        modelInput: FloatArray,
+        outputRotation: Int,
     ): FloatArray? {
         if (coefficients.size != HDRNET_OUTPUT_FLOAT_COUNT) return null
-        if (sourceLumaByCell.size != HDRNET_GRID_WIDTH * HDRNET_GRID_HEIGHT) return null
-        val output = FloatArray(sourceLumaByCell.count { it.isFinite() })
-        var outputCount = 0
-        fun coefficient(x: Int, y: Int, depth: Int, component: Int): Float {
-            val index = (((y * HDRNET_GRID_WIDTH + x) * HDRNET_GRID_DEPTH + depth) *
-                HDRNET_COEFFICIENT_COUNT) + component
-            return coefficients[index]
-        }
-        for (y in 0 until HDRNET_GRID_HEIGHT) {
-            for (x in 0 until HDRNET_GRID_WIDTH) {
-                val sourceLuma = sourceLumaByCell[y * HDRNET_GRID_WIDTH + x]
-                if (!sourceLuma.isFinite()) continue
-                val shortIntensity = (sourceLuma * plan.hdrNetInputScale).coerceIn(0f, 1f)
-                val guide = hdrNetGuide(shortIntensity)
-                val rangePosition = guide * HDRNET_GRID_DEPTH - 0.5f
-                val rangeFloor = floor(rangePosition).toInt()
-                val lowerRange = rangeFloor.coerceIn(0, HDRNET_GRID_DEPTH - 1)
-                val upperRange = (rangeFloor + 1).coerceIn(0, HDRNET_GRID_DEPTH - 1)
-                val rangeAmount = rangePosition - floor(rangePosition)
-                val rawScale = lerp(
-                    coefficient(x, y, lowerRange, component = 0),
-                    coefficient(x, y, upperRange, component = 0),
-                    rangeAmount,
-                )
-                val bias = lerp(
-                    coefficient(x, y, lowerRange, component = 1),
-                    coefficient(x, y, upperRange, component = 1),
-                    rangeAmount,
-                )
-                val scale = rawScale * (plan.hdrRatio - 1f) + 1f
-                val predictedLuma = scale * shortIntensity + bias
-                if (!predictedLuma.isFinite()) return null
-                val renderGain = (
-                    predictedLuma / (shortIntensity + HDRNET_GAIN_EPSILON)
-                    ).coerceIn(HDRNET_RENDER_MIN_GAIN, HDRNET_RENDER_MAX_GAIN)
-                val hdrNetOutputLuma = (shortIntensity * renderGain).coerceIn(0f, 1f)
-                val preCurveLuma = ACR3Curve.inputForOutput(hdrNetOutputLuma)
-                if (!preCurveLuma.isFinite() || preCurveLuma <= HDRNET_GAIN_EPSILON) continue
-                val exposureEv = (
-                    ln((preCurveLuma / sourceLuma).toDouble()) / LN_2
-                    ).toFloat()
-                if (!exposureEv.isFinite()) return null
-                output[outputCount++] = exposureEv
-            }
-        }
-        return output.copyOf(outputCount).takeIf {
-            outputCount >= HDRNET_EXPOSURE_MIN_VALID_CELL_COUNT
-        }
+        val expectedInputCount = HDRNET_INPUT_WIDTH * HDRNET_INPUT_HEIGHT * 4
+        if (modelInput.size != expectedInputCount) return null
+        val rotation = ((outputRotation % 360) + 360) % 360
+        if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) return null
+        return DngHdrNetProfileGainTableNative.evaluateDisplayLinearLumaGrid(
+            plan = plan,
+            coefficients = coefficients,
+            modelInput = modelInput,
+            outputRotation = rotation,
+            guideShifts = HDRNET_GUIDE_SHIFTS,
+            guideSlopes = HDRNET_GUIDE_SLOPES,
+            renderMinGain = HDRNET_RENDER_MIN_GAIN,
+            renderMaxGain = HDRNET_RENDER_MAX_GAIN,
+            outputGridWidth = HDRNET_PGTM_GRID_WIDTH,
+            outputGridHeight = HDRNET_PGTM_GRID_HEIGHT,
+            footprintSamplesPerAxis = HDRNET_MATCH_FOOTPRINT_SAMPLES_PER_AXIS,
+        )
     }
 
-    private fun median(sortedValues: FloatArray, count: Int): Float {
-        val upper = count / 2
-        return if (count % 2 == 0) {
-            (sortedValues[upper - 1] + sortedValues[upper]) * 0.5f
-        } else {
-            sortedValues[upper]
-        }
-    }
-
-    private fun percentile(sortedValues: FloatArray, fraction: Float): Float {
-        val position = fraction.coerceIn(0f, 1f) * sortedValues.lastIndex
-        val lower = floor(position).toInt()
-        val upper = (lower + 1).coerceAtMost(sortedValues.lastIndex)
-        return lerp(sortedValues[lower], sortedValues[upper], position - lower)
-    }
-
-    private fun lerp(first: Float, second: Float, amount: Float): Float =
-        first + (second - first) * amount
-
-    private const val HDRNET_GAIN_EPSILON = 1e-6f
-    private const val HDRNET_LUMA_RED = 0.298828125f
-    private const val HDRNET_LUMA_GREEN = 0.5869140625f
-    private const val HDRNET_LUMA_BLUE = 0.1142578125f
-    private const val HDRNET_EXPOSURE_INPUT_CLIP = 0.98f
-    private const val HDRNET_EXPOSURE_SOURCE_FLOOR = 1f / 1024f
-    private const val HDRNET_EXPOSURE_MIN_VALID_PIXEL_FRACTION = 0.5f
-    private const val HDRNET_EXPOSURE_LOWER_PERCENTILE = 0.2f
-    private const val HDRNET_EXPOSURE_UPPER_PERCENTILE = 0.8f
-    private const val HDRNET_EXPOSURE_MIN_VALID_CELL_COUNT = 24
-    private val LN_2 = ln(2.0)
+    private const val HDRNET_MATCH_FOOTPRINT_SAMPLES_PER_AXIS = 4
 
     fun plan(
         width: Int,
@@ -597,8 +451,6 @@ internal data class HdrNetProfileGainTablePlan(
     val pointCount: Int,
     val mapInputWeights: FloatArray,
     val gamma: Float,
-    /** BaselineExposure gain used only to define the robust global-exposure target. */
-    val sourceBaselineGain: Float,
     /** Total gain a conforming DNG renderer folds into the MapInputWeights coordinate. */
     val rendererBaselineGain: Float,
     /** Gain from source RAW to the candidate final-short exposure used by HDRNet. */
@@ -612,7 +464,6 @@ internal data class HdrNetProfileGainTablePlan(
         require(pointCount > 1)
         require(mapInputWeights.size == 5 && mapInputWeights.all { it.isFinite() })
         require(gamma.isFinite() && gamma in 0.125f..8f)
-        require(sourceBaselineGain.isFinite() && sourceBaselineGain > 0f)
         require(rendererBaselineGain.isFinite() && rendererBaselineGain > 0f)
         require(sourceToShortGain.isFinite() && sourceToShortGain > 0f)
         require(hdrRatio.isFinite() && hdrRatio >= 1f)

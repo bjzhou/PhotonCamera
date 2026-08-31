@@ -51,6 +51,68 @@ internal object DngHdrNetProfileGainTableNative {
         return output.takeIf { completed }
     }
 
+    fun evaluateDisplayLinearLumaGrid(
+        plan: HdrNetProfileGainTablePlan,
+        coefficients: FloatArray,
+        modelInput: FloatArray,
+        outputRotation: Int,
+        guideShifts: FloatArray,
+        guideSlopes: FloatArray,
+        renderMinGain: Float,
+        renderMaxGain: Float,
+        outputGridWidth: Int,
+        outputGridHeight: Int,
+        footprintSamplesPerAxis: Int,
+    ): FloatArray? {
+        val outputCount = outputGridWidth.toLong() * outputGridHeight
+        if (outputCount !in 1..Int.MAX_VALUE.toLong()) return null
+        val output = FloatArray(outputCount.toInt())
+        val completed = nativeEvaluateDisplayLinearLumaGrid(
+            coefficients = coefficients,
+            sourceGridWidth = DngPhotonProfileGainTableGenerator.HDRNET_GRID_WIDTH,
+            sourceGridHeight = DngPhotonProfileGainTableGenerator.HDRNET_GRID_HEIGHT,
+            sourceGridDepth = DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH,
+            coefficientCount = DngPhotonProfileGainTableGenerator.HDRNET_COEFFICIENT_COUNT,
+            modelInput = modelInput,
+            inputWidth = DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH,
+            inputHeight = DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT,
+            inputChannels = HDRNET_INPUT_CHANNELS,
+            outputGridWidth = outputGridWidth,
+            outputGridHeight = outputGridHeight,
+            footprintSamplesPerAxis = footprintSamplesPerAxis,
+            hdrRatio = plan.hdrRatio,
+            renderMinGain = renderMinGain,
+            renderMaxGain = renderMaxGain,
+            outputRotation = outputRotation,
+            guideShifts = guideShifts,
+            guideSlopes = guideSlopes,
+            outputLumas = output,
+        )
+        return output.takeIf { completed }
+    }
+
+    private external fun nativeEvaluateDisplayLinearLumaGrid(
+        coefficients: FloatArray,
+        sourceGridWidth: Int,
+        sourceGridHeight: Int,
+        sourceGridDepth: Int,
+        coefficientCount: Int,
+        modelInput: FloatArray,
+        inputWidth: Int,
+        inputHeight: Int,
+        inputChannels: Int,
+        outputGridWidth: Int,
+        outputGridHeight: Int,
+        footprintSamplesPerAxis: Int,
+        hdrRatio: Float,
+        renderMinGain: Float,
+        renderMaxGain: Float,
+        outputRotation: Int,
+        guideShifts: FloatArray,
+        guideSlopes: FloatArray,
+        outputLumas: FloatArray,
+    ): Boolean
+
     private external fun nativeGenerateGains(
         coefficients: FloatArray,
         sourceGridWidth: Int,
@@ -77,4 +139,6 @@ internal object DngHdrNetProfileGainTableNative {
         diagnosticMode: Int,
         outputGains: FloatArray,
     ): Boolean
+
+    private const val HDRNET_INPUT_CHANNELS = 4
 }
