@@ -48,6 +48,7 @@ import com.hinnka.mycamera.processor.RawStackBufferLayout
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
+import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.GpuDemosaicedRawSource
 import com.hinnka.mycamera.raw.MgcSpatialGpuDenoiseMode
@@ -64,6 +65,7 @@ import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawCaptureProfileCoordinator
 import com.hinnka.mycamera.raw.RawPhotonHdrRatioMetadata
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -5358,6 +5360,7 @@ object GalleryManager {
     private suspend fun MediaMetadata.withImportedRawToneMapPreference(
         context: Context,
         isDng: Boolean,
+        dngFile: File,
     ): MediaMetadata {
         val globalToneMappingParameters = ContentRepository.getInstance(context)
             .userPreferencesRepository
@@ -5366,19 +5369,39 @@ object GalleryManager {
             ?.rawToneMappingParameters
             ?.normalized()
             ?: rawToneMappingParameters.normalized()
-        val importedToneMappingParameters = if (isDng) {
-            globalToneMappingParameters.withPhotonHdr(false)
+        val embeddedProfile = if (isDng) {
+            DngEmbeddedProfile.readAllFrom(dngFile)
+                .asSequence()
+                .filterNot { it.isPhotonHdr }
+                .filter { it.profile?.toneCurve?.isValid == true }
+                .sortedBy { it.id != DngEmbeddedProfile.PRIMARY_PROFILE_ID }
+                .firstOrNull()
         } else {
-            globalToneMappingParameters
+            null
+        }
+        val importedToneMappingParameters = when {
+            embeddedProfile != null -> globalToneMappingParameters
+                .withPhotonHdr(false)
+                .withProfileToneMapMode(RawProfileToneMapMode.Profile)
+            isDng -> globalToneMappingParameters.withPhotonHdr(false)
+            else -> globalToneMappingParameters
         }
         PLog.d(
             TAG,
             "Applying RAW tone defaults to imported RAW: " +
                 "profile=${importedToneMappingParameters.profileToneMapMode} " +
+                "embeddedProfile=${embeddedProfile?.profileName ?: "none"} " +
                 "photonHdr=${importedToneMappingParameters.usePhotonHdr} " +
-                "dng=$isDng activation=${if (isDng) "manual-only" else "global-default"}"
+                "dng=$isDng activation=${when {
+                    embeddedProfile != null -> "embedded-profile"
+                    isDng -> "manual-only"
+                    else -> "global-default"
+                }}"
         )
-        return copy(rawToneMappingParameters = importedToneMappingParameters)
+        return copy(
+            rawEmbeddedDngProfileId = embeddedProfile?.id,
+            rawToneMappingParameters = importedToneMappingParameters,
+        )
     }
 
 
@@ -5490,7 +5513,7 @@ object GalleryManager {
                     }
 
                     var updatedMetadata: MediaMetadata = metadata
-                        .withImportedRawToneMapPreference(context, isDng)
+                        .withImportedRawToneMapPreference(context, isDng, dngFile)
                         .let { rawMetadata ->
                             rawMetadata.copy(
                                 chromaNoiseReduction = rawMetadata.chromaNoiseReduction
