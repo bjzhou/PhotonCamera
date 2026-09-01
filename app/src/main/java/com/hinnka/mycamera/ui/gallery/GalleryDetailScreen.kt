@@ -2151,7 +2151,7 @@ private fun VideoDetailPlayer(
                     PLog.d("VideoDetailPlayer", "ExoPlayer state changed: $state")
                 }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    PLog.e("VideoDetailPlayer", "ExoPlayer encountered error!", error)
+                    PLog.w("VideoDetailPlayer", "ExoPlayer encountered error!", error)
                 }
             })
         }

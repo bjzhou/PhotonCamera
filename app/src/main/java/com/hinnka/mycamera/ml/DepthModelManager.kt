@@ -125,7 +125,7 @@ object DepthModelManager {
                     downloadAndInstall(appContext)
                     _state.value = DepthModelDownloadState.Ready
                 } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to download or install the default depth model", e)
+                    PLog.w(TAG, "Failed to download or install the default depth model", e)
                     _state.value = DepthModelDownloadState.Failed
                 }
             }

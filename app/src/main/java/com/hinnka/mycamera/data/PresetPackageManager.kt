@@ -232,46 +232,66 @@ class PresetPackageManager(
                 }
             }
 
-            val dcpResources = resources.getAsJsonArray("dcps") ?: JsonArray()
             val expectedDcpKeys = packagedPreset.referencedDcpIds().toSet()
-            val declaredDcpKeys = dcpResources.map { it.asJsonObject.requiredString("key") }
-            require(declaredDcpKeys.size == declaredDcpKeys.distinct().size) {
-                "Preset package contains duplicate DCP keys"
-            }
-            require(declaredDcpKeys.toSet() == expectedDcpKeys) {
-                "Preset package DCP references do not match the preset"
-            }
-
             val resolvedDcpIds = linkedMapOf<String, String>()
-            dcpResources.forEach { element ->
-                val resource = element.asJsonObject
-                val sourceKey = resource.requiredString("key")
-                when (resource.requiredString("storage")) {
-                    STORAGE_REFERENCE -> {
-                        val builtIn = contentRepository.dcpManager.getAvailableDcps()
-                            .firstOrNull { it.id == sourceKey }
-                        require(builtIn?.isBuiltIn == true) {
-                            "Built-in DCP is unavailable: $sourceKey"
-                        }
-                        resolvedDcpIds[sourceKey] = sourceKey
-                    }
+            if (version == 1) {
+                val availableDcpIds = contentRepository.dcpManager.getAvailableDcps()
+                    .mapTo(mutableSetOf()) { it.id }
+                val unavailableDcpKeys = expectedDcpKeys - availableDcpIds
+                require(unavailableDcpKeys.isEmpty()) {
+                    "Legacy preset package references unavailable DCPs: " +
+                        unavailableDcpKeys.sorted().joinToString()
+                }
+                expectedDcpKeys.forEach { sourceKey ->
+                    resolvedDcpIds[sourceKey] = sourceKey
+                }
+            } else {
+                val dcpResources = resources.getAsJsonArray("dcps") ?: JsonArray()
+                val declaredDcpKeys = dcpResources.map {
+                    it.asJsonObject.requiredString("key")
+                }
+                require(declaredDcpKeys.size == declaredDcpKeys.distinct().size) {
+                    "Preset package contains duplicate DCP keys"
+                }
+                require(declaredDcpKeys.toSet() == expectedDcpKeys) {
+                    "Preset package DCP references do not match the preset"
+                }
 
-                    STORAGE_BUNDLED -> {
-                        val entryName = resource.requiredSafeEntry("entry")
-                        require(entryName.startsWith("resources/dcps/") && entryName.endsWith(".dcp")) {
-                            "Invalid bundled DCP entry"
+                dcpResources.forEach { element ->
+                    val resource = element.asJsonObject
+                    val sourceKey = resource.requiredString("key")
+                    when (resource.requiredString("storage")) {
+                        STORAGE_REFERENCE -> {
+                            val builtIn = contentRepository.dcpManager.getAvailableDcps()
+                                .firstOrNull { it.id == sourceKey }
+                            require(builtIn?.isBuiltIn == true) {
+                                "Built-in DCP is unavailable: $sourceKey"
+                            }
+                            resolvedDcpIds[sourceKey] = sourceKey
                         }
-                        val bytes = requireNotNull(archiveEntries[entryName]) {
-                            "Bundled DCP entry is missing: $entryName"
-                        }
-                        val nameMap = resource.getAsJsonObject("name")?.toStringMap().orEmpty()
-                        val importedId = customImportManager.importPresetDcp(bytes, nameMap)
-                            ?: error("Failed to import bundled DCP: $sourceKey")
-                        importedDcpIds += importedId
-                        resolvedDcpIds[sourceKey] = importedId
-                    }
 
-                    else -> error("Unsupported DCP storage mode")
+                        STORAGE_BUNDLED -> {
+                            val entryName = resource.requiredSafeEntry("entry")
+                            require(
+                                entryName.startsWith("resources/dcps/") &&
+                                    entryName.endsWith(".dcp")
+                            ) {
+                                "Invalid bundled DCP entry"
+                            }
+                            val bytes = requireNotNull(archiveEntries[entryName]) {
+                                "Bundled DCP entry is missing: $entryName"
+                            }
+                            val nameMap = resource.getAsJsonObject("name")
+                                ?.toStringMap()
+                                .orEmpty()
+                            val importedId = customImportManager.importPresetDcp(bytes, nameMap)
+                                ?: error("Failed to import bundled DCP: $sourceKey")
+                            importedDcpIds += importedId
+                            resolvedDcpIds[sourceKey] = importedId
+                        }
+
+                        else -> error("Unsupported DCP storage mode")
+                    }
                 }
             }
 

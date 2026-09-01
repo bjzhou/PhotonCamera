@@ -5252,6 +5252,8 @@ object GalleryManager {
                     originalBitmap.recycle()
                 }
                 PLog.d(TAG, "Thumbnail updated for photo: $photoId")
+            } catch (e: CancellationException) {
+                PLog.w(TAG, "Failed to update thumbnail for photo: $photoId", e)
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to update thumbnail for photo: $photoId", e)
             }

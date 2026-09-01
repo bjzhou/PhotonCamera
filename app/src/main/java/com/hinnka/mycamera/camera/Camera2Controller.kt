@@ -2863,7 +2863,7 @@ class Camera2Controller(private val context: Context) {
             }
             handlePreviewSessionFailure("create session illegal state", openGeneration, e)
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to create preview session", e)
+            PLog.w(TAG, "Failed to create preview session", e)
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
                     reason = "create session exception: ${e.message}",
