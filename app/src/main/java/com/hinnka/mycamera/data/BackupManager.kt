@@ -2,6 +2,7 @@ package com.hinnka.mycamera.data
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,6 +40,14 @@ object BackupManager {
         "custom_logos"
     )
 
+    // These imported profiles describe a particular camera sensor and must stay with its device.
+    private val DEVICE_SPECIFIC_BACKUP_ENTRIES = setOf(
+        "custom_dcps.json",
+        "custom_raw_noise_profiles.json",
+        "custom_dcps",
+        "custom_raw_noise_profiles",
+    )
+
     /**
      * 执行备份
      * @param context Context
@@ -51,6 +60,10 @@ object BackupManager {
             FileOutputStream(tempZip).use { fileOutput ->
                 ZipOutputStream(fileOutput).use { zos ->
                     val filesDir = context.filesDir
+
+                    zos.putNextEntry(ZipEntry(BackupDeviceMetadata.ENTRY_NAME))
+                    BackupDeviceMetadata.write(currentDeviceIdentity(), zos)
+                    zos.closeEntry()
 
                     for (entryName in BACKUP_ENTRIES) {
                         val fileOrDir = File(filesDir, entryName)
@@ -121,7 +134,7 @@ object BackupManager {
             if (removedPreferenceCount > 0) {
                 PLog.d(
                     TAG,
-                    "Removed $removedPreferenceCount device-bound preferences from backup"
+                    "Removed $removedPreferenceCount non-portable preferences from backup"
                 )
             }
         } else {
@@ -158,11 +171,34 @@ object BackupManager {
             }
 
             unzipBackupToDirectory(tempZip, restoreDir)
-            val sanitizedRestorePreferenceCount = BackupPreferenceSanitizer.sanitizeRestoreDirectory(restoreDir)
-            if (sanitizedRestorePreferenceCount > 0) {
+            val backupDeviceIdentity = BackupDeviceMetadata.read(restoreDir)
+            val currentDeviceIdentity = currentDeviceIdentity()
+            val isSameDevice = backupDeviceIdentity?.matches(currentDeviceIdentity) == true
+            if (!isSameDevice) {
+                PLog.i(
+                    TAG,
+                    "Backup device does not match current device; preserving current " +
+                        "hardware-bound preferences. backup=$backupDeviceIdentity, " +
+                        "current=$currentDeviceIdentity"
+                )
+            }
+            val preferenceSanitization = BackupPreferenceSanitizer.sanitizeRestoreDirectory(
+                restoreDir = restoreDir,
+                currentFilesDir = context.filesDir,
+                preserveCurrentDeviceSpecificPreferences = !isSameDevice,
+            )
+            if (preferenceSanitization.removedNonPortablePreferenceCount > 0) {
                 PLog.d(
                     TAG,
-                    "Removed $sanitizedRestorePreferenceCount device-bound preferences during restore"
+                    "Removed ${preferenceSanitization.removedNonPortablePreferenceCount} " +
+                        "non-portable preferences during restore"
+                )
+            }
+            if (preferenceSanitization.skippedDeviceSpecificPreferenceCount > 0) {
+                PLog.d(
+                    TAG,
+                    "Skipped ${preferenceSanitization.skippedDeviceSpecificPreferenceCount} " +
+                        "device-specific preferences during cross-device restore"
                 )
             }
             val frameAssetMigration = FrameAssetPathMigrator.migrateRestoredData(
@@ -190,7 +226,15 @@ object BackupManager {
                         "invalid restored frame templates"
                 )
             }
-            applyRestoreDirectory(restoreDir, context.filesDir)
+            applyRestoreDirectory(
+                restoreDir = restoreDir,
+                filesDir = context.filesDir,
+                skippedEntries = if (isSameDevice) {
+                    emptySet()
+                } else {
+                    DEVICE_SPECIFIC_BACKUP_ENTRIES
+                },
+            )
 
             PLog.d(TAG, "Restore successfully completed from $inputUri")
             true
@@ -243,8 +287,16 @@ object BackupManager {
         }
     }
 
-    private fun applyRestoreDirectory(restoreDir: File, filesDir: File) {
+    private fun applyRestoreDirectory(
+        restoreDir: File,
+        filesDir: File,
+        skippedEntries: Set<String>,
+    ) {
         for (entryName in BACKUP_ENTRIES) {
+            if (entryName in skippedEntries) {
+                PLog.d(TAG, "Skipped device-specific backup entry during restore: $entryName")
+                continue
+            }
             val stagedEntry = File(restoreDir, entryName)
             if (!stagedEntry.exists()) {
                 continue
@@ -282,13 +334,15 @@ object BackupManager {
     }
 
     private fun validateBackupZip(inputStream: InputStream) {
-        var allowedEntryCount = 0
+        var supportedDataEntryCount = 0
         ZipInputStream(inputStream).use { zis ->
             var zipEntry: ZipEntry? = zis.nextEntry
             while (zipEntry != null) {
                 val entryName = zipEntry.name
                 if (isAllowedBackupEntry(entryName)) {
-                    allowedEntryCount++
+                    if (isBackupDataEntry(entryName)) {
+                        supportedDataEntryCount++
+                    }
                     val bytes = ByteArray(BUFFER_SIZE)
                     while (zis.read(bytes) >= 0) {
                         // Drain the entry so truncated zip files fail before restore.
@@ -300,7 +354,7 @@ object BackupManager {
                 zipEntry = zis.nextEntry
             }
         }
-        if (allowedEntryCount == 0) {
+        if (supportedDataEntryCount == 0) {
             throw IllegalStateException("Backup zip does not contain supported entries")
         }
     }
@@ -310,8 +364,24 @@ object BackupManager {
         if (normalized.isEmpty() || normalized.contains("../") || normalized == "..") {
             return false
         }
+        if (normalized == BackupDeviceMetadata.ENTRY_NAME) {
+            return true
+        }
         val topLevelName = normalized.substringBefore('/')
         return BACKUP_ENTRIES.contains(topLevelName)
+    }
+
+    private fun isBackupDataEntry(entryName: String): Boolean {
+        val normalized = entryName.replace('\\', '/').trimStart('/')
+        return BACKUP_ENTRIES.contains(normalized.substringBefore('/'))
+    }
+
+    private fun currentDeviceIdentity(): BackupDeviceIdentity {
+        return BackupDeviceIdentity(
+            manufacturer = Build.MANUFACTURER,
+            model = Build.MODEL,
+            device = Build.DEVICE,
+        )
     }
 
     private fun assertInsideDirectory(rootDir: File, target: File, entryName: String) {
