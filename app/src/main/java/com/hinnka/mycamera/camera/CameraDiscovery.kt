@@ -210,7 +210,8 @@ class CameraDiscovery(private val context: Context) {
                 val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
 
                 // 检测是否为微距镜头
-                val isMacro = isMacroLens(characteristics) ||
+                val isMacroByCharacteristics = isMacroLens(characteristics)
+                val isMacro = isMacroByCharacteristics ||
                         isPreferredCameraId(cameraId, preferredMacroCameraId)
 
                 val info = createCameraInfo(
@@ -224,7 +225,15 @@ class CameraDiscovery(private val context: Context) {
 
                 when (lensFacing) {
                     CameraCharacteristics.LENS_FACING_BACK -> {
-                        backCameras.add(CameraInfoWithZoom(info, intrinsicZoomRatio, isMacro))
+                        backCameras.add(
+                            CameraInfoWithZoom(
+                                info = info,
+                                intrinsicZoomRatio = intrinsicZoomRatio,
+                                isMacro = isMacro,
+                                preserveMacroClassification = isMacroByCharacteristics &&
+                                        hasMissingOrFixedAutoFocus(characteristics)
+                            )
+                        )
                     }
 
                     CameraCharacteristics.LENS_FACING_FRONT -> {
@@ -406,6 +415,8 @@ class CameraDiscovery(private val context: Context) {
             PLog.d(TAG, "Logical multi-camera auto discovery disabled")
         }
 
+        // Apply the manual whitelist after automatic filtering so explicitly configured
+        // physical cameras are not subject to automatic-discovery heuristics.
         applyForcedLogicalCameraBindings(
             bindings = bindings,
             forcedBindings = config.forcedBindings
@@ -429,10 +440,26 @@ class CameraDiscovery(private val context: Context) {
 
                 val physicalCameras = characteristics.physicalCameraIds
                     .mapNotNull { physicalCameraId ->
-                        createPhysicalCameraCandidate(
+                        val physicalCamera = createPhysicalCameraCandidate(
                             logicalCameraId = logicalCameraId,
                             physicalCameraId = physicalCameraId
                         )
+                        if (physicalCamera == null) {
+                            null
+                        } else {
+                            when (
+                                getAutomaticallyDiscoveredLensDisposition(
+                                    cameraId = physicalCameraId,
+                                    characteristics = getCameraCharacteristics(physicalCameraId),
+                                    fallbackLensFacing = characteristics.get(CameraCharacteristics.LENS_FACING),
+                                    source = "logical camera $logicalCameraId"
+                                )
+                            ) {
+                                AutomaticallyDiscoveredLensDisposition.IGNORE -> null
+                                AutomaticallyDiscoveredLensDisposition.NORMAL,
+                                AutomaticallyDiscoveredLensDisposition.MACRO -> physicalCamera
+                            }
+                        }
                     }
                 if (physicalCameras.isEmpty()) continue
 
@@ -865,6 +892,23 @@ class CameraDiscovery(private val context: Context) {
                 val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
                 lensFacing ?: continue
 
+                when (
+                    getAutomaticallyDiscoveredLensDisposition(
+                        cameraId = cameraId,
+                        characteristics = characteristics,
+                        fallbackLensFacing = null,
+                        source = "camera ID probe"
+                    )
+                ) {
+                    AutomaticallyDiscoveredLensDisposition.IGNORE -> continue
+                    AutomaticallyDiscoveredLensDisposition.MACRO -> {
+                        PLog.d(TAG, "Probed camera $cameraId: added as macro lens")
+                        foundIds.add(cameraId)
+                        continue
+                    }
+                    AutomaticallyDiscoveredLensDisposition.NORMAL -> Unit
+                }
+
                 // 计算 intrinsicZoomRatio 来判断是否是有意义的摄像头
                 val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
 
@@ -893,6 +937,54 @@ class CameraDiscovery(private val context: Context) {
         }
 
         return foundIds
+    }
+
+    private fun getAutomaticallyDiscoveredLensDisposition(
+        cameraId: String,
+        characteristics: CameraCharacteristics,
+        fallbackLensFacing: Int?,
+        source: String
+    ): AutomaticallyDiscoveredLensDisposition {
+        val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: fallbackLensFacing
+        if (lensFacing != CameraCharacteristics.LENS_FACING_BACK) {
+            return AutomaticallyDiscoveredLensDisposition.NORMAL
+        }
+
+        val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+        val hasAutoFocusInfo = afModes != null && afModes.isNotEmpty()
+        val isFixedFocus = afModes != null &&
+                afModes.isNotEmpty() &&
+                afModes.none { it != CameraMetadata.CONTROL_AF_MODE_OFF }
+
+        if (hasAutoFocusInfo && !isFixedFocus) {
+            return AutomaticallyDiscoveredLensDisposition.NORMAL
+        }
+
+        val reasons = buildList {
+            if (!hasAutoFocusInfo) add("no AF information")
+            if (isFixedFocus) add("fixed focus")
+        }.joinToString()
+
+        return if (isMacroLens(characteristics)) {
+            PLog.d(
+                TAG,
+                "Automatically discovered back camera $cameraId from $source kept as macro: $reasons"
+            )
+            AutomaticallyDiscoveredLensDisposition.MACRO
+        } else {
+            PLog.d(
+                TAG,
+                "Automatically discovered back camera $cameraId from $source ignored: $reasons"
+            )
+            AutomaticallyDiscoveredLensDisposition.IGNORE
+        }
+    }
+
+    private fun hasMissingOrFixedAutoFocus(characteristics: CameraCharacteristics): Boolean {
+        val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+        return afModes == null ||
+                afModes.isEmpty() ||
+                afModes.none { it != CameraMetadata.CONTROL_AF_MODE_OFF }
     }
 
     private fun getProbeCameraIdCandidates(): List<String> {
@@ -1124,6 +1216,9 @@ class CameraDiscovery(private val context: Context) {
                 return@map camera
             }
             if (camera.isMacro && isPreferredCameraId(camera.info.cameraId, preferredMacroCameraId)) {
+                return@map camera
+            }
+            if (camera.isMacro && camera.preserveMacroClassification) {
                 return@map camera
             }
             if (!camera.isMacro || !isSameFocalLength(getComparableFocalLength(camera), shortestFocalLength)) {
@@ -1380,13 +1475,20 @@ class CameraDiscovery(private val context: Context) {
     private data class CameraInfoWithZoom(
         val info: CameraInfo,
         val intrinsicZoomRatio: Float,
-        val isMacro: Boolean
+        val isMacro: Boolean,
+        val preserveMacroClassification: Boolean = false
     )
 
     private data class DiscoveredCameraCandidates(
         val backCameras: List<CameraInfoWithZoom>,
         val frontCamera: CameraInfo?
     )
+
+    private enum class AutomaticallyDiscoveredLensDisposition {
+        NORMAL,
+        MACRO,
+        IGNORE
+    }
 
     private data class LogicalCameraDiscoveryConfig(
         val autoDiscoveryEnabled: Boolean = false,
