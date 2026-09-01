@@ -1126,6 +1126,15 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
                 return LogStageFailure("pecan_luma", pecan_result);
             }
             pecan_ms = elapsed_ms(pecan_start);
+        } else {
+            // ChromaDenoise owns only the Cb/Cr planes. The original MGC pipeline always
+            // follows it with Pecan, which supplies Y in the shared destination buffer.
+            // When Photon independently disables luma denoise, preserve the unfiltered Y
+            // emitted by RawToYuv before handing the completed three-plane image to YuvToRgb.
+            std::copy_n(
+                planar_b.get(),
+                pixel_count,
+                planar_a.get());
         }
 
         if (run_diagnostics) {
