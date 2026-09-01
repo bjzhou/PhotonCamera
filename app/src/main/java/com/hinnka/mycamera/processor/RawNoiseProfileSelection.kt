@@ -8,7 +8,10 @@ sealed interface RawNoiseProfileSelection {
         override val id: String = profile.id,
     ) : RawNoiseProfileSelection
 
-    data object Camera2 : RawNoiseProfileSelection {
+    data class Camera2(
+        /** Calibrated model used only when no usable Camera2 sensor model is available. */
+        val fallbackProfile: CalibratedRawNoiseProfile,
+    ) : RawNoiseProfileSelection {
         override val id: String = SYSTEM_CAMERA2_ID
     }
 

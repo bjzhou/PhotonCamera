@@ -7,6 +7,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RawNoiseModelTest {
+    private val systemSelection = RawNoiseProfileSelection.Camera2(
+        fallbackProfile = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
+    )
+
     @Test
     fun legacyNoiseModelReplicatesScalarCoefficientsAcrossBayerChannels() {
         val model = RawNoiseModel.fromLegacyNoiseModel(floatArrayOf(1024f, 256f))
@@ -154,20 +158,11 @@ class RawNoiseModelTest {
             3f, 30f,
             4f, 40f,
         )
-        val base = RawNoiseModel.fromCamera2NoiseProfile(
-            floatArrayOf(
-                11f, 110f,
-                12f, 120f,
-                13f, 130f,
-                14f, 140f,
-            ),
-        )
 
         val resolved = RawNoiseModelResolver.resolve(
-            selection = RawNoiseProfileSelection.Camera2,
+            selection = systemSelection,
             sensitivity = 8000,
             perFrameCamera2Profile = perFrame,
-            baseFrameCamera2Model = base,
         )
 
         assertEquals(RawNoiseModelSource.CAMERA2_PER_FRAME, resolved.source)
@@ -176,44 +171,21 @@ class RawNoiseModelTest {
     }
 
     @Test
-    fun defaultResolverFallsBackOnlyToExactBaseCamera2Model() {
-        val base = RawNoiseModel.fromCamera2NoiseProfile(
-            floatArrayOf(
-                1f, 10f,
-                2f, 20f,
-                3f, 30f,
-                4f, 40f,
-            ),
-        )
-
+    fun defaultResolverUsesConfiguredFallbackWhenPerFrameProfileIsMissing() {
         val resolved = RawNoiseModelResolver.resolve(
-            selection = RawNoiseProfileSelection.Camera2,
+            selection = systemSelection,
             sensitivity = 8000,
             perFrameCamera2Profile = null,
-            baseFrameCamera2Model = base,
         )
+        val expected = checkNotNull(systemSelection.fallbackProfile.evaluate(8000))
 
-        assertEquals(RawNoiseModelSource.CAMERA2_BASE_FRAME, resolved.source)
-        assertArrayEquals(base.shotNoise, resolved.model.shotNoise, 0f)
-        assertArrayEquals(base.readNoise, resolved.model.readNoise, 0f)
+        assertEquals(RawNoiseModelSource.GCAM_SYSTEM_FALLBACK, resolved.source)
+        assertArrayEquals(expected.shotNoise, resolved.model.shotNoise, 0f)
+        assertArrayEquals(expected.readNoise, resolved.model.readNoise, 0f)
     }
 
     @Test
-    fun defaultResolverReportsUnavailableWhenCamera2ProfilesAreUnavailable() {
-        val resolved = RawNoiseModelResolver.resolve(
-            selection = RawNoiseProfileSelection.Camera2,
-            sensitivity = 8000,
-            perFrameCamera2Profile = null,
-            baseFrameCamera2Model = RawNoiseModel.EMPTY,
-        )
-
-        assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)
-        assertArrayEquals(FloatArray(4), resolved.model.shotNoise, 0f)
-        assertArrayEquals(FloatArray(4), resolved.model.readNoise, 0f)
-    }
-
-    @Test
-    fun defaultResolverReportsUnavailableWhenCamera2ReadTermsAreZero() {
+    fun defaultResolverUsesConfiguredFallbackWhenCamera2ReadTermsAreZero() {
         val shotOnlyProfile = floatArrayOf(
             1f, 0f,
             2f, 0f,
@@ -222,15 +194,15 @@ class RawNoiseModelTest {
         )
 
         val resolved = RawNoiseModelResolver.resolve(
-            selection = RawNoiseProfileSelection.Camera2,
+            selection = systemSelection,
             sensitivity = 800,
             perFrameCamera2Profile = shotOnlyProfile,
-            baseFrameCamera2Model = RawNoiseModel.fromCamera2NoiseProfile(shotOnlyProfile),
         )
 
-        assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)
-        assertArrayEquals(FloatArray(4), resolved.model.shotNoise, 0f)
-        assertArrayEquals(FloatArray(4), resolved.model.readNoise, 0f)
+        val expected = checkNotNull(systemSelection.fallbackProfile.evaluate(800))
+        assertEquals(RawNoiseModelSource.GCAM_SYSTEM_FALLBACK, resolved.source)
+        assertArrayEquals(expected.shotNoise, resolved.model.shotNoise, 0f)
+        assertArrayEquals(expected.readNoise, resolved.model.readNoise, 0f)
     }
 
     @Test
@@ -247,7 +219,6 @@ class RawNoiseModelTest {
             ),
             sensitivity = 0,
             perFrameCamera2Profile = camera2,
-            baseFrameCamera2Model = RawNoiseModel.fromCamera2NoiseProfile(camera2),
         )
 
         assertEquals(RawNoiseModelSource.UNAVAILABLE, resolved.source)

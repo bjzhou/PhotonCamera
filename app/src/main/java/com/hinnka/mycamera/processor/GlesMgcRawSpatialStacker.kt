@@ -536,7 +536,6 @@ internal class GlesMgcRawSpatialStacker(
     private var maxShaderStorageBlockBytes = 0L
     private var maxComputePackGroupsX = 0
     private var maxComputePackGroupsY = 0
-    private var baseFrameCamera2Model: RawNoiseModel = RawNoiseModel.EMPTY
     private val pixelDifferenceKernel = gaussianKernel(
         size = PIXEL_DIFFERENCE_KERNEL_SIZE,
         sigma = PIXEL_DIFFERENCE_SMOOTH_SIGMA,
@@ -588,11 +587,6 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
-        baseFrameCamera2Model = frames.firstOrNull()
-            ?.channelNoiseProfile
-            ?.let(RawNoiseModel::fromCamera2NoiseProfile)
-            ?.takeIf { it.hasValidCamera2Profile }
-            ?: RawNoiseModel.EMPTY
         val resolvedNoiseModels = frames.map(::resolveNoiseModelForFrame)
         if (resolvedNoiseModels.any { it.source == RawNoiseModelSource.UNAVAILABLE }) {
             PLog.e(
@@ -736,24 +730,28 @@ internal class GlesMgcRawSpatialStacker(
             val perFrameCamera2Profiles = resolvedNoiseModels.count {
                 it.source == RawNoiseModelSource.CAMERA2_PER_FRAME
             }
-            val baseFrameCamera2Profiles = resolvedNoiseModels.count {
-                it.source == RawNoiseModelSource.CAMERA2_BASE_FRAME
-            }
             val calibratedProfiles = resolvedNoiseModels.count {
                 it.source == RawNoiseModelSource.GCAM_CALIBRATED
             }
+            val systemFallbackProfiles = resolvedNoiseModels.count {
+                it.source == RawNoiseModelSource.GCAM_SYSTEM_FALLBACK
+            }
             val calibratedProfile = (noiseProfileSelection as? RawNoiseProfileSelection.Calibrated)
                 ?.profile
-            val profileSource = calibratedProfile?.let { profile ->
-                profile.maxAnalogSensitivity?.let { maxAnalog ->
-                    "gcam-c:${profile.id} profileMaxAnalog=$maxAnalog"
-                } ?: "mgc-override:${profile.id} cameraGainSplit=enabled"
-            } ?: "Camera2 SENSOR_NOISE_PROFILE"
+            val profileSource = when (val selection = noiseProfileSelection) {
+                is RawNoiseProfileSelection.Calibrated ->
+                    selection.profile.maxAnalogSensitivity?.let { maxAnalog ->
+                        "gcam-c:${selection.profile.id} profileMaxAnalog=$maxAnalog"
+                    } ?: "mgc-override:${selection.profile.id} cameraGainSplit=enabled"
+                is RawNoiseProfileSelection.Camera2 ->
+                    "Camera2 SENSOR_NOISE_PROFILE fallback=gcam-c:" +
+                        selection.fallbackProfile.id
+            }
             PLog.i(
                 TAG,
                 "MGC Spatial noise profile source=$profileSource " +
                     "perFrame=$perFrameCamera2Profiles/${frames.size} " +
-                    "baseFallback=$baseFrameCamera2Profiles/${frames.size} " +
+                    "systemFallback=$systemFallbackProfiles/${frames.size} " +
                     "calibrated=$calibratedProfiles/${frames.size}",
             )
             calibratedProfile?.let { profile ->
@@ -2031,11 +2029,6 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
-        baseFrameCamera2Model = frames.firstOrNull()
-            ?.channelNoiseProfile
-            ?.let(RawNoiseModel::fromCamera2NoiseProfile)
-            ?.takeIf { it.hasValidCamera2Profile }
-            ?: RawNoiseModel.EMPTY
         val resolvedNoiseModels = frames.map(::resolveNoiseModelForFrame)
         if (resolvedNoiseModels.any { it.source == RawNoiseModelSource.UNAVAILABLE }) {
             PLog.e(
@@ -3782,7 +3775,6 @@ internal class GlesMgcRawSpatialStacker(
             minimumSensitivityIso = frame.minimumSensitivityIso,
             maximumAnalogSensitivityIso = frame.maximumAnalogSensitivityIso,
             perFrameCamera2Profile = frame.channelNoiseProfile,
-            baseFrameCamera2Model = baseFrameCamera2Model,
         )
 
     private fun noiseModelForFrame(frame: RawStackFrame): RawNoiseModel =

@@ -184,8 +184,8 @@ class RawNoiseModel private constructor(
 
 internal enum class RawNoiseModelSource {
     GCAM_CALIBRATED,
+    GCAM_SYSTEM_FALLBACK,
     CAMERA2_PER_FRAME,
-    CAMERA2_BASE_FRAME,
     UNAVAILABLE,
 }
 
@@ -194,7 +194,7 @@ internal data class ResolvedRawNoiseModel(
     val source: RawNoiseModelSource,
 )
 
-/** Resolves the selected calibrated or Camera2 noise profile without substituting another model. */
+/** Resolves the selected calibrated or Camera2 noise profile and its configured system fallback. */
 internal object RawNoiseModelResolver {
     fun resolve(
         selection: RawNoiseProfileSelection,
@@ -202,7 +202,6 @@ internal object RawNoiseModelResolver {
         minimumSensitivityIso: Int = 0,
         maximumAnalogSensitivityIso: Int = 0,
         perFrameCamera2Profile: FloatArray?,
-        baseFrameCamera2Model: RawNoiseModel,
     ): ResolvedRawNoiseModel {
         when (selection) {
             is RawNoiseProfileSelection.Calibrated -> {
@@ -217,7 +216,7 @@ internal object RawNoiseModelResolver {
                     )
                 return ResolvedRawNoiseModel(model, RawNoiseModelSource.GCAM_CALIBRATED)
             }
-            RawNoiseProfileSelection.Camera2 -> Unit
+            is RawNoiseProfileSelection.Camera2 -> Unit
         }
         perFrameCamera2Profile
             ?.let(RawNoiseModel::fromCamera2NoiseProfile)
@@ -225,10 +224,15 @@ internal object RawNoiseModelResolver {
             ?.let { model ->
                 return ResolvedRawNoiseModel(model, RawNoiseModelSource.CAMERA2_PER_FRAME)
             }
-        if (baseFrameCamera2Model.hasValidCamera2Profile) {
+        val fallbackModel = selection.fallbackProfile.evaluate(
+            sensitivity = sensitivity,
+            minimumSensitivityIso = minimumSensitivityIso,
+            maximumAnalogSensitivityIso = maximumAnalogSensitivityIso,
+        )
+        if (fallbackModel != null) {
             return ResolvedRawNoiseModel(
-                baseFrameCamera2Model,
-                RawNoiseModelSource.CAMERA2_BASE_FRAME,
+                fallbackModel,
+                RawNoiseModelSource.GCAM_SYSTEM_FALLBACK,
             )
         }
         return ResolvedRawNoiseModel(

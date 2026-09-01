@@ -158,11 +158,6 @@ internal class GlesMgcRawBaseFrameSelector(
         }
         val rawTextureFences = LongArray(rawTextures.size)
 
-        val baseCamera2Model = normalIndices.firstNotNullOfOrNull { index ->
-            frames[index].channelNoiseProfile
-                ?.let(RawNoiseModel::fromCamera2NoiseProfile)
-                ?.takeIf { it.hasValidCamera2Profile }
-        } ?: RawNoiseModel.EMPTY
         try {
             normalIndices.forEachIndexed { measurementIndex, frameIndex ->
                 val ringIndex = measurementIndex % rawTextures.size
@@ -181,7 +176,6 @@ internal class GlesMgcRawBaseFrameSelector(
                     minimumSensitivityIso = frame.minimumSensitivityIso,
                     maximumAnalogSensitivityIso = frame.maximumAnalogSensitivityIso,
                     perFrameCamera2Profile = frame.channelNoiseProfile,
-                    baseFrameCamera2Model = baseCamera2Model,
                 )
                 check(noiseModel.source != RawNoiseModelSource.UNAVAILABLE) {
                     "Noise model is unavailable for base candidate ${frame.frameNumber}"

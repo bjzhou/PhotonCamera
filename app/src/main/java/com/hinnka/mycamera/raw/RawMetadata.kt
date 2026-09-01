@@ -191,7 +191,7 @@ data class RawMetadata(
     fun withNoiseProfileSelection(selection: RawNoiseProfileSelection): RawMetadata {
         val profile = when (selection) {
             is RawNoiseProfileSelection.Calibrated -> selection.profile
-            RawNoiseProfileSelection.Camera2 -> {
+            is RawNoiseProfileSelection.Camera2 -> {
                 val hasUsableSourceProfile = when (noiseProfileLayout) {
                     RawNoiseProfileLayout.CAMERA2_CFA,
                     RawNoiseProfileLayout.CANONICAL_BAYER ->
@@ -205,10 +205,7 @@ data class RawMetadata(
                     RawNoiseProfileLayout.NONE -> false
                 }
                 if (hasUsableSourceProfile) return this
-                return copy(
-                    channelNoiseProfile = FloatArray(0),
-                    noiseProfileLayout = RawNoiseProfileLayout.NONE,
-                )
+                selection.fallbackProfile
             }
         }
         val model = profile.evaluate(

@@ -8,6 +8,10 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class RawMetadataNoiseProfileTest {
+    private val systemSelection = RawNoiseProfileSelection.Camera2(
+        fallbackProfile = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
+    )
+
     @Test
     fun camera2SelectionKeepsCompleteSensorNoiseProfile() {
         val profile = floatArrayOf(
@@ -18,13 +22,13 @@ class RawMetadataNoiseProfileTest {
         )
         val metadata = metadata(profile)
 
-        val resolved = metadata.withNoiseProfileSelection(RawNoiseProfileSelection.Camera2)
+        val resolved = metadata.withNoiseProfileSelection(systemSelection)
 
         assertSame(metadata, resolved)
     }
 
     @Test
-    fun camera2SelectionClearsNoiseProfileWhenReadTermsAreZero() {
+    fun camera2SelectionUsesConfiguredFallbackWhenReadTermsAreZero() {
         val metadata = metadata(
             floatArrayOf(
                 1f, 0f,
@@ -33,26 +37,24 @@ class RawMetadataNoiseProfileTest {
                 4f, 0f,
             ),
         )
-        val resolved = metadata.withNoiseProfileSelection(RawNoiseProfileSelection.Camera2)
+        val resolved = metadata.withNoiseProfileSelection(systemSelection)
 
-        assertEquals(RawNoiseProfileLayout.NONE, resolved.noiseProfileLayout)
-        assertEquals(0, resolved.channelNoiseProfile.size)
+        assertSystemFallback(resolved)
     }
 
     @Test
-    fun camera2SelectionKeepsNoiseProfileUnavailableWhenSensorProfileIsMissing() {
+    fun camera2SelectionUsesConfiguredFallbackWhenSensorProfileIsMissing() {
         val metadata = metadata(FloatArray(0)).copy(
             noiseProfileLayout = RawNoiseProfileLayout.NONE,
         )
 
-        val resolved = metadata.withNoiseProfileSelection(RawNoiseProfileSelection.Camera2)
+        val resolved = metadata.withNoiseProfileSelection(systemSelection)
 
-        assertEquals(RawNoiseProfileLayout.NONE, resolved.noiseProfileLayout)
-        assertEquals(0, resolved.channelNoiseProfile.size)
+        assertSystemFallback(resolved)
     }
 
     @Test
-    fun camera2SelectionClearsPersistedDngProfileWhenReadTermsAreZero() {
+    fun camera2SelectionUsesConfiguredFallbackForInvalidPersistedDngProfile() {
         val metadata = metadata(
             floatArrayOf(
                 1f, 0f,
@@ -60,10 +62,9 @@ class RawMetadataNoiseProfileTest {
                 3f, 0f,
             ),
         ).copy(noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB)
-        val resolved = metadata.withNoiseProfileSelection(RawNoiseProfileSelection.Camera2)
+        val resolved = metadata.withNoiseProfileSelection(systemSelection)
 
-        assertEquals(RawNoiseProfileLayout.NONE, resolved.noiseProfileLayout)
-        assertEquals(0, resolved.channelNoiseProfile.size)
+        assertSystemFallback(resolved)
     }
 
     @Test
@@ -101,6 +102,18 @@ class RawMetadataNoiseProfileTest {
         noiseProfileLayout = RawNoiseProfileLayout.CAMERA2_CFA,
         iso = TEST_ISO,
     )
+
+    private fun assertSystemFallback(resolved: RawMetadata) {
+        val expected = checkNotNull(
+            systemSelection.fallbackProfile.evaluate(
+                sensitivity = resolved.iso,
+                minimumSensitivityIso = resolved.minimumSensitivityIso,
+                maximumAnalogSensitivityIso = resolved.maxAnalogSensitivity,
+            ),
+        )
+        assertEquals(RawNoiseProfileLayout.CANONICAL_BAYER, resolved.noiseProfileLayout)
+        assertArrayEquals(expected.canonicalChannelPairs(), resolved.channelNoiseProfile, 0f)
+    }
 
     companion object {
         private const val TEST_ISO = 800

@@ -26,6 +26,17 @@ class RawNoiseProfileManager(context: Context) {
     private val appContext = context.applicationContext
     private val customImportManager = CustomImportManager(appContext)
     private val calibratedCache = ConcurrentHashMap<String, CalibratedRawNoiseProfile>()
+    private val systemCamera2Selection: RawNoiseProfileSelection.Camera2 by lazy(
+        LazyThreadSafetyMode.SYNCHRONIZED,
+    ) {
+        val fallbackInfo = checkNotNull(
+            BUILT_IN_PROFILES.firstOrNull { it.id == PIXEL8_PRO_PROFILE_ID },
+        ) { "Bundled Pixel 8 Pro RAW noise fallback is not registered" }
+        val fallbackProfile = checkNotNull(loadCalibratedProfile(fallbackInfo)) {
+            "Bundled Pixel 8 Pro RAW noise fallback could not be loaded"
+        }
+        RawNoiseProfileSelection.Camera2(fallbackProfile)
+    }
 
     fun getAvailableProfiles(): List<RawNoiseProfileInfo> =
         (BUILT_IN_PROFILES + customImportManager.getCustomRawNoiseProfiles())
@@ -33,13 +44,17 @@ class RawNoiseProfileManager(context: Context) {
 
     fun resolveSelection(requestedId: String?): RawNoiseProfileSelection {
         val id = requestedId?.takeIf { it.isNotBlank() } ?: DEFAULT_PROFILE_ID
-        if (id == SYSTEM_PROFILE_ID) return RawNoiseProfileSelection.Camera2
+        if (id == SYSTEM_PROFILE_ID) return systemCamera2Selection
         val info = getAvailableProfiles().firstOrNull { it.id == id }
         val calibrated = info?.let(::loadCalibratedProfile)
         if (calibrated != null) return RawNoiseProfileSelection.Calibrated(calibrated, id)
 
-        PLog.w(TAG, "RAW noise profile unavailable: $id; using Camera2 system profile")
-        return RawNoiseProfileSelection.Camera2
+        PLog.w(
+            TAG,
+            "RAW noise profile unavailable: $id; using Camera2 system profile with " +
+                "$PIXEL8_PRO_PROFILE_ID fallback",
+        )
+        return systemCamera2Selection
     }
 
     private fun loadCalibratedProfile(info: RawNoiseProfileInfo): CalibratedRawNoiseProfile? {
