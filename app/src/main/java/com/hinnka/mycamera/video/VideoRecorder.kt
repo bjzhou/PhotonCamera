@@ -3,15 +3,18 @@ package com.hinnka.mycamera.video
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
 import android.media.AudioFormat
-import android.media.AudioRecord
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
 import androidx.core.app.ActivityCompat
@@ -25,7 +28,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -48,6 +50,9 @@ class VideoRecorder(
         private const val AUDIO_MONO_BITRATE = 96_000
         private const val AUDIO_STEREO_BITRATE = 192_000
         private const val I_FRAME_INTERVAL = 1
+        private const val UNSET_TIMESTAMP = Long.MIN_VALUE
+        private const val NANOS_PER_SECOND = 1_000_000_000L
+        private const val MICROS_PER_SECOND = 1_000_000L
     }
 
     private data class AudioCaptureConfig(
@@ -67,11 +72,22 @@ class VideoRecorder(
         val info: MediaCodec.BufferInfo
     )
 
+    private data class PauseInterval(
+        val startTimeUs: Long,
+        val endTimeUs: Long,
+    )
+
+    private data class FrameRange(
+        val startFrame: Int,
+        val endFrameExclusive: Int,
+    )
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val renderDispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val muxerLock = Any()
+    private val timelineLock = Any()
     private val realtimeFrameLock = Any()
     private val videoCodecLock = Any()
     private val audioCodecLock = Any()
@@ -105,7 +121,11 @@ class VideoRecorder(
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var cameraInputStarted = false
     private var hlgCameraInput = false
-    private var firstVideoPresentationTimeUs = Long.MIN_VALUE
+    private var requestedCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+    private var cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
+    private var timelineOriginUs = UNSET_TIMESTAMP
+    private var pauseIntervals = mutableListOf<PauseInterval>()
+    private var activePauseStartTimeUs = UNSET_TIMESTAMP
 
     private var requestedSize = Size(1080, 1920)
     private var requestedFps = 30
@@ -122,13 +142,15 @@ class VideoRecorder(
     private var audioFormat: MediaFormat? = null
     private var errorCallback: ((String) -> Unit)? = null
     private var finishCallback: ((Uri?) -> Unit)? = null
-    private var audioBytesQueued = 0L
+    private var audioFramesRead = 0L
+    private var audioFallbackStartTimeNs = UNSET_TIMESTAMP
+    private var firstAudioCaptureTimeUs = UNSET_TIMESTAMP
+    private var lastQueuedAudioPresentationTimeUs = UNSET_TIMESTAMP
+    private var audioEndPresentationTimeUs = UNSET_TIMESTAMP
     private var activeAudioConfig = monoAudioConfig()
     private var lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
     private var lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
     private var pendingRealtimeFrame = false
-    private var totalPausedDurationUs: Long = 0L
-    private var pauseStartTimeUs: Long = 0L
     private var renderLoopRunning = false
     private var statsWindowStartMs: Long = 0L
     private var statsIncomingFrames: Int = 0
@@ -159,6 +181,7 @@ class VideoRecorder(
         colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
         colorLayers: List<VideoColorEffectLayer> = emptyList(),
         hlgInput: Boolean = false,
+        cameraTimestampSource: Int = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
@@ -180,6 +203,7 @@ class VideoRecorder(
         requestedColorConfig = colorConfig
         requestedColorLayers = colorLayers.toList()
         hlgCameraInput = hlgInput
+        requestedCameraTimestampSource = cameraTimestampSource
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedRecordingPath = recordingPath
         requestedRecordingTreeUri = recordingTreeUri?.takeIf { it.isNotBlank() }
@@ -187,8 +211,6 @@ class VideoRecorder(
         this.errorCallback = onError
         this.finishCallback = onFinished
         resetMuxerState()
-        totalPausedDurationUs = 0L
-        pauseStartTimeUs = 0L
         isPaused = false
         statsWindowStartMs = 0L
         statsIncomingFrames = 0
@@ -199,7 +221,6 @@ class VideoRecorder(
         statsRenderTimeMaxMs = 0L
         stopRequested = false
         cameraInputStarted = false
-        firstVideoPresentationTimeUs = Long.MIN_VALUE
         try {
             prepareVideoEncoder()
             runBlocking(renderDispatcher) {
@@ -221,6 +242,7 @@ class VideoRecorder(
                 "output=${requestedOutputSize.width}x${requestedOutputSize.height} @ " +
                 "${requestedFps}fps, orientationHint=$requestedOrientationHintDegrees, " +
                 "input=dedicated-surface-texture, " +
+                "cameraTimestampSource=$requestedCameraTimestampSource, " +
                 "path=${requestedRecordingPath.name}, uri=${requestedRecordingTreeUri?.take(48)}"
         )
         return true
@@ -277,15 +299,24 @@ class VideoRecorder(
 
     fun pauseRecording() {
         if (!isRecording || isPaused || stopRequested) return
+        val nowUs = SystemClock.elapsedRealtimeNanos() / 1_000L
+        synchronized(timelineLock) {
+            activePauseStartTimeUs = nowUs
+        }
         isPaused = true
-        pauseStartTimeUs = android.os.SystemClock.elapsedRealtimeNanos() / 1000
         PLog.d(TAG, "Video recording paused")
     }
 
     fun resumeRecording() {
         if (!isRecording || !isPaused || stopRequested) return
-        val nowUs = android.os.SystemClock.elapsedRealtimeNanos() / 1000
-        totalPausedDurationUs += (nowUs - pauseStartTimeUs).coerceAtLeast(0L)
+        val nowUs = SystemClock.elapsedRealtimeNanos() / 1_000L
+        synchronized(timelineLock) {
+            val pauseStartUs = activePauseStartTimeUs
+            if (pauseStartUs != UNSET_TIMESTAMP && nowUs > pauseStartUs) {
+                pauseIntervals += PauseInterval(pauseStartUs, nowUs)
+            }
+            activePauseStartTimeUs = UNSET_TIMESTAMP
+        }
         isPaused = false
         PLog.d(TAG, "Video recording resumed")
     }
@@ -547,6 +578,7 @@ class VideoRecorder(
         audioRecordJob = scope.launch {
             try {
                 if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    audioFallbackStartTimeNs = SystemClock.elapsedRealtimeNanos()
                     recorder.startRecording()
                 }
             } catch (e: Exception) {
@@ -554,17 +586,40 @@ class VideoRecorder(
                 return@launch
             }
             val buffer = ByteArray(4096)
-            while (isRecording && !stopRequested) {
-                if (isPaused) {
-                    delay(10)
-                    continue
-                }
+            recordingLoop@ while (isRecording && !stopRequested) {
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read <= 0) continue
                 val frameAlignedRead = read - (read % audioBytesPerFrame())
                 if (frameAlignedRead <= 0) continue
-                if (!queueAudioPcm(encoder, buffer, frameAlignedRead)) {
-                    break
+
+                val bytesPerFrame = audioBytesPerFrame()
+                val frameCount = frameAlignedRead / bytesPerFrame
+                val firstFramePosition = audioFramesRead
+                val bufferStartTimeUs = resolveAudioCaptureTimeUs(
+                    recorder = recorder,
+                    firstFramePosition = firstFramePosition,
+                )
+                audioFramesRead += frameCount.toLong()
+                logFirstAudioCaptureTime(bufferStartTimeUs)
+
+                val activeRanges = resolveActiveAudioFrameRanges(
+                    bufferStartTimeUs = bufferStartTimeUs,
+                    frameCount = frameCount,
+                )
+                for (range in activeRanges) {
+                    val rangeFrameCount = range.endFrameExclusive - range.startFrame
+                    val rangeStartTimeUs = bufferStartTimeUs +
+                        audioFramesToDurationUs(range.startFrame.toLong())
+                    if (!queueAudioPcm(
+                            encoder = encoder,
+                            source = buffer,
+                            sourceOffset = range.startFrame * bytesPerFrame,
+                            byteCount = rangeFrameCount * bytesPerFrame,
+                            firstPresentationTimeUs = rangeStartTimeUs,
+                        )
+                    ) {
+                        break@recordingLoop
+                    }
                 }
             }
             try {
@@ -577,10 +632,13 @@ class VideoRecorder(
     private fun queueAudioPcm(
         encoder: MediaCodec,
         source: ByteArray,
-        byteCount: Int
+        sourceOffset: Int,
+        byteCount: Int,
+        firstPresentationTimeUs: Long,
     ): Boolean {
-        var offset = 0
-        while (offset < byteCount && isRecording && !stopRequested) {
+        var offset = sourceOffset
+        val endOffset = sourceOffset + byteCount
+        while (offset < endOffset && isRecording && !stopRequested) {
             val inputIndex = try {
                 encoder.dequeueInputBuffer(10_000L)
             } catch (_: IllegalStateException) {
@@ -591,7 +649,7 @@ class VideoRecorder(
             val inputBuffer = encoder.getInputBuffer(inputIndex) ?: continue
             inputBuffer.clear()
             val bytesPerFrame = audioBytesPerFrame()
-            val maxChunkSize = minOf(byteCount - offset, inputBuffer.remaining())
+            val maxChunkSize = minOf(endOffset - offset, inputBuffer.remaining())
             val chunkSize = maxChunkSize - (maxChunkSize % bytesPerFrame)
             if (chunkSize <= 0) {
                 PLog.w(TAG, "Skip audio chunk because encoder input buffer cannot fit a complete audio frame")
@@ -599,7 +657,14 @@ class VideoRecorder(
             }
 
             inputBuffer.put(source, offset, chunkSize)
-            val presentationTimeUs = audioBytesToPresentationTimeUs(audioBytesQueued)
+            val sourceFrameOffset = (offset - sourceOffset) / bytesPerFrame
+            val capturePresentationTimeUs = firstPresentationTimeUs +
+                audioFramesToDurationUs(sourceFrameOffset.toLong())
+            val presentationTimeUs = if (lastQueuedAudioPresentationTimeUs == UNSET_TIMESTAMP) {
+                capturePresentationTimeUs
+            } else {
+                capturePresentationTimeUs.coerceAtLeast(lastQueuedAudioPresentationTimeUs + 1L)
+            }
             try {
                 encoder.queueInputBuffer(
                     inputIndex,
@@ -611,19 +676,162 @@ class VideoRecorder(
             } catch (_: IllegalStateException) {
                 return false
             }
-            audioBytesQueued += chunkSize.toLong()
+            lastQueuedAudioPresentationTimeUs = presentationTimeUs
+            audioEndPresentationTimeUs = presentationTimeUs +
+                audioFramesToDurationUs((chunkSize / bytesPerFrame).toLong())
             offset += chunkSize
         }
         return true
     }
 
-    private fun audioBytesToPresentationTimeUs(byteCount: Long): Long {
-        val frames = byteCount / audioBytesPerFrame()
-        return frames * 1_000_000L / AUDIO_SAMPLE_RATE
+    private fun resolveAudioCaptureTimeUs(
+        recorder: AudioRecord,
+        firstFramePosition: Long,
+    ): Long {
+        val timestamp = AudioTimestamp()
+        val timestampAvailable = recorder.getTimestamp(
+            timestamp,
+            AudioTimestamp.TIMEBASE_BOOTTIME,
+        ) == AudioRecord.SUCCESS && timestamp.nanoTime > 0L
+        val captureTimeNs = if (timestampAvailable) {
+            timestamp.nanoTime + audioFramesToDurationNs(firstFramePosition - timestamp.framePosition)
+        } else {
+            val fallbackStartNs = audioFallbackStartTimeNs.takeIf { it != UNSET_TIMESTAMP }
+                ?: SystemClock.elapsedRealtimeNanos().also { audioFallbackStartTimeNs = it }
+            fallbackStartNs + audioFramesToDurationNs(firstFramePosition)
+        }
+        return captureTimeNs / 1_000L
+    }
+
+    private fun logFirstAudioCaptureTime(captureTimeUs: Long) {
+        if (firstAudioCaptureTimeUs != UNSET_TIMESTAMP) return
+        firstAudioCaptureTimeUs = captureTimeUs
+        val originUs = synchronized(timelineLock) { timelineOriginUs }
+        val offsetMs = if (originUs == UNSET_TIMESTAMP) {
+            "pending-video-origin"
+        } else {
+            "${(captureTimeUs - originUs) / 1_000f}"
+        }
+        PLog.i(
+            TAG,
+            "Audio capture timeline established: firstAudioCaptureUs=$captureTimeUs, " +
+                "initialAvOffsetMs=$offsetMs"
+        )
+    }
+
+    private fun resolveActiveAudioFrameRanges(
+        bufferStartTimeUs: Long,
+        frameCount: Int,
+    ): List<FrameRange> {
+        if (frameCount <= 0) return emptyList()
+        val bufferEndTimeUs = bufferStartTimeUs + audioFramesToDurationUs(frameCount.toLong())
+        val pauses = synchronized(timelineLock) {
+            buildList {
+                addAll(pauseIntervals)
+                if (activePauseStartTimeUs != UNSET_TIMESTAMP) {
+                    add(PauseInterval(activePauseStartTimeUs, Long.MAX_VALUE))
+                }
+            }
+        }
+        var activeRanges = listOf(FrameRange(0, frameCount))
+        for (pause in pauses) {
+            if (pause.startTimeUs >= bufferEndTimeUs || pause.endTimeUs <= bufferStartTimeUs) continue
+            val pauseStartFrame = audioFrameOffsetAtOrAfter(
+                timestampUs = pause.startTimeUs,
+                bufferStartTimeUs = bufferStartTimeUs,
+                bufferEndTimeUs = bufferEndTimeUs,
+                frameCount = frameCount,
+            )
+            val pauseEndFrame = if (pause.endTimeUs == Long.MAX_VALUE) {
+                frameCount
+            } else {
+                audioFrameOffsetAtOrAfter(
+                    timestampUs = pause.endTimeUs,
+                    bufferStartTimeUs = bufferStartTimeUs,
+                    bufferEndTimeUs = bufferEndTimeUs,
+                    frameCount = frameCount,
+                )
+            }
+            activeRanges = activeRanges.flatMap { range ->
+                if (pauseEndFrame <= range.startFrame || pauseStartFrame >= range.endFrameExclusive) {
+                    listOf(range)
+                } else {
+                    buildList {
+                        if (range.startFrame < pauseStartFrame) {
+                            add(FrameRange(range.startFrame, pauseStartFrame))
+                        }
+                        if (pauseEndFrame < range.endFrameExclusive) {
+                            add(FrameRange(pauseEndFrame, range.endFrameExclusive))
+                        }
+                    }
+                }
+            }
+            if (activeRanges.isEmpty()) break
+        }
+        return activeRanges
+    }
+
+    private fun audioFrameOffsetAtOrAfter(
+        timestampUs: Long,
+        bufferStartTimeUs: Long,
+        bufferEndTimeUs: Long,
+        frameCount: Int,
+    ): Int {
+        if (timestampUs <= bufferStartTimeUs) return 0
+        if (timestampUs >= bufferEndTimeUs) return frameCount
+        val deltaUs = timestampUs - bufferStartTimeUs
+        return ((deltaUs * AUDIO_SAMPLE_RATE + MICROS_PER_SECOND - 1L) / MICROS_PER_SECOND)
+            .toInt()
+            .coerceIn(0, frameCount)
+    }
+
+    private fun audioFramesToDurationUs(frameCount: Long): Long {
+        return frameCount * MICROS_PER_SECOND / AUDIO_SAMPLE_RATE
+    }
+
+    private fun audioFramesToDurationNs(frameCount: Long): Long {
+        return frameCount * NANOS_PER_SECOND / AUDIO_SAMPLE_RATE
     }
 
     private fun audioBytesPerFrame(): Int {
         return activeAudioConfig.channelCount * AUDIO_BYTES_PER_SAMPLE
+    }
+
+    private fun mapCameraTimestampToBoottimeNs(cameraTimestampNs: Long): Long {
+        if (requestedCameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
+            return cameraTimestampNs
+        }
+
+        if (cameraTimestampToBoottimeOffsetNs == UNSET_TIMESTAMP) {
+            cameraTimestampToBoottimeOffsetNs = SystemClock.elapsedRealtimeNanos() - cameraTimestampNs
+            PLog.w(
+                TAG,
+                "Camera timestamp source is not REALTIME; calibrated to BOOTTIME with " +
+                    "offsetNs=$cameraTimestampToBoottimeOffsetNs"
+            )
+        }
+        return cameraTimestampNs + cameraTimestampToBoottimeOffsetNs
+    }
+
+    private fun establishTimelineOrigin(firstVideoPresentationTimeUs: Long) {
+        val established = synchronized(timelineLock) {
+            if (timelineOriginUs != UNSET_TIMESTAMP) {
+                false
+            } else {
+                timelineOriginUs = firstVideoPresentationTimeUs
+                true
+            }
+        }
+        if (established) {
+            val audioOffsetMs = firstAudioCaptureTimeUs
+                .takeIf { it != UNSET_TIMESTAMP }
+                ?.let { (it - firstVideoPresentationTimeUs) / 1_000f }
+            PLog.i(
+                TAG,
+                "Recording timeline established: firstVideoCaptureUs=$firstVideoPresentationTimeUs, " +
+                    "initialAvOffsetMs=${audioOffsetMs ?: "pending-audio"}"
+            )
+        }
     }
 
     private fun drainRealtimeFrames(allowWhenStopping: Boolean) {
@@ -647,9 +855,12 @@ class VideoRecorder(
 
             try {
                 val videoRenderer = renderer ?: continue
-                val renderStartMs = android.os.SystemClock.elapsedRealtime()
-                videoRenderer.renderLatestFrame() ?: continue
-                val renderCostMs = (android.os.SystemClock.elapsedRealtime() - renderStartMs).coerceAtLeast(0L)
+                val renderStartMs = SystemClock.elapsedRealtime()
+                val presentationTimeNs = videoRenderer.renderLatestFrame(
+                    mapPresentationTimeNs = ::mapCameraTimestampToBoottimeNs,
+                ) ?: continue
+                establishTimelineOrigin(presentationTimeNs / 1_000L)
+                val renderCostMs = (SystemClock.elapsedRealtime() - renderStartMs).coerceAtLeast(0L)
                 statsAcceptedFrames += 1
                 statsRenderedFrames += 1
                 statsRenderTimeTotalMs += renderCostMs
@@ -673,7 +884,7 @@ class VideoRecorder(
     }
 
     private fun logRenderStatsIfNeeded() {
-        val nowMs = android.os.SystemClock.elapsedRealtime()
+        val nowMs = SystemClock.elapsedRealtime()
         if (statsWindowStartMs == 0L) {
             statsWindowStartMs = nowMs
             return
@@ -817,11 +1028,14 @@ class VideoRecorder(
             }
             if (inputIndex >= 0) {
                 try {
+                    val endOfStreamTimeUs = audioEndPresentationTimeUs
+                        .takeIf { it != UNSET_TIMESTAMP }
+                        ?: SystemClock.elapsedRealtimeNanos() / 1_000L
                     encoder.queueInputBuffer(
                         inputIndex,
                         0,
                         0,
-                        audioBytesToPresentationTimeUs(audioBytesQueued),
+                        endOfStreamTimeUs,
                         MediaCodec.BUFFER_FLAG_END_OF_STREAM
                     )
                 } catch (_: IllegalStateException) {
@@ -846,37 +1060,33 @@ class VideoRecorder(
         info: MediaCodec.BufferInfo
     ) {
         if (info.size <= 0 ||
-            info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0 ||
-            (isVideo && isPaused)
+            info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
         ) {
             return
         }
         synchronized(muxerLock) {
-            if (!muxerStarted) {
+            val timelineReady = synchronized(timelineLock) {
+                timelineOriginUs != UNSET_TIMESTAMP
+            }
+            if (!muxerStarted || !timelineReady) {
                 val pending = if (isVideo) pendingVideoSamples else pendingAudioSamples
-                pending += copyEncodedSample(isVideo = isVideo, buffer = buffer, info = info)
+                pending += copyEncodedSample(buffer = buffer, info = info)
                 return
             }
 
-            val trackIndex = if (isVideo) videoTrackIndex else audioTrackIndex
-            if (trackIndex >= 0) {
-                val sanitizedInfo = sanitizeSampleInfo(isVideo = isVideo, info = info)
-                if (sanitizedInfo.size > 0 && sanitizedInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                    val sampleBuffer = buffer.duplicate()
-                    sampleBuffer.position(info.offset)
-                    sampleBuffer.limit(info.offset + info.size)
-                    try {
-                        muxer?.writeSampleData(trackIndex, sampleBuffer.slice(), sanitizedInfo)
-                    } catch (e: Exception) {
-                        PLog.w(TAG, "video recorder write sample error", e)
-                    }
-                }
-            }
+            flushPendingSamplesLocked()
+            val sampleBuffer = buffer.duplicate()
+            sampleBuffer.position(info.offset)
+            sampleBuffer.limit(info.offset + info.size)
+            writeEncodedSampleLocked(
+                isVideo = isVideo,
+                buffer = sampleBuffer.slice(),
+                info = info,
+            )
         }
     }
 
     private fun copyEncodedSample(
-        isVideo: Boolean,
         buffer: ByteBuffer,
         info: MediaCodec.BufferInfo
     ): EncodedSample {
@@ -890,35 +1100,31 @@ class VideoRecorder(
         }
         return EncodedSample(
             data = sampleBytes,
-            info = sanitizeSampleInfo(isVideo = isVideo, info = copiedInfo)
+            info = copiedInfo,
         )
     }
 
-    private fun sanitizeSampleInfo(
+    private fun normalizeSampleInfo(
         isVideo: Boolean,
         info: MediaCodec.BufferInfo
-    ): MediaCodec.BufferInfo {
+    ): MediaCodec.BufferInfo? {
+        val normalizedSourceTimeUs = synchronized(timelineLock) {
+            val originUs = timelineOriginUs
+            if (originUs == UNSET_TIMESTAMP || info.presentationTimeUs < originUs) {
+                return null
+            }
+            info.presentationTimeUs - originUs -
+                pausedDurationBetweenLocked(originUs, info.presentationTimeUs)
+        }
         val lastPresentationTimeUs = if (isVideo) {
             lastMuxedVideoPresentationTimeUs
         } else {
             lastMuxedAudioPresentationTimeUs
         }
-        val sourcePresentationTimeUs = if (isVideo) {
-            if (firstVideoPresentationTimeUs == Long.MIN_VALUE) {
-                firstVideoPresentationTimeUs = info.presentationTimeUs
-            }
-            (
-                info.presentationTimeUs -
-                    firstVideoPresentationTimeUs -
-                    totalPausedDurationUs
-                ).coerceAtLeast(0L)
-        } else {
-            info.presentationTimeUs
-        }
         val sanitizedPresentationTimeUs = if (lastPresentationTimeUs == Long.MIN_VALUE) {
-            sourcePresentationTimeUs.coerceAtLeast(0L)
+            normalizedSourceTimeUs.coerceAtLeast(0L)
         } else {
-            sourcePresentationTimeUs.coerceAtLeast(lastPresentationTimeUs + 1L)
+            normalizedSourceTimeUs.coerceAtLeast(lastPresentationTimeUs + 1L)
         }
         val sanitizedInfo = MediaCodec.BufferInfo().apply {
             set(0, info.size, sanitizedPresentationTimeUs, info.flags)
@@ -929,6 +1135,67 @@ class VideoRecorder(
             lastMuxedAudioPresentationTimeUs = sanitizedPresentationTimeUs
         }
         return sanitizedInfo
+    }
+
+    private fun pausedDurationBetweenLocked(startTimeUs: Long, endTimeUs: Long): Long {
+        if (endTimeUs <= startTimeUs) return 0L
+        var pausedDurationUs = 0L
+        pauseIntervals.forEach { pause ->
+            val overlapStartUs = maxOf(startTimeUs, pause.startTimeUs)
+            val overlapEndUs = minOf(endTimeUs, pause.endTimeUs)
+            if (overlapEndUs > overlapStartUs) {
+                pausedDurationUs += overlapEndUs - overlapStartUs
+            }
+        }
+        val activePauseStartUs = activePauseStartTimeUs
+        if (activePauseStartUs != UNSET_TIMESTAMP) {
+            val overlapStartUs = maxOf(startTimeUs, activePauseStartUs)
+            if (endTimeUs > overlapStartUs) {
+                pausedDurationUs += endTimeUs - overlapStartUs
+            }
+        }
+        return pausedDurationUs
+    }
+
+    private fun writeEncodedSampleLocked(
+        isVideo: Boolean,
+        buffer: ByteBuffer,
+        info: MediaCodec.BufferInfo,
+    ) {
+        val trackIndex = if (isVideo) videoTrackIndex else audioTrackIndex
+        if (trackIndex < 0) return
+        val normalizedInfo = normalizeSampleInfo(isVideo = isVideo, info = info) ?: return
+        try {
+            muxer?.writeSampleData(trackIndex, buffer, normalizedInfo)
+        } catch (e: Exception) {
+            PLog.w(TAG, "Video recorder write sample error", e)
+        }
+    }
+
+    private fun flushPendingSamplesLocked() {
+        if (!muxerStarted) return
+        val timelineReady = synchronized(timelineLock) {
+            timelineOriginUs != UNSET_TIMESTAMP
+        }
+        if (!timelineReady) return
+
+        pendingVideoSamples.forEach { sample ->
+            writeEncodedSampleLocked(
+                isVideo = true,
+                buffer = ByteBuffer.wrap(sample.data),
+                info = sample.info,
+            )
+        }
+        pendingVideoSamples.clear()
+
+        pendingAudioSamples.forEach { sample ->
+            writeEncodedSampleLocked(
+                isVideo = false,
+                buffer = ByteBuffer.wrap(sample.data),
+                info = sample.info,
+            )
+        }
+        pendingAudioSamples.clear()
     }
 
     private fun maybeStartMuxerLocked() {
@@ -944,18 +1211,7 @@ class VideoRecorder(
         }
         localMuxer.start()
         muxerStarted = true
-
-        pendingVideoSamples.forEach { sample ->
-            localMuxer.writeSampleData(videoTrackIndex, ByteBuffer.wrap(sample.data), sample.info)
-        }
-        pendingVideoSamples.clear()
-
-        if (audioTrackIndex >= 0) {
-            pendingAudioSamples.forEach { sample ->
-                localMuxer.writeSampleData(audioTrackIndex, ByteBuffer.wrap(sample.data), sample.info)
-            }
-        }
-        pendingAudioSamples.clear()
+        flushPendingSamplesLocked()
     }
 
     private suspend fun finalizeOutput(): Uri? {
@@ -968,12 +1224,11 @@ class VideoRecorder(
                     videoTrackIndex = muxer?.addTrack(videoFormat!!) ?: -1
                     muxer?.start()
                     muxerStarted = true
-                    pendingVideoSamples.forEach { sample ->
-                        muxer?.writeSampleData(videoTrackIndex, ByteBuffer.wrap(sample.data), sample.info)
-                    }
-                    pendingVideoSamples.clear()
+                    flushPendingSamplesLocked()
                 }
             }
+
+            flushPendingSamplesLocked()
 
             try {
                 if (muxerStarted) {
@@ -1090,11 +1345,20 @@ class VideoRecorder(
             muxerStarted = false
             videoFormat = null
             audioFormat = null
-            audioBytesQueued = 0L
+            audioFramesRead = 0L
+            audioFallbackStartTimeNs = UNSET_TIMESTAMP
+            firstAudioCaptureTimeUs = UNSET_TIMESTAMP
+            lastQueuedAudioPresentationTimeUs = UNSET_TIMESTAMP
+            audioEndPresentationTimeUs = UNSET_TIMESTAMP
             activeAudioConfig = monoAudioConfig()
-            firstVideoPresentationTimeUs = Long.MIN_VALUE
             lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
             lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
+        }
+        synchronized(timelineLock) {
+            cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
+            timelineOriginUs = UNSET_TIMESTAMP
+            pauseIntervals = mutableListOf()
+            activePauseStartTimeUs = UNSET_TIMESTAMP
         }
         synchronized(realtimeFrameLock) {
             pendingRealtimeFrame = false

@@ -6375,6 +6375,9 @@ class Camera2Controller(private val context: Context) {
             ),
             colorLayers = colorLayers,
             hlgInput = _state.value.useHlg10,
+            cameraTimestampSource = getActiveOpenCameraCharacteristics()
+                ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+                ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
             orientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees),
             flipEncodedFrame = shouldFlipEncodedFrame,
             recordingPath = _state.value.videoConfig.recordingPath,

@@ -438,29 +438,18 @@ class CameraDiscovery(private val context: Context) {
                     continue
                 }
 
-                val physicalCameras = characteristics.physicalCameraIds
+                val discoveredPhysicalCameras = characteristics.physicalCameraIds
                     .mapNotNull { physicalCameraId ->
-                        val physicalCamera = createPhysicalCameraCandidate(
+                        createPhysicalCameraCandidate(
                             logicalCameraId = logicalCameraId,
                             physicalCameraId = physicalCameraId
                         )
-                        if (physicalCamera == null) {
-                            null
-                        } else {
-                            when (
-                                getAutomaticallyDiscoveredLensDisposition(
-                                    cameraId = physicalCameraId,
-                                    characteristics = getCameraCharacteristics(physicalCameraId),
-                                    fallbackLensFacing = characteristics.get(CameraCharacteristics.LENS_FACING),
-                                    source = "logical camera $logicalCameraId"
-                                )
-                            ) {
-                                AutomaticallyDiscoveredLensDisposition.IGNORE -> null
-                                AutomaticallyDiscoveredLensDisposition.NORMAL,
-                                AutomaticallyDiscoveredLensDisposition.MACRO -> physicalCamera
-                            }
-                        }
                     }
+                val physicalCameras = filterAutomaticallyDiscoveredPhysicalCameras(
+                    logicalCameraId = logicalCameraId,
+                    logicalLensFacing = characteristics.get(CameraCharacteristics.LENS_FACING),
+                    cameras = discoveredPhysicalCameras
+                )
                 if (physicalCameras.isEmpty()) continue
 
                 PLog.d(
@@ -491,6 +480,67 @@ class CameraDiscovery(private val context: Context) {
                 }
             } catch (e: Exception) {
                 PLog.w(TAG, "Failed to inspect logical camera $logicalCameraId", e)
+            }
+        }
+    }
+
+    private fun filterAutomaticallyDiscoveredPhysicalCameras(
+        logicalCameraId: String,
+        logicalLensFacing: Int?,
+        cameras: List<CameraPhysicalInfo>
+    ): List<CameraPhysicalInfo> {
+        val candidates = cameras.map { camera ->
+            AutomaticallyDiscoveredPhysicalCamera(
+                camera = camera,
+                disposition = getAutomaticallyDiscoveredLensDisposition(
+                    cameraId = camera.cameraId,
+                    characteristics = getCameraCharacteristics(camera.cameraId),
+                    fallbackLensFacing = logicalLensFacing,
+                    source = "logical camera $logicalCameraId"
+                )
+            )
+        }
+        val normalWidestZoomRatio = candidates
+            .filter {
+                it.disposition == AutomaticallyDiscoveredLensDisposition.NORMAL &&
+                        isValidIntrinsicZoomRatio(it.camera.intrinsicZoomRatio)
+            }
+            .minOfOrNull { it.camera.intrinsicZoomRatio }
+        val widestUnreliableUltraWide = candidates
+            .filter {
+                it.disposition == AutomaticallyDiscoveredLensDisposition.UNRELIABLE_AUTO_FOCUS &&
+                        isUltraWideZoomRatio(it.camera.intrinsicZoomRatio)
+            }
+            .minByOrNull { it.camera.intrinsicZoomRatio }
+            ?.takeIf { candidate ->
+                normalWidestZoomRatio == null ||
+                        candidate.camera.intrinsicZoomRatio < normalWidestZoomRatio - 0.01f
+            }
+
+        return candidates.mapNotNull { candidate ->
+            when (candidate.disposition) {
+                AutomaticallyDiscoveredLensDisposition.NORMAL,
+                AutomaticallyDiscoveredLensDisposition.MACRO -> candidate.camera
+
+                AutomaticallyDiscoveredLensDisposition.UNRELIABLE_AUTO_FOCUS -> {
+                    if (candidate.camera.cameraId == widestUnreliableUltraWide?.camera?.cameraId) {
+                        PLog.d(
+                            TAG,
+                            "Automatically discovered back camera ${candidate.camera.cameraId} from " +
+                                    "logical camera $logicalCameraId kept as widest ultra-wide lens: " +
+                                    "intrinsicZoom=${candidate.camera.intrinsicZoomRatio}"
+                        )
+                        candidate.camera
+                    } else {
+                        PLog.d(
+                            TAG,
+                            "Automatically discovered back camera ${candidate.camera.cameraId} from " +
+                                    "logical camera $logicalCameraId ignored: unreliable AF and not the " +
+                                    "widest ultra-wide lens"
+                        )
+                        null
+                    }
+                }
             }
         }
     }
@@ -862,6 +912,8 @@ class CameraDiscovery(private val context: Context) {
         val existingSet = existingIds.toSet()
         val foundIds = mutableListOf<String>()
         val foundMap = mutableMapOf<String, Float>()
+        val normalBackCameraZoomRatios = mutableListOf<Float>()
+        val unreliableAutoFocusUltraWideCandidates = mutableListOf<Pair<String, Float>>()
 
         for (cameraId in getProbeCameraIdCandidates()) {
             if (lensIdBlacklist.contains(cameraId)) {
@@ -870,7 +922,16 @@ class CameraDiscovery(private val context: Context) {
             }
 
             if (existingSet.contains(cameraId)) {
-                foundMap[cameraId] = loadZoomRation(cameraId) ?: 1f
+                val zoomRatio = loadZoomRation(cameraId) ?: 1f
+                foundMap[cameraId] = zoomRatio
+                val characteristics = getCameraCharacteristicsOrNull(cameraId, "probe baseline")
+                if (characteristics?.get(CameraCharacteristics.LENS_FACING) ==
+                    CameraCharacteristics.LENS_FACING_BACK &&
+                    !isMacroLens(characteristics) &&
+                    isValidIntrinsicZoomRatio(zoomRatio)
+                ) {
+                    normalBackCameraZoomRatios.add(zoomRatio)
+                }
                 continue
             }
 
@@ -892,6 +953,10 @@ class CameraDiscovery(private val context: Context) {
                 val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
                 lensFacing ?: continue
 
+                // Calculate before AF filtering so an unreliable-AF lens can still be retained
+                // when it is the widest usable ultra-wide candidate.
+                val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
+
                 when (
                     getAutomaticallyDiscoveredLensDisposition(
                         cameraId = cameraId,
@@ -900,17 +965,29 @@ class CameraDiscovery(private val context: Context) {
                         source = "camera ID probe"
                     )
                 ) {
-                    AutomaticallyDiscoveredLensDisposition.IGNORE -> continue
                     AutomaticallyDiscoveredLensDisposition.MACRO -> {
                         PLog.d(TAG, "Probed camera $cameraId: added as macro lens")
                         foundIds.add(cameraId)
                         continue
                     }
-                    AutomaticallyDiscoveredLensDisposition.NORMAL -> Unit
+                    AutomaticallyDiscoveredLensDisposition.UNRELIABLE_AUTO_FOCUS -> {
+                        if (isUltraWideZoomRatio(intrinsicZoomRatio)) {
+                            unreliableAutoFocusUltraWideCandidates.add(cameraId to intrinsicZoomRatio)
+                        } else {
+                            PLog.d(
+                                TAG,
+                                "Probed back camera $cameraId ignored: unreliable AF and not ultra-wide " +
+                                        "(intrinsicZoom=$intrinsicZoomRatio)"
+                            )
+                        }
+                        continue
+                    }
+                    AutomaticallyDiscoveredLensDisposition.NORMAL -> {
+                        if (lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                            normalBackCameraZoomRatios.add(intrinsicZoomRatio)
+                        }
+                    }
                 }
-
-                // 计算 intrinsicZoomRatio 来判断是否是有意义的摄像头
-                val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
 
                 if (isSameFocalLength(intrinsicZoomRatio, 1f)) {
                     if (includeDuplicateMainCameraIds) {
@@ -933,6 +1010,29 @@ class CameraDiscovery(private val context: Context) {
             } catch (e: Exception) {
                 // 该 ID 不存在或无法访问，忽略
                 PLog.v(TAG, "Probe camera $cameraId failed: ${e.message}")
+            }
+        }
+
+        val normalWidestZoomRatio = normalBackCameraZoomRatios.minOrNull()
+        val widestUnreliableUltraWide = unreliableAutoFocusUltraWideCandidates
+            .minByOrNull { it.second }
+            ?.takeIf { candidate ->
+                normalWidestZoomRatio == null || candidate.second < normalWidestZoomRatio - 0.01f
+            }
+        for (candidate in unreliableAutoFocusUltraWideCandidates) {
+            if (candidate.first == widestUnreliableUltraWide?.first) {
+                PLog.d(
+                    TAG,
+                    "Probed back camera ${candidate.first} kept as widest ultra-wide lens despite " +
+                            "unreliable AF: intrinsicZoom=${candidate.second}"
+                )
+                foundIds.add(candidate.first)
+            } else {
+                PLog.d(
+                    TAG,
+                    "Probed back camera ${candidate.first} ignored: unreliable AF and not the widest " +
+                            "ultra-wide lens"
+                )
             }
         }
 
@@ -972,12 +1072,18 @@ class CameraDiscovery(private val context: Context) {
             )
             AutomaticallyDiscoveredLensDisposition.MACRO
         } else {
-            PLog.d(
-                TAG,
-                "Automatically discovered back camera $cameraId from $source ignored: $reasons"
-            )
-            AutomaticallyDiscoveredLensDisposition.IGNORE
+            AutomaticallyDiscoveredLensDisposition.UNRELIABLE_AUTO_FOCUS
         }
+    }
+
+    private fun isUltraWideZoomRatio(intrinsicZoomRatio: Float): Boolean {
+        return isValidIntrinsicZoomRatio(intrinsicZoomRatio) &&
+                intrinsicZoomRatio < 1f &&
+                !isSameFocalLength(intrinsicZoomRatio, 1f)
+    }
+
+    private fun isValidIntrinsicZoomRatio(intrinsicZoomRatio: Float): Boolean {
+        return intrinsicZoomRatio.isFinite() && intrinsicZoomRatio > 0f
     }
 
     private fun hasMissingOrFixedAutoFocus(characteristics: CameraCharacteristics): Boolean {
@@ -1487,8 +1593,13 @@ class CameraDiscovery(private val context: Context) {
     private enum class AutomaticallyDiscoveredLensDisposition {
         NORMAL,
         MACRO,
-        IGNORE
+        UNRELIABLE_AUTO_FOCUS
     }
+
+    private data class AutomaticallyDiscoveredPhysicalCamera(
+        val camera: CameraPhysicalInfo,
+        val disposition: AutomaticallyDiscoveredLensDisposition
+    )
 
     private data class LogicalCameraDiscoveryConfig(
         val autoDiscoveryEnabled: Boolean = false,

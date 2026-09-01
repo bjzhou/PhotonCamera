@@ -161,9 +161,13 @@ class RealtimeVideoRenderer(
     /**
      * 消费 SurfaceTexture 中最新的一帧并写入编码器。必须在初始化所用的录像 GL 线程调用。
      *
-     * @return 相机帧时间戳（纳秒）；没有有效帧时返回 null。
+     * [mapPresentationTimeNs] 将相机时间轴映射到编码器使用的公共时间轴。
+     *
+     * @return 写入编码器的帧时间戳（纳秒）；没有有效帧时返回 null。
      */
-    fun renderLatestFrame(): Long? {
+    fun renderLatestFrame(
+        mapPresentationTimeNs: (cameraTimestampNs: Long) -> Long,
+    ): Long? {
         if (!initialized || !makeCurrent()) return null
         val surfaceTexture = cameraSurfaceTexture ?: return null
         try {
@@ -177,6 +181,8 @@ class RealtimeVideoRenderer(
 
         val timestampNs = surfaceTexture.timestamp
         if (timestampNs <= 0L) return null
+        val presentationTimeNs = mapPresentationTimeNs(timestampNs)
+        if (presentationTimeNs <= 0L) return null
 
         val firstLayer = layers.first()
         val grainEnabled = finalFilmGrainEnabled
@@ -235,13 +241,13 @@ class RealtimeVideoRenderer(
             }
         }
 
-        EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, timestampNs)
+        EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
         if (!EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)) {
             throw IllegalStateException(
                 "Realtime video eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
             )
         }
-        return timestampNs
+        return presentationTimeNs
     }
 
     private fun updateCameraTransformGeometry() {
