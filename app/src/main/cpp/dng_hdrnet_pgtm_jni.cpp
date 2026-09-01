@@ -25,6 +25,28 @@ struct AxisSample {
   float amount;
 };
 
+struct NormalizedImagePoint {
+  float u;
+  float v;
+};
+
+// Shared RAW/Bitmap contract: row zero is the image top, and positive rotation is clockwise.
+// Returns the source point sampled by one point in the rotated output image.
+NormalizedImagePoint MapTopLeftOutputToSource(float output_u,
+                                             float output_v,
+                                             int clockwise_rotation) {
+  if (clockwise_rotation == 90) {
+    return {output_v, 1.0f - output_u};
+  }
+  if (clockwise_rotation == 180) {
+    return {1.0f - output_u, 1.0f - output_v};
+  }
+  if (clockwise_rotation == 270) {
+    return {1.0f - output_v, output_u};
+  }
+  return {output_u, output_v};
+}
+
 class ScopedFloatArray {
  public:
   ScopedFloatArray(JNIEnv* env, jfloatArray array)
@@ -288,19 +310,12 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeEvaluateDispl
         const float output_u =
             (grid_x + (sample_x + 0.5f) / footprint_samples_per_axis) /
             output_grid_width;
-        const float gl_v = 1.0f - output_v_top;
-        float source_u = output_u;
-        float source_v = gl_v;
-        if (output_rotation == 90) {
-          source_u = gl_v;
-          source_v = 1.0f - output_u;
-        } else if (output_rotation == 180) {
-          source_u = 1.0f - output_u;
-          source_v = 1.0f - gl_v;
-        } else if (output_rotation == 270) {
-          source_u = 1.0f - gl_v;
-          source_v = output_u;
-        }
+        // HDRNet now samples the same top-left/clockwise coordinates as the RAW render and the
+        // already-rotated Android Bitmap used as the viewfinder reference.
+        const NormalizedImagePoint source = MapTopLeftOutputToSource(
+            output_u, output_v_top, output_rotation);
+        const float source_u = source.u;
+        const float source_v = source.v;
 
         const AxisSample input_x =
             MakeNormalizedAxisSample(source_u, input_width);

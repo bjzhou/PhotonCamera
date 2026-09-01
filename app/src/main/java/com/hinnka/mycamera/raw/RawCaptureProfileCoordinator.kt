@@ -19,6 +19,8 @@ internal object RawCaptureProfileCoordinator {
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
         capturePortraitMask: PortraitMaskSnapshot?,
+        viewfinderMirroredHorizontally: Boolean,
+        viewfinderPreviewToCaptureRotationDegrees: Int,
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
@@ -39,6 +41,15 @@ internal object RawCaptureProfileCoordinator {
         }
         val legacyRequest = RawLegacyAutoExposureMatcher.createRequest(
             capturePreviewThumbnail = capturePreviewThumbnail,
+            capturePortraitMask = capturePortraitMask,
+            viewfinderMirroredHorizontally = viewfinderMirroredHorizontally,
+            viewfinderPreviewToCaptureRotationDegrees =
+                viewfinderPreviewToCaptureRotationDegrees,
+            scalarMatchingCenterFractionPerAxis = if (mode.usesPhotonHdr) {
+                1f
+            } else {
+                RawLegacyAutoExposureMatcher.SCALAR_MATCH_CENTER_FRACTION_PER_AXIS
+            },
             highlightClippingConstraint = if (mode == RawAdaptiveExposureMode.OFF) {
                 RawLegacyHighlightClippingConstraint.HDR_PLUS_DISABLED
             } else {

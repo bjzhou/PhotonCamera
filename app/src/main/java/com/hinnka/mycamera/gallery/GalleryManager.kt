@@ -2378,6 +2378,11 @@ object GalleryManager {
                 rotation = rotation,
                 capturePreviewThumbnail = dngThumbnail,
                 capturePortraitMask = capturePortraitMask,
+                viewfinderMirroredHorizontally = characteristics.get(
+                    CameraCharacteristics.LENS_FACING,
+                ) == CameraCharacteristics.LENS_FACING_FRONT,
+                viewfinderPreviewToCaptureRotationDegrees =
+                    viewfinderPreviewToCaptureRotationDegrees(rotation, characteristics),
             )
             val preparedProfile = RawProcessor.prepareRawDngProfile(
                 rawBuffer = rawBuffer,
@@ -3673,6 +3678,11 @@ object GalleryManager {
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
                     capturePortraitMask = capturePortraitMask,
+                    viewfinderMirroredHorizontally = characteristics.get(
+                        CameraCharacteristics.LENS_FACING,
+                    ) == CameraCharacteristics.LENS_FACING_FRONT,
+                    viewfinderPreviewToCaptureRotationDegrees =
+                        viewfinderPreviewToCaptureRotationDegrees(rotation, characteristics),
                 )
                 val profileStartMs = System.currentTimeMillis()
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
@@ -4367,6 +4377,14 @@ object GalleryManager {
                             aspectRatio = aspectRatio,
                             rotation = rotation,
                             capturePreviewThumbnail = capturePreviewThumbnail,
+                            viewfinderMirroredHorizontally = characteristics.get(
+                                CameraCharacteristics.LENS_FACING,
+                            ) == CameraCharacteristics.LENS_FACING_FRONT,
+                            viewfinderPreviewToCaptureRotationDegrees =
+                                viewfinderPreviewToCaptureRotationDegrees(
+                                    rotation,
+                                    characteristics,
+                                ),
                         ),
                     // Serialize the resolved Camera2/ISZ crop through the standard DNG tags.
                     defaultCrop = writtenRawDngDefaultCrop,
@@ -4542,6 +4560,8 @@ object GalleryManager {
         aspectRatio: AspectRatio?,
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
+        viewfinderMirroredHorizontally: Boolean,
+        viewfinderPreviewToCaptureRotationDegrees: Int,
         capturePortraitMask: PortraitMaskSnapshot? = null,
     ): RawDngProfilePreparationOptions {
         val exposureMode = RawAdaptiveExposureMode.resolve(
@@ -4581,6 +4601,9 @@ object GalleryManager {
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
                     capturePortraitMask = capturePortraitMask,
+                    viewfinderMirroredHorizontally = viewfinderMirroredHorizontally,
+                    viewfinderPreviewToCaptureRotationDegrees =
+                        viewfinderPreviewToCaptureRotationDegrees,
                     statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
@@ -4696,6 +4719,19 @@ object GalleryManager {
             PLog.e(TAG, "Failed to savePhoto", e)
         }
     }
+
+    /**
+     * The captured preview bitmap is rotated from the already display-oriented preview, while
+     * [rotation] also contains the sensor orientation. Removing that sensor component recovers
+     * the exact clockwise rotation applied by CameraViewModel to the matching thumbnail.
+     */
+    private fun viewfinderPreviewToCaptureRotationDegrees(
+        rotation: Int,
+        characteristics: CameraCharacteristics,
+    ): Int = Math.floorMod(
+        rotation - (characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0),
+        360,
+    )
 
     suspend fun saveBitmapBurstPhoto(
         context: Context,

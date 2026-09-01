@@ -248,6 +248,8 @@ internal class RawLinearRcdPass(
             }
 
             void main() {
+                // Memory row zero is the image top throughout RAW readback and Android Bitmap.
+                // This inverse mapping applies a clockwise output rotation in that shared space.
                 vec2 orientedCoord = vTexCoord;
                 if (uTextureRotation == 90) {
                     orientedCoord = vec2(vTexCoord.y, 1.0 - vTexCoord.x);

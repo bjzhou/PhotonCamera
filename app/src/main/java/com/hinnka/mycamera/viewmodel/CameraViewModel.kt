@@ -1934,6 +1934,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sensorOrientationDegrees = cameraController.getSensorOrientation(),
                 isFrontFacing = cameraController.getLensFacing() ==
                     CameraCharacteristics.LENS_FACING_FRONT,
+                previewToCaptureRotationDegrees = Math.floorMod(
+                    capturePreviewThumbnailRotation().roundToInt(),
+                    360,
+                ),
             )
         }
         previewEyeFocusProcessor.onTargetLost = {
@@ -4553,7 +4557,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val acceptsPortraitMask = cameraState.captureMode == CaptureMode.PHOTO &&
             cameraState.useRaw &&
             cameraState.isRawSupported &&
-            rawToneMappingParameters.value.usePhotonHdr &&
             cameraState.isPreviewActive &&
             !cameraState.isCapturing
         val acceptsEyeFocus = eyeFocusEnabled.value &&
@@ -4665,6 +4668,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 "size=$size " +
                 "ageMs=$ageMs " +
                 "sensorOrientation=${snapshot?.sensorOrientationDegrees} " +
+                "previewToCaptureRotation=" +
+                "${snapshot?.previewToCaptureRotationDegrees} " +
                 "frontFacing=${snapshot?.isFrontFacing} " +
                 "cameraId=${snapshot?.cameraId}",
         )

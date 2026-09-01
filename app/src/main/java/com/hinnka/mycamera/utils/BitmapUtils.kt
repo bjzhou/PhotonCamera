@@ -159,6 +159,8 @@ object BitmapUtils {
     /**
      * 旋转 Bitmap。
      *
+     * 坐标约定为左上原点，正角度顺时针，与 RAW 和 HDRNet 的输出坐标一致。
+     *
      * 旋转角度为 0 时直接返回原图，避免额外创建 Bitmap。
      */
     fun rotate(bitmap: Bitmap, rotationDegrees: Float): Bitmap {

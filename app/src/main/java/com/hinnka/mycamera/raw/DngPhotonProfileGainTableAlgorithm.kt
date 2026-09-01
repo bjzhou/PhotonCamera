@@ -1822,15 +1822,15 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "mapInputDomain=RAW_X_FINAL_SHORT_GAIN " +
                     "pgtmBaselineCancelledFromInputCoordinate=true " +
                     "exposureSolve=${exposureResult != null} " +
-                    "exposureMetric=NATIVE_PAIRED_P20_P50_P80_CURVE_FIT " +
+                    "exposureMetric=PERCEPTUAL_LSTAR_GRID_MATCH_RATE " +
                     "exposureCandidateDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
                     "exposureReferenceDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
                     "exposureSpatialWeight=CLASSIC_REFERENCE_ENDPOINT_RELIABILITY " +
                     "exposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL " +
                     "exposureReferenceAvailable=${input.viewfinderReference != null} " +
                     "exposureOutputRotation=${input.outputRotation} " +
-                    "exposureAdjustmentMode=DAMPED_NEWTON_SHORT_AND_HDR_RATIO_EV " +
-                    "exposureConvergenceCondition=P50_AND_P20_P80_SPAN_WITH_HUBER_GUARD " +
+                    "exposureAdjustmentMode=HIGHLIGHT_SHORT_SHADOW_LONG_GRID_GUIDED " +
+                    "exposureConvergenceCondition=GRID_MATCH_RATE_ONLY " +
                     "exposureBaseShortGain=$baseShortGain " +
                     "exposureBaseLongGain=$baseLongGain " +
                     "exposureBaseHdrRatio=${basePlan.hdrRatio} " +
@@ -1849,11 +1849,27 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "${exposureResult?.evaluation?.curveSlopeError} " +
                     "exposureReferenceSpanEv=" +
                     "${exposureResult?.evaluation?.referenceSpanEv} " +
+                    "exposureHighlightTargetErrorEv=" +
+                    "${exposureResult?.evaluation?.highlightTargetErrorEv} " +
+                    "exposureShadowTargetErrorEv=" +
+                    "${exposureResult?.evaluation?.shadowTargetErrorEv} " +
+                    "exposureShortTargetCorrectionEv=" +
+                    "${exposureResult?.evaluation?.shortTargetCorrectionEv} " +
+                    "exposureLongTargetCorrectionEv=" +
+                    "${exposureResult?.evaluation?.longTargetCorrectionEv} " +
                     "exposureRobustLog2Loss=" +
                     "${exposureResult?.evaluation?.robustLog2Loss} " +
                     "exposureMeanAbsoluteLog2Ratio=" +
                     "${exposureResult?.evaluation?.meanAbsoluteLog2Ratio} " +
+                    "exposureMeanPerceptualLightnessError=" +
+                    "${exposureResult?.evaluation?.meanAbsolutePerceptualLightnessError} " +
                     "exposureMatchRate=${exposureResult?.evaluation?.matchRate} " +
+                    "exposureCoordinateEdges=" +
+                    "${exposureResult?.evaluation?.coordinateComparedEdgeCount} " +
+                    "exposureCoordinateMatchRate=" +
+                    "${exposureResult?.evaluation?.coordinateMatchRate} " +
+                    "exposureCoordinatesMatched=" +
+                    "${exposureResult?.evaluation?.coordinatesMatched} " +
                     "exposureRecommendedCorrectionEv=" +
                     "${exposureResult?.evaluation?.recommendedExposureCorrectionEv} " +
                     "exposureConverged=${exposureResult?.evaluation?.converged} " +

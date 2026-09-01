@@ -3292,10 +3292,42 @@ class RawDemosaicProcessor {
                                 "hdrNetExposureMeanAbsoluteLog2Ratio=" +
                                     evaluation.meanAbsoluteLog2Ratio,
                             )
+                            appendLine(
+                                "hdrNetExposureMeanPerceptualLightnessError=" +
+                                    evaluation.meanAbsolutePerceptualLightnessError,
+                            )
                             appendLine("hdrNetExposureMatchRate=${evaluation.matchRate}")
+                            appendLine(
+                                "hdrNetExposureCoordinateEdges=" +
+                                    evaluation.coordinateComparedEdgeCount,
+                            )
+                            appendLine(
+                                "hdrNetExposureCoordinateMatchRate=" +
+                                    evaluation.coordinateMatchRate,
+                            )
+                            appendLine(
+                                "hdrNetExposureCoordinatesMatched=" +
+                                    evaluation.coordinatesMatched,
+                            )
                             appendLine(
                                 "hdrNetExposureRecommendedCorrectionEv=" +
                                     evaluation.recommendedExposureCorrectionEv,
+                            )
+                            appendLine(
+                                "hdrNetExposureHighlightTargetErrorEv=" +
+                                    evaluation.highlightTargetErrorEv,
+                            )
+                            appendLine(
+                                "hdrNetExposureShadowTargetErrorEv=" +
+                                    evaluation.shadowTargetErrorEv,
+                            )
+                            appendLine(
+                                "hdrNetExposureShortTargetCorrectionEv=" +
+                                    evaluation.shortTargetCorrectionEv,
+                            )
+                            appendLine(
+                                "hdrNetExposureLongTargetCorrectionEv=" +
+                                    evaluation.longTargetCorrectionEv,
                             )
                             appendLine("hdrNetExposureConverged=${evaluation.converged}")
                             appendLine(
@@ -8345,11 +8377,15 @@ class RawDemosaicProcessor {
         val height = request.height.coerceAtLeast(1)
         return try {
             setupLinearExposurePreviewFramebuffer(width, height)
+            val matchingSourceBounds = RawLegacyAutoExposureMatcher.centeredBounds(
+                outputBounds = outputSourceBounds,
+                centerFractionPerAxis = request.scalarMatchingCenterFractionPerAxis,
+            ) ?: return null
             val normalizedBounds = floatArrayOf(
-                outputSourceBounds.left.toFloat() / metadata.width.toFloat(),
-                outputSourceBounds.top.toFloat() / metadata.height.toFloat(),
-                outputSourceBounds.right.toFloat() / metadata.width.toFloat(),
-                outputSourceBounds.bottom.toFloat() / metadata.height.toFloat(),
+                matchingSourceBounds.left.toFloat() / metadata.width.toFloat(),
+                matchingSourceBounds.top.toFloat() / metadata.height.toFloat(),
+                matchingSourceBounds.right.toFloat() / metadata.width.toFloat(),
+                matchingSourceBounds.bottom.toFloat() / metadata.height.toFloat(),
             )
             val areaSampleFootprint = floatArrayOf(
                 (normalizedBounds[2] - normalizedBounds[0]) / width.toFloat(),
@@ -8373,7 +8409,7 @@ class RawDemosaicProcessor {
                 textureBounds = normalizedBounds,
                 areaSampleFootprint = areaSampleFootprint,
                 textureRotation = outputRotation,
-                label = "RawLegacyAutoExposureLinearPass",
+                label = "RawViewfinderBrightnessMatchLinearPass",
             )
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             GLES31.glMemoryBarrier(

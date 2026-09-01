@@ -19,6 +19,10 @@ internal object RawLegacyAutoExposureNativeBridge {
         val robustLog2Loss: Float,
         val referenceWeightSum: Float,
         val recommendedExposureCorrectionEv: Float,
+        val meanAbsolutePerceptualLightnessError: Float,
+        val coordinateComparedEdgeCount: Int,
+        val coordinateMatchRate: Float,
+        val coordinatesMatched: Boolean?,
     )
 
     data class Result(
@@ -29,6 +33,8 @@ internal object RawLegacyAutoExposureNativeBridge {
         val shadowWeightZeroLinear: Float,
         val highlightWeightZeroLinear: Float,
         val huberDeltaEv: Float,
+        val perceptualLightnessTolerance: Float,
+        val requiredGridMatchRate: Float,
     )
 
     data class HdrNetCurveSample(
@@ -48,15 +54,27 @@ internal object RawLegacyAutoExposureNativeBridge {
         val referenceP50Ev: Float,
         val referenceP80Ev: Float,
         val curveFitCellCount: Int,
+        val shortTargetCorrectionEv: Float,
+        val longTargetCorrectionEv: Float,
+        val meanAbsolutePerceptualLightnessError: Float,
+        val coordinateComparedEdgeCount: Int,
+        val coordinateMatchRate: Float,
+        val coordinatesMatched: Boolean?,
     ) {
         val referenceSpanEv: Float
             get() = referenceP80Ev - referenceP20Ev
+
+        val highlightTargetErrorEv: Float
+            get() = -shortTargetCorrectionEv
+
+        val shadowTargetErrorEv: Float
+            get() = -longTargetCorrectionEv
     }
 
     enum class HdrNetProbeAxis {
         BASE,
         SHORT_JACOBIAN,
-        RATIO_JACOBIAN,
+        LONG_JACOBIAN,
         JOINT_NEWTON,
         FALLBACK_SHORT,
     }
@@ -80,6 +98,8 @@ internal object RawLegacyAutoExposureNativeBridge {
     class Solver private constructor(
         private var handle: Long,
     ) : AutoCloseable {
+        private var latestCoordinatesMatched: Boolean? = null
+
         fun nextExposureEv(): Float? {
             check(handle != 0L) { "Native exposure solver is closed" }
             return nativeNextExposureEv(handle).takeIf { it.isFinite() }
@@ -87,13 +107,18 @@ internal object RawLegacyAutoExposureNativeBridge {
 
         fun submitCandidate(exposureEv: Float, frame: RawLegacyExposurePreviewFrame): Boolean {
             check(handle != 0L) { "Native exposure solver is closed" }
-            return nativeSubmitCandidate(
+            val submitted = nativeSubmitCandidate(
                 handle = handle,
                 exposureEv = exposureEv,
                 candidatePixels = frame.argbPixels,
                 width = frame.width,
                 height = frame.height,
             )
+            if (submitted) {
+                latestCoordinatesMatched =
+                    nativeGetLastSample(handle)?.toSample()?.coordinatesMatched
+            }
+            return submitted
         }
 
         fun submitCandidate(
@@ -106,13 +131,18 @@ internal object RawLegacyAutoExposureNativeBridge {
             if (columns <= 0 || rows <= 0 || displayLinearLumas.size != columns * rows) {
                 return false
             }
-            return nativeSubmitGridCandidate(
+            val submitted = nativeSubmitGridCandidate(
                 handle = handle,
                 exposureEv = exposureEv,
                 candidateDisplayLinearLumas = displayLinearLumas,
                 columns = columns,
                 rows = rows,
             )
+            if (submitted) {
+                latestCoordinatesMatched =
+                    nativeGetLastSample(handle)?.toSample()?.coordinatesMatched
+            }
+            return submitted
         }
 
         fun startHdrNetSolve(
@@ -154,7 +184,9 @@ internal object RawLegacyAutoExposureNativeBridge {
                 columns = columns,
                 rows = rows,
             ) ?: return null
-            return values.toHdrNetCurveSample()
+            return values.toHdrNetCurveSample()?.also {
+                latestCoordinatesMatched = it.coordinatesMatched
+            }
         }
 
         fun hdrNetResult(): HdrNetResult? {
@@ -165,10 +197,10 @@ internal object RawLegacyAutoExposureNativeBridge {
                 shortEv = values[0],
                 hdrRatioEv = values[1],
                 sample = values.toHdrNetCurveSample(offset = 2) ?: return null,
-                evaluatedCandidateCount = values[18].roundToInt(),
-                converged = values[19] != 0f,
-                usedOneDimensionalFallback = values[20] != 0f,
-                jacobianNormalizedDeterminant = values[21],
+                evaluatedCandidateCount = values[24].roundToInt(),
+                converged = values[25] != 0f,
+                usedOneDimensionalFallback = values[26] != 0f,
+                jacobianNormalizedDeterminant = values[27],
             )
         }
 
@@ -182,9 +214,17 @@ internal object RawLegacyAutoExposureNativeBridge {
             return nativeHasConverged(handle)
         }
 
+        /**
+         * Returns whether the latest candidate uses the same spatial coordinates as the
+         * viewfinder reference, or null when the scene has too little local contrast to decide.
+         */
+        fun lastCandidateCoordinatesMatch(): Boolean? = latestCoordinatesMatched
+
         fun lastSample(): Sample? {
             check(handle != 0L) { "Native exposure solver is closed" }
-            return nativeGetLastSample(handle)?.toSample()
+            return nativeGetLastSample(handle)?.toSample()?.also {
+                latestCoordinatesMatched = it.coordinatesMatched
+            }
         }
 
         fun result(): Result? {
@@ -193,12 +233,14 @@ internal object RawLegacyAutoExposureNativeBridge {
             if (values.size != RESULT_VALUE_COUNT) return null
             return Result(
                 best = values.toSample() ?: return null,
-                evaluatedSampleCount = values[10].roundToInt(),
-                excludedShadowCellCount = values[11].roundToInt(),
-                excludedHighlightCellCount = values[12].roundToInt(),
-                shadowWeightZeroLinear = values[13],
-                highlightWeightZeroLinear = values[14],
-                huberDeltaEv = values[15],
+                evaluatedSampleCount = values[14].roundToInt(),
+                excludedShadowCellCount = values[15].roundToInt(),
+                excludedHighlightCellCount = values[16].roundToInt(),
+                shadowWeightZeroLinear = values[17],
+                highlightWeightZeroLinear = values[18],
+                huberDeltaEv = values[19],
+                perceptualLightnessTolerance = values[20],
+                requiredGridMatchRate = values[21],
             )
         }
 
@@ -206,6 +248,7 @@ internal object RawLegacyAutoExposureNativeBridge {
             val nativeHandle = handle
             if (nativeHandle == 0L) return
             handle = 0L
+            latestCoordinatesMatched = null
             nativeDestroy(nativeHandle)
         }
 
@@ -213,6 +256,7 @@ internal object RawLegacyAutoExposureNativeBridge {
             fun create(reference: RawLegacyExposurePreviewFrame): Solver? {
                 val handle = nativeCreate(
                     referencePixels = reference.argbPixels,
+                    portraitPriorityWeights = reference.portraitPriorityWeights,
                     width = reference.width,
                     height = reference.height,
                 )
@@ -234,6 +278,10 @@ internal object RawLegacyAutoExposureNativeBridge {
             robustLog2Loss = this[7],
             referenceWeightSum = this[8],
             recommendedExposureCorrectionEv = this[9],
+            meanAbsolutePerceptualLightnessError = this[10],
+            coordinateComparedEdgeCount = this[11].roundToInt(),
+            coordinateMatchRate = this[12],
+            coordinatesMatched = this[13].toCoordinateMatch(),
         )
     }
 
@@ -256,8 +304,16 @@ internal object RawLegacyAutoExposureNativeBridge {
             referenceP50Ev = this[offset + 13],
             referenceP80Ev = this[offset + 14],
             curveFitCellCount = this[offset + 15].roundToInt(),
+            shortTargetCorrectionEv = this[offset + 16],
+            longTargetCorrectionEv = this[offset + 17],
+            meanAbsolutePerceptualLightnessError = this[offset + 18],
+            coordinateComparedEdgeCount = this[offset + 19].roundToInt(),
+            coordinateMatchRate = this[offset + 20],
+            coordinatesMatched = this[offset + 21].toCoordinateMatch(),
         ).takeIf {
             it.matchRate.isFinite() &&
+                it.meanAbsolutePerceptualLightnessError.isFinite() &&
+                it.coordinateMatchRate.isFinite() &&
                 it.meanAbsoluteLog2Ratio.isFinite() &&
                 it.medianLog2Ratio.isFinite() &&
                 it.robustLog2Loss.isFinite() &&
@@ -266,8 +322,16 @@ internal object RawLegacyAutoExposureNativeBridge {
         }
     }
 
+    private fun Float.toCoordinateMatch(): Boolean? = when (roundToInt()) {
+        -1 -> null
+        0 -> false
+        1 -> true
+        else -> null
+    }
+
     private external fun nativeCreate(
         referencePixels: IntArray,
+        portraitPriorityWeights: FloatArray?,
         width: Int,
         height: Int,
     ): Long
@@ -321,9 +385,9 @@ internal object RawLegacyAutoExposureNativeBridge {
     private external fun nativeGetResult(handle: Long): FloatArray?
     private external fun nativeDestroy(handle: Long)
 
-    private const val SAMPLE_VALUE_COUNT = 10
-    private const val RESULT_VALUE_COUNT = 16
-    private const val HDRNET_CURVE_SAMPLE_VALUE_COUNT = 16
+    private const val SAMPLE_VALUE_COUNT = 14
+    private const val RESULT_VALUE_COUNT = 22
+    private const val HDRNET_CURVE_SAMPLE_VALUE_COUNT = 22
     private const val HDRNET_PARAMETER_VALUE_COUNT = 3
-    private const val HDRNET_RESULT_VALUE_COUNT = 22
+    private const val HDRNET_RESULT_VALUE_COUNT = 28
 }

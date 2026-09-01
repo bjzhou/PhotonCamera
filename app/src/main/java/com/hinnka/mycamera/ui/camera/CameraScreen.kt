@@ -1105,8 +1105,7 @@ fun CameraScreen(
                         (state.focusPoint == null || state.focusPointSource == FocusPointSource.EYE)
                     val portraitMaskActive = state.captureMode == CaptureMode.PHOTO &&
                         state.useRaw &&
-                        state.isRawSupported &&
-                        rawToneMappingParameters.usePhotonHdr
+                        state.isRawSupported
 
                     // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
                     if (isCameraPrepared) {

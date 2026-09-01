@@ -16,7 +16,16 @@ constexpr int kGridRows = 48;
 constexpr int kGridCellCount = kGridColumns * kGridRows;
 constexpr float kMinExposureEv = -4.0f;
 constexpr float kMaxExposureEv = 4.0f;
-constexpr float kMatchResidualToleranceEv = 0.13750352f;  // log2(1.10)
+// CIE L* is linear near black and compressive in highlights. A fixed perceptual-lightness
+// difference therefore remains well conditioned at both endpoints, unlike a luma ratio.
+constexpr float kPerceptualLightnessTolerance = 0.01f;  // 1 L* unit.
+constexpr float kRequiredGridMatchRate = 0.85f;
+constexpr float kCoordinateReferenceContrastThreshold = 0.015f;  // 1.5 L* units.
+constexpr float kCoordinateCandidateContrastThreshold = 0.005f;  // 0.5 L* units.
+constexpr int kMinimumCoordinateComparedEdgeCount = 64;
+constexpr float kRequiredCoordinateMatchRate = 0.70f;
+constexpr float kCieEpsilon = 216.0f / 24389.0f;
+constexpr float kCieKappa = 24389.0f / 27.0f;
 // Reliability is derived only from the reference. A valid reference cell that clips in a
 // candidate must remain an exposure error instead of disappearing from the comparison.
 constexpr int kShadowWeightZeroSrgbCode = 4;
@@ -25,19 +34,21 @@ constexpr int kHighlightWeightFullSrgbCode = 220;
 constexpr int kHighlightWeightZeroSrgbCode = 240;
 constexpr int kMinimumReliableCellCount = 32;
 constexpr float kMinimumReferenceWeightSum = 16.0f;
+// When a sufficiently large portrait is present, Kotlin supplies an aligned soft mask. Preserve
+// enough background to keep the solve spatially constrained while making the portrait dominant.
+constexpr float kPortraitPriorityTargetWeightFraction = 0.75f;
+constexpr float kMinimumPortraitPriorityComponentWeight = 1.0e-4f;
 constexpr float kHuberDeltaEv = 0.25f;
 constexpr float kMaximumAbsoluteLog2Residual = 4.0f;
 constexpr int kMinimumCurveFitCellCount = 24;
 constexpr float kMinimumReferenceCurveSpanEv = 0.25f;
 constexpr int kCurveFitIrlsIterationCount = 6;
-constexpr float kHdrNetCenterToleranceEv = 0.05f;
-constexpr float kHdrNetSpanToleranceEv = 0.075f;
 constexpr float kHdrNetInitialProbeEv = 0.25f;
 constexpr float kHdrNetMaximumStepEv = 0.5f;
 constexpr float kHdrNetMinimumStepEv = 0.01f;
 constexpr float kHdrNetMinimumTotalStepEv = -4.0f;
 constexpr float kHdrNetMaximumTotalStepEv = 4.0f;
-constexpr int kHdrNetMaximumCandidateCount = 5;
+constexpr int kHdrNetMaximumCandidateCount = 6;
 constexpr float kHdrNetDuplicateProbeToleranceEv = 0.005f;
 constexpr float kHdrNetMinimumNormalizedDeterminant = 0.15f;
 constexpr float kHdrNetMinimumNormalEquationDeterminant = 1.0e-8f;
@@ -45,25 +56,19 @@ constexpr float kHdrNetMinimumBroydenStepNormSquared = 1.0e-6f;
 constexpr float kHdrNetInitialDamping = 0.05f;
 constexpr float kHdrNetMinimumDamping = 0.005f;
 constexpr float kHdrNetMaximumDamping = 1.0f;
-constexpr float kHdrNetHuberLossAbsoluteGuardEv = 0.005f;
-constexpr float kHdrNetHuberLossRelativeGuard = 0.1f;
-constexpr float kHdrNetFallbackHuberLossRelativeGuard = 0.01f;
 constexpr float kMinimumCandidateStepEv = 0.01f;
 constexpr float kMinimumInitialStepEv = 0.25f;
 constexpr float kMaximumInitialStepEv = 2.0f;
 constexpr float kRobustCorrectionToleranceEv = 0.025f;
 constexpr float kMinimumUsefulResponseSlope = 0.05f;
 constexpr int kMaximumSampleCount = 6;
-constexpr int kMinimumModelConvergenceSampleCount = 2;
-constexpr float kHighConfidenceMatchRate = 0.85f;
-constexpr float kMatchRateTrendEpsilon = 0.002f;
 constexpr float kScoreEqualityEpsilon = 0.000001f;
 constexpr float kSrgbTransferThreshold = 0.04045f;
 constexpr float kSrgbLinearScale = 12.92f;
 constexpr float kSrgbTransferA = 0.055f;
 constexpr float kSrgbTransferGamma = 2.4f;
 constexpr float kDisplayLinearLumaFloor = 1.0f / (255.0f * 12.92f);
-constexpr int kNativeResultSize = 16;
+constexpr int kNativeResultSize = 22;
 
 float SrgbToLinear(float value) {
     const float clamped = std::clamp(value, 0.0f, 1.0f);
@@ -73,6 +78,14 @@ float SrgbToLinear(float value) {
     return std::pow(
         (clamped + kSrgbTransferA) / (1.0f + kSrgbTransferA),
         kSrgbTransferGamma);
+}
+
+float NormalizedPerceptualLightness(float display_linear_luma) {
+    const float luma = std::clamp(display_linear_luma, 0.0f, 1.0f);
+    const float lightness = luma <= kCieEpsilon
+        ? kCieKappa * luma
+        : 116.0f * std::cbrt(luma) - 16.0f;
+    return lightness / 100.0f;
 }
 
 const float kShadowWeightZeroDisplayLinearLuma =
@@ -165,6 +178,55 @@ bool BuildGridLumas(
     return true;
 }
 
+bool BuildGridPortraitWeights(
+    const jfloat* weights,
+    int width,
+    int height,
+    std::vector<float>* grid_weights) {
+    if (weights == nullptr || grid_weights == nullptr ||
+        width < kGridColumns || height < kGridRows) {
+        return false;
+    }
+    grid_weights->assign(kGridCellCount, std::numeric_limits<float>::quiet_NaN());
+    const int64_t pixel_count = static_cast<int64_t>(width) * height;
+#pragma omp parallel for schedule(static) if(pixel_count >= 32768)
+    for (int grid_y = 0; grid_y < kGridRows; ++grid_y) {
+        const int y_begin =
+            (grid_y * height + kGridRows - 1) / kGridRows;
+        const int y_end =
+            ((grid_y + 1) * height + kGridRows - 1) / kGridRows;
+        for (int grid_x = 0; grid_x < kGridColumns; ++grid_x) {
+            const int x_begin =
+                (grid_x * width + kGridColumns - 1) / kGridColumns;
+            const int x_end =
+                ((grid_x + 1) * width + kGridColumns - 1) / kGridColumns;
+            double sum = 0.0;
+            int count = 0;
+            bool valid = true;
+            for (int y = y_begin; y < y_end && valid; ++y) {
+                const int row_offset = y * width;
+                for (int x = x_begin; x < x_end; ++x) {
+                    const float weight = weights[row_offset + x];
+                    if (!std::isfinite(weight) || weight < 0.0f || weight > 1.0f) {
+                        valid = false;
+                        break;
+                    }
+                    sum += static_cast<double>(weight);
+                    ++count;
+                }
+            }
+            if (valid && count > 0) {
+                (*grid_weights)[grid_y * kGridColumns + grid_x] =
+                    static_cast<float>(sum / count);
+            }
+        }
+    }
+    return std::all_of(
+        grid_weights->begin(),
+        grid_weights->end(),
+        [](float weight) { return std::isfinite(weight); });
+}
+
 struct WeightedValue {
     float value = 0.0f;
     float weight = 0.0f;
@@ -252,12 +314,16 @@ struct MatchResult {
     int valid_cell_count = 0;
     int compared_cell_count = 0;
     float match_rate = 0.0f;
+    float mean_absolute_perceptual_lightness_error =
+        std::numeric_limits<float>::infinity();
     float mean_absolute_log2_ratio = std::numeric_limits<float>::infinity();
     float median_log2_ratio = std::numeric_limits<float>::quiet_NaN();
     float robust_log2_loss = std::numeric_limits<float>::infinity();
     float recommended_exposure_correction_ev =
         std::numeric_limits<float>::quiet_NaN();
     float reference_weight_sum = 0.0f;
+    int coordinate_compared_edge_count = 0;
+    float coordinate_match_rate = 0.0f;
     float center_error_ev = std::numeric_limits<float>::quiet_NaN();
     float span_error_ev = std::numeric_limits<float>::quiet_NaN();
     float curve_slope_error = std::numeric_limits<float>::quiet_NaN();
@@ -265,12 +331,76 @@ struct MatchResult {
     float reference_p50_ev = std::numeric_limits<float>::quiet_NaN();
     float reference_p80_ev = std::numeric_limits<float>::quiet_NaN();
     int curve_fit_cell_count = 0;
+    float short_target_correction_ev =
+        std::numeric_limits<float>::quiet_NaN();
+    float long_target_correction_ev =
+        std::numeric_limits<float>::quiet_NaN();
 };
+
+float HighlightTargetErrorEv(const MatchResult& match) {
+    return -match.short_target_correction_ev;
+}
+
+float ShadowTargetErrorEv(const MatchResult& match) {
+    return -match.long_target_correction_ev;
+}
+
+enum class CoordinateMatchStatus : int {
+    kIndeterminate = -1,
+    kMismatched = 0,
+    kMatched = 1,
+};
+
+CoordinateMatchStatus GetCoordinateMatchStatus(const MatchResult& match) {
+    if (match.coordinate_compared_edge_count < kMinimumCoordinateComparedEdgeCount) {
+        return CoordinateMatchStatus::kIndeterminate;
+    }
+    return match.coordinate_match_rate >= kRequiredCoordinateMatchRate
+        ? CoordinateMatchStatus::kMatched
+        : CoordinateMatchStatus::kMismatched;
+}
+
+bool HasAcceptableCoordinateMapping(const MatchResult& match) {
+    return GetCoordinateMatchStatus(match) != CoordinateMatchStatus::kMismatched;
+}
+
+bool HasRequiredGridMatchRate(const MatchResult& match) {
+    return match.match_rate >= kRequiredGridMatchRate &&
+        HasAcceptableCoordinateMapping(match);
+}
+
+bool IsGridMatchBetter(const MatchResult& candidate, const MatchResult& current) {
+    const bool candidate_coordinates_acceptable =
+        HasAcceptableCoordinateMapping(candidate);
+    const bool current_coordinates_acceptable =
+        HasAcceptableCoordinateMapping(current);
+    if (candidate_coordinates_acceptable != current_coordinates_acceptable) {
+        return candidate_coordinates_acceptable;
+    }
+    const float match_rate_delta = candidate.match_rate - current.match_rate;
+    if (std::abs(match_rate_delta) > kScoreEqualityEpsilon) {
+        return match_rate_delta > 0.0f;
+    }
+    const float lightness_error_delta =
+        candidate.mean_absolute_perceptual_lightness_error -
+        current.mean_absolute_perceptual_lightness_error;
+    if (std::abs(lightness_error_delta) > kScoreEqualityEpsilon) {
+        return lightness_error_delta < 0.0f;
+    }
+    const float robust_loss_delta =
+        candidate.robust_log2_loss - current.robust_log2_loss;
+    if (std::abs(robust_loss_delta) > kScoreEqualityEpsilon) {
+        return robust_loss_delta < 0.0f;
+    }
+    const float log_error_delta =
+        candidate.mean_absolute_log2_ratio - current.mean_absolute_log2_ratio;
+    return log_error_delta < -kScoreEqualityEpsilon;
+}
 
 enum class HdrNetProbeAxis : int {
     kBase = 0,
     kShortJacobian = 1,
-    kRatioJacobian = 2,
+    kLongJacobian = 2,
     kJointNewton = 3,
     kFallbackShort = 4,
 };
@@ -289,10 +419,10 @@ struct HdrNetProbe {
 };
 
 struct HdrNetJacobian {
-    float center_by_short_ev = 0.0f;
-    float center_by_ratio_ev = 0.0f;
-    float span_by_short_ev = 0.0f;
-    float span_by_ratio_ev = 0.0f;
+    float highlight_by_short_ev = 0.0f;
+    float highlight_by_long_ev = 0.0f;
+    float shadow_by_short_ev = 0.0f;
+    float shadow_by_long_ev = 0.0f;
 };
 
 class HdrNetParameterSolver {
@@ -324,22 +454,22 @@ public:
 
         if (probes_.size() == 1) {
             const HdrNetProbe& baseline = probes_.front();
-            maximum_acceptable_huber_loss_ = baseline.match.robust_log2_loss +
-                std::max(
-                    kHdrNetHuberLossAbsoluteGuardEv,
-                    baseline.match.robust_log2_loss *
-                        kHdrNetHuberLossRelativeGuard);
-            if (HasCurveConverged(baseline)) {
-                Finish(true);
+            if (HasGridConverged(baseline)) {
+                Finish();
                 return std::nullopt;
             }
             if (!HasValidCurveFit(baseline.match)) {
                 EnterOneDimensionalFallback();
                 return NextFallbackParameters();
             }
+            const auto short_probe = ChooseShortProbeEv(baseline.match);
+            if (!short_probe.has_value()) {
+                EnterOneDimensionalFallback();
+                return NextFallbackParameters();
+            }
             return Issue(
-                kHdrNetInitialProbeEv,
-                0.0f,
+                *short_probe,
+                -*short_probe,
                 HdrNetProbeAxis::kShortJacobian,
                 -1);
         }
@@ -349,15 +479,15 @@ public:
                 EnterOneDimensionalFallback();
                 return NextFallbackParameters();
             }
-            const auto ratio_probe = ChooseRatioProbeEv();
-            if (!ratio_probe.has_value()) {
+            const auto long_probe = ChooseLongProbeEv(probes_.front().match);
+            if (!long_probe.has_value()) {
                 EnterOneDimensionalFallback();
                 return NextFallbackParameters();
             }
             return Issue(
                 0.0f,
-                *ratio_probe,
-                HdrNetProbeAxis::kRatioJacobian,
+                *long_probe,
+                HdrNetProbeAxis::kLongJacobian,
                 -1);
         }
 
@@ -366,9 +496,9 @@ public:
                 EnterOneDimensionalFallback();
                 return NextFallbackParameters();
             }
-            current_probe_index_ = BestCurveProbeIndex();
-            if (HasCurveConverged(probes_[current_probe_index_])) {
-                Finish(true);
+            current_probe_index_ = BestProbeIndex();
+            if (HasGridConverged(probes_[current_probe_index_])) {
+                Finish();
                 return std::nullopt;
             }
         }
@@ -377,8 +507,8 @@ public:
             EnterOneDimensionalFallback();
             return NextFallbackParameters();
         }
-        if (HasCurveConverged(probes_[current_probe_index_])) {
-            Finish(true);
+        if (HasGridConverged(probes_[current_probe_index_])) {
+            Finish();
             return std::nullopt;
         }
         return NextJointParameters();
@@ -408,18 +538,26 @@ public:
             } else {
                 const HdrNetProbe& previous =
                     probes_[submitted.broyden_origin_index];
-                const float previous_objective = CurveObjective(previous.match);
+                const float previous_objective =
+                    ProposalResidualObjective(previous.match);
                 broyden_valid = BroydenUpdate(previous, next);
                 if (broyden_valid) {
-                    damping_ = CurveObjective(next.match) <= previous_objective
+                    damping_ = ProposalResidualObjective(next.match) <=
+                            previous_objective
                         ? std::max(kHdrNetMinimumDamping, damping_ * 0.5f)
                         : std::min(kHdrNetMaximumDamping, damping_ * 4.0f);
                 }
             }
         }
         probes_.push_back(next);
-        current_probe_index_ = static_cast<int>(probes_.size()) - 1;
         pending_.reset();
+        if (HasRequiredGridMatchRate(match)) {
+            Finish();
+            return true;
+        }
+        // Residuals guide the next proposal, but the search remains anchored at the probe with
+        // the highest grid success rate so a worse Newton step cannot drag later probes away.
+        current_probe_index_ = BestProbeIndex();
         if (!broyden_valid || !HasValidCurveFit(match)) {
             EnterOneDimensionalFallback();
         }
@@ -447,84 +585,113 @@ public:
 
 private:
     static bool HasValidCurveFit(const MatchResult& match) {
-        return std::isfinite(match.center_error_ev) &&
+        return std::isfinite(match.recommended_exposure_correction_ev) &&
+            std::isfinite(match.center_error_ev) &&
             std::isfinite(match.span_error_ev) &&
             std::isfinite(match.curve_slope_error) &&
             std::isfinite(match.reference_p20_ev) &&
             std::isfinite(match.reference_p50_ev) &&
             std::isfinite(match.reference_p80_ev) &&
             match.reference_p80_ev > match.reference_p20_ev &&
-            match.curve_fit_cell_count > 0;
+            match.curve_fit_cell_count > 0 &&
+            std::isfinite(HighlightTargetErrorEv(match)) &&
+            std::isfinite(ShadowTargetErrorEv(match));
     }
 
-    static float CurveObjective(const MatchResult& match) {
+    static float ProposalResidualObjective(const MatchResult& match) {
         if (!HasValidCurveFit(match)) {
             return std::numeric_limits<float>::infinity();
         }
-        const float center = match.center_error_ev / kHdrNetCenterToleranceEv;
-        const float span = match.span_error_ev / kHdrNetSpanToleranceEv;
-        return center * center + span * span;
+        const float highlight = HighlightTargetErrorEv(match) /
+            kRobustCorrectionToleranceEv;
+        const float shadow = ShadowTargetErrorEv(match) /
+            kRobustCorrectionToleranceEv;
+        return highlight * highlight + shadow * shadow;
     }
 
-    bool HasCurveConverged(const HdrNetProbe& probe) const {
-        return HasValidCurveFit(probe.match) &&
-            std::abs(probe.match.center_error_ev) <= kHdrNetCenterToleranceEv &&
-            std::abs(probe.match.span_error_ev) <= kHdrNetSpanToleranceEv &&
-            probe.match.robust_log2_loss <= maximum_acceptable_huber_loss_;
+    bool HasGridConverged(const HdrNetProbe& probe) const {
+        return HasRequiredGridMatchRate(probe.match);
     }
 
-    bool HasFallbackConverged(int probe_index, int frozen_probe_count) const {
-        const MatchResult& match = probes_[probe_index].match;
-        return std::abs(match.recommended_exposure_correction_ev) <=
-                kRobustCorrectionToleranceEv &&
-            match.robust_log2_loss <= MaximumFallbackHuberLoss() &&
-            (frozen_probe_count >= kMinimumModelConvergenceSampleCount ||
-                match.match_rate >= kHighConfidenceMatchRate);
+    bool HasFallbackConverged(int probe_index) const {
+        return HasGridConverged(probes_[probe_index]);
     }
 
-    float MaximumFallbackHuberLoss() const {
-        const float baseline_loss = probes_.front().match.robust_log2_loss;
-        return baseline_loss + std::max(
-            kHdrNetHuberLossAbsoluteGuardEv,
-            baseline_loss * kHdrNetFallbackHuberLossRelativeGuard);
+    static std::optional<float> ChooseBoundedAxisProbeEv(
+        float target_correction_ev,
+        float minimum_ev,
+        float maximum_ev) {
+        if (!std::isfinite(target_correction_ev) ||
+            !std::isfinite(minimum_ev) || !std::isfinite(maximum_ev) ||
+            minimum_ev > maximum_ev) {
+            return std::nullopt;
+        }
+        const float direction = target_correction_ev != 0.0f
+            ? target_correction_ev
+            : -kHdrNetInitialProbeEv;
+        const float magnitude = std::clamp(
+            std::abs(direction),
+            kHdrNetInitialProbeEv,
+            kHdrNetMaximumStepEv);
+        const float preferred = std::clamp(
+            std::copysign(magnitude, direction),
+            minimum_ev,
+            maximum_ev);
+        if (std::abs(preferred) >= kHdrNetMinimumStepEv) return preferred;
+
+        const float alternate_bound = direction < 0.0f ? maximum_ev : minimum_ev;
+        if (std::abs(alternate_bound) < kHdrNetMinimumStepEv) {
+            return std::nullopt;
+        }
+        return std::copysign(
+            std::min(kHdrNetInitialProbeEv, std::abs(alternate_bound)),
+            alternate_bound);
     }
 
-    std::optional<float> ChooseRatioProbeEv() const {
-        if (maximum_ratio_ev_ >= kHdrNetInitialProbeEv) {
-            return kHdrNetInitialProbeEv;
-        }
-        if (minimum_ratio_ev_ <= -kHdrNetInitialProbeEv) {
-            return -kHdrNetInitialProbeEv;
-        }
-        if (maximum_ratio_ev_ >= kHdrNetMinimumStepEv) {
-            return maximum_ratio_ev_;
-        }
-        if (minimum_ratio_ev_ <= -kHdrNetMinimumStepEv) {
-            return minimum_ratio_ev_;
-        }
-        return std::nullopt;
+    std::optional<float> ChooseShortProbeEv(const MatchResult& baseline) const {
+        // Hold long EV at zero: ratio EV is the negative of this short-only probe.
+        return ChooseBoundedAxisProbeEv(
+            -HighlightTargetErrorEv(baseline),
+            std::max(kHdrNetMinimumTotalStepEv, -maximum_ratio_ev_),
+            std::min(kHdrNetMaximumTotalStepEv, -minimum_ratio_ev_));
+    }
+
+    std::optional<float> ChooseLongProbeEv(const MatchResult& baseline) const {
+        // Hold short EV at zero: ratio EV equals this long-only probe.
+        return ChooseBoundedAxisProbeEv(
+            -ShadowTargetErrorEv(baseline),
+            std::max(kHdrNetMinimumTotalStepEv, minimum_ratio_ev_),
+            std::min(kHdrNetMaximumTotalStepEv, maximum_ratio_ev_));
     }
 
     bool BuildInitialJacobian() {
         if (probes_.size() < 3) return false;
         const HdrNetProbe& baseline = probes_[0];
         const HdrNetProbe& short_probe = probes_[1];
-        const HdrNetProbe& ratio_probe = probes_[2];
+        const HdrNetProbe& long_probe = probes_[2];
+        const float short_probe_long_ev =
+            short_probe.short_ev + short_probe.ratio_ev;
+        const float long_probe_long_ev =
+            long_probe.short_ev + long_probe.ratio_ev;
         if (!HasValidCurveFit(short_probe.match) ||
-            !HasValidCurveFit(ratio_probe.match) ||
+            !HasValidCurveFit(long_probe.match) ||
             std::abs(short_probe.short_ev) < kHdrNetMinimumStepEv ||
-            std::abs(ratio_probe.ratio_ev) < kHdrNetMinimumStepEv) {
+            std::abs(short_probe_long_ev) >= kHdrNetDuplicateProbeToleranceEv ||
+            std::abs(long_probe.short_ev) >= kHdrNetDuplicateProbeToleranceEv ||
+            std::abs(long_probe_long_ev) < kHdrNetMinimumStepEv) {
             return false;
         }
+        const float baseline_highlight = HighlightTargetErrorEv(baseline.match);
+        const float baseline_shadow = ShadowTargetErrorEv(baseline.match);
         jacobian_ = HdrNetJacobian{
-            (short_probe.match.center_error_ev -
-                baseline.match.center_error_ev) / short_probe.short_ev,
-            (ratio_probe.match.center_error_ev -
-                baseline.match.center_error_ev) / ratio_probe.ratio_ev,
-            (short_probe.match.span_error_ev -
-                baseline.match.span_error_ev) / short_probe.short_ev,
-            (ratio_probe.match.span_error_ev -
-                baseline.match.span_error_ev) / ratio_probe.ratio_ev,
+            (HighlightTargetErrorEv(short_probe.match) - baseline_highlight) /
+                short_probe.short_ev,
+            (HighlightTargetErrorEv(long_probe.match) - baseline_highlight) /
+                long_probe_long_ev,
+            (ShadowTargetErrorEv(short_probe.match) - baseline_shadow) /
+                short_probe.short_ev,
+            (ShadowTargetErrorEv(long_probe.match) - baseline_shadow) /
+                long_probe_long_ev,
         };
         jacobian_initialized_ = AllFinite(jacobian_);
         UpdateJacobianDeterminant();
@@ -532,10 +699,10 @@ private:
     }
 
     static bool AllFinite(const HdrNetJacobian& jacobian) {
-        return std::isfinite(jacobian.center_by_short_ev) &&
-            std::isfinite(jacobian.center_by_ratio_ev) &&
-            std::isfinite(jacobian.span_by_short_ev) &&
-            std::isfinite(jacobian.span_by_ratio_ev);
+        return std::isfinite(jacobian.highlight_by_short_ev) &&
+            std::isfinite(jacobian.highlight_by_long_ev) &&
+            std::isfinite(jacobian.shadow_by_short_ev) &&
+            std::isfinite(jacobian.shadow_by_long_ev);
     }
 
     void UpdateJacobianDeterminant() {
@@ -545,31 +712,31 @@ private:
             return;
         }
         const float short_norm = std::hypot(
-            jacobian_.center_by_short_ev,
-            jacobian_.span_by_short_ev);
-        const float ratio_norm = std::hypot(
-            jacobian_.center_by_ratio_ev,
-            jacobian_.span_by_ratio_ev);
-        if (!(short_norm > 0.0f) || !(ratio_norm > 0.0f)) {
+            jacobian_.highlight_by_short_ev,
+            jacobian_.shadow_by_short_ev);
+        const float long_norm = std::hypot(
+            jacobian_.highlight_by_long_ev,
+            jacobian_.shadow_by_long_ev);
+        if (!(short_norm > 0.0f) || !(long_norm > 0.0f)) {
             jacobian_normalized_determinant_ = 0.0f;
             return;
         }
         jacobian_normalized_determinant_ = std::abs(
-            jacobian_.center_by_short_ev * jacobian_.span_by_ratio_ev -
-            jacobian_.center_by_ratio_ev * jacobian_.span_by_short_ev) /
-            (short_norm * ratio_norm);
+            jacobian_.highlight_by_short_ev * jacobian_.shadow_by_long_ev -
+            jacobian_.highlight_by_long_ev * jacobian_.shadow_by_short_ev) /
+            (short_norm * long_norm);
     }
 
     bool IsJacobianIdentifiable() const {
         if (!jacobian_initialized_ || !AllFinite(jacobian_)) return false;
         const float short_norm = std::hypot(
-            jacobian_.center_by_short_ev,
-            jacobian_.span_by_short_ev);
-        const float ratio_norm = std::hypot(
-            jacobian_.center_by_ratio_ev,
-            jacobian_.span_by_ratio_ev);
+            jacobian_.highlight_by_short_ev,
+            jacobian_.shadow_by_short_ev);
+        const float long_norm = std::hypot(
+            jacobian_.highlight_by_long_ev,
+            jacobian_.shadow_by_long_ev);
         return short_norm >= kMinimumUsefulResponseSlope &&
-            ratio_norm >= kMinimumUsefulResponseSlope &&
+            long_norm >= kMinimumUsefulResponseSlope &&
             jacobian_normalized_determinant_ >=
                 kHdrNetMinimumNormalizedDeterminant;
     }
@@ -577,39 +744,41 @@ private:
     bool DampedNewtonStep(
         const MatchResult& match,
         float* short_step,
-        float* ratio_step) const {
-        if (short_step == nullptr || ratio_step == nullptr) return false;
-        const float span_weight =
-            (kHdrNetCenterToleranceEv / kHdrNetSpanToleranceEv) *
-            (kHdrNetCenterToleranceEv / kHdrNetSpanToleranceEv);
+        float* long_step) const {
+        if (short_step == nullptr || long_step == nullptr) return false;
         const float a00 =
-            jacobian_.center_by_short_ev * jacobian_.center_by_short_ev +
-            span_weight * jacobian_.span_by_short_ev *
-                jacobian_.span_by_short_ev + damping_;
+            jacobian_.highlight_by_short_ev *
+                jacobian_.highlight_by_short_ev +
+            jacobian_.shadow_by_short_ev *
+                jacobian_.shadow_by_short_ev + damping_;
         const float a01 =
-            jacobian_.center_by_short_ev * jacobian_.center_by_ratio_ev +
-            span_weight * jacobian_.span_by_short_ev *
-                jacobian_.span_by_ratio_ev;
+            jacobian_.highlight_by_short_ev *
+                jacobian_.highlight_by_long_ev +
+            jacobian_.shadow_by_short_ev *
+                jacobian_.shadow_by_long_ev;
         const float a11 =
-            jacobian_.center_by_ratio_ev * jacobian_.center_by_ratio_ev +
-            span_weight * jacobian_.span_by_ratio_ev *
-                jacobian_.span_by_ratio_ev + damping_;
+            jacobian_.highlight_by_long_ev *
+                jacobian_.highlight_by_long_ev +
+            jacobian_.shadow_by_long_ev *
+                jacobian_.shadow_by_long_ev + damping_;
+        const float highlight_error = HighlightTargetErrorEv(match);
+        const float shadow_error = ShadowTargetErrorEv(match);
         const float gradient_short =
-            jacobian_.center_by_short_ev * match.center_error_ev +
-            span_weight * jacobian_.span_by_short_ev * match.span_error_ev;
-        const float gradient_ratio =
-            jacobian_.center_by_ratio_ev * match.center_error_ev +
-            span_weight * jacobian_.span_by_ratio_ev * match.span_error_ev;
+            jacobian_.highlight_by_short_ev * highlight_error +
+            jacobian_.shadow_by_short_ev * shadow_error;
+        const float gradient_long =
+            jacobian_.highlight_by_long_ev * highlight_error +
+            jacobian_.shadow_by_long_ev * shadow_error;
         const float determinant = a00 * a11 - a01 * a01;
         if (!std::isfinite(determinant) ||
             determinant <= kHdrNetMinimumNormalEquationDeterminant) {
             return false;
         }
         *short_step =
-            -(a11 * gradient_short - a01 * gradient_ratio) / determinant;
-        *ratio_step =
-            -(-a01 * gradient_short + a00 * gradient_ratio) / determinant;
-        return std::isfinite(*short_step) && std::isfinite(*ratio_step);
+            -(a11 * gradient_short - a01 * gradient_long) / determinant;
+        *long_step =
+            -(-a01 * gradient_short + a00 * gradient_long) / determinant;
+        return std::isfinite(*short_step) && std::isfinite(*long_step);
     }
 
     bool BroydenUpdate(
@@ -617,63 +786,52 @@ private:
         const HdrNetProbe& next) {
         if (!HasValidCurveFit(next.match)) return false;
         const float short_step = next.short_ev - previous.short_ev;
-        const float ratio_step = next.ratio_ev - previous.ratio_ev;
+        const float long_step =
+            (next.short_ev + next.ratio_ev) -
+            (previous.short_ev + previous.ratio_ev);
         const float step_norm_squared =
-            short_step * short_step + ratio_step * ratio_step;
+            short_step * short_step + long_step * long_step;
         if (step_norm_squared < kHdrNetMinimumBroydenStepNormSquared) {
             return false;
         }
-        const float center_remainder =
-            next.match.center_error_ev - previous.match.center_error_ev -
-            (jacobian_.center_by_short_ev * short_step +
-                jacobian_.center_by_ratio_ev * ratio_step);
-        const float span_remainder =
-            next.match.span_error_ev - previous.match.span_error_ev -
-            (jacobian_.span_by_short_ev * short_step +
-                jacobian_.span_by_ratio_ev * ratio_step);
-        jacobian_.center_by_short_ev +=
-            center_remainder * short_step / step_norm_squared;
-        jacobian_.center_by_ratio_ev +=
-            center_remainder * ratio_step / step_norm_squared;
-        jacobian_.span_by_short_ev +=
-            span_remainder * short_step / step_norm_squared;
-        jacobian_.span_by_ratio_ev +=
-            span_remainder * ratio_step / step_norm_squared;
+        const float highlight_remainder =
+            HighlightTargetErrorEv(next.match) -
+            HighlightTargetErrorEv(previous.match) -
+            (jacobian_.highlight_by_short_ev * short_step +
+                jacobian_.highlight_by_long_ev * long_step);
+        const float shadow_remainder =
+            ShadowTargetErrorEv(next.match) -
+            ShadowTargetErrorEv(previous.match) -
+            (jacobian_.shadow_by_short_ev * short_step +
+                jacobian_.shadow_by_long_ev * long_step);
+        jacobian_.highlight_by_short_ev +=
+            highlight_remainder * short_step / step_norm_squared;
+        jacobian_.highlight_by_long_ev +=
+            highlight_remainder * long_step / step_norm_squared;
+        jacobian_.shadow_by_short_ev +=
+            shadow_remainder * short_step / step_norm_squared;
+        jacobian_.shadow_by_long_ev +=
+            shadow_remainder * long_step / step_norm_squared;
         jacobian_initialized_ = AllFinite(jacobian_);
         UpdateJacobianDeterminant();
         return jacobian_initialized_;
     }
 
-    int BestCurveProbeIndex() const {
+    int BestProbeIndex() const {
         int best_index = 0;
-        float best_objective = std::numeric_limits<float>::infinity();
-        float best_loss = std::numeric_limits<float>::infinity();
-        for (size_t index = 0; index < probes_.size(); ++index) {
-            const MatchResult& match = probes_[index].match;
-            if (!HasValidCurveFit(match) ||
-                match.robust_log2_loss > maximum_acceptable_huber_loss_) {
-                continue;
-            }
-            const float objective = CurveObjective(match);
-            if (objective < best_objective ||
-                (objective == best_objective &&
-                    match.robust_log2_loss < best_loss)) {
+        for (size_t index = 1; index < probes_.size(); ++index) {
+            if (IsGridMatchBetter(
+                    probes_[index].match,
+                    probes_[best_index].match)) {
                 best_index = static_cast<int>(index);
-                best_objective = objective;
-                best_loss = match.robust_log2_loss;
             }
         }
         return best_index;
     }
 
     int BestFallbackProbeIndex(int* frozen_probe_count) const {
-        int best_index = 0;
-        int best_converged_index = -1;
+        int best_index = -1;
         int count = 0;
-        float best_loss = std::numeric_limits<float>::infinity();
-        float best_correction = std::numeric_limits<float>::infinity();
-        float best_converged_correction = std::numeric_limits<float>::infinity();
-        float best_converged_loss = std::numeric_limits<float>::infinity();
         for (size_t index = 0; index < probes_.size(); ++index) {
             const HdrNetProbe& probe = probes_[index];
             if (std::abs(probe.ratio_ev) >=
@@ -681,29 +839,14 @@ private:
                 continue;
             }
             ++count;
-            const float correction =
-                std::abs(probe.match.recommended_exposure_correction_ev);
-            const bool converged_and_safe =
-                correction <= kRobustCorrectionToleranceEv &&
-                probe.match.robust_log2_loss <= MaximumFallbackHuberLoss();
-            if (converged_and_safe &&
-                (correction < best_converged_correction ||
-                    (correction == best_converged_correction &&
-                        probe.match.robust_log2_loss < best_converged_loss))) {
-                best_converged_index = static_cast<int>(index);
-                best_converged_correction = correction;
-                best_converged_loss = probe.match.robust_log2_loss;
-            }
-            if (probe.match.robust_log2_loss < best_loss ||
-                (probe.match.robust_log2_loss == best_loss &&
-                    correction < best_correction)) {
+            if (best_index < 0 || IsGridMatchBetter(
+                    probe.match,
+                    probes_[best_index].match)) {
                 best_index = static_cast<int>(index);
-                best_loss = probe.match.robust_log2_loss;
-                best_correction = correction;
             }
         }
         if (frozen_probe_count != nullptr) *frozen_probe_count = count;
-        return best_converged_index >= 0 ? best_converged_index : best_index;
+        return best_index >= 0 ? best_index : 0;
     }
 
     std::optional<float> HuberCorrectionSlope() const {
@@ -742,50 +885,108 @@ private:
         return std::isfinite(slope) ? std::optional<float>(slope) : std::nullopt;
     }
 
+    bool ProjectSemanticExposureAdjustments(
+        float* short_ev,
+        float* long_ev) const {
+        if (short_ev == nullptr || long_ev == nullptr ||
+            !std::isfinite(*short_ev) || !std::isfinite(*long_ev)) {
+            return false;
+        }
+        *short_ev = std::clamp(
+            *short_ev,
+            kHdrNetMinimumTotalStepEv,
+            kHdrNetMaximumTotalStepEv);
+        *long_ev = std::clamp(
+            *long_ev,
+            kHdrNetMinimumTotalStepEv,
+            kHdrNetMaximumTotalStepEv);
+
+        float ratio_ev = *long_ev - *short_ev;
+        if (ratio_ev < minimum_ratio_ev_) {
+            const float half_violation = (minimum_ratio_ev_ - ratio_ev) * 0.5f;
+            *short_ev -= half_violation;
+            *long_ev += half_violation;
+        } else if (ratio_ev > maximum_ratio_ev_) {
+            const float half_violation = (ratio_ev - maximum_ratio_ev_) * 0.5f;
+            *short_ev += half_violation;
+            *long_ev -= half_violation;
+        }
+        *short_ev = std::clamp(
+            *short_ev,
+            kHdrNetMinimumTotalStepEv,
+            kHdrNetMaximumTotalStepEv);
+        *long_ev = std::clamp(
+            *long_ev,
+            kHdrNetMinimumTotalStepEv,
+            kHdrNetMaximumTotalStepEv);
+
+        ratio_ev = *long_ev - *short_ev;
+        if (ratio_ev < minimum_ratio_ev_) {
+            const float adjusted_long = *short_ev + minimum_ratio_ev_;
+            if (adjusted_long <= kHdrNetMaximumTotalStepEv) {
+                *long_ev = adjusted_long;
+            } else {
+                *short_ev = *long_ev - minimum_ratio_ev_;
+            }
+        } else if (ratio_ev > maximum_ratio_ev_) {
+            const float adjusted_long = *short_ev + maximum_ratio_ev_;
+            if (adjusted_long >= kHdrNetMinimumTotalStepEv) {
+                *long_ev = adjusted_long;
+            } else {
+                *short_ev = *long_ev - maximum_ratio_ev_;
+            }
+        }
+        ratio_ev = *long_ev - *short_ev;
+        return *short_ev >= kHdrNetMinimumTotalStepEv &&
+            *short_ev <= kHdrNetMaximumTotalStepEv &&
+            *long_ev >= kHdrNetMinimumTotalStepEv &&
+            *long_ev <= kHdrNetMaximumTotalStepEv &&
+            ratio_ev >= minimum_ratio_ev_ - kHdrNetDuplicateProbeToleranceEv &&
+            ratio_ev <= maximum_ratio_ev_ + kHdrNetDuplicateProbeToleranceEv;
+    }
+
     std::optional<HdrNetParameters> NextJointParameters() {
         if (static_cast<int>(probes_.size()) >= kHdrNetMaximumCandidateCount) {
-            Finish(HasCurveConverged(probes_[current_probe_index_]));
+            Finish();
             return std::nullopt;
         }
         float short_step = 0.0f;
-        float ratio_step = 0.0f;
+        float long_step = 0.0f;
         const HdrNetProbe& current = probes_[current_probe_index_];
-        if (!DampedNewtonStep(current.match, &short_step, &ratio_step)) {
-            Finish(false);
+        if (!DampedNewtonStep(current.match, &short_step, &long_step)) {
+            Finish();
             return std::nullopt;
         }
-        const float next_short = std::clamp(
-            current.short_ev + std::clamp(
-                short_step,
-                -kHdrNetMaximumStepEv,
-                kHdrNetMaximumStepEv),
-            kHdrNetMinimumTotalStepEv,
-            kHdrNetMaximumTotalStepEv);
-        const float next_ratio = std::clamp(
-            current.ratio_ev + std::clamp(
-                ratio_step,
-                -kHdrNetMaximumStepEv,
-                kHdrNetMaximumStepEv),
-            minimum_ratio_ev_,
-            maximum_ratio_ev_);
+        float next_short = current.short_ev + std::clamp(
+            short_step,
+            -kHdrNetMaximumStepEv,
+            kHdrNetMaximumStepEv);
+        float next_long = current.short_ev + current.ratio_ev + std::clamp(
+            long_step,
+            -kHdrNetMaximumStepEv,
+            kHdrNetMaximumStepEv);
+        if (!ProjectSemanticExposureAdjustments(&next_short, &next_long)) {
+            Finish();
+            return std::nullopt;
+        }
         const auto issued = Issue(
             next_short,
-            next_ratio,
+            next_long - next_short,
             HdrNetProbeAxis::kJointNewton,
             current_probe_index_);
-        if (!issued.has_value()) Finish(false);
+        if (!issued.has_value()) Finish();
         return issued;
     }
 
     std::optional<HdrNetParameters> NextFallbackParameters() {
         int frozen_probe_count = 0;
         const int current_index = BestFallbackProbeIndex(&frozen_probe_count);
-        if (HasFallbackConverged(current_index, frozen_probe_count)) {
-            Finish(true);
+        if (HasFallbackConverged(current_index)) {
+            Finish();
             return std::nullopt;
         }
         if (static_cast<int>(probes_.size()) >= kHdrNetMaximumCandidateCount) {
-            Finish(false);
+            Finish();
             return std::nullopt;
         }
         const HdrNetProbe& current = probes_[current_index];
@@ -798,7 +999,7 @@ private:
                 *response_slope;
         }
         if (!std::isfinite(short_step)) {
-            Finish(false);
+            Finish();
             return std::nullopt;
         }
         short_step = std::clamp(
@@ -817,7 +1018,7 @@ private:
             0.0f,
             HdrNetProbeAxis::kFallbackShort,
             -1);
-        if (!issued.has_value()) Finish(false);
+        if (!issued.has_value()) Finish();
         return issued;
     }
 
@@ -856,21 +1057,18 @@ private:
         jacobian_initialized_ = false;
     }
 
-    void Finish(bool converged) {
+    void Finish() {
         if (probes_.empty()) return;
-        int frozen_probe_count = 0;
-        selected_probe_index_ = one_dimensional_fallback_
-            ? BestFallbackProbeIndex(&frozen_probe_count)
-            : BestCurveProbeIndex();
-        converged_ = converged;
+        // Fallback restrictions only control which probes are generated. The final result is
+        // always the best spatially valid grid match among every evaluated probe.
+        selected_probe_index_ = BestProbeIndex();
+        converged_ = HasGridConverged(probes_[selected_probe_index_]);
         finished_ = true;
         pending_.reset();
     }
 
     float minimum_ratio_ev_ = 0.0f;
     float maximum_ratio_ev_ = 0.0f;
-    float maximum_acceptable_huber_loss_ =
-        std::numeric_limits<float>::infinity();
     float damping_ = kHdrNetInitialDamping;
     float jacobian_normalized_determinant_ =
         std::numeric_limits<float>::quiet_NaN();
@@ -899,11 +1097,16 @@ class ExposureSolver {
 public:
     static std::unique_ptr<ExposureSolver> Create(
         const jint* reference_pixels,
+        const jfloat* portrait_priority_weights,
         int width,
         int height) {
         auto solver = std::unique_ptr<ExposureSolver>(new (std::nothrow) ExposureSolver());
         if (!solver ||
-            !solver->Initialize(reference_pixels, width, height)) {
+            !solver->Initialize(
+                reference_pixels,
+                portrait_priority_weights,
+                width,
+                height)) {
             return nullptr;
         }
         return solver;
@@ -1030,15 +1233,7 @@ public:
 
     bool HasConverged() const {
         if (!HasResult()) return false;
-        const MatchResult& match = LastSample().match;
-        if (!std::isfinite(match.recommended_exposure_correction_ev) ||
-            std::abs(match.recommended_exposure_correction_ev) >
-                kRobustCorrectionToleranceEv) {
-            return false;
-        }
-        return static_cast<int>(samples_.size()) >=
-                kMinimumModelConvergenceSampleCount ||
-            match.match_rate >= kHighConfidenceMatchRate;
+        return HasRequiredGridMatchRate(BestSample().match);
     }
 
     const Sample& BestSample() const {
@@ -1066,8 +1261,21 @@ private:
         return true;
     }
 
-    bool Initialize(const jint* pixels, int width, int height) {
+    bool Initialize(
+        const jint* pixels,
+        const jfloat* portrait_priority_weights,
+        int width,
+        int height) {
         if (!BuildGridLumas(pixels, width, height, &reference_grid_lumas_)) {
+            return false;
+        }
+        std::vector<float> portrait_grid_weights;
+        if (portrait_priority_weights != nullptr &&
+            !BuildGridPortraitWeights(
+                portrait_priority_weights,
+                width,
+                height,
+                &portrait_grid_weights)) {
             return false;
         }
         width_ = width;
@@ -1088,6 +1296,42 @@ private:
             eligible_cell_indices_.push_back(cell);
             reference_cell_weights_.push_back(weight);
             reference_weight_sum_ += weight;
+        }
+        if (!portrait_grid_weights.empty() && reference_weight_sum_ > 0.0f) {
+            double portrait_component_weight = 0.0;
+            double background_component_weight = 0.0;
+            for (size_t index = 0; index < eligible_cell_indices_.size(); ++index) {
+                const float base_weight = reference_cell_weights_[index];
+                const float portrait_weight =
+                    portrait_grid_weights[eligible_cell_indices_[index]];
+                portrait_component_weight += base_weight * portrait_weight;
+                background_component_weight += base_weight * (1.0f - portrait_weight);
+            }
+            const double total_component_weight =
+                portrait_component_weight + background_component_weight;
+            const double natural_portrait_fraction = total_component_weight > 0.0
+                ? portrait_component_weight / total_component_weight
+                : 0.0;
+            if (portrait_component_weight >= kMinimumPortraitPriorityComponentWeight &&
+                background_component_weight >= kMinimumPortraitPriorityComponentWeight &&
+                natural_portrait_fraction < kPortraitPriorityTargetWeightFraction) {
+                const double portrait_scale =
+                    kPortraitPriorityTargetWeightFraction * total_component_weight /
+                    portrait_component_weight;
+                const double background_scale =
+                    (1.0 - kPortraitPriorityTargetWeightFraction) * total_component_weight /
+                    background_component_weight;
+                reference_weight_sum_ = 0.0f;
+                for (size_t index = 0; index < eligible_cell_indices_.size(); ++index) {
+                    const float portrait_weight =
+                        portrait_grid_weights[eligible_cell_indices_[index]];
+                    const float priority_scale = static_cast<float>(
+                        portrait_weight * portrait_scale +
+                        (1.0f - portrait_weight) * background_scale);
+                    reference_cell_weights_[index] *= priority_scale;
+                    reference_weight_sum_ += reference_cell_weights_[index];
+                }
+            }
         }
         if (static_cast<int>(eligible_cell_indices_.size()) < kMinimumReliableCellCount ||
             reference_weight_sum_ < kMinimumReferenceWeightSum) {
@@ -1202,7 +1446,38 @@ private:
         output->center_error_ev = center_error_ev;
         output->curve_slope_error = slope_error;
         output->span_error_ev = slope_error * reference_span_ev;
-        return std::isfinite(output->span_error_ev);
+
+        std::vector<WeightedValue> highlight_residuals;
+        std::vector<WeightedValue> shadow_residuals;
+        highlight_residuals.reserve(log2_ratios.size() / 4);
+        shadow_residuals.reserve(log2_ratios.size() / 4);
+        float highlight_weight_sum = 0.0f;
+        float shadow_weight_sum = 0.0f;
+        for (size_t index = 0; index < log2_ratios.size(); ++index) {
+            const float reference_ev = reference_cell_log2_lumas_[index];
+            const WeightedValue residual = log2_ratios[index];
+            if (reference_ev >= reference_p80_ev_) {
+                highlight_residuals.push_back(residual);
+                highlight_weight_sum += residual.weight;
+            }
+            if (reference_ev <= reference_p20_ev_) {
+                shadow_residuals.push_back(residual);
+                shadow_weight_sum += residual.weight;
+            }
+        }
+        if (highlight_residuals.size() < kMinimumCurveFitCellCount ||
+            shadow_residuals.size() < kMinimumCurveFitCellCount) {
+            return false;
+        }
+        output->short_target_correction_ev = RobustExposureCorrection(
+            highlight_residuals,
+            highlight_weight_sum);
+        output->long_target_correction_ev = RobustExposureCorrection(
+            shadow_residuals,
+            shadow_weight_sum);
+        return std::isfinite(output->span_error_ev) &&
+            std::isfinite(output->short_target_correction_ev) &&
+            std::isfinite(output->long_target_correction_ev);
     }
 
     bool Evaluate(
@@ -1224,6 +1499,56 @@ private:
             output);
     }
 
+    void EvaluateCoordinateMapping(
+        const float* candidate_grid_lumas,
+        MatchResult* output) const {
+        int matched_edge_count = 0;
+        int compared_edge_count = 0;
+        const auto evaluate_edge = [&](int first_cell, int second_cell) {
+            const float first_reference = reference_grid_lumas_[first_cell];
+            const float second_reference = reference_grid_lumas_[second_cell];
+            const float first_candidate = candidate_grid_lumas[first_cell];
+            const float second_candidate = candidate_grid_lumas[second_cell];
+            if (!std::isfinite(first_reference) || !std::isfinite(second_reference) ||
+                !std::isfinite(first_candidate) || !std::isfinite(second_candidate) ||
+                !(ReferenceReliabilityWeight(first_reference) > 0.0f) ||
+                !(ReferenceReliabilityWeight(second_reference) > 0.0f)) {
+                return;
+            }
+            const float reference_contrast =
+                NormalizedPerceptualLightness(second_reference) -
+                NormalizedPerceptualLightness(first_reference);
+            if (std::abs(reference_contrast) <
+                kCoordinateReferenceContrastThreshold) {
+                return;
+            }
+            const float candidate_contrast =
+                NormalizedPerceptualLightness(second_candidate) -
+                NormalizedPerceptualLightness(first_candidate);
+            ++compared_edge_count;
+            const bool same_direction =
+                (reference_contrast > 0.0f) == (candidate_contrast > 0.0f);
+            if (same_direction && std::abs(candidate_contrast) >=
+                    kCoordinateCandidateContrastThreshold) {
+                ++matched_edge_count;
+            }
+        };
+
+        for (int grid_y = 0; grid_y < kGridRows; ++grid_y) {
+            for (int grid_x = 0; grid_x < kGridColumns; ++grid_x) {
+                const int cell = grid_y * kGridColumns + grid_x;
+                if (grid_x + 1 < kGridColumns) evaluate_edge(cell, cell + 1);
+                if (grid_y + 1 < kGridRows) {
+                    evaluate_edge(cell, cell + kGridColumns);
+                }
+            }
+        }
+        output->coordinate_compared_edge_count = compared_edge_count;
+        output->coordinate_match_rate = compared_edge_count > 0
+            ? static_cast<float>(matched_edge_count) / compared_edge_count
+            : 0.0f;
+    }
+
     bool EvaluateGridLumas(
         const float* candidate_grid_lumas,
         int candidate_count,
@@ -1239,11 +1564,13 @@ private:
         int compared_count = 0;
         double compared_weight_sum = 0.0;
         double matched_weight_sum = 0.0;
+        double absolute_perceptual_lightness_error_sum = 0.0;
         double absolute_log2_ratio_sum = 0.0;
         double robust_log2_loss_sum = 0.0;
 #pragma omp parallel for schedule(static) if(valid_count >= 1024) \
     reduction(+:matched_count, compared_count, compared_weight_sum, matched_weight_sum, \
-        absolute_log2_ratio_sum, robust_log2_loss_sum)
+        absolute_perceptual_lightness_error_sum, absolute_log2_ratio_sum, \
+        robust_log2_loss_sum)
         for (int index = 0; index < valid_count; ++index) {
             const int cell = eligible_cell_indices_[index];
             const float candidate_luma = candidate_grid_lumas[cell];
@@ -1255,15 +1582,21 @@ private:
             const float reference_luma = reference_grid_lumas_[cell];
             const float safe_reference = std::max(reference_luma, kDisplayLinearLumaFloor);
             const float safe_candidate = std::max(candidate_luma, kDisplayLinearLumaFloor);
+            const float perceptual_lightness_error = std::abs(
+                NormalizedPerceptualLightness(candidate_luma) -
+                NormalizedPerceptualLightness(reference_luma));
             const float log2_ratio = std::clamp(
                 std::log2(safe_candidate / safe_reference),
                 -kMaximumAbsoluteLog2Residual,
                 kMaximumAbsoluteLog2Residual);
             log2_ratios[index] = WeightedValue{log2_ratio, weight};
-            const bool matched = std::abs(log2_ratio) <= kMatchResidualToleranceEv;
+            const bool matched = perceptual_lightness_error <=
+                kPerceptualLightnessTolerance;
             matched_count += matched ? 1 : 0;
             matched_weight_sum += matched ? weight : 0.0;
             compared_weight_sum += weight;
+            absolute_perceptual_lightness_error_sum +=
+                weight * perceptual_lightness_error;
             absolute_log2_ratio_sum += weight * std::abs(log2_ratio);
             robust_log2_loss_sum += weight * HuberLoss(log2_ratio);
             ++compared_count;
@@ -1276,8 +1609,11 @@ private:
         output->valid_cell_count = valid_count;
         output->compared_cell_count = compared_count;
         output->match_rate = static_cast<float>(matched_weight_sum / compared_weight_sum);
+        output->mean_absolute_perceptual_lightness_error = static_cast<float>(
+            absolute_perceptual_lightness_error_sum / compared_weight_sum);
         output->mean_absolute_log2_ratio =
             static_cast<float>(absolute_log2_ratio_sum / compared_weight_sum);
+        EvaluateCoordinateMapping(candidate_grid_lumas, output);
         if (fit_reference_curve) FitReferenceCurve(log2_ratios, output);
         output->median_log2_ratio = WeightedMedian(
             &log2_ratios,
@@ -1289,6 +1625,8 @@ private:
             static_cast<float>(compared_weight_sum));
         output->reference_weight_sum = static_cast<float>(compared_weight_sum);
         return std::isfinite(output->match_rate) &&
+            std::isfinite(output->mean_absolute_perceptual_lightness_error) &&
+            std::isfinite(output->coordinate_match_rate) &&
             std::isfinite(output->mean_absolute_log2_ratio) &&
             std::isfinite(output->median_log2_ratio) &&
             std::isfinite(output->robust_log2_loss) &&
@@ -1297,21 +1635,8 @@ private:
     }
 
     static bool IsBetter(const Sample& candidate, const Sample& current) {
-        const float robust_loss_delta =
-            candidate.match.robust_log2_loss - current.match.robust_log2_loss;
-        if (std::abs(robust_loss_delta) > kScoreEqualityEpsilon) {
-            return robust_loss_delta < 0.0f;
-        }
-        const float match_rate_delta =
-            candidate.match.match_rate - current.match.match_rate;
-        if (std::abs(match_rate_delta) > kMatchRateTrendEpsilon) {
-            return match_rate_delta > 0.0f;
-        }
-        const float residual_delta = candidate.match.mean_absolute_log2_ratio -
-            current.match.mean_absolute_log2_ratio;
-        if (std::abs(residual_delta) > kScoreEqualityEpsilon) {
-            return residual_delta < 0.0f;
-        }
+        if (IsGridMatchBetter(candidate.match, current.match)) return true;
+        if (IsGridMatchBetter(current.match, candidate.match)) return false;
         const float absolute_ev_delta =
             std::abs(candidate.exposure_ev) - std::abs(current.exposure_ev);
         if (std::abs(absolute_ev_delta) > kMinimumCandidateStepEv * 0.1f) {
@@ -1501,9 +1826,16 @@ jfloatArray CreateSampleArray(JNIEnv* env, const Sample& sample) {
         sample.match.robust_log2_loss,
         sample.match.reference_weight_sum,
         sample.match.recommended_exposure_correction_ev,
+        sample.match.mean_absolute_perceptual_lightness_error,
+        static_cast<float>(sample.match.coordinate_compared_edge_count),
+        sample.match.coordinate_match_rate,
+        static_cast<float>(GetCoordinateMatchStatus(sample.match)),
     };
-    jfloatArray result = env->NewFloatArray(10);
-    if (result != nullptr) env->SetFloatArrayRegion(result, 0, 10, values);
+    constexpr int kValueCount = sizeof(values) / sizeof(values[0]);
+    jfloatArray result = env->NewFloatArray(kValueCount);
+    if (result != nullptr) {
+        env->SetFloatArrayRegion(result, 0, kValueCount, values);
+    }
     return result;
 }
 
@@ -1527,6 +1859,12 @@ jfloatArray CreateHdrNetCurveSampleArray(
         match.reference_p50_ev,
         match.reference_p80_ev,
         static_cast<float>(match.curve_fit_cell_count),
+        match.short_target_correction_ev,
+        match.long_target_correction_ev,
+        match.mean_absolute_perceptual_lightness_error,
+        static_cast<float>(match.coordinate_compared_edge_count),
+        match.coordinate_match_rate,
+        static_cast<float>(GetCoordinateMatchStatus(match)),
     };
     constexpr int kValueCount = sizeof(values) / sizeof(values[0]);
     jfloatArray result = env->NewFloatArray(kValueCount);
@@ -1560,6 +1898,12 @@ jfloatArray CreateHdrNetResultArray(
         match.reference_p50_ev,
         match.reference_p80_ev,
         static_cast<float>(match.curve_fit_cell_count),
+        match.short_target_correction_ev,
+        match.long_target_correction_ev,
+        match.mean_absolute_perceptual_lightness_error,
+        static_cast<float>(match.coordinate_compared_edge_count),
+        match.coordinate_match_rate,
+        static_cast<float>(GetCoordinateMatchStatus(match)),
         static_cast<float>(solver.ProbeCount()),
         solver.HasConverged() ? 1.0f : 0.0f,
         solver.UsedOneDimensionalFallback() ? 1.0f : 0.0f,
@@ -1580,19 +1924,40 @@ Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeCreate(
     JNIEnv* env,
     jobject,
     jintArray reference_pixels,
+    jfloatArray portrait_priority_weights,
     jint width,
     jint height) {
+    const int64_t expected_pixel_count = static_cast<int64_t>(width) * height;
     if (reference_pixels == nullptr || width <= 0 || height <= 0 ||
-        static_cast<int64_t>(width) * height != env->GetArrayLength(reference_pixels)) {
+        expected_pixel_count != env->GetArrayLength(reference_pixels) ||
+        (portrait_priority_weights != nullptr &&
+            expected_pixel_count != env->GetArrayLength(portrait_priority_weights))) {
         return 0;
     }
     jint* pixels = env->GetIntArrayElements(reference_pixels, nullptr);
     if (pixels == nullptr) return 0;
+    jfloat* priority_weights = portrait_priority_weights != nullptr
+        ? env->GetFloatArrayElements(portrait_priority_weights, nullptr)
+        : nullptr;
+    if (portrait_priority_weights != nullptr && priority_weights == nullptr) {
+        env->ReleaseIntArrayElements(reference_pixels, pixels, JNI_ABORT);
+        return 0;
+    }
     std::unique_ptr<ExposureSolver> solver;
     try {
-        solver = ExposureSolver::Create(pixels, width, height);
+        solver = ExposureSolver::Create(
+            pixels,
+            priority_weights,
+            width,
+            height);
     } catch (const std::bad_alloc&) {
         solver.reset();
+    }
+    if (portrait_priority_weights != nullptr) {
+        env->ReleaseFloatArrayElements(
+            portrait_priority_weights,
+            priority_weights,
+            JNI_ABORT);
     }
     env->ReleaseIntArrayElements(reference_pixels, pixels, JNI_ABORT);
     return reinterpret_cast<jlong>(solver.release());
@@ -1810,12 +2175,18 @@ Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeGetResult(
         best.match.robust_log2_loss,
         best.match.reference_weight_sum,
         best.match.recommended_exposure_correction_ev,
+        best.match.mean_absolute_perceptual_lightness_error,
+        static_cast<float>(best.match.coordinate_compared_edge_count),
+        best.match.coordinate_match_rate,
+        static_cast<float>(GetCoordinateMatchStatus(best.match)),
         static_cast<float>(solver->SampleCount()),
         static_cast<float>(solver->ExcludedShadowCellCount()),
         static_cast<float>(solver->ExcludedHighlightCellCount()),
         kShadowWeightZeroDisplayLinearLuma,
         kHighlightWeightZeroDisplayLinearLuma,
         kHuberDeltaEv,
+        kPerceptualLightnessTolerance,
+        kRequiredGridMatchRate,
     };
     jfloatArray result = env->NewFloatArray(kNativeResultSize);
     if (result != nullptr) {
