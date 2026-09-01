@@ -1,8 +1,10 @@
 package com.hinnka.mycamera.raw
 
 import android.graphics.Bitmap
+import android.graphics.Rect
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.pow
 
@@ -17,7 +19,56 @@ internal data class RawLegacyAutoExposureRequest(
     val height: Int,
     /** Complete capture-time viewfinder image retained for Photon HDR spatial matching. */
     val referenceFrame: RawLegacyExposurePreviewFrame,
-    val solve: ((Float) -> RawLegacyExposurePreviewFrame?) -> Float?,
+    val highlightClippingConstraint: RawLegacyHighlightClippingConstraint?,
+    val solve: (
+        renderSample: (Float) -> RawLegacyExposurePreviewFrame?,
+        maximumExposureEv: Float?,
+    ) -> Float?,
+)
+
+/** RAW-domain highlight guard used only when HDR+ processing is disabled. */
+internal data class RawLegacyHighlightClippingConstraint(
+    /** Fraction retained on both axes, centered inside the final RAW output bounds. */
+    val centerFractionPerAxis: Float,
+    /** Maximum fraction of pixels whose brightest linear RAW channel may reach one. */
+    val maximumClippedFraction: Float,
+) {
+    init {
+        require(centerFractionPerAxis.isFinite() && centerFractionPerAxis > 0f &&
+            centerFractionPerAxis <= 1f)
+        require(maximumClippedFraction.isFinite() && maximumClippedFraction in 0f..1f)
+    }
+
+    companion object {
+        val HDR_PLUS_DISABLED = RawLegacyHighlightClippingConstraint(
+            centerFractionPerAxis = 2f / 3f,
+            maximumClippedFraction = 0.005f,
+        )
+    }
+}
+
+/** Log2-domain peak-signal histogram produced from the linear RAW texture. */
+internal data class RawLegacyHighlightHistogram(
+    val counts: LongArray,
+    val minimumLog2Signal: Float,
+    val log2SignalStep: Float,
+    val pixelCount: Long,
+) {
+    init {
+        require(counts.isNotEmpty())
+        require(minimumLog2Signal.isFinite())
+        require(log2SignalStep.isFinite() && log2SignalStep > 0f)
+        require(pixelCount > 0L)
+        require(counts.all { it >= 0L })
+        require(counts.sum() == pixelCount)
+    }
+}
+
+internal data class RawLegacyHighlightExposureLimit(
+    val maximumExposureOffsetEv: Float,
+    val allowedClippedPixelCount: Long,
+    val conservativeClippedPixelCountAtLimit: Long,
+    val pixelCount: Long,
 )
 
 internal data class RawHdrNetExposureEvaluation(
@@ -66,6 +117,7 @@ internal object RawLegacyAutoExposureMatcher {
 
     fun createRequest(
         capturePreviewThumbnail: Bitmap?,
+        highlightClippingConstraint: RawLegacyHighlightClippingConstraint? = null,
     ): RawLegacyAutoExposureRequest? {
         val reference = capturePreviewThumbnail?.let(::buildReference)
         if (capturePreviewThumbnail != null && reference == null) {
@@ -76,9 +128,65 @@ internal object RawLegacyAutoExposureMatcher {
                 width = it.frame.width,
                 height = it.frame.height,
                 referenceFrame = it.frame,
-                solve = { renderSample -> solve(it, renderSample) },
+                highlightClippingConstraint = highlightClippingConstraint,
+                solve = { renderSample, maximumExposureEv ->
+                    solve(it, renderSample, maximumExposureEv)
+                },
             )
         }
+    }
+
+    fun centeredHighlightBounds(
+        outputBounds: Rect,
+        constraint: RawLegacyHighlightClippingConstraint,
+    ): Rect? {
+        if (outputBounds.isEmpty) return null
+        val constrainedWidth = floor(
+            outputBounds.width().toDouble() * constraint.centerFractionPerAxis.toDouble(),
+        ).toInt().coerceIn(1, outputBounds.width())
+        val constrainedHeight = floor(
+            outputBounds.height().toDouble() * constraint.centerFractionPerAxis.toDouble(),
+        ).toInt().coerceIn(1, outputBounds.height())
+        val left = outputBounds.left + (outputBounds.width() - constrainedWidth) / 2
+        val top = outputBounds.top + (outputBounds.height() - constrainedHeight) / 2
+        return Rect(left, top, left + constrainedWidth, top + constrainedHeight)
+    }
+
+    /**
+     * Converts a conservative RAW peak histogram quantile into the largest additional EV whose
+     * total BaselineExposure cannot clip more than the configured pixel fraction.
+     */
+    fun resolveHighlightExposureLimit(
+        histogram: RawLegacyHighlightHistogram,
+        sourceBaselineExposureEv: Float,
+        constraint: RawLegacyHighlightClippingConstraint,
+    ): RawLegacyHighlightExposureLimit? {
+        if (!sourceBaselineExposureEv.isFinite()) return null
+        val allowedClippedPixelCount = floor(
+            histogram.pixelCount.toDouble() * constraint.maximumClippedFraction.toDouble(),
+        ).toLong()
+        var clippedPixelCount = 0L
+        var thresholdBin = histogram.counts.size
+        for (bin in histogram.counts.lastIndex downTo 0) {
+            val countIncludingBin = clippedPixelCount + histogram.counts[bin]
+            if (countIncludingBin > allowedClippedPixelCount) break
+            clippedPixelCount = countIncludingBin
+            thresholdBin = bin
+        }
+        // Every value in thresholdBin is treated as clipped. Using its lower edge therefore makes
+        // the bound conservative even when many samples share the quantile boundary.
+        val clippingThresholdLog2 = histogram.minimumLog2Signal +
+            thresholdBin.toFloat() * histogram.log2SignalStep
+        val maximumTotalExposureEv = -clippingThresholdLog2
+        val maximumExposureOffsetEv =
+            maximumTotalExposureEv - DngBaselineExposure.sanitize(sourceBaselineExposureEv)
+        if (!maximumExposureOffsetEv.isFinite()) return null
+        return RawLegacyHighlightExposureLimit(
+            maximumExposureOffsetEv = maximumExposureOffsetEv,
+            allowedClippedPixelCount = allowedClippedPixelCount,
+            conservativeClippedPixelCountAtLimit = clippedPixelCount,
+            pixelCount = histogram.pixelCount,
+        )
     }
 
     private fun buildReference(bitmap: Bitmap): ViewfinderReference? {
@@ -240,16 +348,35 @@ internal object RawLegacyAutoExposureMatcher {
     private fun solve(
         reference: ViewfinderReference,
         renderSample: (Float) -> RawLegacyExposurePreviewFrame?,
+        maximumExposureEv: Float?,
     ): Float? {
         val solver = RawLegacyAutoExposureNativeBridge.Solver.create(reference.frame)
             ?: run {
                 PLog.w(
                     TAG,
-                    "Classic auto exposure skipped: insufficient reliable non-endpoint cells",
+                    "Viewfinder brightness matching skipped: " +
+                        "insufficient reliable non-endpoint cells",
                 )
                 return null
             }
         return solver.use {
+            maximumExposureEv?.let { requestedMaximum ->
+                if (!requestedMaximum.isFinite() ||
+                    requestedMaximum < MeteringSystem.RAW_EXPOSURE_MIN_EV ||
+                    !solver.configureExposureBounds(
+                        MeteringSystem.RAW_EXPOSURE_MIN_EV,
+                        minOf(requestedMaximum, MeteringSystem.RAW_EXPOSURE_MAX_EV),
+                    )
+                ) {
+                    PLog.e(
+                        TAG,
+                        "Viewfinder brightness matching has no feasible highlight-safe range: " +
+                            "maximumExposureEv=$requestedMaximum " +
+                            "minimumExposureEv=${MeteringSystem.RAW_EXPOSURE_MIN_EV}",
+                    )
+                    return@use null
+                }
+            }
             while (true) {
                 val exposureEv = solver.nextExposureEv() ?: break
                 val frame = renderSample(exposureEv) ?: return@use null
@@ -257,7 +384,8 @@ internal object RawLegacyAutoExposureMatcher {
                 solver.lastSample()?.let { sample ->
                     PLog.d(
                         TAG,
-                        "Classic auto exposure sample: exposureEv=${sample.exposureEv} " +
+                        "Viewfinder brightness matching sample: " +
+                            "exposureEv=${sample.exposureEv} " +
                             "matchedCells=${sample.matchedCellCount}/${sample.validCellCount} " +
                             "matchRate=${sample.matchRate} " +
                             "meanAbsoluteLog2Ratio=${sample.meanAbsoluteLog2Ratio} " +
@@ -272,7 +400,8 @@ internal object RawLegacyAutoExposureMatcher {
             val result = solver.result() ?: return@use null
             PLog.i(
                 TAG,
-                "Classic auto exposure result: exposureEv=${result.best.exposureEv} " +
+                "Viewfinder brightness matching result: " +
+                    "exposureEv=${result.best.exposureEv} " +
                     "matchedCells=${result.best.matchedCellCount}/${result.best.validCellCount} " +
                     "matchRate=${result.best.matchRate} " +
                     "meanAbsoluteLog2Ratio=${result.best.meanAbsoluteLog2Ratio} " +

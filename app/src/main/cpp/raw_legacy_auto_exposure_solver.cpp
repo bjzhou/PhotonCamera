@@ -1016,7 +1016,9 @@ public:
         }
         const float safe_minimum = std::clamp(minimum_ev, kMinExposureEv, kMaxExposureEv);
         const float safe_maximum = std::clamp(maximum_ev, kMinExposureEv, kMaxExposureEv);
-        if (safe_minimum > safe_maximum || safe_minimum > 0.0f || safe_maximum < 0.0f) {
+        // A RAW highlight guard may require the complete search range to stay below zero. The
+        // first candidate is still issued from zero and clamped into the configured interval.
+        if (safe_minimum > safe_maximum) {
             return false;
         }
         minimum_exposure_ev_ = safe_minimum;

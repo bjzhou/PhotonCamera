@@ -4549,8 +4549,10 @@ object GalleryManager {
             useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
         )
         val generatePhotonPgtm = exposureMode.usesPhotonHdr
-        val legacyMeteringEnabled = exposureMode.usesLegacyAutoExposure &&
-            kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f
+        val scalarViewfinderMatchingEnabled =
+            exposureMode == RawAdaptiveExposureMode.OFF ||
+                (exposureMode.usesLegacyAutoExposure &&
+                    kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f)
         val blackBorderDefaultCrop =
             RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
                 width = width,
@@ -4566,7 +4568,7 @@ object GalleryManager {
             metadataDefaultCrop = blackBorderDefaultCrop ?: defaultCrop,
         ).takeUnless { it.hasSameBounds(Rect(0, 0, width, height)) }
         val captureProfileRequired = generatePhotonPgtm ||
-            (legacyMeteringEnabled && capturePreviewThumbnail != null)
+            (scalarViewfinderMatchingEnabled && capturePreviewThumbnail != null)
         val captureProfilePreparer = if (captureProfileRequired) {
             RawDngCaptureProfilePreparer { input ->
                 RawCaptureProfileCoordinator.prepareCaptureProfile(
@@ -4602,7 +4604,7 @@ object GalleryManager {
             "RAW_ADAPTIVE_EXPOSURE stage=DNG_PREPARE mode=$exposureMode " +
                 "curve=DEFAULT blackBorderDefaultCrop=$blackBorderDefaultCrop " +
                 "photonPgtm=$generatePhotonPgtm processingBounds=$statsBounds " +
-                "legacyMetering=$legacyMeteringEnabled " +
+                "scalarViewfinderMatching=$scalarViewfinderMatchingEnabled " +
                 "capturePreview=${capturePreviewThumbnail != null} " +
                 "portraitMask=${capturePortraitMask != null} " +
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"

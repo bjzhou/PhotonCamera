@@ -800,7 +800,7 @@ object RawProcessor {
                     .fromCameraCharacteristics(characteristics),
             )
         )
-        val legacyExposureOffsetEv = captureProfile?.exposureOffsetEv
+        val viewfinderExposureOffsetEv = captureProfile?.exposureOffsetEv
             ?.takeIf { it.isFinite() }
             ?.coerceIn(
                 com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MIN_EV,
@@ -808,7 +808,7 @@ object RawProcessor {
             )
         val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
             sourceBaselineEv = sourceBaselineExposureEv,
-            legacyExposureOffsetEv = legacyExposureOffsetEv,
+            legacyExposureOffsetEv = viewfinderExposureOffsetEv,
         )
         val profileRequired = options.generatePhotonPgtm
         if (profileRequired && captureProfile?.profileGainTableMap == null) {
@@ -838,12 +838,16 @@ object RawProcessor {
                 TAG,
                 "RAW_SCENE_EXPOSURE stage=SHARED_PROFILE_READY " +
                     "enabled=${options.captureProfilePreparer != null} " +
-                    "legacyAutoExposure=${legacyExposureOffsetEv != null} " +
+                    "viewfinderBrightnessMatch=${viewfinderExposureOffsetEv != null} " +
                     "sourceBaselineEv=$sourceBaselineExposureEv " +
                     "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
-                    "legacyExposureOffsetEv=$legacyExposureOffsetEv " +
+                    "viewfinderExposureOffsetEv=$viewfinderExposureOffsetEv " +
                     "baselineExposureSource=" +
-                    "${if (legacyExposureOffsetEv != null) "SOURCE_PLUS_LEGACY_AE" else "SOURCE_METADATA"} " +
+                    "${if (viewfinderExposureOffsetEv != null) {
+                        "SOURCE_PLUS_VIEWFINDER_MATCH"
+                    } else {
+                        "SOURCE_METADATA"
+                    }} " +
                     "finalBaselineEv=${finalProfile.baselineExposureEv} " +
                     "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +

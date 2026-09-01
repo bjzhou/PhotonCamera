@@ -107,7 +107,7 @@ data class GpuDemosaicedRawSource(
 )
 
 data class RawDngCaptureProfileResult(
-    /** Legacy auto-exposure EV relative to the source baseline; null for Photon HDR. */
+    /** Scalar viewfinder-match EV relative to the source baseline; null for Photon HDR. */
     val exposureOffsetEv: Float?,
     /** Photon HDR long/short TET ratio; always null for classic auto exposure. */
     val hdrRatio: Float?,

@@ -37,11 +37,14 @@ internal object RawCaptureProfileCoordinator {
         } else {
             null
         }
-        val legacyRequest = if (mode.usesLegacyAutoExposure || mode.usesPhotonHdr) {
-            RawLegacyAutoExposureMatcher.createRequest(capturePreviewThumbnail)
-        } else {
-            null
-        }
+        val legacyRequest = RawLegacyAutoExposureMatcher.createRequest(
+            capturePreviewThumbnail = capturePreviewThumbnail,
+            highlightClippingConstraint = if (mode == RawAdaptiveExposureMode.OFF) {
+                RawLegacyHighlightClippingConstraint.HDR_PLUS_DISABLED
+            } else {
+                null
+            },
+        )
         return renderer.prepareCaptureProfile(
             context = context,
             input = input,
