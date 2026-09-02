@@ -5,6 +5,10 @@ enable_language(ASM)
 set(ADOBE_DNG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/dng_sdk/source)
 set(ADOBE_XMP_STUB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/XMPStub/include)
 set(ULTRAHDR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr)
+set(
+    MGC_EIS_RECONSTRUCTION_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../research/mgc_eis_reconstruction"
+)
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
 
 set(
@@ -158,6 +162,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo)
 include_directories(${ULTRAHDR_SOURCE_DIR})
 include_directories(${ADOBE_DNG_SOURCE_DIR})
 include_directories(${ADOBE_XMP_STUB_DIR})
+include_directories(${MGC_EIS_RECONSTRUCTION_DIR})
 
 # 启用 OpenMP
 find_package(OpenMP REQUIRED)
@@ -232,6 +237,12 @@ add_library(my-native-lib SHARED
     dng_hdrnet_pgtm_jni.cpp
     raw_signal_stats_jni.cpp
     mgc_strength_map_scaler.cpp
+    mgc_eis_reconstruction_jni.cpp
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_eis_reconstruction.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_engine.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_gyro.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_lookahead.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_projection.cpp"
     jpeg_export_jni.cpp
     jpeg_r_encoder.cpp
     yuv_utils.cpp
@@ -270,6 +281,20 @@ set_source_files_properties(
 # reliably reject non-finite values. Keep both independent of target-wide fast-math.
 set_source_files_properties(
     raw_signal_stats_jni.cpp
+    PROPERTIES
+    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
+)
+
+# The reconstructed MGC type-18 state machine relies on ordered quaternion,
+# crop-feasibility and homography arithmetic. It also rejects non-finite JNI
+# output. Keep that path independent of the target-wide fast-math setting.
+set_source_files_properties(
+    mgc_eis_reconstruction_jni.cpp
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_eis_reconstruction.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_engine.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_gyro.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_lookahead.cpp"
+    "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_projection.cpp"
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

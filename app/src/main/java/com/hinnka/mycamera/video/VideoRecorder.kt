@@ -17,7 +17,11 @@ import android.view.Surface
 import androidx.core.app.ActivityCompat
 import com.hinnka.mycamera.lut.RealtimeVideoRenderer
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
+import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +110,8 @@ class VideoRecorder(
     private var requestedCameraInputSize = Size(1920, 1080)
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
     private var requestedEnhancedStabilization = false
+    private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
+    private var requestedEnhancedStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
     private var cameraInputStarted = false
     private var hlgCameraInput = false
     private var firstVideoPresentationTimeUs = Long.MIN_VALUE
@@ -129,7 +135,7 @@ class VideoRecorder(
     private var activeAudioConfig = monoAudioConfig()
     private var lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
     private var lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
-    private var pendingRealtimeFrame = false
+    private var pendingRealtimeFrameCount = 0
     private var totalPausedDurationUs: Long = 0L
     private var pauseStartTimeUs: Long = 0L
     private var renderLoopRunning = false
@@ -165,6 +171,8 @@ class VideoRecorder(
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
         enhancedStabilization: Boolean = false,
+        enhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
+        enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
         recordingTreeUri: String? = null,
         onError: ((String) -> Unit)? = null,
@@ -186,6 +194,10 @@ class VideoRecorder(
         hlgCameraInput = hlgInput
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedEnhancedStabilization = enhancedStabilization
+        requestedEnhancedStabilizationStrength =
+            normalizeStabilizationStrength(enhancedStabilizationStrength)
+        requestedEnhancedStabilizationLookahead =
+            normalizeStabilizationLookahead(enhancedStabilizationLookahead)
         requestedRecordingPath = recordingPath
         requestedRecordingTreeUri = recordingTreeUri?.takeIf { it.isNotBlank() }
         outputDateTakenMs = System.currentTimeMillis()
@@ -226,7 +238,8 @@ class VideoRecorder(
                 "output=${requestedOutputSize.width}x${requestedOutputSize.height} @ " +
                 "${requestedFps}fps, orientationHint=$requestedOrientationHintDegrees, " +
                 "enhancedStabilization=$requestedEnhancedStabilization, " +
-                "input=dedicated-surface-texture, " +
+                "stabilizationStrength=$requestedEnhancedStabilizationStrength, " +
+                "input=${if (requestedEnhancedStabilization) "timestamped-yuv" else "dedicated-surface-texture"}, " +
                 "path=${requestedRecordingPath.name}, uri=${requestedRecordingTreeUri?.take(48)}"
         )
         return true
@@ -235,6 +248,7 @@ class VideoRecorder(
     fun onCameraInputStarted(): Boolean {
         if (!isRecording || stopRequested || cameraInputStarted) return false
         cameraInputStarted = true
+        renderer?.resumeStabilization()
         if (audioEnabled) {
             startAudioLoop()
         }
@@ -252,6 +266,7 @@ class VideoRecorder(
                 audioRecordJob?.join()
                 withContext(renderDispatcher) {
                     drainRealtimeFrames(allowWhenStopping = true)
+                    renderer?.pauseStabilization()
                     signalVideoEndOfInputStream()
                 }
                 queueAudioEndOfStream()
@@ -321,6 +336,8 @@ class VideoRecorder(
             encoderColorConfig = encoderColorConfig,
             stabilizationCoordinator = stabilizationCoordinator,
             enhancedStabilizationEnabled = requestedEnhancedStabilization,
+            enhancedStabilizationStrength = requestedEnhancedStabilizationStrength,
+            enhancedStabilizationLookahead = requestedEnhancedStabilizationLookahead,
         )
         renderer = realtimeRenderer
         realtimeRenderer.initialize(
@@ -337,10 +354,16 @@ class VideoRecorder(
         if (!isRecording || stopRequested || isPaused) return
         statsIncomingFrames += 1
         synchronized(realtimeFrameLock) {
-            if (pendingRealtimeFrame) {
+            if (pendingRealtimeFrameCount > 0) {
                 statsReplacedPendingFrames += 1
             }
-            pendingRealtimeFrame = true
+            pendingRealtimeFrameCount = if (requestedEnhancedStabilization) {
+                pendingRealtimeFrameCount + 1
+            } else {
+                // SurfaceTexture itself is latest-only; multiple callbacks before the GL
+                // consumer runs therefore represent one materializable OES frame.
+                1
+            }
             if (!renderLoopRunning) {
                 renderLoopRunning = true
                 scope.launch(renderDispatcher) {
@@ -639,11 +662,11 @@ class VideoRecorder(
     private fun drainRealtimeFrames(allowWhenStopping: Boolean) {
         while (true) {
             val hasFrame = synchronized(realtimeFrameLock) {
-                if (!pendingRealtimeFrame) {
+                if (pendingRealtimeFrameCount <= 0) {
                     renderLoopRunning = false
                     return
                 }
-                pendingRealtimeFrame = false
+                pendingRealtimeFrameCount -= 1
                 true
             }
 
@@ -1107,7 +1130,7 @@ class VideoRecorder(
             lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
         }
         synchronized(realtimeFrameLock) {
-            pendingRealtimeFrame = false
+            pendingRealtimeFrameCount = 0
             renderLoopRunning = false
         }
     }

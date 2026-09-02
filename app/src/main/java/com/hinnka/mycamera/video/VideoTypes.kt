@@ -5,6 +5,8 @@ import android.os.Environment
 import android.util.Size
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -124,6 +126,8 @@ data class VideoConfig(
     val recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
     val recordingTreeUri: String? = null,
     val stabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
+    val enhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
+    val enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     val torchEnabled: Boolean = false,
     val lensLockEnabled: Boolean = false,
     val whiteBalanceLockEnabled: Boolean = false

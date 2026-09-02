@@ -41,6 +41,8 @@ import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
+import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -275,6 +277,7 @@ class Camera2Controller(private val context: Context) {
     private var previewSurface: Surface? = null
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var imageReader: ImageReader? = null
+    private var stabilizationImageReader: ImageReader? = null
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto)
     private var nrLevel = 5
@@ -689,7 +692,11 @@ class Camera2Controller(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
 
-            realtimeStabilizationCoordinator.submitCaptureResult(result)
+            realtimeStabilizationCoordinator.submitCaptureResult(
+                result = result,
+                request = request,
+                outputPhysicalCameraId = activeOutputPhysicalCameraId,
+            )
 
             val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
             if (timestamp != null && isRawCaptureReader(imageReader)) {
@@ -1692,6 +1699,8 @@ class Camera2Controller(private val context: Context) {
         if (closeImageReader) {
             safeCloseImageReader(imageReader)
             imageReader = null
+            safeCloseImageReader(stabilizationImageReader)
+            stabilizationImageReader = null
         }
     }
 
@@ -2588,6 +2597,7 @@ class Camera2Controller(private val context: Context) {
         val surface = previewSurface ?: return
         val captureMode = _state.value.captureMode
         val reader = imageReader
+        val stabilizationReader = ensureStabilizationImageReader()
         val videoSurface = if (
             captureMode == CaptureMode.VIDEO &&
             _state.value.videoRecordingState.shouldAttachCameraInput()
@@ -2608,6 +2618,7 @@ class Camera2Controller(private val context: Context) {
         try {
             previewRequestBuilder = device.createCaptureRequest(templateType).apply {
                 addTarget(surface)
+                stabilizationReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
@@ -2615,6 +2626,7 @@ class Camera2Controller(private val context: Context) {
             }
 
             val surfaces = mutableListOf(surface)
+            stabilizationReader?.surface?.let(surfaces::add)
             videoSurface?.let(surfaces::add)
             if (captureMode == CaptureMode.PHOTO) {
                 val captureReader = reader ?: return
@@ -2622,7 +2634,10 @@ class Camera2Controller(private val context: Context) {
             }
 
             if (captureMode == CaptureMode.VIDEO) {
-                val useHlgCapture = _state.value.useHlg10 && activeOutputPhysicalCameraId == null && !forceStandardSession
+                val useHlgCapture = _state.value.useHlg10 &&
+                    stabilizationReader == null &&
+                    activeOutputPhysicalCameraId == null &&
+                    !forceStandardSession
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
                     buildList {
@@ -2633,6 +2648,15 @@ class Camera2Controller(private val context: Context) {
                                 outputType = CameraOutputType.PREVIEW
                             )
                         )
+                        stabilizationReader?.surface?.let { eisSurface ->
+                            add(
+                                createOutputConfiguration(
+                                    surface = eisSurface,
+                                    useHlgCapture = false,
+                                    outputType = CameraOutputType.PREVIEW,
+                                )
+                            )
+                        }
                         videoSurface?.let { encoderSurface ->
                             add(
                                 createOutputConfiguration(
@@ -2656,6 +2680,7 @@ class Camera2Controller(private val context: Context) {
                             } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
                                 _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
                             }
+                            closeUnusedStabilizationImageReader(stabilizationReader)
                             onSessionConfigured(session, openGeneration, sessionGeneration)
                         }
 
@@ -2701,6 +2726,7 @@ class Camera2Controller(private val context: Context) {
 
             // Android 9+ 使用 SessionConfiguration
             val useHlgCapture = _state.value.useHlg10 &&
+                    stabilizationReader == null &&
                     activeOutputPhysicalCameraId == null &&
                     !isRawCaptureReader(reader) &&
                     !forceStandardSession
@@ -2719,6 +2745,15 @@ class Camera2Controller(private val context: Context) {
                         outputType = CameraOutputType.PREVIEW
                     )
                 )
+                stabilizationReader?.surface?.let { eisSurface ->
+                    add(
+                        createOutputConfiguration(
+                            surface = eisSurface,
+                            useHlgCapture = false,
+                            outputType = CameraOutputType.PREVIEW,
+                        )
+                    )
+                }
                 reader?.surface?.let { captureSurface ->
                     add(
                         createOutputConfiguration(
@@ -2749,6 +2784,7 @@ class Camera2Controller(private val context: Context) {
                         } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
                             _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
                         }
+                        closeUnusedStabilizationImageReader(stabilizationReader)
                         onSessionConfigured(session, openGeneration, sessionGeneration)
                     }
 
@@ -2837,6 +2873,53 @@ class Camera2Controller(private val context: Context) {
             }
             handlePreviewSessionFailure("create session exception", openGeneration, e)
         }
+    }
+
+    private fun ensureStabilizationImageReader(): ImageReader? {
+        val state = _state.value
+        val enabled = when (state.captureMode) {
+            CaptureMode.PHOTO -> state.photoPreviewStabilizationEnabled &&
+                realtimeStabilizationCoordinator.isCurrentCameraSupported
+            CaptureMode.VIDEO -> shouldUseVideoEnhancedStabilization()
+        }
+        if (!enabled) return null
+        val size = state.currentPreviewSize
+        if (size.width <= 0 || size.height <= 0) return null
+        stabilizationImageReader?.let { existing ->
+            if (existing.width == size.width && existing.height == size.height &&
+                existing.imageFormat == ImageFormat.YUV_420_888
+            ) {
+                return existing
+            }
+            safeCloseImageReader(existing)
+            stabilizationImageReader = null
+        }
+        return ImageReader.newInstance(
+            size.width,
+            size.height,
+            ImageFormat.YUV_420_888,
+            RealtimeStabilizationCoordinator.STABILIZATION_IMAGE_READER_MAX_IMAGES,
+        ).also { reader ->
+            reader.setOnImageAvailableListener({ source ->
+                while (true) {
+                    val image = try {
+                        source.acquireNextImage()
+                    } catch (error: IllegalStateException) {
+                        PLog.e(TAG, "Cannot acquire MGC YUV image", error)
+                        null
+                    } ?: break
+                    realtimeStabilizationCoordinator.submitStabilizationImage(image)
+                }
+            }, cameraHandler)
+            stabilizationImageReader = reader
+            PLog.i(TAG, "MGC YUV input configured: ${size.width}x${size.height}")
+        }
+    }
+
+    private fun closeUnusedStabilizationImageReader(activeReader: ImageReader?) {
+        if (activeReader != null) return
+        safeCloseImageReader(stabilizationImageReader)
+        stabilizationImageReader = null
     }
 
     private fun retryPreviewSessionWithoutVendorSessionParameters(
@@ -3146,6 +3229,7 @@ class Camera2Controller(private val context: Context) {
         return when (format) {
             NO_IMAGE_READER_FORMAT -> "NO_IMAGE_READER"
             ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
+            ImageFormat.PRIVATE -> "PRIVATE"
             ImageFormat.YCBCR_P010 -> "YCBCR_P010"
             ImageFormat.YUV_420_888 -> "YUV_420_888"
             ImageFormat.JPEG -> "JPEG"
@@ -3232,7 +3316,7 @@ class Camera2Controller(private val context: Context) {
         applyFlashSettings(builder, currentState, isCapture, useStillFlashTrigger)
 
         // 4. 变焦设置
-        applyZoomSettings(builder, currentState)
+        applyZoomSettings(builder, currentState, isCapture)
 
         // 5. 对焦设置
         applyFocusSettings(builder, currentState)
@@ -3246,7 +3330,7 @@ class Camera2Controller(private val context: Context) {
         }
 
         // 8. 防抖设置
-        applyStabilizationSettings(builder, currentState)
+        applyStabilizationSettings(builder, currentState, isCapture)
 
         if (!isRawCapture) {
             // 9. 静态拍照后处理质量设置
@@ -4246,7 +4330,11 @@ class Camera2Controller(private val context: Context) {
     /**
      * 应用变焦设置
      */
-    private fun applyZoomSettings(builder: CaptureRequest.Builder, state: CameraState) {
+    private fun applyZoomSettings(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        isCapture: Boolean = false,
+    ) {
         val openCameraId = getActiveOpenCameraId()
         if (openCameraId.isEmpty()) return
 
@@ -4256,7 +4344,8 @@ class Camera2Controller(private val context: Context) {
             val zoomRatioRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             val minZoom = zoomRatioRange?.lower ?: 1f
             val maxSupportedZoom = zoomRatioRange?.upper ?: maxZoom
-            val zoomRatio = state.zoomRatio.coerceIn(minZoom, maxSupportedZoom)
+            val userZoomRatio = state.zoomRatio.coerceIn(minZoom, maxSupportedZoom)
+            val zoomRatio = userZoomRatio
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
 
             applyZoomRequestSettings(
@@ -4339,9 +4428,14 @@ class Camera2Controller(private val context: Context) {
     /**
      * 应用防抖设置
      *
-     * 视频模式按用户选项启用 EIS/OIS；EIS 优先使用预览防抖以匹配当前 GL 录制链路。
+     * 视频模式按用户选项启用 EIS/OIS。算法防抖与 MGC 请求链一致，关闭 Camera2
+     * 硬件 EIS 和 HAL OIS，由同一套陀螺仪滚快门网格同时处理预览与录制。
      */
-    private fun applyStabilizationSettings(builder: CaptureRequest.Builder, state: CameraState) {
+    private fun applyStabilizationSettings(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        isCapture: Boolean = false,
+    ) {
         try {
             if (state.captureMode == CaptureMode.VIDEO) {
                 val mode = state.videoConfig.stabilizationMode
@@ -4369,18 +4463,36 @@ class Camera2Controller(private val context: Context) {
                         }
                     )
                 }
+                applyOisDataMode(builder, enhancedSelected)
                 return
             }
 
             if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
                 builder.set(
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                    if (state.photoPreviewStabilizationEnabled && !isCapture) {
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                    } else {
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                    }
                 )
             }
+            applyOisDataMode(builder, state.photoPreviewStabilizationEnabled && !isCapture)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply stabilization settings", e)
         }
+    }
+
+    private fun applyOisDataMode(builder: CaptureRequest.Builder, enabled: Boolean) {
+        if (!isCaptureRequestKeyAvailable(CaptureRequest.STATISTICS_OIS_DATA_MODE.name)) return
+        builder.set(
+            CaptureRequest.STATISTICS_OIS_DATA_MODE,
+            if (enabled) {
+                CaptureRequest.STATISTICS_OIS_DATA_MODE_ON
+            } else {
+                CaptureRequest.STATISTICS_OIS_DATA_MODE_OFF
+            },
+        )
     }
 
     private fun resolveVideoStabilizationRequestMode(mode: VideoStabilizationMode): Int? {
@@ -6149,18 +6261,9 @@ class Camera2Controller(private val context: Context) {
 
     fun setVideoFps(fps: VideoFpsPreset) {
         val currentConfig = _state.value.videoConfig
-        val stabilizationMode = if (
-            currentConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
-            fps != VideoFpsPreset.FPS_30
-        ) {
-            preferredHardwareVideoStabilizationMode()
-        } else {
-            currentConfig.stabilizationMode
-        }
         _state.value = _state.value.copy(
             videoConfig = currentConfig.copy(
                 fps = fps,
-                stabilizationMode = stabilizationMode
             )
         )
         refreshVideoCapabilities()
@@ -6193,16 +6296,6 @@ class Camera2Controller(private val context: Context) {
         val previousConfig = _state.value.videoConfig
         _state.value = _state.value.copy(
             videoConfig = previousConfig.copy(
-                resolution = if (mode == VideoStabilizationMode.ENHANCED) {
-                    VideoResolutionPreset.FHD_1080P
-                } else {
-                    previousConfig.resolution
-                },
-                fps = if (mode == VideoStabilizationMode.ENHANCED) {
-                    VideoFpsPreset.FPS_30
-                } else {
-                    previousConfig.fps
-                },
                 stabilizationMode = mode,
             )
         )
@@ -6242,8 +6335,35 @@ class Camera2Controller(private val context: Context) {
         videoRecorder.setPreferredAudioInputId(normalizedAudioInputId)
     }
 
+    fun setVideoEnhancedStabilizationStrength(strength: Float) {
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(
+                enhancedStabilizationStrength = normalizeStabilizationStrength(strength)
+            )
+        )
+    }
+
+    fun setVideoEnhancedStabilizationLookahead(lookahead: Int) {
+        _state.value = _state.value.copy(
+            videoConfig = _state.value.videoConfig.copy(
+                enhancedStabilizationLookahead = normalizeStabilizationLookahead(lookahead)
+            )
+        )
+    }
+
     fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
+        if (_state.value.photoPreviewStabilizationEnabled == enabled) return
         _state.value = _state.value.copy(photoPreviewStabilizationEnabled = enabled)
+        if (_state.value.captureMode == CaptureMode.PHOTO &&
+            cameraDevice != null && previewSurface != null
+        ) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+            return
+        }
+        previewRequestBuilder?.apply {
+            applyBaseCameraSettings(this, isCapture = false)
+            updatePreview()
+        }
     }
 
     fun setVideoRecordingPath(recordingPath: VideoRecordingPath, recordingTreeUri: String? = null) {
@@ -6336,10 +6456,14 @@ class Camera2Controller(private val context: Context) {
                 hasActiveLut = _state.value.lutEnabled && _state.value.currentLutName != null
             ),
             colorLayers = colorLayers,
-            hlgInput = _state.value.useHlg10,
+            hlgInput = _state.value.useHlg10 && !useEnhancedStabilization,
             orientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees),
             flipEncodedFrame = shouldFlipEncodedFrame,
             enhancedStabilization = useEnhancedStabilization,
+            enhancedStabilizationStrength =
+                _state.value.videoConfig.enhancedStabilizationStrength,
+            enhancedStabilizationLookahead =
+                _state.value.videoConfig.enhancedStabilizationLookahead,
             recordingPath = _state.value.videoConfig.recordingPath,
             recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
             onError = { message ->
@@ -6377,7 +6501,6 @@ class Camera2Controller(private val context: Context) {
         return state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
             state.captureMode == CaptureMode.VIDEO &&
             state.videoConfig.resolution == VideoResolutionPreset.FHD_1080P &&
-            state.videoConfig.fps == VideoFpsPreset.FPS_30 &&
             !isCurrentCameraFrontFacing() &&
             realtimeStabilizationCoordinator.isCurrentCameraSupported
     }
@@ -6456,6 +6579,9 @@ class Camera2Controller(private val context: Context) {
         return try {
             val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(previewTarget)
+                stabilizationImageReader?.surface
+                    ?.takeIf { shouldUseVideoEnhancedStabilization() }
+                    ?.let(::addTarget)
                 encoderTarget?.takeIf { includeVideoSurface }?.let(::addTarget)
                 applyBaseCameraSettings(this, isCapture = false)
             }

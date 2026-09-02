@@ -140,6 +140,12 @@ import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
+import com.hinnka.mycamera.stabilization.MIN_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.MAX_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
+import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -451,6 +457,12 @@ fun SettingsScreen(
     var rawMaxChromaNoiseReductionUi by remember { mutableStateOf(rawMaxChromaNoiseReduction) }
     var windowScreenBrightnessUi by remember { mutableStateOf(windowScreenBrightness ?: 1f) }
     var windowScreenBrightnessEnabled by remember { mutableStateOf(windowScreenBrightness != null) }
+    var videoEnhancedStabilizationStrengthUi by remember {
+        mutableStateOf(userPreferences.videoEnhancedStabilizationStrength)
+    }
+    var videoEnhancedStabilizationLookaheadUi by remember {
+        mutableStateOf(userPreferences.videoEnhancedStabilizationLookahead)
+    }
     var showAspectRatioDialog by remember { mutableStateOf(false) }
     var showAddIszLensDialog by remember { mutableStateOf(false) }
     var showCustomVendorKeysDialog by remember { mutableStateOf(false) }
@@ -541,6 +553,16 @@ fun SettingsScreen(
         windowScreenBrightness?.let {
             windowScreenBrightnessUi = it
         }
+    }
+
+    LaunchedEffect(userPreferences.videoEnhancedStabilizationStrength) {
+        videoEnhancedStabilizationStrengthUi =
+            userPreferences.videoEnhancedStabilizationStrength
+    }
+
+    LaunchedEffect(userPreferences.videoEnhancedStabilizationLookahead) {
+        videoEnhancedStabilizationLookaheadUi =
+            userPreferences.videoEnhancedStabilizationLookahead
     }
 
     fun commitRawSliderValues() {
@@ -1591,6 +1613,87 @@ fun SettingsScreen(
                                     ?.first
                                     ?.let(viewModel::setVideoStabilizationMode)
                             },
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        val stabilizationStrengthValueFormat = stringResource(
+                            R.string.settings_video_stabilization_strength_value
+                        )
+                        SliderSettingItem(
+                            title = stringResource(
+                                R.string.settings_video_stabilization_strength
+                            ),
+                            description = stringResource(
+                                R.string.settings_video_stabilization_strength_description
+                            ),
+                            value = videoEnhancedStabilizationStrengthUi,
+                            valueRange = 0f..1f,
+                            resetValue = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
+                            onResetValue = { strength ->
+                                videoEnhancedStabilizationStrengthUi = strength
+                                viewModel.setVideoEnhancedStabilizationStrength(strength)
+                            },
+                            onValueChange = { strength ->
+                                videoEnhancedStabilizationStrengthUi =
+                                    normalizeStabilizationStrength(strength)
+                            },
+                            onValueChangeFinished = {
+                                viewModel.setVideoEnhancedStabilizationStrength(
+                                    videoEnhancedStabilizationStrengthUi
+                                )
+                            },
+                            valueTextFormatter = { strength ->
+                                String.format(
+                                    stabilizationStrengthValueFormat,
+                                    (strength * 100f).roundToInt()
+                                )
+                            },
+                            enabled = viewModel.isAlgorithmicStabilizationSupported,
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        val stabilizationLookaheadValueFormat = stringResource(
+                            R.string.settings_video_stabilization_lookahead_value
+                        )
+                        SliderSettingItem(
+                            title = stringResource(
+                                R.string.settings_video_stabilization_lookahead
+                            ),
+                            description = stringResource(
+                                R.string.settings_video_stabilization_lookahead_description
+                            ),
+                            value = videoEnhancedStabilizationLookaheadUi.toFloat(),
+                            valueRange = MIN_VIDEO_STABILIZATION_LOOKAHEAD.toFloat()..MAX_VIDEO_STABILIZATION_LOOKAHEAD.toFloat(),
+                            resetValue = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD.toFloat(),
+                            onResetValue = { lookahead ->
+                                val intLookahead = lookahead.roundToInt()
+                                videoEnhancedStabilizationLookaheadUi = intLookahead
+                                viewModel.setVideoEnhancedStabilizationLookahead(intLookahead)
+                            },
+                            onValueChange = { lookahead ->
+                                videoEnhancedStabilizationLookaheadUi =
+                                    normalizeStabilizationLookahead(lookahead.roundToInt())
+                            },
+                            onValueChangeFinished = {
+                                viewModel.setVideoEnhancedStabilizationLookahead(
+                                    videoEnhancedStabilizationLookaheadUi
+                                )
+                            },
+                            valueTextFormatter = { lookahead ->
+                                String.format(
+                                    stabilizationLookaheadValueFormat,
+                                    lookahead.roundToInt()
+                                )
+                            },
+                            enabled = viewModel.isAlgorithmicStabilizationSupported,
                         )
 
                         HorizontalDivider(

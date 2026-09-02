@@ -14,10 +14,11 @@ import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
-import com.hinnka.mycamera.stabilization.AlgorithmicStabilizationTransform
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
-import com.hinnka.mycamera.stabilization.STABILIZATION_ROW_COUNT
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
+import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
+import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
 import java.nio.ByteBuffer
@@ -68,6 +69,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private val colorProgramCache = PreviewColorProgramCache()
+    private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
+    private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
 
     private data class PreviewCaptureRequest(
         val width: Int,
@@ -228,6 +231,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     // SurfaceTexture 变换矩阵
     private val stMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
+    private val mgcEisPresentationTransform = MgcEisPresentationTransform()
 
     // MVP 变换矩阵（用于 center crop）
     private val mvpMatrix = FloatArray(16)
@@ -240,8 +244,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
     @Volatile
     private var stabilizationSessionStarted = false
-    private var photoPreviewStabilizationEnabled = false
-    private var currentStabilizationTransform: AlgorithmicStabilizationTransform? = null
+    private var previewStabilizationUseCase: StabilizationUseCase? = null
+    private var previewStabilizationStrength = 0f
+    private var currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
+    private var currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+    private var currentCameraTextureId = 0
+    private var currentCameraTextureMatrix: FloatArray = stMatrix
+    private var currentFrameTimestampNs = 0L
 
     // 标记 Surface 是否已创建（GL 上下文是否可用）
     private var surfaceReady = false
@@ -551,7 +560,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             setDefaultBufferSize(previewWidth, previewHeight)
             setOnFrameAvailableListener {
                 frameAvailable.set(true)
-                onRequestRender?.invoke()
+                if (previewStabilizationUseCase == null) {
+                    onRequestRender?.invoke()
+                }
             }
         }
 
@@ -584,7 +595,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      */
     private fun resetGlResourceState() {
         colorProgramCache.reset()
+        mgcEisHardwareBufferRenderer.resetAfterContextLoss()
+        mgcEisYuvRenderer.resetAfterContextLoss()
         cameraTextureId = 0
+        currentCameraTextureId = 0
+        currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
+        currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+        currentCameraTextureMatrix = stMatrix
+        currentFrameTimestampNs = 0L
         lutTextureId = 0
         baselineLutTextureId = 0
         basicToneTextures.reset()
@@ -829,7 +847,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
         treatSourceAsHlgInput: Boolean,
-        stabilizationTransform: AlgorithmicStabilizationTransform? = null,
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
@@ -849,7 +866,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
         GLES30.glUniformMatrix4fv(locations.uMVPMatrixLocation, 1, false, targetMvpMatrix, 0)
         GLES30.glUniformMatrix4fv(locations.uSTMatrixLocation, 1, false, sourceStMatrix, 0)
-        GLES30.glUniformMatrix4fv(locations.uSTMatrixFragLocation, 1, false, sourceStMatrix, 0)
         GLES30.glUniform4f(
             locations.uCropRectLocation,
             sourceCropRect[0],
@@ -857,21 +873,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             sourceCropRect[2],
             sourceCropRect[3]
         )
-        val stabilizationEnabled = stabilizationTransform != null &&
-            stabilizationTransform.rowHomographies.size == STABILIZATION_ROW_COUNT * 9
-        GLES30.glUniform1i(
-            locations.uStabilizationEnabledLocation,
-            if (stabilizationEnabled) 1 else 0,
-        )
-        if (stabilizationEnabled) {
-            GLES30.glUniformMatrix3fv(
-                locations.uStabilizationRowsLocation,
-                STABILIZATION_ROW_COUNT,
-                false,
-                stabilizationTransform.rowHomographies,
-                0,
-            )
-        }
         GLES30.glUniform1f(locations.uLutSizeLocation, lutSize)
         GLES30.glUniform1f(locations.uLutIntensityLocation, params.lutIntensity)
         GLES30.glUniform1i(locations.uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
@@ -910,7 +911,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
             GLES30.glUniform1f(
                 locations.uFilmGrainSeedLocation,
-                FilmGrainShaders.frameSeed(surfaceTexture?.timestamp ?: 0L)
+                FilmGrainShaders.frameSeed(currentFrameTimestampNs)
             )
             GLES30.glUniform1f(
                 locations.uFilmGrainPixelScaleLocation,
@@ -976,15 +977,31 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
         GLES30.glEnableVertexAttribArray(locations.aPositionLocation)
-        GLES30.glVertexAttribPointer(locations.aPositionLocation, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-
+        GLES30.glVertexAttribPointer(
+            locations.aPositionLocation,
+            POSITION_COMPONENT_COUNT,
+            GLES30.GL_FLOAT,
+            false,
+            0,
+            0,
+        )
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
         GLES30.glEnableVertexAttribArray(locations.aTexCoordLocation)
-        GLES30.glVertexAttribPointer(locations.aTexCoordLocation, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-
+        GLES30.glVertexAttribPointer(
+            locations.aTexCoordLocation,
+            TEXTURE_COORD_COMPONENT_COUNT,
+            GLES30.GL_FLOAT,
+            false,
+            0,
+            0,
+        )
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
-
+        GLES30.glDrawElements(
+            GLES30.GL_TRIANGLES,
+            Shaders.DRAW_ORDER.size,
+            GLES30.GL_UNSIGNED_SHORT,
+            0,
+        )
         GLES30.glDisableVertexAttribArray(locations.aPositionLocation)
         GLES30.glDisableVertexAttribArray(locations.aTexCoordLocation)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
@@ -1012,23 +1029,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (renderingPaused) return
         if (viewportWidth <= 0 || viewportHeight <= 0) return
 
-        // 更新 SurfaceTexture
-        var cameraFrameUpdated = false
-        if (frameAvailable.getAndSet(false)) {
-            try {
-                surfaceTexture?.updateTexImage()
-                surfaceTexture?.getTransformMatrix(stMatrix)
-                cameraFrameUpdated = true
-            } catch (e: RuntimeException) {
-                PLog.e(
-                    TAG,
-                    "updateTexImage failed, surfaceReady=$surfaceReady, cameraTextureId=$cameraTextureId",
-                    e
-                )
-            }
+        val delayedStabilizationEnabled = previewStabilizationUseCase != null
+        if (delayedStabilizationEnabled && !stabilizationSessionStarted) {
+            stabilizationSessionStarted = stabilizationSession?.start() == true
         }
+        val oesFrameUpdated = frameAvailable.getAndSet(false) && acquireLatestCameraFrame()
+        var cameraFrameUpdated = oesFrameUpdated
 
-        if (cameraFrameUpdated && photoPreviewStabilizationEnabled) {
+        if (delayedStabilizationEnabled) {
             val session = stabilizationSession
             if (stabilizationSessionStarted &&
                 stabilizationCoordinator?.isCurrentCameraSupported == false
@@ -1039,20 +1047,29 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             if (!stabilizationSessionStarted) {
                 stabilizationSessionStarted = session?.start() == true
             }
-            currentStabilizationTransform = if (stabilizationSessionStarted) {
-                surfaceTexture?.timestamp?.let { timestampNs ->
-                    session?.transformForFrame(
-                        timestampNs = timestampNs,
-                        baseCropRect = cropRect,
-                        textureAxesSwapped = isTextureTransformAxesSwapped(stMatrix),
-                        displayRotationDegrees = deviceRotation,
-                    )
+            if (stabilizationSessionStarted) {
+                val completedFrame = session?.dequeueFrame()
+                if (completedFrame != null) {
+                    renderMgcEisFrame(completedFrame)?.let { rendered ->
+                        currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
+                        currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
+                        currentCameraTextureId = rendered.textureId
+                        currentCameraTextureMatrix = mgcEisPresentationTransform.matrix
+                        currentFrameTimestampNs = rendered.timestampNs
+                        cameraFrameUpdated = true
+                    }
                 }
-            } else {
-                null
+                if ((session?.pendingResultCount() ?: 0) > 0) {
+                    onRequestRender?.invoke()
+                }
             }
-        } else if (!photoPreviewStabilizationEnabled) {
-            currentStabilizationTransform = null
+            if (currentCameraTextureSource != PreviewColorTextureSource.TEXTURE_2D) {
+                GLES30.glClearColor(0f, 0f, 0f, 1f)
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                return
+            }
+        } else if (cameraFrameUpdated) {
+            useCurrentOesFrame()
         }
 
         val liveRecorder = livePhotoRecorder
@@ -1110,7 +1127,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     params = creativeParams,
                     enableVideoLog = false,
                     treatSourceAsHlgInput = false,
-                ) ?: return
+                ) ?: run {
+                    return
+                }
                 drawColorPass(
                     locations = secondPassLocations,
                     targetFboId = stackFboId,
@@ -1165,7 +1184,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     width = currentWidth,
                     height = currentHeight,
                     amount = filmGrain,
-                    frameSeed = FilmGrainShaders.frameSeed(surfaceTexture?.timestamp ?: 0L),
+                    frameSeed = FilmGrainShaders.frameSeed(currentFrameTimestampNs),
                     drawQuad = ::drawSimpleQuad,
                 )
                 if (grainOutput != null) {
@@ -1196,7 +1215,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     transformMatrix = rotationMatrix,
                     width = targetWidth,
                     height = targetHeight,
-                    timestampNs = surfaceTexture?.timestamp ?: 0L,
+                    timestampNs = currentFrameTimestampNs,
                     lutConfig = currentLutConfig,
                     params = getCurrentRecipeParams(),
                     sharedContext = EGL14.eglGetCurrentContext(),
@@ -1280,6 +1299,34 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (cameraFrameUpdated && !firstFrameRendered) {
             firstFrameRendered = true
             onFirstFrameRendered?.invoke()
+        }
+    }
+
+    private fun useCurrentOesFrame() {
+        currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
+        currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+        currentCameraTextureId = cameraTextureId
+        currentCameraTextureMatrix = stMatrix
+        currentFrameTimestampNs = surfaceTexture?.timestamp ?: 0L
+    }
+
+    private fun acquireLatestCameraFrame(): Boolean {
+        return try {
+            surfaceTexture?.updateTexImage()
+            surfaceTexture?.getTransformMatrix(stMatrix)
+            if (previewStabilizationUseCase != null &&
+                !mgcEisPresentationTransform.captureFromOes(stMatrix)
+            ) {
+                PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
+            }
+            surfaceTexture != null
+        } catch (error: RuntimeException) {
+            PLog.e(
+                TAG,
+                "updateTexImage failed, surfaceReady=$surfaceReady, cameraTextureId=$cameraTextureId",
+                error,
+            )
+            false
         }
     }
 
@@ -1379,23 +1426,24 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             false
         }
         val enableVideoLog = true
+        val currentSourceIsHlg = isHlgInput && previewStabilizationUseCase == null
         val locations = getColorPassLocations(
-            textureSource = PreviewColorTextureSource.EXTERNAL_OES,
+            textureSource = currentCameraTextureSource,
             lutConfig = layerLutConfig,
             lutEnabled = layerLutEnabled,
             params = layerParams,
             enableVideoLog = enableVideoLog,
-            treatSourceAsHlgInput = isHlgInput,
+            treatSourceAsHlgInput = currentSourceIsHlg,
         ) ?: return
         drawColorPass(
             locations = locations,
             targetFboId = fboId,
             width = width,
             height = height,
-            sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
-            sourceTextureId = cameraTextureId,
-            sourceStMatrix = stMatrix,
-            sourceCropRect = currentStabilizationTransform?.cropRect ?: cropRect,
+            sourceTextureTarget = currentCameraTextureTarget,
+            sourceTextureId = currentCameraTextureId,
+            sourceStMatrix = currentCameraTextureMatrix,
+            sourceCropRect = cropRect,
             targetMvpMatrix = targetMvpMatrix,
             lutConfig = layerLutConfig,
             lutTextureId = layerLutTextureId,
@@ -1405,8 +1453,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
-            treatSourceAsHlgInput = isHlgInput,
-            stabilizationTransform = currentStabilizationTransform,
+            treatSourceAsHlgInput = currentSourceIsHlg,
         )
 
         // 测光和直方图（按需）
@@ -2566,9 +2613,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      * 设置预览尺寸
      */
     fun setPreviewSize(width: Int, height: Int) {
+        val sizeChanged = previewWidth != width || previewHeight != height
         previewWidth = width
         previewHeight = height
         surfaceTexture?.setDefaultBufferSize(width, height)
+        if (sizeChanged && previewStabilizationUseCase != null) {
+            mgcEisHardwareBufferRenderer.release()
+            mgcEisYuvRenderer.release()
+            recreatePreviewStabilizationSession()
+        }
         // 更新 MVP 矩阵以处理 center crop
         updateMVPMatrix()
         updateCaptureSize()
@@ -2576,21 +2629,72 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     fun setStabilizationCoordinator(coordinator: RealtimeStabilizationCoordinator?) {
         if (stabilizationCoordinator === coordinator) return
-        stabilizationSession?.stop()
         stabilizationCoordinator = coordinator
-        stabilizationSession = coordinator?.createSession(StabilizationUseCase.PHOTO_PREVIEW)
-        stabilizationSessionStarted = false
-        currentStabilizationTransform = null
+        recreatePreviewStabilizationSession()
     }
 
-    fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
-        if (photoPreviewStabilizationEnabled == enabled) return
-        photoPreviewStabilizationEnabled = enabled
-        PLog.i(TAG, "Photo preview stabilization enabled=$enabled")
-        if (!enabled) {
-            stabilizationSession?.stop()
-            stabilizationSessionStarted = false
-            currentStabilizationTransform = null
+    private var previewStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+
+    fun setPreviewStabilization(
+        useCase: StabilizationUseCase?,
+        strength: Float,
+        lookaheadFrames: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    ) {
+        val normalizedStrength = normalizeStabilizationStrength(strength)
+        val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
+        if (previewStabilizationUseCase == useCase &&
+            abs(previewStabilizationStrength - normalizedStrength) <= 0.0001f &&
+            previewStabilizationLookahead == normalizedLookahead
+        ) {
+            return
+        }
+        previewStabilizationUseCase = useCase
+        previewStabilizationStrength = normalizedStrength
+        previewStabilizationLookahead = normalizedLookahead
+        PLog.i(
+            TAG,
+            "Preview stabilization useCase=${useCase?.name ?: "OFF"}, " +
+                "strength=$normalizedStrength, lookahead=$normalizedLookahead"
+        )
+        recreatePreviewStabilizationSession()
+    }
+
+    private fun recreatePreviewStabilizationSession() {
+        stabilizationSession?.stop()
+        mgcEisPresentationTransform.reset()
+        stabilizationSession = previewStabilizationUseCase?.let { useCase ->
+            stabilizationCoordinator?.createSession(
+                useCase = useCase,
+                strength = previewStabilizationStrength,
+                frameWidth = previewWidth,
+                frameHeight = previewHeight,
+                lookaheadFrames = previewStabilizationLookahead,
+                onFrameAvailable = { onRequestRender?.invoke() },
+            )
+        }
+        stabilizationSessionStarted = stabilizationSession?.start() == true
+        currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
+        currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+        currentCameraTextureId = cameraTextureId
+        currentCameraTextureMatrix = stMatrix
+        currentFrameTimestampNs = 0L
+    }
+
+    /**
+     * Uses MGC's HardwareBuffer/EGLImage renderer whenever the camera buffer and current EGL
+     * context support it. The CPU YUV implementation is retained only for devices without that
+     * platform import path.
+     */
+    private fun renderMgcEisFrame(
+        frame: com.hinnka.mycamera.stabilization.StabilizationFrame,
+    ): MgcEisHardwareBufferRenderer.Frame? {
+        val hardwareRendered = mgcEisHardwareBufferRenderer.render(frame)
+        if (hardwareRendered != null) {
+            frame.image.close()
+            return hardwareRendered
+        }
+        return mgcEisYuvRenderer.render(frame)?.let { rendered ->
+            MgcEisHardwareBufferRenderer.Frame(rendered.timestampNs, rendered.textureId)
         }
     }
 
@@ -3137,7 +3241,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (paused) {
             stabilizationSession?.stop()
             stabilizationSessionStarted = false
-            currentStabilizationTransform = null
+            currentFrameTimestampNs = 0L
         }
     }
 
@@ -3287,7 +3391,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         stabilizationSession = null
         stabilizationCoordinator = null
         stabilizationSessionStarted = false
-        currentStabilizationTransform = null
+        currentFrameTimestampNs = 0L
         try {
             meteringExecutor.shutdown()
         } catch (e: Exception) {
@@ -3411,6 +3515,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stackTextureId = 0
         }
         basicToneTextures.release()
+        mgcEisHardwareBufferRenderer.release()
+        mgcEisYuvRenderer.release()
         // 删除程序
         colorProgramCache.release()
         GlUtils.deleteProgram(passthroughProgramId)
