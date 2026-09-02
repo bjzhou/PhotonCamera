@@ -2,11 +2,9 @@
 
 `PhotonCoreImagingTuning` 是 Photon 自己的核心 RAW 调校模型。它不模拟外部相机配置，也不把不同处理阶段的数值塞进一个扁平参数表。
 
-当前具体参数保持隐藏：RAWmax 设置只展示“RAWmax 画质调优”总开关。开关关闭时使用默认参数；开启后，
-没有显式值时按当前物理镜头的传感器面积解析，也可以由内部代码设置显式覆盖。最终值会在拍摄时固化进
-metadata，支持 RAW 重处理复现。面积模型及标定方法见
-[Photon 传感器面积核心调校](photon-sensor-size-tuning.md)，去雾阶段和原版调用证据见
-[Photon 独立去雾管线](photon-dehaze-pipeline.md)。
+当前拍摄与处理固定使用默认核心参数，不提供设置项、DataStore 覆盖或基于传感器面积的自动调优。
+旧版本已经写入 RAW metadata 的 Photon 参数仍可读取，以保持历史照片的重处理兼容性。去雾阶段和
+原版调用证据见 [Photon 独立去雾管线](photon-dehaze-pipeline.md)。
 
 ## 领域结构
 
@@ -92,10 +90,8 @@ PostDehazeColorMap 之后的线性工作 RGB 分支生成，并使用 SDR 的实
 
 ## 生命周期与持久化
 
-- DataStore 保存 RAWmax 画质调优开关和一个可选的 `photon_core_imaging_tuning` 显式覆盖。
-- capture custom properties 只写 `photonFusion*`、`photonDenoise*`、`photonSharpen*`、`photonDehaze*`。
-- 去雾隐藏键为 `photonDehazeEnabled`、`photonDehazeStrength`、
-  `photonDehazeDynamicHighlightStrength`；旧的预留键没有运行时语义且不迁移。
-- 去雾不提供 UI 或独立 DataStore 偏好；无显式隐藏值时静默启用，强度固定为 `1.0`。
-- 拍摄、融合结果、DNG metadata 和重新处理全程传递同一份 normalized tuning。
-- 不读取、不迁移旧参数键；开关关闭或开启后面积不可用时使用 `PhotonCoreImagingTuning.DEFAULT`。
+- 新拍摄不写入核心参数覆盖，融合与 RAW 处理使用 `PhotonCoreImagingTuning.DEFAULT`。
+- 不提供 UI、DataStore 偏好或基于物理传感器尺寸的自动模型。
+- 历史 metadata 中已有的 `photonFusion*`、`photonDenoise*` 和 `photonDehaze*` 参数仍可读取，
+  仅用于旧照片重处理复现。
+- 去雾不提供 UI 或独立 DataStore 偏好；没有历史覆盖值时使用默认强度。

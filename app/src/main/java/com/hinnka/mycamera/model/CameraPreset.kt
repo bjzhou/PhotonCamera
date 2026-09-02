@@ -29,20 +29,15 @@ data class CameraPreset(
     val rawHncsRenderIntent: String = HncsRenderIntent.Standard.assetValue,
     val rawHncsFilmCurveMode: String = HncsFilmCurveMode.Standard.persistedValue,
     val rawRenderingEngine: String = RawRenderingEngine.AdobeCurve.name,
-    val rawSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
     val rawMaxSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
-    val rawNoiseReduction: Float = RawDenoiseDefaults.RAW_LUMA_STRENGTH,
-    val rawChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
     val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
     val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
     val rawExposureCompensation: Float = 0f,
-    val rawAutoExposure: Boolean = false,
     val rawHighlightsAdjustment: Float = 0f,
     val rawShadowsAdjustment: Float = 0f,
     val rawBlackPointCorrection: Float = 0f,
     val rawWhitePointCorrection: Float = 0f,
     val rawOppoMasterToneMap: Boolean = false,
-    val rawPhotonHdr: Boolean = true,
     val rawSpectralFilmStock: String? = null,
     val rawSpectralFilmPrint: String? = null,
     val rawDROMode: String = "OFF",
@@ -135,21 +130,16 @@ data class CameraPreset(
                 rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     rawHncsFilmCurveMode
                 ).persistedValue,
-                rawSharpening = RawSharpeningDefaults.normalize(rawSharpening),
                 rawMaxSharpening = RawSharpeningDefaults.normalize(rawMaxSharpening),
-                rawNoiseReduction = RawDenoiseDefaults.normalize(rawNoiseReduction),
-                rawChromaNoiseReduction = RawDenoiseDefaults.normalize(rawChromaNoiseReduction),
                 rawMaxNoiseReduction = RawDenoiseDefaults.normalize(rawMaxNoiseReduction),
                 rawMaxChromaNoiseReduction =
                     RawDenoiseDefaults.normalize(rawMaxChromaNoiseReduction),
                 rawExposureCompensation = rawExposureCompensation.coerceIn(-4f, 4f),
-                rawAutoExposure = rawAutoExposure && !rawPhotonHdr,
                 rawHighlightsAdjustment = rawHighlightsAdjustment.coerceIn(-1f, 1f),
                 rawShadowsAdjustment = rawShadowsAdjustment.coerceIn(-1f, 1f),
                 rawBlackPointCorrection = rawBlackPointCorrection.coerceIn(-1f, 1f),
                 rawWhitePointCorrection = rawWhitePointCorrection.coerceIn(-1f, 1f),
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
-                rawPhotonHdr = rawPhotonHdr,
             )
     }
 

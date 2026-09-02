@@ -404,6 +404,10 @@ data class CameraState(
     val isMultiFrameEnabled: Boolean
         get() = multiFrameOutputScale != null && (!useRaw || isRawSupported)
 
+    /** Whether capture itself needs a Camera2 multi-request sequence. */
+    val requiresMultiFrameCaptureSequence: Boolean
+        get() = isMultiFrameEnabled && activeMultiFrameCount > 1
+
     val isJpgMaxEnabled: Boolean
         get() = isMultiFrameEnabled && !useRaw
 

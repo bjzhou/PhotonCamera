@@ -56,8 +56,6 @@ import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MgcMergeMethod
 import com.hinnka.mycamera.processor.MgcRawMaxMode
-import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
-import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.processor.RawmaxExposurePlanner
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
@@ -154,40 +152,13 @@ private fun resolveEffectiveRawAutoExposure(
     return userPrefs?.rawAutoExposure ?: true
 }
 
-private fun rawProcessingMetadataProperties(
-    userPrefs: UserPreferences?,
-    sensorPhysicalAreaMm2: Float?,
-): Map<String, String> = buildMap {
-    val explicitTuning = userPrefs?.coreImagingTuning
-    val qualityTuningEnabled = userPrefs?.let {
-        it.useRawMax && it.rawMaxQualityTuningEnabled
-    } == true
-    val baseTuning = PhotonSensorSizeTuning.resolveForRawMax(
-        enabled = qualityTuningEnabled,
-        explicitTuning = explicitTuning,
-        sensorPhysicalAreaMm2 = sensorPhysicalAreaMm2,
-    )
-    putAll(baseTuning.toCustomProperties())
-    if (
-        qualityTuningEnabled &&
-        explicitTuning == null &&
-        sensorPhysicalAreaMm2 != null &&
-        sensorPhysicalAreaMm2.isFinite() &&
-        sensorPhysicalAreaMm2 > 0f
-    ) {
-        put(PhotonSensorSizeTuning.MODEL_PROPERTY, PhotonSensorSizeTuning.MODEL_ID)
-        put(PhotonSensorSizeTuning.SENSOR_AREA_PROPERTY, sensorPhysicalAreaMm2.toString())
-    }
-}
-
 private fun resolveCaptureSharpening(
     isRawCapture: Boolean,
-    isRawMaxCapture: Boolean,
     userPrefs: UserPreferences?,
-): Float = when {
-    !isRawCapture -> 0f
-    isRawMaxCapture -> userPrefs?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
-    else -> userPrefs?.rawSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+): Float = if (isRawCapture) {
+    userPrefs?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
+} else {
+    0f
 }.let(RawSharpeningDefaults::normalize)
 
 internal data class CaptureDenoiseStrengths(
@@ -199,11 +170,10 @@ internal data class CaptureDenoiseStrengths(
 
 internal fun resolveCaptureDenoiseStrengths(
     isRawCapture: Boolean,
-    isRawMaxCapture: Boolean,
     userPrefs: UserPreferences?,
 ): CaptureDenoiseStrengths = when {
     !isRawCapture -> CaptureDenoiseStrengths(0f, 0f, null, null)
-    isRawMaxCapture -> CaptureDenoiseStrengths(
+    else -> CaptureDenoiseStrengths(
         editableLuma = 0f,
         editableChroma = 0f,
         bakedLuma = RawDenoiseDefaults.normalize(
@@ -213,16 +183,6 @@ internal fun resolveCaptureDenoiseStrengths(
             userPrefs?.rawMaxChromaNoiseReduction
                 ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
         ),
-    )
-    else -> CaptureDenoiseStrengths(
-        editableLuma = RawDenoiseDefaults.normalize(
-            userPrefs?.rawNoiseReduction ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
-        ),
-        editableChroma = RawDenoiseDefaults.normalize(
-            userPrefs?.rawChromaNoiseReduction ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
-        ),
-        bakedLuma = null,
-        bakedChroma = null,
     )
 }
 
@@ -244,14 +204,10 @@ private data class PresetMatchSnapshot(
     val rawHncsRenderIntent: HncsRenderIntent,
     val rawHncsFilmCurveMode: HncsFilmCurveMode,
     val rawRenderingEngine: RawRenderingEngine,
-    val rawSharpening: Float,
     val rawMaxSharpening: Float,
-    val rawNoiseReduction: Float,
-    val rawChromaNoiseReduction: Float,
     val rawMaxNoiseReduction: Float,
     val rawMaxChromaNoiseReduction: Float,
     val rawOppoMasterToneMap: Boolean,
-    val rawPhotonHdr: Boolean,
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
     val rawDROMode: String,
@@ -279,14 +235,10 @@ private data class PresetMatchSnapshot(
                 preset.rawHncsFilmCurveMode
             ) &&
             rawRenderingEngine == RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine) &&
-            rawSharpening == preset.rawSharpening &&
             rawMaxSharpening == preset.rawMaxSharpening &&
-            rawNoiseReduction == preset.rawNoiseReduction &&
-            rawChromaNoiseReduction == preset.rawChromaNoiseReduction &&
             rawMaxNoiseReduction == preset.rawMaxNoiseReduction &&
             rawMaxChromaNoiseReduction == preset.rawMaxChromaNoiseReduction &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
-            rawPhotonHdr == preset.rawPhotonHdr &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
             rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
             rawDROMode == preset.rawDROMode &&
@@ -342,20 +294,8 @@ private data class PresetMatchSnapshot(
             if (rawRenderingEngine != presetRawRenderingEngine) {
                 add("rawRenderingEngine current=$rawRenderingEngine preset=$presetRawRenderingEngine")
             }
-            if (rawSharpening != preset.rawSharpening) {
-                add("rawSharpening current=$rawSharpening preset=${preset.rawSharpening}")
-            }
             if (rawMaxSharpening != preset.rawMaxSharpening) {
                 add("rawMaxSharpening current=$rawMaxSharpening preset=${preset.rawMaxSharpening}")
-            }
-            if (rawNoiseReduction != preset.rawNoiseReduction) {
-                add("rawNoiseReduction current=$rawNoiseReduction preset=${preset.rawNoiseReduction}")
-            }
-            if (rawChromaNoiseReduction != preset.rawChromaNoiseReduction) {
-                add(
-                    "rawChromaNoiseReduction current=$rawChromaNoiseReduction " +
-                        "preset=${preset.rawChromaNoiseReduction}"
-                )
             }
             if (rawMaxNoiseReduction != preset.rawMaxNoiseReduction) {
                 add(
@@ -373,11 +313,6 @@ private data class PresetMatchSnapshot(
                 add(
                     "rawOppoMasterToneMap current=$rawOppoMasterToneMap " +
                         "preset=${preset.rawOppoMasterToneMap}"
-                )
-            }
-            if (rawPhotonHdr != preset.rawPhotonHdr) {
-                add(
-                    "rawPhotonHdr current=$rawPhotonHdr preset=${preset.rawPhotonHdr}"
                 )
             }
             if (rawSpectralFilmStock != preset.rawSpectralFilmStock) {
@@ -450,21 +385,16 @@ private data class CameraFeatureUpdate(
     val rawHncsRenderIntent: SettingValue<HncsRenderIntent>? = null,
     val rawHncsFilmCurveMode: SettingValue<HncsFilmCurveMode>? = null,
     val rawRenderingEngine: SettingValue<RawRenderingEngine>? = null,
-    val rawSharpening: SettingValue<Float>? = null,
     val rawMaxSharpening: SettingValue<Float>? = null,
-    val rawNoiseReduction: SettingValue<Float>? = null,
-    val rawChromaNoiseReduction: SettingValue<Float>? = null,
     val rawMaxNoiseReduction: SettingValue<Float>? = null,
     val rawMaxChromaNoiseReduction: SettingValue<Float>? = null,
     val rawExposureCompensation: SettingValue<Float>? = null,
-    val rawAutoExposure: SettingValue<Boolean>? = null,
     val rawHighlightsAdjustment: SettingValue<Float>? = null,
     val rawShadowsAdjustment: SettingValue<Float>? = null,
     val rawBlackPointCorrection: SettingValue<Float>? = null,
     val rawWhitePointCorrection: SettingValue<Float>? = null,
     val rawProfileToneMapMode: SettingValue<RawProfileToneMapMode>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
-    val rawPhotonHdr: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
     val droMode: SettingValue<String>? = null,
@@ -599,14 +529,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawHncsRenderIntent = saved.rawHncsRenderIntent,
                             rawHncsFilmCurveMode = saved.rawHncsFilmCurveMode,
                             rawRenderingEngine = saved.rawRenderingEngine,
-                            rawSharpening = saved.rawSharpening,
                             rawMaxSharpening = saved.rawMaxSharpening,
-                            rawNoiseReduction = saved.rawNoiseReduction,
-                            rawChromaNoiseReduction = saved.rawChromaNoiseReduction,
                             rawMaxNoiseReduction = saved.rawMaxNoiseReduction,
                             rawMaxChromaNoiseReduction = saved.rawMaxChromaNoiseReduction,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
-                            rawPhotonHdr = saved.rawPhotonHdr,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
                             rawDROMode = saved.rawDROMode,
@@ -667,20 +593,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = rawHncsRenderIntent.value.assetValue,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode.value.persistedValue,
             rawRenderingEngine = rawRenderingEngine.value.name,
-            rawSharpening = userPreferences.value.rawSharpening,
             rawMaxSharpening = userPreferences.value.rawMaxSharpening,
-            rawNoiseReduction = userPreferences.value.rawNoiseReduction,
-            rawChromaNoiseReduction = userPreferences.value.rawChromaNoiseReduction,
             rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
             rawExposureCompensation = userPreferences.value.rawExposureCompensation,
-            rawAutoExposure = userPreferences.value.rawAutoExposure,
             rawHighlightsAdjustment = userPreferences.value.rawHighlightsAdjustment,
             rawShadowsAdjustment = userPreferences.value.rawShadowsAdjustment,
             rawBlackPointCorrection = userPreferences.value.rawBlackPointCorrection,
             rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
-            rawPhotonHdr = rawToneMappingParameters.value.usePhotonHdr,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
@@ -752,17 +673,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 HncsFilmCurveMode.fromPersistedValue(this?.rawHncsFilmCurveMode)
             ),
             rawRenderingEngine = SettingValue(RawRenderingEngine.fromPersistedName(this?.rawRenderingEngine)),
-            rawSharpening = SettingValue(
-                this?.rawSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
-            ),
             rawMaxSharpening = SettingValue(
                 this?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
-            ),
-            rawNoiseReduction = SettingValue(
-                this?.rawNoiseReduction ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
-            ),
-            rawChromaNoiseReduction = SettingValue(
-                this?.rawChromaNoiseReduction ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
             ),
             rawMaxNoiseReduction = SettingValue(
                 this?.rawMaxNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
@@ -772,13 +684,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
             ),
             rawExposureCompensation = SettingValue(this?.rawExposureCompensation ?: 0f),
-            rawAutoExposure = SettingValue(this?.rawAutoExposure ?: true),
             rawHighlightsAdjustment = SettingValue(this?.rawHighlightsAdjustment ?: 0f),
             rawShadowsAdjustment = SettingValue(this?.rawShadowsAdjustment ?: 0f),
             rawBlackPointCorrection = SettingValue(this?.rawBlackPointCorrection ?: 0f),
             rawWhitePointCorrection = SettingValue(this?.rawWhitePointCorrection ?: 0f),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
-            rawPhotonHdr = SettingValue(this?.rawPhotonHdr ?: false),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
             droMode = SettingValue(this?.rawDROMode ?: RawProcessingPreferences.DROMode.OFF.name),
@@ -901,8 +811,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val rawToneMappingUpdate = if (
             update.rawProfileToneMapMode != null ||
-            update.rawOppoMasterToneMap != null ||
-            update.rawPhotonHdr != null
+            update.rawOppoMasterToneMap != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
             update.rawProfileToneMapMode?.let {
@@ -910,9 +819,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             update.rawOppoMasterToneMap?.let {
                 toneMappingParameters = toneMappingParameters.withOppoMasterToneMap(it.value)
-            }
-            update.rawPhotonHdr?.let {
-                toneMappingParameters = toneMappingParameters.withPhotonHdr(it.value)
             }
             PreferenceUpdateValue(toneMappingParameters)
         } else {
@@ -973,16 +879,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     null
                 },
                 rawToneMappingParameters = rawToneMappingUpdate,
-                rawSharpening = update.rawSharpening?.let {
-                    PreferenceUpdateValue(it.value)
-                },
                 rawMaxSharpening = update.rawMaxSharpening?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawNoiseReduction = update.rawNoiseReduction?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawChromaNoiseReduction = update.rawChromaNoiseReduction?.let {
                     PreferenceUpdateValue(it.value)
                 },
                 rawMaxNoiseReduction = update.rawMaxNoiseReduction?.let {
@@ -992,9 +889,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     PreferenceUpdateValue(it.value)
                 },
                 rawExposureCompensation = update.rawExposureCompensation?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawAutoExposure = update.rawAutoExposure?.let {
                     PreferenceUpdateValue(it.value)
                 },
                 rawHighlightsAdjustment = update.rawHighlightsAdjustment?.let {
@@ -1212,14 +1106,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = rawHncsRenderIntent.value,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode.value,
             rawRenderingEngine = rawRenderingEngine.value,
-            rawSharpening = userPreferences.value.rawSharpening,
             rawMaxSharpening = userPreferences.value.rawMaxSharpening,
-            rawNoiseReduction = userPreferences.value.rawNoiseReduction,
-            rawChromaNoiseReduction = userPreferences.value.rawChromaNoiseReduction,
             rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
-            rawPhotonHdr = rawToneMappingParameters.value.usePhotonHdr,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
@@ -1243,14 +1133,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = prefs.rawHncsRenderIntent,
             rawHncsFilmCurveMode = prefs.rawHncsFilmCurveMode,
             rawRenderingEngine = prefs.rawRenderingEngine,
-            rawSharpening = prefs.rawSharpening,
             rawMaxSharpening = prefs.rawMaxSharpening,
-            rawNoiseReduction = prefs.rawNoiseReduction,
-            rawChromaNoiseReduction = prefs.rawChromaNoiseReduction,
             rawMaxNoiseReduction = prefs.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = prefs.rawMaxChromaNoiseReduction,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
-            rawPhotonHdr = prefs.rawToneMappingParameters.usePhotonHdr,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,
             rawDROMode = prefs.droMode,
@@ -1362,13 +1248,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawToneMappingParameters: StateFlow<RawToneMappingParameters> = userPreferencesRepository.userPreferences
         .map { it.rawToneMappingParameters }
         .stateIn(viewModelScope, SharingStarted.Eagerly, RawToneMappingParameters.DEFAULT)
-    val rawSharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawSharpening }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.Eagerly,
-            RawSharpeningDefaults.DEFAULT_STRENGTH,
-        )
     val rawMaxSharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawMaxSharpening }
         .stateIn(
@@ -1376,12 +1255,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             SharingStarted.Eagerly,
             RawSharpeningDefaults.DEFAULT_STRENGTH,
         )
-    val rawNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawNoiseReduction }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, RawDenoiseDefaults.RAW_LUMA_STRENGTH)
-    val rawChromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawChromaNoiseReduction }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, RawDenoiseDefaults.RAW_CHROMA_STRENGTH)
     val rawMaxNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawMaxNoiseReduction }
         .stateIn(
@@ -1614,14 +1487,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val rawMaxQualityTuningEnabled: StateFlow<Boolean> =
-        userPreferencesRepository.userPreferences
-            .map { it.rawMaxQualityTuningEnabled }
-            .stateIn(
-                viewModelScope,
-                SharingStarted.Eagerly,
-                PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
-            )
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -2538,20 +2403,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { userPreferencesRepository.saveRawShadowsAdjustment(value) }
     }
 
-    fun setRawSharpening(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawSharpening(value) }
-    }
-
     fun setRawMaxSharpening(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawMaxSharpening(value) }
-    }
-
-    fun setRawNoiseReduction(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawNoiseReduction(value) }
-    }
-
-    fun setRawChromaNoiseReduction(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawChromaNoiseReduction(value) }
     }
 
     fun setRawMaxNoiseReduction(value: Float) {
@@ -2994,10 +2847,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ?: HncsFilmCurveMode.Standard,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
             rawAutoExposure = effectiveRawAutoExposure,
-            customProperties = rawProcessingMetadataProperties(
-                userPrefs,
-                cameraController.getCurrentSensorPhysicalAreaMm2(),
-            ),
             rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
@@ -4517,24 +4366,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setRawMaxQualityTuningEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawMaxQualityTuningEnabled(enabled)
-        }
-    }
-
-    fun setCoreImagingTuning(tuning: PhotonCoreImagingTuning) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveCoreImagingTuning(tuning)
-        }
-    }
-
-    fun clearCoreImagingTuningOverride() {
-        viewModelScope.launch {
-            userPreferencesRepository.clearCoreImagingTuning()
-        }
-    }
-
     fun setJpgMultiFrameDenoiseFrameCount(count: Int) {
         val normalizedCount = MultiFrameConfig.normalizeDenoiseFrameCount(count)
         cameraController.setJpgMultiFrameDenoiseFrameCount(normalizedCount)
@@ -5399,12 +5230,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val isRawCapture = isRawCaptureFormat(image.format)
             val sharpeningValue = resolveCaptureSharpening(
                 isRawCapture = isRawCapture,
-                isRawMaxCapture = state.value.isRawMaxEnabled,
                 userPrefs = userPrefs,
             )
             val denoiseStrengths = resolveCaptureDenoiseStrengths(
                 isRawCapture = isRawCapture,
-                isRawMaxCapture = state.value.isRawMaxEnabled,
                 userPrefs = userPrefs,
             )
             val noiseReductionValue = denoiseStrengths.editableLuma
@@ -5481,10 +5310,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
                 customProperties = RawCaptureExposureCompensationMetadata.write(
-                    rawProcessingMetadataProperties(
-                        userPrefs,
-                        cameraController.getCurrentSensorPhysicalAreaMm2(),
-                    ),
+                    emptyMap(),
                     captureExposureCompensationEv,
                 ),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
@@ -5657,10 +5483,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     ?: HncsFilmCurveMode.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
-                customProperties = rawProcessingMetadataProperties(
-                    userPrefs,
-                    cameraController.getCurrentSensorPhysicalAreaMm2(),
-                ),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
@@ -5823,12 +5645,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val sharpeningValue = resolveCaptureSharpening(
                 isRawCapture = isRawStack,
-                isRawMaxCapture = isRawStack,
                 userPrefs = userPrefs,
             )
             val denoiseStrengths = resolveCaptureDenoiseStrengths(
                 isRawCapture = isRawStack,
-                isRawMaxCapture = isRawStack,
                 userPrefs = userPrefs,
             )
             val noiseReductionValue = denoiseStrengths.editableLuma
@@ -5932,10 +5752,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
                 customProperties = RawCaptureExposureCompensationMetadata.write(
-                    rawProcessingMetadataProperties(
-                        userPrefs,
-                        cameraController.getCurrentSensorPhysicalAreaMm2(),
-                    ),
+                    emptyMap(),
                     captureExposureCompensationEv,
                 ),
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
@@ -6291,12 +6108,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val isRawCapture = isRawCaptureFormat(image.format)
         val sharpeningValue = resolveCaptureSharpening(
             isRawCapture = isRawCapture,
-            isRawMaxCapture = state.value.isRawMaxEnabled,
             userPrefs = userPrefs,
         )
         val denoiseStrengths = resolveCaptureDenoiseStrengths(
             isRawCapture = isRawCapture,
-            isRawMaxCapture = state.value.isRawMaxEnabled,
             userPrefs = userPrefs,
         )
         val noiseReductionValue = denoiseStrengths.editableLuma
@@ -6364,10 +6179,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ?: HncsFilmCurveMode.Standard,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
             rawAutoExposure = effectiveRawAutoExposure,
-            customProperties = rawProcessingMetadataProperties(
-                userPrefs,
-                cameraController.getCurrentSensorPhysicalAreaMm2(),
-            ),
             rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,

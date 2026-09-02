@@ -45,7 +45,6 @@ internal object BackupPreferenceSanitizer {
         "raw_white_level_modes",
         "raw_custom_white_levels",
         "raw_cfa_correction_modes",
-        "photon_core_imaging_tuning",
         "raw_lens_shading_correction_enabled",
         "vendor_capture_settings",
         "custom_vendor_key_settings",

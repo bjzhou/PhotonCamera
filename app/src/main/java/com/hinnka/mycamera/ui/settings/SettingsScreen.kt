@@ -342,7 +342,6 @@ fun SettingsScreen(
     val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
     val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsState()
     val hdrPlusBracketExposureEnabled by viewModel.hdrPlusBracketExposureEnabled.collectAsState()
-    val rawMaxQualityTuningEnabled by viewModel.rawMaxQualityTuningEnabled.collectAsState()
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
@@ -402,10 +401,7 @@ fun SettingsScreen(
     val rawCfaCorrectionModes by viewModel.rawCfaCorrectionModes.collectAsState()
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
-    val rawSharpening by viewModel.rawSharpening.collectAsState()
     val rawMaxSharpening by viewModel.rawMaxSharpening.collectAsState()
-    val rawNoiseReduction by viewModel.rawNoiseReduction.collectAsState()
-    val rawChromaNoiseReduction by viewModel.rawChromaNoiseReduction.collectAsState()
     val rawMaxNoiseReduction by viewModel.rawMaxNoiseReduction.collectAsState()
     val rawMaxChromaNoiseReduction by viewModel.rawMaxChromaNoiseReduction.collectAsState()
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
@@ -428,10 +424,7 @@ fun SettingsScreen(
     var rawBlackPointCorrectionUi by remember { mutableStateOf(rawBlackPointCorrection) }
     var rawWhitePointCorrectionUi by remember { mutableStateOf(rawWhitePointCorrection) }
     var rawToneMappingParametersUi by remember { mutableStateOf(rawToneMappingParameters) }
-    var rawSharpeningUi by remember { mutableStateOf(rawSharpening) }
     var rawMaxSharpeningUi by remember { mutableStateOf(rawMaxSharpening) }
-    var rawNoiseReductionUi by remember { mutableStateOf(rawNoiseReduction) }
-    var rawChromaNoiseReductionUi by remember { mutableStateOf(rawChromaNoiseReduction) }
     var rawMaxNoiseReductionUi by remember { mutableStateOf(rawMaxNoiseReduction) }
     var rawMaxChromaNoiseReductionUi by remember { mutableStateOf(rawMaxChromaNoiseReduction) }
     var windowScreenBrightnessUi by remember { mutableStateOf(windowScreenBrightness ?: 1f) }
@@ -454,10 +447,7 @@ fun SettingsScreen(
         rawBlackPointCorrection,
         rawWhitePointCorrection,
         rawToneMappingParameters,
-        rawSharpening,
         rawMaxSharpening,
-        rawNoiseReduction,
-        rawChromaNoiseReduction,
         rawMaxNoiseReduction,
         rawMaxChromaNoiseReduction,
     ) {
@@ -468,10 +458,7 @@ fun SettingsScreen(
             rawBlackPointCorrectionUi = rawBlackPointCorrection
             rawWhitePointCorrectionUi = rawWhitePointCorrection
             rawToneMappingParametersUi = rawToneMappingParameters
-            rawSharpeningUi = rawSharpening
             rawMaxSharpeningUi = rawMaxSharpening
-            rawNoiseReductionUi = rawNoiseReduction
-            rawChromaNoiseReductionUi = rawChromaNoiseReduction
             rawMaxNoiseReductionUi = rawMaxNoiseReduction
             rawMaxChromaNoiseReductionUi = rawMaxChromaNoiseReduction
         }
@@ -542,10 +529,7 @@ fun SettingsScreen(
         viewModel.setRawBlackPointCorrection(rawBlackPointCorrectionUi)
         viewModel.setRawWhitePointCorrection(rawWhitePointCorrectionUi)
         viewModel.setRawToneMappingParameters(rawToneMappingParametersUi)
-        viewModel.setRawSharpening(rawSharpeningUi)
         viewModel.setRawMaxSharpening(rawMaxSharpeningUi)
-        viewModel.setRawNoiseReduction(rawNoiseReductionUi)
-        viewModel.setRawChromaNoiseReduction(rawChromaNoiseReductionUi)
         viewModel.setRawMaxNoiseReduction(rawMaxNoiseReductionUi)
         viewModel.setRawMaxChromaNoiseReduction(rawMaxChromaNoiseReductionUi)
     }
@@ -1941,20 +1925,6 @@ fun SettingsScreen(
                     SettingsSection(
                         title = stringResource(R.string.settings_professional_group_image_quality)
                     ) {
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_raw_max_quality_tuning),
-                            description = stringResource(
-                                R.string.settings_raw_max_quality_tuning_description
-                            ),
-                            checked = rawMaxQualityTuningEnabled,
-                            onCheckedChange = viewModel::setRawMaxQualityTuningEnabled,
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
                         val valueFormat = stringResource(R.string.settings_raw_max_output_scale_value)
                         SliderSettingItem(
                             title = stringResource(R.string.settings_raw_max_output_scale),
@@ -2126,65 +2096,6 @@ fun SettingsScreen(
                             contentMode = RawEditPanelContentMode.FULL
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    SettingsSection(
-                        title = stringResource(R.string.settings_raw_default_processing_section),
-                        isExpandable = false,
-                    ) {
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_raw_default_sharpening),
-                            description = stringResource(
-                                R.string.settings_raw_default_sharpening_description
-                            ),
-                            value = rawSharpeningUi,
-                            valueRange = 0f..1f,
-                            resetValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
-                            onValueChange = {
-                                isRawSliderAdjusting = true
-                                rawSharpeningUi = it
-                            },
-                            onValueChangeFinished = ::commitRawSliderValues,
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_raw_default_luma_denoise),
-                            description = stringResource(
-                                R.string.settings_raw_default_luma_denoise_description
-                            ),
-                            value = rawNoiseReductionUi,
-                            valueRange = DenoiseStrength.valueRange,
-                            resetValue = RawDenoiseDefaults.RAW_LUMA_STRENGTH,
-                            onValueChange = {
-                                isRawSliderAdjusting = true
-                                rawNoiseReductionUi = it
-                            },
-                            onValueChangeFinished = ::commitRawSliderValues,
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_raw_default_chroma_denoise),
-                            description = stringResource(
-                                R.string.settings_raw_default_chroma_denoise_description
-                            ),
-                            value = rawChromaNoiseReductionUi,
-                            valueRange = DenoiseStrength.valueRange,
-                            resetValue = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
-                            onValueChange = {
-                                isRawSliderAdjusting = true
-                                rawChromaNoiseReductionUi = it
-                            },
-                            onValueChangeFinished = ::commitRawSliderValues,
-                        )
-
-                    }
-
-                    Spacer(modifier = Modifier.height(24.dp))
 
                     SettingsSection(
                         title = stringResource(R.string.settings_raw_group_capture_output)
@@ -3058,7 +2969,6 @@ private fun SettingsCategoryOverview(
                 stringResource(R.string.settings_professional_group_max_hdr),
                 stringResource(R.string.settings_professional_group_image_quality),
                 stringResource(R.string.settings_raw_group_development),
-                stringResource(R.string.settings_raw_default_processing_section),
                 stringResource(R.string.settings_raw_group_capture_output),
                 stringResource(R.string.settings_raw_group_sensor_correction),
             ).joinToString(" · "),

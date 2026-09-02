@@ -254,12 +254,12 @@ object GalleryManager {
         val photoDir = getPhotoDir(context, photoId, true)
         val dngFile = File(photoDir, DNG_FILE)
         val tempDngFile = File(photoDir, "temp_mgc.dng")
-        val rawSharpening = preferences?.rawSharpening
+        val rawSharpening = preferences?.rawMaxSharpening
             ?: RawSharpeningDefaults.DEFAULT_STRENGTH
-        val rawNoiseReduction = preferences?.rawNoiseReduction
-            ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
-        val rawChromaNoiseReduction = preferences?.rawChromaNoiseReduction
-            ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
+        val rawNoiseReduction = preferences?.rawMaxNoiseReduction
+            ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
+        val rawChromaNoiseReduction = preferences?.rawMaxChromaNoiseReduction
+            ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
 
         try {
             sourceDngFile.copyTo(tempDngFile, overwrite = true)

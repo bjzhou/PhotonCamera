@@ -46,10 +46,7 @@ class CameraPresetJsonCodecTest {
             effects = EffectParams.DEFAULT.copy(clarity = -0.31f),
             ultraHdrGainMapEnabled = false,
             rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
-            rawSharpening = 0.2f,
             rawMaxSharpening = 0.7f,
-            rawNoiseReduction = 0.35f,
-            rawChromaNoiseReduction = 0.9f,
             rawMaxNoiseReduction = 1.2f,
             rawMaxChromaNoiseReduction = 1.5f,
             rawSpectralFilmStock = "kodak_gold_200",
@@ -61,10 +58,7 @@ class CameraPresetJsonCodecTest {
 
         requireNotNull(preset)
         assertEquals(RawRenderingEngine.Spektrafilm.name, preset.rawRenderingEngine)
-        assertEquals(0.2f, preset.rawSharpening, 0.0001f)
         assertEquals(0.7f, preset.rawMaxSharpening, 0.0001f)
-        assertEquals(0.35f, preset.rawNoiseReduction, 0.0001f)
-        assertEquals(0.9f, preset.rawChromaNoiseReduction, 0.0001f)
         assertEquals(1.2f, preset.rawMaxNoiseReduction, 0.0001f)
         assertEquals(1.5f, preset.rawMaxChromaNoiseReduction, 0.0001f)
         assertEquals("kodak_gold_200", preset.rawSpectralFilmStock)
@@ -76,23 +70,56 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
-    fun fromJson_migratesLegacyPhotonPgtmSwitchToIndependentPhotonHdr() {
+    fun fromJson_ignoresRemovedStandaloneRawDetailFields() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_legacy_raw_detail",
+              "name": "Legacy RAW Detail",
+              "rawSharpening": 0.1,
+              "rawNoiseReduction": 0.2,
+              "rawChromaNoiseReduction": 0.3
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertEquals(0.4f, preset.rawMaxSharpening, 0.0001f)
+        assertEquals(RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH, preset.rawMaxNoiseReduction, 0f)
+        assertEquals(
+            RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
+            preset.rawMaxChromaNoiseReduction,
+            0f,
+        )
+        val json = preset.toJson()
+        assertFalse(json.contains("\"rawSharpening\""))
+        assertFalse(json.contains("\"rawNoiseReduction\""))
+        assertFalse(json.contains("\"rawChromaNoiseReduction\""))
+    }
+
+    @Test
+    fun fromJson_ignoresRemovedHdrDynamicRangeFields() {
         val preset = CameraPreset.fromJson(
             """
             {
               "id": "preset_legacy_photon",
               "name": "Legacy Photon",
+              "rawPhotonHdr": true,
               "rawPhotonPgtmToneMap": true,
+              "rawGooglePixelToneMap": true,
+              "rawAutoExposure": true,
               "rawOppoMasterToneMap": true
             }
             """.trimIndent()
         )
 
         requireNotNull(preset)
-        assertTrue(preset.rawPhotonHdr)
         assertTrue(preset.rawOppoMasterToneMap)
-        assertTrue(preset.toJson().contains("\"rawPhotonHdr\":true"))
-        assertFalse(preset.toJson().contains("rawPhotonPgtmToneMap"))
+        val json = preset.toJson()
+        assertFalse(json.contains("rawPhotonHdr"))
+        assertFalse(json.contains("rawPhotonPgtmToneMap"))
+        assertFalse(json.contains("rawGooglePixelToneMap"))
+        assertFalse(json.contains("rawAutoExposure"))
     }
 
     @Test
@@ -187,14 +214,7 @@ class CameraPresetJsonCodecTest {
         assertEquals(RawRenderingEngine.AdobeCurve.name, preset.rawRenderingEngine)
         assertEquals(AspectRatio.RATIO_4_3.name, preset.aspectRatio)
         assertFalse(preset.ultraHdrGainMapEnabled)
-        assertEquals(0.4f, preset.rawSharpening, 0.0001f)
         assertEquals(0.4f, preset.rawMaxSharpening, 0.0001f)
-        assertEquals(RawDenoiseDefaults.RAW_LUMA_STRENGTH, preset.rawNoiseReduction, 0f)
-        assertEquals(
-            RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
-            preset.rawChromaNoiseReduction,
-            0f,
-        )
         assertEquals(
             RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
             preset.rawMaxNoiseReduction,

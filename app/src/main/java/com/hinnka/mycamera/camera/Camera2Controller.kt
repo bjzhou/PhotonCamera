@@ -4588,7 +4588,7 @@ class Camera2Controller(private val context: Context) {
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder) {
         try {
             val currentState = _state.value
-            val isBurst = currentState.isMultiFrameEnabled
+            val isBurst = currentState.requiresMultiFrameCaptureSequence
             val effectiveEdgeLevel = if (isBurst && edgeLevel == 2) 1 else edgeLevel
             val edgeMode = when (effectiveEdgeLevel) {
                 0 -> CaptureRequest.EDGE_MODE_OFF
@@ -4895,17 +4895,6 @@ class Camera2Controller(private val context: Context) {
      */
     fun getCurrentCameraId(): String {
         return _state.value.currentCameraId
-    }
-
-    /** Physical sensor area for the selected output lens, in square millimeters. */
-    fun getCurrentSensorPhysicalAreaMm2(): Float? {
-        val characteristics = resolveActiveFocusCharacteristics()?.second
-            ?: getActiveOpenCameraCharacteristics()
-            ?: return null
-        val size = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-            ?: return null
-        val area = size.width * size.height
-        return area.takeIf { it.isFinite() && it > 0f }
     }
 
     /**
@@ -7098,7 +7087,7 @@ class Camera2Controller(private val context: Context) {
             // 只有在【自动曝光 + 单次闪光】时才使用预闪流程
             // 手动曝光模式下，AE_PRECAPTURE_TRIGGER 不生效（因为 AE_MODE=OFF），直接拍照
             val currentState = _state.value
-            if (currentState.isMultiFrameEnabled) {
+            if (currentState.requiresMultiFrameCaptureSequence) {
                 burstGyroRecorder.start(cameraHandler)
                 prepareMultiFrameFocusForCapture(device, reader, baseExposureResult)
                 return
@@ -7400,7 +7389,7 @@ class Camera2Controller(private val context: Context) {
         lockExposure: Boolean,
         isRawCapture: Boolean,
     ) {
-        if (!state.isMultiFrameEnabled) return
+        if (!state.requiresMultiFrameCaptureSequence) return
 
         if (lockExposure) {
             val useMultiFrameTorch = isMultiFrameTorchCaptureActive
@@ -7698,7 +7687,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun shouldUseMultiFrameTorch(state: CameraState): Boolean {
-        return state.isMultiFrameEnabled &&
+        return state.requiresMultiFrameCaptureSequence &&
                 isFlashSupported &&
                 state.flashMode == CameraMetadata.FLASH_MODE_SINGLE
     }
@@ -7763,7 +7752,7 @@ class Camera2Controller(private val context: Context) {
 
                 // A previous multi-frame/torch sequence may have used AE_LOCK. Standard
                 // single-frame flash capture must let the flash AE routine choose exposure.
-                if (!currentState.isMultiFrameEnabled) {
+                if (!currentState.requiresMultiFrameCaptureSequence) {
                     set(CaptureRequest.CONTROL_AE_LOCK, false)
                 }
 
@@ -7838,7 +7827,7 @@ class Camera2Controller(private val context: Context) {
                 )
             }
 
-            if (currentState.isMultiFrameEnabled) {
+            if (currentState.requiresMultiFrameCaptureSequence) {
                 // Burst Mode
                 val frameCount = currentState.activeMultiFrameCount
                 captureBuilder.setTag(MultiFrameCaptureRole.BASE)

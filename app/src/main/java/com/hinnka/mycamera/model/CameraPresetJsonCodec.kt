@@ -40,10 +40,6 @@ internal object CameraPresetJsonCodec {
         val obj = element.asJsonObject
         val id = obj.stringOrNull("id")?.takeIf { it.isNotBlank() } ?: return null
         val name = obj.stringOrNull("name")?.takeIf { it.isNotBlank() } ?: id
-        val rawPhotonHdr =
-            obj.boolean("rawPhotonHdr", false) ||
-                obj.boolean("rawPhotonPgtmToneMap", false) ||
-                obj.boolean("rawGooglePixelToneMap", false)
 
         return CameraPreset(
             id = id,
@@ -64,17 +60,8 @@ internal object CameraPresetJsonCodec {
             rawRenderingEngine = parseRawRenderingEngine(
                 obj.stringOrNull("rawRenderingEngine") ?: obj.stringOrNull("rawColorEngine")
             ),
-            rawSharpening = RawSharpeningDefaults.normalize(
-                obj.float("rawSharpening", RawSharpeningDefaults.DEFAULT_STRENGTH)
-            ),
             rawMaxSharpening = RawSharpeningDefaults.normalize(
                 obj.float("rawMaxSharpening", RawSharpeningDefaults.DEFAULT_STRENGTH)
-            ),
-            rawNoiseReduction = RawDenoiseDefaults.normalize(
-                obj.float("rawNoiseReduction", RawDenoiseDefaults.RAW_LUMA_STRENGTH)
-            ),
-            rawChromaNoiseReduction = RawDenoiseDefaults.normalize(
-                obj.float("rawChromaNoiseReduction", RawDenoiseDefaults.RAW_CHROMA_STRENGTH)
             ),
             rawMaxNoiseReduction = RawDenoiseDefaults.normalize(
                 obj.float("rawMaxNoiseReduction", RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH)
@@ -87,7 +74,6 @@ internal object CameraPresetJsonCodec {
             ),
             rawExposureCompensation = obj.float("rawExposureCompensation", 0f)
                 .coerceIn(-4f, 4f),
-            rawAutoExposure = !rawPhotonHdr && obj.boolean("rawAutoExposure", true),
             rawHighlightsAdjustment = obj.float("rawHighlightsAdjustment", 0f)
                 .coerceIn(-1f, 1f),
             rawShadowsAdjustment = obj.float("rawShadowsAdjustment", 0f)
@@ -97,7 +83,6 @@ internal object CameraPresetJsonCodec {
             rawWhitePointCorrection = obj.float("rawWhitePointCorrection", 0f)
                 .coerceIn(-1f, 1f),
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
-            rawPhotonHdr = rawPhotonHdr,
             rawSpectralFilmStock = obj.stringOrNull("rawSpectralFilmStock"),
             rawSpectralFilmPrint = obj.stringOrNull("rawSpectralFilmPrint"),
             rawDROMode = parseDroMode(obj.stringOrNull("rawDROMode")),

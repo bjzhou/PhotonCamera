@@ -36,8 +36,6 @@ import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
-import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
-import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -150,14 +148,9 @@ data class UserPreferences(
     val rawWhiteLevelModes: Map<String, String> = emptyMap(),
     val rawCustomWhiteLevels: Map<String, Float> = emptyMap(),
     val rawCfaCorrectionModes: Map<String, String> = emptyMap(),
-    val rawSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
     val rawMaxSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
-    val rawNoiseReduction: Float = RawDenoiseDefaults.RAW_LUMA_STRENGTH,
-    val rawChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_CHROMA_STRENGTH,
     val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
     val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
-    /** Hidden override used only while RAWmax quality tuning is enabled; null selects its area model. */
-    val coreImagingTuning: PhotonCoreImagingTuning? = null,
     val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
     val phantomFrameId: String? = null,
@@ -198,8 +191,6 @@ data class UserPreferences(
     val hdrPlusFrameCount: Int = MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
     val hdrPlusBracketExposureEnabled: Boolean =
         MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
-    val rawMaxQualityTuningEnabled: Boolean =
-        PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
@@ -314,10 +305,7 @@ data class CameraFeaturePreferencesUpdate(
     val rawHncsFilmCurveMode: PreferenceUpdateValue<HncsFilmCurveMode>? = null,
     val rawRenderingEngine: PreferenceUpdateValue<RawRenderingEngine>? = null,
     val rawToneMappingParameters: PreferenceUpdateValue<RawToneMappingParameters>? = null,
-    val rawSharpening: PreferenceUpdateValue<Float>? = null,
     val rawMaxSharpening: PreferenceUpdateValue<Float>? = null,
-    val rawNoiseReduction: PreferenceUpdateValue<Float>? = null,
-    val rawChromaNoiseReduction: PreferenceUpdateValue<Float>? = null,
     val rawMaxNoiseReduction: PreferenceUpdateValue<Float>? = null,
     val rawMaxChromaNoiseReduction: PreferenceUpdateValue<Float>? = null,
     val rawExposureCompensation: PreferenceUpdateValue<Float>? = null,
@@ -393,16 +381,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_WHITE_LEVEL_MODES_KEY = stringPreferencesKey("raw_white_level_modes")
         private val RAW_CUSTOM_WHITE_LEVELS_KEY = stringPreferencesKey("raw_custom_white_levels")
         private val RAW_CFA_CORRECTION_MODES_KEY = stringPreferencesKey("raw_cfa_correction_modes")
-        private val RAW_SHARPENING_KEY = floatPreferencesKey("raw_sharpening")
         private val RAW_MAX_SHARPENING_KEY = floatPreferencesKey("raw_max_sharpening")
-        private val RAW_NOISE_REDUCTION_KEY = floatPreferencesKey("raw_noise_reduction")
-        private val RAW_CHROMA_NOISE_REDUCTION_KEY =
-            floatPreferencesKey("raw_chroma_noise_reduction")
         private val RAW_MAX_NOISE_REDUCTION_KEY = floatPreferencesKey("raw_max_noise_reduction")
         private val RAW_MAX_CHROMA_NOISE_REDUCTION_KEY =
             floatPreferencesKey("raw_max_chroma_noise_reduction")
-        private val PHOTON_CORE_IMAGING_TUNING_KEY =
-            stringPreferencesKey("photon_core_imaging_tuning")
         private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
         private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
@@ -444,8 +426,6 @@ class UserPreferencesRepository(private val context: Context) {
         // 多帧合成 Key
         private val USE_JPG_MAX = booleanPreferencesKey("use_jpg_max")
         private val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
-        private val RAW_MAX_QUALITY_TUNING_ENABLED =
-            booleanPreferencesKey("raw_max_quality_tuning_enabled")
         private val LEGACY_USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
         private val JPG_MULTI_FRAME_DENOISE_FRAME_COUNT =
@@ -657,19 +637,8 @@ class UserPreferencesRepository(private val context: Context) {
                 rawWhiteLevelModes = parseMapString(preferences[RAW_WHITE_LEVEL_MODES_KEY]),
                 rawCustomWhiteLevels = parseMapFloat(preferences[RAW_CUSTOM_WHITE_LEVELS_KEY]),
                 rawCfaCorrectionModes = parseMapString(preferences[RAW_CFA_CORRECTION_MODES_KEY]),
-                rawSharpening = RawSharpeningDefaults.normalize(
-                    preferences[RAW_SHARPENING_KEY] ?: RawSharpeningDefaults.DEFAULT_STRENGTH
-                ),
                 rawMaxSharpening = RawSharpeningDefaults.normalize(
                     preferences[RAW_MAX_SHARPENING_KEY] ?: RawSharpeningDefaults.DEFAULT_STRENGTH
-                ),
-                rawNoiseReduction = RawDenoiseDefaults.normalize(
-                    preferences[RAW_NOISE_REDUCTION_KEY]
-                        ?: RawDenoiseDefaults.RAW_LUMA_STRENGTH
-                ),
-                rawChromaNoiseReduction = RawDenoiseDefaults.normalize(
-                    preferences[RAW_CHROMA_NOISE_REDUCTION_KEY]
-                        ?: RawDenoiseDefaults.RAW_CHROMA_STRENGTH
                 ),
                 rawMaxNoiseReduction = RawDenoiseDefaults.normalize(
                     preferences[RAW_MAX_NOISE_REDUCTION_KEY]
@@ -678,9 +647,6 @@ class UserPreferencesRepository(private val context: Context) {
                 rawMaxChromaNoiseReduction = RawDenoiseDefaults.normalize(
                     preferences[RAW_MAX_CHROMA_NOISE_REDUCTION_KEY]
                         ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
-                ),
-                coreImagingTuning = preferences[PHOTON_CORE_IMAGING_TUNING_KEY]?.let(
-                    PhotonCoreImagingTuning::fromPersistedString,
                 ),
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
@@ -747,8 +713,6 @@ class UserPreferencesRepository(private val context: Context) {
                     }
                     ?: MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
                 hdrPlusBracketExposureEnabled = hdrPlusBracketExposureEnabled,
-                rawMaxQualityTuningEnabled = preferences[RAW_MAX_QUALITY_TUNING_ENABLED]
-                    ?: PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
                 rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
                     ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
                     MultiFrameConfig.normalizeOutputScale(
@@ -1744,27 +1708,9 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveRawSharpening(value: Float) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_SHARPENING_KEY] = RawSharpeningDefaults.normalize(value)
-        }
-    }
-
     suspend fun saveRawMaxSharpening(value: Float) {
         context.dataStore.edit { preferences ->
             preferences[RAW_MAX_SHARPENING_KEY] = RawSharpeningDefaults.normalize(value)
-        }
-    }
-
-    suspend fun saveRawNoiseReduction(value: Float) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_NOISE_REDUCTION_KEY] = DenoiseStrength.clamp(value)
-        }
-    }
-
-    suspend fun saveRawChromaNoiseReduction(value: Float) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_CHROMA_NOISE_REDUCTION_KEY] = DenoiseStrength.clamp(value)
         }
     }
 
@@ -1777,18 +1723,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawMaxChromaNoiseReduction(value: Float) {
         context.dataStore.edit { preferences ->
             preferences[RAW_MAX_CHROMA_NOISE_REDUCTION_KEY] = DenoiseStrength.clamp(value)
-        }
-    }
-
-    suspend fun saveCoreImagingTuning(tuning: PhotonCoreImagingTuning) {
-        context.dataStore.edit { preferences ->
-            preferences[PHOTON_CORE_IMAGING_TUNING_KEY] = tuning.normalized().toPersistedString()
-        }
-    }
-
-    suspend fun clearCoreImagingTuning() {
-        context.dataStore.edit { preferences ->
-            preferences.remove(PHOTON_CORE_IMAGING_TUNING_KEY)
         }
     }
 
@@ -1970,12 +1904,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveHdrPlusBracketExposureEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED] = enabled
-        }
-    }
-
-    suspend fun saveRawMaxQualityTuningEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_MAX_QUALITY_TUNING_ENABLED] = enabled
         }
     }
 
@@ -2488,17 +2416,8 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_AUTO_EXPOSURE_KEY] = exposureMode.usesLegacyAutoExposure
                 preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = exposureMode.persistedValue
             }
-            update.rawSharpening?.let {
-                preferences[RAW_SHARPENING_KEY] = RawSharpeningDefaults.normalize(it.value)
-            }
             update.rawMaxSharpening?.let {
                 preferences[RAW_MAX_SHARPENING_KEY] = RawSharpeningDefaults.normalize(it.value)
-            }
-            update.rawNoiseReduction?.let {
-                preferences[RAW_NOISE_REDUCTION_KEY] = RawDenoiseDefaults.normalize(it.value)
-            }
-            update.rawChromaNoiseReduction?.let {
-                preferences[RAW_CHROMA_NOISE_REDUCTION_KEY] = RawDenoiseDefaults.normalize(it.value)
             }
             update.rawMaxNoiseReduction?.let {
                 preferences[RAW_MAX_NOISE_REDUCTION_KEY] = RawDenoiseDefaults.normalize(it.value)

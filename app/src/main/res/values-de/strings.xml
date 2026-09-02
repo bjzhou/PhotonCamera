@@ -272,11 +272,6 @@
     <string name="settings_use_p010">P010 (10-Bit YUV)</string>
     <string name="settings_use_p010_description">Aktiviert die 10-Bit YUV-Ausgabe für eine bessere Bildpräzision. Wirksam auf unterstützten Geräten, wenn RAW deaktiviert ist.</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: ein von Hasselblad unabhängig entwickeltes Farbmanagementsystem</string>
-    <string name="settings_raw_max_quality_tuning">HDR+-Bildqualitätsoptimierung</string>
-    <string name="settings_raw_max_quality_tuning_description">Passt Fusion, Rauschminderung und Schärfung an die physische Sensorgröße an. Bei Deaktivierung verwendet HDR+ die Standardparameter der Bildverarbeitung.</string>
-    <string name="settings_raw_default_sharpening_section">Standardschärfung</string>
-    <string name="settings_raw_default_sharpening">Schärfung</string>
-    <string name="settings_raw_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von RAW-Aufnahmen angewendet wird.</string>
     <string name="settings_raw_max_default_sharpening">HDR+-Standardschärfung</string>
     <string name="settings_raw_max_default_sharpening_description">Schärfung, die standardmäßig beim Entwickeln von HDR+-Aufnahmen angewendet wird.</string>
     <string name="preset_import">Voreinstellung importieren</string>

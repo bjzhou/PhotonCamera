@@ -13,6 +13,7 @@ import android.util.Half
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
+import com.hinnka.mycamera.raw.RawSceneAERawStats
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -73,6 +74,7 @@ internal class GlesMgcRawSpatialStacker(
     private val gpuLinearRgbStorage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
     private val processorPipeline: MgcRawProcessorPipeline = MgcRawProcessorPipeline.SPATIAL,
     private val coreImagingTuning: PhotonCoreImagingTuning = PhotonCoreImagingTuning.DEFAULT,
+    private val computeFastMomentsRawStats: Boolean = false,
 ) {
     private data class TextureLevel(
         val texture: Int,
@@ -597,6 +599,7 @@ internal class GlesMgcRawSpatialStacker(
             images.forEach { it.close() }
             return null
         }
+        val hasAuxiliaryFrames = frames.size > 1
         var cpuOutput: ByteBuffer? = null
         var returned = false
         var exportedBayerTexture = 0
@@ -606,6 +609,7 @@ internal class GlesMgcRawSpatialStacker(
         var strengthRejectionHostBuffer: ByteBuffer? = null
         var rgbDiagnosticHostBuffer: ByteBuffer? = null
         var strengthCapture: StrengthCapture? = null
+        var fastMomentsRawStats: RawSceneAERawStats? = null
         val processStartNs = System.nanoTime()
         val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
         return try {
@@ -621,6 +625,7 @@ internal class GlesMgcRawSpatialStacker(
             initPrograms(
                 includeBentoAssessment = hasBentoCandidate,
                 includeReferenceHighlightMask = hasBentoCandidate || hasShadowLongFrame,
+                includeTemporalProcessing = hasAuxiliaryFrames,
             )
             val programInitMs = (System.nanoTime() - programInitStartNs) / 1_000_000L
             renderFbo = createFramebuffer()
@@ -663,25 +668,23 @@ internal class GlesMgcRawSpatialStacker(
                 GLES30.GL_R16UI,
                 GLES30.GL_NEAREST,
             )
-            val currentRaw = createTexture(
-                width,
-                height,
-                GLES30.GL_R16UI,
-                GLES30.GL_NEAREST,
-            )
-            val referenceGuide = createTexture(
-                guideWidth,
-                guideHeight,
-                GLES30.GL_RGBA16F,
-                GLES30.GL_LINEAR,
-            )
-            val currentGuide = createTexture(
-                guideWidth,
-                guideHeight,
-                GLES30.GL_RGBA16F,
-                GLES30.GL_LINEAR,
-            )
+            val currentRaw = if (hasAuxiliaryFrames) {
+                createTexture(width, height, GLES30.GL_R16UI, GLES30.GL_NEAREST)
+            } else {
+                0
+            }
             val needsSabreCovariance = mergeMethod == MgcMergeMethod.SABRE
+            val needsReferencePreparation = hasAuxiliaryFrames || needsSabreCovariance
+            val referenceGuide = if (needsReferencePreparation) {
+                createTexture(guideWidth, guideHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
+            } else {
+                0
+            }
+            val currentGuide = if (hasAuxiliaryFrames) {
+                createTexture(guideWidth, guideHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
+            } else {
+                0
+            }
             val referenceCovariance = if (needsSabreCovariance) {
                 createTexture(
                     guideWidth,
@@ -692,7 +695,7 @@ internal class GlesMgcRawSpatialStacker(
             } else {
                 0
             }
-            val currentCovariance = if (needsSabreCovariance) {
+            val currentCovariance = if (needsSabreCovariance && hasAuxiliaryFrames) {
                 createTexture(
                     guideWidth,
                     guideHeight,
@@ -704,7 +707,11 @@ internal class GlesMgcRawSpatialStacker(
             }
             val zeroFlow = createZeroFlowTexture()
             val identityWeight = createIdentityWeightTexture()
-            val zeroLinearKernelMask = createZeroLinearKernelMaskTexture()
+            val zeroLinearKernelMask = if (outputMode == MgcSpatialOutputMode.BAYER) {
+                createZeroLinearKernelMaskTexture()
+            } else {
+                0
+            }
             val accumulatorColor = if (outputMode == MgcSpatialOutputMode.BAYER) {
                 createTexture(
                     width,
@@ -813,27 +820,54 @@ internal class GlesMgcRawSpatialStacker(
             )
             val rawUploadStartNs = System.nanoTime()
             uploadRaw(images.first(), referenceRaw, "reference")
+            if (computeFastMomentsRawStats) {
+                check(supportsComputePrograms) {
+                    "Fast Moments selected-base statistics require GLES 3.1"
+                }
+                val statsStartNs = System.nanoTime()
+                val statsResult = GlesRawAEStats(
+                    width = width,
+                    height = height,
+                    cfaPattern = cfaPattern,
+                    blackLevel = canonicalBlackLevelForFrame(frames.first()),
+                    whiteLevel = sensorWhiteLevelCode,
+                    maxShaderStorageBlockBytes = maxShaderStorageBlockBytes,
+                ).build(referenceRaw)
+                fastMomentsRawStats = statsResult.stats
+                PLog.i(
+                    TAG,
+                    "Fast Moments reused Spatial reference upload size=" +
+                        "${statsResult.stats.width}x${statsResult.stats.height} " +
+                        "source=${width}x$height frame=${frames.first().frameNumber} " +
+                        "submitMs=${statsResult.submitMs} gpuWaitMs=${statsResult.gpuWaitMs} " +
+                        "mapMs=${statsResult.mapMs} totalMs=${elapsedMs(statsStartNs)}",
+                )
+            }
+            val rawTextureCount = if (hasAuxiliaryFrames) 2 else 1
             PLog.i(
                 TAG,
-                "MGC Spatial RAW temporal window textures=2 " +
-                    "bytes=${width.toLong() * height * RAW_BYTES_PER_PIXEL * 2L} " +
+                "MGC Spatial RAW temporal window textures=$rawTextureCount " +
+                    "bytes=${width.toLong() * height * RAW_BYTES_PER_PIXEL * rawTextureCount} " +
                     "referenceUpload=1 took=" +
                     "${(System.nanoTime() - rawUploadStartNs) / 1_000_000L}ms",
             )
             // MGC's GenerateBaseFrameLuma and GuideImage::Create prepare this noise-aware guide,
             // and alignment pyramid directly from the reference RAW. User-controlled luma/chroma
             // denoise remains a later RAW-render stage, not reference-frame preprocessing.
-            val referenceNoiseLut = createNoiseLut(
-                referenceCalibration,
-                referenceCalibration,
-            )
-            renderGuide(
-                rawTexture = referenceRaw,
-                noiseTexture = referenceNoiseLut,
-                calibration = referenceCalibration,
-                guideTexture = referenceGuide,
-                forceReferenceColorRgb = 0f,
-            )
+            val referenceNoiseLut = if (needsReferencePreparation) {
+                createNoiseLut(referenceCalibration, referenceCalibration)
+            } else {
+                0
+            }
+            if (needsReferencePreparation) {
+                renderGuide(
+                    rawTexture = referenceRaw,
+                    noiseTexture = referenceNoiseLut,
+                    calibration = referenceCalibration,
+                    guideTexture = referenceGuide,
+                    forceReferenceColorRgb = 0f,
+                )
+            }
             if (needsSabreCovariance) {
                 renderCovariance(
                     rawTexture = referenceRaw,
@@ -843,15 +877,22 @@ internal class GlesMgcRawSpatialStacker(
                 )
                 currentMergeCovariance = referenceCovariance
             }
-            val referenceGrayPyramid = buildGrayPyramid(
-                rawTexture = referenceRaw,
-                calibration = referenceCalibration,
-            )
-            val referenceRejectionLuma = buildRejectionBaseLuma(referenceGrayPyramid)
-            val referenceAlignmentProducts = buildReferenceAlignmentProducts(
-                referenceGrayPyramid,
-            )
-            GlesGpuScheduler.yieldToUiRenderer()
+            val referenceGrayPyramid = if (hasAuxiliaryFrames) {
+                buildGrayPyramid(rawTexture = referenceRaw, calibration = referenceCalibration)
+            } else {
+                emptyList()
+            }
+            val referenceRejectionLuma = if (hasAuxiliaryFrames) {
+                buildRejectionBaseLuma(referenceGrayPyramid)
+            } else {
+                0
+            }
+            val referenceAlignmentProducts = if (hasAuxiliaryFrames) {
+                buildReferenceAlignmentProducts(referenceGrayPyramid)
+            } else {
+                emptyList()
+            }
+            if (hasAuxiliaryFrames) GlesGpuScheduler.yieldToUiRenderer()
 
             val diagnosticMode = RawStackRuntimeDebug.mgcSpatialDiagnosticMode
             val referenceOnly =
@@ -1973,6 +2014,7 @@ internal class GlesMgcRawSpatialStacker(
                 mgcSharpenAttenuationScale = finishRawSharpenAttenuationScale,
                 coreImagingTuning = coreImagingTuning,
                 mgcSpatialReferenceOnlyDiagnostic = referenceOnly,
+                fastMomentsRawStats = fastMomentsRawStats,
             )
         } catch (error: Exception) {
             PLog.e(TAG, "MGC Spatial ${outputMode.name} merge failed", error)
@@ -3244,40 +3286,43 @@ internal class GlesMgcRawSpatialStacker(
     private fun initPrograms(
         includeBentoAssessment: Boolean,
         includeReferenceHighlightMask: Boolean = includeBentoAssessment,
+        includeTemporalProcessing: Boolean = true,
     ) {
-        guideProgram = linkProgram(GlesMgcRawSpatialShaders.guide, "mgc_spatial_guide")
-        if (mergeMethod == MgcMergeMethod.SABRE) {
-            covarianceProgram = linkProgram(
-                GlesMgcRawSpatialShaders.covariance,
-                "mgc_spatial_rgb_covariance",
+        if (includeTemporalProcessing) {
+            guideProgram = linkProgram(GlesMgcRawSpatialShaders.guide, "mgc_spatial_guide")
+            if (mergeMethod == MgcMergeMethod.SABRE) {
+                covarianceProgram = linkProgram(
+                    GlesMgcRawSpatialShaders.covariance,
+                    "mgc_spatial_rgb_covariance",
+                )
+            }
+            rawToGrayProgram = linkProgram(GlesMgcRawSpatialShaders.rawToGray, "mgc_raw_to_gray")
+            downsampleProgram = linkProgram(
+                GlesMgcRawSpatialShaders.grayDownsample,
+                "mgc_gray_downsample",
+            )
+            downsample4Program = linkProgram(
+                GlesMgcRawSpatialShaders.grayDownsample4,
+                "mgc_gray_downsample_4x",
+            )
+            alignmentGradientProductsProgram = linkProgram(
+                GlesMgcRawSpatialShaders.alignmentGradientProducts,
+                "mgc_alignment_gradient_products",
+            )
+            upsampleAlignmentProgram = linkProgram(
+                GlesMgcRawSpatialShaders.upsampleAlignment,
+                "mgc_upsample_alignment",
+            )
+            blockLucasKanadeProgram = linkProgram(
+                GlesMgcRawSpatialShaders.blockLucasKanade,
+                "mgc_block_lucas_kanade",
+            )
+            alignProgram = linkProgram(GlesMgcRawSpatialShaders.alignL1, "mgc_align_l1")
+            convertAlignmentProgram = linkProgram(
+                GlesMgcRawSpatialShaders.convertAlignment,
+                "mgc_convert_alignment",
             )
         }
-        rawToGrayProgram = linkProgram(GlesMgcRawSpatialShaders.rawToGray, "mgc_raw_to_gray")
-        downsampleProgram = linkProgram(
-            GlesMgcRawSpatialShaders.grayDownsample,
-            "mgc_gray_downsample",
-        )
-        downsample4Program = linkProgram(
-            GlesMgcRawSpatialShaders.grayDownsample4,
-            "mgc_gray_downsample_4x",
-        )
-        alignmentGradientProductsProgram = linkProgram(
-            GlesMgcRawSpatialShaders.alignmentGradientProducts,
-            "mgc_alignment_gradient_products",
-        )
-        upsampleAlignmentProgram = linkProgram(
-            GlesMgcRawSpatialShaders.upsampleAlignment,
-            "mgc_upsample_alignment",
-        )
-        blockLucasKanadeProgram = linkProgram(
-            GlesMgcRawSpatialShaders.blockLucasKanade,
-            "mgc_block_lucas_kanade",
-        )
-        alignProgram = linkProgram(GlesMgcRawSpatialShaders.alignL1, "mgc_align_l1")
-        convertAlignmentProgram = linkProgram(
-            GlesMgcRawSpatialShaders.convertAlignment,
-            "mgc_convert_alignment",
-        )
         strengthAlignmentProgram = linkProgram(
             GlesMgcRawSpatialShaders.strengthAlignment,
             "mgc_strength_alignment",
@@ -3286,49 +3331,51 @@ internal class GlesMgcRawSpatialStacker(
             GlesMgcRawSpatialShaders.strengthRejection,
             "mgc_strength_rejection",
         )
-        unblockerProgram = linkProgram(GlesMgcRawSpatialShaders.unblocker, "mgc_unblocker")
-        unblockerBlurProgram = linkProgram(
-            GlesMgcRawSpatialShaders.unblockerBlur,
-            "mgc_unblocker_blur",
-        )
-        rejectionProgram = linkProgram(
-            GlesMgcRawSpatialShaders.rejection,
-            "mgc_spatial_rejection",
-        )
-        if (outputMode == MgcSpatialOutputMode.RGB) {
-            rejectionAcceptanceProgram = linkProgram(
-                GlesMgcRawSpatialShaders.rejectionAcceptance,
-                "mgc_spatial_rgb_rejection_acceptance",
+        if (includeTemporalProcessing) {
+            unblockerProgram = linkProgram(GlesMgcRawSpatialShaders.unblocker, "mgc_unblocker")
+            unblockerBlurProgram = linkProgram(
+                GlesMgcRawSpatialShaders.unblockerBlur,
+                "mgc_unblocker_blur",
+            )
+            rejectionProgram = linkProgram(
+                GlesMgcRawSpatialShaders.rejection,
+                "mgc_spatial_rejection",
+            )
+            if (outputMode == MgcSpatialOutputMode.RGB) {
+                rejectionAcceptanceProgram = linkProgram(
+                    GlesMgcRawSpatialShaders.rejectionAcceptance,
+                    "mgc_spatial_rgb_rejection_acceptance",
+                )
+            }
+            rejectionPixelDifferenceDownsampleProgram = linkProgram(
+                GlesMgcRawSpatialShaders.rejectionPixelDifferenceDownsample,
+                "mgc_rejection_pixel_difference_downsample",
+            )
+            clippedGaussianHorizontalProgram = linkProgram(
+                GlesMgcRawSpatialShaders.clippedGaussianHorizontal,
+                "mgc_pixel_diff_clipped_gaussian_x",
+            )
+            clippedGaussianVerticalProgram = linkProgram(
+                GlesMgcRawSpatialShaders.clippedGaussianVertical,
+                "mgc_pixel_diff_clipped_gaussian_y",
+            )
+            rejectionFilterDownsampleProgram = linkProgram(
+                GlesMgcRawSpatialShaders.rejectionFilterDownsample,
+                "mgc_rejection_filter_downsample",
+            )
+            rejectionFilterProgram = linkProgram(
+                GlesMgcRawSpatialShaders.rejectionFilter,
+                "mgc_rejection_filter",
+            )
+            rejectionPostprocessProgram = linkProgram(
+                GlesMgcRawSpatialShaders.rejectionPostprocess,
+                "mgc_rejection_postprocess",
+            )
+            dilationProgram = linkProgram(
+                GlesMgcRawSpatialShaders.dilateRejection,
+                "mgc_rejection_dilation",
             )
         }
-        rejectionPixelDifferenceDownsampleProgram = linkProgram(
-            GlesMgcRawSpatialShaders.rejectionPixelDifferenceDownsample,
-            "mgc_rejection_pixel_difference_downsample",
-        )
-        clippedGaussianHorizontalProgram = linkProgram(
-            GlesMgcRawSpatialShaders.clippedGaussianHorizontal,
-            "mgc_pixel_diff_clipped_gaussian_x",
-        )
-        clippedGaussianVerticalProgram = linkProgram(
-            GlesMgcRawSpatialShaders.clippedGaussianVertical,
-            "mgc_pixel_diff_clipped_gaussian_y",
-        )
-        rejectionFilterDownsampleProgram = linkProgram(
-            GlesMgcRawSpatialShaders.rejectionFilterDownsample,
-            "mgc_rejection_filter_downsample",
-        )
-        rejectionFilterProgram = linkProgram(
-            GlesMgcRawSpatialShaders.rejectionFilter,
-            "mgc_rejection_filter",
-        )
-        rejectionPostprocessProgram = linkProgram(
-            GlesMgcRawSpatialShaders.rejectionPostprocess,
-            "mgc_rejection_postprocess",
-        )
-        dilationProgram = linkProgram(
-            GlesMgcRawSpatialShaders.dilateRejection,
-            "mgc_rejection_dilation",
-        )
         if (includeBentoAssessment) {
             findBlockTilesGatherEdgesProgram = linkProgram(
                 GlesMgcRawSpatialShaders.findBlockTilesGatherEdges,

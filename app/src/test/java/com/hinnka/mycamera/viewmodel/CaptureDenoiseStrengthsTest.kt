@@ -8,24 +8,22 @@ import org.junit.Test
 
 class CaptureDenoiseStrengthsTest {
     @Test
-    fun singleRawDefaultsAreEditableAndNotBaked() {
+    fun singleRawUsesHdrPlusDefaultsAndBakesThem() {
         val resolved = resolveCaptureDenoiseStrengths(
             isRawCapture = true,
-            isRawMaxCapture = false,
             userPrefs = null,
         )
 
-        assertEquals(RawDenoiseDefaults.RAW_LUMA_STRENGTH, resolved.editableLuma, 0f)
-        assertEquals(RawDenoiseDefaults.RAW_CHROMA_STRENGTH, resolved.editableChroma, 0f)
-        assertNull(resolved.bakedLuma)
-        assertNull(resolved.bakedChroma)
+        assertEquals(0f, resolved.editableLuma, 0f)
+        assertEquals(0f, resolved.editableChroma, 0f)
+        assertEquals(RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH, resolved.bakedLuma ?: -1f, 0f)
+        assertEquals(RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH, resolved.bakedChroma ?: -1f, 0f)
     }
 
     @Test
     fun rawMaxDefaultsAreBakedAndGalleryAdjustmentStartsAtZero() {
         val resolved = resolveCaptureDenoiseStrengths(
             isRawCapture = true,
-            isRawMaxCapture = true,
             userPrefs = UserPreferences(
                 rawMaxNoiseReduction = 1.4f,
                 rawMaxChromaNoiseReduction = 1.6f,
@@ -42,10 +40,9 @@ class CaptureDenoiseStrengthsTest {
     fun nonRawCaptureDoesNotInheritRawDenoise() {
         val resolved = resolveCaptureDenoiseStrengths(
             isRawCapture = false,
-            isRawMaxCapture = false,
             userPrefs = UserPreferences(
-                rawNoiseReduction = 1f,
-                rawChromaNoiseReduction = 1f,
+                rawMaxNoiseReduction = 1f,
+                rawMaxChromaNoiseReduction = 1f,
             ),
         )
 

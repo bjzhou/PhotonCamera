@@ -273,11 +273,6 @@
     <string name="settings_dro_dr200">DR200</string>
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: 핫셀블라드가 독자적으로 개발한 컬러 매니지먼트 시스템</string>
-    <string name="settings_raw_max_quality_tuning">HDR+ 화질 튜닝</string>
-    <string name="settings_raw_max_quality_tuning_description">물리적 센서 크기에 맞춰 병합, 노이즈 감소, 선명도를 조정합니다. 끄면 HDR+가 기본 이미징 매개변수를 사용합니다.</string>
-    <string name="settings_raw_default_sharpening_section">기본 선명도</string>
-    <string name="settings_raw_default_sharpening">선명도</string>
-    <string name="settings_raw_default_sharpening_description">RAW 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
     <string name="settings_raw_max_default_sharpening">HDR+ 기본 선명도</string>
     <string name="settings_raw_max_default_sharpening_description">HDR+ 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
     <string name="preset_import">프리셋 가져오기</string>

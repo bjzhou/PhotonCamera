@@ -57,18 +57,31 @@ internal class GlesMgcRawFusion(
             frames.forEach { it.image.close() }
             return null
         }
-        val baseFrameSelection = GlesMgcRawBaseFrameSelector(
-            width = width,
-            height = height,
-            sourceBounds = sourceBounds,
-            cfaPattern = cfaPattern,
-            canonicalBlackLevel = blackLevel,
-            whiteLevel = whiteLevel,
-            noiseProfileSelection = noiseProfileSelection,
-            useCurrentGlContext = useCurrentGlContext,
-        ).select(
-            frames = frames,
-        )
+        val canReuseSpatialReferenceUpload =
+            normalIndicesBeforeSelection.size == 1 &&
+                mergeMethod != MgcMergeMethod.SABRE &&
+                width >= 8 && height >= 8
+        val baseFrameSelection = if (canReuseSpatialReferenceUpload) {
+            GlesMgcRawBaseFrameSelection(
+                referenceIndex = normalIndicesBeforeSelection.single(),
+                candidateIndices = normalIndicesBeforeSelection.toIntArray(),
+                prunedLatestIndex = null,
+                measurements = emptyMap(),
+            )
+        } else {
+            GlesMgcRawBaseFrameSelector(
+                width = width,
+                height = height,
+                sourceBounds = sourceBounds,
+                cfaPattern = cfaPattern,
+                canonicalBlackLevel = blackLevel,
+                whiteLevel = whiteLevel,
+                noiseProfileSelection = noiseProfileSelection,
+                useCurrentGlContext = useCurrentGlContext,
+            ).select(
+                frames = frames,
+            )
+        }
         if (baseFrameSelection == null) {
             PLog.e(TAG, "MGC Spatial ${outputMode.name} RAW-content base-frame selection failed")
             frames.forEach { it.image.close() }
@@ -208,9 +221,12 @@ internal class GlesMgcRawFusion(
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
             gpuLinearRgbStorage = gpuLinearRgbStorage,
             coreImagingTuning = coreImagingTuning,
-        ).processFrames(scheduledFrames)?.copy(
-            fastMomentsRawStats = fastMomentsRawStats,
-        )
+            computeFastMomentsRawStats = canReuseSpatialReferenceUpload,
+        ).processFrames(scheduledFrames).let { result ->
+            fastMomentsRawStats?.let { stats ->
+                result?.copy(fastMomentsRawStats = stats)
+            } ?: result
+        }
     }
 
     private fun strictExposureProduct(frame: RawStackFrame): Double? =

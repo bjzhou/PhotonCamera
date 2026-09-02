@@ -3,10 +3,10 @@ package com.hinnka.mycamera.processor
 /**
  * Photon-owned controls for the core RAW imaging chain.
  *
- * The model is intentionally organized by processing domain. It is capture-scoped, persisted,
- * embedded in RAW metadata, and hidden from the settings UI until a dedicated tuning surface is
- * introduced. Runtime processors must consume these domain fields directly rather than importing
- * a third-party patch vocabulary.
+ * The model is intentionally organized by processing domain. New captures use [DEFAULT]; decoding
+ * custom properties remains available so RAW files created by older versions can be reprocessed
+ * with their original parameters. Runtime processors consume these domain fields directly rather
+ * than importing a third-party patch vocabulary.
  */
 data class PhotonCoreImagingTuning(
     val fusion: PhotonFusionTuning = PhotonFusionTuning.DEFAULT,
