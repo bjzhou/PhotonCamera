@@ -101,12 +101,7 @@ object VideoCapabilitiesResolver {
         }
         val enhancedCameraInputSize = cameraInputSizesByResolution[VideoResolutionPreset.FHD_1080P]
         val enhancedStabilizationAvailable = algorithmicStabilizationSupported &&
-            enhancedCameraInputSize != null &&
-            resolveAvailableFps(
-                characteristics = characteristics,
-                cameraInputSize = enhancedCameraInputSize,
-                previewSize = previewSize
-            ).contains(VideoFpsPreset.FPS_30)
+            enhancedCameraInputSize != null
         if (enhancedStabilizationAvailable) {
             availableStabilizationModes.add(VideoStabilizationMode.ENHANCED)
         }

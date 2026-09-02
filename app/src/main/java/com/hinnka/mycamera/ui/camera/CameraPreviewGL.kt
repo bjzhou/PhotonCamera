@@ -24,7 +24,9 @@ import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -72,6 +74,9 @@ fun CameraPreviewGL(
     focusPeakingEnabled: Boolean = true,
     stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
     photoPreviewStabilizationEnabled: Boolean = false,
+    videoPreviewStabilizationEnabled: Boolean = false,
+    videoPreviewStabilizationStrength: Float = 0f,
+    videoPreviewStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     modifier: Modifier = Modifier
 ) {
     val rotationDegrees = OrientationObserver.rotationDegrees
@@ -222,8 +227,25 @@ fun CameraPreviewGL(
                         glSurfaceView.setCalibrationOffset(calibrationOffset)
                         glSurfaceView.setCaptureAspectRatio(aspectRatio)
                         glSurfaceView.setStabilizationCoordinator(stabilizationCoordinator)
-                        glSurfaceView.setPhotoPreviewStabilizationEnabled(
-                            photoPreviewStabilizationEnabled && captureMode == CaptureMode.PHOTO
+                        val previewStabilizationUseCase = when {
+                            captureMode == CaptureMode.VIDEO &&
+                                videoPreviewStabilizationEnabled -> StabilizationUseCase.VIDEO
+                            captureMode == CaptureMode.PHOTO &&
+                                photoPreviewStabilizationEnabled -> StabilizationUseCase.PHOTO_PREVIEW
+                            else -> null
+                        }
+                        glSurfaceView.setPreviewStabilization(
+                            useCase = previewStabilizationUseCase,
+                            strength = if (previewStabilizationUseCase == StabilizationUseCase.VIDEO) {
+                                videoPreviewStabilizationStrength
+                            } else {
+                                StabilizationUseCase.PHOTO_PREVIEW.defaultStrength
+                            },
+                            lookaheadFrames = if (previewStabilizationUseCase == StabilizationUseCase.VIDEO) {
+                                videoPreviewStabilizationLookahead
+                            } else {
+                                DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+                            },
                         )
 
                         // 当 SurfaceTexture 准备好且尺寸已就绪时，通知外部打开相机。

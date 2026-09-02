@@ -2181,6 +2181,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoAudioInputId(it.videoAudioInputId)
                 cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
+                cameraController.setVideoEnhancedStabilizationStrength(
+                    it.videoEnhancedStabilizationStrength
+                )
+                cameraController.setVideoEnhancedStabilizationLookahead(
+                    it.videoEnhancedStabilizationLookahead
+                )
                 cameraController.setPhotoPreviewStabilizationEnabled(
                     it.photoPreviewStabilizationEnabled
                 )
@@ -2325,6 +2331,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoAudioInputId(prefs.videoAudioInputId)
                 cameraController.setVideoRecordingPath(prefs.videoRecordingPath, prefs.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(prefs.videoStabilizationMode)
+                cameraController.setVideoEnhancedStabilizationStrength(
+                    prefs.videoEnhancedStabilizationStrength
+                )
+                cameraController.setVideoEnhancedStabilizationLookahead(
+                    prefs.videoEnhancedStabilizationLookahead
+                )
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
                 cameraController.setVideoLensLockEnabled(prefs.videoLensLockEnabled)
                 cameraController.setVideoWhiteBalanceLockEnabled(prefs.videoWhiteBalanceLockEnabled)
@@ -3679,11 +3691,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             reopenCamera()
         }
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationConfig(
-                mode = resolvedConfig.stabilizationMode,
-                resolution = resolvedConfig.resolution,
-                fps = resolvedConfig.fps,
-            )
+            userPreferencesRepository.saveVideoStabilizationMode(resolvedConfig.stabilizationMode)
         }
     }
 
@@ -3691,6 +3699,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setPhotoPreviewStabilizationEnabled(enabled)
         viewModelScope.launch {
             userPreferencesRepository.savePhotoPreviewStabilizationEnabled(enabled)
+        }
+    }
+
+    fun setVideoEnhancedStabilizationStrength(strength: Float) {
+        cameraController.setVideoEnhancedStabilizationStrength(strength)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoEnhancedStabilizationStrength(strength)
+        }
+    }
+
+    fun setVideoEnhancedStabilizationLookahead(lookahead: Int) {
+        cameraController.setVideoEnhancedStabilizationLookahead(lookahead)
+        viewModelScope.launch {
+            userPreferencesRepository.saveVideoEnhancedStabilizationLookahead(lookahead)
         }
     }
 

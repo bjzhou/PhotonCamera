@@ -38,6 +38,10 @@ import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
+import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
+import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import com.hinnka.mycamera.video.CaptureMode
@@ -235,6 +239,8 @@ data class UserPreferences(
     val videoRecordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
     val videoRecordingTreeUri: String? = null,
     val videoStabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
+    val videoEnhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
+    val videoEnhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     val photoPreviewStabilizationEnabled: Boolean = false,
     val videoTorchEnabled: Boolean = false,
     val videoLensLockEnabled: Boolean = false,
@@ -496,6 +502,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
         private val VIDEO_ENHANCED_STABILIZATION_ENABLED =
             booleanPreferencesKey("video_enhanced_stabilization_enabled")
+        private val VIDEO_ENHANCED_STABILIZATION_STRENGTH =
+            floatPreferencesKey("video_enhanced_stabilization_strength")
+        private val VIDEO_ENHANCED_STABILIZATION_LOOKAHEAD =
+            intPreferencesKey("video_enhanced_stabilization_lookahead")
         private val PHOTO_PREVIEW_STABILIZATION_ENABLED =
             booleanPreferencesKey("photo_preview_stabilization_enabled")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
@@ -791,11 +801,7 @@ class UserPreferencesRepository(private val context: Context) {
                 } else {
                     storedVideoResolution
                 },
-                videoFps = if (videoStabilizationMode == VideoStabilizationMode.ENHANCED) {
-                    VideoFpsPreset.FPS_30
-                } else {
-                    storedVideoFps
-                },
+                videoFps = storedVideoFps,
                 videoAspectRatio = VideoAspectRatio.valueOf(
                     preferences[VIDEO_ASPECT_RATIO] ?: VideoAspectRatio.RATIO_16_9.name
                 ),
@@ -809,6 +815,14 @@ class UserPreferencesRepository(private val context: Context) {
                 videoRecordingPath = VideoRecordingPath.fromPersistedName(preferences[VIDEO_RECORDING_PATH]),
                 videoRecordingTreeUri = preferences[VIDEO_RECORDING_TREE_URI]?.takeIf { it.isNotBlank() },
                 videoStabilizationMode = videoStabilizationMode,
+                videoEnhancedStabilizationStrength = normalizeStabilizationStrength(
+                    preferences[VIDEO_ENHANCED_STABILIZATION_STRENGTH]
+                        ?: DEFAULT_VIDEO_STABILIZATION_STRENGTH
+                ),
+                videoEnhancedStabilizationLookahead = normalizeStabilizationLookahead(
+                    preferences[VIDEO_ENHANCED_STABILIZATION_LOOKAHEAD]
+                        ?: DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+                ),
                 photoPreviewStabilizationEnabled =
                     preferences[PHOTO_PREVIEW_STABILIZATION_ENABLED] ?: false,
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
@@ -1599,6 +1613,13 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveVideoStabilizationMode(mode: VideoStabilizationMode) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_STABILIZATION_MODE] = mode.name
+            preferences.remove(VIDEO_ENHANCED_STABILIZATION_ENABLED)
+        }
+    }
+
     suspend fun saveVideoStabilizationConfig(
         mode: VideoStabilizationMode,
         resolution: VideoResolutionPreset,
@@ -1609,6 +1630,20 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[VIDEO_RESOLUTION] = resolution.name
             preferences[VIDEO_FPS] = fps.name
             preferences.remove(VIDEO_ENHANCED_STABILIZATION_ENABLED)
+        }
+    }
+
+    suspend fun saveVideoEnhancedStabilizationStrength(strength: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_ENHANCED_STABILIZATION_STRENGTH] =
+                normalizeStabilizationStrength(strength)
+        }
+    }
+
+    suspend fun saveVideoEnhancedStabilizationLookahead(lookahead: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_ENHANCED_STABILIZATION_LOOKAHEAD] =
+                normalizeStabilizationLookahead(lookahead)
         }
     }
 

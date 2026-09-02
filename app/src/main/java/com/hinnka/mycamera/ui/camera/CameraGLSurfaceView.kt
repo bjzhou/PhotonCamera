@@ -17,7 +17,11 @@ import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
+import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.StabilizationUseCase
+import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
+import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
 
@@ -38,7 +42,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     private val renderer: LutRenderer = LutRenderer(context.applicationContext)
     private var currentStabilizationCoordinator: RealtimeStabilizationCoordinator? = null
-    private var currentPhotoPreviewStabilizationEnabled = false
+    private var currentPreviewStabilizationUseCase: StabilizationUseCase? = null
+    private var currentPreviewStabilizationStrength = 0f
 
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
@@ -166,11 +171,26 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
-    fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
-        if (currentPhotoPreviewStabilizationEnabled == enabled) return
-        currentPhotoPreviewStabilizationEnabled = enabled
+    private var currentPreviewStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+
+    fun setPreviewStabilization(
+        useCase: StabilizationUseCase?,
+        strength: Float,
+        lookaheadFrames: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    ) {
+        val normalizedStrength = normalizeStabilizationStrength(strength)
+        val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
+        if (currentPreviewStabilizationUseCase == useCase &&
+            kotlin.math.abs(currentPreviewStabilizationStrength - normalizedStrength) <= 0.0001f &&
+            currentPreviewStabilizationLookahead == normalizedLookahead
+        ) {
+            return
+        }
+        currentPreviewStabilizationUseCase = useCase
+        currentPreviewStabilizationStrength = normalizedStrength
+        currentPreviewStabilizationLookahead = normalizedLookahead
         queueEvent {
-            renderer.setPhotoPreviewStabilizationEnabled(enabled)
+            renderer.setPreviewStabilization(useCase, normalizedStrength, normalizedLookahead)
             requestRender()
         }
     }

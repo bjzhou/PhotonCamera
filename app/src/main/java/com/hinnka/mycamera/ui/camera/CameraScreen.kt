@@ -82,6 +82,7 @@ import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
+import com.hinnka.mycamera.video.VideoStabilizationMode
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1194,6 +1195,13 @@ fun CameraScreen(
                             stabilizationCoordinator = viewModel.realtimeStabilizationCoordinator,
                             photoPreviewStabilizationEnabled =
                                 state.photoPreviewStabilizationEnabled,
+                            videoPreviewStabilizationEnabled =
+                                state.videoConfig.stabilizationMode ==
+                                    VideoStabilizationMode.ENHANCED,
+                            videoPreviewStabilizationStrength =
+                                state.videoConfig.enhancedStabilizationStrength,
+                            videoPreviewStabilizationLookahead =
+                                state.videoConfig.enhancedStabilizationLookahead,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
