@@ -61,9 +61,6 @@ internal object BackupPreferenceSanitizer {
         "logical_camera_binding_whitelist",
         "hidden_focal_lengths",
         "video_audio_input_id",
-        "fix_tonemap_preview",
-        "fix_tonemap_capture",
-        "hlg_hardware_compatibility_enabled",
         "camera_startup_defaults_restored_v1",
     )
 

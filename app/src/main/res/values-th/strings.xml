@@ -198,8 +198,8 @@
     <string name="settings_frame_style">สไตล์กรอบ</string>
     <string name="settings_frame_description">เพิ่มกรอบตกแต่งและลายน้ำให้กับรูปภาพ</string>
     <string name="settings_section_software_processing">การปรับจูน</string>
-    <string name="settings_baseline_jpg_title">การแก้ไขสีพื้นฐาน JPG</string>
-    <string name="settings_baseline_jpg_description">ใช้ LUT พื้นฐานและสูตรพื้นฐานก่อนเลือก LUT ครีเอทีฟโฆษณา JPG ปกติ</string>
+    <string name="settings_baseline_jpg_title">การแก้ไขสีพื้นฐาน</string>
+    <string name="settings_baseline_jpg_description">ใช้ LUT พื้นฐานและสูตรพื้นฐานก่อนเลือก LUT ครีเอทีฟ</string>
     <string name="settings_baseline_raw_title">การแก้ไขสีพื้นฐาน</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">นำเข้า DCP</string>
@@ -243,7 +243,6 @@
     <string name="settings_nr_level_fast">เร็ว</string>
     <string name="settings_nr_level_high_quality">HQ</string>
     <string name="settings_nr_level_zsl">ZSL</string>
-    <string name="settings_nr_level_auto">อัตโนมัติ</string>
     <string name="settings_edge_level">ระดับความคมชัด</string>
     <string name="settings_edge_level_description">ปรับโหมดการเร่งความคมชัดที่ขอบด้วยฮาร์ดแวร์</string>
     <string name="settings_sharpening">เพิ่มความคมชัด</string>
@@ -255,14 +254,6 @@
     <string name="settings_detail_enhancement_description">ปรับแต่งพารามิเตอร์ของความคมชัดและการลดสัญญาณรบกวนอย่างละเอียด</string>
     <string name="settings_photo_quality">คุณภาพรูปภาพ</string>
     <string name="settings_photo_quality_description">เลือกคุณภาพการบีบอัด JPEG สำหรับรูปภาพ (คุณภาพสูง = ภาพชัดขึ้น แต่ไฟล์มีขนาดใหญ่ขึ้น)</string>
-    <string name="settings_tonemap_mode">การทำแผนที่โทน</string>
-    <string name="settings_tonemap_mode_description">ปรับโหมดการจับคู่โทนสีฮาร์ดแวร์ (คอนทราสต์/แกมมา)</string>
-    <string name="settings_tonemap_mode_system_default">ค่าเริ่มต้นของระบบ</string>
-    <string name="settings_tonemap_mode_srgb">sRGB</string>
-    <string name="settings_fix_tonemap_preview">แก้ไขข้อยกเว้นการแสดงตัวอย่างการแมปโทน</string>
-    <string name="settings_fix_tonemap_preview_description">ตัวอย่างอุปกรณ์บางรุ่นมาพร้อมกับ sRGB Gamma อยู่แล้ว หลังจากเปิดใช้งาน กล้องจะแปลงเป็นเส้นตรงในหน้าตัวอย่างเท่านั้น จากนั้นจึงใช้ Tone Curve แบบกำหนดเอง และเอาต์พุตการถ่ายภาพยังคงไม่เปลี่ยนแปลง</string>
-    <string name="settings_fix_tonemap_capture">แก้ไขข้อยกเว้นการถ่ายภาพการแมปโทน</string>
-    <string name="settings_fix_tonemap_capture_description">ภาพถ่ายจากอุปกรณ์บางรุ่นมี sRGB Gamma อยู่แล้ว หลังจากเปิดใช้งาน กล้องจะแปลงอินพุตการถ่ายภาพเป็นเส้นตรงก่อนใช้ Tone Curve แบบกำหนดเอง</string>
 
     <!-- LUT -->
     <string name="filter_intensity">ความเข้ม LUT</string>
@@ -633,10 +624,6 @@
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_use_p010">P010 (YUV 10 บิต)</string>
     <string name="settings_use_p010_description">เปิดใช้งานเอาต์พุต YUV 10 บิตเพื่อความแม่นยำของข้อมูลภาพที่ดีขึ้น มีผลกับอุปกรณ์ที่รองรับเมื่อปิดใช้งาน RAW</string>
-    <string name="settings_use_hlg10">HLG10 HDR</string>
-    <string name="settings_use_hlg10_description">เปิดใช้งานการถ่ายภาพช่วงไดนามิก HLG10 บนอุปกรณ์ที่รองรับ ต้องเปิด P010 และปิด RAW พร้อมกัน</string>
-    <string name="settings_hlg_hardware_compatibility">การถอดรหัสความเข้ากันได้ของ HLG</string>
-    <string name="settings_hlg_hardware_compatibility_description">ภาพอาจมืดหรือผิดปกติหลังจากเปิด HLG บนอุปกรณ์บางตัว หากคุณพบภาพที่ผิดปกติ โปรดเปิดตัวเลือกนี้สำหรับการถอดรหัสด้วยตนเอง หากภาพเป็นปกติโปรดปิดไว้</string>
     <string name="settings_use_p3_color_space">ช่วงสี P3</string>
     <string name="settings_use_p3_color_space_description">เปิดใช้งานเอาต์พุต Display P3 บนอุปกรณ์ที่รองรับ ปิดโดยค่าเริ่มต้น</string>
     <string name="settings_ultra_hdr_gain_map">Ultra HDR</string>

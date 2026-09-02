@@ -129,7 +129,6 @@ class VideoRecorder(
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
     private var requestedEnhancedStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
     private var cameraInputStarted = false
-    private var hlgCameraInput = false
     private var requestedCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
     private var cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
     private var timelineOriginUs = UNSET_TIMESTAMP
@@ -189,7 +188,6 @@ class VideoRecorder(
         codecMime: String,
         colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
         colorLayers: List<VideoColorEffectLayer> = emptyList(),
-        hlgInput: Boolean = false,
         cameraTimestampSource: Int = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
@@ -214,7 +212,6 @@ class VideoRecorder(
         requestedCodecMime = codecMime
         requestedColorConfig = colorConfig
         requestedColorLayers = colorLayers.toList()
-        hlgCameraInput = hlgInput
         requestedCameraTimestampSource = cameraTimestampSource
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedEnhancedStabilization = enhancedStabilization
@@ -359,7 +356,6 @@ class VideoRecorder(
             encoderOutputSize = requestedSize,
             colorLayers = requestedColorLayers,
             videoLogProfile = requestedColorConfig.logProfile,
-            hlgInput = hlgCameraInput,
             mirrorHorizontally =
                 requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 == 0,
             mirrorVertically =

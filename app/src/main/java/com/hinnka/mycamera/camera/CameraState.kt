@@ -9,6 +9,20 @@ import com.hinnka.mycamera.video.VideoConfig
 import com.hinnka.mycamera.video.VideoRecordingState
 import kotlin.math.abs
 
+object NoiseReductionLevel {
+    const val OFF = 0
+    const val FAST = 1
+    const val HIGH_QUALITY = 2
+    const val ZERO_SHUTTER_LAG = 3
+    const val MINIMAL = 4
+    const val DEFAULT = HIGH_QUALITY
+
+    fun normalize(level: Int): Int = when (level) {
+        OFF, FAST, HIGH_QUALITY, ZERO_SHUTTER_LAG, MINIMAL -> level
+        else -> DEFAULT
+    }
+}
+
 /**
  * 画面比例。内置比例使用稳定名称持久化，自定义比例使用 CUSTOM_宽_高。
  */
@@ -341,8 +355,8 @@ data class CameraState(
     // 网格线
     val showGrid: Boolean = false, // 是否显示网格线
 
-    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto)
-    val nrLevel: Int = 5,
+    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal)
+    val nrLevel: Int = NoiseReductionLevel.DEFAULT,
     val availableNrModes: IntArray = intArrayOf(),
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
     val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
@@ -358,24 +372,18 @@ data class CameraState(
     val rawMinShutterSpeedNs: Long = 0L,
     val useLivePhoto: Boolean = false,
     val droMode: String = "OFF",
-    val tonemapMode: String = "SYSTEM_DEFAULT",
-    val fixTonemapPreview: Boolean = false,
-    val fixTonemapCapture: Boolean = false,
     // 是否正在拍摄 Live Photo (用于 UI 动画)
     val isCapturingLivePhoto: Boolean = false,
     val applyUltraHDR: Boolean = true,
     val useP010: Boolean = false,
-    val useHlg10: Boolean = false,
     val useP3ColorSpace: Boolean = false,
     val isP010Supported: Boolean = false,
-    val isHlg10Supported: Boolean = false,
     val burstCapturing: Boolean = false,
     val hdrBracketCapturing: Boolean = false,
     val hdrBracketFrameCount: Int = 0,
     val latitude: Double? = null,
     val longitude: Double? = null,
     val isP3Supported: Boolean = false,
-    val currentDynamicRangeProfile: String = "STANDARD",
     val captureMode: CaptureMode = CaptureMode.PHOTO,
     val photoPreviewStabilizationEnabled: Boolean = false,
     val videoConfig: VideoConfig = VideoConfig(),
@@ -392,9 +400,6 @@ data class CameraState(
      */
     val isAutoExposure: Boolean
         get() = isIsoAuto && isShutterSpeedAuto
-
-    val isHLG: Boolean
-        get() = currentDynamicRangeProfile == "HLG10"
 
     val isMultiFrameEnabled: Boolean
         get() = multiFrameOutputScale != null && (!useRaw || isRawSupported)

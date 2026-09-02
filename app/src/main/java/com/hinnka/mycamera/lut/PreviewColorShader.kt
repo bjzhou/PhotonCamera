@@ -36,7 +36,6 @@ internal object PreviewColorShader {
             uniform bool uVideoLogEnabled;
             uniform int uVideoLogCurve;
             uniform int uVideoColorSpace;
-            uniform bool uIsHlgInput;
 
             uniform bool uColorRecipeEnabled;
             uniform mat4 uSTMatrix;
@@ -89,7 +88,6 @@ internal object PreviewColorShader {
             const float PI = 3.14159265359;
 
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
-            ${if (variant.includeHlgInput) PreviewColorShaderModules.HLG_TO_LINEAR else PreviewColorShaderModules.HLG_TO_LINEAR_STUB}
             ${PreviewColorShaderModules.EXPOSURE}
             ${DirectFlashShader.GLSL}
             ${ThreeWayColorGradingShader.GLSL}
@@ -205,11 +203,6 @@ internal object PreviewColorShader {
                     color = vec4(r, g, b, a);
                 } else {
                     color = texture(uCameraTexture, uvCoord);
-                }
-
-                if (uIsHlgInput) {
-                    color.rgb = hlgToLinear(color.rgb);
-                    color.rgb = linearToSrgb(color.rgb);
                 }
 
                 ${if (variant.includeJpegInputToneCurve) """

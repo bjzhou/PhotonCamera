@@ -18,6 +18,7 @@ import com.hinnka.mycamera.camera.IszLensConfig
 import com.hinnka.mycamera.camera.IszRawDngMetadataCorrections
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.NoiseReductionLevel
 import com.hinnka.mycamera.camera.VendorCaptureSettings
 import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.gallery.PhotoSavePath
@@ -69,15 +70,6 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
         listOf(OpenAiApiKeyEncryptionMigration())
     },
 )
-
-private fun sanitizeTonemapMode(mode: String): String {
-    return when (mode) {
-        "FAST", "HIGH_QUALITY" -> "SYSTEM_DEFAULT"
-        "REC709" -> "SRGB"
-        "SYSTEM_DEFAULT", "SRGB" -> mode
-        else -> "SYSTEM_DEFAULT"
-    }
-}
 
 private fun resolveStoredRawAutoExposure(mode: String?, legacyValue: Boolean?): Boolean {
     return when {
@@ -182,7 +174,7 @@ data class UserPreferences(
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
     val photoSavePath: PhotoSavePath = PhotoSavePath.DCIM_PHOTON,
     val photoSaveTreeUri: String? = null,
-    val nrLevel: Int = 5,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto
+    val nrLevel: Int = NoiseReductionLevel.DEFAULT,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal
     val edgeLevel: Int = 1, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
     val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
@@ -219,16 +211,11 @@ data class UserPreferences(
     val captureButtonColor: Int = 0xFFFFFFFF.toInt(),
     val captureButtonImagePath: String? = null,
     val droMode: String = "OFF", // DRO 模式
-    val tonemapMode: String = "SYSTEM_DEFAULT", // 色调映射模式
-    val fixTonemapPreview: Boolean = false, // 修复部分设备自定义色调映射预览异常
-    val fixTonemapCapture: Boolean = false, // 修复部分设备自定义色调映射拍摄异常
     val applyUltraHDR: Boolean = false, // 是否应用 Ultra HDR 策略
     val colorSpace: ColorSpace = ColorSpace.SRGB,
     val logCurve: TransferCurve = TransferCurve.SRGB,
     val rawLuts: Map<String, String> = mapOf(TransferCurve.SRGB.name to RawProfile.STANDARD_SRGB.rawLut),
     val useP010: Boolean = false,
-    val useHlg10: Boolean = false,
-    val hlgHardwareCompatibilityEnabled: Boolean = false,
     val useP3ColorSpace: Boolean = false,
     val videoResolution: VideoResolutionPreset = VideoResolutionPreset.FHD_1080P,
     val videoFps: VideoFpsPreset = VideoFpsPreset.FPS_30,
@@ -481,15 +468,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val CAPTURE_BUTTON_COLOR = intPreferencesKey("capture_button_color")
         private val CAPTURE_BUTTON_IMAGE_PATH = stringPreferencesKey("capture_button_image_path")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
-        private val TONEMAP_MODE = stringPreferencesKey("tonemap_mode")
-        private val FIX_TONEMAP_PREVIEW = booleanPreferencesKey("fix_tonemap_preview")
-        private val FIX_TONEMAP_CAPTURE = booleanPreferencesKey("fix_tonemap_capture")
         private val APPLY_ULTRA_HDR = booleanPreferencesKey("apply_ultra_hdr")
         private val COLOR_SPACE = stringPreferencesKey("color_space")
         private val LOG_CURVE = stringPreferencesKey("log_curve")
         private val USE_P010 = booleanPreferencesKey("use_p010")
-        private val USE_HLG10 = booleanPreferencesKey("use_hlg10")
-        private val HLG_HARDWARE_COMPATIBILITY_ENABLED = booleanPreferencesKey("hlg_hardware_compatibility_enabled")
         private val USE_P3_COLOR_SPACE = booleanPreferencesKey("use_p3_color_space")
         private val VIDEO_RESOLUTION = stringPreferencesKey("video_resolution")
         private val VIDEO_FPS = stringPreferencesKey("video_fps")
@@ -719,7 +701,9 @@ class UserPreferencesRepository(private val context: Context) {
                 autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true,
                 photoSavePath = PhotoSavePath.fromPersistedName(preferences[PHOTO_SAVE_PATH]),
                 photoSaveTreeUri = preferences[PHOTO_SAVE_TREE_URI]?.takeIf { it.isNotBlank() },
-                nrLevel = preferences[NR_LEVEL] ?: 5,
+                nrLevel = NoiseReductionLevel.normalize(
+                    preferences[NR_LEVEL] ?: NoiseReductionLevel.DEFAULT
+                ),
                 edgeLevel = preferences[EDGE_LEVEL] ?: 1,
                 vendorCaptureSettingsByLens = VendorCaptureSettingsByLens.deserialize(
                     preferences[VENDOR_CAPTURE_SETTINGS]
@@ -785,16 +769,11 @@ class UserPreferencesRepository(private val context: Context) {
                 captureButtonImagePath = preferences[CAPTURE_BUTTON_IMAGE_PATH]
                     ?.takeIf { it.isNotBlank() },
                 droMode = preferences[DRO_MODE] ?: if (preferences[RAW_DRO_ENABLED_KEY] == true) "DR100" else "OFF",
-                tonemapMode = sanitizeTonemapMode(preferences[TONEMAP_MODE] ?: "SYSTEM_DEFAULT"),
-                fixTonemapPreview = preferences[FIX_TONEMAP_PREVIEW] ?: false,
-                fixTonemapCapture = preferences[FIX_TONEMAP_CAPTURE] ?: false,
                 applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: false,
                 colorSpace = ColorSpace.valueOf(preferences[COLOR_SPACE] ?: ColorSpace.SRGB.name),
                 logCurve = TransferCurve.fromPersistedName(preferences[LOG_CURVE] ?: TransferCurve.SRGB.name),
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
-                useHlg10 = preferences[USE_HLG10] ?: false,
-                hlgHardwareCompatibilityEnabled = preferences[HLG_HARDWARE_COMPATIBILITY_ENABLED] ?: false,
                 useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
                 videoResolution = storedVideoResolution,
                 videoFps = storedVideoFps,
@@ -1326,7 +1305,6 @@ class UserPreferencesRepository(private val context: Context) {
             if (preferences[CAMERA_STARTUP_DEFAULTS_RESTORED_V1] == true) {
                 return@edit
             }
-            preferences[TONEMAP_MODE] = "SYSTEM_DEFAULT"
             val exposureMode = RawAdaptiveExposureMode.fromPersistedValue(
                 value = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
                 usePhotonHdr =
@@ -1684,7 +1662,7 @@ class UserPreferencesRepository(private val context: Context) {
      */
     suspend fun saveNRLevel(level: Int) {
         context.dataStore.edit { preferences ->
-            preferences[NR_LEVEL] = level
+            preferences[NR_LEVEL] = NoiseReductionLevel.normalize(level)
         }
     }
 
@@ -2112,33 +2090,6 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     /**
-     * 保存色调映射模式
-     */
-    suspend fun saveTonemapMode(mode: String) {
-        context.dataStore.edit { preferences ->
-            preferences[TONEMAP_MODE] = sanitizeTonemapMode(mode)
-        }
-    }
-
-    /**
-     * 保存是否修复自定义色调映射预览异常
-     */
-    suspend fun saveFixTonemapPreview(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[FIX_TONEMAP_PREVIEW] = enabled
-        }
-    }
-
-    /**
-     * 保存是否修复自定义色调映射拍摄异常
-     */
-    suspend fun saveFixTonemapCapture(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[FIX_TONEMAP_CAPTURE] = enabled
-        }
-    }
-
-    /**
      * 保存是否应用 Ultra HDR 策略
      */
     suspend fun saveApplyUltraHDR(enabled: Boolean) {
@@ -2188,18 +2139,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseP010(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_P010] = enabled
-        }
-    }
-
-    suspend fun saveUseHlg10(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_HLG10] = enabled
-        }
-    }
-
-    suspend fun saveHlgHardwareCompatibilityEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[HLG_HARDWARE_COMPATIBILITY_ENABLED] = enabled
         }
     }
 

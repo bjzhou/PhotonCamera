@@ -134,18 +134,6 @@ data class MultipleExposureSessionState(
         get() = capturedCount >= 2 && !isProcessing
 }
 
-private const val TONEMAP_MODE_SYSTEM_DEFAULT = "SYSTEM_DEFAULT"
-private const val TONEMAP_MODE_SRGB = "SRGB"
-
-private fun sanitizeViewModelTonemapMode(mode: String): String {
-    return when (mode) {
-        "FAST", "HIGH_QUALITY" -> TONEMAP_MODE_SYSTEM_DEFAULT
-        "REC709" -> TONEMAP_MODE_SRGB
-        TONEMAP_MODE_SYSTEM_DEFAULT, TONEMAP_MODE_SRGB -> mode
-        else -> TONEMAP_MODE_SYSTEM_DEFAULT
-    }
-}
-
 private fun resolvePreviewBaselineTarget(prefs: UserPreferences): BaselineColorCorrectionTarget? {
     return if (prefs.useRaw) null else BaselineColorCorrectionTarget.JPG
 }
@@ -1055,14 +1043,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return base.normalized()
     }
 
-    private fun effectiveCameraTonemapMode(prefs: UserPreferences): String {
-        return sanitizeViewModelTonemapMode(prefs.tonemapMode)
-    }
-
-    private fun metadataTonemapMode(prefs: UserPreferences?): String {
-        return sanitizeViewModelTonemapMode(prefs?.tonemapMode ?: TONEMAP_MODE_SYSTEM_DEFAULT)
-    }
-
     fun savePreset(preset: com.hinnka.mycamera.model.CameraPreset) {
         viewModelScope.launch {
             val resolvedPreset = presetMutationMutex.withLock {
@@ -1361,7 +1341,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, AspectRatio.entries)
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 5)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, NoiseReductionLevel.DEFAULT)
     val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRaw }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1675,15 +1655,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.droMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
-    val tonemapMode: StateFlow<String> = userPreferencesRepository.userPreferences
-        .map { it.tonemapMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "SYSTEM_DEFAULT")
-    val fixTonemapPreview: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.fixTonemapPreview }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val fixTonemapCapture: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.fixTonemapCapture }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val applyUltraHDR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.applyUltraHDR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1711,12 +1682,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP010 }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val useHlg10: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useHlg10 }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val hlgHardwareCompatibilityEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.hlgHardwareCompatibilityEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP3ColorSpace }
@@ -2185,12 +2150,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (currentCameraState.rawMinShutterSpeedNs != it.rawMinShutterSpeedNs) {
                     cameraController.setRawMinShutterSpeedNs(it.rawMinShutterSpeedNs)
                 }
-                val effectiveTonemapMode = effectiveCameraTonemapMode(it)
-                if (currentCameraState.tonemapMode != effectiveTonemapMode) {
-                    cameraController.setTonemapMode(effectiveTonemapMode)
-                }
-                cameraController.setFixTonemapPreview(it.fixTonemapPreview)
-                cameraController.setFixTonemapCapture(it.fixTonemapCapture)
                 if (cameraController.state.value.meteringMode != it.meteringMode) {
                     cameraController.setMeteringMode(it.meteringMode)
                 }
@@ -2229,8 +2188,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
                 // 同步 P010 设置到相机控制器
                 cameraController.setUseP010(it.useP010)
-                // 同步 HLG10 设置到相机控制器
-                cameraController.setUseHlg10(it.useHlg10)
                 // 同步 P3 色域设置到相机控制器
                 cameraController.setUseP3ColorSpace(it.useP3ColorSpace)
             }
@@ -2399,10 +2356,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseLivePhoto(
                     prefs.useLivePhoto && !prefs.useJpgMax && prefs.captureMode == CaptureMode.PHOTO
                 )
-                cameraController.setTonemapMode(effectiveCameraTonemapMode(prefs))
-                cameraController.setFixTonemapPreview(prefs.fixTonemapPreview)
-                cameraController.setFixTonemapCapture(prefs.fixTonemapCapture)
-
                 // 应用保存的虚拟光圈
                 applyDefaultVirtualAperture(prefs.defaultVirtualAperture)
             } else {
@@ -2420,7 +2373,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             state.collect { currentState ->
                 glSurfaceView?.let { view ->
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
-                    view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                     currentState.focusPoint?.let { fp ->
                         view.setFocusPoint(android.graphics.PointF(fp.first, fp.second))
                     }
@@ -2970,7 +2922,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 view.setParams(currentRecipeParams.value)
                 view.setColorRecipeEnabled(!currentRecipeParams.value.isDefault())
                 view.setVideoLogProfile(currentState.videoConfig.logProfile)
-                view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                 view.restoreRenderStateAfterResume()
             }
         }
@@ -3026,7 +2977,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         return MediaMetadata(
             lutId = lutIdToSave,
-            tonemapMode = metadataTonemapMode(userPrefs),
             frameId = frameIdToSave,
             colorRecipeParams = getMergedRecipeParams(),
             baselineTarget = baselineMetadata?.first,
@@ -3297,8 +3247,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 captureInfo = captureInfo,
                 captureMode = "multiple_exposure",
                 multipleExposureFrameCount = multipleExposureState.targetCount
-            ).copy(
-                tonemapMode = "SYSTEM_DEFAULT"
             ).also { multipleExposureMetadata = it }
 
             val frameFile = GalleryManager.saveMultipleExposureFrame(
@@ -4148,26 +4096,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun shouldUseHlgCapture(): Boolean {
-        val state = state.value
-        val baseCondition = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                state.isP010Supported &&
-                state.isHlg10Supported &&
-                !state.useRaw
-        if (!baseCondition) return false
-        // 用户主动开启 HLG10 录制
-        val userHlg = state.useP010 && state.useHlg10
-        // Log LUT 需要 HLG 采集获取线性信号（替代 tonemap gamma，提升兼容性）
-        val logLutHlg = state.lutEnabled && state.isLogLutActive
-        // Video Log 同样需要 HLG 采集获取线性信号
-        val videoLogHlg = state.captureMode == CaptureMode.VIDEO && state.videoConfig.logProfile.isEnabled
-        return userHlg || logLutHlg || videoLogHlg
-    }
-
-    private fun shouldTreatPreviewAsHlgInput(currentState: CameraState): Boolean {
-        return hlgHardwareCompatibilityEnabled.value && currentState.isHLG
-    }
-
     /**
      * 切换到下一个滤镜
      */
@@ -4293,21 +4221,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setUseHlg10(enabled: Boolean) {
-        cameraController.setUseHlg10(enabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseHlg10(enabled)
-        }
-        reopenCamera()
-    }
-
-    fun setHlgHardwareCompatibilityEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveHlgHardwareCompatibilityEnabled(enabled)
-        }
-        glSurfaceView?.setIsHlgInput(shouldTreatPreviewAsHlgInput(state.value))
-    }
-
     fun setUseP3ColorSpace(enabled: Boolean) {
         cameraController.setUseP3ColorSpace(enabled)
         viewModelScope.launch {
@@ -4388,7 +4301,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val params = getMergedRecipeParams(contentRepository.lutManager.loadColorRecipeParams(currentLutId.value))
             contentRepository.imageProcessor.applyLut(
                 bitmap = bitmap,
-                isHlgInput = shouldTreatPreviewAsHlgInput(state.value),
                 lutConfig = lut,
                 colorRecipeParams = params
             )
@@ -5549,7 +5461,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = MediaMetadata(
                 lutId = lutIdToSave,
-                tonemapMode = metadataTonemapMode(userPrefs),
                 frameId = frameIdToSave,
                 colorRecipeParams = getMergedRecipeParams(),
                 baselineTarget = baselineMetadata?.first,
@@ -5616,7 +5527,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 droMode = droModeString,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
-                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
                 computationalAperture = aperture,
                 focusPointX = state.value.focusPoint?.first,
                 focusPointY = state.value.focusPoint?.second,
@@ -5791,7 +5701,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 droMode = droMode.value,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
-                dynamicRangeProfile = currentState.currentDynamicRangeProfile,
                 computationalAperture = computationalAperture,
                 focusPointX = currentState.focusPoint?.first,
                 focusPointY = currentState.focusPoint?.second,
@@ -6003,7 +5912,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = MediaMetadata(
                 lutId = lutIdToSave,
-                tonemapMode = metadataTonemapMode(userPrefs),
                 frameId = frameIdToSave,
                 colorRecipeParams = getMergedRecipeParams(),
                 baselineTarget = baselineMetadata?.first,
@@ -6070,7 +5978,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 droMode = droModeString,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
-                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
                 computationalAperture = aperture,
                 focusPointX = state.value.focusPoint?.first,
                 focusPointY = state.value.focusPoint?.second,
@@ -6438,7 +6345,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
         val metadata = MediaMetadata(
             lutId = lutIdToSave,
-            tonemapMode = metadataTonemapMode(userPrefs),
             frameId = frameIdToSave,
             colorRecipeParams = getMergedRecipeParams(),
             baselineTarget = baselineMetadata?.first,
@@ -6500,7 +6406,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             aperture = captureInfo.formatAperture(),
             isMirrored = shouldMirror,
             colorSpace = captureInfo.colorSpace,
-            dynamicRangeProfile = state.value.currentDynamicRangeProfile,
             computationalAperture = aperture,
             focusPointX = state.value.focusPoint?.first,
             focusPointY = state.value.focusPoint?.second,
@@ -6716,27 +6621,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             applyCameraFeatureUpdate(
                 CameraFeatureUpdate(droMode = SettingValue(mode))
             )
-        }
-    }
-
-    /**
-     * 设置色调映射模式
-     */
-    fun setTonemapMode(mode: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveTonemapMode(sanitizeViewModelTonemapMode(mode))
-        }
-    }
-
-    fun setFixTonemapPreview(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveFixTonemapPreview(enabled)
-        }
-    }
-
-    fun setFixTonemapCapture(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveFixTonemapCapture(enabled)
         }
     }
 

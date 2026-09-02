@@ -129,9 +129,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var aCopyPositionLoc: Int = 0
     private var aCopyTexCoordLoc: Int = 0
 
-    // 是否以 HLG10 动态范围采集（Log LUT 兼容性方案）
-    var isHlgInput: Boolean = false
-
     // 曲线纹理
     private var curveTextureId: Int = 0
     private var baselineCurveTextureId: Int = 0
@@ -819,7 +816,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         lutEnabled: Boolean,
         params: com.hinnka.mycamera.model.ColorRecipeParams,
         enableVideoLog: Boolean,
-        treatSourceAsHlgInput: Boolean,
     ): ColorPassLocations? {
         val variant = PreviewColorShaderVariant.forPass(
             textureSource = textureSource,
@@ -827,7 +823,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             lutConfig = lutConfig,
             lutEnabled = lutEnabled && lutConfig != null,
             videoLogEnabled = enableVideoLog && videoLogProfile.isEnabled,
-            hlgInput = treatSourceAsHlgInput,
         )
         return colorProgramCache.get(variant)
     }
@@ -850,7 +845,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveTextureId: Int,
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
-        treatSourceAsHlgInput: Boolean,
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
@@ -889,9 +883,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glUniform1i(locations.uVideoLogEnabledLocation, if (enableVideoLog && videoLogProfile.isEnabled) 1 else 0)
         GLES30.glUniform1i(locations.uVideoLogCurveLocation, LutShaderMappings.transferCurveId(videoLogProfile.logCurve))
         GLES30.glUniform1i(locations.uVideoColorSpaceLocation, LutShaderMappings.colorSpaceId(videoLogProfile.colorSpace))
-        GLES30.glUniform1i(locations.uIsHlgInputLocation, if (treatSourceAsHlgInput) 1 else 0)
-
-//        PLog.d(TAG, "uIsHlgInputLocation=$treatSourceAsHlgInput")
 
         val recipeEnabled = !params.isDefault()
         GLES30.glUniform1i(locations.uColorRecipeEnabledLocation, if (recipeEnabled) 1 else 0)
@@ -1142,7 +1133,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     lutEnabled = lutEnabled && currentLutConfig != null,
                     params = creativeParams,
                     enableVideoLog = false,
-                    treatSourceAsHlgInput = false,
                 ) ?: run {
                     return
                 }
@@ -1164,7 +1154,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     curveTextureId = curveTextureId,
                     curveEnabled = curveEnabled && curveTextureId != 0,
                     enableVideoLog = false,
-                    treatSourceAsHlgInput = false
                 )
                 currentTexId = stackTextureId
             }
@@ -1442,14 +1431,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             false
         }
         val enableVideoLog = true
-        val currentSourceIsHlg = isHlgInput && previewStabilizationUseCase == null
         val locations = getColorPassLocations(
             textureSource = currentCameraTextureSource,
             lutConfig = layerLutConfig,
             lutEnabled = layerLutEnabled,
             params = layerParams,
             enableVideoLog = enableVideoLog,
-            treatSourceAsHlgInput = currentSourceIsHlg,
         ) ?: return
         drawColorPass(
             locations = locations,
@@ -1469,7 +1456,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
-            treatSourceAsHlgInput = currentSourceIsHlg,
         )
 
         // 测光和直方图（按需）

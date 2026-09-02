@@ -11,7 +11,6 @@ internal enum class PreviewColorTextureSource {
 
 internal data class PreviewColorShaderVariant(
     val textureSource: PreviewColorTextureSource,
-    val includeHlgInput: Boolean,
     val includeExtendedLutCurves: Boolean,
     val includeOklchDensity: Boolean,
     val includeLchMixer: Boolean,
@@ -27,12 +26,10 @@ internal data class PreviewColorShaderVariant(
             lutConfig: LutConfig?,
             lutEnabled: Boolean,
             videoLogEnabled: Boolean,
-            hlgInput: Boolean,
         ): PreviewColorShaderVariant {
             val lutCurve = lutConfig?.curve ?: TransferCurve.SRGB
             return PreviewColorShaderVariant(
                 textureSource = textureSource,
-                includeHlgInput = hlgInput,
                 includeExtendedLutCurves = videoLogEnabled ||
                     (lutEnabled && lutCurve.shaderId !in SIMPLE_LUT_CURVES),
                 includeOklchDensity = abs(params.color) > EPSILON,

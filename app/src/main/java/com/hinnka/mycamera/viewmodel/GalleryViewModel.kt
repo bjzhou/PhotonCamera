@@ -4416,7 +4416,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (photo.isVideo) return false
         val metadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: return false
         return metadata.hasEmbeddedGainmap ||
-            metadata.dynamicRangeProfile == "HLG10" ||
             GalleryManager.getDngFile(getApplication(), photo.id).exists() ||
             GalleryManager.getHighQualityPhotoFile(getApplication(), photo.id).exists() ||
             GalleryManager.getPhotoFile(getApplication(), photo.id).exists()

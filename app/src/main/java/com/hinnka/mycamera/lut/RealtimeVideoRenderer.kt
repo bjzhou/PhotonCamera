@@ -43,7 +43,6 @@ class RealtimeVideoRenderer(
     private val encoderOutputSize: Size,
     colorLayers: List<VideoColorEffectLayer>,
     private val videoLogProfile: VideoLogProfile,
-    private val hlgInput: Boolean,
     private val mirrorHorizontally: Boolean,
     private val mirrorVertically: Boolean,
     private val encoderColorConfig: VideoEncoderColorConfig,
@@ -185,7 +184,7 @@ class RealtimeVideoRenderer(
             TAG,
             "Initialized: camera=${cameraInputSize.width}x${cameraInputSize.height}, " +
                 "encoder=${encoderOutputSize.width}x${encoderOutputSize.height}, " +
-                "layers=${layers.size}, log=${videoLogProfile.name}, hlgInput=$hlgInput, " +
+                "layers=${layers.size}, log=${videoLogProfile.name}, " +
                 "enhancedStabilization=$enhancedStabilizationEnabled, " +
                 "stabilizationStrength=$enhancedStabilizationStrength, " +
                 "mirrorH=$mirrorHorizontally, mirrorV=$mirrorVertically, " +
@@ -253,7 +252,6 @@ class RealtimeVideoRenderer(
             cropRect = sourceCropRect,
             mvpMatrix = firstPassMvpMatrix,
             enableVideoLog = videoLogProfile.isEnabled,
-            treatSourceAsHlgInput = hlgInput,
             presentationTimeNs = timestampNs,
         )
 
@@ -274,7 +272,6 @@ class RealtimeVideoRenderer(
                     cropRect = fullCropRect,
                     mvpMatrix = identityMatrix,
                     enableVideoLog = false,
-                    treatSourceAsHlgInput = false,
                     presentationTimeNs = timestampNs,
                 )
             }
@@ -366,7 +363,6 @@ class RealtimeVideoRenderer(
         cropRect: FloatArray,
         mvpMatrix: FloatArray,
         enableVideoLog: Boolean,
-        treatSourceAsHlgInput: Boolean,
         presentationTimeNs: Long,
     ) {
         val lutEnabled = layer.lutConfig != null && layer.lutTextureId != 0
@@ -376,7 +372,6 @@ class RealtimeVideoRenderer(
             lutConfig = layer.lutConfig,
             lutEnabled = lutEnabled,
             videoLogEnabled = enableVideoLog,
-            hlgInput = treatSourceAsHlgInput,
         )
         val locations = colorProgramCache.get(variant)
             ?: throw IllegalStateException("Cannot create realtime video color shader: $variant")
@@ -436,11 +431,6 @@ class RealtimeVideoRenderer(
             locations.uVideoColorSpaceLocation,
             LutShaderMappings.colorSpaceId(videoLogProfile.colorSpace),
         )
-        GLES30.glUniform1i(
-            locations.uIsHlgInputLocation,
-            if (treatSourceAsHlgInput) 1 else 0,
-        )
-
         bindRecipeUniforms(
             locations = locations,
             params = layer.params,

@@ -258,8 +258,8 @@
     <string name="settings_frame_style">边框样式</string>
     <string name="settings_frame_description">为拍摄的照片添加装饰性边框和水印</string>
     <string name="settings_section_software_processing">细节微调</string>
-    <string name="settings_baseline_jpg_title">JPG 基准色彩校正</string>
-    <string name="settings_baseline_jpg_description">选择普通 JPG 创意 LUT 之前先应用的基准 LUT 与基准配方。</string>
+    <string name="settings_baseline_jpg_title">基准色彩校正</string>
+    <string name="settings_baseline_jpg_description">选择创意 LUT 之前先应用的基准 LUT 与基准配方。</string>
     <string name="settings_baseline_raw_title">基准色彩校正</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">导入 DCP</string>
@@ -342,7 +342,6 @@
     <string name="settings_nr_level_fast">快速</string>
     <string name="settings_nr_level_high_quality">高质量</string>
     <string name="settings_nr_level_zsl">零延迟</string>
-    <string name="settings_nr_level_auto">自动</string>
     <string name="settings_edge_level">锐化等级</string>
     <string name="settings_edge_level_description">调整系统硬件边缘增强（锐化）模式。</string>
     <string name="settings_add_isz_lens">新增 ISZ/DCG 镜头</string>
@@ -423,14 +422,6 @@
     <string name="settings_use_heic_export_description">在支持的设备上优先使用原生 HEIC 导出。</string>
     <string name="settings_use_jpeg_444_export">JPEG 4:4:4 导出</string>
     <string name="settings_use_jpeg_444_export_description">使用 4:4:4 色度采样导出 JPEG，保留最完整的色彩细节。文件体积更大，且会关闭 HEIC 导出；有增益图时会保留 Ultra HDR。</string>
-    <string name="settings_tonemap_mode">色调映射</string>
-    <string name="settings_tonemap_mode_description">调整硬件色调映射（对比度/伽马）模式</string>
-    <string name="settings_tonemap_mode_system_default">系统默认</string>
-    <string name="settings_tonemap_mode_srgb">sRGB</string>
-    <string name="settings_fix_tonemap_preview">修复色调映射预览异常</string>
-    <string name="settings_fix_tonemap_preview_description">部分设备预览已自带 sRGB Gamma。开启后仅在预览中先转为线性再应用自定义色调曲线，拍摄输出不变。</string>
-    <string name="settings_fix_tonemap_capture">修复色调映射拍摄异常</string>
-    <string name="settings_fix_tonemap_capture_description">部分设备拍摄输出已自带 sRGB Gamma。开启后会在拍摄请求中先转为线性再应用自定义色调曲线。</string>
 
     <!-- LUT -->
     <string name="filter_intensity">滤镜强度</string>
@@ -833,10 +824,6 @@
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_use_p010">P010 (10位 YUV)</string>
     <string name="settings_use_p010_description">启用 10位 YUV 输出以获得更好的图像数据精度。仅在支持的设备上且 RAW 关闭时生效。</string>
-    <string name="settings_use_hlg10">HLG10 HDR</string>
-    <string name="settings_use_hlg10_description">在支持的设备上启用 HLG10 动态范围拍摄。需同时开启 P010 且关闭 RAW。</string>
-    <string name="settings_hlg_hardware_compatibility">HLG 兼容性解码</string>
-    <string name="settings_hlg_hardware_compatibility_description">部分设备开启 HLG 拍摄后画面可能偏暗或异常。若遇到画面异常，请开启此选项进行手动解码；画面正常请保持关闭。</string>
     <string name="settings_use_p3_color_space">P3 色域</string>
     <string name="settings_use_p3_color_space_description">在支持的设备上启用 Display P3 输出。默认关闭。</string>
     <string name="settings_ultra_hdr_gain_map">Ultra HDR</string>

@@ -88,7 +88,6 @@ private class VideoLutShaderProgram(
             uniform int uLutCurve;
             uniform int uLutColorSpace;
             uniform int uInputColorSpace;
-            uniform int uIsHlgInput;
 
             // 色彩配方控制
             uniform int uColorRecipeEnabled;
@@ -158,23 +157,6 @@ private class VideoLutShaderProgram(
                 vec3 absC = abs(c);
                 vec3 result = mix(absC / 12.92, pow((absC + 0.055) / 1.055, vec3(2.4)), step(0.04045, absC));
                 return sign(c) * result;
-            }
-
-            vec3 hlgToLinear(vec3 e) {
-                float ha = 0.17883277;
-                float hb = 1.0 - 4.0 * ha;
-                float hc = 0.5 - ha * log(4.0 * ha);
-                vec3 low = e * e / 3.0;
-                vec3 high = (exp((e - hc) / ha) + hb) / 12.0;
-                return mix(low, high, step(vec3(0.5), e));
-            }
-
-            vec3 bt2020ToLinearSrgb(vec3 rgb) {
-                return mat3(
-                    1.660491, -0.124550, -0.018151,
-                    -0.587641, 1.132900, -0.100579,
-                    -0.072850, -0.008350, 1.118730
-                ) * rgb;
             }
 
             vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
@@ -539,12 +521,6 @@ private class VideoLutShaderProgram(
                     color = vec4(r, g, b, a);
                 } else {
                     color = texture(uImageTexture, uvCoord);
-                }
-
-                if (uIsHlgInput != 0) {
-                    color.rgb = hlgToLinear(color.rgb);
-                    color.rgb = bt2020ToLinearSrgb(color.rgb);
-                    color.rgb = linearToSrgb(color.rgb);
                 }
 
                 if (uColorRecipeEnabled != 0) {
@@ -987,7 +963,6 @@ private class VideoLutShaderProgram(
         }
 
         GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uInputColorSpace"), 0) // 默认 sRGB
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uIsHlgInput"), 0)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uChromaticAberration"), 0f)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uSharpening"), 0f)
 

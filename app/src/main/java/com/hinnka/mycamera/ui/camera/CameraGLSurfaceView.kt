@@ -245,11 +245,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
-    fun setIsHlgInput(isHlg: Boolean) {
-        renderer.isHlgInput = isHlg
-        requestRender()
-    }
-
     fun setAutoFocus(auto: Boolean) {
         renderer.isAutoFocus = auto
         requestRender()

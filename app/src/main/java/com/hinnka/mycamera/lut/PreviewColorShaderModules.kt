@@ -18,23 +18,6 @@ internal object PreviewColorShaderModules {
         }
     """.trimIndent()
 
-    val HLG_TO_LINEAR = """
-        vec3 hlgToLinear(vec3 e) {
-            float ha = 0.17883277;
-            float hb = 1.0 - 4.0 * ha;
-            float hc = 0.5 - ha * log(4.0 * ha);
-            vec3 low = e * e / 3.0;
-            vec3 high = (exp((e - hc) / ha) + hb) / 12.0;
-            return mix(low, high, step(vec3(0.5), e));
-        }
-    """.trimIndent()
-
-    val HLG_TO_LINEAR_STUB = """
-        vec3 hlgToLinear(vec3 e) {
-            return e;
-        }
-    """.trimIndent()
-
     val EXPOSURE = """
         vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
             vec3 linearColor = srgbToLinear(max(srgbColor, vec3(0.0)));

@@ -243,7 +243,6 @@ fun CameraScreen(
     val ultraHdrEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
-    val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
     val videoCodec by viewModel.videoCodec.collectAsState()
@@ -1209,7 +1208,6 @@ fun CameraScreen(
                             },
                             livePhotoRecorder = viewModel.livePhotoRecorder,
                             videoLogProfile = state.videoConfig.logProfile,
-                            isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,

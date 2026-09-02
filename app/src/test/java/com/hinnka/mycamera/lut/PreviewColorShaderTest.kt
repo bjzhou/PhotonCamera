@@ -9,7 +9,6 @@ class PreviewColorShaderTest {
     fun jpegInputToneCurveRunsBeforeRecipeAndPhotonLut() {
         val variant = PreviewColorShaderVariant(
             textureSource = PreviewColorTextureSource.TEXTURE_2D,
-            includeHlgInput = false,
             includeExtendedLutCurves = true,
             includeOklchDensity = true,
             includeLchMixer = true,
@@ -30,7 +29,6 @@ class PreviewColorShaderTest {
     fun normalPreviewDoesNotContainJpegInputToneCurve() {
         val variant = PreviewColorShaderVariant(
             textureSource = PreviewColorTextureSource.EXTERNAL_OES,
-            includeHlgInput = false,
             includeExtendedLutCurves = true,
             includeOklchDensity = true,
             includeLchMixer = true,
@@ -46,7 +44,6 @@ class PreviewColorShaderTest {
     fun capturedSpatialEffectsMatchStaticImageOrder() {
         val variant = PreviewColorShaderVariant(
             textureSource = PreviewColorTextureSource.TEXTURE_2D,
-            includeHlgInput = false,
             includeExtendedLutCurves = true,
             includeOklchDensity = true,
             includeLchMixer = true,
@@ -70,7 +67,6 @@ class PreviewColorShaderTest {
     fun customLogFilmGrainRunsBeforeLogEncoding() {
         val variant = PreviewColorShaderVariant(
             textureSource = PreviewColorTextureSource.TEXTURE_2D,
-            includeHlgInput = false,
             includeExtendedLutCurves = true,
             includeOklchDensity = false,
             includeLchMixer = false,
@@ -90,7 +86,6 @@ class PreviewColorShaderTest {
     fun displayPipelineDoesNotInlineFilmGrain() {
         val variant = PreviewColorShaderVariant(
             textureSource = PreviewColorTextureSource.TEXTURE_2D,
-            includeHlgInput = false,
             includeExtendedLutCurves = false,
             includeOklchDensity = false,
             includeLchMixer = false,

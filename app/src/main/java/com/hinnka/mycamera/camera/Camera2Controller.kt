@@ -10,10 +10,8 @@ import android.hardware.camera2.*
 import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
-import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
-import android.hardware.camera2.params.TonemapCurve
 import android.media.Image
 import android.media.ImageReader
 import android.os.Build
@@ -222,13 +220,6 @@ class Camera2Controller(private val context: Context) {
         UNAVAILABLE
     }
 
-    private enum class CameraOutputType {
-        PREVIEW,
-        STILL_CAPTURE,
-        RAW_CAPTURE,
-        VIDEO_RECORD
-    }
-
     private val cameraManager: CameraManager by lazy {
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
@@ -284,8 +275,8 @@ class Camera2Controller(private val context: Context) {
     private var imageReader: ImageReader? = null
     private var stabilizationImageReader: ImageReader? = null
 
-    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal, 5=Auto)
-    private var nrLevel = 5
+    // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal)
+    private var nrLevel = NoiseReductionLevel.DEFAULT
 
     // 锐化等级 (0=Off, 1=Fast, 2=High Quality, 3=Zero Shutter Lag/Real-time)
     private var edgeLevel = 1
@@ -312,7 +303,6 @@ class Camera2Controller(private val context: Context) {
     private var availableEdgeModes: IntArray = intArrayOf()
     private var availableNoiseReductionModes: IntArray = intArrayOf()
     private var availableTonemapModes: IntArray = intArrayOf()
-    private var tonemapMaxCurvePoints: Int = 0
     private var availableColorCorrectionAberrationModes: IntArray = intArrayOf()
     private var availableHotPixelModes: IntArray = intArrayOf()
     private var availableShadingModes: IntArray = intArrayOf()
@@ -332,7 +322,6 @@ class Camera2Controller(private val context: Context) {
     private var requestedRawCaptureEnabled = false
     private var isRawSupported = false
     private var isP010Supported = false
-    private var isHlg10Supported = false
     private var isStreamUseCaseSupported = false
     private var availableStreamUseCases: LongArray = longArrayOf()
     private var isZslControlSupported: Boolean? = null
@@ -1679,7 +1668,6 @@ class Camera2Controller(private val context: Context) {
         availableEdgeModes = intArrayOf()
         availableNoiseReductionModes = intArrayOf()
         availableTonemapModes = intArrayOf()
-        tonemapMaxCurvePoints = 0
         availableColorCorrectionAberrationModes = intArrayOf()
         availableHotPixelModes = intArrayOf()
         availableShadingModes = intArrayOf()
@@ -1697,7 +1685,6 @@ class Camera2Controller(private val context: Context) {
         malformedColorCorrectionGainsReported = false
         isRawSupported = false
         isP010Supported = false
-        isHlg10Supported = false
         isStreamUseCaseSupported = false
         availableStreamUseCases = longArrayOf()
         lastAfState = null
@@ -2191,8 +2178,6 @@ class Camera2Controller(private val context: Context) {
                         ?: intArrayOf()
                 availableTonemapModes =
                     openCharacteristics.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf()
-                tonemapMaxCurvePoints =
-                    openCharacteristics.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS) ?: 0
                 availableColorCorrectionAberrationModes =
                     openCharacteristics.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES)
                         ?: intArrayOf()
@@ -2251,14 +2236,6 @@ class Camera2Controller(private val context: Context) {
                         (outputPhysicalCameraId?.let {
                             !isPhysicalOutputProfileFailed(it, ImageFormat.YCBCR_P010)
                         } ?: true)
-                isHlg10Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isP010Supported) {
-                    val dynamicRangeProfiles =
-                        openCharacteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
-                    dynamicRangeProfiles?.supportedProfiles?.contains(DynamicRangeProfiles.HLG10) == true
-                } else {
-                    false
-                }
-
                 val resolvedVideoPreviewSize = refreshVideoCapabilities(openCharacteristics)
                 previewSize = when (captureMode) {
                     CaptureMode.VIDEO -> resolvedVideoPreviewSize
@@ -2305,7 +2282,6 @@ class Camera2Controller(private val context: Context) {
                         useRaw = requestedRawCaptureEnabled,
                         isRawSupported = isRawSupported,
                         isP010Supported = isP010Supported,
-                        isHlg10Supported = isHlg10Supported,
                         availableNrModes = selectableNrModes,
                         supportsCctWhiteBalance = supportsCctWhiteBalance(),
                         canAdjustWhiteBalance = false,
@@ -2675,7 +2651,6 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun createPreviewSession(
-        forceStandardSession: Boolean = false,
         forceWithoutVendorSessionParameters: Boolean = false,
         openGeneration: Long = cameraOpenGeneration
     ) {
@@ -2722,7 +2697,7 @@ class Camera2Controller(private val context: Context) {
                 stabilizationReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
 
-                // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
+                // 应用所有相机参数（曝光、白平衡、闪光灯、变焦）
                 applyBaseCameraSettings(this, isCapture = false)
             }
 
@@ -2735,37 +2710,15 @@ class Camera2Controller(private val context: Context) {
             }
 
             if (captureMode == CaptureMode.VIDEO) {
-                val useHlgCapture = _state.value.useHlg10 &&
-                    stabilizationReader == null &&
-                    activeOutputPhysicalCameraId == null &&
-                    !forceStandardSession
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
                     buildList {
-                        add(
-                            createOutputConfiguration(
-                                surface = surface,
-                                useHlgCapture = useHlgCapture,
-                                outputType = CameraOutputType.PREVIEW
-                            )
-                        )
+                        add(createOutputConfiguration(surface))
                         stabilizationReader?.surface?.let { eisSurface ->
-                            add(
-                                createOutputConfiguration(
-                                    surface = eisSurface,
-                                    useHlgCapture = false,
-                                    outputType = CameraOutputType.PREVIEW,
-                                )
-                            )
+                            add(createOutputConfiguration(eisSurface))
                         }
                         videoSurface?.let { encoderSurface ->
-                            add(
-                                createOutputConfiguration(
-                                    surface = encoderSurface,
-                                    useHlgCapture = useHlgCapture,
-                                    outputType = CameraOutputType.VIDEO_RECORD
-                                )
-                            )
+                            add(createOutputConfiguration(encoderSurface))
                         }
                     },
                     Executors.newSingleThreadExecutor(),
@@ -2776,11 +2729,6 @@ class Camera2Controller(private val context: Context) {
                                 safeCloseCaptureSession(session, "stale video preview session")
                                 return
                             }
-                            if (useHlgCapture) {
-                                _state.value = _state.value.copy(currentDynamicRangeProfile = "HLG10")
-                            } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
-                                _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
-                            }
                             closeUnusedStabilizationImageReader(stabilizationReader)
                             onSessionConfigured(session, openGeneration, sessionGeneration)
                         }
@@ -2790,24 +2738,17 @@ class Camera2Controller(private val context: Context) {
                                 safeCloseCaptureSession(session, "stale video configure failure")
                                 return
                             }
-                            PLog.e(TAG, "Video session configuration failed: useHlgCapture=$useHlgCapture")
+                            PLog.e(TAG, "Video session configuration failed")
                             safeCloseCaptureSession(session, "video configure failure")
                             if (vendorSessionParametersApplied &&
                                 retryPreviewSessionWithoutVendorSessionParameters(
                                     reason = "video configure failed",
-                                    forceStandardSession = forceStandardSession,
                                     openGeneration = openGeneration
                                 )
                             ) {
                                 return
                             }
                             if (retryPreviewSessionWithoutPhysicalOutput("video configure failed", openGeneration)) {
-                                return
-                            }
-                            if (useHlgCapture) {
-                                PLog.w(TAG, "Retrying video preview session with STANDARD dynamic range fallback")
-                                _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
-                                createPreviewSession(forceStandardSession = true, openGeneration = openGeneration)
                                 return
                             }
                             handlePreviewSessionFailure("video configure failed", openGeneration)
@@ -2824,49 +2765,20 @@ class Camera2Controller(private val context: Context) {
                 return
             }
 
-
             // Android 9+ 使用 SessionConfiguration
-            val useHlgCapture = _state.value.useHlg10 &&
-                    stabilizationReader == null &&
-                    activeOutputPhysicalCameraId == null &&
-                    !isRawCaptureReader(reader) &&
-                    !forceStandardSession
             val readerFormat = reader?.imageFormat ?: ImageFormat.YUV_420_888
             PLog.i(
                 TAG,
-                "Creating preview session: forceStandard=$forceStandardSession, " +
-                        "useHlgCapture=$useHlgCapture, readerFormat=${imageFormatToString(readerFormat)}, " +
-                        "isP010Supported=$isP010Supported, isHlg10Supported=$isHlg10Supported"
+                "Creating preview session: readerFormat=${imageFormatToString(readerFormat)}, " +
+                        "isP010Supported=$isP010Supported"
             )
             val outputConfigs = buildList {
-                add(
-                    createOutputConfiguration(
-                        surface = surface,
-                        useHlgCapture = useHlgCapture,
-                        outputType = CameraOutputType.PREVIEW
-                    )
-                )
+                add(createOutputConfiguration(surface))
                 stabilizationReader?.surface?.let { eisSurface ->
-                    add(
-                        createOutputConfiguration(
-                            surface = eisSurface,
-                            useHlgCapture = false,
-                            outputType = CameraOutputType.PREVIEW,
-                        )
-                    )
+                    add(createOutputConfiguration(eisSurface))
                 }
                 reader?.surface?.let { captureSurface ->
-                    add(
-                        createOutputConfiguration(
-                            surface = captureSurface,
-                            useHlgCapture = useHlgCapture,
-                            outputType = if (readerFormat == ImageFormat.RAW_SENSOR) {
-                                CameraOutputType.RAW_CAPTURE
-                            } else {
-                                CameraOutputType.STILL_CAPTURE
-                            }
-                        )
-                    )
+                    add(createOutputConfiguration(captureSurface))
                 }
             }
             val sessionConfig = SessionConfiguration(
@@ -2880,11 +2792,6 @@ class Camera2Controller(private val context: Context) {
                             safeCloseCaptureSession(session, "stale preview session")
                             return
                         }
-                        if (useHlgCapture) {
-                            _state.value = _state.value.copy(currentDynamicRangeProfile = "HLG10")
-                        } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
-                            _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
-                        }
                         closeUnusedStabilizationImageReader(stabilizationReader)
                         onSessionConfigured(session, openGeneration, sessionGeneration)
                     }
@@ -2896,15 +2803,13 @@ class Camera2Controller(private val context: Context) {
                         }
                         PLog.e(
                             TAG,
-                            "Session configuration failed: useHlgCapture=$useHlgCapture, " +
-                                    "readerFormat=${imageFormatToString(readerFormat)}, " +
+                            "Session configuration failed: readerFormat=${imageFormatToString(readerFormat)}, " +
                                     "sessionColorSpace=${if (shouldUseP3ColorSpace()) "DISPLAY_P3" else "DEFAULT"}"
                         )
                         safeCloseCaptureSession(session, "photo configure failure")
                         if (vendorSessionParametersApplied &&
                             retryPreviewSessionWithoutVendorSessionParameters(
                                 reason = "photo configure failed",
-                                forceStandardSession = forceStandardSession,
                                 openGeneration = openGeneration
                             )
                         ) {
@@ -2913,18 +2818,12 @@ class Camera2Controller(private val context: Context) {
                         if (retryPreviewSessionWithoutPhysicalOutput("photo configure failed", openGeneration)) {
                             return
                         }
-                        if (useHlgCapture) {
-                            PLog.w(TAG, "Retrying preview session with STANDARD dynamic range fallback")
-                            _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
-                            createPreviewSession(forceStandardSession = true, openGeneration = openGeneration)
-                            return
-                        }
                         handlePreviewSessionFailure("photo configure failed", openGeneration)
                     }
                 }
             )
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                if (shouldUseP3ColorSpace() && !useHlgCapture) {
+                if (shouldUseP3ColorSpace()) {
                     sessionConfig.setColorSpace(ColorSpace.Named.DISPLAY_P3)
                 }
             }
@@ -2940,7 +2839,6 @@ class Camera2Controller(private val context: Context) {
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
                     reason = "create session illegal state: ${e.message}",
-                    forceStandardSession = forceStandardSession,
                     openGeneration = openGeneration
                 )
             ) {
@@ -2959,7 +2857,6 @@ class Camera2Controller(private val context: Context) {
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
                     reason = "create session exception: ${e.message}",
-                    forceStandardSession = forceStandardSession,
                     openGeneration = openGeneration
                 )
             ) {
@@ -3158,13 +3055,11 @@ class Camera2Controller(private val context: Context) {
 
     private fun retryPreviewSessionWithoutVendorSessionParameters(
         reason: String,
-        forceStandardSession: Boolean,
         openGeneration: Long
     ): Boolean {
         if (openGeneration != cameraOpenGeneration) return false
         PLog.w(TAG, "Retrying preview session without vendor session parameters: $reason")
         createPreviewSession(
-            forceStandardSession = forceStandardSession,
             forceWithoutVendorSessionParameters = true,
             openGeneration = openGeneration
         )
@@ -3189,11 +3084,7 @@ class Camera2Controller(private val context: Context) {
         return true
     }
 
-    private fun createOutputConfiguration(
-        surface: Surface,
-        useHlgCapture: Boolean,
-        outputType: CameraOutputType
-    ): OutputConfiguration {
+    private fun createOutputConfiguration(surface: Surface): OutputConfiguration {
         return OutputConfiguration(surface).apply {
             activeOutputPhysicalCameraId?.let { physicalCameraId ->
                 setPhysicalCameraId(physicalCameraId)
@@ -3203,40 +3094,6 @@ class Camera2Controller(private val context: Context) {
                             "(openCameraId=$activeOpenCameraId)"
                 )
             }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
-                dynamicRangeProfile = if (useHlgCapture) {
-                    DynamicRangeProfiles.HLG10
-                } else {
-                    DynamicRangeProfiles.STANDARD
-                }
-            }
-
-            /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val streamUseCase = when (outputType) {
-                    CameraOutputType.PREVIEW ->
-                        CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()
-                    CameraOutputType.STILL_CAPTURE ->
-                        CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong()
-                    CameraOutputType.RAW_CAPTURE -> null
-                    CameraOutputType.VIDEO_RECORD ->
-                        CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_VIDEO_RECORD.toLong()
-                }
-
-                if (streamUseCase == null) {
-                    PLog.i(TAG, "OutputConfiguration streamUseCase=DEFAULT for ${outputType.name}")
-                } else if (
-                    isStreamUseCaseSupported && availableStreamUseCases.contains(streamUseCase)
-                ) {
-                    setStreamUseCase(streamUseCase)
-                    PLog.i(TAG, "OutputConfiguration streamUseCase=${outputType.name}")
-                } else {
-                    PLog.d(
-                        TAG,
-                        "OutputConfiguration streamUseCase=${outputType.name} unsupported; using DEFAULT"
-                    )
-                }
-            }*/
         }
     }
 
@@ -3583,10 +3440,8 @@ class Camera2Controller(private val context: Context) {
 
         if (!isRawCapture) {
             // 6. 图像质量设置（锐化、降噪）
-            applyImageQualitySettings(builder, isCapture)
+            applyImageQualitySettings(builder)
 
-            // 7. 视频 Log / 色调映射设置
-            applyToneMapSettings(builder, currentState, isCapture)
         }
 
         // 8. 防抖设置
@@ -4239,88 +4094,6 @@ class Camera2Controller(private val context: Context) {
         builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
     }
 
-    private fun generateSrgbCurve(linearizeInput: Boolean = false): FloatArray {
-        val points = 64
-        val curve = FloatArray(points * 2)
-        for (i in 0 until points) {
-            val x = i.toFloat() / (points - 1)
-            val y = if (linearizeInput) {
-                x
-            } else {
-                linearToSrgb(x)
-            }
-            curve[i * 2] = x
-            curve[i * 2 + 1] = y.coerceIn(0f, 1f)
-        }
-        return curve
-    }
-
-    private fun inverseSrgb(x: Float): Float {
-        return if (x <= 0.04045f) {
-            x / 12.92f
-        } else {
-            Math.pow(((x + 0.055) / 1.055), 2.4).toFloat()
-        }
-    }
-
-    private fun linearToSrgb(x: Float): Float {
-        return if (x <= 0.0031308f) {
-            12.92f * x
-        } else {
-            1.055f * Math.pow(x.toDouble(), 1.0 / 2.4).toFloat() - 0.055f
-        }
-    }
-
-    private fun generateLinearToneCurve(): FloatArray {
-        return floatArrayOf(0f, 0f, 1f, 1f)
-    }
-
-    private fun applyToneMapSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
-        val linearizeInput = if (isCapture) state.fixTonemapCapture else state.fixTonemapPreview
-        val tonemapMode = sanitizeTonemapMode(state.tonemapMode)
-        when (tonemapMode) {
-            "SYSTEM_DEFAULT" -> applyDefaultToneMapSettings(builder, state, isCapture)
-            "SRGB" -> {
-                if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)) {
-                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
-                    val srgbCurve = generateSrgbCurve(linearizeInput)
-                    val curve = TonemapCurve(srgbCurve, srgbCurve, srgbCurve)
-                    builder.set(CaptureRequest.TONEMAP_CURVE, curve)
-                }
-            }
-            else -> {
-                applyDefaultToneMapSettings(builder, state, isCapture)
-            }
-        }
-    }
-
-    private fun applyDefaultToneMapSettings(
-        builder: CaptureRequest.Builder,
-        state: CameraState,
-        isCapture: Boolean
-    ) {
-        val preferredTonemapMode = when {
-            isCapture && state.captureMode == CaptureMode.PHOTO &&
-                availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_HIGH_QUALITY) -> {
-                CaptureRequest.TONEMAP_MODE_HIGH_QUALITY
-            }
-            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_FAST) -> {
-                CaptureRequest.TONEMAP_MODE_FAST
-            }
-            else -> null
-        }
-        preferredTonemapMode?.let { builder.set(CaptureRequest.TONEMAP_MODE, it) }
-    }
-
-    private fun sanitizeTonemapMode(mode: String): String {
-        return when (mode) {
-            "FAST", "HIGH_QUALITY" -> "SYSTEM_DEFAULT"
-            "REC709" -> "SRGB"
-            "SYSTEM_DEFAULT", "SRGB" -> mode
-            else -> "SYSTEM_DEFAULT"
-        }
-    }
-
     /**
      * 应用白平衡设置
      */
@@ -4812,7 +4585,7 @@ class Camera2Controller(private val context: Context) {
      * @param builder 需要配置的 Builder
      * @param isCapture 是否为拍摄请求（拍摄时使用高质量模式）
      */
-    private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
+    private fun applyImageQualitySettings(builder: CaptureRequest.Builder) {
         try {
             val currentState = _state.value
             val isBurst = currentState.isMultiFrameEnabled
@@ -4834,19 +4607,24 @@ class Camera2Controller(private val context: Context) {
             } else if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
-            val resolvedNrLevel = resolveAutoNoiseReductionLevel(currentState, isCapture)
-            val effectiveNrLevel = if (isBurst && resolvedNrLevel == 2) 1 else resolvedNrLevel
+            val effectiveNrLevel = if (
+                isBurst && nrLevel == NoiseReductionLevel.HIGH_QUALITY
+            ) {
+                NoiseReductionLevel.FAST
+            } else {
+                nrLevel
+            }
             val noiseReductionMode = when (effectiveNrLevel) {
-                0 -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
-                4 -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
+                NoiseReductionLevel.OFF -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
+                NoiseReductionLevel.MINIMAL -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL)) {
                     CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
                 } else {
                     CaptureRequest.NOISE_REDUCTION_MODE_FAST
                 }
 
-                1 -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                2 -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-                3 -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) {
+                NoiseReductionLevel.FAST -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                NoiseReductionLevel.HIGH_QUALITY -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                NoiseReductionLevel.ZERO_SHUTTER_LAG -> if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG)) {
                     CaptureRequest.NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG
                 } else {
                     CaptureRequest.NOISE_REDUCTION_MODE_FAST
@@ -4939,7 +4717,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun buildSelectableNoiseReductionModes(hardwareModes: IntArray): IntArray {
-        val orderedModes = mutableListOf(5)
+        val orderedModes = mutableListOf<Int>()
         val preferredOrder = listOf(
             CaptureRequest.NOISE_REDUCTION_MODE_OFF,
             CaptureRequest.NOISE_REDUCTION_MODE_FAST,
@@ -4955,34 +4733,6 @@ class Camera2Controller(private val context: Context) {
         return orderedModes.toIntArray()
     }
 
-    private fun resolveAutoNoiseReductionLevel(state: CameraState, isCapture: Boolean): Int {
-        if (nrLevel != 5) {
-            return nrLevel
-        }
-        val lightValue = calculateCaptureLightValue(state, isCapture)
-        val resolvedLevel = when {
-            lightValue >= 9.0 -> 0
-            lightValue >= 6.0 -> 4
-            lightValue >= 4.0 -> 1
-            else -> 2
-        }
-        PLog.d(TAG, "Auto NR resolved by LV=$lightValue to level=$resolvedLevel")
-        return resolvedLevel
-    }
-
-    private fun calculateCaptureLightValue(state: CameraState, isCapture: Boolean): Double {
-        val aperture = state.physicalAperture.takeIf { it > 0f }?.toDouble() ?: 2.0
-        val exposureTimeNs = if (isCapture) {
-            state.shutterSpeed
-        } else {
-            coercePreviewExposureTime(state)
-        }
-        val exposureTimeSeconds = exposureTimeNs / 1_000_000_000.0
-        val iso = state.iso.coerceAtLeast(1).toDouble()
-        val ev100 = ln((aperture * aperture / exposureTimeSeconds) * (100.0 / iso)) / ln(2.0)
-        return (ev100 * 10.0).roundToInt() / 10.0
-    }
-
     /**
      * 设置锐化等级
      */
@@ -4994,8 +4744,9 @@ class Camera2Controller(private val context: Context) {
      * 设置降噪等级
      */
     fun setNRLevel(level: Int) {
-        nrLevel = level
-        _state.value = _state.value.copy(nrLevel = level)
+        val normalizedLevel = NoiseReductionLevel.normalize(level)
+        nrLevel = normalizedLevel
+        _state.value = _state.value.copy(nrLevel = normalizedLevel)
     }
 
     fun setVendorCaptureSettingsByLens(settingsByLens: VendorCaptureSettingsByLens) {
@@ -5121,39 +4872,6 @@ class Camera2Controller(private val context: Context) {
         val resolvedValue = value.coerceAtLeast(0L)
         _state.value = _state.value.copy(rawMinShutterSpeedNs = resolvedValue)
         PLog.d(TAG, "RAW 最低快门速度: $resolvedValue ns")
-    }
-
-    /**
-     * 设置色调映射模式
-     */
-    fun setTonemapMode(mode: String) {
-        val resolvedMode = sanitizeTonemapMode(mode)
-        _state.value = _state.value.copy(tonemapMode = resolvedMode)
-        PLog.d(TAG, "色调映射模式: $resolvedMode")
-        previewRequestBuilder?.apply {
-            applyToneMapSettings(this, _state.value, false)
-            updatePreview()
-        }
-    }
-
-    /**
-     * 设置是否修复自定义色调映射预览异常
-     */
-    fun setFixTonemapPreview(enabled: Boolean) {
-        _state.value = _state.value.copy(fixTonemapPreview = enabled)
-        PLog.d(TAG, "修复色调映射预览异常: $enabled")
-        previewRequestBuilder?.apply {
-            applyToneMapSettings(this, _state.value, false)
-            updatePreview()
-        }
-    }
-
-    /**
-     * 设置是否修复自定义色调映射拍摄异常
-     */
-    fun setFixTonemapCapture(enabled: Boolean) {
-        _state.value = _state.value.copy(fixTonemapCapture = enabled)
-        PLog.d(TAG, "修复色调映射拍摄异常: $enabled")
     }
 
     /**
@@ -6778,7 +6496,6 @@ class Camera2Controller(private val context: Context) {
                 hasActiveLut = _state.value.lutEnabled && _state.value.currentLutName != null
             ),
             colorLayers = colorLayers,
-            hlgInput = _state.value.useHlg10 && !useEnhancedStabilization,
             cameraTimestampSource = getActiveOpenCameraCharacteristics()
                 ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
                 ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
@@ -8040,7 +7757,7 @@ class Camera2Controller(private val context: Context) {
                 //     previewSurface?.let { addTarget(it) }
                 // }
 
-                // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
+                // 应用所有相机参数（曝光、白平衡、闪光灯、变焦）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
                 applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
 
@@ -8875,12 +8592,6 @@ class Camera2Controller(private val context: Context) {
 
     fun setUseP010(enabled: Boolean) {
         _state.value = _state.value.copy(useP010 = enabled)
-    }
-
-    fun setUseHlg10(enabled: Boolean) {
-        _state.value = _state.value.copy(
-            useHlg10 = enabled,
-        )
     }
 
     fun setUseP3ColorSpace(enabled: Boolean) {

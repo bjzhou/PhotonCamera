@@ -293,7 +293,6 @@ object GalleryManager {
             }
             val metadata = baseMetadata.copy(
                 lutId = lutId,
-                tonemapMode = mgcTonemapMode(preferences?.tonemapMode),
                 colorRecipeParams = lutId?.let { repository.lutManager.loadColorRecipeParams(it) },
                 baselineTarget = baselineLutId?.let { BaselineColorCorrectionTarget.RAW },
                 baselineLutId = baselineLutId,
@@ -367,15 +366,6 @@ object GalleryManager {
             null
         } finally {
             tempDngFile.delete()
-        }
-    }
-
-    private fun mgcTonemapMode(tonemapMode: String?): String {
-        return when (tonemapMode) {
-            "FAST", "HIGH_QUALITY", null -> "SYSTEM_DEFAULT"
-            "REC709" -> "SRGB"
-            "SYSTEM_DEFAULT", "SRGB" -> tonemapMode
-            else -> "SYSTEM_DEFAULT"
         }
     }
 

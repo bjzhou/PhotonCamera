@@ -262,8 +262,8 @@
     <string name="settings_frame_style">Frame Style</string>
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>
     <string name="settings_section_software_processing">Fine Tuning</string>
-    <string name="settings_baseline_jpg_title">JPG Baseline Color Correction</string>
-    <string name="settings_baseline_jpg_description">Choose the baseline LUT and recipe applied before the regular JPG creative LUT.</string>
+    <string name="settings_baseline_jpg_title">Baseline Color Correction</string>
+    <string name="settings_baseline_jpg_description">Choose the baseline LUT and recipe applied before the creative LUT.</string>
     <string name="settings_baseline_raw_title">Baseline Color Correction</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">Import DCP</string>
@@ -346,7 +346,6 @@
     <string name="settings_nr_level_fast">Fast</string>
     <string name="settings_nr_level_high_quality">HQ</string>
     <string name="settings_nr_level_zsl">ZSL</string>
-    <string name="settings_nr_level_auto">Auto</string>
     <string name="settings_edge_level">Sharpening Level</string>
     <string name="settings_edge_level_description">Adjust the hardware edge enhancement (sharpening) mode.</string>
     <string name="settings_add_isz_lens">Add ISZ/DCG Lens</string>
@@ -427,14 +426,6 @@
     <string name="settings_use_heic_export_description">Prefer native HEIC export on supported devices.</string>
     <string name="settings_use_jpeg_444_export">JPEG 4:4:4 Export</string>
     <string name="settings_use_jpeg_444_export_description">Export JPEGs with 4:4:4 chroma sampling for maximum color detail. Files are larger, HEIC export is disabled, and Ultra HDR gain maps are preserved when available.</string>
-    <string name="settings_tonemap_mode">Tone Mapping</string>
-    <string name="settings_tonemap_mode_description">Adjust the hardware tone mapping (contrast/gamma) mode</string>
-    <string name="settings_tonemap_mode_system_default">System Default</string>
-    <string name="settings_tonemap_mode_srgb">sRGB</string>
-    <string name="settings_fix_tonemap_preview">Fix tone mapping preview</string>
-    <string name="settings_fix_tonemap_preview_description">Linearize preview input before applying custom tone curves on devices whose preview already includes sRGB gamma. Capture output is unchanged.</string>
-    <string name="settings_fix_tonemap_capture">Fix tone mapping capture</string>
-    <string name="settings_fix_tonemap_capture_description">Linearize capture input before applying custom tone curves on devices whose captured images already include sRGB gamma.</string>
     <string name="settings_background">Background</string>
     <string name="settings_background_description">Change the app background image</string>
     <string name="settings_custom_background">Custom...</string>
@@ -948,10 +939,6 @@
     <string name="settings_cfa_correction_8x8_bggr">8x8 BGGR</string>
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Enable 10-bit YUV output for better image data precision. Effective on supported devices when RAW is disabled.</string>
-    <string name="settings_use_hlg10">HLG10 HDR</string>
-    <string name="settings_use_hlg10_description">Enable HLG10 dynamic range capture on supported devices. Requires P010 and RAW to be off.</string>
-    <string name="settings_hlg_hardware_compatibility">HLG Compatibility Decoding</string>
-    <string name="settings_hlg_hardware_compatibility_description">Some devices render dark or washed-out images under HLG. Enable this to manually decode HLG in shader if preview is abnormal.</string>
     <string name="settings_use_p3_color_space">P3 Color Space</string>
     <string name="settings_use_p3_color_space_description">Enable Display P3 output on supported devices. Default is off.</string>
     <string name="settings_ultra_hdr_gain_map">Ultra HDR</string>

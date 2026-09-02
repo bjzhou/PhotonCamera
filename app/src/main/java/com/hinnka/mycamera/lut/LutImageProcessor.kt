@@ -168,7 +168,6 @@ class LutImageProcessor(context: Context? = null) {
     private var uLutCurveLoc = 0
     private var uLutColorSpaceLoc = 0
     private var uInputColorSpaceLoc = 0
-    private var uIsHlgInputLoc = 0
     private var uMVPMatrixLoc = 0
 
     // 色彩配方 Uniform 位置
@@ -346,7 +345,6 @@ class LutImageProcessor(context: Context? = null) {
         width: Int,
         height: Int,
         colorSpace: ColorSpace,
-        isHlgInput: Boolean = false,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
@@ -426,7 +424,6 @@ class LutImageProcessor(context: Context? = null) {
             width, height,
             inputTexId,
             colorSpace,
-            isHlgInput,
             lutConfig,
             effectiveRecipeParams,
             sharpening,
@@ -441,7 +438,6 @@ class LutImageProcessor(context: Context? = null) {
         width: Int,
         height: Int,
         colorSpace: ColorSpace,
-        isHlgInput: Boolean = false,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
         sharpeningValue: Float = 0f,
@@ -457,7 +453,6 @@ class LutImageProcessor(context: Context? = null) {
                     width = width,
                     height = height,
                     colorSpace = colorSpace,
-                    isHlgInput = isHlgInput,
                     lutConfig = baselineLayer.lutConfig,
                     colorRecipeParams = baselineLayer.colorRecipeParams,
                     noiseReductionValue = 0f,
@@ -477,7 +472,6 @@ class LutImageProcessor(context: Context? = null) {
                 width = width,
                 height = height,
                 colorSpace = colorSpace,
-                isHlgInput = isHlgInput,
                 lutConfig = baselineLayer.lutConfig,
                 colorRecipeParams = baselineLayer.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
@@ -489,7 +483,6 @@ class LutImageProcessor(context: Context? = null) {
                 width = width,
                 height = height,
                 colorSpace = colorSpace,
-                isHlgInput = isHlgInput,
                 lutConfig = creativeLayer?.lutConfig,
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
@@ -511,7 +504,6 @@ class LutImageProcessor(context: Context? = null) {
      */
     suspend fun applyLut(
         bitmap: Bitmap,
-        isHlgInput: Boolean = false,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
@@ -594,7 +586,6 @@ class LutImageProcessor(context: Context? = null) {
             width, height,
             inputTexId,
             renderColorSpace,
-            isHlgInput,
             lutConfig,
             effectiveRecipeParams,
             sharpening,
@@ -606,7 +597,6 @@ class LutImageProcessor(context: Context? = null) {
 
     suspend fun applyLutStack(
         bitmap: Bitmap,
-        isHlgInput: Boolean = false,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
         sharpeningValue: Float = 0f,
@@ -619,7 +609,6 @@ class LutImageProcessor(context: Context? = null) {
             hasBaseline && hasCreative -> {
                 val baseBitmap = applyLut(
                     bitmap = bitmap,
-                    isHlgInput = isHlgInput,
                     lutConfig = baselineLayer.lutConfig,
                     colorRecipeParams = baselineLayer.colorRecipeParams,
                     noiseReductionValue = 0f,
@@ -636,7 +625,6 @@ class LutImageProcessor(context: Context? = null) {
             }
             hasBaseline -> applyLut(
                 bitmap = bitmap,
-                isHlgInput = isHlgInput,
                 lutConfig = baselineLayer.lutConfig,
                 colorRecipeParams = baselineLayer.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
@@ -645,7 +633,6 @@ class LutImageProcessor(context: Context? = null) {
             )
             else -> applyLut(
                 bitmap = bitmap,
-                isHlgInput = isHlgInput,
                 lutConfig = creativeLayer?.lutConfig,
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
                 sharpeningValue = sharpeningValue,
@@ -662,7 +649,6 @@ class LutImageProcessor(context: Context? = null) {
      */
     suspend fun applyLutStackWithLuminanceGain(
         bitmap: Bitmap,
-        isHlgInput: Boolean = false,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
         sharpeningValue: Float = 0f,
@@ -672,20 +658,19 @@ class LutImageProcessor(context: Context? = null) {
     ): LutStackRenderResult {
         val rendered = applyLutStack(
             bitmap = bitmap,
-            isHlgInput = isHlgInput,
             baselineLayer = baselineLayer,
             creativeLayer = creativeLayer,
             sharpeningValue = sharpeningValue,
             noiseReductionValue = noiseReductionValue,
             chromaNoiseReductionValue = chromaNoiseReductionValue,
         )
-        val luminanceGainMap = if (isHlgInput || !bitmap.colorSpace.isEncodedSrgbFamily() ||
+        val luminanceGainMap = if (!bitmap.colorSpace.isEncodedSrgbFamily() ||
             !rendered.colorSpace.isEncodedSrgbFamily()
         ) {
             PLog.e(
                 TAG,
                 "LUT luminance sidecar requires encoded sRGB input/output: " +
-                    "isHlg=$isHlgInput, before=${bitmap.colorSpace}, after=${rendered.colorSpace}"
+                    "before=${bitmap.colorSpace}, after=${rendered.colorSpace}"
             )
             null
         } else withContext(glDispatcher) {
@@ -852,7 +837,6 @@ class LutImageProcessor(context: Context? = null) {
             height = height,
             inputTextureId = bitmapDenoiseTexId[0],
             inputColorSpace = bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
-            isHlgInput = false,
             lutConfig = null,
             effectiveRecipeParams = null,
             sharpening = 0f,
@@ -868,7 +852,6 @@ class LutImageProcessor(context: Context? = null) {
         height: Int,
         inputTextureId: Int,
         inputColorSpace: ColorSpace,
-        isHlgInput: Boolean,
         lutConfig: LutConfig?,
         effectiveRecipeParams: ColorRecipeParams?,
         sharpening: Float,
@@ -935,7 +918,6 @@ class LutImageProcessor(context: Context? = null) {
 
         val inputColorSpaceId = if (inputColorSpace == ColorSpace.get(ColorSpace.Named.DISPLAY_P3)) 1 else 0
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputColorSpace"), inputColorSpaceId)
-        GLES30.glUniform1i(uIsHlgInputLoc, if (isHlgInput) 1 else 0)
 
         // 设置色彩配方参数
         GLES30.glUniform1i(
@@ -1355,7 +1337,6 @@ class LutImageProcessor(context: Context? = null) {
         uLutCurveLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutCurve")
         uLutColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutColorSpace")
         uInputColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uInputColorSpace")
-        uIsHlgInputLoc = GLES30.glGetUniformLocation(shaderProgram, "uIsHlgInput")
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
 
         // 获取色彩配方 uniform 位置
@@ -3239,7 +3220,6 @@ class LutImageProcessor(context: Context? = null) {
             uniform int uLutCurve;
             uniform int uLutColorSpace;
             uniform int uInputColorSpace;
-            uniform bool uIsHlgInput;
 
             // 色彩配方控制
             uniform bool uColorRecipeEnabled;
@@ -3297,7 +3277,6 @@ class LutImageProcessor(context: Context? = null) {
             }
 
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
-            ${PreviewColorShaderModules.HLG_TO_LINEAR}
             ${PreviewColorShaderModules.EXPOSURE}
             ${DirectFlashShader.GLSL}
             ${ThreeWayColorGradingShader.GLSL}
@@ -3306,10 +3285,6 @@ class LutImageProcessor(context: Context? = null) {
 
             vec3 prepareToneSample(vec3 sampleColor) {
                 vec3 prepared = sampleColor;
-                if (uIsHlgInput) {
-                    prepared = hlgToLinear(prepared);
-                    prepared = linearToSrgb(prepared);
-                }
                 if (abs(uExposure) > 0.001) {
                     prepared = applyExposureInLinearSpace(prepared, uExposure);
                 }
@@ -3444,11 +3419,6 @@ class LutImageProcessor(context: Context? = null) {
                     color = vec4(r, g, b, a);
                 } else {
                     color = sampleImage(uvCoord);
-                }
-
-                if (uIsHlgInput) {
-                    color.rgb = hlgToLinear(color.rgb);
-                    color.rgb = linearToSrgb(color.rgb);
                 }
 
                 // === 色彩配方处理（按专业后期流程顺序） ===

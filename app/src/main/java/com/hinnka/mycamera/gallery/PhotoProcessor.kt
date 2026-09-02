@@ -67,12 +67,6 @@ class PhotoProcessor(
         val metadata: MediaMetadata,
     )
 
-    private suspend fun shouldDecodeHlgInput(metadata: MediaMetadata): Boolean {
-        val isHlg = metadata.dynamicRangeProfile == "HLG10"
-        if (!isHlg) return false
-        return userPreferencesRepository.userPreferences.firstOrNull()?.hlgHardwareCompatibilityEnabled ?: false
-    }
-
     private suspend fun resolveRawAutoWhiteBalanceEstimate(metadata: MediaMetadata): Boolean {
         return metadata.rawAutoWhiteBalanceEstimate
             ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoWhiteBalanceEstimate ?: false)
@@ -323,7 +317,6 @@ class PhotoProcessor(
 
         val lutStackResult = lutImageProcessor.applyLutStackWithLuminanceGain(
             sdrBitmap,
-            isHlgInput = false,
             colorCorrection.baselineLayer,
             colorCorrection.creativeLayer,
             0f,
@@ -725,7 +718,6 @@ class PhotoProcessor(
 
             lutImageProcessor.applyLutStack(
                 b,
-                isHlgInput = false,
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
                 0f,
@@ -789,7 +781,6 @@ class PhotoProcessor(
         if (onLutLuminanceGainMap != null) {
             val lutStackResult = lutImageProcessor.applyLutStackWithLuminanceGain(
                 result,
-                isHlgInput = shouldDecodeHlgInput(metadata),
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
                 finalSharpening,
@@ -802,7 +793,6 @@ class PhotoProcessor(
         } else {
             result = lutImageProcessor.applyLutStack(
                 result,
-                isHlgInput = shouldDecodeHlgInput(metadata),
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
                 finalSharpening,

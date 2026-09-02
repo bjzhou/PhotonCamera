@@ -116,6 +116,7 @@ import com.hinnka.mycamera.camera.IszLensConfig
 import com.hinnka.mycamera.camera.IszRawDngMetadataCorrections
 import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.camera.MultiFrameConfig
+import com.hinnka.mycamera.camera.NoiseReductionLevel
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.camera.VendorCaptureKey
 import com.hinnka.mycamera.camera.VendorCaptureSettings
@@ -232,15 +233,6 @@ private val RAW_MIN_SHUTTER_SPEED_OPTIONS = listOf(
     1_000_000_000L / 2000,
 )
 
-private fun sanitizeSettingsTonemapMode(mode: String): String {
-    return when (mode) {
-        "FAST", "HIGH_QUALITY" -> "SYSTEM_DEFAULT"
-        "REC709" -> "SRGB"
-        "SYSTEM_DEFAULT", "SRGB" -> mode
-        else -> "SYSTEM_DEFAULT"
-    }
-}
-
 private fun openExternalUrl(context: Context, url: String) {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -333,7 +325,7 @@ fun SettingsScreen(
     val customAspectRatios by viewModel.customAspectRatios.collectAsState()
     val availablePhotoAspectRatios by viewModel.availablePhotoAspectRatios.collectAsState()
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
-    val nrLevel by viewModel.nrLevel.collectAsState(initial = 5)
+    val nrLevel by viewModel.nrLevel.collectAsState(initial = NoiseReductionLevel.DEFAULT)
     val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
     val vendorCaptureSettingsByLens by viewModel.vendorCaptureSettingsByLens.collectAsState()
     val customVendorKeySettings by viewModel.customVendorKeySettings.collectAsState()
@@ -356,13 +348,7 @@ fun SettingsScreen(
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useHeicExport by viewModel.useHeicExport.collectAsState(initial = false)
     val useJpeg444Export by viewModel.useJpeg444Export.collectAsState(initial = false)
-    val tonemapMode by viewModel.tonemapMode.collectAsState()
-    val settingsTonemapMode = remember(tonemapMode) { sanitizeSettingsTonemapMode(tonemapMode) }
-    val fixTonemapPreview by viewModel.fixTonemapPreview.collectAsState()
-    val fixTonemapCapture by viewModel.fixTonemapCapture.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
-    val useHlg10 by viewModel.useHlg10.collectAsState()
-    val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
     val ultraHdrGainMapEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
     val useHdrScreenMode by viewModel.useHdrScreenMode.collectAsState()
@@ -528,16 +514,6 @@ fun SettingsScreen(
             viewModel.discoverMacroCameraIdOptions()
         }.getOrElse {
             emptyList()
-        }
-    }
-
-    fun applyTonemapMode(mode: String) {
-        viewModel.setTonemapMode(mode)
-    }
-
-    LaunchedEffect(tonemapMode, settingsTonemapMode) {
-        if (settingsTonemapMode != tonemapMode) {
-            applyTonemapMode(settingsTonemapMode)
         }
     }
 
@@ -1824,12 +1800,11 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_nr_level),
                             description = stringResource(R.string.settings_nr_level_description),
                             levels = listOf(
-                                5 to stringResource(R.string.settings_nr_level_auto),
-                                0 to stringResource(R.string.settings_nr_level_off),
-                                1 to stringResource(R.string.settings_nr_level_fast),
-                                2 to stringResource(R.string.settings_nr_level_high_quality),
-                                3 to stringResource(R.string.settings_nr_level_zsl),
-                                4 to stringResource(R.string.settings_nr_level_minimal)
+                                NoiseReductionLevel.OFF to stringResource(R.string.settings_nr_level_off),
+                                NoiseReductionLevel.FAST to stringResource(R.string.settings_nr_level_fast),
+                                NoiseReductionLevel.HIGH_QUALITY to stringResource(R.string.settings_nr_level_high_quality),
+                                NoiseReductionLevel.ZERO_SHUTTER_LAG to stringResource(R.string.settings_nr_level_zsl),
+                                NoiseReductionLevel.MINIMAL to stringResource(R.string.settings_nr_level_minimal)
                             ),
                             currentLevel = nrLevel,
                             onLevelSelected = { viewModel.setNRLevel(it) }
@@ -1865,46 +1840,6 @@ fun SettingsScreen(
                             onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.JPG }
                         )
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        QualityLevelSetting(
-                            title = stringResource(R.string.settings_tonemap_mode),
-                            description = stringResource(R.string.settings_tonemap_mode_description),
-                            levels = listOf(
-                                "SYSTEM_DEFAULT" to stringResource(R.string.settings_tonemap_mode_system_default),
-                                "SRGB" to stringResource(R.string.settings_tonemap_mode_srgb),
-                            ),
-                            currentLevel = settingsTonemapMode,
-                            onLevelSelected = ::applyTonemapMode
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_fix_tonemap_preview),
-                            description = stringResource(R.string.settings_fix_tonemap_preview_description),
-                            checked = fixTonemapPreview,
-                            onCheckedChange = { viewModel.setFixTonemapPreview(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_fix_tonemap_capture),
-                            description = stringResource(R.string.settings_fix_tonemap_capture_description),
-                            checked = fixTonemapCapture,
-                            onCheckedChange = { viewModel.setFixTonemapCapture(it) }
-                        )
-
                         if (state.isP010Supported) {
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
@@ -1933,36 +1868,6 @@ fun SettingsScreen(
                             )
                         }
 
-                        if (isHdrSettingsSupported && state.isHlg10Supported) {
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-
-                            SwitchSettingItem(
-                                title = stringResource(R.string.settings_use_hlg10),
-                                description = stringResource(R.string.settings_use_hlg10_description),
-                                checked = useHlg10,
-                                onCheckedChange = {
-                                    viewModel.setUseHlg10(it)
-                                    if (it) {
-                                        viewModel.setUseP010(true)
-                                    }
-                                }
-                            )
-
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-
-                            SwitchSettingItem(
-                                title = stringResource(R.string.settings_hlg_hardware_compatibility),
-                                description = stringResource(R.string.settings_hlg_hardware_compatibility_description),
-                                checked = hlgHardwareCompatibilityEnabled,
-                                onCheckedChange = { viewModel.setHlgHardwareCompatibilityEnabled(it) }
-                            )
-                        }
                     }
                 }
 
@@ -3140,8 +3045,7 @@ private fun SettingsCategoryOverview(
                 stringResource(R.string.settings_multi_frame_denoise_frame_count),
                 stringResource(R.string.settings_nr_level),
                 stringResource(R.string.settings_edge_level),
-                stringResource(R.string.settings_baseline_jpg_title),
-                stringResource(R.string.settings_tonemap_mode)
+                stringResource(R.string.settings_baseline_jpg_title)
             ).joinToString(" · "),
             onClick = { onPageSelected(SettingsPage.PHOTO_MODE) }
         )
