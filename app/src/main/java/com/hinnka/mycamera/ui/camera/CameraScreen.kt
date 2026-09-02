@@ -619,15 +619,8 @@ fun CameraScreen(
 
     fun presetRequiresPreviewTransition(preset: CameraPreset?): Boolean {
         val targetAspectRatio = presetTargetAspectRatio(preset)
-        val targetPreset = preset?.withSupportedCaptureCombination()
-        val targetUseRaw = targetPreset?.useRaw ?: false
-        val targetUseJpgMax = targetPreset?.useJpgMax ?: false
-        val targetUseRawMax = targetPreset?.useRawMax ?: false
-
         return targetAspectRatio != state.aspectRatio ||
-            targetUseRaw != useRaw ||
-            targetUseJpgMax != useJpgMax ||
-            targetUseRawMax != useRawMax
+            !useRaw || useJpgMax || !useRawMax
     }
 
     LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
@@ -799,6 +792,19 @@ fun CameraScreen(
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
+        val isProfessionalMode = isPhotoStyleMode && useRaw && state.isRawSupported
+        val effectiveLutSelectorMode = if (
+            !isProfessionalMode && lutSelectorMode == LutSelectorMode.Presets
+        ) {
+            LutSelectorMode.Style
+        } else {
+            lutSelectorMode
+        }
+        LaunchedEffect(isProfessionalMode, lutSelectorMode) {
+            if (!isProfessionalMode && lutSelectorMode == LutSelectorMode.Presets) {
+                viewModel.setLutSelectorMode(LutSelectorMode.Style)
+            }
+        }
         LaunchedEffect(isPhotoStyleMode) {
             if (!isPhotoStyleMode) {
                 parameterRulerBounds = null
@@ -1718,7 +1724,7 @@ fun CameraScreen(
                         .padding(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    if (lutSelectorMode == LutSelectorMode.Style) {
+                    if (effectiveLutSelectorMode == LutSelectorMode.Style) {
                         val currentLut = viewModel.availableLutList.find { it.id == currentLutId }
                         Row(
                             modifier = Modifier
@@ -1753,9 +1759,9 @@ fun CameraScreen(
                         currentLutId = currentLutId,
                         thumbnail = viewModel.previewThumbnail,
                         onLutSelected = { viewModel.setLut(it) },
-                        allPresets = allPresets,
-                        activePresetId = activePresetId,
-                        selectedMode = lutSelectorMode,
+                        allPresets = if (isProfessionalMode) allPresets else emptyList(),
+                        activePresetId = activePresetId.takeIf { isProfessionalMode },
+                        selectedMode = effectiveLutSelectorMode,
                         onModeSelected = { viewModel.setLutSelectorMode(it) },
                         availableFrames = viewModel.availableFrameList,
                         currentFrameId = viewModel.currentFrameId,

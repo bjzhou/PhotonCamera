@@ -104,16 +104,12 @@ fun PresetEditorScreen(
 
     // 相机参数
     var aspectRatio by remember { mutableStateOf(sourcePreset?.aspectRatio ?: AspectRatio.RATIO_4_3.name) }
-    var useRaw by remember {
-        mutableStateOf(sourcePreset?.let { it.useRaw || it.useRawMax } ?: false)
-    }
-    var useJpgMax by remember { mutableStateOf(sourcePreset?.useJpgMax ?: false) }
     var ultraHdrGainMapEnabled by remember {
         mutableStateOf(sourcePreset?.ultraHdrGainMapEnabled ?: false)
     }
     var frameId by remember { mutableStateOf(sourcePreset?.frameId) }
 
-    // Quick RAW 参数
+    // 专业模式参数
     var rawDcpId by remember { mutableStateOf(sourcePreset?.rawDcpId) }
     var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset?.rawDcpIdsByLens ?: emptyMap()) }
     var rawHncsProfileId by remember { mutableStateOf(sourcePreset?.rawHncsProfileId) }
@@ -179,14 +175,12 @@ fun PresetEditorScreen(
     var rawSpectralFilmPrint by remember { mutableStateOf(sourcePreset?.rawSpectralFilmPrint ?: "kodak_2383") }
     var rawDROMode by remember { mutableStateOf(sourcePreset?.rawDROMode ?: "OFF") }
 
-    // 基准色彩校正
-    var jpgBaselineLutId by remember { mutableStateOf(sourcePreset?.jpgBaselineLutId) }
+    // 专业模式基准色彩校正
     var rawBaselineLutId by remember { mutableStateOf(sourcePreset?.rawBaselineLutId) }
-    var phantomBaselineLutId by remember { mutableStateOf(sourcePreset?.phantomBaselineLutId) }
 
     // 折叠卡片展开控制
     var expandSettings by remember { mutableStateOf(false) }
-    var expandQuickRaw by remember { mutableStateOf(false) }
+    var expandProfessionalSettings by remember { mutableStateOf(false) }
     var expandBaseline by remember { mutableStateOf(false) }
     var showEditSheet by remember { mutableStateOf(false) }
     var baselineRecipeEditLutId by remember { mutableStateOf<String?>(null) }
@@ -203,9 +197,6 @@ fun PresetEditorScreen(
             colorRecipe = colorRecipe,
             effects = effects,
             aspectRatio = aspectRatio,
-            useRaw = useRaw,
-            useJpgMax = useJpgMax,
-            useRawMax = useRaw,
             ultraHdrGainMapEnabled = ultraHdrGainMapEnabled,
             frameId = frameId,
             rawDcpId = rawDcpId,
@@ -230,9 +221,7 @@ fun PresetEditorScreen(
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
             rawDROMode = rawDROMode,
-            jpgBaselineLutId = jpgBaselineLutId,
             rawBaselineLutId = rawBaselineLutId,
-            phantomBaselineLutId = phantomBaselineLutId,
             isBuiltIn = isBuiltInFlag
         )
         viewModel.savePreset(savedPreset)
@@ -370,20 +359,6 @@ fun PresetEditorScreen(
                         }
                     }
                 )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_jpg_max),
-                    checked = useJpgMax,
-                    onCheckedChange = {
-                        useJpgMax = it
-                        if (it) {
-                            useRaw = false
-                        }
-                    }
-                )
-
             }
 
             if (showEditSheet) {
@@ -456,28 +431,14 @@ fun PresetEditorScreen(
             SettingsSection(
                 title = stringResource(R.string.settings_professional_parameters),
                 isExpandable = true,
-                isExpanded = expandQuickRaw,
-                onToggleExpand = { expandQuickRaw = !expandQuickRaw }
+                isExpanded = expandProfessionalSettings,
+                onToggleExpand = { expandProfessionalSettings = !expandProfessionalSettings }
             ) {
-                SwitchSettingItem(
-                    title = stringResource(R.string.capture_mode_professional),
-                    checked = useRaw,
-                    onCheckedChange = {
-                        useRaw = it
-                        if (it) {
-                            useJpgMax = false
-                        }
-                    }
-                )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
                 SwitchSettingItem(
                     title = stringResource(R.string.settings_ultra_hdr_gain_map),
                     description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
                     checked = ultraHdrGainMapEnabled,
                     onCheckedChange = { ultraHdrGainMapEnabled = it },
-                    enabled = useRaw,
                 )
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
@@ -783,34 +744,12 @@ fun PresetEditorScreen(
                 onToggleExpand = { expandBaseline = !expandBaseline }
             ) {
                 RawBaselineColorCorrectionSelector(
-                    title = stringResource(R.string.settings_baseline_jpg_title),
-                    selectedLutId = jpgBaselineLutId,
-                    availableLuts = availableLuts,
-                    thumbnail = null,
-                    onSelectLut = { jpgBaselineLutId = it },
-                    onEditRecipe = { editBaselineRecipe(it, LutEditorTarget.BASELINE_JPG) }
-                )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
-                RawBaselineColorCorrectionSelector(
                     title = stringResource(R.string.settings_baseline_raw_title),
                     selectedLutId = rawBaselineLutId,
                     availableLuts = availableLuts,
                     thumbnail = null,
                     onSelectLut = { rawBaselineLutId = it },
                     onEditRecipe = { editBaselineRecipe(it, LutEditorTarget.BASELINE_RAW) }
-                )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
-                RawBaselineColorCorrectionSelector(
-                    title = stringResource(R.string.settings_baseline_phantom_title),
-                    selectedLutId = phantomBaselineLutId,
-                    availableLuts = availableLuts,
-                    thumbnail = null,
-                    onSelectLut = { phantomBaselineLutId = it },
-                    onEditRecipe = { editBaselineRecipe(it, LutEditorTarget.BASELINE_PHANTOM) }
                 )
             }
         }

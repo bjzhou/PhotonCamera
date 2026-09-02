@@ -11,7 +11,7 @@ import org.junit.Test
 
 class CameraPresetJsonCodecTest {
     @Test
-    fun contentReferences_includeAndRemapEveryLutSlot() {
+    fun contentReferences_includeAndRemapProfessionalLutSlots() {
         val source = CameraPreset(
             id = "preset_resource_mapping",
             name = "Resource Mapping",
@@ -19,26 +19,20 @@ class CameraPresetJsonCodecTest {
             colorRecipe = ColorRecipeParams.DEFAULT,
             effects = EffectParams.DEFAULT,
             frameId = "frame_source",
-            jpgBaselineLutId = "jpg",
             rawBaselineLutId = "raw",
-            phantomBaselineLutId = "phantom",
         )
 
-        assertEquals(listOf("main", "jpg", "raw", "phantom"), source.referencedLutIds())
+        assertEquals(listOf("main", "raw"), source.referencedLutIds())
 
         val resolved = source.withResolvedContentReferences(
             lutIdsBySourceKey = mapOf(
                 "main" to "imported_main",
-                "jpg" to "imported_jpg",
                 "raw" to "imported_raw",
-                "phantom" to "imported_phantom",
             ),
             resolvedFrameId = "imported_frame",
         )
         assertEquals("imported_main", resolved.lutId)
-        assertEquals("imported_jpg", resolved.jpgBaselineLutId)
         assertEquals("imported_raw", resolved.rawBaselineLutId)
-        assertEquals("imported_phantom", resolved.phantomBaselineLutId)
         assertEquals("imported_frame", resolved.frameId)
     }
 
@@ -50,7 +44,6 @@ class CameraPresetJsonCodecTest {
             lutId = null,
             colorRecipe = ColorRecipeParams.DEFAULT.copy(clarity = 0.42f),
             effects = EffectParams.DEFAULT.copy(clarity = -0.31f),
-            useRaw = true,
             ultraHdrGainMapEnabled = false,
             rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
             rawSharpening = 0.2f,
@@ -77,7 +70,6 @@ class CameraPresetJsonCodecTest {
         assertEquals("kodak_gold_200", preset.rawSpectralFilmStock)
         assertEquals("kodak_2383", preset.rawSpectralFilmPrint)
         assertEquals("DR400", preset.rawDROMode)
-        assertTrue(preset.useRaw)
         assertFalse(preset.ultraHdrGainMapEnabled)
         assertEquals(0.42f, preset.colorRecipe.clarity, 0.0001f)
         assertEquals(-0.31f, preset.effects.clarity, 0.0001f)
@@ -123,43 +115,19 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
-    fun toJson_writesOnlyNormalizedMaxFields() {
-        val source = CameraPreset(
-            id = "preset_current_raw_max",
-            name = "Current RAWmax",
-            lutId = null,
-            colorRecipe = ColorRecipeParams.DEFAULT,
-            effects = EffectParams.DEFAULT,
-            useRaw = false,
-            useJpgMax = true,
-            useRawMax = true,
-        )
-
-        val json = source.toJson()
-        val preset = CameraPreset.fromJson(json)
-
-        requireNotNull(preset)
-        assertTrue(json.contains("\"useRawMax\""))
-        assertTrue(json.contains("\"useJpgMax\""))
-        assertFalse(json.contains("\"useMFNR\""))
-        assertFalse(json.contains("\"useMFSR\""))
-        assertFalse(json.contains("\"useHdrComposition\""))
-        assertTrue(preset.useRaw)
-        assertTrue(preset.useRawMax)
-        assertFalse(preset.useJpgMax)
-    }
-
-    @Test
-    fun fromJson_migratesLegacyRawMultiFrameToRawMax() {
+    fun fromJson_ignoresLegacyNonProfessionalFields() {
         val preset = CameraPreset.fromJson(
             """
             {
-              "id": "preset_raw_mfsr_conflict",
-              "name": "RAW MFSR Conflict",
+              "id": "preset_legacy_capture_fields",
+              "name": "Legacy Capture Fields",
               "lutId": "standard",
               "useRaw": true,
-              "useMFNR": false,
-              "useMFSR": true,
+              "useJpgMax": true,
+              "useRawMax": false,
+              "jpgBaselineLutId": "jpg_baseline",
+              "rawBaselineLutId": "raw_baseline",
+              "phantomBaselineLutId": "phantom_baseline",
               "colorRecipe": {},
               "effects": {}
             }
@@ -167,55 +135,13 @@ class CameraPresetJsonCodecTest {
         )
 
         requireNotNull(preset)
-        assertTrue(preset.useRaw)
-        assertTrue(preset.useRawMax)
-        assertFalse(preset.useJpgMax)
-    }
-
-    @Test
-    fun fromJson_ignoresLegacyYuvHdrFlagForRawMaxMigration() {
-        val preset = CameraPreset.fromJson(
-            """
-            {
-              "id": "preset_raw_mfsr_hdr_preference",
-              "name": "RAW MFSR with HDR Preference",
-              "useRaw": true,
-              "useMFNR": false,
-              "useHdrComposition": true,
-              "useMFSR": true,
-              "colorRecipe": {},
-              "effects": {}
-            }
-            """.trimIndent()
-        )
-
-        requireNotNull(preset)
-        assertTrue(preset.useRaw)
-        assertTrue(preset.useRawMax)
-        assertFalse(preset.useJpgMax)
-    }
-
-    @Test
-    fun fromJson_migratesLegacyYuvMultiFrameAndHdrToJpgMax() {
-        val preset = CameraPreset.fromJson(
-            """
-            {
-              "id": "preset_yuv_mfsr_hdr_conflict",
-              "name": "YUV MFSR HDR Conflict",
-              "useRaw": false,
-              "useMFNR": false,
-              "useHdrComposition": true,
-              "useMFSR": true,
-              "colorRecipe": {},
-              "effects": {}
-            }
-            """.trimIndent()
-        )
-
-        requireNotNull(preset)
-        assertTrue(preset.useJpgMax)
-        assertFalse(preset.useRawMax)
-        assertFalse(preset.useRaw)
+        assertEquals("raw_baseline", preset.rawBaselineLutId)
+        val json = preset.toJson()
+        assertFalse(json.contains("\"useRaw\""))
+        assertFalse(json.contains("\"useJpgMax\""))
+        assertFalse(json.contains("\"useRawMax\""))
+        assertFalse(json.contains("\"jpgBaselineLutId\""))
+        assertFalse(json.contains("\"phantomBaselineLutId\""))
     }
 
     @Test
@@ -260,8 +186,6 @@ class CameraPresetJsonCodecTest {
         assertEquals("Legacy Preset", preset.name)
         assertEquals(RawRenderingEngine.AdobeCurve.name, preset.rawRenderingEngine)
         assertEquals(AspectRatio.RATIO_4_3.name, preset.aspectRatio)
-        assertFalse(preset.useJpgMax)
-        assertFalse(preset.useRawMax)
         assertFalse(preset.ultraHdrGainMapEnabled)
         assertEquals(0.4f, preset.rawSharpening, 0.0001f)
         assertEquals(0.4f, preset.rawMaxSharpening, 0.0001f)
@@ -324,7 +248,6 @@ class CameraPresetJsonCodecTest {
         assertEquals("preset_2", presets.first().id)
         assertEquals(RawRenderingEngine.Spektrafilm.name, presets.first().rawRenderingEngine)
         assertEquals("DR400", presets.first().rawDROMode)
-        assertTrue(presets.first().useRaw)
     }
 
     @Test

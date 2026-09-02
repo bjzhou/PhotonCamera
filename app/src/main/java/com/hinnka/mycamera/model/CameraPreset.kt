@@ -10,7 +10,7 @@ import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 
 /**
- * 拍摄预设组合（用户自定义档位配置）
+ * 专业模式拍摄预设（用户自定义档位配置）
  */
 @Keep
 data class CameraPreset(
@@ -20,12 +20,9 @@ data class CameraPreset(
     val colorRecipe: ColorRecipeParams, // 仅保留可烘焙色彩微调
     val effects: EffectParams,          // 独立物理效果
     val aspectRatio: String = AspectRatio.RATIO_4_3.name,
-    val useRaw: Boolean = false,
-    val useJpgMax: Boolean = false,
-    val useRawMax: Boolean = false,
     val ultraHdrGainMapEnabled: Boolean = false,
     val frameId: String? = null,
-    // Quick RAW 功能
+    // 专业模式参数
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     val rawHncsProfileId: String? = null,
@@ -49,10 +46,8 @@ data class CameraPreset(
     val rawSpectralFilmStock: String? = null,
     val rawSpectralFilmPrint: String? = null,
     val rawDROMode: String = "OFF",
-    // 基准色彩校正
-    val jpgBaselineLutId: String? = null,
+    // 专业模式基准色彩校正
     val rawBaselineLutId: String? = null,
-    val phantomBaselineLutId: String? = null,
     // 是否为内置预设
     val isBuiltIn: Boolean = false
 ) {
@@ -63,25 +58,6 @@ data class CameraPreset(
             colorRecipe = colorRecipe.copy(halation = 0f),
             effects = effects.copy(hdf = 0f)
         )
-    }
-
-    fun withSupportedCaptureCombination(): CameraPreset {
-        val resolvedUseRaw = useRaw || useRawMax
-        val resolvedUseRawMax = resolvedUseRaw
-        val resolvedUseJpgMax = useJpgMax && !resolvedUseRaw
-        return if (
-            resolvedUseRaw == useRaw &&
-            resolvedUseJpgMax == useJpgMax &&
-            resolvedUseRawMax == useRawMax
-        ) {
-            this
-        } else {
-            copy(
-                useRaw = resolvedUseRaw,
-                useJpgMax = resolvedUseJpgMax,
-                useRawMax = resolvedUseRawMax,
-            )
-        }
     }
 
     fun rawDcpIdForLens(lensId: String?): String? {
@@ -98,14 +74,12 @@ data class CameraPreset(
     }
 
     /**
-     * 返回该预设依赖的全部 LUT 键，包括主 LUT 与三种基准色彩校正 LUT。
+     * 返回该预设依赖的全部 LUT 键，包括主 LUT 与专业模式基准色彩校正 LUT。
      */
     fun referencedLutIds(): List<String> {
         return listOfNotNull(
             normalizeLutId(lutId),
-            normalizeLutId(jpgBaselineLutId),
             normalizeLutId(rawBaselineLutId),
-            normalizeLutId(phantomBaselineLutId),
         ).distinct()
     }
 
@@ -146,15 +120,12 @@ data class CameraPreset(
             frameId = resolvedFrameId,
             rawDcpId = resolveDcp(rawDcpId),
             rawDcpIdsByLens = rawDcpIdsByLens.mapValues { (_, dcpId) -> resolveDcp(dcpId) },
-            jpgBaselineLutId = resolveLut(jpgBaselineLutId),
             rawBaselineLutId = resolveLut(rawBaselineLutId),
-            phantomBaselineLutId = resolveLut(phantomBaselineLutId),
         )
     }
 
     fun normalizedForPersistence(): CameraPreset {
-        return withSupportedCaptureCombination()
-            .withoutLegacyHdf()
+        return withoutLegacyHdf()
             .copy(
                 lutId = normalizeLutId(lutId),
                 rawDcpId = rawDcpId?.takeIf { it.isNotBlank() },
@@ -205,8 +176,6 @@ data class CameraPreset(
                 colorRecipe = ColorRecipeParams.DEFAULT,
                 effects = EffectParams.DEFAULT,
                 frameId = null,
-                useRaw = false,
-                useJpgMax = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true
@@ -224,7 +193,6 @@ data class CameraPreset(
                     )
                 ),
                 effects = EffectParams.DEFAULT,
-                useRaw = true,
                 rawRenderingEngine = RawRenderingEngine.HncsCcm.name,
                 isBuiltIn = true
             ),
@@ -237,8 +205,6 @@ data class CameraPreset(
                 ),
                 effects = EffectParams.DEFAULT,
                 frameId = "polaroid",
-                useRaw = false,
-                useJpgMax = true,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true
@@ -261,8 +227,6 @@ data class CameraPreset(
                     vignette = -0.2f,
                 ),
                 frameId = "leica",
-                useRaw = true,
-                useJpgMax = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true
@@ -278,7 +242,6 @@ data class CameraPreset(
                 effects = EffectParams.DEFAULT,
                 frameId = "xpan",
                 aspectRatio = AspectRatio.XPAN.name,
-                useRaw = true,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true
@@ -297,7 +260,6 @@ data class CameraPreset(
                     halation = 0.25f,
                 ),
                 frameId = "time",
-                useRaw = true,
                 rawDcpId = null,
                 rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
                 rawSpectralFilmStock = "kodak_gold_200",
@@ -314,7 +276,6 @@ data class CameraPreset(
                 ),
                 effects = EffectParams.DEFAULT,
                 frameId = "black_border",
-                useRaw = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true

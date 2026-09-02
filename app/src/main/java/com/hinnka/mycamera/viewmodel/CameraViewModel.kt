@@ -247,9 +247,7 @@ private data class PresetMatchSnapshot(
     val colorRecipe: ColorRecipeParams,
     val effects: EffectParams,
     val aspectRatio: String,
-    val useRaw: Boolean,
-    val useJpgMax: Boolean,
-    val useRawMax: Boolean,
+    val isProfessionalMode: Boolean,
     val ultraHdrGainMapEnabled: Boolean,
     val frameId: String?,
     val rawDcpId: String?,
@@ -269,9 +267,7 @@ private data class PresetMatchSnapshot(
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
     val rawDROMode: String,
-    val jpgBaselineLutId: String?,
-    val rawBaselineLutId: String?,
-    val phantomBaselineLutId: String?
+    val rawBaselineLutId: String?
 ) {
     fun matches(preset: com.hinnka.mycamera.model.CameraPreset): Boolean {
         val colorRecipeMatches = colorRecipe.withoutIndependentEffects()
@@ -282,9 +278,7 @@ private data class PresetMatchSnapshot(
             colorRecipeMatches &&
             effects == preset.effects &&
             aspectRatio == preset.aspectRatio &&
-            useRaw == preset.useRaw &&
-            useJpgMax == preset.useJpgMax &&
-            useRawMax == preset.useRawMax &&
+            isProfessionalMode &&
             ultraHdrGainMapEnabled == preset.ultraHdrGainMapEnabled &&
             frameId == preset.frameId &&
             rawDcpId == preset.rawDcpId &&
@@ -308,9 +302,7 @@ private data class PresetMatchSnapshot(
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
             rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
             rawDROMode == preset.rawDROMode &&
-            jpgBaselineLutId == preset.jpgBaselineLutId &&
-            rawBaselineLutId == preset.rawBaselineLutId &&
-            phantomBaselineLutId == preset.phantomBaselineLutId
+            rawBaselineLutId == preset.rawBaselineLutId
     }
 
     fun mismatchSummary(preset: com.hinnka.mycamera.model.CameraPreset): String {
@@ -326,9 +318,7 @@ private data class PresetMatchSnapshot(
             }
             if (effects != preset.effects) add("effects current=$effects preset=${preset.effects}")
             if (aspectRatio != preset.aspectRatio) add("aspectRatio current=$aspectRatio preset=${preset.aspectRatio}")
-            if (useRaw != preset.useRaw) add("useRaw current=$useRaw preset=${preset.useRaw}")
-            if (useJpgMax != preset.useJpgMax) add("useJpgMax current=$useJpgMax preset=${preset.useJpgMax}")
-            if (useRawMax != preset.useRawMax) add("useRawMax current=$useRawMax preset=${preset.useRawMax}")
+            if (!isProfessionalMode) add("professional mode is not active")
             if (ultraHdrGainMapEnabled != preset.ultraHdrGainMapEnabled) {
                 add(
                     "ultraHdrGainMapEnabled current=$ultraHdrGainMapEnabled " +
@@ -409,14 +399,8 @@ private data class PresetMatchSnapshot(
                 add("rawSpectralFilmPrint current=$rawSpectralFilmPrint preset=${preset.rawSpectralFilmPrint}")
             }
             if (rawDROMode != preset.rawDROMode) add("rawDROMode current=$rawDROMode preset=${preset.rawDROMode}")
-            if (jpgBaselineLutId != preset.jpgBaselineLutId) {
-                add("jpgBaselineLutId current=$jpgBaselineLutId preset=${preset.jpgBaselineLutId}")
-            }
             if (rawBaselineLutId != preset.rawBaselineLutId) {
                 add("rawBaselineLutId current=$rawBaselineLutId preset=${preset.rawBaselineLutId}")
-            }
-            if (phantomBaselineLutId != preset.phantomBaselineLutId) {
-                add("phantomBaselineLutId current=$phantomBaselineLutId preset=${preset.phantomBaselineLutId}")
             }
         }
         return differences.joinToString("; ").ifEmpty { "unknown" }
@@ -616,9 +600,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             colorRecipe = saved.colorRecipe,
                             effects = saved.effects,
                             aspectRatio = saved.aspectRatio,
-                            useRaw = saved.useRaw,
-                            useJpgMax = saved.useJpgMax,
-                            useRawMax = saved.useRawMax,
                             ultraHdrGainMapEnabled = saved.ultraHdrGainMapEnabled,
                             frameId = saved.frameId,
                             rawDcpId = saved.rawDcpId,
@@ -638,9 +619,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
                             rawDROMode = saved.rawDROMode,
-                            jpgBaselineLutId = saved.jpgBaselineLutId,
-                            rawBaselineLutId = saved.rawBaselineLutId,
-                            phantomBaselineLutId = saved.phantomBaselineLutId
+                            rawBaselineLutId = saved.rawBaselineLutId
                         )
                     } ?: saved
                 }
@@ -689,9 +668,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             colorRecipe = currentRecipeParams.value.withoutIndependentEffects(),
             effects = currentRecipeParams.value.toEffectParams(),
             aspectRatio = state.value.aspectRatio.name,
-            useRaw = useRaw.value,
-            useJpgMax = useJpgMax.value,
-            useRawMax = useRawMax.value,
             ultraHdrGainMapEnabled = ultraHdrGainMapEnabled.value,
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
@@ -717,9 +693,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
-            jpgBaselineLutId = jpgBaselineLutId.value,
             rawBaselineLutId = rawBaselineLutId.value,
-            phantomBaselineLutId = phantomBaselineLutId.value,
             isBuiltIn = false
         ).also {
             draftPreset = it
@@ -738,15 +712,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (presetApplyGeneration != applyGeneration) {
                     return@withLock
                 }
-                val resolvedPreset = preset?.withSupportedCaptureCombination()
                 try {
+                    if (state.value.captureMode != CaptureMode.PHOTO) {
+                        setCaptureMode(CaptureMode.PHOTO)
+                    }
                     PLog.d(
                         TAG,
-                        "Applying preset id=${resolvedPreset?.id}, aspectRatio=${resolvedPreset?.aspectRatio}, " +
-                            "frameId=${resolvedPreset?.frameId}"
+                        "Applying preset id=${preset?.id}, aspectRatio=${preset?.aspectRatio}, " +
+                            "frameId=${preset?.frameId}"
                     )
                     applyCameraFeatureUpdate(
-                        resolvedPreset.toCameraFeatureUpdate().copy(activePresetId = SettingValue(resolvedPreset?.id)),
+                        preset.toCameraFeatureUpdate().copy(activePresetId = SettingValue(preset?.id)),
                         clearActivePresetOnMismatch = false
                     )
                 } finally {
@@ -770,9 +746,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             colorRecipe = SettingValue(this?.colorRecipe ?: ColorRecipeParams.DEFAULT),
             effects = SettingValue(this?.effects ?: EffectParams.DEFAULT),
             aspectRatio = SettingValue(ratio),
-            useRaw = SettingValue(this?.useRaw ?: false),
-            useJpgMax = SettingValue(this?.useJpgMax ?: false),
-            useRawMax = SettingValue(this?.useRawMax ?: false),
+            useRaw = SettingValue(true),
+            useJpgMax = SettingValue(false),
+            useRawMax = SettingValue(true),
             ultraHdrGainMapEnabled = SettingValue(this?.ultraHdrGainMapEnabled ?: false),
             frameId = SettingValue(this?.frameId),
             rawDcpId = SettingValue(this?.rawDcpId),
@@ -815,9 +791,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
             droMode = SettingValue(this?.rawDROMode ?: RawProcessingPreferences.DROMode.OFF.name),
-            jpgBaselineLutId = SettingValue(this?.jpgBaselineLutId),
-            rawBaselineLutId = SettingValue(this?.rawBaselineLutId),
-            phantomBaselineLutId = SettingValue(this?.phantomBaselineLutId)
+            rawBaselineLutId = SettingValue(this?.rawBaselineLutId)
         )
     }
 
@@ -1245,9 +1219,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             colorRecipe = currentRecipeParams.value,
             effects = currentEffectParams.value,
             aspectRatio = state.value.aspectRatio.name,
-            useRaw = useRaw.value,
-            useJpgMax = useJpgMax.value,
-            useRawMax = useRawMax.value,
+            isProfessionalMode = state.value.captureMode == CaptureMode.PHOTO &&
+                useRaw.value && useRawMax.value && !useJpgMax.value,
             ultraHdrGainMapEnabled = ultraHdrGainMapEnabled.value,
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
@@ -1267,9 +1240,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
-            jpgBaselineLutId = jpgBaselineLutId.value,
-            rawBaselineLutId = rawBaselineLutId.value,
-            phantomBaselineLutId = phantomBaselineLutId.value
+            rawBaselineLutId = rawBaselineLutId.value
         )
     }
 
@@ -1279,9 +1250,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             colorRecipe = recipe,
             effects = effects,
             aspectRatio = aspectRatio,
-            useRaw = prefs.useRaw,
-            useJpgMax = prefs.useJpgMax,
-            useRawMax = prefs.useRawMax,
+            isProfessionalMode = prefs.captureMode == CaptureMode.PHOTO &&
+                prefs.useRaw && prefs.useRawMax && !prefs.useJpgMax,
             ultraHdrGainMapEnabled = prefs.ultraHdrGainMapEnabled,
             frameId = prefs.frameId,
             rawDcpId = prefs.rawDcpId,
@@ -1301,9 +1271,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,
             rawDROMode = prefs.droMode,
-            jpgBaselineLutId = prefs.jpgBaselineLutId,
-            rawBaselineLutId = prefs.rawBaselineLutId,
-            phantomBaselineLutId = prefs.phantomBaselineLutId
+            rawBaselineLutId = prefs.rawBaselineLutId
         )
     }
 

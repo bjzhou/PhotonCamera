@@ -277,6 +277,7 @@ fun CameraTopSheet(
 
                 ContentManagementOptionsPanel(
                     visible = showContentManagementOptions,
+                    showPresetManagement = isProfessionalMode,
                     onFilterManageClick = {
                         handleContentManagementAction(onFilterManageClick)
                     },
@@ -463,6 +464,7 @@ fun CameraTopSheet(
 
                 ContentManagementOptionsPanel(
                     visible = showContentManagementOptions,
+                    showPresetManagement = false,
                     onFilterManageClick = {
                         handleContentManagementAction(onFilterManageClick)
                     },
@@ -790,6 +792,7 @@ private fun ContentManagementQuickSetting(
 @Composable
 private fun ContentManagementOptionsPanel(
     visible: Boolean,
+    showPresetManagement: Boolean,
     onFilterManageClick: () -> Unit,
     onFrameManageClick: () -> Unit,
     onPresetManageClick: () -> Unit
@@ -817,12 +820,14 @@ private fun ContentManagementOptionsPanel(
                     onClick = onFrameManageClick,
                     modifier = Modifier.weight(1f)
                 )
-                QuickSettingButton(
-                    title = stringResource(R.string.settings_preset_management),
-                    icon = AppIcons.Bookmark,
-                    onClick = onPresetManageClick,
-                    modifier = Modifier.weight(1f)
-                )
+                if (showPresetManagement) {
+                    QuickSettingButton(
+                        title = stringResource(R.string.settings_preset_management),
+                        icon = AppIcons.Bookmark,
+                        onClick = onPresetManageClick,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }

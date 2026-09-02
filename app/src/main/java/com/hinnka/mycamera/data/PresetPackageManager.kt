@@ -183,11 +183,15 @@ class PresetPackageManager(
                 ?: error("Preset package resources are missing")
             val lutResources = resources.getAsJsonArray("luts") ?: JsonArray()
             val expectedLutKeys = packagedPreset.referencedLutIds().toSet()
+            val ignoredLegacyLutKeys = setOfNotNull(
+                CameraPreset.normalizeLutId(presetJson.optionalString("jpgBaselineLutId")),
+                CameraPreset.normalizeLutId(presetJson.optionalString("phantomBaselineLutId")),
+            ) - expectedLutKeys
             val declaredLutKeys = lutResources.map { it.asJsonObject.requiredString("key") }
             require(declaredLutKeys.size == declaredLutKeys.distinct().size) {
                 "Preset package contains duplicate LUT keys"
             }
-            require(declaredLutKeys.toSet() == expectedLutKeys) {
+            require(declaredLutKeys.toSet() == expectedLutKeys + ignoredLegacyLutKeys) {
                 "Preset package LUT references do not match the preset"
             }
 
@@ -195,6 +199,7 @@ class PresetPackageManager(
             lutResources.forEach { element ->
                 val resource = element.asJsonObject
                 val sourceKey = resource.requiredString("key")
+                if (sourceKey in ignoredLegacyLutKeys) return@forEach
                 when (resource.requiredString("storage")) {
                     STORAGE_REFERENCE -> {
                         val builtIn = contentRepository.lutManager.getLutInfo(sourceKey)

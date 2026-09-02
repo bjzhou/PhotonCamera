@@ -40,19 +40,6 @@ internal object CameraPresetJsonCodec {
         val obj = element.asJsonObject
         val id = obj.stringOrNull("id")?.takeIf { it.isNotBlank() } ?: return null
         val name = obj.stringOrNull("name")?.takeIf { it.isNotBlank() } ?: id
-        val useRaw = obj.boolean("useRaw", false)
-        val hasCurrentMaxFields = obj.has("useJpgMax") || obj.has("useRawMax")
-        val legacyMultiFrameEnabled = obj.boolean("useMFNR", false) || obj.boolean("useMFSR", false)
-        val useJpgMax = if (hasCurrentMaxFields) {
-            obj.boolean("useJpgMax", false)
-        } else {
-            !useRaw && (legacyMultiFrameEnabled || obj.boolean("useHdrComposition", false))
-        }
-        val useRawMax = if (hasCurrentMaxFields) {
-            obj.boolean("useRawMax", false)
-        } else {
-            useRaw && legacyMultiFrameEnabled
-        }
         val rawPhotonHdr =
             obj.boolean("rawPhotonHdr", false) ||
                 obj.boolean("rawPhotonPgtmToneMap", false) ||
@@ -65,9 +52,6 @@ internal object CameraPresetJsonCodec {
             colorRecipe = parseColorRecipe(obj.get("colorRecipe")),
             effects = parseEffects(obj.get("effects")),
             aspectRatio = parseAspectRatio(obj.stringOrNull("aspectRatio")),
-            useRaw = useRaw,
-            useJpgMax = useJpgMax,
-            useRawMax = useRawMax,
             ultraHdrGainMapEnabled = obj.boolean("ultraHdrGainMapEnabled", false),
             frameId = obj.stringOrNull("frameId"),
             rawDcpId = obj.stringOrNull("rawDcpId"),
@@ -117,9 +101,7 @@ internal object CameraPresetJsonCodec {
             rawSpectralFilmStock = obj.stringOrNull("rawSpectralFilmStock"),
             rawSpectralFilmPrint = obj.stringOrNull("rawSpectralFilmPrint"),
             rawDROMode = parseDroMode(obj.stringOrNull("rawDROMode")),
-            jpgBaselineLutId = obj.stringOrNull("jpgBaselineLutId"),
             rawBaselineLutId = obj.stringOrNull("rawBaselineLutId"),
-            phantomBaselineLutId = obj.stringOrNull("phantomBaselineLutId"),
             isBuiltIn = obj.boolean("isBuiltIn", false)
         ).normalizedForPersistence()
     }
