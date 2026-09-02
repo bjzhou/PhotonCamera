@@ -505,6 +505,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // 预览尺寸
     private var previewWidth: Int = 1920
     private var previewHeight: Int = 1080
+    private var stabilizationInputWidth: Int = 1920
+    private var stabilizationInputHeight: Int = 1080
     private var sensorOrientation: Int = 0
     private var calibrationOffset: Int = 0
     private var deviceRotation: Int = 0
@@ -1053,13 +1055,24 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             if (stabilizationSessionStarted) {
                 val completedFrame = session?.dequeueFrame()
                 if (completedFrame != null) {
-                    renderMgcEisFrame(completedFrame)?.let { rendered ->
-                        currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
-                        currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
-                        currentCameraTextureId = rendered.textureId
-                        currentCameraTextureMatrix = mgcEisPresentationTransform.matrix
-                        currentFrameTimestampNs = rendered.timestampNs
-                        cameraFrameUpdated = true
+                    val holdPreviousPhotoPreviewFrame =
+                        previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
+                            completedFrame.transform == null &&
+                            currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
+                    if (holdPreviousPhotoPreviewFrame) {
+                        // A dropped photo-preview frame has no pose. Showing it with an identity
+                        // transform would make the view jump for one frame; retain the last fully
+                        // stabilized texture until a frame with matching metadata is available.
+                        completedFrame.image.close()
+                    } else {
+                        renderMgcEisFrame(completedFrame)?.let { rendered ->
+                            currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
+                            currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
+                            currentCameraTextureId = rendered.textureId
+                            currentCameraTextureMatrix = mgcEisPresentationTransform.matrix
+                            currentFrameTimestampNs = rendered.timestampNs
+                            cameraFrameUpdated = true
+                        }
                     }
                 }
                 if ((session?.pendingResultCount() ?: 0) > 0) {
@@ -2630,6 +2643,21 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         updateCaptureSize()
     }
 
+    fun setStabilizationInputSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0 ||
+            (stabilizationInputWidth == width && stabilizationInputHeight == height)
+        ) {
+            return
+        }
+        stabilizationInputWidth = width
+        stabilizationInputHeight = height
+        if (previewStabilizationUseCase != null) {
+            mgcEisHardwareBufferRenderer.release()
+            mgcEisYuvRenderer.release()
+            recreatePreviewStabilizationSession()
+        }
+    }
+
     fun setStabilizationCoordinator(coordinator: RealtimeStabilizationCoordinator?) {
         if (stabilizationCoordinator === coordinator) return
         stabilizationCoordinator = coordinator
@@ -2669,8 +2697,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stabilizationCoordinator?.createSession(
                 useCase = useCase,
                 strength = previewStabilizationStrength,
-                frameWidth = previewWidth,
-                frameHeight = previewHeight,
+                frameWidth = stabilizationInputWidth,
+                frameHeight = stabilizationInputHeight,
                 lookaheadFrames = previewStabilizationLookahead,
                 onFrameAvailable = { onRequestRender?.invoke() },
             )

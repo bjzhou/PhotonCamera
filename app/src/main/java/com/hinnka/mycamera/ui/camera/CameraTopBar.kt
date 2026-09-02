@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,6 +32,7 @@ import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
+import com.hinnka.mycamera.video.VideoStabilizationMode
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 @Composable
@@ -49,7 +51,7 @@ fun CameraTopBar(
     videoConfig: VideoConfig,
     videoCapabilities: VideoCapabilities,
     onVideoTorchToggle: () -> Unit,
-    onVideoStabilizationToggle: () -> Unit,
+    onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
     onVideoResolutionClick: () -> Unit,
     onVideoFpsClick: () -> Unit,
     onSettingsClick: () -> Unit,
@@ -62,7 +64,7 @@ fun CameraTopBar(
             videoConfig = videoConfig,
             videoCapabilities = videoCapabilities,
             onVideoTorchToggle = onVideoTorchToggle,
-            onVideoStabilizationToggle = onVideoStabilizationToggle,
+            onVideoStabilizationModeChange = onVideoStabilizationModeChange,
             onVideoResolutionClick = onVideoResolutionClick,
             onVideoFpsClick = onVideoFpsClick,
             onSettingsClick = onSettingsClick,
@@ -162,12 +164,13 @@ private fun VideoTopBar(
     videoConfig: VideoConfig,
     videoCapabilities: VideoCapabilities,
     onVideoTorchToggle: () -> Unit,
-    onVideoStabilizationToggle: () -> Unit,
+    onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
     onVideoResolutionClick: () -> Unit,
     onVideoFpsClick: () -> Unit,
     onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var stabilizationMenuExpanded by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -207,12 +210,48 @@ private fun VideoTopBar(
                     )
 
                     if (videoCapabilities.availableStabilizationModes.size > 1) {
-                        TextActionIcon(
-                            title = videoConfig.stabilizationMode.displayName,
-                            active = videoConfig.stabilizationMode != com.hinnka.mycamera.video.VideoStabilizationMode.OFF,
-                            enabled = true,
-                            onClick = onVideoStabilizationToggle,
-                        )
+                        Box {
+                            VideoActionIcon(
+                                icon = AppIcons.Stabilization,
+                                active = videoConfig.stabilizationMode !=
+                                    VideoStabilizationMode.OFF,
+                                enabled = true,
+                                onClick = { stabilizationMenuExpanded = true },
+                                contentDescription = stringResource(
+                                    R.string.settings_video_stabilization_default
+                                )
+                            )
+                            DropdownMenu(
+                                expanded = stabilizationMenuExpanded,
+                                onDismissRequest = {
+                                    stabilizationMenuExpanded = false
+                                }
+                            ) {
+                                videoCapabilities.availableStabilizationModes.forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(videoStabilizationModeLabel(mode))
+                                        },
+                                        onClick = {
+                                            stabilizationMenuExpanded = false
+                                            onVideoStabilizationModeChange(mode)
+                                        },
+                                        trailingIcon = if (
+                                            mode == videoConfig.stabilizationMode
+                                        ) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        } else {
+                                            null
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     IconButton(onClick = onSettingsClick) {
@@ -315,30 +354,16 @@ private fun VideoActionIcon(
 }
 
 @Composable
-private fun TextActionIcon(
-    title: String,
-    active: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled
-    ) {
-        Box(modifier = Modifier.width(30.dp).height(20.dp), contentAlignment = Alignment.Center) {
-            Text(
-                text = title,
-                fontSize = 12.sp,
-                lineHeight = 12.sp,
-                maxLines = 1,
-                fontWeight = FontWeight.Bold,
-                color = if (enabled) {
-                    if (active) Color(0xFFFFD700) else Color.White
-                } else {
-                    Color.White.copy(alpha = 0.3f)
-                },
-            )
-        }
+private fun videoStabilizationModeLabel(mode: VideoStabilizationMode): String {
+    return when (mode) {
+        VideoStabilizationMode.OFF ->
+            stringResource(R.string.settings_video_stabilization_mode_off)
+        VideoStabilizationMode.EIS ->
+            stringResource(R.string.settings_video_stabilization_mode_eis)
+        VideoStabilizationMode.OIS ->
+            stringResource(R.string.settings_video_stabilization_mode_ois)
+        VideoStabilizationMode.ENHANCED ->
+            stringResource(R.string.settings_video_stabilization_mode_enhanced)
     }
 }
 

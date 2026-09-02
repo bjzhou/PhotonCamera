@@ -1846,12 +1846,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
 
     init {
-        cameraController.realtimeStabilizationCoordinator
-            .onEnhancedStabilizationUnavailable = {
-                viewModelScope.launch(Dispatchers.Main.immediate) {
-                    showEnhancedStabilizationUnavailableDialog = true
+        cameraController.onEnhancedStabilizationUnavailable = { fallback ->
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                showEnhancedStabilizationUnavailableDialog = true
+                when (fallback) {
+                    is EnhancedStabilizationFallback.Video -> {
+                        val resolvedConfig = cameraController.state.value.videoConfig
+                        userPreferencesRepository.saveVideoStabilizationConfig(
+                            mode = fallback.mode,
+                            resolution = resolvedConfig.resolution,
+                            fps = resolvedConfig.fps,
+                        )
+                    }
+
+                    EnhancedStabilizationFallback.PhotoPreview -> {
+                        userPreferencesRepository.savePhotoPreviewStabilizationEnabled(false)
+                    }
                 }
             }
+        }
         previewEyeFocusProcessor.onBusyStateChanged = { busy ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 isEyeFocusBusy = busy
@@ -3704,14 +3717,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             reopenCamera()
         }
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationMode(resolvedConfig.stabilizationMode)
+            userPreferencesRepository.saveVideoStabilizationConfig(
+                mode = resolvedConfig.stabilizationMode,
+                resolution = resolvedConfig.resolution,
+                fps = resolvedConfig.fps,
+            )
         }
     }
 
     fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
         cameraController.setPhotoPreviewStabilizationEnabled(enabled)
+        val resolvedEnabled = state.value.photoPreviewStabilizationEnabled
         viewModelScope.launch {
-            userPreferencesRepository.savePhotoPreviewStabilizationEnabled(enabled)
+            userPreferencesRepository.savePhotoPreviewStabilizationEnabled(resolvedEnabled)
         }
     }
 
@@ -3777,14 +3795,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.savePhotoSavePath(savePath, treeUri)
         }
-    }
-
-    fun cycleVideoStabilizationMode() {
-        val currentMode = state.value.videoConfig.stabilizationMode
-        val availableModes = state.value.videoCapabilities.availableStabilizationModes
-        if (availableModes.isEmpty()) return
-        val nextMode = availableModes[(availableModes.indexOf(currentMode) + 1) % availableModes.size]
-        setVideoStabilizationMode(nextMode)
     }
 
     fun setVideoTorchEnabled(enabled: Boolean) {
@@ -6675,8 +6685,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
-        cameraController.realtimeStabilizationCoordinator
-            .onEnhancedStabilizationUnavailable = null
+        cameraController.onEnhancedStabilizationUnavailable = null
         cameraReopenJob?.cancel()
         cameraErrorRecoveryJob?.cancel()
         previewEyeFocusProcessor.close()

@@ -126,6 +126,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setStabilizationInputSize(width: Int, height: Int) {
+        queueEvent {
+            renderer.setStabilizationInputSize(width, height)
+        }
+    }
+
     fun setCaptureSize(width: Int, height: Int) {
         queueEvent {
             renderer.setCaptureSize(width, height)

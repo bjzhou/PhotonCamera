@@ -897,9 +897,7 @@ fun CameraScreen(
                 videoConfig = state.videoConfig,
                 videoCapabilities = state.videoCapabilities,
                 onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
-                onVideoStabilizationToggle = {
-                    viewModel.cycleVideoStabilizationMode()
-                },
+                onVideoStabilizationModeChange = viewModel::setVideoStabilizationMode,
                 onVideoResolutionClick = {
                     cycleVideoResolution(state)?.let(viewModel::setVideoResolution)
                 },
@@ -1216,6 +1214,18 @@ fun CameraScreen(
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
                             stabilizationCoordinator = viewModel.realtimeStabilizationCoordinator,
+                            stabilizationInputSize = if (
+                                state.captureMode == CaptureMode.VIDEO &&
+                                state.videoConfig.stabilizationMode ==
+                                    VideoStabilizationMode.ENHANCED
+                            ) {
+                                state.videoCapabilities
+                                    .enhancedStabilizationInputSizesByResolution[
+                                        state.videoConfig.resolution
+                                    ] ?: previewSize
+                            } else {
+                                previewSize
+                            },
                             photoPreviewStabilizationEnabled =
                                 state.photoPreviewStabilizationEnabled,
                             videoPreviewStabilizationEnabled =
@@ -1663,6 +1673,12 @@ fun CameraScreen(
             rawSpectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
             ultraHdrEnabled = ultraHdrEnabled,
             onUltraHdrToggle = viewModel::setUltraHdrGainMapEnabled,
+            photoPreviewStabilizationEnabled =
+                state.photoPreviewStabilizationEnabled,
+            photoPreviewStabilizationAvailable =
+                viewModel.realtimeStabilizationCoordinator.isCurrentCameraSupported,
+            onPhotoPreviewStabilizationChange =
+                viewModel::setPhotoPreviewStabilizationEnabled,
             onRawDcpChange = { viewModel.setRawDcpId(it) },
             onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
             onRawHncsProfileChange = { viewModel.setRawHncsProfileId(it) },

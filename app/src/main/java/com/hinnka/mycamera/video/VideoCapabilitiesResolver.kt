@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.video
 
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
@@ -27,6 +28,7 @@ object VideoCapabilitiesResolver {
     ): VideoCapabilitySnapshot {
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val previewOutputSizes = streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        val yuvOutputSizes = streamConfigMap?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
         val recordingOutputSizes = resolveRecordingOutputSizes(characteristics)
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
@@ -37,10 +39,6 @@ object VideoCapabilitiesResolver {
                 findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
         }
 
-        val resolvedResolution = requestedConfig.resolution.takeIf { availableResolutions.contains(it) }
-            ?: availableResolutions.firstOrNull()
-            ?: VideoResolutionPreset.FHD_1080P
-
         val recordingSizesByResolution = availableResolutions.mapNotNull { preset ->
             findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
                 ?.let { preset to it }
@@ -49,6 +47,14 @@ object VideoCapabilitiesResolver {
             findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
                 ?.let { preset to it }
         }.toMap()
+        val enhancedStabilizationInputSizesByResolution = availableResolutions.mapNotNull { preset ->
+            findBestOutputSize(yuvOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
+                ?.let { preset to it }
+        }.toMap()
+
+        val resolvedResolution = requestedConfig.resolution.takeIf { availableResolutions.contains(it) }
+            ?: availableResolutions.firstOrNull()
+            ?: VideoResolutionPreset.FHD_1080P
 
         val recordingSize = recordingSizesByResolution[resolvedResolution]
             ?: resolvedResolution.resolveOutputSize(
@@ -72,6 +78,11 @@ object VideoCapabilitiesResolver {
         val resolvedFps = requestedConfig.fps.takeIf { availableFps.contains(it) }
             ?: availableFps.firstOrNull()
             ?: VideoFpsPreset.FPS_30
+
+        val enhancedCameraInputSize =
+            enhancedStabilizationInputSizesByResolution[resolvedResolution]
+        val enhancedStabilizationAvailable = algorithmicStabilizationSupported &&
+            enhancedCameraInputSize != null
 
         /*PLog.d(
             TAG,
@@ -99,9 +110,6 @@ object VideoCapabilitiesResolver {
         if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
             availableStabilizationModes.add(VideoStabilizationMode.OIS)
         }
-        val enhancedCameraInputSize = cameraInputSizesByResolution[VideoResolutionPreset.FHD_1080P]
-        val enhancedStabilizationAvailable = algorithmicStabilizationSupported &&
-            enhancedCameraInputSize != null
         if (enhancedStabilizationAvailable) {
             availableStabilizationModes.add(VideoStabilizationMode.ENHANCED)
         }
@@ -130,6 +138,8 @@ object VideoCapabilitiesResolver {
                 availableLogProfiles = availableLogProfiles,
                 availableBitrates = VideoBitratePreset.entries.toList(),
                 cameraInputSizesByResolution = cameraInputSizesByResolution,
+                enhancedStabilizationInputSizesByResolution =
+                    enhancedStabilizationInputSizesByResolution,
                 recordingSizesByResolution = recordingSizesByResolution,
                 openGatePortraitAspectRatio = openGateAspect,
                 availableStabilizationModes = availableStabilizationModes,

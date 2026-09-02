@@ -227,6 +227,7 @@
     <string name="settings_focus_peaking">Focus Peaking</string>
     <string name="settings_focus_peaking_description">Show focus peaking highlights during manual focus</string>
     <string name="settings_photo_preview_stabilization">Photo Preview Stabilization</string>
+    <string name="camera_preview_stabilization">Preview Stabilization</string>
     <string name="settings_photo_preview_stabilization_description">Stabilize the photo viewfinder using gyro motion. The saved photo is unchanged; rear cameras only.</string>
     <string name="settings_grid_lines">Grid Lines</string>
     <string name="settings_grid_description">Show grid lines for composition</string>

@@ -382,8 +382,6 @@ fun SettingsScreen(
     val videoLutId by viewModel.videoLutId.collectAsState()
     val videoLensLockEnabled by viewModel.videoLensLockEnabled.collectAsState()
     val videoWhiteBalanceLockEnabled by viewModel.videoWhiteBalanceLockEnabled.collectAsState()
-    val photoPreviewStabilizationEnabled by
-        viewModel.photoPreviewStabilizationEnabled.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
     val openAIUrl by viewModel.openAIUrl.collectAsState()
     val openAIModel by viewModel.openAIModel.collectAsState()
@@ -1143,9 +1141,10 @@ fun SettingsScreen(
                             description = stringResource(
                                 R.string.settings_photo_preview_stabilization_description
                             ),
-                            checked = photoPreviewStabilizationEnabled,
+                            checked = state.photoPreviewStabilizationEnabled,
                             onCheckedChange = viewModel::setPhotoPreviewStabilizationEnabled,
-                            enabled = viewModel.isAlgorithmicStabilizationSupported,
+                            enabled = viewModel.realtimeStabilizationCoordinator
+                                .isCurrentCameraSupported,
                         )
                     }
                 }
@@ -1572,10 +1571,14 @@ fun SettingsScreen(
                 }
 
                 SettingsPage.VIDEO -> {
-                    val stabilizationModes = VideoStabilizationMode.entries.filter { mode ->
-                        mode != VideoStabilizationMode.ENHANCED ||
-                            viewModel.isAlgorithmicStabilizationSupported
-                    }
+                    val stabilizationModes = state.videoCapabilities
+                        .availableStabilizationModes
+                        .ifEmpty {
+                            VideoStabilizationMode.entries.filter { mode ->
+                                mode != VideoStabilizationMode.ENHANCED ||
+                                    viewModel.isAlgorithmicStabilizationSupported
+                            }
+                        }
                     val stabilizationModeLabels = stabilizationModes.map { mode ->
                         mode to when (mode) {
                             VideoStabilizationMode.OFF ->
@@ -1589,9 +1592,9 @@ fun SettingsScreen(
                         }
                     }
                     val selectedStabilizationModeLabel = stabilizationModeLabels
-                        .firstOrNull { it.first == userPreferences.videoStabilizationMode }
+                        .firstOrNull { it.first == state.videoConfig.stabilizationMode }
                         ?.second
-                        ?: userPreferences.videoStabilizationMode.displayName
+                        ?: state.videoConfig.stabilizationMode.displayName
                     SettingsSection(
                         title = stringResource(R.string.settings_section_video),
                         showTitle = false

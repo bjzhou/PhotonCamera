@@ -155,6 +155,7 @@ data class VideoCapabilities(
     val availableBitrates: List<VideoBitratePreset> = VideoBitratePreset.entries.toList(),
     val availableCodecs: List<VideoCodec> = VideoCodec.entries.toList(),
     val cameraInputSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
+    val enhancedStabilizationInputSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
     val recordingSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
     val openGatePortraitAspectRatio: Float = 3f / 4f,
     val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),

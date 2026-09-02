@@ -223,6 +223,7 @@
     <string name="settings_focus_peaking">峰值对焦</string>
     <string name="settings_focus_peaking_description">手动对焦时显示峰值对焦高亮</string>
     <string name="settings_photo_preview_stabilization">照片预览防抖</string>
+    <string name="camera_preview_stabilization">预览防抖</string>
     <string name="settings_photo_preview_stabilization_description">使用陀螺仪稳定照片取景画面，不改变最终照片；仅支持后置相机。</string>
     <string name="settings_grid_lines">网格线显示</string>
     <string name="settings_grid_description">在拍摄时显示网格线，辅助构图</string>

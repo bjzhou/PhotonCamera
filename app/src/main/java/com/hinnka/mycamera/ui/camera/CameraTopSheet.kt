@@ -126,6 +126,9 @@ fun CameraTopSheet(
     rawSpectralFilmPrint: String?,
     ultraHdrEnabled: Boolean,
     onUltraHdrToggle: (Boolean) -> Unit,
+    photoPreviewStabilizationEnabled: Boolean,
+    photoPreviewStabilizationAvailable: Boolean,
+    onPhotoPreviewStabilizationChange: (Boolean) -> Unit,
     onRawDcpChange: (String?) -> Unit,
     onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
     onRawHncsProfileChange: (String?) -> Unit,
@@ -249,6 +252,13 @@ fun CameraTopSheet(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    QuickSettingToggle(
+                        title = stringResource(R.string.camera_preview_stabilization),
+                        checked = photoPreviewStabilizationEnabled,
+                        onCheckedChange = onPhotoPreviewStabilizationChange,
+                        enabled = photoPreviewStabilizationAvailable,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -331,7 +341,8 @@ fun CameraTopSheet(
                         expanded = expandedVideoPanel == VideoSettingPanel.LOG_PROFILE,
                         onClick = {
                             expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.LOG_PROFILE) null else VideoSettingPanel.LOG_PROFILE
-                        }
+                        },
+                        modifier = Modifier.weight(1f)
                     )
                     VideoSettingTile(
                         title = stringResource(R.string.video_bitrate_chip),
@@ -339,7 +350,8 @@ fun CameraTopSheet(
                         expanded = expandedVideoPanel == VideoSettingPanel.BITRATE,
                         onClick = {
                             expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.BITRATE) null else VideoSettingPanel.BITRATE
-                        }
+                        },
+                        modifier = Modifier.weight(1f)
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -353,7 +365,8 @@ fun CameraTopSheet(
                         expanded = expandedVideoPanel == VideoSettingPanel.CODEC,
                         onClick = {
                             expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.CODEC) null else VideoSettingPanel.CODEC
-                        }
+                        },
+                        modifier = Modifier.weight(1f)
                     )
                     VideoSettingTile(
                         title = stringResource(R.string.video_microphone_title),
@@ -364,7 +377,8 @@ fun CameraTopSheet(
                         expanded = expandedVideoPanel == VideoSettingPanel.MICROPHONE,
                         onClick = {
                             expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.MICROPHONE) null else VideoSettingPanel.MICROPHONE
-                        }
+                        },
+                        modifier = Modifier.weight(1f)
                     )
                 }
 
@@ -583,15 +597,15 @@ fun CameraTopSheet(
 }
 
 @Composable
-private fun RowScope.VideoSettingTile(
+private fun VideoSettingTile(
     title: String,
     summary: String,
     expanded: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier
-            .weight(1f)
+        modifier = modifier
             .height(40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(

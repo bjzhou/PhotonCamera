@@ -71,6 +71,10 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
+sealed interface EnhancedStabilizationFallback {
+    data class Video(val mode: VideoStabilizationMode) : EnhancedStabilizationFallback
+    data object PhotoPreview : EnhancedStabilizationFallback
+}
 
 /**
  * Camera2 相机控制器
@@ -104,6 +108,7 @@ class Camera2Controller(private val context: Context) {
         private const val STATE_PICTURE_TAKEN = 4 // Picture is already taken.
         private const val PRECAPTURE_TIMEOUT_MS = 3_000L
         private const val MULTI_FRAME_TORCH_WARMUP_TIMEOUT_MS = 2_000L
+        private const val EIS_PLUS_INPUT_WATCHDOG_MS = 2_000L
 
         // 场景变化检测阈值
         private const val SCENE_CHANGE_EXPOSURE_RATIO = 1.5   // 曝光乘积变化判定为场景变化
@@ -336,7 +341,10 @@ class Camera2Controller(private val context: Context) {
     private var availableAwbModes: IntArray = intArrayOf()
     private var videoCaptureStatsWindowStartMs: Long = 0L
     private var videoCaptureStatsFrames: Int = 0
-    private var videoCaptureStatsLastTimestampNs: Long = 0L
+    private var videoCaptureStatsFirstTimestampNs: Long = 0L
+    private var stabilizationInputStatsFirstTimestampNs: Long = 0L
+    private var stabilizationInputStatsFrames: Int = 0
+    private var stabilizationInputFrameCount: Long = 0L
     private var mirrorFrontCameraEnabled: Boolean = true
     @Volatile
     private var cameraOpenGeneration: Long = 0L
@@ -348,7 +356,19 @@ class Camera2Controller(private val context: Context) {
     val livePhotoRecorder = LivePhotoRecorder(context)
     val realtimeStabilizationCoordinator = RealtimeStabilizationCoordinator(context)
     val videoRecorder = VideoRecorder(context, realtimeStabilizationCoordinator)
+    var onEnhancedStabilizationUnavailable: ((EnhancedStabilizationFallback) -> Unit)? = null
     var onVideoSaved: ((Uri?) -> Unit)? = null
+    private var previousVideoStabilizationMode = VideoStabilizationMode.OIS
+    private val enhancedStabilizationUnavailableCameraIds =
+        ConcurrentHashMap.newKeySet<String>()
+
+    init {
+        realtimeStabilizationCoordinator.onEnhancedStabilizationUnavailable = {
+            handleEnhancedStabilizationUnavailable(
+                reason = "Camera HAL stabilization conflicts with algorithmic stabilization"
+            )
+        }
+    }
 
     private var videoRecordingStartElapsedMs: Long = 0L
     private var videoRecordingPausedMs: Long = 0L
@@ -873,18 +893,17 @@ class Camera2Controller(private val context: Context) {
         val nowMs = SystemClock.elapsedRealtime()
         if (videoCaptureStatsWindowStartMs == 0L) {
             videoCaptureStatsWindowStartMs = nowMs
-            videoCaptureStatsFrames = 0
-            videoCaptureStatsLastTimestampNs = sensorTimestampNs
+            videoCaptureStatsFrames = 1
+            videoCaptureStatsFirstTimestampNs = sensorTimestampNs
+            return
         }
 
         videoCaptureStatsFrames += 1
         val elapsedMs = nowMs - videoCaptureStatsWindowStartMs
-        if (elapsedMs < 1000L) {
-            videoCaptureStatsLastTimestampNs = sensorTimestampNs
-            return
-        }
+        if (elapsedMs < 1000L) return
 
-        val sensorElapsedNs = (sensorTimestampNs - videoCaptureStatsLastTimestampNs).coerceAtLeast(0L)
+        val sensorElapsedNs =
+            (sensorTimestampNs - videoCaptureStatsFirstTimestampNs).coerceAtLeast(0L)
         val callbackFps = videoCaptureStatsFrames * 1000f / elapsedMs.toFloat()
         val sensorFps = if (sensorElapsedNs > 0L && videoCaptureStatsFrames > 1) {
             (videoCaptureStatsFrames - 1) * 1_000_000_000f / sensorElapsedNs.toFloat()
@@ -892,16 +911,16 @@ class Camera2Controller(private val context: Context) {
             0f
         }
         val fpsRange = result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
-        /*PLog.i(
+        PLog.i(
             TAG,
             "Video capture stats: requested=${_state.value.videoConfig.fps.fps}, " +
                 "aeRange=$fpsRange, callbackFps=${"%.1f".format(callbackFps)}, " +
                 "sensorFps=${"%.1f".format(sensorFps)}, preview=${_state.value.currentPreviewSize.width}x${_state.value.currentPreviewSize.height}"
-        )*/
+        )
 
         videoCaptureStatsWindowStartMs = nowMs
-        videoCaptureStatsFrames = 0
-        videoCaptureStatsLastTimestampNs = sensorTimestampNs
+        videoCaptureStatsFrames = 1
+        videoCaptureStatsFirstTimestampNs = sensorTimestampNs
     }
 
     /**
@@ -1925,12 +1944,45 @@ class Camera2Controller(private val context: Context) {
             availableVideoStabilizationModes = availableVideoStabilizationModes,
             availableOpticalStabilizationModes = availableOpticalStabilizationModes,
             algorithmicStabilizationSupported =
-                realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics),
+                realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics) &&
+                    !isEnhancedStabilizationUnavailableForCurrentCamera(),
             isFlashSupported = isFlashSupported
         )
 
+        if (_state.value.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) {
+            val enhancedInput = snapshot.capabilities
+                .enhancedStabilizationInputSizesByResolution[snapshot.config.resolution]
+            if (snapshot.config.stabilizationMode == VideoStabilizationMode.ENHANCED) {
+                PLog.i(
+                    TAG,
+                    "EIS+ capability accepted: resolution=${snapshot.config.resolution.displayName}, " +
+                        "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput"
+                )
+            } else {
+                PLog.e(
+                    TAG,
+                    "EIS+ capability rejected: resolution=${snapshot.config.resolution.displayName}, " +
+                        "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput, " +
+                        "reason=missing YUV output for the selected resolution"
+                )
+            }
+        }
+
+        val enhancedFallbackMode = if (
+            _state.value.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
+            snapshot.config.stabilizationMode != VideoStabilizationMode.ENHANCED
+        ) {
+            resolvePreviousVideoStabilizationMode(
+                snapshot.capabilities.availableStabilizationModes
+            )
+        } else {
+            null
+        }
+        val resolvedConfig = enhancedFallbackMode?.let { fallbackMode ->
+            snapshot.config.copy(stabilizationMode = fallbackMode)
+        } ?: snapshot.config
         _state.value = _state.value.copy(
-            videoConfig = snapshot.config,
+            videoConfig = resolvedConfig,
             videoCapabilities = snapshot.capabilities,
             currentPreviewSize = if (_state.value.captureMode == CaptureMode.VIDEO) {
                 snapshot.previewSize
@@ -1938,6 +1990,12 @@ class Camera2Controller(private val context: Context) {
                 _state.value.currentPreviewSize
             }
         )
+        if (enhancedFallbackMode != null) {
+            previousVideoStabilizationMode = enhancedFallbackMode
+            notifyEnhancedStabilizationUnavailable(
+                EnhancedStabilizationFallback.Video(enhancedFallbackMode)
+            )
+        }
         return snapshot.previewSize
     }
 
@@ -2101,6 +2159,21 @@ class Camera2Controller(private val context: Context) {
                     characteristics = capabilityCharacteristics,
                     timingCharacteristics = openCharacteristics,
                 )
+                if (_state.value.captureMode == CaptureMode.PHOTO &&
+                    _state.value.photoPreviewStabilizationEnabled &&
+                    !realtimeStabilizationCoordinator.isCurrentCameraSupported
+                ) {
+                    PLog.e(
+                        TAG,
+                        "Disabling photo preview stabilization: current camera is unsupported"
+                    )
+                    _state.value = _state.value.copy(
+                        photoPreviewStabilizationEnabled = false
+                    )
+                    notifyEnhancedStabilizationUnavailable(
+                        EnhancedStabilizationFallback.PhotoPreview
+                    )
+                }
                 isManualSensorSupported =
                     capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
                 isManualPostProcessingSupported =
@@ -2615,9 +2688,11 @@ class Camera2Controller(private val context: Context) {
         val captureMode = _state.value.captureMode
         val reader = imageReader
         val stabilizationReader = ensureStabilizationImageReader()
+        val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val videoSurface = if (
             captureMode == CaptureMode.VIDEO &&
-            _state.value.videoRecordingState.shouldAttachCameraInput()
+            _state.value.videoRecordingState.shouldAttachCameraInput() &&
+            !useEnhancedStabilization
         ) {
             videoRecorder.cameraInputSurface
         } else {
@@ -2625,11 +2700,20 @@ class Camera2Controller(private val context: Context) {
         }
         val sessionGeneration = ++previewSessionGeneration
         pendingVendorSessionParameterRestart = false
-        val templateType = if (captureMode == CaptureMode.VIDEO) {
+        val templateType = if (
+            captureMode == CaptureMode.VIDEO &&
+            !useEnhancedStabilization
+        ) {
             CameraDevice.TEMPLATE_RECORD
         } else {
             CameraDevice.TEMPLATE_PREVIEW
         }
+        PLog.i(
+            TAG,
+            "Creating repeating request: " +
+                "template=${if (templateType == CameraDevice.TEMPLATE_PREVIEW) "PREVIEW" else "RECORD"}, " +
+                "captureMode=$captureMode, enhancedStabilization=$useEnhancedStabilization"
+        )
         var vendorSessionParametersApplied = false
 
         try {
@@ -2894,13 +2978,13 @@ class Camera2Controller(private val context: Context) {
 
     private fun ensureStabilizationImageReader(): ImageReader? {
         val state = _state.value
-        val enabled = when (state.captureMode) {
-            CaptureMode.PHOTO -> state.photoPreviewStabilizationEnabled &&
-                realtimeStabilizationCoordinator.isCurrentCameraSupported
-            CaptureMode.VIDEO -> shouldUseVideoEnhancedStabilization()
+        if (!shouldUseAlgorithmicStabilization()) return null
+        val size = when (state.captureMode) {
+            CaptureMode.PHOTO -> state.currentPreviewSize
+            CaptureMode.VIDEO -> state.videoCapabilities
+                .enhancedStabilizationInputSizesByResolution[state.videoConfig.resolution]
+                ?: return null
         }
-        if (!enabled) return null
-        val size = state.currentPreviewSize
         if (size.width <= 0 || size.height <= 0) return null
         stabilizationImageReader?.let { existing ->
             if (existing.width == size.width && existing.height == size.height &&
@@ -2925,11 +3009,144 @@ class Camera2Controller(private val context: Context) {
                         PLog.e(TAG, "Cannot acquire MGC YUV image", error)
                         null
                     } ?: break
+                    logStabilizationInputStats(image)
                     realtimeStabilizationCoordinator.submitStabilizationImage(image)
                 }
             }, cameraHandler)
             stabilizationImageReader = reader
+            stabilizationInputStatsFirstTimestampNs = 0L
+            stabilizationInputStatsFrames = 0
             PLog.i(TAG, "MGC YUV input configured: ${size.width}x${size.height}")
+        }
+    }
+
+    private fun logStabilizationInputStats(image: Image) {
+        val timestampNs = image.timestamp
+        if (timestampNs <= 0L) return
+        stabilizationInputFrameCount += 1L
+        if (stabilizationInputStatsFirstTimestampNs == 0L) {
+            stabilizationInputStatsFirstTimestampNs = timestampNs
+            stabilizationInputStatsFrames = 1
+            return
+        }
+
+        stabilizationInputStatsFrames += 1
+        val elapsedNs = timestampNs - stabilizationInputStatsFirstTimestampNs
+        if (elapsedNs < 1_000_000_000L) return
+        val actualFps = if (stabilizationInputStatsFrames > 1 && elapsedNs > 0L) {
+            (stabilizationInputStatsFrames - 1) * 1_000_000_000f / elapsedNs.toFloat()
+        } else {
+            0f
+        }
+        PLog.i(
+            TAG,
+            "EIS+ YUV input stats: requested=${_state.value.videoConfig.fps.fps}, " +
+                "actual=${"%.1f".format(actualFps)}, " +
+                "frames=$stabilizationInputStatsFrames, size=${image.width}x${image.height}"
+        )
+        stabilizationInputStatsFirstTimestampNs = timestampNs
+        stabilizationInputStatsFrames = 1
+    }
+
+    private fun scheduleEnhancedStabilizationInputWatchdog(
+        sessionGeneration: Long,
+        baselineFrameCount: Long = stabilizationInputFrameCount,
+    ) {
+        val handler = cameraHandler ?: return
+        handler.postDelayed({
+            if (sessionGeneration != previewSessionGeneration ||
+                !shouldUseAlgorithmicStabilization()
+            ) {
+                return@postDelayed
+            }
+            if (stabilizationInputFrameCount == baselineFrameCount) {
+                disableAlgorithmicStabilizationForMissingInput(sessionGeneration)
+                return@postDelayed
+            }
+            scheduleEnhancedStabilizationInputWatchdog(
+                sessionGeneration = sessionGeneration,
+                baselineFrameCount = stabilizationInputFrameCount,
+            )
+        }, EIS_PLUS_INPUT_WATCHDOG_MS)
+    }
+
+    private fun disableAlgorithmicStabilizationForMissingInput(sessionGeneration: Long) {
+        if (sessionGeneration != previewSessionGeneration ||
+            !shouldUseAlgorithmicStabilization()
+        ) {
+            return
+        }
+        handleEnhancedStabilizationUnavailable(
+            reason = "YUV input produced no frames for ${EIS_PLUS_INPUT_WATCHDOG_MS}ms"
+        )
+    }
+
+    private fun handleEnhancedStabilizationUnavailable(reason: String) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { handleEnhancedStabilizationUnavailable(reason) }
+            return
+        }
+
+        val state = _state.value
+        currentStabilizationCameraId()
+            .takeIf { it.isNotEmpty() }
+            ?.let(enhancedStabilizationUnavailableCameraIds::add)
+        when {
+            state.captureMode == CaptureMode.VIDEO &&
+                state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED -> {
+                val fallbackMode = resolvePreviousVideoStabilizationMode(
+                    state.videoCapabilities.availableStabilizationModes
+                )
+                PLog.e(
+                    TAG,
+                    "Disabling EIS+: $reason at " +
+                        "${state.videoConfig.resolution.displayName}@" +
+                        "${state.videoConfig.fps.fps}; fallback=$fallbackMode"
+                )
+                previousVideoStabilizationMode = fallbackMode
+                _state.value = state.copy(
+                    videoConfig = state.videoConfig.copy(stabilizationMode = fallbackMode)
+                )
+                refreshVideoCapabilities()
+                previousVideoStabilizationMode =
+                    _state.value.videoConfig.stabilizationMode
+                notifyEnhancedStabilizationUnavailable(
+                    EnhancedStabilizationFallback.Video(
+                        _state.value.videoConfig.stabilizationMode
+                    )
+                )
+                if (_state.value.videoRecordingState.isRecording) {
+                    videoRecorder.forceStop()
+                } else if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+
+            state.captureMode == CaptureMode.PHOTO &&
+                state.photoPreviewStabilizationEnabled -> {
+                PLog.e(TAG, "Disabling photo preview stabilization: $reason")
+                _state.value = state.copy(photoPreviewStabilizationEnabled = false)
+                refreshVideoCapabilities()
+                notifyEnhancedStabilizationUnavailable(
+                    EnhancedStabilizationFallback.PhotoPreview
+                )
+                if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+
+            else -> PLog.w(TAG, "Ignoring stale stabilization unavailable callback: $reason")
+        }
+    }
+
+    private fun notifyEnhancedStabilizationUnavailable(
+        fallback: EnhancedStabilizationFallback
+    ) {
+        try {
+            onEnhancedStabilizationUnavailable?.invoke(fallback)
+        } catch (error: RuntimeException) {
+            PLog.w(TAG, "Stabilization unavailable callback failed: ${error.message}")
         }
     }
 
@@ -3217,6 +3434,9 @@ class Camera2Controller(private val context: Context) {
             // 关键修复: 不再动态添加 surface，因为已经在创建 builder 时添加了
             previewRequestBuilder?.let { builder ->
                 session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            }
+            if (shouldUseAlgorithmicStabilization()) {
+                scheduleEnhancedStabilizationInputWatchdog(sessionGeneration)
             }
             if (_state.value.captureMode == CaptureMode.VIDEO &&
                 _state.value.videoRecordingState.shouldAttachCameraInput() &&
@@ -6303,18 +6523,9 @@ class Camera2Controller(private val context: Context) {
 
     fun setVideoResolution(resolution: VideoResolutionPreset) {
         val currentConfig = _state.value.videoConfig
-        val stabilizationMode = if (
-            currentConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
-            resolution != VideoResolutionPreset.FHD_1080P
-        ) {
-            preferredHardwareVideoStabilizationMode()
-        } else {
-            currentConfig.stabilizationMode
-        }
         _state.value = _state.value.copy(
             videoConfig = currentConfig.copy(
                 resolution = resolution,
-                stabilizationMode = stabilizationMode
             )
         )
         refreshVideoCapabilities()
@@ -6355,6 +6566,26 @@ class Camera2Controller(private val context: Context) {
 
     fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
         val previousConfig = _state.value.videoConfig
+        if (mode == VideoStabilizationMode.ENHANCED &&
+            isEnhancedStabilizationUnavailableForCurrentCamera()
+        ) {
+            PLog.w(
+                TAG,
+                "Ignoring EIS+ selection because it was already verified unavailable for " +
+                    currentStabilizationCameraId()
+            )
+            return
+        }
+        when {
+            mode == VideoStabilizationMode.ENHANCED &&
+                previousConfig.stabilizationMode != VideoStabilizationMode.ENHANCED -> {
+                previousVideoStabilizationMode = previousConfig.stabilizationMode
+            }
+
+            mode != VideoStabilizationMode.ENHANCED -> {
+                previousVideoStabilizationMode = mode
+            }
+        }
         _state.value = _state.value.copy(
             videoConfig = previousConfig.copy(
                 stabilizationMode = mode,
@@ -6362,6 +6593,16 @@ class Camera2Controller(private val context: Context) {
         )
         refreshVideoCapabilities()
         val resolvedConfig = _state.value.videoConfig
+        if (
+            mode == VideoStabilizationMode.ENHANCED &&
+            resolvedConfig.stabilizationMode != VideoStabilizationMode.ENHANCED
+        ) {
+            PLog.e(
+                TAG,
+                "EIS+ rejected for ${resolvedConfig.resolution.displayName}@" +
+                    "${resolvedConfig.fps.fps}: camera does not expose a matching YUV input"
+            )
+        }
         val outputGeometryChanged = previousConfig.resolution != resolvedConfig.resolution ||
             previousConfig.fps != resolvedConfig.fps
         if (_state.value.captureMode == CaptureMode.VIDEO &&
@@ -6413,6 +6654,20 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
+        if (enabled && cameraDevice != null &&
+            !realtimeStabilizationCoordinator.isCurrentCameraSupported
+        ) {
+            if (_state.value.photoPreviewStabilizationEnabled) {
+                _state.value = _state.value.copy(
+                    photoPreviewStabilizationEnabled = false
+                )
+            }
+            PLog.e(TAG, "Photo preview stabilization rejected: current camera is unsupported")
+            notifyEnhancedStabilizationUnavailable(
+                EnhancedStabilizationFallback.PhotoPreview
+            )
+            return
+        }
         if (_state.value.photoPreviewStabilizationEnabled == enabled) return
         _state.value = _state.value.copy(photoPreviewStabilizationEnabled = enabled)
         if (_state.value.captureMode == CaptureMode.PHOTO &&
@@ -6486,15 +6741,21 @@ class Camera2Controller(private val context: Context) {
 
         videoCaptureStatsWindowStartMs = 0L
         videoCaptureStatsFrames = 0
-        videoCaptureStatsLastTimestampNs = 0L
+        videoCaptureStatsFirstTimestampNs = 0L
         val outputSize = _state.value.videoConfig.resolveOutputSize(
             _state.value.videoCapabilities.openGatePortraitAspectRatio
         )
-        val cameraInputSize = _state.value.videoCapabilities.cameraInputSizesByResolution[
-            _state.value.videoConfig.resolution
-        ] ?: _state.value.currentPreviewSize
         val isFrontCamera = isCurrentCameraFrontFacing()
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
+        val cameraInputSize = if (useEnhancedStabilization) {
+            _state.value.videoCapabilities.enhancedStabilizationInputSizesByResolution[
+                _state.value.videoConfig.resolution
+            ]
+        } else {
+            _state.value.videoCapabilities.cameraInputSizesByResolution[
+                _state.value.videoConfig.resolution
+            ]
+        } ?: _state.value.currentPreviewSize
         val shouldFlipEncodedFrame = isFrontCamera && mirrorFrontCameraEnabled
         val colorLayers = buildList {
             if (!_state.value.videoConfig.logProfile.isEnabled &&
@@ -6564,9 +6825,41 @@ class Camera2Controller(private val context: Context) {
         val state = _state.value
         return state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
             state.captureMode == CaptureMode.VIDEO &&
-            state.videoConfig.resolution == VideoResolutionPreset.FHD_1080P &&
+            VideoStabilizationMode.ENHANCED in
+                state.videoCapabilities.availableStabilizationModes &&
             !isCurrentCameraFrontFacing() &&
             realtimeStabilizationCoordinator.isCurrentCameraSupported
+    }
+
+    private fun shouldUseAlgorithmicStabilization(): Boolean {
+        val state = _state.value
+        return when (state.captureMode) {
+            CaptureMode.PHOTO -> state.photoPreviewStabilizationEnabled &&
+                realtimeStabilizationCoordinator.isCurrentCameraSupported
+            CaptureMode.VIDEO -> shouldUseVideoEnhancedStabilization()
+        }
+    }
+
+    private fun currentStabilizationCameraId(): String {
+        return activeOutputPhysicalCameraId
+            ?.takeIf { it.isNotEmpty() }
+            ?: getActiveOpenCameraId()
+    }
+
+    private fun isEnhancedStabilizationUnavailableForCurrentCamera(): Boolean {
+        return currentStabilizationCameraId() in enhancedStabilizationUnavailableCameraIds
+    }
+
+    private fun resolvePreviousVideoStabilizationMode(
+        availableModes: List<VideoStabilizationMode>
+    ): VideoStabilizationMode {
+        return previousVideoStabilizationMode.takeIf { mode ->
+            mode != VideoStabilizationMode.ENHANCED && mode in availableModes
+        } ?: when {
+            VideoStabilizationMode.OIS in availableModes -> VideoStabilizationMode.OIS
+            VideoStabilizationMode.EIS in availableModes -> VideoStabilizationMode.EIS
+            else -> VideoStabilizationMode.OFF
+        }
     }
 
     private fun preferredHardwareVideoStabilizationMode(): VideoStabilizationMode {
@@ -6609,7 +6902,7 @@ class Camera2Controller(private val context: Context) {
         if (!_state.value.videoRecordingState.isRecording) return
         videoCaptureStatsWindowStartMs = 0L
         videoCaptureStatsFrames = 0
-        videoCaptureStatsLastTimestampNs = 0L
+        videoCaptureStatsFirstTimestampNs = 0L
         stopVideoRecordingTicker()
         _state.value = _state.value.copy(
             videoRecordingState = _state.value.videoRecordingState.copy(
@@ -6641,12 +6934,27 @@ class Camera2Controller(private val context: Context) {
         if (includeVideoSurface && encoderTarget == null) return false
 
         return try {
-            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
+            val templateType = if (useEnhancedStabilization) {
+                CameraDevice.TEMPLATE_PREVIEW
+            } else {
+                CameraDevice.TEMPLATE_RECORD
+            }
+            PLog.i(
+                TAG,
+                "Updating dedicated video repeating request: " +
+                    "template=${if (templateType == CameraDevice.TEMPLATE_PREVIEW) "PREVIEW" else "RECORD"}, " +
+                    "enhancedStabilization=$useEnhancedStabilization, " +
+                    "includeVideoSurface=$includeVideoSurface"
+            )
+            val builder = device.createCaptureRequest(templateType).apply {
                 addTarget(previewTarget)
                 stabilizationImageReader?.surface
-                    ?.takeIf { shouldUseVideoEnhancedStabilization() }
+                    ?.takeIf { useEnhancedStabilization }
                     ?.let(::addTarget)
-                encoderTarget?.takeIf { includeVideoSurface }?.let(::addTarget)
+                encoderTarget
+                    ?.takeIf { includeVideoSurface && !useEnhancedStabilization }
+                    ?.let(::addTarget)
                 applyBaseCameraSettings(this, isCapture = false)
             }
             previewRequestBuilder = builder
@@ -8071,7 +8379,10 @@ class Camera2Controller(private val context: Context) {
                 builder,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL,
             )
-            session.capture(builder.build(), null, cameraHandler)
+            // The preview builder also targets the stabilization ImageReader. Keep this one-shot
+            // AF/AE reset request on the normal preview callback so its YUV image has matching
+            // CaptureResult metadata; otherwise the stabilizer must emit an identity-pose frame.
+            session.capture(builder.build(), previewCallback, cameraHandler)
 
             clearMultiFrameFocusState("capture sequence finished")
             applyBaseCameraSettings(builder, isCapture = false)

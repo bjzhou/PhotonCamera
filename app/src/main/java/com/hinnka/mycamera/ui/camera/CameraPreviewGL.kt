@@ -73,6 +73,7 @@ fun CameraPreviewGL(
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
     stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
+    stabilizationInputSize: Size = previewSize,
     photoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewStabilizationStrength: Float = 0f,
@@ -183,6 +184,10 @@ fun CameraPreviewGL(
                                 surfaceAvailable = true
                                 glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
                                     glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                                    glSurfaceView.setStabilizationInputSize(
+                                        stabilizationInputSize.width,
+                                        stabilizationInputSize.height,
+                                    )
                                     PLog.d("CameraPreviewGL", "onSurfaceReady: notifiedST=$notifiedSurfaceTexture, newST=$surfaceTexture")
                                     // If the SurfaceTexture changed (e.g. Surface recreated due to layout bounds change), force notify
                                     if (notifiedSurfaceTexture != null && notifiedSurfaceTexture != surfaceTexture) {
@@ -226,6 +231,10 @@ fun CameraPreviewGL(
                         glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                         glSurfaceView.setCalibrationOffset(calibrationOffset)
                         glSurfaceView.setCaptureAspectRatio(aspectRatio)
+                        glSurfaceView.setStabilizationInputSize(
+                            stabilizationInputSize.width,
+                            stabilizationInputSize.height,
+                        )
                         glSurfaceView.setStabilizationCoordinator(stabilizationCoordinator)
                         val previewStabilizationUseCase = when {
                             captureMode == CaptureMode.VIDEO &&
@@ -261,6 +270,10 @@ fun CameraPreviewGL(
                         if (viewWidth > 0 && viewHeight > 0 && surfaceAvailable) {
                             glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
                                 glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                                glSurfaceView.setStabilizationInputSize(
+                                    stabilizationInputSize.width,
+                                    stabilizationInputSize.height,
+                                )
                                 glSurfaceView.setCaptureSize(captureSize.width, captureSize.height)
                                 val shouldNotifySurfaceTexture =
                                     !currentSurfaceNotified ||

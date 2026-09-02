@@ -796,11 +796,7 @@ class UserPreferencesRepository(private val context: Context) {
                 useHlg10 = preferences[USE_HLG10] ?: false,
                 hlgHardwareCompatibilityEnabled = preferences[HLG_HARDWARE_COMPATIBILITY_ENABLED] ?: false,
                 useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
-                videoResolution = if (videoStabilizationMode == VideoStabilizationMode.ENHANCED) {
-                    VideoResolutionPreset.FHD_1080P
-                } else {
-                    storedVideoResolution
-                },
+                videoResolution = storedVideoResolution,
                 videoFps = storedVideoFps,
                 videoAspectRatio = VideoAspectRatio.valueOf(
                     preferences[VIDEO_ASPECT_RATIO] ?: VideoAspectRatio.RATIO_16_9.name
