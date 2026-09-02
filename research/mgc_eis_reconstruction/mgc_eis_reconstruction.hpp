@@ -81,9 +81,17 @@ struct GyroSample {
 
 struct LensOffsetSample {
   std::int64_t timestamp_ns = 0;
-  // The native ABI accepts raw float offsets. Their conversion is defined by
-  // the per-camera model, which is absent from the empty type-18 fallback.
+  // Optical-axis displacement in pre-correction active-array pixels.
   Vec2 offset;
+  int camera_index = 0;
+};
+
+struct LensIntrinsicsSample {
+  std::int64_t timestamp_ns = 0;
+  // Camera2 order: fx, fy, cx, cy, skew, in pre-correction active-array
+  // pixels. These samples already include OIS, focus and optical-zoom motion;
+  // they must never be combined with LensOffsetSample for the same row.
+  std::array<double, 5> intrinsics{};
   int camera_index = 0;
 };
 
@@ -106,6 +114,18 @@ struct FrameMetadata {
   // Full horizontal field scale used by MGC's JNI call:
   // crop_width / active_width * physical_sensor_width / focal_length.
   double inverse_focal_length = 0.0;
+
+  // Static CameraCharacteristics intrinsic calibration used as the nominal
+  // optical state. Dynamic API-35 samples are converted to deltas from this
+  // state before being applied to the output projection.
+  std::array<double, 5> nominal_lens_intrinsics{};
+  bool has_nominal_lens_intrinsics = false;
+  int active_array_width = 0;
+  int active_array_height = 0;
+  int crop_width = 0;
+  int crop_height = 0;
+  int pre_correction_active_array_width = 0;
+  int pre_correction_active_array_height = 0;
 };
 
 struct EngineConfig {
@@ -186,6 +206,7 @@ public:
 
   bool pushGyro(const GyroSample &sample);
   bool pushLensOffset(const LensOffsetSample &sample);
+  bool pushLensIntrinsics(const LensIntrinsicsSample &sample);
 
   // Matches EisNative's delayed-output behavior: the returned timestamp can
   // belong to an older frame when look-ahead is enabled.

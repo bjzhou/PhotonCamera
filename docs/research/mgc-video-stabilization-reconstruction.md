@@ -685,7 +685,9 @@ cropZoom = 1 / (1 - 2 × 0.05) = 1 / 0.9
 
 ### 5.6 OIS lens offset
 
-`processLensOffset(x, y, timestamp, cameraIndex)` 的存在和时间同步是确认事实。V25 的 `apply_lens_offset_to_intrinsics` 只有在 camera metadata 指示存在 camera model 时才查询标定并修改 K；`oeq` 对未知设备创建的 type-18 空配置没有该模型。因此 Photon 仍按原 ABI 接收和排序 OIS 样本，但 fallback 活动路径不把原始 `xshift/yshift` 猜成像素平移。独立的 Camera2 `OIS` 模式仍由 HAL 控制。
+`processLensOffset(x, y, timestamp, cameraIndex)` 的存在和时间同步是确认事实。V25 的 `apply_lens_offset_to_intrinsics` 只有在 camera metadata 指示存在 camera model 时才查询私有标定并修改 K；`oeq` 对未知设备创建的 type-18 空配置没有该模型。
+
+Photon 的生产路径不复原或猜测该私有模型，而使用 Camera2 已定义单位的公开数据：API 35 的 `STATISTICS_LENS_INTRINSICS_SAMPLES` 优先，包含 OIS、对焦和光学变焦造成的完整逐时刻 K；否则使用 `STATISTICS_OIS_SAMPLES` 给出的 pre-correction active-array 像素位移。两类数据互斥，按每条 rolling-shutter 行的曝光时间插值，只修改 `Preal` 的 K，`Pvirtual` 保持标称 K。pre-correction 到处理输出的尺度由 active/pre-correction active array、实际 crop 和输出尺寸共同换算。即使静态能力列表没有 OIS，EIS+也保持 legacy OIS telemetry 请求开启，以覆盖“OFF 请求被 HAL 忽略”的设备。若 HAL OIS 已开启但连续五帧仍没有可接受的校正样本，EIS+在七帧前瞻产生首个输出前退出，而不是继续把机身 Gyro 错配到已经光学补偿的画面。
 
 ### 5.7 裁切约束与动态姿态修正
 
@@ -813,7 +815,7 @@ Photon 正式路径只编译 clean-room 重建源码，构建产物中不存在 
 
 启用条件分成两个互不依赖的开关：
 
-- **视频增强防抖**：视频防抖模式选择 `EIS+`、普通视频录制、后置相机、1080p、30 fps、存在 Gyro，且 Camera2 时间戳源为 `REALTIME`。`EIS+` 与顶栏的 `OFF/EIS/OIS` 共用同一模式状态，设置页用于选择默认模式；选择 `EIS+` 会同步切换到 1080p/30 fps。反编译 `fwp` case 18 和 `ffw` 均表明算法 EIS 运行时关闭 HAL OIS，Photon 按此执行；独立 `OIS` 模式仍由 HAL 开启。
+- **视频增强防抖**：视频防抖模式选择 `EIS+`、普通视频录制、后置相机、1080p、30 fps、存在 Gyro，且 Camera2 时间戳源为 `REALTIME`。`EIS+` 与顶栏的 `OFF/EIS/OIS` 共用同一模式状态，设置页用于选择默认模式；选择 `EIS+` 会同步切换到 1080p/30 fps。HAL EIS 和 OIS 始终先请求关闭；只有 HAL 忽略 OIS OFF 时才融合逐时刻镜头内参或 OIS 位移。OIS 无法关闭且又没有连续校正数据时，EIS+退出并提示不可用。独立 `OIS` 模式仍由 HAL 控制。
 - **强度与裁切**：默认值按 `oeq.l()` 恢复为 `1.0`。profile 7 同样走 method-4 look-ahead 与 outer full-grid 可行性约束；用户强度只进入该已恢复的滤波状态，不改 Camera2 zoom、焦距矩阵，也不另造 `safeStrength`。
 - **照片预览防抖**：开关开启、照片模式、后置相机、存在 Gyro，且 Camera2 时间戳源为 `REALTIME`。它只进入 `LutRenderer` 的首个 OES pass，不参与静态照片请求或照片编码。
 

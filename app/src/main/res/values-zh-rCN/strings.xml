@@ -1206,4 +1206,6 @@
     <string name="settings_language">语言</string>
     <string name="settings_language_description">选择 App 使用的语言</string>
     <string name="settings_language_system">跟随系统</string>
+    <string name="eis_plus_unavailable_title">EIS+ 无法使用</string>
+    <string name="eis_plus_unavailable_message">此设备无法关闭系统防抖。为避免双重防抖导致画面抖动，已退出 EIS+。</string>
 </resources>

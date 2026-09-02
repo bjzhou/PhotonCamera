@@ -1184,4 +1184,6 @@
     <string name="settings_language">語言</string>
     <string name="settings_language_description">選擇 App 使用的語言</string>
     <string name="settings_language_system">跟隨系統</string>
+    <string name="eis_plus_unavailable_title">EIS+ 無法使用</string>
+    <string name="eis_plus_unavailable_message">此裝置無法關閉系統防震。為避免雙重防震導致畫面抖動，已退出 EIS+。</string>
 </resources>

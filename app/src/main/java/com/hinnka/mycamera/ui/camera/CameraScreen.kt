@@ -713,6 +713,29 @@ fun CameraScreen(
         )
     }
 
+    if (viewModel.showEnhancedStabilizationUnavailableDialog) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissEnhancedStabilizationUnavailableDialog,
+            title = {
+                Text(
+                    text = stringResource(R.string.eis_plus_unavailable_title),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            },
+            text = {
+                Text(
+                    text = stringResource(R.string.eis_plus_unavailable_message),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::dismissEnhancedStabilizationUnavailableDialog) {
+                    Text(stringResource(R.string.close))
+                }
+            },
+        )
+    }
+
     if (showGhostPermissionDialog) {
         AlertDialog(
             onDismissRequest = { showGhostPermissionDialog = false },

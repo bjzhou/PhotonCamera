@@ -11,8 +11,8 @@ import java.io.File
  * factory selects method 4, 12 strips and a seven-frame look-ahead for that profile. This class
  * owns the recovered gyro queues, motion filtering, look-ahead, crop constraints and rolling-
  * shutter projection as ordinary app source compiled into `libmy-native-lib.so`; it never loads
- * `libgcastartup.so`. The empty profile configuration has no calibrated OIS camera model, so raw
- * OIS offsets are not fabricated into a separate image translation.
+ * `libgcastartup.so`. Camera2 OIS shifts or API-35 dynamic intrinsics are interpolated on the same
+ * rolling-shutter row timestamps and applied only to the real-camera projection.
  */
 internal class MgcEisNativeEngine(cacheDirectory: File) {
     companion object {
@@ -29,6 +29,8 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
         val rollingShutterSkewNs: Long,
         val cropRegion: Rect,
         val activeArray: Rect,
+        val preCorrectionActiveArray: Rect,
+        val nominalLensIntrinsics: FloatArray?,
         val physicalSensorWidthMm: Float,
         val focalLengthMm: Float,
     )
@@ -50,6 +52,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
     private var gyroSampleCount = 0L
     private var firstGyroTimestampNs = 0L
     private var lensOffsetCount = 0L
+    private var lensIntrinsicsCount = 0L
     private var frameCallCount = 0L
     private val diagnosticTrace = MgcEisDiagnosticTrace(cacheDirectory)
 
@@ -81,6 +84,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             gyroSampleCount = 0L
             firstGyroTimestampNs = 0L
             lensOffsetCount = 0L
+            lensIntrinsicsCount = 0L
             frameCallCount = 0L
             diagnosticTrace.start(width, height, frontFacing, strength)
             PLog.i(
@@ -107,6 +111,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
         gyroSampleCount = 0L
         firstGyroTimestampNs = 0L
         lensOffsetCount = 0L
+        lensIntrinsicsCount = 0L
         frameCallCount = 0L
         if (current != 0L) {
             runCatching { MgcEisNativeBridge.release(current) }
@@ -140,7 +145,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
         yShiftPixels: Float,
         timestampNs: Long,
         cameraType: Int,
-    ) {
+    ): Boolean {
         val current = handle
         if (current != 0L) {
             lensOffsetCount += 1L
@@ -159,7 +164,42 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
                         "accepted=$accepted",
                 )
             }
+            return accepted
         }
+        return false
+    }
+
+    @Synchronized
+    fun processLensIntrinsics(
+        intrinsics: FloatArray,
+        timestampNs: Long,
+        cameraType: Int,
+    ): Boolean {
+        val current = handle
+        if (current == 0L || intrinsics.size != 5 ||
+            intrinsics.any { !it.isFinite() } || intrinsics[0] <= 0f || intrinsics[1] <= 0f
+        ) {
+            return false
+        }
+        lensIntrinsicsCount += 1L
+        val accepted = MgcEisNativeBridge.processLensIntrinsics(
+            current,
+            intrinsics[0],
+            intrinsics[1],
+            intrinsics[2],
+            intrinsics[3],
+            intrinsics[4],
+            timestampNs,
+            cameraType,
+        )
+        if (lensIntrinsicsCount <= 3L || lensIntrinsicsCount % 100L == 0L) {
+            PLog.i(
+                TAG,
+                "MGC processLensIntrinsics #$lensIntrinsicsCount: ts=$timestampNs, " +
+                    "K=${intrinsics.contentToString()}, camera=$cameraType, accepted=$accepted",
+            )
+        }
+        return accepted
     }
 
     @Synchronized
@@ -200,7 +240,8 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
                     "firstRowTs=$firstRowCenterTimestampNs, exposure=${input.exposureTimeNs}, " +
                     "rolling=$croppedRollingShutterSkewNs, active=${activeWidth}x$activeHeight, " +
                     "crop=$crop, focal=${input.focalLengthMm}, " +
-                    "inverseFocal=$inverseFocalLength, gyro=$gyroSampleCount, ois=$lensOffsetCount",
+                    "inverseFocal=$inverseFocalLength, gyro=$gyroSampleCount, " +
+                    "ois=$lensOffsetCount, lensIntrinsics=$lensIntrinsicsCount",
             )
         }
         val matrices = FloatArray(STRIP_COUNT * 9)
@@ -216,6 +257,9 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             activeHeight,
             crop.width(),
             crop.height(),
+            input.preCorrectionActiveArray.width().coerceAtLeast(1),
+            input.preCorrectionActiveArray.height().coerceAtLeast(1),
+            input.nominalLensIntrinsics,
             matrices,
             state,
         )

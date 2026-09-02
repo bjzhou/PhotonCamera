@@ -20,6 +20,7 @@ using mgc_eis_reconstruction::Engine;
 using mgc_eis_reconstruction::EngineConfig;
 using mgc_eis_reconstruction::FrameMetadata;
 using mgc_eis_reconstruction::GyroSample;
+using mgc_eis_reconstruction::LensIntrinsicsSample;
 using mgc_eis_reconstruction::LensOffsetSample;
 using mgc_eis_reconstruction::Quaternion;
 using mgc_eis_reconstruction::Vec2;
@@ -165,6 +166,28 @@ Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processLensOffset(
   }
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processLensIntrinsics(
+    JNIEnv *, jobject, jlong handle, jfloat fx, jfloat fy, jfloat cx,
+    jfloat cy, jfloat skew, jlong timestamp_ns, jint camera_type) {
+  Handle *state = fromJlong(handle);
+  if (!state) {
+    return JNI_FALSE;
+  }
+  try {
+    return state->engine.pushLensIntrinsics(LensIntrinsicsSample{
+               timestamp_ns,
+               {fx, fy, cx, cy, skew},
+               camera_type,
+           })
+               ? JNI_TRUE
+               : JNI_FALSE;
+  } catch (const std::exception &error) {
+    logFailure("processLensIntrinsics", error);
+    return JNI_FALSE;
+  }
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processFrame(
     JNIEnv *env, jobject, jlong handle, jlong source_timestamp_ns,
@@ -172,6 +195,8 @@ Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processFrame(
     jlong exposure_time_ns, jlong rolling_shutter_skew_ns,
     jfloat inverse_focal_length,
     jint active_width, jint active_height, jint crop_width, jint crop_height,
+    jint pre_correction_active_width, jint pre_correction_active_height,
+    jfloatArray nominal_lens_intrinsics,
     jfloatArray row_homographies, jfloatArray output_state) {
   Handle *state = fromJlong(handle);
   if (!state || !row_homographies ||
@@ -188,6 +213,24 @@ Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processFrame(
     frame.exposure_time_ns = exposure_time_ns;
     frame.rolling_shutter_skew_ns = rolling_shutter_skew_ns;
     frame.inverse_focal_length = inverse_focal_length;
+    frame.active_array_width = active_width;
+    frame.active_array_height = active_height;
+    frame.crop_width = crop_width;
+    frame.crop_height = crop_height;
+    frame.pre_correction_active_array_width = pre_correction_active_width;
+    frame.pre_correction_active_array_height = pre_correction_active_height;
+    if (nominal_lens_intrinsics != nullptr &&
+        env->GetArrayLength(nominal_lens_intrinsics) >= 5) {
+      jfloat values[5]{};
+      env->GetFloatArrayRegion(nominal_lens_intrinsics, 0, 5, values);
+      bool valid = values[0] > 0.0F && values[1] > 0.0F;
+      for (int index = 0; index < 5; ++index) {
+        valid = valid && std::isfinite(values[index]);
+        frame.nominal_lens_intrinsics[static_cast<std::size_t>(index)] =
+            values[index];
+      }
+      frame.has_nominal_lens_intrinsics = valid;
+    }
     const auto result = state->engine.processFrame(frame);
     if (!result) {
       return kPendingTimestamp;

@@ -162,7 +162,11 @@ class RealtimeVideoRenderer(
             setDefaultBufferSize(cameraInputSize.width, cameraInputSize.height)
             setOnFrameAvailableListener {
                 cameraFramePending.set(true)
-                if (!enhancedStabilizationEnabled) onFrameAvailable()
+                if (!enhancedStabilizationEnabled ||
+                    stabilizationCoordinator?.isCurrentCameraSupported != true
+                ) {
+                    onFrameAvailable()
+                }
             }
         }
         cameraSurface = Surface(cameraSurfaceTexture)
@@ -212,8 +216,15 @@ class RealtimeVideoRenderer(
         var sourceCropRect = cameraCropRect
         var timestampNs = cameraTimestampNs
 
-        if (enhancedStabilizationEnabled && stabilizationSessionStarted) {
-            val session = stabilizationSession ?: return null
+        val session = stabilizationSession
+        val stabilizationOperational = enhancedStabilizationEnabled &&
+            stabilizationSessionStarted && session?.isOperational == true
+        if (stabilizationSessionStarted && !stabilizationOperational) {
+            session?.stop()
+            stabilizationSessionStarted = false
+            mgcEisPresentationTransform.reset()
+        }
+        if (stabilizationOperational) {
             val frame = session.dequeueFrame() ?: return null
             val rendered = renderMgcEisFrame(frame) ?: return null
             sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D

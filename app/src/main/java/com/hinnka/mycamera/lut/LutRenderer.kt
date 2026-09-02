@@ -560,7 +560,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             setDefaultBufferSize(previewWidth, previewHeight)
             setOnFrameAvailableListener {
                 frameAvailable.set(true)
-                if (previewStabilizationUseCase == null) {
+                if (previewStabilizationUseCase == null ||
+                    stabilizationCoordinator?.isCurrentCameraSupported != true
+                ) {
                     onRequestRender?.invoke()
                 }
             }
@@ -1029,7 +1031,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (renderingPaused) return
         if (viewportWidth <= 0 || viewportHeight <= 0) return
 
-        val delayedStabilizationEnabled = previewStabilizationUseCase != null
+        val delayedStabilizationRequested = previewStabilizationUseCase != null
+        val delayedStabilizationEnabled = delayedStabilizationRequested &&
+            stabilizationCoordinator?.isCurrentCameraSupported == true
+        if (!delayedStabilizationEnabled && stabilizationSessionStarted) {
+            stabilizationSession?.stop()
+            stabilizationSessionStarted = false
+            mgcEisPresentationTransform.reset()
+        }
         if (delayedStabilizationEnabled && !stabilizationSessionStarted) {
             stabilizationSessionStarted = stabilizationSession?.start() == true
         }
@@ -1038,12 +1047,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
         if (delayedStabilizationEnabled) {
             val session = stabilizationSession
-            if (stabilizationSessionStarted &&
-                stabilizationCoordinator?.isCurrentCameraSupported == false
-            ) {
-                session?.stop()
-                stabilizationSessionStarted = false
-            }
             if (!stabilizationSessionStarted) {
                 stabilizationSessionStarted = session?.start() == true
             }

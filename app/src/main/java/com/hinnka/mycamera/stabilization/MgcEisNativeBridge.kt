@@ -34,6 +34,17 @@ internal object MgcEisNativeBridge {
         cameraType: Int,
     ): Boolean
 
+    external fun processLensIntrinsics(
+        handle: Long,
+        fx: Float,
+        fy: Float,
+        cx: Float,
+        cy: Float,
+        skew: Float,
+        timestampNs: Long,
+        cameraType: Int,
+    ): Boolean
+
     external fun processFrame(
         handle: Long,
         sourceTimestampNs: Long,
@@ -45,6 +56,9 @@ internal object MgcEisNativeBridge {
         activeHeight: Int,
         cropWidth: Int,
         cropHeight: Int,
+        preCorrectionActiveWidth: Int,
+        preCorrectionActiveHeight: Int,
+        nominalLensIntrinsics: FloatArray?,
         rowHomographies: FloatArray,
         state: FloatArray,
     ): Long

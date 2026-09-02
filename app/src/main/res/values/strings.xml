@@ -1221,4 +1221,6 @@
     <string name="settings_language_chinese_simplified" translatable="false">简体中文</string>
     <string name="settings_language_chinese_hong_kong" translatable="false">繁體中文（香港）</string>
     <string name="settings_language_chinese_traditional" translatable="false">繁體中文（台灣）</string>
+    <string name="eis_plus_unavailable_title">EIS+ unavailable</string>
+    <string name="eis_plus_unavailable_message">This device cannot disable its built-in camera stabilization. EIS+ has been turned off to avoid unstable video caused by double stabilization.</string>
 </resources>

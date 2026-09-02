@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
@@ -24,6 +25,7 @@ constexpr double kAllowedInnerMargin = 0.025;
 constexpr double kOutputCropZoom =
     1.0 / (1.0 - 2.0 * kLookaheadCropMargin);
 constexpr double kProjectionDenominatorEpsilon = 0.000001;
+constexpr std::int64_t kMaximumLensSampleInterpolationGapNs = 50'000'000;
 
 type18::Parameters parametersFor(const EngineConfig &config) {
   type18::Parameters parameters;
@@ -33,11 +35,10 @@ type18::Parameters parametersFor(const EngineConfig &config) {
   // retain a stale type-18 literal.
   parameters.half_window_frames = config.lookahead_frames;
   // 0x22FD640 and 0x22FE244 pass params+416 to the rolling-shutter projection
-  // builder. The ensuing conditional is only the calibrated OIS/lens-offset
-  // intrinsic adjustment; profile 7 leaves it false. Photon has no calibrated
-  // profile-7 lens model, so its existing geometry path correctly keeps K
-  // unchanged, but carry the recovered profile field explicitly rather than
-  // treating the type-18 setting as a common default.
+  // builder. The ensuing conditional is the proprietary profile's calibrated
+  // lens-model branch, which profile 7 leaves false. Photon retains that
+  // recovered field verbatim; Camera2's public, already pixel-calibrated OIS
+  // shifts/dynamic intrinsics are fused separately in realIntrinsicsForRows.
   parameters.apply_lens_offsets_to_intrinsics = config.lookahead_frames != 7;
   return parameters;
 }
@@ -114,18 +115,40 @@ public:
   }
 
   bool pushLensOffset(const LensOffsetSample &sample) {
+    if (sample.timestamp_ns <= 0 || !std::isfinite(sample.offset.x) ||
+        !std::isfinite(sample.offset.y)) {
+      return false;
+    }
     if (!lens_offsets_.empty() &&
-        sample.timestamp_ns < lens_offsets_.back().timestamp_ns) {
+        sample.timestamp_ns <= lens_offsets_.back().timestamp_ns) {
       return false;
     }
     lens_offsets_.push_back(sample);
     while (lens_offsets_.size() > 2048) {
       lens_offsets_.pop_front();
     }
-    // Profile 7 disables the raw-offset-to-intrinsics branch (params+416=0).
-    // The empty profile configuration also has no calibrated lens model. In
-    // either case, applying raw shifts would invent a calibration and
-    // reverse/scale motion incorrectly.
+    return true;
+  }
+
+  bool pushLensIntrinsics(const LensIntrinsicsSample &sample) {
+    if (sample.timestamp_ns <= 0) {
+      return false;
+    }
+    if (!lens_intrinsics_.empty() &&
+        sample.timestamp_ns <= lens_intrinsics_.back().timestamp_ns) {
+      return false;
+    }
+    const bool finite = std::all_of(
+        sample.intrinsics.begin(), sample.intrinsics.end(),
+        [](double value) { return std::isfinite(value); });
+    if (!finite || sample.intrinsics[0] <= 0.0 ||
+        sample.intrinsics[1] <= 0.0) {
+      return false;
+    }
+    lens_intrinsics_.push_back(sample);
+    while (lens_intrinsics_.size() > 2048) {
+      lens_intrinsics_.pop_front();
+    }
     return true;
   }
 
@@ -244,6 +267,196 @@ private:
         static_cast<double>(config_.output_height) * 0.5);
   }
 
+  std::optional<Vec2> lensOffsetAt(std::int64_t timestamp_ns) const {
+    if (lens_offsets_.empty()) {
+      return std::nullopt;
+    }
+    const auto after = std::lower_bound(
+        lens_offsets_.begin(), lens_offsets_.end(), timestamp_ns,
+        [](const LensOffsetSample &sample, std::int64_t timestamp) {
+          return sample.timestamp_ns < timestamp;
+        });
+    if (after == lens_offsets_.begin()) {
+      if (after->timestamp_ns - timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return after->offset;
+      }
+      return std::nullopt;
+    }
+    if (after == lens_offsets_.end()) {
+      const LensOffsetSample &before = lens_offsets_.back();
+      if (timestamp_ns - before.timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return before.offset;
+      }
+      return std::nullopt;
+    }
+    const LensOffsetSample &before = *std::prev(after);
+    if (timestamp_ns - before.timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs ||
+        after->timestamp_ns - timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs) {
+      return std::nullopt;
+    }
+    const std::int64_t span = after->timestamp_ns - before.timestamp_ns;
+    if (span <= 0) {
+      return after->offset;
+    }
+    const double alpha = static_cast<double>(timestamp_ns - before.timestamp_ns) /
+                         static_cast<double>(span);
+    return Vec2{
+        before.offset.x + (after->offset.x - before.offset.x) * alpha,
+        before.offset.y + (after->offset.y - before.offset.y) * alpha,
+    };
+  }
+
+  std::optional<std::array<double, 5>>
+  lensIntrinsicsAt(std::int64_t timestamp_ns) const {
+    if (lens_intrinsics_.empty()) {
+      return std::nullopt;
+    }
+    const auto after = std::lower_bound(
+        lens_intrinsics_.begin(), lens_intrinsics_.end(), timestamp_ns,
+        [](const LensIntrinsicsSample &sample, std::int64_t timestamp) {
+          return sample.timestamp_ns < timestamp;
+        });
+    if (after == lens_intrinsics_.begin()) {
+      if (after->timestamp_ns - timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return after->intrinsics;
+      }
+      return std::nullopt;
+    }
+    if (after == lens_intrinsics_.end()) {
+      const LensIntrinsicsSample &before = lens_intrinsics_.back();
+      if (timestamp_ns - before.timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return before.intrinsics;
+      }
+      return std::nullopt;
+    }
+    const LensIntrinsicsSample &before = *std::prev(after);
+    if (timestamp_ns - before.timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs ||
+        after->timestamp_ns - timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs) {
+      return std::nullopt;
+    }
+    const std::int64_t span = after->timestamp_ns - before.timestamp_ns;
+    if (span <= 0) {
+      return after->intrinsics;
+    }
+    const double alpha = static_cast<double>(timestamp_ns - before.timestamp_ns) /
+                         static_cast<double>(span);
+    std::array<double, 5> result{};
+    for (std::size_t index = 0; index < result.size(); ++index) {
+      result[index] = before.intrinsics[index] +
+                      (after->intrinsics[index] - before.intrinsics[index]) *
+                          alpha;
+    }
+    return result;
+  }
+
+  std::vector<Mat3> realIntrinsicsForRows(
+      const FrameMetadata &frame,
+      const std::vector<std::int64_t> &row_timestamps_ns) const {
+    const Mat3 nominal = intrinsicsFor(frame);
+    if (row_timestamps_ns.empty()) {
+      return {};
+    }
+    const int pre_width = frame.pre_correction_active_array_width > 0
+                              ? frame.pre_correction_active_array_width
+                              : frame.active_array_width;
+    const int pre_height = frame.pre_correction_active_array_height > 0
+                               ? frame.pre_correction_active_array_height
+                               : frame.active_array_height;
+    const double active_to_pre_x =
+        static_cast<double>(std::max(frame.active_array_width, 1)) /
+        static_cast<double>(std::max(pre_width, 1));
+    const double active_to_pre_y =
+        static_cast<double>(std::max(frame.active_array_height, 1)) /
+        static_cast<double>(std::max(pre_height, 1));
+    const double x_scale =
+        static_cast<double>(config_.output_width) /
+        static_cast<double>(std::max(frame.crop_width, 1)) * active_to_pre_x;
+    const double y_scale =
+        static_cast<double>(config_.output_height) /
+        static_cast<double>(std::max(frame.crop_height, 1)) * active_to_pre_y;
+
+    if (frame.has_nominal_lens_intrinsics &&
+        frame.nominal_lens_intrinsics[0] > 0.0 &&
+        frame.nominal_lens_intrinsics[1] > 0.0) {
+      std::vector<std::array<double, 5>> samples;
+      samples.reserve(row_timestamps_ns.size());
+      for (const std::int64_t timestamp_ns : row_timestamps_ns) {
+        const auto sample = lensIntrinsicsAt(timestamp_ns);
+        if (!sample) {
+          samples.clear();
+          break;
+        }
+        samples.push_back(*sample);
+      }
+      if (samples.size() == row_timestamps_ns.size()) {
+        std::vector<Mat3> result;
+        result.reserve(samples.size());
+        for (const auto &sample : samples) {
+          const double fx_ratio =
+              sample[0] / frame.nominal_lens_intrinsics[0];
+          const double fy_ratio =
+              sample[1] / frame.nominal_lens_intrinsics[1];
+          const double cx_delta =
+              (sample[2] - frame.nominal_lens_intrinsics[2]) * x_scale;
+          const double cy_delta =
+              (sample[3] - frame.nominal_lens_intrinsics[3]) * y_scale;
+          if (!std::isfinite(fx_ratio) || !std::isfinite(fy_ratio) ||
+              fx_ratio < 0.5 || fx_ratio > 2.0 || fy_ratio < 0.5 ||
+              fy_ratio > 2.0 ||
+              std::abs(cx_delta) > config_.output_width * 0.25 ||
+              std::abs(cy_delta) > config_.output_height * 0.25) {
+            result.clear();
+            break;
+          }
+          Mat3 adjusted = Mat3::cameraIntrinsics(
+              nominal.at(0, 0) * fx_ratio,
+              nominal.at(1, 1) * fy_ratio,
+              nominal.at(0, 2) + cx_delta,
+              nominal.at(1, 2) + cy_delta);
+          adjusted.at(0, 1) =
+              (sample[4] - frame.nominal_lens_intrinsics[4]) * x_scale;
+          result.push_back(adjusted);
+        }
+        if (result.size() == row_timestamps_ns.size()) {
+          return result;
+        }
+      }
+    }
+
+    std::vector<Vec2> offsets;
+    offsets.reserve(row_timestamps_ns.size());
+    for (const std::int64_t timestamp_ns : row_timestamps_ns) {
+      const auto offset = lensOffsetAt(timestamp_ns);
+      if (!offset) {
+        return {nominal};
+      }
+      offsets.push_back(*offset);
+    }
+    std::vector<Mat3> result;
+    result.reserve(offsets.size());
+    for (const Vec2 &offset : offsets) {
+      const double cx_delta = offset.x * x_scale;
+      const double cy_delta = offset.y * y_scale;
+      if (!std::isfinite(cx_delta) || !std::isfinite(cy_delta) ||
+          std::abs(cx_delta) > config_.output_width * 0.25 ||
+          std::abs(cy_delta) > config_.output_height * 0.25) {
+        return {nominal};
+      }
+      result.push_back(Mat3::cameraIntrinsics(
+          nominal.at(0, 0), nominal.at(1, 1), nominal.at(0, 2) + cx_delta,
+          nominal.at(1, 2) + cy_delta));
+    }
+    return result;
+  }
+
   bool queryPair(const type18::GyroPoseQueue &queue,
                  std::int64_t timestamp_ns, type18::PosePair *pair) const {
     return queue.query(timestamp_ns, &pair->primary, &pair->secondary);
@@ -356,10 +569,24 @@ private:
       const type18::GyroPoseQueue &queue, const FrameMetadata &metadata,
       std::int64_t center_timestamp_ns, bool dense) const {
     std::vector<Quaternion> orientations;
+    std::vector<std::int64_t> row_timestamps_ns;
     if (dense) {
-      orientations = queryRowOrientations(
-          queue, center_timestamp_ns - metadata.rolling_shutter_skew_ns / 2,
-          metadata.rolling_shutter_skew_ns);
+      const std::int64_t first_row_timestamp_ns =
+          center_timestamp_ns - metadata.rolling_shutter_skew_ns / 2;
+      const std::vector<std::int64_t> offsets =
+          type18::makeRollingShutterRowOffsets(
+              metadata.rolling_shutter_skew_ns, config_.num_strips);
+      orientations.reserve(offsets.size());
+      row_timestamps_ns.reserve(offsets.size());
+      for (const std::int64_t offset : offsets) {
+        Quaternion orientation;
+        const std::int64_t timestamp_ns = first_row_timestamp_ns + offset;
+        if (!queue.query(timestamp_ns, &orientation)) {
+          return {};
+        }
+        orientations.push_back(orientation);
+        row_timestamps_ns.push_back(timestamp_ns);
+      }
     } else {
       const std::array<double, 2> source_rows{
           kLookaheadCropMargin * static_cast<double>(config_.output_height),
@@ -370,14 +597,17 @@ private:
           metadata.rolling_shutter_skew_ns, source_rows,
           static_cast<double>(config_.output_height));
       orientations.reserve(2);
+      row_timestamps_ns.reserve(2);
       for (const std::int64_t offset : offsets) {
         Quaternion orientation;
         const std::int64_t first_row =
             center_timestamp_ns - metadata.rolling_shutter_skew_ns / 2;
-        if (!queue.query(first_row + offset, &orientation)) {
+        const std::int64_t timestamp_ns = first_row + offset;
+        if (!queue.query(timestamp_ns, &orientation)) {
           return {};
         }
         orientations.push_back(orientation);
+        row_timestamps_ns.push_back(timestamp_ns);
       }
     }
 
@@ -386,7 +616,7 @@ private:
       return geometry;
     }
     geometry.real = type18::buildRealCameraProjectionRows(
-        orientations, {intrinsicsFor(metadata)});
+        orientations, realIntrinsicsForRows(metadata, row_timestamps_ns));
     geometry.inverse_real.reserve(geometry.real.size());
     for (const Mat3 &projection : geometry.real) {
       geometry.inverse_real.push_back(projection.inverse());
@@ -1008,6 +1238,7 @@ private:
   type18::LowProtrusionMotionFilter motion_filter_;
   type18::TemporalPressureFilter pressure_filter_;
   std::deque<LensOffsetSample> lens_offsets_;
+  std::deque<LensIntrinsicsSample> lens_intrinsics_;
   std::deque<FrameMetadata> pending_frames_;
   std::deque<OutputCacheEntry> output_cache_;
   std::deque<double> projected_motion_magnitudes_;
@@ -1052,6 +1283,10 @@ bool Engine::pushGyro(const GyroSample &sample) {
 
 bool Engine::pushLensOffset(const LensOffsetSample &sample) {
   return impl_->pushLensOffset(sample);
+}
+
+bool Engine::pushLensIntrinsics(const LensIntrinsicsSample &sample) {
+  return impl_->pushLensIntrinsics(sample);
 }
 
 std::optional<StabilizedFrame>

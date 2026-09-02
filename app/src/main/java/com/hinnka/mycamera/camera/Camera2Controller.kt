@@ -4471,8 +4471,8 @@ class Camera2Controller(private val context: Context) {
     /**
      * 应用防抖设置
      *
-     * 视频模式按用户选项启用 EIS/OIS。算法防抖与 MGC 请求链一致，关闭 Camera2
-     * 硬件 EIS 和 HAL OIS，由同一套陀螺仪滚快门网格同时处理预览与录制。
+     * 视频模式按用户选项启用 EIS/OIS。EIS+始终请求关闭 Camera2 EIS 和 HAL OIS；
+     * 仅当 HAL 忽略 OIS OFF 时，才用逐时刻镜头内参或 OIS 位移修正滚快门网格。
      */
     private fun applyStabilizationSettings(
         builder: CaptureRequest.Builder,
@@ -4496,7 +4496,21 @@ class Camera2Controller(private val context: Context) {
                         videoStabilizationMode
                     )
                 }
-                if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
+                if (enhancedSelected && isCaptureRequestKeyAvailable(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE.name
+                    )
+                ) {
+                    // Never enable OIS proactively for EIS+. Some HALs default TEMPLATE_PREVIEW
+                    // to OIS ON or ignore OFF; the coordinator fuses telemetry only for that
+                    // forced-ON case and disables EIS+ if no correction stream is available.
+                    builder.set(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF,
+                    )
+                } else if (availableOpticalStabilizationModes.contains(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                    )
+                ) {
                     builder.set(
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
                         if (mode == VideoStabilizationMode.OIS) {
@@ -4506,7 +4520,11 @@ class Camera2Controller(private val context: Context) {
                         }
                     )
                 }
-                applyOisDataMode(builder, enhancedSelected)
+                applyOisDataMode(
+                    builder,
+                    enhancedSelected &&
+                        realtimeStabilizationCoordinator.shouldRequestOisSamples,
+                )
                 return
             }
 

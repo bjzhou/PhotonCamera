@@ -1842,7 +1842,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     var showGhostPermissions by mutableStateOf(false)
 
+    var showEnhancedStabilizationUnavailableDialog by mutableStateOf(false)
+        private set
+
     init {
+        cameraController.realtimeStabilizationCoordinator
+            .onEnhancedStabilizationUnavailable = {
+                viewModelScope.launch(Dispatchers.Main.immediate) {
+                    showEnhancedStabilizationUnavailableDialog = true
+                }
+            }
         previewEyeFocusProcessor.onBusyStateChanged = { busy ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 isEyeFocusBusy = busy
@@ -2408,6 +2417,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         StartupTrace.mark("CameraViewModel.init end")
+    }
+
+    fun dismissEnhancedStabilizationUnavailableDialog() {
+        showEnhancedStabilizationUnavailableDialog = false
     }
 
     fun getAvailableRawLutList(context: Context, logCurve: TransferCurve): List<String> {
@@ -6662,6 +6675,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        cameraController.realtimeStabilizationCoordinator
+            .onEnhancedStabilizationUnavailable = null
         cameraReopenJob?.cancel()
         cameraErrorRecoveryJob?.cancel()
         previewEyeFocusProcessor.close()
