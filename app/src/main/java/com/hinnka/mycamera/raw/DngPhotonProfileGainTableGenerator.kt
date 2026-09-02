@@ -30,6 +30,8 @@ internal object DngPhotonProfileGainTableGenerator {
     const val HDRNET_GRID_DEPTH = 8
     const val HDRNET_PGTM_GRID_WIDTH = 64
     const val HDRNET_PGTM_GRID_HEIGHT = 48
+    const val HDRNET_MATCH_GRID_WIDTH = 8
+    const val HDRNET_MATCH_GRID_HEIGHT = 6
     const val HDRNET_COEFFICIENT_COUNT = 2
     const val HDRNET_OUTPUT_FLOAT_COUNT =
         HDRNET_GRID_WIDTH * HDRNET_GRID_HEIGHT * HDRNET_GRID_DEPTH * HDRNET_COEFFICIENT_COUNT
@@ -77,7 +79,8 @@ internal object DngPhotonProfileGainTableGenerator {
     /**
      * Normalized ProfileGainTableMap intensity direction written by Pixel's MGC pipeline.
      *
-     * This is deliberately distinct from the HDRNet tensor, whose channels are Y, U, V, 1.
+     * This is deliberately distinct from the HDRNet tensor, whose channels are final-short
+     * R, G, B and reconstructed final-long Rec.601 luma.
      * The DNG table N axis combines half of standard RGB luma with one eighth of min-RGB and
      * three eighths of max-RGB. Pixel DNGs scale all five values together for final-short space;
      * [hdrNetPlan] performs the same scale after accounting for renderer BaselineExposure.
@@ -114,16 +117,12 @@ internal object DngPhotonProfileGainTableGenerator {
      * in HDRNet inference or viewfinder matching.
      */
     fun hdrNetPlan(
-        sourceWidth: Int,
-        sourceHeight: Int,
         rendererBaselineExposureEv: Float,
         hdrRatio: Float,
         sourceToShortGain: Float,
-        diagnosticBand: DiagnosticBand? = null,
         samplingArea: PhotonPgtmSamplingArea = PhotonPgtmSamplingArea.FULL,
     ): HdrNetProfileGainTablePlan? {
-        if (sourceWidth <= 0 || sourceHeight <= 0 ||
-            !rendererBaselineExposureEv.isFinite() ||
+        if (!rendererBaselineExposureEv.isFinite() ||
             !hdrRatio.isFinite() || hdrRatio <= 0f ||
             !sourceToShortGain.isFinite() || sourceToShortGain <= 0f
         ) {
@@ -159,7 +158,6 @@ internal object DngPhotonProfileGainTableGenerator {
             sourceToShortGain = sourceToShortGain,
             // The native MGC path builds the long-exposure guide from a ratio of at least one.
             hdrRatio = hdrRatio.coerceAtLeast(1f),
-            diagnosticBand = diagnosticBand?.sanitized(),
         )
     }
 
@@ -225,7 +223,7 @@ internal object DngPhotonProfileGainTableGenerator {
     }
 
     /**
-     * Evaluates HDRNet on the complete 64 x 48 PGTM spatial grid and returns clipped
+     * Evaluates HDRNet across the complete image on the 8 x 6 matching grid and returns clipped
      * display-linear Rec.709 luma. This is the same post-EOTF domain built from the classic
      * matcher's ARGB_8888 candidate and reference images.
      */
@@ -249,8 +247,8 @@ internal object DngPhotonProfileGainTableGenerator {
             guideSlopes = HDRNET_GUIDE_SLOPES,
             renderMinGain = HDRNET_RENDER_MIN_GAIN,
             renderMaxGain = HDRNET_RENDER_MAX_GAIN,
-            outputGridWidth = HDRNET_PGTM_GRID_WIDTH,
-            outputGridHeight = HDRNET_PGTM_GRID_HEIGHT,
+            outputGridWidth = HDRNET_MATCH_GRID_WIDTH,
+            outputGridHeight = HDRNET_MATCH_GRID_HEIGHT,
             footprintSamplesPerAxis = HDRNET_MATCH_FOOTPRINT_SAMPLES_PER_AXIS,
         )
     }
@@ -262,7 +260,6 @@ internal object DngPhotonProfileGainTableGenerator {
         height: Int,
         baselineExposureEv: Float,
         tablePointCount: Int = TABLE_POINTS,
-        diagnosticBand: DiagnosticBand? = null,
         samplingArea: PhotonPgtmSamplingArea = PhotonPgtmSamplingArea.FULL,
     ): PhotonProfileGainTablePlan? {
         if (width <= 0 || height <= 0 || !baselineExposureEv.isFinite()) return null
@@ -271,7 +268,6 @@ internal object DngPhotonProfileGainTableGenerator {
             pointCount = tablePointCount.coerceIn(TABLE_POINTS, TABLE_POINTS),
             baselineExposureEv = baselineExposureEv,
             samplingArea = samplingArea,
-            diagnosticBand = diagnosticBand?.sanitized(),
         )
     }
 
@@ -280,7 +276,6 @@ internal object DngPhotonProfileGainTableGenerator {
         pointCount: Int,
         baselineExposureEv: Float,
         samplingArea: PhotonPgtmSamplingArea = PhotonPgtmSamplingArea.FULL,
-        diagnosticBand: DiagnosticBand?,
     ): PhotonProfileGainTablePlan {
         val exposureGain = DngBaselineExposure.exactGain(baselineExposureEv)
         // The input shader samples one non-overlapping 16x16 block per spatial table entry.
@@ -311,7 +306,6 @@ internal object DngPhotonProfileGainTableGenerator {
                 maxTableGain = MAX_TABLE_GAIN,
                 parameters = PhotonLocalToneMappingParameters(),
             ),
-            diagnosticBand = diagnosticBand,
         )
     }
 
@@ -343,28 +337,6 @@ internal object DngPhotonProfileGainTableGenerator {
         }
         return map
     }
-
-    data class DiagnosticBand(
-        val start: Float,
-        val end: Float,
-        val feather: Float = 0.02f,
-        val mode: DiagnosticMode = DiagnosticMode.PASS_ONLY,
-    ) {
-        internal fun sanitized(): DiagnosticBand? {
-            if (!start.isFinite() || !end.isFinite() || !feather.isFinite()) return null
-            val safeStart = start.coerceIn(0f, 1f)
-            val safeEnd = end.coerceIn(0f, 1f)
-            if (safeEnd <= safeStart) return null
-            return DiagnosticBand(
-                start = safeStart,
-                end = safeEnd,
-                feather = feather.coerceIn(0f, 0.12f),
-                mode = mode,
-            )
-        }
-    }
-
-    enum class DiagnosticMode { PASS_ONLY, BLOCK_ONLY }
 
     private fun chooseGrid(width: Int, height: Int): PhotonPgtmGrid {
         val mapPointsH = ((width + TARGET_TILE_PX - 1) / TARGET_TILE_PX)
@@ -435,7 +407,6 @@ internal data class PhotonProfileGainTablePlan(
     val mapInputWeights: FloatArray,
     val gamma: Float,
     val photonPlan: PhotonPgtmPlan,
-    val diagnosticBand: DngPhotonProfileGainTableGenerator.DiagnosticBand?,
 ) {
     init {
         require(mapInputWeights.size == 5 && mapInputWeights.all { it.isFinite() })
@@ -456,7 +427,6 @@ internal data class HdrNetProfileGainTablePlan(
     /** Gain from source RAW to the candidate final-short exposure used by HDRNet. */
     val sourceToShortGain: Float,
     val hdrRatio: Float,
-    val diagnosticBand: DngPhotonProfileGainTableGenerator.DiagnosticBand?,
 ) {
     init {
         require(grid.mapPointsH == DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_WIDTH)
@@ -467,24 +437,16 @@ internal data class HdrNetProfileGainTablePlan(
         require(rendererBaselineGain.isFinite() && rendererBaselineGain > 0f)
         require(sourceToShortGain.isFinite() && sourceToShortGain > 0f)
         require(hdrRatio.isFinite() && hdrRatio >= 1f)
+        val rendererMapInputEffectiveScale = mapInputWeights.sum() * rendererBaselineGain
         require(
-            kotlin.math.abs(rendererMapInputEffectiveScale - hdrNetInputScale) <=
-                maxOf(1e-6f, hdrNetInputScale * 1e-5f)
+            kotlin.math.abs(rendererMapInputEffectiveScale - sourceToShortGain) <=
+                maxOf(1e-6f, sourceToShortGain * 1e-5f)
         )
     }
 
     val cellCount: Int
         get() = grid.mapPointsH * grid.mapPointsV
 
-    val mapInputWeightSum: Float
-        get() = mapInputWeights.sum()
-
-    /** Effective neutral-axis scale after a conforming renderer restores BaselineExposure. */
-    val rendererMapInputEffectiveScale: Float
-        get() = mapInputWeightSum * rendererBaselineGain
-
-    val hdrNetInputScale: Float
-        get() = sourceToShortGain
 }
 
 internal data class PhotonPgtmGrid(

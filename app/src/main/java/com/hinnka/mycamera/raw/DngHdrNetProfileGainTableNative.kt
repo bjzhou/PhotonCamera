@@ -21,7 +21,6 @@ internal object DngHdrNetProfileGainTableNative {
         val outputCount = plan.cellCount.toLong() * plan.pointCount
         if (outputCount !in 1..Int.MAX_VALUE.toLong()) return null
         val output = FloatArray(outputCount.toInt())
-        val diagnosticBand = plan.diagnosticBand
         val completed = nativeGenerateGains(
             coefficients = coefficients,
             sourceGridWidth = DngPhotonProfileGainTableGenerator.HDRNET_GRID_WIDTH,
@@ -42,10 +41,6 @@ internal object DngHdrNetProfileGainTableNative {
             guideShifts = guideShifts,
             guideSlopes = guideSlopes,
             acr3Curve = acr3Curve,
-            diagnosticStart = diagnosticBand?.start ?: 0f,
-            diagnosticEnd = diagnosticBand?.end ?: 1f,
-            diagnosticFeather = diagnosticBand?.feather ?: 0f,
-            diagnosticMode = diagnosticBand?.mode?.ordinal ?: -1,
             outputGains = output,
         )
         return output.takeIf { completed }
@@ -133,10 +128,6 @@ internal object DngHdrNetProfileGainTableNative {
         guideShifts: FloatArray,
         guideSlopes: FloatArray,
         acr3Curve: FloatArray,
-        diagnosticStart: Float,
-        diagnosticEnd: Float,
-        diagnosticFeather: Float,
-        diagnosticMode: Int,
         outputGains: FloatArray,
     ): Boolean
 

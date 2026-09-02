@@ -20,10 +20,8 @@ internal data class RawLegacyExposurePreviewFrame(
 internal data class RawLegacyAutoExposureRequest(
     val width: Int,
     val height: Int,
-    /** Complete capture-time viewfinder image retained for Photon HDR spatial matching. */
+    /** Complete capture-time viewfinder image used by both exposure matching paths. */
     val referenceFrame: RawLegacyExposurePreviewFrame,
-    /** Center fraction used by the scalar viewfinder matcher on both axes. */
-    val scalarMatchingCenterFractionPerAxis: Float,
     val highlightClippingConstraint: RawLegacyHighlightClippingConstraint?,
     val solve: (
         renderSample: (Float) -> RawLegacyExposurePreviewFrame?,
@@ -76,37 +74,6 @@ internal data class RawLegacyHighlightExposureLimit(
     val pixelCount: Long,
 )
 
-internal data class RawHdrNetExposureEvaluation(
-    val centerErrorEv: Float,
-    val spanErrorEv: Float,
-    val curveSlopeError: Float,
-    val referenceSpanEv: Float,
-    val highlightTargetErrorEv: Float,
-    val shadowTargetErrorEv: Float,
-    val shortTargetCorrectionEv: Float,
-    val longTargetCorrectionEv: Float,
-    val medianLog2Ratio: Float,
-    val robustLog2Loss: Float,
-    val meanAbsoluteLog2Ratio: Float,
-    val meanAbsolutePerceptualLightnessError: Float,
-    val matchRate: Float,
-    val coordinateComparedEdgeCount: Int,
-    val coordinateMatchRate: Float,
-    val coordinatesMatched: Boolean?,
-    val recommendedExposureCorrectionEv: Float,
-    val evaluatedCandidateCount: Int,
-    val converged: Boolean,
-    val usedOneDimensionalFallback: Boolean,
-    val jacobianNormalizedDeterminant: Float,
-)
-
-internal data class RawHdrNetExposureCandidate<T>(
-    val shortGain: Float,
-    val longGain: Float,
-    val payload: T,
-    val evaluation: RawHdrNetExposureEvaluation,
-)
-
 /**
  * Capture-side viewfinder matching derived from PhotonCamera 1.27.1's spatial solver. Native code
  * owns reference linearization, robust grid statistics and both exposure solvers. Kotlin only
@@ -116,8 +83,6 @@ internal object RawLegacyAutoExposureMatcher {
     private const val TAG = "RawLegacyAutoExposureMatcher"
     private const val PREVIEW_LONG_EDGE = 256
     private const val PORTRAIT_PRIORITY_MINIMUM_AREA_FRACTION = 0.045f
-    const val SCALAR_MATCH_CENTER_FRACTION_PER_AXIS = 2f / 3f
-
     private data class ViewfinderReference(
         val frame: RawLegacyExposurePreviewFrame,
     )
@@ -130,8 +95,6 @@ internal object RawLegacyAutoExposureMatcher {
     private data class HdrNetInference<T>(
         val shortEv: Float,
         val hdrRatioEv: Float,
-        val shortGain: Float,
-        val longGain: Float,
         val payload: T,
     )
 
@@ -140,15 +103,8 @@ internal object RawLegacyAutoExposureMatcher {
         capturePortraitMask: PortraitMaskSnapshot? = null,
         viewfinderMirroredHorizontally: Boolean = false,
         viewfinderPreviewToCaptureRotationDegrees: Int = 0,
-        scalarMatchingCenterFractionPerAxis: Float = 1f,
         highlightClippingConstraint: RawLegacyHighlightClippingConstraint? = null,
     ): RawLegacyAutoExposureRequest? {
-        if (!scalarMatchingCenterFractionPerAxis.isFinite() ||
-            scalarMatchingCenterFractionPerAxis <= 0f ||
-            scalarMatchingCenterFractionPerAxis > 1f
-        ) {
-            return null
-        }
         val normalizedViewfinderRotation = Math.floorMod(
             viewfinderPreviewToCaptureRotationDegrees,
             360,
@@ -169,58 +125,25 @@ internal object RawLegacyAutoExposureMatcher {
             snapshot = capturePortraitMask,
             expectedRotationDegrees = normalizedViewfinderRotation,
         )
-        val detectedPortraitAreaFraction = portraitPriority?.areaFraction
-            ?: capturePortraitMask?.let(::portraitAreaFraction)
-        // A portrait outside the historical center crop still has to be observable by the scalar
-        // solver. The RAW highlight guard remains independently constrained to its center region.
-        val effectiveScalarCenterFraction = if (portraitPriority != null) {
-            1f
-        } else {
-            scalarMatchingCenterFractionPerAxis
-        }
-        PLog.i(
-            TAG,
-            "Viewfinder portrait target: available=${capturePortraitMask != null} " +
-                "areaFraction=$detectedPortraitAreaFraction " +
-                "minimumAreaFraction=$PORTRAIT_PRIORITY_MINIMUM_AREA_FRACTION " +
-                "active=${portraitPriority != null} " +
-                "previewToCaptureRotation=" +
-                "$normalizedViewfinderRotation " +
-                "portraitMaskRotation=${capturePortraitMask?.previewToCaptureRotationDegrees} " +
-                "viewfinderMirroredHorizontally=$viewfinderMirroredHorizontally " +
-                "scalarCenterFraction=$effectiveScalarCenterFraction",
-        )
+        // Matching always uses the complete viewfinder. The RAW highlight guard remains
+        // independently constrained to its configured center region.
         val completeReference = buildReference(
             bitmap = bitmap,
             portraitPriority = portraitPriority,
             mirrorHorizontally = viewfinderMirroredHorizontally,
             previewToCaptureRotationDegrees = normalizedViewfinderRotation,
         )
-        val scalarReference = when {
-            completeReference == null -> null
-            effectiveScalarCenterFraction >= 1f -> completeReference
-            else -> buildReference(
-                bitmap = bitmap,
-                centerFractionPerAxis = effectiveScalarCenterFraction,
-                portraitPriority = portraitPriority,
-                mirrorHorizontally = viewfinderMirroredHorizontally,
-                previewToCaptureRotationDegrees = normalizedViewfinderRotation,
-            )
-        }
-        if (completeReference == null || scalarReference == null) {
+        if (completeReference == null) {
             PLog.w(TAG, "Viewfinder matching skipped: capture preview is unavailable")
         }
         return completeReference?.let { complete ->
-            val scalar = scalarReference ?: return@let null
             RawLegacyAutoExposureRequest(
-                width = scalar.frame.width,
-                height = scalar.frame.height,
+                width = complete.frame.width,
+                height = complete.frame.height,
                 referenceFrame = complete.frame,
-                scalarMatchingCenterFractionPerAxis =
-                    effectiveScalarCenterFraction,
                 highlightClippingConstraint = highlightClippingConstraint,
                 solve = { renderSample, maximumExposureEv ->
-                    solve(scalar, renderSample, maximumExposureEv)
+                    solve(complete, renderSample, maximumExposureEv)
                 },
             )
         }
@@ -290,17 +213,13 @@ internal object RawLegacyAutoExposureMatcher {
 
     private fun buildReference(
         bitmap: Bitmap,
-        centerFractionPerAxis: Float = 1f,
         portraitPriority: PortraitPrioritySource? = null,
         mirrorHorizontally: Boolean = false,
         previewToCaptureRotationDegrees: Int = 0,
     ): ViewfinderReference? {
         if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return null
         return try {
-            val sourceBounds = centeredBounds(
-                outputBounds = Rect(0, 0, bitmap.width, bitmap.height),
-                centerFractionPerAxis = centerFractionPerAxis,
-            ) ?: return null
+            val sourceBounds = Rect(0, 0, bitmap.width, bitmap.height)
             val size = longEdgeSize(
                 sourceBounds.width(),
                 sourceBounds.height(),
@@ -341,17 +260,17 @@ internal object RawLegacyAutoExposureMatcher {
     /**
      * Drives the native two-dimensional HDRNet matcher.
      *
-     * Native code jointly searches independent short and long EV coordinates. Highlight-grid
-     * error drives short, shadow-grid error drives long, and the measured cross-response is kept
-     * in the Jacobian. Selection and convergence use the full-grid match rate. This maps native
-     * requests back to short EV and HDR-ratio EV and runs the model callback.
+     * Native code jointly searches the model's short-EV and HDR-ratio-EV coordinates. Robust
+     * highlight error anchors short exposure, paired p20..p80 dynamic-range error drives HDR
+     * ratio, and their measured cross-response is retained in the damped Jacobian. Selection and
+     * convergence still use the weighted full-grid direct-EV match rate.
      */
     fun <T> solveHdrNetExposure(
         referenceFrame: RawLegacyExposurePreviewFrame,
         initialShortGain: Float,
         initialLongGain: Float,
         evaluateCandidate: (shortGain: Float, longGain: Float) -> Pair<T, FloatArray>?,
-    ): RawHdrNetExposureCandidate<T>? {
+    ): T? {
         if (!initialShortGain.isFinite() || !initialLongGain.isFinite() ||
             initialShortGain <= 0f || initialLongGain < initialShortGain
         ) {
@@ -384,83 +303,20 @@ internal object RawLegacyAutoExposureMatcher {
                 ) {
                     return@use null
                 }
-                val probeStartNs = System.nanoTime()
                 val candidate = evaluateCandidate(shortGain, longGain) ?: return@use null
-                val candidateReadyNs = System.nanoTime()
-                val sample = solver.submitHdrNetCandidate(
+                if (!solver.submitHdrNetCandidate(
                     parameters = parameters,
                     displayLinearLumas = candidate.second,
-                    columns = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_WIDTH,
-                    rows = DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_HEIGHT,
-                ) ?: return@use null
-                val coordinatesMatched = solver.lastCandidateCoordinatesMatch()
+                    columns = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH,
+                    rows = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_HEIGHT,
+                )) return@use null
                 inferences += HdrNetInference(
                     shortEv = parameters.shortEv,
                     hdrRatioEv = parameters.hdrRatioEv,
-                    shortGain = shortGain,
-                    longGain = longGain,
                     payload = candidate.first,
-                )
-                val probeReadyNs = System.nanoTime()
-                PLog.d(
-                    TAG,
-                    "HDRNet viewfinder probe: index=${inferences.size} " +
-                        "adjustmentAxis=${parameters.axis} " +
-                        "shortEv=${parameters.shortEv} ratioEv=${parameters.hdrRatioEv} " +
-                        "longEv=${parameters.shortEv + parameters.hdrRatioEv} " +
-                        "shortGain=$shortGain longGain=$longGain hdrRatio=$hdrRatio " +
-                        "matchedCells=${sample.matchedCellCount}/${sample.validCellCount} " +
-                        "curveFitCells=${sample.curveFitCellCount} " +
-                        "centerErrorEv=${sample.centerErrorEv} " +
-                        "spanErrorEv=${sample.spanErrorEv} " +
-                        "curveSlopeError=${sample.curveSlopeError} " +
-                        "highlightTargetErrorEv=${sample.highlightTargetErrorEv} " +
-                        "shadowTargetErrorEv=${sample.shadowTargetErrorEv} " +
-                        "shortTargetCorrectionEv=${sample.shortTargetCorrectionEv} " +
-                        "longTargetCorrectionEv=${sample.longTargetCorrectionEv} " +
-                        "referenceP20Ev=${sample.referenceP20Ev} " +
-                        "referenceP50Ev=${sample.referenceP50Ev} " +
-                        "referenceP80Ev=${sample.referenceP80Ev} " +
-                        "robustLog2Loss=${sample.robustLog2Loss} " +
-                        "matchRate=${sample.matchRate} " +
-                        "meanPerceptualLightnessError=" +
-                        "${sample.meanAbsolutePerceptualLightnessError} " +
-                        "coordinateEdges=${sample.coordinateComparedEdgeCount} " +
-                        "coordinateMatchRate=${sample.coordinateMatchRate} " +
-                        "coordinatesMatched=$coordinatesMatched " +
-                        "recommendedExposureCorrectionEv=" +
-                        "${sample.recommendedExposureCorrectionEv} " +
-                        "candidateMs=${(candidateReadyNs - probeStartNs) / 1_000_000f} " +
-                        "matchStatsMs=${(probeReadyNs - candidateReadyNs) / 1_000_000f} " +
-                        "totalMs=${(probeReadyNs - probeStartNs) / 1_000_000f}",
                 )
             }
             val result = solver.hdrNetResult() ?: return@use null
-            if (result.sample.coordinatesMatched == false) {
-                PLog.w(
-                    TAG,
-                    "HDRNet viewfinder matching rejected: " +
-                        "reason=COORDINATE_MISMATCH " +
-                        "matchRate=${result.sample.matchRate} " +
-                        "coordinateEdges=${result.sample.coordinateComparedEdgeCount} " +
-                        "coordinateMatchRate=${result.sample.coordinateMatchRate} " +
-                        "coordinatesMatched=${result.sample.coordinatesMatched} " +
-                        "candidateCount=${result.evaluatedCandidateCount}",
-                )
-                return@use null
-            }
-            if (!result.converged) {
-                PLog.w(
-                    TAG,
-                    "HDRNet viewfinder matching did not reach the early-convergence target; " +
-                        "using the highest-match-rate candidate: " +
-                        "matchRate=${result.sample.matchRate} " +
-                        "coordinateEdges=${result.sample.coordinateComparedEdgeCount} " +
-                        "coordinateMatchRate=${result.sample.coordinateMatchRate} " +
-                        "coordinatesMatched=${result.sample.coordinatesMatched} " +
-                        "candidateCount=${result.evaluatedCandidateCount}",
-                )
-            }
             val selectedInference = inferences.minByOrNull {
                 abs(it.shortEv - result.shortEv) +
                     abs(it.hdrRatioEv - result.hdrRatioEv)
@@ -469,67 +325,7 @@ internal object RawLegacyAutoExposureMatcher {
                     abs(it.hdrRatioEv - result.hdrRatioEv) <
                     HDRNET_PAYLOAD_LOOKUP_TOLERANCE_EV
             } ?: return@use null
-            val sample = result.sample
-            val selected = RawHdrNetExposureCandidate(
-                shortGain = selectedInference.shortGain,
-                longGain = selectedInference.longGain,
-                payload = selectedInference.payload,
-                evaluation = RawHdrNetExposureEvaluation(
-                    centerErrorEv = sample.centerErrorEv,
-                    spanErrorEv = sample.spanErrorEv,
-                    curveSlopeError = sample.curveSlopeError,
-                    referenceSpanEv = sample.referenceSpanEv,
-                    highlightTargetErrorEv = sample.highlightTargetErrorEv,
-                    shadowTargetErrorEv = sample.shadowTargetErrorEv,
-                    shortTargetCorrectionEv = sample.shortTargetCorrectionEv,
-                    longTargetCorrectionEv = sample.longTargetCorrectionEv,
-                    medianLog2Ratio = sample.medianLog2Ratio,
-                    robustLog2Loss = sample.robustLog2Loss,
-                    meanAbsoluteLog2Ratio = sample.meanAbsoluteLog2Ratio,
-                    meanAbsolutePerceptualLightnessError =
-                        sample.meanAbsolutePerceptualLightnessError,
-                    matchRate = sample.matchRate,
-                    coordinateComparedEdgeCount = sample.coordinateComparedEdgeCount,
-                    coordinateMatchRate = sample.coordinateMatchRate,
-                    coordinatesMatched = sample.coordinatesMatched,
-                    recommendedExposureCorrectionEv =
-                        sample.recommendedExposureCorrectionEv,
-                    evaluatedCandidateCount = result.evaluatedCandidateCount,
-                    converged = result.converged,
-                    usedOneDimensionalFallback = result.usedOneDimensionalFallback,
-                    jacobianNormalizedDeterminant =
-                        result.jacobianNormalizedDeterminant,
-                ),
-            )
-            PLog.i(
-                TAG,
-                "HDRNet viewfinder result: shortGain=${selected.shortGain} " +
-                    "longGain=${selected.longGain} " +
-                    "hdrRatio=${selected.longGain / selected.shortGain} " +
-                    "shortEv=${result.shortEv} ratioEv=${result.hdrRatioEv} " +
-                    "longEv=${result.shortEv + result.hdrRatioEv} " +
-                    "centerErrorEv=${sample.centerErrorEv} " +
-                    "spanErrorEv=${sample.spanErrorEv} " +
-                    "curveSlopeError=${sample.curveSlopeError} " +
-                    "highlightTargetErrorEv=${sample.highlightTargetErrorEv} " +
-                    "shadowTargetErrorEv=${sample.shadowTargetErrorEv} " +
-                    "shortTargetCorrectionEv=${sample.shortTargetCorrectionEv} " +
-                    "longTargetCorrectionEv=${sample.longTargetCorrectionEv} " +
-                    "referenceSpanEv=${sample.referenceSpanEv} " +
-                    "robustLog2Loss=${sample.robustLog2Loss} " +
-                    "matchRate=${sample.matchRate} " +
-                    "meanPerceptualLightnessError=" +
-                    "${sample.meanAbsolutePerceptualLightnessError} " +
-                    "coordinateEdges=${sample.coordinateComparedEdgeCount} " +
-                    "coordinateMatchRate=${sample.coordinateMatchRate} " +
-                    "coordinatesMatched=${sample.coordinatesMatched} " +
-                    "jacobianNormalizedDeterminant=" +
-                    "${result.jacobianNormalizedDeterminant} " +
-                    "fallback1d=${result.usedOneDimensionalFallback} " +
-                    "converged=${result.converged} " +
-                    "candidateCount=${result.evaluatedCandidateCount}",
-            )
-            selected
+            selectedInference.payload
         }
     }
 
@@ -569,82 +365,14 @@ internal object RawLegacyAutoExposureMatcher {
                 val exposureEv = solver.nextExposureEv() ?: break
                 val frame = renderSample(exposureEv) ?: return@use null
                 if (!solver.submitCandidate(exposureEv, frame)) return@use null
-                val coordinatesMatched = solver.lastCandidateCoordinatesMatch()
-                solver.lastSample()?.let { sample ->
-                    PLog.d(
-                        TAG,
-                        "Viewfinder brightness matching sample: " +
-                            "exposureEv=${sample.exposureEv} " +
-                            "matchedCells=${sample.matchedCellCount}/${sample.validCellCount} " +
-                            "matchRate=${sample.matchRate} " +
-                            "meanPerceptualLightnessError=" +
-                            "${sample.meanAbsolutePerceptualLightnessError} " +
-                            "meanAbsoluteLog2Ratio=${sample.meanAbsoluteLog2Ratio} " +
-                            "medianLog2Ratio=${sample.medianLog2Ratio} " +
-                            "robustLog2Loss=${sample.robustLog2Loss} " +
-                            "recommendedExposureCorrectionEv=" +
-                            "${sample.recommendedExposureCorrectionEv} " +
-                            "referenceWeightSum=${sample.referenceWeightSum} " +
-                            "coordinateEdges=${sample.coordinateComparedEdgeCount} " +
-                            "coordinateMatchRate=${sample.coordinateMatchRate} " +
-                            "coordinatesMatched=$coordinatesMatched",
-                    )
-                }
             }
-            val result = solver.result() ?: return@use null
-            if (result.best.coordinatesMatched == false) {
-                PLog.w(
-                    TAG,
-                    "Viewfinder brightness matching rejected: " +
-                        "reason=COORDINATE_MISMATCH " +
-                        "matchRate=${result.best.matchRate} " +
-                        "requiredMatchRate=${result.requiredGridMatchRate} " +
-                        "coordinateEdges=${result.best.coordinateComparedEdgeCount} " +
-                        "coordinateMatchRate=${result.best.coordinateMatchRate} " +
-                        "coordinatesMatched=${result.best.coordinatesMatched}",
-                )
-                return@use null
-            }
-            if (!solver.hasConverged()) {
-                PLog.w(
-                    TAG,
-                    "Viewfinder brightness matching did not reach the early-convergence " +
-                        "target; using the highest-match-rate candidate: " +
-                        "matchRate=${result.best.matchRate} " +
-                        "requiredMatchRate=${result.requiredGridMatchRate} " +
-                        "coordinateEdges=${result.best.coordinateComparedEdgeCount} " +
-                        "coordinateMatchRate=${result.best.coordinateMatchRate} " +
-                        "coordinatesMatched=${result.best.coordinatesMatched}",
-                )
-            }
+            val resultExposureEv = solver.resultExposureEv() ?: return@use null
             PLog.i(
                 TAG,
                 "Viewfinder brightness matching result: " +
-                    "exposureEv=${result.best.exposureEv} " +
-                    "matchedCells=${result.best.matchedCellCount}/${result.best.validCellCount} " +
-                    "matchRate=${result.best.matchRate} " +
-                    "meanPerceptualLightnessError=" +
-                    "${result.best.meanAbsolutePerceptualLightnessError} " +
-                    "meanAbsoluteLog2Ratio=${result.best.meanAbsoluteLog2Ratio} " +
-                    "medianLog2Ratio=${result.best.medianLog2Ratio} " +
-                    "robustLog2Loss=${result.best.robustLog2Loss} " +
-                    "recommendedExposureCorrectionEv=" +
-                    "${result.best.recommendedExposureCorrectionEv} " +
-                    "referenceWeightSum=${result.best.referenceWeightSum} " +
-                    "coordinateEdges=${result.best.coordinateComparedEdgeCount} " +
-                    "coordinateMatchRate=${result.best.coordinateMatchRate} " +
-                    "coordinatesMatched=${result.best.coordinatesMatched} " +
-                    "sampleCount=${result.evaluatedSampleCount} " +
-                    "excludedShadowCells=${result.excludedShadowCellCount} " +
-                    "excludedHighlightCells=${result.excludedHighlightCellCount} " +
-                    "shadowWeightZeroLinear=${result.shadowWeightZeroLinear} " +
-                    "highlightWeightZeroLinear=${result.highlightWeightZeroLinear} " +
-                    "huberDeltaEv=${result.huberDeltaEv} " +
-                    "perceptualLightnessTolerance=" +
-                    "${result.perceptualLightnessTolerance} " +
-                    "requiredGridMatchRate=${result.requiredGridMatchRate}",
+                    "exposureEv=$resultExposureEv",
             )
-            result.best.exposureEv
+            resultExposureEv
         }
     }
 

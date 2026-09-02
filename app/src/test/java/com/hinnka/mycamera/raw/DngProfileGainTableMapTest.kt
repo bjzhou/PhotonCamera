@@ -57,6 +57,31 @@ class DngProfileGainTableMapTest {
         assertEquals(3_158_096, payload.size)
     }
 
+    @Test
+    fun rebasingRendererBaselinePreservesEffectiveInputWeights() {
+        val map = testMap(
+            mapPointsN = 2,
+            gamma = 1f,
+            gains = floatArrayOf(1f, 1f),
+        )
+
+        val rebased = requireNotNull(
+            map.rebasedForRendererBaseline(
+                fromTotalBaselineExposureEv = 1f,
+                toTotalBaselineExposureEv = 3f,
+            ),
+        )
+
+        map.mapInputWeights.indices.forEach { index ->
+            val originalEffectiveWeight = map.mapInputWeights[index] *
+                DngBaselineExposure.exactGain(1f)
+            val rebasedEffectiveWeight = rebased.mapInputWeights[index] *
+                DngBaselineExposure.exactGain(3f)
+            assertEquals(originalEffectiveWeight, rebasedEffectiveWeight, 1e-6f)
+        }
+        assertEquals(map.gains, rebased.gains)
+    }
+
     private fun testMap(
         mapPointsN: Int,
         gamma: Float,

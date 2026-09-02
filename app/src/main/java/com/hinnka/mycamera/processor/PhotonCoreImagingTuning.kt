@@ -369,10 +369,19 @@ data class PhotonDehazeTuning(
 
     val isActive: Boolean
         get() = normalized().let {
-            it.enabled && (it.strength > 0f || it.dynamicHighlightStrength > 0f)
+            PROCESSING_ENABLED &&
+                it.enabled && (it.strength > 0f || it.dynamicHighlightStrength > 0f)
         }
 
     companion object {
+        /**
+         * Temporary master gate for the standalone Dehaze stage.
+         *
+         * Keep persisted tuning intact so captures and presets remain forward-compatible, while
+         * every render/metering path observes the same disabled state until the stage is restored.
+         */
+        const val PROCESSING_ENABLED = false
+
         val DEFAULT = PhotonDehazeTuning()
         val DISABLED = PhotonDehazeTuning(enabled = false)
     }

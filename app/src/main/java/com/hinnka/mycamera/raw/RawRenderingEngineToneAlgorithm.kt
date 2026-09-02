@@ -392,8 +392,8 @@ internal abstract class RawRenderingEngineToneAlgorithm(
         )
         GLES30.glUniform2f(
             GLES30.glGetUniformLocation(program, "uGlobalUvScale"),
-            input.width.toFloat() / input.fullImageWidth.coerceAtLeast(1),
-            input.height.toFloat() / input.fullImageHeight.coerceAtLeast(1),
+            input.globalWidth.toFloat() / input.fullImageWidth.coerceAtLeast(1),
+            input.globalHeight.toFloat() / input.fullImageHeight.coerceAtLeast(1),
         )
         if (!input.colorEngine.isHncs) {
             GLES30.glUniformMatrix3fv(

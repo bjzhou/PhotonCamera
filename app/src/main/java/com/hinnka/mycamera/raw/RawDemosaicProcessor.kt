@@ -2398,18 +2398,7 @@ class RawDemosaicProcessor {
         var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
         var embeddedDngProfiles: List<DngEmbeddedProfileEntry> = emptyList()
         var selectedEmbeddedDngProfile: DngEmbeddedProfileEntry? = null
-        val sourceProfileGainTableMapCandidate = metadata?.profileGainTableMap
-        val sourcePgtmValidationStartNs = System.nanoTime()
-        val sourceProfileGainTableMap =
-            sourceProfileGainTableMapCandidate?.takeIf { it.isValid }
-        sourceProfileGainTableMapCandidate?.let { candidate ->
-            PLog.i(
-                TAG,
-                "PGTM validation stage=RENDER_SOURCE " +
-                    "points=${candidate.gains.size} valid=${sourceProfileGainTableMap != null} " +
-                    "tookUs=${(System.nanoTime() - sourcePgtmValidationStartNs) / 1_000L}",
-            )
-        }
+        val sourceProfileGainTableMap = metadata?.profileGainTableMap?.takeIf { it.isValid }
 
         if (dngFile != null) {
             val hasClassicTiffHeader = DngProfileGainTableMap.hasClassicTiffHeader(dngFile)
@@ -3101,7 +3090,7 @@ class RawDemosaicProcessor {
                     sceneExposureRequest == null && legacyAutoExposureRequest != null
                 val captureUsesLocalLaplacian =
                     captureUsesViewfinderBrightnessMatch && capturePhotonPgtmRequested
-                val solvedExposureEv = legacyAutoExposureRequest
+                val initialSolvedExposureEv = legacyAutoExposureRequest
                     ?.takeIf { captureUsesViewfinderBrightnessMatch }
                     ?.let { request ->
                         renderLegacyAutoExposureRequest(
@@ -3148,23 +3137,30 @@ class RawDemosaicProcessor {
                             "${solution.fractionPixelsClippedAtFinalShortTet}",
                     )
                 }
-                solvedExposureEv?.let { exposureEv ->
+                initialSolvedExposureEv?.let { exposureEv ->
                     PLog.i(
                         TAG,
-                        "RAW_VIEWFINDER_BRIGHTNESS_MATCH stage=METERING_COMPLETE " +
+                        "RAW_VIEWFINDER_BRIGHTNESS_MATCH stage=" +
+                            "${if (captureUsesLocalLaplacian) {
+                                "PRE_PGTM_METERING_COMPLETE"
+                            } else {
+                                "METERING_COMPLETE"
+                            }} " +
                             "sourceBaselineEv=${actualMetadata.baselineExposure} " +
                             "exposureOffsetEv=$exposureEv",
                     )
                 }
-                val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
+                val initialBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
                     sourceBaselineEv = actualMetadata.baselineExposure,
-                    legacyExposureOffsetEv = solvedExposureEv,
+                    legacyExposureOffsetEv = initialSolvedExposureEv,
                 )
+                val dcpBaselineExposureOffsetEv =
+                    dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan)
                 val captureHdrRatio = solvedSceneExposure?.hdrRatio
                     ?.takeIf { it.isFinite() && it >= 1f }
                 val captureSourceToShortGain = solvedSceneExposure?.finalShortGain
                     ?.takeIf { it.isFinite() && it > 0f }
-                val captureProfileOutput = when {
+                val initialCaptureProfileOutput = when {
                     capturePhotonPgtmRequested && captureUsesHdrNet &&
                         legacyAutoExposureRequest != null && captureHdrRatio != null &&
                         captureSourceToShortGain != null -> {
@@ -3182,8 +3178,8 @@ class RawDemosaicProcessor {
                             samplesPerPixel = actualSamplesPerPixel,
                             metadata = actualMetadata.copy(profileGainTableMap = null),
                             statsBounds = processingBounds,
-                            rendererBaselineExposureEv = finalBaselineExposureEv +
-                                dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
+                            rendererBaselineExposureEv = initialBaselineExposureEv +
+                                dcpBaselineExposureOffsetEv,
                             viewfinderReference = legacyAutoExposureRequest.referenceFrame,
                             outputRotation = actualRotation,
                             // HDRNet's ratio describes capture exposure, not the DCP profile's
@@ -3200,7 +3196,7 @@ class RawDemosaicProcessor {
                         )
                     }
                     capturePhotonPgtmRequested && captureUsesLocalLaplacian &&
-                        solvedExposureEv != null -> {
+                        initialSolvedExposureEv != null -> {
                         generateProfileGainTableMapOnGpu(
                             mode = DngPhotonProfileGainTableAlgorithm.Mode.LOCAL_LAPLACIAN,
                             context = context.applicationContext,
@@ -3215,8 +3211,8 @@ class RawDemosaicProcessor {
                             samplesPerPixel = actualSamplesPerPixel,
                             metadata = actualMetadata.copy(profileGainTableMap = null),
                             statsBounds = processingBounds,
-                            rendererBaselineExposureEv = finalBaselineExposureEv +
-                                dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
+                            rendererBaselineExposureEv = initialBaselineExposureEv +
+                                dcpBaselineExposureOffsetEv,
                             viewfinderReference = null,
                             outputRotation = actualRotation,
                             hdrRatio = 1f,
@@ -3243,6 +3239,72 @@ class RawDemosaicProcessor {
                         null
                     }
                 }
+                var solvedExposureEv = initialSolvedExposureEv
+                var captureProfileOutput = initialCaptureProfileOutput
+                if (captureUsesLocalLaplacian && initialSolvedExposureEv != null &&
+                    initialCaptureProfileOutput != null
+                ) {
+                    val viewfinderMatchRequest = checkNotNull(legacyAutoExposureRequest)
+                    val generatedTotalBaselineExposureEv = initialBaselineExposureEv +
+                        dcpBaselineExposureOffsetEv
+                    // Candidate EV remains relative to the source BaselineExposure. Rebase only
+                    // the lookup weights used by this preview so the generated LL curve keeps the
+                    // same sensor-linear N coordinate while the solver varies the post-PGTM ramp.
+                    val previewTotalBaselineExposureEv =
+                        DngBaselineExposure.sanitize(actualMetadata.baselineExposure) +
+                            dcpBaselineExposureOffsetEv
+                    val previewMap = initialCaptureProfileOutput.map
+                        .rebasedForRendererBaseline(
+                            fromTotalBaselineExposureEv = generatedTotalBaselineExposureEv,
+                            toTotalBaselineExposureEv = previewTotalBaselineExposureEv,
+                        )
+                    val finalMatchedExposureEv = previewMap?.let { map ->
+                        renderLegacyAutoExposureRequest(
+                            request = viewfinderMatchRequest,
+                            metadata = actualMetadata.copy(profileGainTableMap = map),
+                            sourceTextureId = demosaicTextureId,
+                            colorCorrectionMatrix = linearColorCorrectionMatrix,
+                            cameraWhite = linearCameraWhite,
+                            dcpRenderPlan = activeDcpRenderPlan,
+                            rawBlackPointCorrection = rawBlackPointCorrection,
+                            rawWhitePointCorrection = rawWhitePointCorrection,
+                            outputSourceBounds = outputSourceBounds,
+                            outputRotation = actualRotation,
+                            applyProfileGainTableMap = true,
+                        )
+                    }
+                    val finalMap = finalMatchedExposureEv?.let { exposureEv ->
+                        val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
+                            sourceBaselineEv = actualMetadata.baselineExposure,
+                            legacyExposureOffsetEv = exposureEv,
+                        )
+                        initialCaptureProfileOutput.map.rebasedForRendererBaseline(
+                            fromTotalBaselineExposureEv = generatedTotalBaselineExposureEv,
+                            toTotalBaselineExposureEv = finalBaselineExposureEv +
+                                dcpBaselineExposureOffsetEv,
+                        )
+                    }
+                    if (finalMatchedExposureEv == null || finalMap == null) {
+                        PLog.e(
+                            TAG,
+                            "Local Laplacian final-domain viewfinder matching failed",
+                        )
+                        solvedExposureEv = null
+                        captureProfileOutput = null
+                    } else {
+                        solvedExposureEv = finalMatchedExposureEv
+                        captureProfileOutput = initialCaptureProfileOutput.copy(map = finalMap)
+                        PLog.i(
+                            TAG,
+                            "RAW_VIEWFINDER_BRIGHTNESS_MATCH " +
+                                "stage=POST_LOCAL_LAPLACIAN_METERING_COMPLETE " +
+                                "sourceBaselineEv=${actualMetadata.baselineExposure} " +
+                                "prePgtmExposureOffsetEv=$initialSolvedExposureEv " +
+                                "finalExposureOffsetEv=$finalMatchedExposureEv " +
+                                "pgtmWeightRebase=true",
+                        )
+                    }
+                }
                 val captureProfileGainTableMap = captureProfileOutput?.map
                 val selectedCaptureHdrRatio = captureProfileOutput?.hdrRatio ?: captureHdrRatio
                 val selectedCaptureSourceToShortGain =
@@ -3255,94 +3317,10 @@ class RawDemosaicProcessor {
                         append(summary.trimEnd())
                         appendLine()
                         appendLine("hdrNetExposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL")
-                        appendLine("hdrNetExposureGrid=64x48_PAIRED_LOG2_REC709")
-                        appendLine(
-                            "hdrNetShortExposureAdjustmentEv=" +
-                                output.hdrNetShortExposureAdjustmentEv,
-                        )
-                        appendLine(
-                            "hdrNetLongExposureAdjustmentEv=" +
-                                output.hdrNetLongExposureAdjustmentEv,
-                        )
+                        appendLine("hdrNetExposureGrid=8x6_WEIGHTED_DIRECT_LOG2_EV")
                         appendLine("hdrNetFinalShortGain=$outputShortGain")
                         appendLine("hdrNetFinalLongGain=${outputShortGain * outputHdrRatio}")
                         appendLine("hdrNetFinalHdrRatio=$outputHdrRatio")
-                        output.hdrNetExposureEvaluation?.let { evaluation ->
-                            appendLine(
-                                "hdrNetExposureCenterErrorEv=${evaluation.centerErrorEv}",
-                            )
-                            appendLine(
-                                "hdrNetExposureSpanErrorEv=${evaluation.spanErrorEv}",
-                            )
-                            appendLine(
-                                "hdrNetExposureCurveSlopeError=" +
-                                    evaluation.curveSlopeError,
-                            )
-                            appendLine(
-                                "hdrNetExposureReferenceSpanEv=" +
-                                    evaluation.referenceSpanEv,
-                            )
-                            appendLine(
-                                "hdrNetExposureMedianLog2Ratio=${evaluation.medianLog2Ratio}",
-                            )
-                            appendLine(
-                                "hdrNetExposureRobustLog2Loss=${evaluation.robustLog2Loss}",
-                            )
-                            appendLine(
-                                "hdrNetExposureMeanAbsoluteLog2Ratio=" +
-                                    evaluation.meanAbsoluteLog2Ratio,
-                            )
-                            appendLine(
-                                "hdrNetExposureMeanPerceptualLightnessError=" +
-                                    evaluation.meanAbsolutePerceptualLightnessError,
-                            )
-                            appendLine("hdrNetExposureMatchRate=${evaluation.matchRate}")
-                            appendLine(
-                                "hdrNetExposureCoordinateEdges=" +
-                                    evaluation.coordinateComparedEdgeCount,
-                            )
-                            appendLine(
-                                "hdrNetExposureCoordinateMatchRate=" +
-                                    evaluation.coordinateMatchRate,
-                            )
-                            appendLine(
-                                "hdrNetExposureCoordinatesMatched=" +
-                                    evaluation.coordinatesMatched,
-                            )
-                            appendLine(
-                                "hdrNetExposureRecommendedCorrectionEv=" +
-                                    evaluation.recommendedExposureCorrectionEv,
-                            )
-                            appendLine(
-                                "hdrNetExposureHighlightTargetErrorEv=" +
-                                    evaluation.highlightTargetErrorEv,
-                            )
-                            appendLine(
-                                "hdrNetExposureShadowTargetErrorEv=" +
-                                    evaluation.shadowTargetErrorEv,
-                            )
-                            appendLine(
-                                "hdrNetExposureShortTargetCorrectionEv=" +
-                                    evaluation.shortTargetCorrectionEv,
-                            )
-                            appendLine(
-                                "hdrNetExposureLongTargetCorrectionEv=" +
-                                    evaluation.longTargetCorrectionEv,
-                            )
-                            appendLine("hdrNetExposureConverged=${evaluation.converged}")
-                            appendLine(
-                                "hdrNetExposureFallback1d=" +
-                                    evaluation.usedOneDimensionalFallback,
-                            )
-                            appendLine(
-                                "hdrNetExposureJacobianNormalizedDeterminant=" +
-                                    evaluation.jacobianNormalizedDeterminant,
-                            )
-                            appendLine(
-                                "hdrNetExposureCandidateCount=" +
-                                    evaluation.evaluatedCandidateCount,
-                            )
-                        }
                     }.trimEnd()
                 }
                 val captureProfileFailed =
@@ -3487,11 +3465,7 @@ class RawDemosaicProcessor {
                         "${regeneratedPhotonPgtm.map.mapPointsV}x" +
                         regeneratedPhotonPgtm.map.mapPointsN +
                         " hdrRatio=${regeneratedPhotonPgtm.hdrRatio}" +
-                        " finalShortGain=${regeneratedPhotonPgtm.sourceToShortGain}" +
-                        " shortExposureAdjustmentEv=" +
-                        regeneratedPhotonPgtm.hdrNetShortExposureAdjustmentEv +
-                        " longExposureAdjustmentEv=" +
-                        regeneratedPhotonPgtm.hdrNetLongExposureAdjustmentEv,
+                        " finalShortGain=${regeneratedPhotonPgtm.sourceToShortGain}",
                 )
             }
 
@@ -6709,7 +6683,9 @@ class RawDemosaicProcessor {
         fullImageWidth: Int = metadata.width,
         fullImageHeight: Int = metadata.height,
         viewportWidth: Int = metadata.width,
-        viewportHeight: Int = metadata.height
+        viewportHeight: Int = metadata.height,
+        globalWidth: Int = viewportWidth,
+        globalHeight: Int = viewportHeight,
     ): RawCombinedRenderOutput? {
         val outputTransform = computeWorkingToOutputTransform(outputWorkingColorSpace, ColorSpace.SRGB)
         setupEngineToneFramebuffer(viewportWidth, viewportHeight)
@@ -6729,6 +6705,8 @@ class RawDemosaicProcessor {
                 globalOriginY = globalOriginY,
                 fullImageWidth = fullImageWidth,
                 fullImageHeight = fullImageHeight,
+                globalWidth = globalWidth,
+                globalHeight = globalHeight,
                 rawToneMappingParameters = rawToneMappingParameters,
                 outputTransform = outputTransform,
                 viewportWidth = viewportWidth,
@@ -6847,7 +6825,9 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters,
         outputTransform: FloatArray,
         viewportWidth: Int,
-        viewportHeight: Int
+        viewportHeight: Int,
+        globalWidth: Int = viewportWidth,
+        globalHeight: Int = viewportHeight,
     ): Boolean {
         return engineTonePass.render(
             RawEngineTonePass.Input(
@@ -6863,6 +6843,8 @@ class RawDemosaicProcessor {
                 fullImageHeight = fullImageHeight,
                 width = viewportWidth,
                 height = viewportHeight,
+                globalWidth = globalWidth,
+                globalHeight = globalHeight,
                 toneMappingParameters = rawToneMappingParameters,
                 profileExposure = profileExposureUniforms,
                 dcpRenderPlan = dcpRenderPlan,
@@ -8019,7 +8001,6 @@ class RawDemosaicProcessor {
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
         restoreSourceBaselineExposure: Boolean = false,
     ): RawSceneExposureResult? {
-        val inputPreparationStartedNs = System.nanoTime()
         return try {
             val width = RawSceneExposureMath.INPUT_WIDTH
             val height = RawSceneExposureMath.INPUT_HEIGHT
@@ -8098,18 +8079,15 @@ class RawDemosaicProcessor {
             } else {
                 1f
             }
-            val meteringInputSource: String
             val cameraRgb: FloatArray
             val lensShadingStats: RawSceneAERawStats?
             if (baseFrameMetering != null) {
-                meteringInputSource = "BASE_RAW_SENSOR"
                 cameraRgb = baseFrameMetering.sensorRgb
                 lensShadingStats = suppliedFastMomentsRawStats
             } else {
                 // Regenerated/standalone DNGs cannot recover the selected burst base frame. The
                 // demosaic output is camera RGB with LSC already applied, so only use it as an
                 // explicit fallback and keep all remaining MGC color operations on the CPU.
-                meteringInputSource = "RENDERED_CAMERA_RGB_FALLBACK"
                 lensShadingStats = null
                 val areaSampleFootprint = floatArrayOf(
                     (normalizedBounds[2] - normalizedBounds[0]) / width.toFloat(),
@@ -8155,7 +8133,6 @@ class RawDemosaicProcessor {
             } else {
                 metadata
             }
-            val meteringStartedNs = System.nanoTime()
             val meteringRgb = RawSceneExposureMath.prepareFastMomentsMeteringRgb(
                 cameraRgb = cameraRgb,
                 width = width,
@@ -8165,60 +8142,6 @@ class RawDemosaicProcessor {
                 rgbTransform = meteringRgbTransform,
                 lensShadingStats = lensShadingStats,
             ) ?: return null
-            val meteringCompletedNs = System.nanoTime()
-            val meteringRgbMean = FloatArray(3)
-            val meteringRgbMax = FloatArray(3)
-            for (pixel in 0 until width * height) {
-                for (channel in 0..2) {
-                    val value = meteringRgb[pixel * 3 + channel]
-                    meteringRgbMean[channel] += value
-                    if (value > meteringRgbMax[channel]) meteringRgbMax[channel] = value
-                }
-            }
-            for (channel in 0..2) meteringRgbMean[channel] /= (width * height).toFloat()
-            val baseFrameHasLensShading = baseFrameMetering?.let { metering ->
-                metering.lensShadingMap != null &&
-                    metering.lensShadingMapWidth > 0 && metering.lensShadingMapHeight > 0 &&
-                    metering.lensShadingMap.size >=
-                    metering.lensShadingMapWidth * metering.lensShadingMapHeight * 4
-            } == true
-            val diagnosticsCompletedNs = System.nanoTime()
-            fun elapsedMs(startedNs: Long, completedNs: Long): Float =
-                (completedNs - startedNs).toFloat() / 1_000_000f
-            PLog.i(
-                TAG,
-                "RAW_SCENE_EXPOSURE stage=INPUT_PREP_TIMING " +
-                    "setupMs=${elapsedMs(inputPreparationStartedNs, meteringStartedNs)} " +
-                    "fastMeteringMs=${elapsedMs(meteringStartedNs, meteringCompletedNs)} " +
-                    "diagnosticsMs=${elapsedMs(meteringCompletedNs, diagnosticsCompletedNs)} " +
-                    "totalMs=${elapsedMs(inputPreparationStartedNs, diagnosticsCompletedNs)}",
-            )
-            PLog.i(
-                TAG,
-                    "RAW_SCENE_EXPOSURE stage=INPUT_COLOR_CONTRACT " +
-                    "meteringSource=$meteringInputSource " +
-                    "meteringGeometry=${if (baseFrameMetering != null) {
-                        "MGC_RAW_ROWS_X1_OR_X4_GROUPS_DIRECT_64X64"
-                    } else {
-                        "RENDERED_CAMERA_RGB_AREA_64X64_FALLBACK"
-                    }} " +
-                    "sourceBaselineRestored=$restoreFallbackBaselineExposure " +
-                    "sourceBaselineGain=$sourceBaselineGain " +
-                    "lscSource=${when {
-                        baseFrameHasLensShading -> "BASE_RAW_CAPTURE_MAP"
-                        baseFrameMetering != null -> "UNITY"
-                        else -> "RENDERED_CAMERA_RGB"
-                    }} " +
-                    "gainsSource=${if (camera2Gains != null) "CAMERA2_CAPTURE_RESULT" else "DNG_WHITE_BALANCE_FALLBACK"} " +
-                    "matrixSource=${if (camera2Transform != null) "CAMERA2_CAPTURE_RESULT" else "DNG_COLOR_SPEC_FALLBACK"} " +
-                    "camera2ColorCorrectionMode=${metadata.camera2ColorCorrectionMode} " +
-                    "rggbGains=${gains.contentToString()} " +
-                    "rgbGains=${rgbGains.contentToString()} " +
-                    "rgb2rgb=${meteringRgbTransform.contentToString()} " +
-                    "rawAeBounds=$rawAeBounds " +
-                    "meteringRgbMean=${meteringRgbMean.contentToString()} " +
-                    "meteringRgbMax=${meteringRgbMax.contentToString()}",
-            )
 
             val fastMomentsStats = suppliedFastMomentsRawStats ?: if (
                 rawSamplesPerPixel == 1 && rawTextureIdForStats != 0
@@ -8372,15 +8295,23 @@ class RawDemosaicProcessor {
         rawWhitePointCorrection: Float,
         outputSourceBounds: Rect,
         outputRotation: Int,
+        applyProfileGainTableMap: Boolean = false,
     ): Float? {
         val width = request.width.coerceAtLeast(1)
         val height = request.height.coerceAtLeast(1)
+        val normalizedRotation = Math.floorMod(outputRotation, 360)
+        if (normalizedRotation != 0 && normalizedRotation != 90 &&
+            normalizedRotation != 180 && normalizedRotation != 270
+        ) {
+            return null
+        }
+        val swapsAxes = normalizedRotation == 90 || normalizedRotation == 270
+        val renderWidth = if (swapsAxes) height else width
+        val renderHeight = if (swapsAxes) width else height
         return try {
-            setupLinearExposurePreviewFramebuffer(width, height)
-            val matchingSourceBounds = RawLegacyAutoExposureMatcher.centeredBounds(
-                outputBounds = outputSourceBounds,
-                centerFractionPerAxis = request.scalarMatchingCenterFractionPerAxis,
-            ) ?: return null
+            setupLinearExposurePreviewFramebuffer(renderWidth, renderHeight)
+            setupSharpenFramebuffer(width, height)
+            val matchingSourceBounds = outputSourceBounds
             val normalizedBounds = floatArrayOf(
                 matchingSourceBounds.left.toFloat() / metadata.width.toFloat(),
                 matchingSourceBounds.top.toFloat() / metadata.height.toFloat(),
@@ -8388,27 +8319,29 @@ class RawDemosaicProcessor {
                 matchingSourceBounds.bottom.toFloat() / metadata.height.toFloat(),
             )
             val areaSampleFootprint = floatArrayOf(
-                (normalizedBounds[2] - normalizedBounds[0]) / width.toFloat(),
-                (normalizedBounds[3] - normalizedBounds[1]) / height.toFloat(),
+                (normalizedBounds[2] - normalizedBounds[0]) / renderWidth.toFloat(),
+                (normalizedBounds[3] - normalizedBounds[1]) / renderHeight.toFloat(),
             )
-            // Candidate exposure is applied through the same Adobe/DNG exposure ramp used by the
-            // final render. The camera-to-profile conversion itself remains exposure-neutral.
+            // Dehaze is globally bypassed. Match the remaining final Adobe path exactly: apply
+            // the selected HueSatMap in profile-linear space, then PGTM (when requested), the DNG
+            // exposure ramp, black/white adjustment, sRGB encoding, and final output rotation.
+            // Keeping PGTM before rotation also preserves the map's sensor-space coordinates.
             renderLinearRcdPass(
                 metadata = metadata,
                 sourceTextureId = sourceTextureId,
                 targetFramebufferId = linearExposurePreviewFramebufferId,
-                viewportWidth = width,
-                viewportHeight = height,
+                viewportWidth = renderWidth,
+                viewportHeight = renderHeight,
                 rawExposureCompensation = 0f,
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 cameraWhite = cameraWhite,
-                hueSatMap = null,
+                hueSatMap = dcpRenderPlan?.hueSatMap,
                 applyDngBaselineExposure = false,
                 clampProfileRgb = true,
                 hueSatMapSupportsOverrange = dcpRenderPlan?.supportsOverrange == true,
                 textureBounds = normalizedBounds,
                 areaSampleFootprint = areaSampleFootprint,
-                textureRotation = outputRotation,
+                textureRotation = 0,
                 label = "RawViewfinderBrightnessMatchLinearPass",
             )
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -8476,14 +8409,48 @@ class RawDemosaicProcessor {
                             rawWhitesAdjustment = rawWhitePointCorrection,
                             rawToneMappingParameters = RawToneMappingParameters.DEFAULT
                                 .withPhotonHdr(false),
-                            applyProfileGainTableMap = false,
-                            viewportWidth = width,
-                            viewportHeight = height,
+                            applyProfileGainTableMap = applyProfileGainTableMap,
+                            globalOriginX = matchingSourceBounds.left,
+                            globalOriginY = matchingSourceBounds.top,
+                            fullImageWidth = metadata.width,
+                            fullImageHeight = metadata.height,
+                            viewportWidth = renderWidth,
+                            viewportHeight = renderHeight,
+                            globalWidth = matchingSourceBounds.width(),
+                            globalHeight = matchingSourceBounds.height(),
                         )
                         if (rendered == null) {
                             null
                         } else {
-                            readLegacyExposurePreviewFrame(width, height, readback)
+                            val orientedBounds = Rect(
+                                0,
+                                0,
+                                renderWidth,
+                                renderHeight,
+                            ).toOutputBounds(normalizedRotation)
+                            val oriented = outputPass.render(
+                                RawOutputPass.Input(
+                                    textureId = rendered.encodedTextureId,
+                                    sourceWidth = renderWidth,
+                                    sourceHeight = renderHeight,
+                                    rotation = normalizedRotation,
+                                    bounds = orientedBounds,
+                                    targetFramebufferId = sharpenFramebufferId,
+                                    targetTextureId = sharpenTextureId,
+                                    targetWidth = width,
+                                    targetHeight = height,
+                                ),
+                            )
+                            if (oriented == null) {
+                                null
+                            } else {
+                                readLegacyExposurePreviewFrame(
+                                    width = width,
+                                    height = height,
+                                    readback = readback,
+                                    framebufferId = sharpenFramebufferId,
+                                )
+                            }
                         }
                     },
                     maximumExposureEv,
@@ -8501,11 +8468,12 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         readback: ByteBuffer,
+        framebufferId: Int,
     ): RawLegacyExposurePreviewFrame? {
         val pixelCount = width * height
         readback.clear()
         readback.limit(pixelCount * 4)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, combinedFramebufferId)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
         GLES30.glReadPixels(

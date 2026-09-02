@@ -192,23 +192,6 @@ float InputForAcrOutput(float output, const float* curve, int curve_count) {
   return (lower_index + amount) / static_cast<float>(curve_count - 1);
 }
 
-float SmoothStep(float edge_0, float edge_1, float value) {
-  const float amount = std::clamp(
-      (value - edge_0) / std::max(edge_1 - edge_0, 1.0e-6f), 0.0f, 1.0f);
-  return amount * amount * (3.0f - 2.0f * amount);
-}
-
-float DiagnosticMask(float input, float start, float end, float feather) {
-  const float enter = start <= 0.0f || feather <= 0.0f
-                          ? (input >= start ? 1.0f : 0.0f)
-                          : SmoothStep(start - feather, start + feather, input);
-  const float exit = end >= 1.0f || feather <= 0.0f
-                         ? (input <= end ? 1.0f : 0.0f)
-                         : 1.0f -
-                               SmoothStep(end - feather, end + feather, input);
-  return std::clamp(std::min(enter, exit), 0.0f, 1.0f);
-}
-
 bool IsFiniteArray(const float* values, int count) {
   for (int index = 0; index < count; ++index) {
     if (!std::isfinite(values[index])) return false;
@@ -389,8 +372,6 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     jfloat min_table_gain, jfloat max_table_gain,
     jfloatArray guide_shifts_array,
     jfloatArray guide_slopes_array, jfloatArray acr_curve_array,
-    jfloat diagnostic_start, jfloat diagnostic_end,
-    jfloat diagnostic_feather, jint diagnostic_mode,
     jfloatArray output_gains_array) {
   if (coefficients_array == nullptr || guide_shifts_array == nullptr ||
       guide_slopes_array == nullptr || acr_curve_array == nullptr ||
@@ -407,8 +388,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       !std::isfinite(render_max_gain_blend_threshold) ||
       render_max_gain_blend_threshold < 0.0f ||
       !std::isfinite(min_table_gain) || min_table_gain <= 0.0f ||
-      !std::isfinite(max_table_gain) || max_table_gain < min_table_gain ||
-      diagnostic_mode < -1 || diagnostic_mode > 1) {
+      !std::isfinite(max_table_gain) || max_table_gain < min_table_gain) {
     LogError("Rejected invalid HDRNet PGTM parameters");
     return JNI_FALSE;
   }
@@ -431,16 +411,6 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     LogError("Rejected mismatched HDRNet PGTM array geometry");
     return JNI_FALSE;
   }
-  if (diagnostic_mode >= 0 &&
-      (!std::isfinite(diagnostic_start) ||
-       !std::isfinite(diagnostic_end) ||
-       !std::isfinite(diagnostic_feather) ||
-       diagnostic_start < 0.0f || diagnostic_end > 1.0f ||
-       diagnostic_end <= diagnostic_start || diagnostic_feather < 0.0f)) {
-    LogError("Rejected invalid HDRNet diagnostic band");
-    return JNI_FALSE;
-  }
-
   ScopedFloatArray coefficients(env, coefficients_array);
   ScopedFloatArray guide_shifts(env, guide_shifts_array);
   ScopedFloatArray guide_slopes(env, guide_slopes_array);
@@ -543,17 +513,9 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
         // pending exposure. The subsequent exposure ramp then restores pre_curve_target exactly.
         const float baseline_applied_source_intensity =
             short_intensity * renderer_baseline_gain / source_to_short_gain;
-        float gain = std::clamp(
+        const float gain = std::clamp(
             pre_curve_target / baseline_applied_source_intensity, min_table_gain,
             max_table_gain);
-        if (diagnostic_mode >= 0) {
-          const float mask =
-              DiagnosticMask(short_intensity, diagnostic_start,
-                             diagnostic_end, diagnostic_feather);
-          gain = diagnostic_mode == 0 ? Lerp(1.0f, gain, mask)
-                                      : Lerp(gain, 1.0f, mask);
-          gain = std::clamp(gain, min_table_gain, max_table_gain);
-        }
         gain_curve[point] = gain;
       }
     }

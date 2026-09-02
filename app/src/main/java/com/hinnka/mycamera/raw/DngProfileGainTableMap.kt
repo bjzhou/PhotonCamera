@@ -47,6 +47,33 @@ data class DngProfileGainTableMap(
             )
     }
 
+    /**
+     * Preserves the map's source-linear lookup coordinate when TotalBaselineExposure changes.
+     *
+     * DNG renderers multiply [mapInputWeights] by TotalBaselineExposure before indexing the
+     * table. The generated gain curves remain unchanged; only the weights need the inverse gain
+     * ratio. Both EV values must therefore include the selected profile's BaselineExposureOffset.
+     */
+    fun rebasedForRendererBaseline(
+        fromTotalBaselineExposureEv: Float,
+        toTotalBaselineExposureEv: Float,
+    ): DngProfileGainTableMap? {
+        if (!fromTotalBaselineExposureEv.isFinite() ||
+            !toTotalBaselineExposureEv.isFinite()
+        ) {
+            return null
+        }
+        val fromGain = DngBaselineExposure.exactGain(fromTotalBaselineExposureEv)
+        val toGain = DngBaselineExposure.exactGain(toTotalBaselineExposureEv)
+        val weightScale = fromGain / toGain
+        if (!weightScale.isFinite() || weightScale <= 0f) return null
+        val rebasedWeights = FloatArray(mapInputWeights.size) { index ->
+            mapInputWeights[index] * weightScale
+        }
+        if (rebasedWeights.any { !it.isFinite() }) return null
+        return copy(mapInputWeights = rebasedWeights)
+    }
+
     fun encodeProfileGainTableMap2(byteOrder: ByteOrder): ByteArray {
         require(isValid) { "Invalid ProfileGainTableMap2" }
         val gainMin = gains.minOrNull()

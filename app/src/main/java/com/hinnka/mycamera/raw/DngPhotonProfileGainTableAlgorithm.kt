@@ -807,38 +807,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
         uniform float uGuideAlpha;
         uniform float uMinTableGain;
         uniform float uMaxTableGain;
-        uniform int uDiagnosticMode;
-        uniform float uDiagnosticStart;
-        uniform float uDiagnosticEnd;
-        uniform float uDiagnosticFeather;
         const float CURVE_EPS = 1e-6;
-
-        float smoothUnit(float edge0, float edge1, float value) {
-            float amount = clamp(
-                (value - edge0) / max(edge1 - edge0, CURVE_EPS),
-                0.0,
-                1.0
-            );
-            return amount * amount * (3.0 - 2.0 * amount);
-        }
-
-        float diagnosticMask(float inputValue) {
-            float enter = uDiagnosticStart <= 0.0 || uDiagnosticFeather <= 0.0
-                ? (inputValue >= uDiagnosticStart ? 1.0 : 0.0)
-                : smoothUnit(
-                    uDiagnosticStart - uDiagnosticFeather,
-                    uDiagnosticStart + uDiagnosticFeather,
-                    inputValue
-                );
-            float exit = uDiagnosticEnd >= 1.0 || uDiagnosticFeather <= 0.0
-                ? (inputValue <= uDiagnosticEnd ? 1.0 : 0.0)
-                : 1.0 - smoothUnit(
-                    uDiagnosticEnd - uDiagnosticFeather,
-                    uDiagnosticEnd + uDiagnosticFeather,
-                    inputValue
-                );
-            return clamp(min(enter, exit), 0.0, 1.0);
-        }
 
         void main() {
             int outputIndex = int(gl_GlobalInvocationID.x);
@@ -873,20 +842,8 @@ internal object DngPhotonLocalToneMapGpuShaders {
                 uMinTableGain,
                 uMaxTableGain
             );
-            float finalGain = trueGain;
-            if (uDiagnosticMode >= 0) {
-                float mask = diagnosticMask(sourceInput);
-                finalGain = uDiagnosticMode == 0
-                    ? mix(1.0, trueGain, mask)
-                    : mix(trueGain, 1.0, mask);
-            }
-            float outputGain = clamp(
-                finalGain,
-                uMinTableGain,
-                uMaxTableGain
-            );
-            gainCurves[outputIndex] = outputGain;
-            imageStore(uGainTexture, ivec2(point, cell), vec4(outputGain, 0.0, 0.0, 1.0));
+            gainCurves[outputIndex] = trueGain;
+            imageStore(uGainTexture, ivec2(point, cell), vec4(trueGain, 0.0, 0.0, 1.0));
         }
     """.trimIndent()
 
@@ -1415,9 +1372,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val map: DngProfileGainTableMap,
         val hdrRatio: Float? = null,
         val sourceToShortGain: Float? = null,
-        val hdrNetShortExposureAdjustmentEv: Float,
-        val hdrNetLongExposureAdjustmentEv: Float,
-        val hdrNetExposureEvaluation: RawHdrNetExposureEvaluation? = null,
     )
 
     private data class GpuPhotonGainCurves(
@@ -1428,8 +1382,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
     private data class HdrNetInferenceCandidate(
         val plan: HdrNetProfileGainTablePlan,
         val coefficients: FloatArray,
-        val shortAdjustmentEv: Float,
-        val longAdjustmentEv: Float,
     )
 
     private var cellSamplesProgram = 0
@@ -1474,11 +1426,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
         return when (input.mode) {
             Mode.HDR_NET -> generate(input)
             Mode.LOCAL_LAPLACIAN -> generateLocalLaplacian(input)?.let { map ->
-                Output(
-                    map = map,
-                    hdrNetShortExposureAdjustmentEv = 0f,
-                    hdrNetLongExposureAdjustmentEv = 0f,
-                )
+                Output(map = map)
             }
         }
     }
@@ -1535,12 +1483,9 @@ internal class DngPhotonProfileGainTableAlgorithm {
             extentV = stage3Bounds.height().toDouble() / height.toDouble(),
         )
         val basePlan = DngPhotonProfileGainTableGenerator.hdrNetPlan(
-            sourceWidth = width,
-            sourceHeight = height,
             rendererBaselineExposureEv = input.rendererBaselineExposureEv,
             hdrRatio = input.hdrRatio,
             sourceToShortGain = input.sourceToShortGain,
-            diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG HDRNet capture"),
             samplingArea = samplingArea,
         ) ?: return null
         val interpreter = ensureHdrNetInterpreter(input.context) ?: return null
@@ -1580,7 +1525,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
             return null
         }
         val bufferIds = IntArray(2)
-        val totalStartNs = System.nanoTime()
         GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
         try {
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferIds[0])
@@ -1648,9 +1592,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             val baseShortGain = basePlan.sourceToShortGain
             val baseLongGain = baseShortGain * basePlan.hdrRatio
-            var totalInputNs = 0L
-            var totalInferenceNs = 0L
-            var totalMatchGridNs = 0L
             val modelInputBuffer = ByteBuffer.allocateDirect(inputFloatCount * Float.SIZE_BYTES)
                 .order(ByteOrder.nativeOrder())
             val modelOutputBuffer = ByteBuffer.allocateDirect(
@@ -1664,20 +1605,12 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 val candidateHdrRatio = longGain / shortGain
                 if (!candidateHdrRatio.isFinite() || candidateHdrRatio < 1f) return null
                 return DngPhotonProfileGainTableGenerator.hdrNetPlan(
-                    sourceWidth = width,
-                    sourceHeight = height,
                     rendererBaselineExposureEv = input.rendererBaselineExposureEv,
                     hdrRatio = candidateHdrRatio,
                     sourceToShortGain = shortGain,
-                    diagnosticBand = DngPgtmDiagnostic.activeBandForSource(
-                        "$TAG HDRNet capture",
-                    ),
                     samplingArea = samplingArea,
                 )
             }
-
-            fun exposureAdjustmentEv(gain: Float, baseGain: Float): Float =
-                (ln((gain / baseGain).toDouble()) / ln(2.0)).toFloat()
 
             fun runCandidate(
                 shortGain: Float,
@@ -1685,7 +1618,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
             ): Pair<HdrNetInferenceCandidate, FloatArray>? {
                 val candidatePlan = planCandidate(shortGain, longGain) ?: return null
 
-                val inputStartNs = System.nanoTime()
                 GLES31.glUseProgram(hdrNetInputProgram)
                 GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bufferIds[0])
                 GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, bufferIds[1])
@@ -1721,28 +1653,16 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     PLog.e(TAG, "HDRNet input contains a non-finite value")
                     return null
                 }
-                totalInputNs += System.nanoTime() - inputStartNs
-                logHdrNetInputContract(
-                    input = input,
-                    plan = candidatePlan,
-                    colorCorrectionMatrix = safeColorCorrectionMatrix,
-                    values = inputFloats,
-                )
-
                 modelInputBuffer.clear()
                 modelInputBuffer.asFloatBuffer().put(inputFloats)
                 modelInputBuffer.rewind()
                 modelOutputBuffer.clear()
-                val inferenceStartNs = System.nanoTime()
                 interpreter.run(modelInputBuffer, modelOutputBuffer)
-                totalInferenceNs += System.nanoTime() - inferenceStartNs
                 modelOutputBuffer.rewind()
                 val coefficients = FloatArray(
                     DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
                 )
                 modelOutputBuffer.asFloatBuffer().get(coefficients)
-                logHdrNetOutputContract(coefficients, candidatePlan.hdrRatio)
-                val matchGridStartNs = System.nanoTime()
                 val displayLinearLumaGrid =
                     DngPhotonProfileGainTableGenerator.hdrNetDisplayLinearLumaGrid(
                         plan = candidatePlan,
@@ -1750,20 +1670,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                         modelInput = inputFloats,
                         outputRotation = input.outputRotation,
                     )
-                val matchGridNs = System.nanoTime() - matchGridStartNs
-                totalMatchGridNs += matchGridNs
-                PLog.d(
-                    TAG,
-                    "HDRNet viewfinder grid: shortGain=$shortGain longGain=$longGain " +
-                        "hdrRatio=${candidatePlan.hdrRatio} " +
-                        "gridMs=${matchGridNs / 1_000_000f}",
-                )
                 if (displayLinearLumaGrid == null) return null
                 return HdrNetInferenceCandidate(
                     plan = candidatePlan,
                     coefficients = coefficients,
-                    shortAdjustmentEv = exposureAdjustmentEv(shortGain, baseShortGain),
-                    longAdjustmentEv = exposureAdjustmentEv(longGain, baseLongGain),
                 ) to displayLinearLumaGrid
             }
 
@@ -1775,18 +1685,15 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     evaluateCandidate = ::runCandidate,
                 )
             }
-            val selectedCandidate = exposureResult?.payload
+            val selectedCandidate = exposureResult
                 ?: runCandidate(baseShortGain, baseLongGain)?.first
                 ?: return null
             val plan = selectedCandidate.plan
             val coefficients = selectedCandidate.coefficients
-            val pgtmStartNs = System.nanoTime()
             val map = DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(
                 plan = plan,
                 coefficients = coefficients,
             ) ?: return null
-//            logHdrNetGainTableContract(map)
-            val pgtmReadyNs = System.nanoTime()
             val textureId = uploadProfileGainTableTexture(map) ?: return null
             try {
                 input.installProfileGainTableTexture(map, textureId)
@@ -1794,106 +1701,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
                 throw error
             }
-            val totalReadyNs = System.nanoTime()
-            PLog.d(
-                TAG,
-                "HDRNet PGTM ready: input=${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH}x" +
-                    "${DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT}x4 " +
-                    "modelGrid=${DngPhotonProfileGainTableGenerator.HDRNET_GRID_WIDTH}x" +
-                    "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_HEIGHT}x" +
-                    "${DngPhotonProfileGainTableGenerator.HDRNET_GRID_DEPTH} " +
-                    "pgtmGrid=${plan.grid.mapPointsH}x${plan.grid.mapPointsV} " +
-                    "hdrRatio=${plan.hdrRatio} " +
-                    "rendererBaselineGain=${plan.rendererBaselineGain} " +
-                    "sourceToShortGain=${plan.sourceToShortGain} " +
-                    "hdrNetTotalInputGain=${plan.hdrNetInputScale} " +
-                    "mapInputWeightSum=${plan.mapInputWeightSum} " +
-                    "mapInputEffectiveScale=${plan.rendererMapInputEffectiveScale} " +
-                    "mapInputInvariantError=" +
-                    "${plan.rendererMapInputEffectiveScale - plan.hdrNetInputScale} " +
-                    "modelInputChannels=R_G_B_LONG_LUMA " +
-                    "modelInputFinalClamp=UPPER_ONE_ONLY_NEGATIVE_PRESERVED " +
-                    "modelInputHueSat=false " +
-                    "modelInputAux=MIN_REC601_LUMA_X_HDR_RATIO_12 " +
-                    "hdrRatioDomain=MODEL_AUX_AND_POST_INFERENCE_COEFFICIENT_UNROLL " +
-                    "baselineAppliedToHdrNetInput=false " +
-                    "baselineAppliedToViewfinderMatch=false " +
-                    "baselineRole=DNG_RENDER_COORDINATE_ONLY " +
-                    "mapInputDomain=RAW_X_FINAL_SHORT_GAIN " +
-                    "pgtmBaselineCancelledFromInputCoordinate=true " +
-                    "exposureSolve=${exposureResult != null} " +
-                    "exposureMetric=PERCEPTUAL_LSTAR_GRID_MATCH_RATE " +
-                    "exposureCandidateDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
-                    "exposureReferenceDomain=DISPLAY_LINEAR_REC709_LUMA_GRID " +
-                    "exposureSpatialWeight=CLASSIC_REFERENCE_ENDPOINT_RELIABILITY " +
-                    "exposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL " +
-                    "exposureReferenceAvailable=${input.viewfinderReference != null} " +
-                    "exposureOutputRotation=${input.outputRotation} " +
-                    "exposureAdjustmentMode=HIGHLIGHT_SHORT_SHADOW_LONG_GRID_GUIDED " +
-                    "exposureConvergenceCondition=GRID_MATCH_RATE_ONLY " +
-                    "exposureBaseShortGain=$baseShortGain " +
-                    "exposureBaseLongGain=$baseLongGain " +
-                    "exposureBaseHdrRatio=${basePlan.hdrRatio} " +
-                    "exposureShortAdjustmentEv=${selectedCandidate.shortAdjustmentEv} " +
-                    "exposureLongAdjustmentEv=${selectedCandidate.longAdjustmentEv} " +
-                    "exposureFinalShortGain=${plan.sourceToShortGain} " +
-                    "exposureFinalLongGain=${plan.sourceToShortGain * plan.hdrRatio} " +
-                    "exposureFinalHdrRatio=${plan.hdrRatio} " +
-                    "exposureMedianLog2Ratio=" +
-                    "${exposureResult?.evaluation?.medianLog2Ratio} " +
-                    "exposureCenterErrorEv=" +
-                    "${exposureResult?.evaluation?.centerErrorEv} " +
-                    "exposureSpanErrorEv=" +
-                    "${exposureResult?.evaluation?.spanErrorEv} " +
-                    "exposureCurveSlopeError=" +
-                    "${exposureResult?.evaluation?.curveSlopeError} " +
-                    "exposureReferenceSpanEv=" +
-                    "${exposureResult?.evaluation?.referenceSpanEv} " +
-                    "exposureHighlightTargetErrorEv=" +
-                    "${exposureResult?.evaluation?.highlightTargetErrorEv} " +
-                    "exposureShadowTargetErrorEv=" +
-                    "${exposureResult?.evaluation?.shadowTargetErrorEv} " +
-                    "exposureShortTargetCorrectionEv=" +
-                    "${exposureResult?.evaluation?.shortTargetCorrectionEv} " +
-                    "exposureLongTargetCorrectionEv=" +
-                    "${exposureResult?.evaluation?.longTargetCorrectionEv} " +
-                    "exposureRobustLog2Loss=" +
-                    "${exposureResult?.evaluation?.robustLog2Loss} " +
-                    "exposureMeanAbsoluteLog2Ratio=" +
-                    "${exposureResult?.evaluation?.meanAbsoluteLog2Ratio} " +
-                    "exposureMeanPerceptualLightnessError=" +
-                    "${exposureResult?.evaluation?.meanAbsolutePerceptualLightnessError} " +
-                    "exposureMatchRate=${exposureResult?.evaluation?.matchRate} " +
-                    "exposureCoordinateEdges=" +
-                    "${exposureResult?.evaluation?.coordinateComparedEdgeCount} " +
-                    "exposureCoordinateMatchRate=" +
-                    "${exposureResult?.evaluation?.coordinateMatchRate} " +
-                    "exposureCoordinatesMatched=" +
-                    "${exposureResult?.evaluation?.coordinatesMatched} " +
-                    "exposureRecommendedCorrectionEv=" +
-                    "${exposureResult?.evaluation?.recommendedExposureCorrectionEv} " +
-                    "exposureConverged=${exposureResult?.evaluation?.converged} " +
-                    "exposureFallback1d=" +
-                    "${exposureResult?.evaluation?.usedOneDimensionalFallback} " +
-                    "exposureJacobianNormalizedDeterminant=" +
-                    "${exposureResult?.evaluation?.jacobianNormalizedDeterminant} " +
-                    "exposureCandidateCount=" +
-                    "${exposureResult?.evaluation?.evaluatedCandidateCount} " +
-                    "stage3Source=${width}x$height linearRgbBounds=$hdrNetSourceBounds " +
-                    "processingBounds=$stage3Bounds samplingArea=$samplingArea " +
-                    "inputMs=${totalInputNs / 1_000_000f} " +
-                    "inferenceMs=${totalInferenceNs / 1_000_000f} " +
-                    "matchGridMs=${totalMatchGridNs / 1_000_000f} " +
-                    "pgtmMs=${(pgtmReadyNs - pgtmStartNs) / 1_000_000f} " +
-                    "totalMs=${(totalReadyNs - totalStartNs) / 1_000_000f}",
-            )
             return Output(
                 map = map,
                 hdrRatio = plan.hdrRatio,
                 sourceToShortGain = plan.sourceToShortGain,
-                hdrNetShortExposureAdjustmentEv = selectedCandidate.shortAdjustmentEv,
-                hdrNetLongExposureAdjustmentEv = selectedCandidate.longAdjustmentEv,
-                hdrNetExposureEvaluation = exposureResult?.evaluation,
             )
         } catch (error: Throwable) {
             PLog.e(TAG, "HDRNet ProfileGainTableMap generation failed", error)
@@ -1993,7 +1804,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
             emptyList()
         }
         val bufferIds = IntArray(2)
-        val totalStartNs = System.nanoTime()
         GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
         try {
             val sampleBufferId = bufferIds[0]
@@ -2122,7 +1932,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 RawToneMappingGl.transposeMatrix3x3(safeColorCorrectionMatrix),
                 0,
             )
-            val samplesGpuStartNs = System.nanoTime()
             if (streamingInput) {
                 val source = requireNotNull(streamingRawData)
                 streamingTiles.forEachIndexed { tileIndex, tile ->
@@ -2181,13 +1990,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
             )
             RawGlesProgram.logErrors("generateProfileGainTableMapOnGpu sample dispatch")
-            val samplesGpuReadyNs = System.nanoTime()
-
             val plan = DngPhotonProfileGainTableGenerator.plan(
                 width = width,
                 height = height,
                 baselineExposureEv = baselineExposureEv,
-                diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
                 samplingArea = PhotonPgtmSamplingArea(
                     originH = safeStatsBounds.left.toDouble() / rawTextureWidth,
                     originV = safeStatsBounds.top.toDouble() / rawTextureHeight,
@@ -2195,7 +2001,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     extentV = safeStatsBounds.height().toDouble() / rawTextureHeight,
                 ),
             ) ?: return null
-            val planReadyNs = System.nanoTime()
             if (plan.cellCount != cellCount) {
                 PLog.e(
                     TAG,
@@ -2204,12 +2009,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 return null
             }
 
-            val localToneMapGpuStartNs = System.nanoTime()
             val generated = generatePhotonProfileGainCurvesOnGpu(
                 plan = plan,
                 sampleBufferId = sampleBufferId,
             ) ?: return null
-            val localToneMapGpuReadyNs = System.nanoTime()
             val map =
                 DngPhotonProfileGainTableGenerator.mapFromGpuGains(plan, generated.gains)
                     ?: run {
@@ -2217,31 +2020,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                         return null
                     }
             input.installProfileGainTableTexture(map, generated.textureId)
-            val photonPlan = plan.photonPlan
-            val photonPreToneMapGain = photonPlan.exposureGain *
-                2.0f.pow(photonPlan.parameters.preToneMapExposureBoostEv)
-            PLog.d(
-                TAG,
-                "GPU Local Laplacian PGTM prepared: size=${width}x$height " +
-                    "source=${rawTextureWidth}x$rawTextureHeight " +
-                    "streaming=$streamingInput sampleTiles=${streamingTiles.size} " +
-                    "statsBounds=$safeStatsBounds " +
-                    "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
-                    "lsc=${input.lensShadingDescription} " +
-                    "warpCount=${activeWarpParameters.size / 8} " +
-                    "photonGuide=paperIntensity " +
-                    "hueSatOverrange=$hueSatMapSupportsOverrange " +
-                    "photonBaselineGain=${photonPlan.exposureGain} " +
-                    "photonPreToneMapGain=$photonPreToneMapGain " +
-                    "photonLlfLevels=${photonPlan.parameters.localLaplacianIntensityLevels} " +
-                    "photonRangeSigma=${photonPlan.parameters.localLaplacianRangeSigma} " +
-                    "photonBguRangeSigma=${photonPlan.parameters.bilateralRangeSigma} " +
-                    "samplesGpuMs=${(samplesGpuReadyNs - samplesGpuStartNs) / 1_000_000.0} " +
-                    "planCpuMs=${(planReadyNs - samplesGpuReadyNs) / 1_000_000.0} " +
-                    "localToneMapGpuMs=" +
-                    "${(localToneMapGpuReadyNs - localToneMapGpuStartNs) / 1_000_000.0} " +
-                    "totalMs=${(localToneMapGpuReadyNs - totalStartNs) / 1_000_000.0}",
-            )
             return map
         } catch (error: Exception) {
             PLog.e(TAG, "GPU RAW PGTM preparation failed", error)
@@ -2956,27 +2734,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             uniform1f(activeProgram, "uMinTableGain", photonPlan.minTableGain)
             uniform1f(activeProgram, "uMaxTableGain", photonPlan.maxTableGain)
-            val diagnosticMode = when (plan.diagnosticBand?.mode) {
-                DngPhotonProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
-                DngPhotonProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
-                null -> -1
-            }
-            uniform1i(activeProgram, "uDiagnosticMode", diagnosticMode)
-            uniform1f(
-                activeProgram,
-                "uDiagnosticStart",
-                plan.diagnosticBand?.start ?: 0f,
-            )
-            uniform1f(
-                activeProgram,
-                "uDiagnosticEnd",
-                plan.diagnosticBand?.end ?: 1f,
-            )
-            uniform1f(
-                activeProgram,
-                "uDiagnosticFeather",
-                plan.diagnosticBand?.feather ?: 0f,
-            )
             dispatch1d(gainFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
             GLES31.glMemoryBarrier(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
@@ -2991,9 +2748,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 floatCount = gainFloatCount,
                 label = "Photon PGTM gain curves",
             ) ?: return null
-            if (plan.diagnosticBand != null) {
-                PLog.d(TAG, summarizePhotonGainCurves(plan, gains))
-            }
             val result = GpuPhotonGainCurves(
                 gains = gains,
                 textureId = generatedTextureId,
@@ -3013,111 +2767,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 GLES30.glDeleteTextures(1, intArrayOf(generatedTextureId), 0)
             }
         }
-    }
-
-    private fun summarizePhotonGainCurves(
-        plan: PhotonProfileGainTablePlan,
-        gains: FloatArray,
-    ): String {
-        val photonPlan = plan.photonPlan
-        val pointCount = plan.pointCount
-        val gridWidth = plan.grid.mapPointsH
-        val gridHeight = plan.grid.mapPointsV
-        val firstVisiblePoint = max(1, ceil(0.02f * pointCount).toInt())
-        var gainMinimum = Float.POSITIVE_INFINITY
-        var gainMaximum = Float.NEGATIVE_INFINITY
-        var reversalCount = 0
-        var worstOutputDrop = 0f
-        var worstOutputDropCell = -1
-        var worstOutputDropPoint = -1
-        var maximumRangeGainRatio = 1f
-        var maximumRangeGainCell = -1
-        var maximumRangeGainPoint = -1
-        var maximumSpatialGainRatio = 1f
-        var maximumSpatialGainCell = -1
-        var maximumSpatialGainPoint = -1
-
-        fun gainRatio(first: Float, second: Float): Float {
-            val low = min(first, second).coerceAtLeast(1e-12f)
-            return max(first, second) / low
-        }
-
-        repeat(plan.cellCount) { cell ->
-            val curveOffset = cell * pointCount
-            var previousOutput = 0f
-            for (point in 0 until pointCount) {
-                val gain = gains[curveOffset + point]
-                gainMinimum = min(gainMinimum, gain)
-                gainMaximum = max(gainMaximum, gain)
-                val sourceInput = when (point) {
-                    0 -> 0f
-                    pointCount - 1 -> 1f
-                    else -> point.toFloat() / pointCount
-                }
-                val output = photonPlan.exposureGain * sourceInput * gain
-                if (point > 0 && output < previousOutput) {
-                    reversalCount++
-                    val drop = previousOutput - output
-                    if (drop > worstOutputDrop) {
-                        worstOutputDrop = drop
-                        worstOutputDropCell = cell
-                        worstOutputDropPoint = point
-                    }
-                }
-                if (point >= firstVisiblePoint) {
-                    val previousGain = gains[curveOffset + point - 1]
-                    val ratio = gainRatio(previousGain, gain)
-                    if (ratio > maximumRangeGainRatio) {
-                        maximumRangeGainRatio = ratio
-                        maximumRangeGainCell = cell
-                        maximumRangeGainPoint = point
-                    }
-                }
-                previousOutput = output
-            }
-        }
-
-        repeat(gridHeight) { y ->
-            repeat(gridWidth) { x ->
-                val cell = y * gridWidth + x
-                for (point in firstVisiblePoint until pointCount) {
-                    val gain = gains[cell * pointCount + point]
-                    if (x > 0) {
-                        val ratio = gainRatio(
-                            gain,
-                            gains[(cell - 1) * pointCount + point],
-                        )
-                        if (ratio > maximumSpatialGainRatio) {
-                            maximumSpatialGainRatio = ratio
-                            maximumSpatialGainCell = cell
-                            maximumSpatialGainPoint = point
-                        }
-                    }
-                    if (y > 0) {
-                        val ratio = gainRatio(
-                            gain,
-                            gains[(cell - gridWidth) * pointCount + point],
-                        )
-                        if (ratio > maximumSpatialGainRatio) {
-                            maximumSpatialGainRatio = ratio
-                            maximumSpatialGainCell = cell
-                            maximumSpatialGainPoint = point
-                        }
-                    }
-                }
-            }
-        }
-
-        fun ratioToEv(ratio: Float): Float =
-            (ln(ratio.coerceAtLeast(1f).toDouble()) / ln(2.0)).toFloat()
-
-        return "Photon PGTM curve diagnostics: gain=$gainMinimum..$gainMaximum " +
-            "outputReversals=$reversalCount worstOutputDrop=$worstOutputDrop " +
-            "atCell=$worstOutputDropCell point=$worstOutputDropPoint " +
-            "maxRangeGainStep=${ratioToEv(maximumRangeGainRatio)}EV " +
-            "atCell=$maximumRangeGainCell point=$maximumRangeGainPoint " +
-            "maxSpatialNeighborStep=${ratioToEv(maximumSpatialGainRatio)}EV " +
-            "atCell=$maximumSpatialGainCell point=$maximumSpatialGainPoint"
     }
 
     private fun ensureHdrNetInterpreter(context: Context): Interpreter? {
@@ -3401,158 +3050,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
         } finally {
             GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
         }
-    }
-
-    private fun logHdrNetInputContract(
-        input: Input,
-        plan: HdrNetProfileGainTablePlan,
-        colorCorrectionMatrix: FloatArray,
-        values: FloatArray,
-    ) {
-        val whiteBalance = input.metadata.whiteBalanceGains
-        val redGain = whiteBalance.getOrElse(0) { 1f }.coerceAtLeast(1e-6f)
-        val greenEven = whiteBalance.getOrElse(1) { 1f }.coerceAtLeast(1e-6f)
-        val greenOdd = whiteBalance.getOrElse(2) { greenEven }.coerceAtLeast(1e-6f)
-        val blueGain = whiteBalance.getOrElse(3) {
-            whiteBalance.getOrElse(2) { 1f }
-        }.coerceAtLeast(1e-6f)
-        val greenGain = (greenEven + greenOdd) * 0.5f
-        val cameraNeutral = floatArrayOf(greenGain / redGain, 1f, greenGain / blueGain)
-        val mappedNeutral = FloatArray(3) { row ->
-            colorCorrectionMatrix[row * 3] * cameraNeutral[0] +
-                colorCorrectionMatrix[row * 3 + 1] * cameraNeutral[1] +
-                colorCorrectionMatrix[row * 3 + 2] * cameraNeutral[2]
-        }
-        val minimums = FloatArray(4) { Float.POSITIVE_INFINITY }
-        val maximums = FloatArray(4) { Float.NEGATIVE_INFINITY }
-        val sums = DoubleArray(4)
-        val rgbClipped = LongArray(3)
-        for (index in values.indices) {
-            val channel = index and 3
-            val value = values[index]
-            minimums[channel] = minOf(minimums[channel], value)
-            maximums[channel] = maxOf(maximums[channel], value)
-            sums[channel] += value.toDouble()
-            if (channel < 3 && value >= 0.999999f) rgbClipped[channel]++
-        }
-        val pixelCount = (values.size / 4).coerceAtLeast(1)
-        val means = FloatArray(4) { channel ->
-            (sums[channel] / pixelCount).toFloat()
-        }
-        val clippedFractions = FloatArray(3) { channel ->
-            rgbClipped[channel].toFloat() / pixelCount
-        }
-        PLog.d(
-            TAG,
-            "HDRNet input contract: wb=${whiteBalance.contentToString()} " +
-                "cameraNeutral=${cameraNeutral.contentToString()} " +
-                "mappedNeutral=${mappedNeutral.contentToString()} " +
-                "matrix=${colorCorrectionMatrix.take(9)} " +
-                "whiteBalanceDomain=BAKED_IN_COLOR_CORRECTION_MATRIX " +
-                "modelInputChannels=R_G_B_LONG_LUMA " +
-                "modelInputFinalClamp=UPPER_ONE_ONLY_NEGATIVE_PRESERVED hueSat=false " +
-                "baselineAppliedToModelInput=false " +
-                "baselineAppliedToViewfinderMatch=false " +
-                "rendererBaselineGain=${plan.rendererBaselineGain} " +
-                "sourceToShort=${plan.sourceToShortGain} " +
-                "hdrRatio=${plan.hdrRatio} mapWeights=${plan.mapInputWeights.contentToString()} " +
-                "mapWeightSum=${plan.mapInputWeightSum} " +
-                "mapInputEffectiveScale=${plan.rendererMapInputEffectiveScale} " +
-                "mapInputInvariantError=" +
-                "${plan.rendererMapInputEffectiveScale - plan.hdrNetInputScale} " +
-                "modelInputAux=MIN_REC601_LUMA_X_HDR_RATIO_12 " +
-                "hdrRatioDomain=MODEL_AUX_AND_POST_INFERENCE_COEFFICIENT_UNROLL " +
-                "channelMin=${minimums.contentToString()} " +
-                "channelMean=${means.contentToString()} " +
-                "channelMax=${maximums.contentToString()} " +
-                "rgbClipped=${clippedFractions.contentToString()}",
-        )
-    }
-
-    private fun logHdrNetOutputContract(coefficients: FloatArray, hdrRatio: Float) {
-        if (coefficients.size % DngPhotonProfileGainTableGenerator.HDRNET_COEFFICIENT_COUNT != 0) {
-            return
-        }
-        val minimums = floatArrayOf(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-        val maximums = floatArrayOf(Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY)
-        val sums = DoubleArray(2)
-        var pairCount = 0
-        for (offset in coefficients.indices step 2) {
-            for (component in 0..1) {
-                val value = coefficients[offset + component]
-                minimums[component] = minOf(minimums[component], value)
-                maximums[component] = maxOf(maximums[component], value)
-                sums[component] += value.toDouble()
-            }
-            ++pairCount
-        }
-        val means = FloatArray(2) { component ->
-            (sums[component] / pairCount.coerceAtLeast(1)).toFloat()
-        }
-        val affineScaleMinimum = minimums[0] * (hdrRatio - 1f) + 1f
-        val affineScaleMean = means[0] * (hdrRatio - 1f) + 1f
-        val affineScaleMaximum = maximums[0] * (hdrRatio - 1f) + 1f
-        PLog.d(
-            TAG,
-            "HDRNet model output contract: layout=Y_X_Z_ONE_SCALE_RESIDUAL_BIAS " +
-                "coefficientMin=${minimums.contentToString()} " +
-                "coefficientMean=${means.contentToString()} " +
-                "coefficientMax=${maximums.contentToString()} " +
-                "affineScaleAfterRatio=[$affineScaleMinimum,$affineScaleMean,$affineScaleMaximum] " +
-                "hdrRatio=$hdrRatio",
-        )
-    }
-
-    private fun logHdrNetGainTableContract(map: DngProfileGainTableMap) {
-        val pointCount = map.mapPointsN
-        if (pointCount <= 0 || map.gains.isEmpty()) return
-        val requestedPoints = intArrayOf(0, 1, 4, 16, 64, 128, pointCount - 1)
-        val points = requestedPoints.distinct().filter { it in 0 until pointCount }
-        val pointMin = FloatArray(points.size) { Float.POSITIVE_INFINITY }
-        val pointMax = FloatArray(points.size) { Float.NEGATIVE_INFINITY }
-        val pointSum = DoubleArray(points.size)
-        var gainMin = Float.POSITIVE_INFINITY
-        var gainMax = Float.NEGATIVE_INFINITY
-        var gainSum = 0.0
-        var finiteCount = 0
-        var nonFiniteCount = 0
-        var renderFloorCount = 0
-        var belowPointOneCount = 0
-        map.gains.forEachIndexed { index, gain ->
-            if (!gain.isFinite()) {
-                nonFiniteCount++
-                return@forEachIndexed
-            }
-            gainMin = min(gainMin, gain)
-            gainMax = max(gainMax, gain)
-            gainSum += gain
-            finiteCount++
-            if (gain <= 0.031f) renderFloorCount++
-            if (gain <= 0.1f) belowPointOneCount++
-            val point = index % pointCount
-            val selected = points.indexOf(point)
-            if (selected >= 0) {
-                pointMin[selected] = min(pointMin[selected], gain)
-                pointMax[selected] = max(pointMax[selected], gain)
-                pointSum[selected] += gain
-            }
-        }
-        val cellCount = map.gains.size / pointCount
-        val pointSummary = points.indices.joinToString(prefix = "[", postfix = "]") { index ->
-            val mean = if (cellCount > 0) pointSum[index] / cellCount else Double.NaN
-            "${points[index]}:${pointMin[index]}/$mean/${pointMax[index]}"
-        }
-        PLog.i(
-            TAG,
-            "HDRNet PGTM gain contract: gainMin=$gainMin " +
-                "gainMean=${if (finiteCount > 0) gainSum / finiteCount else Double.NaN} " +
-                "gainMax=$gainMax finiteCount=$finiteCount nonFiniteCount=$nonFiniteCount " +
-                "atOrBelowRenderFloorFraction=" +
-                "${renderFloorCount.toDouble() / map.gains.size.coerceAtLeast(1)} " +
-                "atOrBelowPointOneFraction=" +
-                "${belowPointOneCount.toDouble() / map.gains.size.coerceAtLeast(1)} " +
-                "pointGainMinMeanMax=$pointSummary",
-        )
     }
 
     private companion object {

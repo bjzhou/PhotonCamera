@@ -1,5 +1,8 @@
 # Photon 独立去雾管线
 
+> 当前运行状态：`PhotonDehazeTuning.PROCESSING_ENABLED = false`。整图渲染、分块决策和取景器
+> 曝光匹配统一旁路 Dehaze；已有参数与实现保留，恢复前需重新验证最终输出域的曝光匹配。
+
 ## 原版位置与语义
 
 MGC 9.6 的调用链不是后置滤镜：
@@ -56,9 +59,9 @@ Photon 没有接入 GCam 的 AE face-map buffer，统计采用原版的 zero-mas
 
 ## 控制与持久化
 
-去雾没有设置页或相册编辑页入口，也不保存用户偏好。缺少显式隐藏配置时，RAW 和 RAWmax
-统一静默启用，`strength = 1.0`、`dynamicHighlightStrength = 1.0`。新拍摄会把这个有效值
-固化到照片元数据；不含去雾字段的历史照片重新显影时同样采用该默认值。
+去雾没有设置页或相册编辑页入口，也不保存用户偏好。参数默认值仍为 `strength = 1.0`、
+`dynamicHighlightStrength = 1.0`，但当前总开关使其不参与处理。新拍摄与历史照片继续保留这些
+字段的解析和持久化语义，不用改写元数据来实现临时旁路。
 
 `strength` 是 `dehazed_expo` 实际消费者，直接缩放两组 atmospheric haze point。默认值 `1`
 保持算法基准强度。

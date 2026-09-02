@@ -66,6 +66,9 @@ GPU 强度。锐化不读取 SNR，不触发 RAW 像素统计或 GPU→CPU 回�
 
 ## 除雾
 
+当前 `PhotonDehazeTuning.PROCESSING_ENABLED` 为 `false`，所以下述参数仍会规范化、读取和持久化，
+但 `isActive` 对所有渲染路径统一返回 `false`，Dehaze 暂不进入最终输出或曝光匹配。
+
 `PhotonDehazeTuning` 由独立的 `PhotonDehazePipeline` 消费：
 
 - `enabled`

@@ -23,8 +23,6 @@ class DngHdrNetViewfinderGridTest {
         )
         val neutralBaselinePlan = checkNotNull(
             DngPhotonProfileGainTableGenerator.hdrNetPlan(
-                sourceWidth = 4_032,
-                sourceHeight = 3_024,
                 rendererBaselineExposureEv = 0f,
                 hdrRatio = 2f,
                 sourceToShortGain = 1f,
@@ -32,8 +30,6 @@ class DngHdrNetViewfinderGridTest {
         )
         val brightBaselinePlan = checkNotNull(
             DngPhotonProfileGainTableGenerator.hdrNetPlan(
-                sourceWidth = 4_032,
-                sourceHeight = 3_024,
                 rendererBaselineExposureEv = 3f,
                 hdrRatio = 2f,
                 sourceToShortGain = 1f,
@@ -60,8 +56,8 @@ class DngHdrNetViewfinderGridTest {
         val brightBaselineGrid = checkNotNull(grids.second)
 
         assertEquals(
-            DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_WIDTH *
-                DngPhotonProfileGainTableGenerator.HDRNET_PGTM_GRID_HEIGHT,
+            DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH *
+                DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_HEIGHT,
             neutralGrid.size,
         )
         neutralGrid.forEach { assertEquals(0.249999f, it, 2e-6f) }

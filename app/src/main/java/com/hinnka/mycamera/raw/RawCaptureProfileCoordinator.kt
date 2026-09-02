@@ -45,11 +45,6 @@ internal object RawCaptureProfileCoordinator {
             viewfinderMirroredHorizontally = viewfinderMirroredHorizontally,
             viewfinderPreviewToCaptureRotationDegrees =
                 viewfinderPreviewToCaptureRotationDegrees,
-            scalarMatchingCenterFractionPerAxis = if (mode.usesPhotonHdr) {
-                1f
-            } else {
-                RawLegacyAutoExposureMatcher.SCALAR_MATCH_CENTER_FRACTION_PER_AXIS
-            },
             highlightClippingConstraint = if (mode == RawAdaptiveExposureMode.OFF) {
                 RawLegacyHighlightClippingConstraint.HDR_PLUS_DISABLED
             } else {

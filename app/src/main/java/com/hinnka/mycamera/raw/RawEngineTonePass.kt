@@ -21,6 +21,9 @@ internal class RawEngineTonePass(
         val fullImageHeight: Int,
         val width: Int,
         val height: Int,
+        /** Full-image pixel span represented by this possibly downsampled input texture. */
+        val globalWidth: Int = width,
+        val globalHeight: Int = height,
         val toneMappingParameters: RawToneMappingParameters,
         val profileExposure: RawProfileExposureGl.Uniforms,
         val dcpRenderPlan: DcpRenderPlan?,

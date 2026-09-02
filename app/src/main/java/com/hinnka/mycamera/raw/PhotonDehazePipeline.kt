@@ -99,24 +99,53 @@ internal class PhotonDehazePipeline {
         width: Int,
         height: Int,
         tuning: PhotonDehazeTuning,
+    ): Output? = renderWithHistogramSource(
+        histogramSourceTextureId = sourceTextureId,
+        histogramWidth = width,
+        histogramHeight = height,
+        sourceTextureId = sourceTextureId,
+        targetTextureId = targetTextureId,
+        width = width,
+        height = height,
+        tuning = tuning,
+    )
+
+    /**
+     * Builds the adaptive curve from the full-resolution source while applying it to another
+     * texture in the same linear RGB domain. Capture metering uses this to preserve the exact
+     * final-render histogram while evaluating only its small viewfinder-sized image.
+     */
+    fun renderWithHistogramSource(
+        histogramSourceTextureId: Int,
+        histogramWidth: Int,
+        histogramHeight: Int,
+        sourceTextureId: Int,
+        targetTextureId: Int,
+        width: Int,
+        height: Int,
+        tuning: PhotonDehazeTuning,
     ): Output? {
         val startedAtNs = System.nanoTime()
         val normalizedTuning = tuning.normalized()
         require(normalizedTuning.isActive) { "Photon dehaze render requested while disabled" }
-        require(sourceTextureId != 0 && targetTextureId != 0) {
+        require(
+            histogramSourceTextureId != 0 && sourceTextureId != 0 && targetTextureId != 0
+        ) {
             "Photon dehaze requires valid source and destination textures"
         }
         require(sourceTextureId != targetTextureId) {
             "Photon dehaze requires a linear RGB ping-pong destination"
         }
-        require(width > 0 && height > 0) { "Invalid Photon dehaze dimensions" }
+        require(
+            histogramWidth > 0 && histogramHeight > 0 && width > 0 && height > 0
+        ) { "Invalid Photon dehaze dimensions" }
         if (!initialize()) return null
 
-        val lowWidth = (width + DOWNSAMPLE_FACTOR - 1) / DOWNSAMPLE_FACTOR
-        val lowHeight = (height + DOWNSAMPLE_FACTOR - 1) / DOWNSAMPLE_FACTOR
+        val lowWidth = (histogramWidth + DOWNSAMPLE_FACTOR - 1) / DOWNSAMPLE_FACTOR
+        val lowHeight = (histogramHeight + DOWNSAMPLE_FACTOR - 1) / DOWNSAMPLE_FACTOR
         resetHistogram()
         GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, sourceTextureId)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, histogramSourceTextureId)
 
         // LinearRcd writes through a framebuffer; histogram consumes that texture by sampler.
         GLES31.glMemoryBarrier(
@@ -124,7 +153,11 @@ internal class PhotonDehazePipeline {
         )
         GLES31.glUseProgram(histogramProgram)
         GLES31.glUniform1i(histogramSourceLocation, 0)
-        GLES31.glUniform2i(histogramSourceSizeLocation, width, height)
+        GLES31.glUniform2i(
+            histogramSourceSizeLocation,
+            histogramWidth,
+            histogramHeight,
+        )
         GLES31.glUniform2i(histogramLowSizeLocation, lowWidth, lowHeight)
         GLES31.glBindBufferBase(
             GLES31.GL_SHADER_STORAGE_BUFFER,
@@ -158,6 +191,8 @@ internal class PhotonDehazePipeline {
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
 
         GLES31.glUseProgram(applyProgram)
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, sourceTextureId)
         GLES31.glUniform1i(applySourceLocation, 0)
         GLES31.glUniform2i(applySourceSizeLocation, width, height)
         GLES31.glBindBufferBase(
@@ -189,7 +224,9 @@ internal class PhotonDehazePipeline {
         requireNoGlError("GPU-resident histogram/curve/apply")
         PLog.i(
             TAG,
-            "Photon dehaze submitted size=${width}x$height low=${lowWidth}x$lowHeight " +
+            "Photon dehaze submitted size=${width}x$height " +
+                "histogram=${histogramWidth}x$histogramHeight " +
+                "low=${lowWidth}x$lowHeight " +
                 "maxSamples=${lowWidth * lowHeight} path=GPU_COMPUTE_BATCHED_HISTOGRAM " +
                 "curveScanBins=${HAZE_HISTOGRAM_SIZE + HIGHLIGHT_HISTOGRAM_SIZE} " +
                 "cpuReadback=false strength=${normalizedTuning.strength} " +

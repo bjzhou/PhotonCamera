@@ -522,55 +522,10 @@ internal object DngPhotonLocalToneMapper {
                     photonPlan.minTableGain,
                     photonPlan.maxTableGain,
                 )
-                val diagnosticGain = applyDiagnostic(
-                    trueGain = fittedGain,
-                    tableInput = sourceInput,
-                    plan = plan,
-                )
-                result[outputOffset + point] = diagnosticGain.coerceIn(
-                    photonPlan.minTableGain,
-                    photonPlan.maxTableGain,
-                )
+                result[outputOffset + point] = fittedGain
             }
         }
         return result
-    }
-
-    private fun applyDiagnostic(
-        trueGain: Float,
-        tableInput: Float,
-        plan: PhotonProfileGainTablePlan,
-    ): Float {
-        val band = plan.diagnosticBand ?: return trueGain
-        val mask = diagnosticMask(tableInput, band)
-        return when (band.mode) {
-            DngPhotonProfileGainTableGenerator.DiagnosticMode.PASS_ONLY ->
-                lerp(1f, trueGain, mask)
-            DngPhotonProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY ->
-                lerp(trueGain, 1f, mask)
-        }
-    }
-
-    private fun diagnosticMask(
-        input: Float,
-        band: DngPhotonProfileGainTableGenerator.DiagnosticBand,
-    ): Float {
-        val enter = if (band.start <= 0f || band.feather <= 0f) {
-            if (input >= band.start) 1f else 0f
-        } else {
-            smoothStep(band.start - band.feather, band.start + band.feather, input)
-        }
-        val exit = if (band.end >= 1f || band.feather <= 0f) {
-            if (input <= band.end) 1f else 0f
-        } else {
-            1f - smoothStep(band.end - band.feather, band.end + band.feather, input)
-        }
-        return min(enter, exit).coerceIn(0f, 1f)
-    }
-
-    private fun smoothStep(edge0: Float, edge1: Float, value: Float): Float {
-        val amount = ((value - edge0) / max(edge1 - edge0, CURVE_EPS)).coerceIn(0f, 1f)
-        return amount * amount * (3f - 2f * amount)
     }
 
     private fun curvedBilateralGuide(value: Float, alpha: Float): Float {
