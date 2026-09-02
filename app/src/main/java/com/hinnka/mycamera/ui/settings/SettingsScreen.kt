@@ -95,7 +95,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.processor.DenoiseStrength
-import com.hinnka.mycamera.processor.MgcRawMaxMode
 import androidx.core.net.toUri
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.Lifecycle
@@ -167,9 +166,8 @@ private enum class SettingsPage {
     FOCUS_LENS,
     CAPTURE_STORAGE,
     VIDEO,
-    COLOR_HDR,
-    MULTIFRAME_EXPOSURE,
-    RAW,
+    PHOTO_MODE,
+    PROFESSIONAL_MODE,
     PHANTOM,
     INTERFACE,
     CONTENT_MANAGEMENT,
@@ -333,7 +331,7 @@ fun SettingsScreen(
     val vendorCaptureSettingsByLens by viewModel.vendorCaptureSettingsByLens.collectAsState()
     val customVendorKeySettings by viewModel.customVendorKeySettings.collectAsState()
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
-    val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = true)
+    val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = false)
     val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
     val customLensIds by viewModel.customLensIds.collectAsState(initial = emptyList())
     val lensIdBlacklist by viewModel.lensIdBlacklist.collectAsState(initial = emptyList())
@@ -342,13 +340,10 @@ fun SettingsScreen(
     val preferredMacroCameraId by viewModel.preferredMacroCameraId.collectAsState(initial = null)
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
-    val multiFrameCount by viewModel.multiFrameCount.collectAsState()
+    val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
+    val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsState()
+    val hdrPlusBracketExposureEnabled by viewModel.hdrPlusBracketExposureEnabled.collectAsState()
     val rawMaxQualityTuningEnabled by viewModel.rawMaxQualityTuningEnabled.collectAsState()
-    val rawMaxSpatialMode by viewModel.rawMaxSpatialMode.collectAsState()
-    val rawMaxSpatialModeOptions = listOf(
-        MgcRawMaxMode.SABRE to stringResource(R.string.settings_raw_max_mode_sabre),
-        MgcRawMaxMode.SPATIAL to stringResource(R.string.settings_raw_max_mode_spatial),
-    )
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
@@ -788,8 +783,11 @@ fun SettingsScreen(
     var showInstallUpdateDialog by remember { mutableStateOf(false) }
     var baselinePickerTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
-    var multiFrameCountSliderValue by remember(multiFrameCount) {
-        mutableStateOf(multiFrameCount.toFloat())
+    var jpgMultiFrameDenoiseCountSliderValue by remember(jpgMultiFrameDenoiseFrameCount) {
+        mutableStateOf(jpgMultiFrameDenoiseFrameCount.toFloat())
+    }
+    var hdrPlusFrameCountSliderValue by remember(hdrPlusFrameCount) {
+        mutableStateOf(hdrPlusFrameCount.toFloat())
     }
     var rawMaxOutputScaleUi by remember(rawMaxOutputScale) {
         mutableStateOf(MultiFrameConfig.normalizeOutputScale(rawMaxOutputScale))
@@ -986,9 +984,8 @@ fun SettingsScreen(
         SettingsPage.FOCUS_LENS -> stringResource(R.string.settings_section_focus_lens)
         SettingsPage.CAPTURE_STORAGE -> stringResource(R.string.settings_section_capture_storage)
         SettingsPage.VIDEO -> stringResource(R.string.settings_section_video)
-        SettingsPage.COLOR_HDR -> stringResource(R.string.settings_section_color_hdr)
-        SettingsPage.MULTIFRAME_EXPOSURE -> stringResource(R.string.settings_section_multiframe_exposure)
-        SettingsPage.RAW -> stringResource(R.string.baseline_target_raw)
+        SettingsPage.PHOTO_MODE -> stringResource(R.string.settings_section_photo_mode)
+        SettingsPage.PROFESSIONAL_MODE -> stringResource(R.string.settings_section_professional_mode)
         SettingsPage.PHANTOM -> stringResource(R.string.phantom)
         SettingsPage.INTERFACE -> stringResource(R.string.settings_section_interface)
         SettingsPage.CONTENT_MANAGEMENT -> stringResource(R.string.settings_section_management)
@@ -1625,12 +1622,37 @@ fun SettingsScreen(
                     }
                 }
 
-                SettingsPage.COLOR_HDR -> {
-                    // 成像与色彩
+                SettingsPage.PHOTO_MODE -> {
+                    // 拍照模式设置
                     SettingsSection(
-                        title = stringResource(R.string.settings_section_color_hdr),
+                        title = stringResource(R.string.settings_section_photo_mode),
                         showTitle = false
                     ) {
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_multi_frame_denoise_frame_count),
+                            description = stringResource(
+                                R.string.settings_multi_frame_denoise_frame_count_description
+                            ),
+                            value = jpgMultiFrameDenoiseCountSliderValue,
+                            valueRange = MultiFrameConfig.MIN_DENOISE_FRAME_COUNT.toFloat()..
+                                MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
+                            onValueChange = {
+                                jpgMultiFrameDenoiseCountSliderValue = it.roundToInt().toFloat()
+                            },
+                            resetValue = MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT.toFloat(),
+                            onValueChangeFinished = {
+                                viewModel.setJpgMultiFrameDenoiseFrameCount(
+                                    jpgMultiFrameDenoiseCountSliderValue.roundToInt()
+                                )
+                            },
+                            valueTextFormatter = { it.roundToInt().toString() }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         QualityLevelSetting(
                             title = stringResource(R.string.settings_nr_level),
                             description = stringResource(R.string.settings_nr_level_description),
@@ -1777,11 +1799,75 @@ fun SettingsScreen(
                     }
                 }
 
-                SettingsPage.MULTIFRAME_EXPOSURE -> {
-                    // Max & HDR
+                SettingsPage.PROFESSIONAL_MODE -> {
+                    // 专业模式固定使用 HDR+ 与 Spatial 融合。
                     SettingsSection(
-                        title = stringResource(R.string.settings_section_multiframe_exposure),
-                        showTitle = false
+                        title = stringResource(R.string.settings_professional_group_max_hdr)
+                    ) {
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_hdr_plus_frame_count),
+                            description = stringResource(
+                                R.string.settings_hdr_plus_frame_count_description
+                            ),
+                            value = hdrPlusFrameCountSliderValue,
+                            valueRange = (if (hdrPlusBracketExposureEnabled) {
+                                MultiFrameConfig.MIN_HDR_PLUS_BRACKET_FRAME_COUNT
+                            } else {
+                                MultiFrameConfig.MIN_HDR_PLUS_FRAME_COUNT
+                            }).toFloat()..
+                                MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
+                            onValueChange = {
+                                hdrPlusFrameCountSliderValue = it.roundToInt().toFloat()
+                            },
+                            resetValue = MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT.toFloat(),
+                            onValueChangeFinished = {
+                                viewModel.setHdrPlusFrameCount(
+                                    hdrPlusFrameCountSliderValue.roundToInt()
+                                )
+                            },
+                            valueTextFormatter = { it.roundToInt().toString() }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_hdr_plus_bracket_exposure),
+                            description = stringResource(
+                                R.string.settings_hdr_plus_bracket_exposure_description
+                            ),
+                            checked = hdrPlusBracketExposureEnabled,
+                            onCheckedChange = viewModel::setHdrPlusBracketExposureEnabled,
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_raw_min_shutter_speed),
+                            description = stringResource(
+                                R.string.settings_raw_min_shutter_speed_description
+                            ),
+                            levels = RAW_MIN_SHUTTER_SPEED_OPTIONS.map { value ->
+                                value to if (value == 0L) {
+                                    stringResource(R.string.video_option_off)
+                                } else {
+                                    "1/${(1_000_000_000L / value).toInt()}"
+                                }
+                            },
+                            currentLevel = rawMinShutterSpeedNs,
+                            onLevelSelected = viewModel::setRawMinShutterSpeedNs,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    SettingsSection(
+                        title = stringResource(R.string.settings_professional_group_image_quality)
                     ) {
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_raw_max_quality_tuning),
@@ -1790,42 +1876,6 @@ fun SettingsScreen(
                             ),
                             checked = rawMaxQualityTuningEnabled,
                             onCheckedChange = viewModel::setRawMaxQualityTuningEnabled,
-                        )
-
-                        if (isHdrSettingsSupported) {
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-
-                            SwitchSettingItem(
-                                title = stringResource(R.string.settings_ultra_hdr_gain_map),
-                                description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
-                                checked = ultraHdrGainMapEnabled,
-                                onCheckedChange = { viewModel.setUltraHdrGainMapEnabled(it) }
-                            )
-                        }
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        DropdownSettingItem(
-                            title = stringResource(R.string.settings_raw_max_spatial_mode),
-                            description = stringResource(
-                                R.string.settings_raw_max_spatial_mode_description
-                            ),
-                            value = rawMaxSpatialModeOptions.first { it.first == rawMaxSpatialMode }.second,
-                            options = rawMaxSpatialModeOptions.map { it.second },
-                            isLoading = false,
-                            onExpanded = {},
-                            onOptionSelected = { selectedLabel ->
-                                rawMaxSpatialModeOptions
-                                    .firstOrNull { it.second == selectedLabel }
-                                    ?.first
-                                    ?.let(viewModel::setRawMaxSpatialMode)
-                            },
                         )
 
                         HorizontalDivider(
@@ -1853,24 +1903,6 @@ fun SettingsScreen(
                                 viewModel.setRawMaxOutputScale(rawMaxOutputScaleUi)
                             },
                             valueTextFormatter = { scale -> String.format(valueFormat, scale) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_max_frame_count),
-                            description = stringResource(R.string.settings_max_frame_count_description),
-                            value = multiFrameCountSliderValue,
-                            valueRange = MultiFrameConfig.MIN_FRAME_COUNT.toFloat()..MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
-                            onValueChange = { multiFrameCountSliderValue = it.roundToInt().toFloat() },
-                            resetValue = MultiFrameConfig.DEFAULT_FRAME_COUNT.toFloat(),
-                            onValueChangeFinished = {
-                                viewModel.setMultiFrameCount(multiFrameCountSliderValue.roundToInt())
-                            },
-                            valueTextFormatter = { it.roundToInt().toString() }
                         )
 
                         HorizontalDivider(
@@ -1933,9 +1965,9 @@ fun SettingsScreen(
                             onValueChangeFinished = ::commitRawSliderValues,
                         )
                     }
-                }
 
-                SettingsPage.RAW -> {
+                    Spacer(modifier = Modifier.height(24.dp))
+
                     SettingsSection(
                         title = stringResource(R.string.settings_raw_group_development)
                     ) {
@@ -2085,30 +2117,31 @@ fun SettingsScreen(
                     SettingsSection(
                         title = stringResource(R.string.settings_raw_group_capture_output)
                     ) {
+                        if (isHdrSettingsSupported) {
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                                description = stringResource(
+                                    R.string.settings_ultra_hdr_gain_map_description
+                                ),
+                                checked = ultraHdrGainMapEnabled,
+                                onCheckedChange = viewModel::setUltraHdrGainMapEnabled,
+                            )
+
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = Color.White.copy(alpha = 0.1f)
+                            )
+                        }
+
                         QualityLevelSetting(
-                            title = stringResource(R.string.settings_raw_min_shutter_speed),
-                            description = stringResource(R.string.settings_raw_min_shutter_speed_description),
-                            levels = RAW_MIN_SHUTTER_SPEED_OPTIONS.map { value ->
-                                value to if (value == 0L) {
-                                    stringResource(R.string.video_option_off)
-                                } else {
-                                    "1/${(1_000_000_000L / value).toInt()}"
-                                }
-                            },
-                            currentLevel = rawMinShutterSpeedNs,
-                            onLevelSelected = { viewModel.setRawMinShutterSpeedNs(it) }
-                        )
-
-                        HorizontalDivider(
-                            modifier = Modifier.padding(vertical = 8.dp),
-                            color = Color.White.copy(alpha = 0.1f)
-                        )
-
-                        SwitchSettingItem(
                             title = stringResource(R.string.settings_export_dng_with_raw_export),
                             description = stringResource(R.string.settings_export_dng_with_raw_export_description),
-                            checked = exportDngWithRawExport,
-                            onCheckedChange = { viewModel.setExportDngWithRawExport(it) }
+                            levels = listOf(
+                                false to stringResource(R.string.settings_professional_export_jpg),
+                                true to stringResource(R.string.settings_professional_export_raw_jpg),
+                            ),
+                            currentLevel = exportDngWithRawExport,
+                            onLevelSelected = viewModel::setExportDngWithRawExport,
                         )
                     }
 
@@ -2935,42 +2968,30 @@ private fun SettingsCategoryOverview(
 
     SettingsSection(title = stringResource(R.string.imaging)) {
         NavigationSettingItem(
-            title = stringResource(R.string.settings_section_color_hdr),
+            title = stringResource(R.string.settings_section_photo_mode),
             description = listOf(
+                stringResource(R.string.settings_multi_frame_denoise_frame_count),
                 stringResource(R.string.settings_nr_level),
                 stringResource(R.string.settings_edge_level),
                 stringResource(R.string.settings_baseline_jpg_title),
                 stringResource(R.string.settings_tonemap_mode)
             ).joinToString(" · "),
-            onClick = { onPageSelected(SettingsPage.COLOR_HDR) }
+            onClick = { onPageSelected(SettingsPage.PHOTO_MODE) }
         )
 
         SettingsCategoryDivider()
 
         NavigationSettingItem(
-            title = stringResource(R.string.settings_section_multiframe_exposure),
+            title = stringResource(R.string.settings_section_professional_mode),
             description = listOf(
-                stringResource(R.string.settings_use_jpg_max),
-                stringResource(R.string.settings_raw_max_spatial_mode),
-                stringResource(R.string.settings_raw_max_quality_tuning),
-                stringResource(R.string.settings_ultra_hdr_gain_map),
-                stringResource(R.string.settings_raw_max_output_scale),
-                stringResource(R.string.settings_raw_max_default_sharpening)
+                stringResource(R.string.settings_professional_group_max_hdr),
+                stringResource(R.string.settings_professional_group_image_quality),
+                stringResource(R.string.settings_raw_group_development),
+                stringResource(R.string.settings_raw_default_processing_section),
+                stringResource(R.string.settings_raw_group_capture_output),
+                stringResource(R.string.settings_raw_group_sensor_correction),
             ).joinToString(" · "),
-            onClick = { onPageSelected(SettingsPage.MULTIFRAME_EXPOSURE) }
-        )
-
-        SettingsCategoryDivider()
-
-        NavigationSettingItem(
-            title = stringResource(R.string.baseline_target_raw),
-            description = listOf(
-                stringResource(R.string.raw_dcp_title),
-                stringResource(R.string.settings_raw_photon_hdr),
-                stringResource(R.string.settings_raw_profile_tone_map),
-                stringResource(R.string.settings_raw_cfa_correction)
-            ).joinToString(" · "),
-            onClick = { onPageSelected(SettingsPage.RAW) }
+            onClick = { onPageSelected(SettingsPage.PROFESSIONAL_MODE) }
         )
 
         if (DeviceUtil.canShowPhantom) {

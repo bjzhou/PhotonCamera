@@ -272,13 +272,13 @@
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Aktifkan output YUV 10-bit untuk presisi data gambar yang lebih baik. Efektif pada perangkat yang didukung saat RAW dinonaktifkan.</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: sistem manajemen warna yang dikembangkan secara independen oleh Hasselblad</string>
-    <string name="settings_raw_max_quality_tuning">Penyetelan kualitas RAWmax</string>
-    <string name="settings_raw_max_quality_tuning_description">Terapkan penyetelan penggabungan, pengurangan noise, dan penajaman sesuai ukuran fisik sensor. Saat nonaktif, RAWmax menggunakan parameter pencitraan default.</string>
+    <string name="settings_raw_max_quality_tuning">Penyetelan kualitas HDR+</string>
+    <string name="settings_raw_max_quality_tuning_description">Terapkan penyetelan penggabungan, pengurangan noise, dan penajaman sesuai ukuran fisik sensor. Saat nonaktif, HDR+ menggunakan parameter pencitraan default.</string>
     <string name="settings_raw_default_sharpening_section">Penajaman default</string>
     <string name="settings_raw_default_sharpening">Penajaman</string>
     <string name="settings_raw_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan RAW.</string>
-    <string name="settings_raw_max_default_sharpening">Penajaman RAWmax default</string>
-    <string name="settings_raw_max_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan RAWmax.</string>
+    <string name="settings_raw_max_default_sharpening">Penajaman HDR+ default</string>
+    <string name="settings_raw_max_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan HDR+.</string>
     <string name="preset_import">Impor Preset</string>
     <string name="preset_export">Ekspor Preset</string>
     <string name="preset_import_success">%1$d preset berhasil diimpor</string>

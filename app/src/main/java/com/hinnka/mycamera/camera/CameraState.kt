@@ -349,9 +349,10 @@ data class CameraState(
 
     val isRawSupported: Boolean = false,
     val multiFrameOutputScale: Float? = null,
-    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT,
+    val jpgMultiFrameDenoiseFrameCount: Int = MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
+    val hdrPlusFrameCount: Int = MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
     val useJpgMaxHdrComposition: Boolean = false,
-    val useRawMaxHdrComposition: Boolean = MultiFrameConfig.DEFAULT_RAW_MAX_HDR_COMPOSITION,
+    val hdrPlusBracketExposureEnabled: Boolean = MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
     val useRaw: Boolean = false,
     val useMultipleExposure: Boolean = false,
     val rawMinShutterSpeedNs: Long = 0L,
@@ -406,8 +407,20 @@ data class CameraState(
     val isRawMaxEnabled: Boolean
         get() = isMultiFrameEnabled && useRaw
 
-    val isRawMaxHdrEnabled: Boolean
-        get() = isRawMaxEnabled && useRawMaxHdrComposition
+    val isHdrPlusBracketExposureEnabled: Boolean
+        get() = isRawMaxEnabled && hdrPlusBracketExposureEnabled
+
+    val activeMultiFrameCount: Int
+        get() = when {
+            isJpgMaxEnabled -> MultiFrameConfig.normalizeDenoiseFrameCount(
+                jpgMultiFrameDenoiseFrameCount
+            )
+            isRawMaxEnabled -> MultiFrameConfig.normalizeHdrPlusFrameCount(
+                hdrPlusFrameCount,
+                bracketExposureEnabled = hdrPlusBracketExposureEnabled,
+            )
+            else -> 1
+        }
 
     /**
      * 获取当前相机信息

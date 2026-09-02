@@ -841,6 +841,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (update.useRaw?.value == true) {
             desiredUseMultipleExposure = false
             desiredUseJpgMax = false
+            desiredUseRawMax = true
         } else if (update.useRaw?.value == false) {
             desiredUseRawMax = false
         }
@@ -859,6 +860,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             desiredUseJpgMax = false
             desiredUseRawMax = false
         }
+        // 专业模式与 HDR+ 是同一个拍摄能力，不再保留可独立关闭的状态。
+        desiredUseRawMax = desiredUseRaw
         if (desiredUseJpgMax && prefs.useLivePhoto) {
             cameraController.setUseLivePhoto(false)
             userPreferencesRepository.saveUseLivePhoto(false)
@@ -1634,9 +1637,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multipleExposureCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multipleExposureCount }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 2)
-    val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
-        .map { it.multiFrameCount }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.DEFAULT_FRAME_COUNT)
+    val jpgMultiFrameDenoiseFrameCount: StateFlow<Int> =
+        userPreferencesRepository.userPreferences
+            .map { it.jpgMultiFrameDenoiseFrameCount }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
+            )
+    val hdrPlusFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
+        .map { it.hdrPlusFrameCount }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
+        )
+    val hdrPlusBracketExposureEnabled: StateFlow<Boolean> =
+        userPreferencesRepository.userPreferences
+            .map { it.hdrPlusBracketExposureEnabled }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
+            )
     val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1648,12 +1671,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 SharingStarted.Eagerly,
                 PhotonSensorSizeTuning.DEFAULT_RAW_MAX_QUALITY_TUNING_ENABLED,
             )
-    val useRawMaxSpatialRgb: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useRawMaxSpatialRgb }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val rawMaxSpatialMode: StateFlow<MgcRawMaxMode> = userPreferencesRepository.userPreferences
-        .map { it.rawMaxSpatialMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, MgcRawMaxMode.DEFAULT)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -1938,7 +1955,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     handleMultipleExposureFrameCaptured(image, captureInfo)
                 }
             } else if (state.value.isMultiFrameEnabled) {
-                val count = MultiFrameConfig.captureFrameCount(state.value.multiFrameCount)
+                val count = state.value.activeMultiFrameCount
                 PLog.d(TAG, "Burst frame received: ${pendingRawStackFrames.size + 1}/$count")
                 pendingRawStackFrames.add(
                     PendingRawStackFrame(
@@ -1952,7 +1969,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val chronologicalFrames = pendingRawStackFrames
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
-                    val rawMaxHdrFusionEnabled = state.value.isRawMaxHdrEnabled
+                    val rawMaxHdrFusionEnabled = state.value.isHdrPlusBracketExposureEnabled
                     val capturePortraitMask = consumeCapturePortraitMask()
                     viewModelScope.launch {
                         val exposurePlan = RawmaxExposurePlanner.plan(
@@ -2130,11 +2147,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (currentCameraState.multiFrameOutputScale != effectiveMultiFrameOutputScale) {
                     cameraController.setMultiFrameOutputScale(effectiveMultiFrameOutputScale)
                 }
+                if (
+                    currentCameraState.jpgMultiFrameDenoiseFrameCount !=
+                    it.jpgMultiFrameDenoiseFrameCount
+                ) {
+                    cameraController.setJpgMultiFrameDenoiseFrameCount(
+                        it.jpgMultiFrameDenoiseFrameCount
+                    )
+                }
+                if (currentCameraState.hdrPlusFrameCount != it.hdrPlusFrameCount) {
+                    cameraController.setHdrPlusFrameCount(it.hdrPlusFrameCount)
+                }
                 if (currentCameraState.useJpgMaxHdrComposition != it.useJpgMaxHdrComposition) {
                     cameraController.setUseJpgMaxHdrComposition(it.useJpgMaxHdrComposition)
                 }
-                if (currentCameraState.useRawMaxHdrComposition != it.useRawMaxHdrComposition) {
-                    cameraController.setUseRawMaxHdrComposition(it.useRawMaxHdrComposition)
+                if (
+                    currentCameraState.hdrPlusBracketExposureEnabled !=
+                    it.hdrPlusBracketExposureEnabled
+                ) {
+                    cameraController.setHdrPlusBracketExposureEnabled(
+                        it.hdrPlusBracketExposureEnabled
+                    )
                 }
                 if (multipleExposureEnabled && (it.useRaw || it.useJpgMax || it.useRawMax)) {
                     viewModelScope.launch {
@@ -2343,9 +2376,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         rawMaxOutputScale = prefs.rawMaxOutputScale,
                     )
                 )
-                cameraController.setMultiFrameCount(prefs.multiFrameCount)
+                cameraController.setJpgMultiFrameDenoiseFrameCount(
+                    prefs.jpgMultiFrameDenoiseFrameCount
+                )
+                cameraController.setHdrPlusFrameCount(prefs.hdrPlusFrameCount)
                 cameraController.setUseJpgMaxHdrComposition(prefs.useJpgMaxHdrComposition)
-                cameraController.setUseRawMaxHdrComposition(prefs.useRawMaxHdrComposition)
+                cameraController.setHdrPlusBracketExposureEnabled(
+                    prefs.hdrPlusBracketExposureEnabled
+                )
                 cameraController.setUseLivePhoto(
                     prefs.useLivePhoto && !prefs.useJpgMax && prefs.captureMode == CaptureMode.PHOTO
                 )
@@ -2957,6 +2995,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
             hasEmbeddedGainmap = false,
+            isProfessionalCapture = baselineTarget == BaselineColorCorrectionTarget.RAW,
             userPrefs = userPrefs,
         )
         val baselineMetadata = resolveBaselineMetadata(
@@ -3090,10 +3129,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun defaultHdrEffectEnabled(
         hasEmbeddedGainmap: Boolean,
+        isProfessionalCapture: Boolean,
         userPrefs: UserPreferences?,
     ): Boolean {
         if (hasEmbeddedGainmap) return true
-        return userPrefs?.ultraHdrGainMapEnabled ?: false
+        return isProfessionalCapture && (userPrefs?.ultraHdrGainMapEnabled ?: false)
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {
@@ -4507,7 +4547,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // ==================== 延时拍摄和网格线相关方法 ====================
 
-    /** JPGmax：YUV 多帧降噪。 */
+    /** 拍照模式：YUV 多帧降噪。 */
     fun setUseJpgMax(enabled: Boolean) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
@@ -4519,19 +4559,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawMaxQualityTuningEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawMaxQualityTuningEnabled(enabled)
-        }
-    }
-
-    fun setUseRawMaxSpatialRgb(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseRawMaxSpatialRgb(enabled)
-        }
-    }
-
-    fun setRawMaxSpatialMode(mode: MgcRawMaxMode) {
-        cameraController.setUseRawMaxHdrComposition(mode == MgcRawMaxMode.SPATIAL)
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawMaxSpatialMode(mode)
         }
     }
 
@@ -4547,18 +4574,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * 设置多帧合成帧数
-     */
-    fun setMultiFrameCount(count: Int) {
-        val normalizedCount = count.coerceIn(
-            MultiFrameConfig.MIN_FRAME_COUNT,
-            MultiFrameConfig.MAX_FRAME_COUNT
-        )
-        cameraController.setMultiFrameCount(normalizedCount)
+    fun setJpgMultiFrameDenoiseFrameCount(count: Int) {
+        val normalizedCount = MultiFrameConfig.normalizeDenoiseFrameCount(count)
+        cameraController.setJpgMultiFrameDenoiseFrameCount(normalizedCount)
         viewModelScope.launch {
-            userPreferencesRepository.saveMultiFrameCount(normalizedCount)
-            //reopenCamera()
+            userPreferencesRepository.saveJpgMultiFrameDenoiseFrameCount(normalizedCount)
+        }
+    }
+
+    fun setHdrPlusFrameCount(count: Int) {
+        val normalizedCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
+            count,
+            bracketExposureEnabled = cameraController.state.value.hdrPlusBracketExposureEnabled,
+        )
+        cameraController.setHdrPlusFrameCount(normalizedCount)
+        viewModelScope.launch {
+            userPreferencesRepository.saveHdrPlusFrameCount(normalizedCount)
+        }
+    }
+
+    fun setHdrPlusBracketExposureEnabled(enabled: Boolean) {
+        val normalizedFrameCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
+            cameraController.state.value.hdrPlusFrameCount,
+            bracketExposureEnabled = enabled,
+        )
+        cameraController.setHdrPlusFrameCount(normalizedFrameCount)
+        cameraController.setHdrPlusBracketExposureEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveHdrPlusFrameCount(normalizedFrameCount)
+            userPreferencesRepository.saveHdrPlusBracketExposureEnabled(enabled)
         }
     }
 
@@ -4567,15 +4611,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         multipleExposureState = multipleExposureState.copy(targetCount = normalizedCount)
         viewModelScope.launch {
             userPreferencesRepository.saveMultipleExposureCount(normalizedCount)
-        }
-    }
-
-    /** RAWmax：RAW Radiance 多帧管线。 */
-    fun setUseRawMax(enabled: Boolean) {
-        viewModelScope.launch {
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(useRawMax = SettingValue(enabled))
-            )
         }
     }
 
@@ -5449,6 +5484,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
                 hasEmbeddedGainmap = false,
+                isProfessionalCapture = isRawCapture,
                 userPrefs = userPrefs,
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
@@ -5864,7 +5900,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            val rawMaxMode = userPrefs?.rawMaxSpatialMode ?: MgcRawMaxMode.DEFAULT
+            val rawMaxMode = MgcRawMaxMode.SPATIAL
             val rawSpatialOutputMode = if (isRawStack) {
                 rawMaxMode.outputMode
             } else {
@@ -5902,6 +5938,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
                 hasEmbeddedGainmap = false,
+                isProfessionalCapture = isRawStack,
                 userPrefs = userPrefs,
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
@@ -6340,6 +6377,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
             hasEmbeddedGainmap = false,
+            isProfessionalCapture = isRawCapture,
             userPrefs = userPrefs,
         )
         val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)

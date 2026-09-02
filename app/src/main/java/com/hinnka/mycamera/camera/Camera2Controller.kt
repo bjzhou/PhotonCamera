@@ -626,14 +626,14 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveImageReaderMaxImages(): Int {
         val currentState = _state.value
-        val multiFrameCount = MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
+        val multiFrameCount = currentState.activeMultiFrameCount
         val usesJpgMaxHdr = currentState.isJpgMaxHdrEnabled
         val requestedImages = when {
             usesJpgMaxHdr ->
                 multiFrameCount + HDR_BRACKET_SIDE_FRAME_COUNT
 
             currentState.isMultiFrameEnabled ->
-                MultiFrameConfig.captureFrameCount(multiFrameCount)
+                multiFrameCount
 
             else -> BURST_CAPTURE_BATCH_SIZE
         }
@@ -647,7 +647,7 @@ class Camera2Controller(private val context: Context) {
             currentState.hdrBracketCapturing -> currentState.hdrBracketFrameCount
                 .coerceAtLeast(HDR_BRACKET_BASE_CAPTURE_COUNT)
             currentState.isMultiFrameEnabled ->
-                MultiFrameConfig.captureFrameCount(currentState.multiFrameCount)
+                currentState.activeMultiFrameCount
 
             else -> 1
         }
@@ -6469,11 +6469,6 @@ class Camera2Controller(private val context: Context) {
         val normalizedScale = outputScale?.let(MultiFrameConfig::normalizeOutputScale)
         _state.value = currentState.copy(
             multiFrameOutputScale = normalizedScale,
-            multiFrameCount = if (normalizedScale != null) {
-                MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
-            } else {
-                currentState.multiFrameCount
-            },
         )
     }
 
@@ -6488,9 +6483,19 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
-    fun setMultiFrameCount(multiFrameCount: Int) {
+    fun setJpgMultiFrameDenoiseFrameCount(frameCount: Int) {
         _state.value = _state.value.copy(
-            multiFrameCount = MultiFrameConfig.normalizeFrameCount(multiFrameCount),
+            jpgMultiFrameDenoiseFrameCount = MultiFrameConfig.normalizeDenoiseFrameCount(frameCount),
+        )
+    }
+
+    fun setHdrPlusFrameCount(frameCount: Int) {
+        val currentState = _state.value
+        _state.value = _state.value.copy(
+            hdrPlusFrameCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
+                frameCount,
+                bracketExposureEnabled = currentState.hdrPlusBracketExposureEnabled,
+            ),
         )
     }
 
@@ -6498,8 +6503,15 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(useJpgMaxHdrComposition = enabled)
     }
 
-    fun setUseRawMaxHdrComposition(enabled: Boolean) {
-        _state.value = _state.value.copy(useRawMaxHdrComposition = enabled)
+    fun setHdrPlusBracketExposureEnabled(enabled: Boolean) {
+        val currentState = _state.value
+        _state.value = currentState.copy(
+            hdrPlusBracketExposureEnabled = enabled,
+            hdrPlusFrameCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
+                currentState.hdrPlusFrameCount,
+                bracketExposureEnabled = enabled,
+            ),
+        )
     }
 
 
@@ -7446,7 +7458,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveHdrBracketZeroEvFrameCount(state: CameraState): Int {
         return if (state.isMultiFrameEnabled) {
-            MultiFrameConfig.normalizeFrameCount(state.multiFrameCount)
+            state.activeMultiFrameCount
         } else {
             0
         }
@@ -7575,44 +7587,48 @@ class Camera2Controller(private val context: Context) {
 
             if (currentState.isMultiFrameEnabled) {
                 // Burst Mode
-                val requestedFrameCount = currentState.multiFrameCount
-                val frameCount = MultiFrameConfig.normalizeFrameCount(requestedFrameCount)
-                if (frameCount != requestedFrameCount) {
-                    PLog.w(
-                        TAG,
-                        "Normalized invalid multi-frame count $requestedFrameCount to $frameCount",
-                    )
-                }
+                val frameCount = currentState.activeMultiFrameCount
                 captureBuilder.setTag(MultiFrameCaptureRole.BASE)
                 val baseRequest = captureBuilder.build()
-                val useRawMaxHdrExposurePlan =
-                    currentState.isRawMaxHdrEnabled && !useMultiFrameTorch
-                val requests = if (!useRawMaxHdrExposurePlan) {
+                val useHdrPlusBracketExposurePlan =
+                    currentState.isHdrPlusBracketExposureEnabled && !useMultiFrameTorch
+                val requests = if (!useHdrPlusBracketExposurePlan) {
                     List(frameCount) { baseRequest }
                 } else {
-                    val normalFrameCount = MultiFrameConfig.normalFrameCount(frameCount)
-                    val longFrameCount = MultiFrameConfig.longFrameCount(frameCount)
-                    val shortRequest = buildMultiFrameShortCaptureRequest(
-                        device = device,
-                        reader = reader,
-                        state = currentState,
-                        baseResult = baseExposureResult,
-                        baseRequest = baseRequest,
-                        isRawCapture = isRawCapture,
-                    )
-                    val longRequest = buildMultiFrameLongCaptureRequest(
-                        device = device,
-                        reader = reader,
-                        state = currentState,
-                        baseResult = baseExposureResult,
-                        baseRequest = baseRequest,
-                        isRawCapture = isRawCapture,
-                    )
-                    val radianceRequests = buildList(MultiFrameConfig.captureFrameCount(frameCount)) {
+                    val normalFrameCount = MultiFrameConfig.hdrPlusNormalFrameCount(frameCount)
+                    val shortFrameCount = MultiFrameConfig.hdrPlusShortFrameCount(frameCount)
+                    val longFrameCount = MultiFrameConfig.hdrPlusLongFrameCount(frameCount)
+                    val shortRequest = if (shortFrameCount > 0) {
+                        buildMultiFrameShortCaptureRequest(
+                            device = device,
+                            reader = reader,
+                            state = currentState,
+                            baseResult = baseExposureResult,
+                            baseRequest = baseRequest,
+                            isRawCapture = isRawCapture,
+                        )
+                    } else {
+                        null
+                    }
+                    val longRequest = if (longFrameCount > 0) {
+                        buildMultiFrameLongCaptureRequest(
+                            device = device,
+                            reader = reader,
+                            state = currentState,
+                            baseResult = baseExposureResult,
+                            baseRequest = baseRequest,
+                            isRawCapture = isRawCapture,
+                        )
+                    } else {
+                        null
+                    }
+                    val radianceRequests = buildList(
+                        MultiFrameConfig.hdrPlusCaptureFrameCount(frameCount)
+                    ) {
                         repeat(normalFrameCount) {
                             add(baseRequest)
                         }
-                        add(shortRequest)
+                        shortRequest?.let(::add)
                         repeat(longFrameCount) {
                             add(longRequest ?: baseRequest)
                         }
@@ -7620,8 +7636,8 @@ class Camera2Controller(private val context: Context) {
                     val scheduledLongFrameCount = if (longRequest != null) longFrameCount else 0
                     PLog.i(
                         TAG,
-                        "Multi-frame burst plan: normalFrames=$normalFrameCount shortFrames=" +
-                            "${MultiFrameConfig.SHORT_FRAME_COUNT} " +
+                        "HDR+ burst plan: normalFrames=$normalFrameCount shortFrames=" +
+                            "$shortFrameCount " +
                             "longFrames=$scheduledLongFrameCount " +
                             "fallbackNormalFrames=${longFrameCount - scheduledLongFrameCount} " +
                             "longTargetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
@@ -7644,7 +7660,7 @@ class Camera2Controller(private val context: Context) {
                         TAG,
                         "JPGmax denoise burst plan: zeroEvFrames=${requests.size} hdr=false",
                     )
-                } else if (!useRawMaxHdrExposurePlan) {
+                } else if (!useHdrPlusBracketExposurePlan) {
                     PLog.i(
                         TAG,
                         "RAWmax same-exposure burst plan: baseFrames=${requests.size} " +

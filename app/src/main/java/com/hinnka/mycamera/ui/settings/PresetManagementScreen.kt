@@ -426,7 +426,9 @@ private fun PresetManagementItem(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     val rawRenderingEngine = RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine)
                     PresetFeatureText(preset.aspectRatio.removePrefix("RATIO_").replace("_", ":"))
-                    if (preset.useRaw) PresetFeatureText("RAW")
+                    if (preset.useRaw) {
+                        PresetFeatureText(stringResource(R.string.capture_mode_professional))
+                    }
                     if (preset.useJpgMax) PresetFeatureText(stringResource(R.string.settings_use_jpg_max))
                     if (preset.useRawMax) PresetFeatureText(stringResource(R.string.settings_use_raw_max))
                     if (rawRenderingEngine == RawRenderingEngine.Spektrafilm) PresetFeatureText("FILM")

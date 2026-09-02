@@ -9,10 +9,13 @@ object MultiFrameConfig {
      */
     const val ENABLE_MGC_SPATIAL_DEFAULT_DENOISE = true
 
-    const val MIN_FRAME_COUNT = 3
+    const val MIN_DENOISE_FRAME_COUNT = 3
+    const val DEFAULT_DENOISE_FRAME_COUNT = 5
+    const val MIN_HDR_PLUS_FRAME_COUNT = 1
+    const val MIN_HDR_PLUS_BRACKET_FRAME_COUNT = 2
+    const val DEFAULT_HDR_PLUS_FRAME_COUNT = 3
     const val MAX_FRAME_COUNT = 20
-    const val DEFAULT_FRAME_COUNT = 5
-    const val DEFAULT_RAW_MAX_HDR_COMPOSITION = false
+    const val DEFAULT_HDR_PLUS_BRACKET_EXPOSURE = false
     const val MIN_OUTPUT_SCALE = 1f
     const val MAX_OUTPUT_SCALE = 2f
     const val DEFAULT_SUPER_RESOLUTION_SCALE = 1f
@@ -24,8 +27,20 @@ object MultiFrameConfig {
     const val LONG_FRAME_MAX_EXPOSURE_TIME_NS = 10_000_000L
     const val LONG_FRAME_FALLBACK_MAX_ANALOG_SENSITIVITY = 800
 
-    fun normalizeFrameCount(frameCount: Int): Int {
-        return frameCount.coerceIn(MIN_FRAME_COUNT, MAX_FRAME_COUNT)
+    fun normalizeDenoiseFrameCount(frameCount: Int): Int {
+        return frameCount.coerceIn(MIN_DENOISE_FRAME_COUNT, MAX_FRAME_COUNT)
+    }
+
+    fun normalizeHdrPlusFrameCount(
+        frameCount: Int,
+        bracketExposureEnabled: Boolean = false,
+    ): Int {
+        val minimumFrameCount = if (bracketExposureEnabled) {
+            MIN_HDR_PLUS_BRACKET_FRAME_COUNT
+        } else {
+            MIN_HDR_PLUS_FRAME_COUNT
+        }
+        return frameCount.coerceIn(minimumFrameCount, MAX_FRAME_COUNT)
     }
 
     fun normalizeOutputScale(
@@ -56,20 +71,33 @@ object MultiFrameConfig {
         }
     }
 
-    fun normalFrameCount(totalFrameCount: Int): Int {
-        val normalizedFrameCount = normalizeFrameCount(totalFrameCount)
-        return normalizedFrameCount - SHORT_FRAME_COUNT - longFrameCount(normalizedFrameCount)
+    fun hdrPlusNormalFrameCount(totalFrameCount: Int): Int {
+        val normalizedFrameCount = normalizeHdrPlusFrameCount(totalFrameCount)
+        return when (normalizedFrameCount) {
+            1, 2 -> 1
+            else -> normalizedFrameCount -
+                hdrPlusShortFrameCount(normalizedFrameCount) -
+                hdrPlusLongFrameCount(normalizedFrameCount)
+        }
     }
 
-    fun longFrameCount(totalFrameCount: Int): Int {
-        return (normalizeFrameCount(totalFrameCount) / LONG_FRAME_COUNT_DIVISOR)
-            .coerceAtLeast(MIN_LONG_FRAME_COUNT)
+    fun hdrPlusShortFrameCount(totalFrameCount: Int): Int {
+        return if (normalizeHdrPlusFrameCount(totalFrameCount) >= 3) SHORT_FRAME_COUNT else 0
     }
 
-    fun captureFrameCount(totalFrameCount: Int): Int {
-        val normalizedFrameCount = normalizeFrameCount(totalFrameCount)
-        return normalFrameCount(normalizedFrameCount) +
-            SHORT_FRAME_COUNT +
-            longFrameCount(normalizedFrameCount)
+    fun hdrPlusLongFrameCount(totalFrameCount: Int): Int {
+        return when (val normalizedFrameCount = normalizeHdrPlusFrameCount(totalFrameCount)) {
+            1 -> 0
+            2 -> 1
+            else -> (normalizedFrameCount / LONG_FRAME_COUNT_DIVISOR)
+                .coerceAtLeast(MIN_LONG_FRAME_COUNT)
+        }
+    }
+
+    fun hdrPlusCaptureFrameCount(totalFrameCount: Int): Int {
+        val normalizedFrameCount = normalizeHdrPlusFrameCount(totalFrameCount)
+        return hdrPlusNormalFrameCount(normalizedFrameCount) +
+            hdrPlusShortFrameCount(normalizedFrameCount) +
+            hdrPlusLongFrameCount(normalizedFrameCount)
     }
 }

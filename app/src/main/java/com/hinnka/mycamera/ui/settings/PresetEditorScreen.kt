@@ -104,9 +104,10 @@ fun PresetEditorScreen(
 
     // 相机参数
     var aspectRatio by remember { mutableStateOf(sourcePreset?.aspectRatio ?: AspectRatio.RATIO_4_3.name) }
-    var useRaw by remember { mutableStateOf(sourcePreset?.useRaw ?: false) }
+    var useRaw by remember {
+        mutableStateOf(sourcePreset?.let { it.useRaw || it.useRawMax } ?: false)
+    }
     var useJpgMax by remember { mutableStateOf(sourcePreset?.useJpgMax ?: false) }
-    var useRawMax by remember { mutableStateOf(sourcePreset?.useRawMax ?: false) }
     var ultraHdrGainMapEnabled by remember {
         mutableStateOf(sourcePreset?.ultraHdrGainMapEnabled ?: false)
     }
@@ -204,7 +205,7 @@ fun PresetEditorScreen(
             aspectRatio = aspectRatio,
             useRaw = useRaw,
             useJpgMax = useJpgMax,
-            useRawMax = useRawMax,
+            useRawMax = useRaw,
             ultraHdrGainMapEnabled = ultraHdrGainMapEnabled,
             frameId = frameId,
             rawDcpId = rawDcpId,
@@ -379,32 +380,8 @@ fun PresetEditorScreen(
                         useJpgMax = it
                         if (it) {
                             useRaw = false
-                            useRawMax = false
                         }
                     }
-                )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_raw_max),
-                    checked = useRawMax,
-                    onCheckedChange = {
-                        useRawMax = it
-                        if (it) {
-                            useRaw = true
-                            useJpgMax = false
-                        }
-                    }
-                )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_ultra_hdr_gain_map),
-                    description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
-                    checked = ultraHdrGainMapEnabled,
-                    onCheckedChange = { ultraHdrGainMapEnabled = it }
                 )
 
             }
@@ -477,22 +454,30 @@ fun PresetEditorScreen(
             }
 
             SettingsSection(
-                title = stringResource(R.string.baseline_target_raw),
+                title = stringResource(R.string.settings_professional_parameters),
                 isExpandable = true,
                 isExpanded = expandQuickRaw,
                 onToggleExpand = { expandQuickRaw = !expandQuickRaw }
             ) {
                 SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_raw),
+                    title = stringResource(R.string.capture_mode_professional),
                     checked = useRaw,
                     onCheckedChange = {
                         useRaw = it
                         if (it) {
                             useJpgMax = false
-                        } else {
-                            useRawMax = false
                         }
                     }
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                    description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
+                    checked = ultraHdrGainMapEnabled,
+                    onCheckedChange = { ultraHdrGainMapEnabled = it },
+                    enabled = useRaw,
                 )
 
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))

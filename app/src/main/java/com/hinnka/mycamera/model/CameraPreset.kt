@@ -66,13 +66,9 @@ data class CameraPreset(
     }
 
     fun withSupportedCaptureCombination(): CameraPreset {
-        val resolvedUseRawMax = useRawMax
-        val resolvedUseJpgMax = useJpgMax && !resolvedUseRawMax
-        val resolvedUseRaw = when {
-            resolvedUseRawMax -> true
-            resolvedUseJpgMax -> false
-            else -> useRaw
-        }
+        val resolvedUseRaw = useRaw || useRawMax
+        val resolvedUseRawMax = resolvedUseRaw
+        val resolvedUseJpgMax = useJpgMax && !resolvedUseRaw
         return if (
             resolvedUseRaw == useRaw &&
             resolvedUseJpgMax == useJpgMax &&

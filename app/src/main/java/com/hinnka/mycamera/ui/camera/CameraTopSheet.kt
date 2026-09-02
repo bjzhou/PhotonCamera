@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
 import android.media.AudioDeviceInfo
-import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.animation.*
 import androidx.compose.foundation.ScrollState
@@ -35,17 +34,14 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
-import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
-import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.SpectralFilmSelection
-import com.hinnka.mycamera.ui.components.RawEditPanel
-import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import com.hinnka.mycamera.ui.components.RawDcpLensOption
+import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
@@ -68,7 +64,7 @@ private val CameraTopSheetContentTopPadding = 32.dp
  * connection only consumes forward scrolling at the content bottom, so dragging down from the
  * content top and dragging the sheet handle retain their standard collapse/dismiss behavior.
  */
-private class RawSheetScrollBoundaryConnection(
+private class RenderingEngineSheetScrollBoundaryConnection(
     private val scrollState: ScrollState
 ) : NestedScrollConnection {
     override fun onPostScroll(
@@ -116,7 +112,6 @@ fun CameraTopSheet(
     videoAudioInputOptions: List<VideoAudioInputOption>,
     onVideoAudioInputChange: (String) -> Unit,
     useRaw: Boolean,
-    onRawToggle: (Boolean) -> Unit,
     isRawSupported: Boolean,
     rawDcpId: String?,
     rawDcpIdsByLens: Map<String, String?> = emptyMap(),
@@ -125,32 +120,20 @@ fun CameraTopSheet(
     rawHncsProfileId: String?,
     rawHncsFilmCurveMode: HncsFilmCurveMode,
     availableHncsProfiles: List<HncsProfileInfo>,
-    rawBaselineLutId: String?,
-    availableLuts: List<LutInfo>,
-    previewThumbnail: Bitmap?,
-    rawExposureCompensation: Float,
-    rawAdaptiveExposureMode: RawAdaptiveExposureMode,
-    rawHighlightsAdjustment: Float,
-    rawShadowsAdjustment: Float,
-    rawDROMode: String,
-    rawBlackPointCorrection: Float,
-    rawWhitePointCorrection: Float,
     rawRenderingEngine: RawRenderingEngine,
     rawToneMappingParameters: RawToneMappingParameters,
     rawSpectralFilmSelection: SpectralFilmSelection?,
     rawSpectralFilmPrint: String?,
+    ultraHdrEnabled: Boolean,
+    onUltraHdrToggle: (Boolean) -> Unit,
     onRawDcpChange: (String?) -> Unit,
     onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
     onRawHncsProfileChange: (String?) -> Unit,
     onRawHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit,
     onImportRawDcp: () -> Unit,
     onDeleteRawDcp: (DcpInfo) -> Unit,
-    onRawBaselineLutChange: (String?) -> Unit,
-    onEditRawBaselineRecipe: (String) -> Unit,
-    onRawDROModeChange: (String) -> Unit,
     onRawColorEngineChange: (RawRenderingEngine) -> Unit,
     onRawToneMappingParametersChange: (RawToneMappingParameters) -> Unit,
-    onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit,
     onRawSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onRawSpectralFilmPrintChange: (String?) -> Unit,
     meteringMode: MeteringMode,
@@ -162,15 +145,13 @@ fun CameraTopSheet(
     onMoreSettingsClick: () -> Unit,
     useJpgMax: Boolean,
     onJpgMaxToggle: (Boolean) -> Unit,
-    useRawMax: Boolean,
-    onRawMaxToggle: (Boolean) -> Unit,
     useMultipleExposure: Boolean,
     onMultipleExposureToggle: (Boolean) -> Unit,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
     modifier: Modifier = Modifier
 ) {
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
-    var showRawSheet by rememberSaveable { mutableStateOf(false) }
+    var showRenderingEngineSheet by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
     fun handleContentManagementAction(action: () -> Unit) {
         showContentManagementOptions = false
@@ -179,6 +160,12 @@ fun CameraTopSheet(
 
     LaunchedEffect(visible, captureMode) {
         showContentManagementOptions = false
+    }
+
+    LaunchedEffect(useRaw) {
+        if (!useRaw) {
+            showRenderingEngineSheet = false
+        }
     }
 
     AnimatedVisibility(
@@ -198,6 +185,7 @@ fun CameraTopSheet(
                 .autoRotate()
         ) {
             if (captureMode == CaptureMode.PHOTO) {
+                val isProfessionalMode = useRaw && isRawSupported
                 SectionLabel(title = stringResource(R.string.aspect_ratio))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -234,49 +222,30 @@ fun CameraTopSheet(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_jpg_max),
-                        checked = useJpgMax,
-                        onCheckedChange = onJpgMaxToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    if (isRawSupported) {
-                        QuickSettingToggle(
-                            title = stringResource(R.string.settings_use_raw_max),
-                            checked = useRawMax,
-                            onCheckedChange = onRawMaxToggle,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    if (isRawSupported) {
+                    if (isProfessionalMode) {
                         QuickSettingButton2(
-                            title = stringResource(R.string.baseline_target_raw),
-                            checked = useRaw,
-                            onClick = { showRawSheet = true },
+                            title = stringResource(R.string.settings_raw_color_engine),
+                            checked = true,
+                            onClick = { showRenderingEngineSheet = true },
                             modifier = Modifier.weight(1f)
                         )
-                    }
-
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_multiple_exposure),
-                        checked = useMultipleExposure,
-                        onCheckedChange = onMultipleExposureToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    if (!isRawSupported) {
-                        MeteringModeQuickSetting(
-                            meteringMode = meteringMode,
-                            onMeteringModeChange = onMeteringModeChange,
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                            checked = ultraHdrEnabled,
+                            onCheckedChange = onUltraHdrToggle,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_use_jpg_max),
+                            checked = useJpgMax,
+                            onCheckedChange = onJpgMaxToggle,
+                            modifier = Modifier.weight(1f)
+                        )
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_use_multiple_exposure),
+                            checked = useMultipleExposure,
+                            onCheckedChange = onMultipleExposureToggle,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -288,13 +257,11 @@ fun CameraTopSheet(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (isRawSupported) {
-                        MeteringModeQuickSetting(
-                            meteringMode = meteringMode,
-                            onMeteringModeChange = onMeteringModeChange,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                    MeteringModeQuickSetting(
+                        meteringMode = meteringMode,
+                        onMeteringModeChange = onMeteringModeChange,
+                        modifier = Modifier.weight(1f)
+                    )
 
                     ToolboxQuickSetting(
                         onToolboxClick = onToolboxClick,
@@ -306,9 +273,6 @@ fun CameraTopSheet(
                         modifier = Modifier.weight(1f)
                     )
 
-                    if (!isRawSupported) {
-                        Spacer(modifier = Modifier.weight(1f).height(40.dp))
-                    }
                 }
 
                 ContentManagementOptionsPanel(
@@ -561,51 +525,36 @@ fun CameraTopSheet(
         }
     }
 
-    if (showRawSheet) {
-        val rawSheetScrollState = rememberScrollState()
-        val rawSheetScrollBoundaryConnection = remember(rawSheetScrollState) {
-            RawSheetScrollBoundaryConnection(rawSheetScrollState)
+    if (showRenderingEngineSheet) {
+        val renderingEngineScrollState = rememberScrollState()
+        val renderingEngineScrollBoundaryConnection = remember(renderingEngineScrollState) {
+            RenderingEngineSheetScrollBoundaryConnection(renderingEngineScrollState)
         }
         ModalBottomSheet(
-            onDismissRequest = { showRawSheet = false },
+            onDismissRequest = { showRenderingEngineSheet = false },
             containerColor = Color(0xFF1E1E1E),
             dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .nestedScroll(rawSheetScrollBoundaryConnection)
-                    .verticalScroll(rawSheetScrollState)
+                    .nestedScroll(renderingEngineScrollBoundaryConnection)
+                    .verticalScroll(renderingEngineScrollState)
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
-                    text = stringResource(R.string.settings_use_raw),
+                    text = stringResource(R.string.settings_raw_color_engine),
                     color = Color.White,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                RawCaptureSwitch(
-                    checked = useRaw,
-                    onCheckedChange = onRawToggle
-                )
-                RawEditPanel(
+                RawRenderingEngineSettingsPanel(
                     selectedDcpId = rawDcpId,
                     rawDcpIdsByLens = rawDcpIdsByLens,
                     dcpLensOptions = rawDcpLensOptions,
                     availableDcps = availableDcps,
-                    selectedBaselineLutId = rawBaselineLutId,
-                    onSelectBaselineLut = onRawBaselineLutChange,
-                    onEditBaselineRecipe = onEditRawBaselineRecipe,
-                    availableLuts = availableLuts,
-                    thumbnail = previewThumbnail,
-                    rawExposureCompensation = rawExposureCompensation,
-                    rawAdaptiveExposureMode = rawAdaptiveExposureMode,
-                    rawHighlightsAdjustment = rawHighlightsAdjustment,
-                    rawShadowsAdjustment = rawShadowsAdjustment,
-                    rawBlackPointCorrection = rawBlackPointCorrection,
-                    rawWhitePointCorrection = rawWhitePointCorrection,
                     rawRenderingEngine = rawRenderingEngine,
                     rawToneMappingParameters = rawToneMappingParameters,
                     spectralFilmSelection = rawSpectralFilmSelection,
@@ -619,63 +568,15 @@ fun CameraTopSheet(
                     onSelectHncsProfile = onRawHncsProfileChange,
                     hncsFilmCurveMode = rawHncsFilmCurveMode,
                     onHncsFilmCurveModeChange = onRawHncsFilmCurveModeChange,
-                    onRawExposureCompensationChange = {},
-                    onRawAdaptiveExposureModeChange = onRawAdaptiveExposureModeChange,
-                    onRawHighlightsAdjustmentChange = {},
-                    onRawShadowsAdjustmentChange = {},
-                    onRawBlackPointCorrectionChange = {},
-                    onRawWhitePointCorrectionChange = {},
                     onRawColorEngineChange = onRawColorEngineChange,
                     onRawToneMappingParametersChange = onRawToneMappingParametersChange,
                     onSpectralFilmSelectionChange = onRawSpectralFilmSelectionChange,
                     onSpectralFilmPrintChange = onRawSpectralFilmPrintChange,
-                    onAdjustmentStart = {},
-                    onAdjustmentEnd = {},
-                    contentMode = RawEditPanelContentMode.QUICK
+                    inlineEngineOptions = true,
+                    showToneMappingControls = true,
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun RawCaptureSwitch(
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.settings_use_raw),
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Normal
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = stringResource(R.string.settings_use_raw_description),
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
-        }
-        Spacer(modifier = Modifier.width(16.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = Color(0xFFFF6B35),
-                uncheckedThumbColor = Color.Gray,
-                uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
-                uncheckedBorderColor = Color.Transparent
-            )
-        )
     }
 }
 

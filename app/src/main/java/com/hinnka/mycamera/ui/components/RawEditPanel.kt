@@ -184,90 +184,36 @@ fun RawEditPanel(
         }
         Spacer(modifier = Modifier.height(16.dp))
 
-        RawRenderingEngineSelector(
-            selectedEngine = rawRenderingEngine,
-            onSelectEngine = onRawColorEngineChange
+        RawRenderingEngineSettingsPanel(
+            selectedDcpId = selectedDcpId,
+            rawDcpIdsByLens = rawDcpIdsByLens,
+            dcpLensOptions = dcpLensOptions,
+            availableDcps = availableDcps,
+            rawRenderingEngine = rawRenderingEngine,
+            rawToneMappingParameters = rawToneMappingParameters,
+            spectralFilmSelection = spectralFilmSelection,
+            spectralFilmPrint = spectralFilmPrint,
+            onSelectDcp = onSelectDcp,
+            onRawDcpIdsByLensChange = onRawDcpIdsByLensChange,
+            onImportDcp = onImportDcp,
+            onDeleteDcp = onDeleteDcp,
+            onRawColorEngineChange = onRawColorEngineChange,
+            onRawToneMappingParametersChange = onRawToneMappingParametersChange,
+            embeddedDngProfiles = embeddedDngProfiles,
+            selectedEmbeddedDngProfileId = selectedEmbeddedDngProfileId,
+            onSelectEmbeddedDngProfile = onSelectEmbeddedDngProfile,
+            onSpectralFilmSelectionChange = onSpectralFilmSelectionChange,
+            onSpectralFilmPrintChange = onSpectralFilmPrintChange,
+            selectedHncsProfileId = selectedHncsProfileId,
+            availableHncsProfiles = availableHncsProfiles,
+            onSelectHncsProfile = onSelectHncsProfile,
+            hncsFilmCurveMode = hncsFilmCurveMode,
+            onHncsFilmCurveModeChange = onHncsFilmCurveModeChange,
+            onAdjustmentStart = onAdjustmentStart,
+            onAdjustmentEnd = onAdjustmentEnd,
+            inlineEngineOptions = false,
+            showToneMappingControls = contentMode != RawEditPanelContentMode.QUICK,
         )
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (rawRenderingEngine.isHncs) {
-            RawChoiceSetting(
-                title = stringResource(R.string.settings_raw_hncs_color_branch),
-                description = stringResource(R.string.settings_raw_hncs_color_branch_description),
-                levels = listOf(
-                    RawRenderingEngine.HncsCcm.name to
-                        stringResource(R.string.settings_raw_hncs_color_branch_ccm),
-                    RawRenderingEngine.HncsLut.name to
-                        stringResource(R.string.settings_raw_hncs_color_branch_lut)
-                ),
-                currentLevel = rawRenderingEngine.name,
-                onLevelSelected = { persistedName ->
-                    onRawColorEngineChange(
-                        RawRenderingEngine.fromPersistedName(
-                            persistedName,
-                            RawRenderingEngine.HncsCcm
-                        )
-                    )
-                }
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            if (rawRenderingEngine == RawRenderingEngine.HncsLut &&
-                availableHncsProfiles.isNotEmpty()
-            ) {
-                RawChoiceSetting(
-                    title = stringResource(R.string.settings_raw_hncs_2d_lut),
-                    description = stringResource(R.string.settings_raw_hncs_profile_description),
-                    levels = availableHncsProfiles.map { profile ->
-                        profile.id to profile.displayName
-                    },
-                    currentLevel = selectedHncsProfileId.orEmpty(),
-                    onLevelSelected = { onSelectHncsProfile(it) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-            RawChoiceSetting(
-                title = stringResource(R.string.settings_raw_hncs_film_curve),
-                description = stringResource(R.string.settings_raw_hncs_film_curve_description),
-                levels = listOf(
-                    HncsFilmCurveMode.Standard.persistedValue to
-                        stringResource(R.string.settings_raw_hncs_film_curve_standard),
-                    HncsFilmCurveMode.Reproduction.persistedValue to
-                        stringResource(R.string.settings_raw_hncs_film_curve_reproduction)
-                ),
-                currentLevel = hncsFilmCurveMode.persistedValue,
-                onLevelSelected = { persistedValue ->
-                    onHncsFilmCurveModeChange(
-                        HncsFilmCurveMode.fromPersistedValue(persistedValue)
-                    )
-                }
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
-            RawDcpSelector(
-                selectedDcpId = selectedDcpId,
-                rawDcpIdsByLens = rawDcpIdsByLens,
-                lensOptions = dcpLensOptions,
-                availableDcps = availableDcps,
-                onSelectDcp = onSelectDcp,
-                onRawDcpIdsByLensChange = onRawDcpIdsByLensChange,
-                onImportDcp = onImportDcp,
-                onDeleteDcp = onDeleteDcp
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            RawProfileToneMapSwitches(
-                params = rawToneMappingParameters.normalized(),
-                selectedDcpName = availableDcps.firstOrNull { it.id == selectedDcpId }?.getName(),
-                hasSelectedDcpId = selectedDcpId != null,
-                embeddedDngProfiles = embeddedDngProfiles,
-                selectedEmbeddedDngProfileId = selectedEmbeddedDngProfileId,
-                onSelectEmbeddedDngProfile = onSelectEmbeddedDngProfile,
-                onParamsChange = onRawToneMappingParametersChange,
-                onAdjustmentEnd = onAdjustmentEnd
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
 
         if (contentMode == RawEditPanelContentMode.FULL && availableRawNoiseProfiles.isNotEmpty()) {
             RawNoiseProfileSelector(
@@ -283,36 +229,7 @@ fun RawEditPanel(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        if (rawRenderingEngine == RawRenderingEngine.Spektrafilm) {
-            val isPositiveFilm = SpectralFilmUiInfo.isPositiveFilm(spectralFilmSelection?.id)
-            RawSpectralFilmSelector(
-                selectedFilm = spectralFilmSelection?.id,
-                onSelectFilm = { film ->
-                    onSpectralFilmSelectionChange(film?.let { SpectralFilmSelection(it) })
-                }
-            )
-            if (!isPositiveFilm) {
-                Spacer(modifier = Modifier.height(16.dp))
-                RawSpectralPrintSelector(
-                    selectedPrint = spectralFilmPrint,
-                    onSelectPrint = onSpectralFilmPrintChange
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            } else {
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-        }
-
-        if (contentMode != RawEditPanelContentMode.QUICK) {
-            RawToneMappingControls(
-                rawRenderingEngine = rawRenderingEngine,
-                params = rawToneMappingParameters.normalized(),
-                spectralFilmSelection = spectralFilmSelection,
-                onParamsChange = onRawToneMappingParametersChange,
-                onSpectralFilmSelectionChange = onSpectralFilmSelectionChange,
-                onAdjustmentStart = onAdjustmentStart,
-                onAdjustmentEnd = onAdjustmentEnd
-            )
+        if (contentMode == RawEditPanelContentMode.FULL) {
             SliderSettingItem(
                 title = stringResource(R.string.settings_raw_exposure_compensation),
                 value = rawExposureCompensation,
@@ -394,6 +311,157 @@ fun RawEditPanel(
             onOpenSheet = onOpenBaselineLutSheet
         )
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+fun RawRenderingEngineSettingsPanel(
+    selectedDcpId: String?,
+    rawDcpIdsByLens: Map<String, String?> = emptyMap(),
+    dcpLensOptions: List<RawDcpLensOption> = emptyList(),
+    availableDcps: List<DcpInfo>,
+    rawRenderingEngine: RawRenderingEngine,
+    rawToneMappingParameters: RawToneMappingParameters,
+    spectralFilmSelection: SpectralFilmSelection?,
+    spectralFilmPrint: String?,
+    onSelectDcp: (String?) -> Unit,
+    onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
+    onImportDcp: () -> Unit,
+    onDeleteDcp: (DcpInfo) -> Unit,
+    onRawColorEngineChange: (RawRenderingEngine) -> Unit,
+    onRawToneMappingParametersChange: (RawToneMappingParameters) -> Unit,
+    embeddedDngProfiles: List<RawEmbeddedDngProfileOption> = emptyList(),
+    selectedEmbeddedDngProfileId: String? = null,
+    onSelectEmbeddedDngProfile: ((RawEmbeddedDngProfileOption) -> Unit)? = null,
+    onSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
+    onSpectralFilmPrintChange: (String?) -> Unit,
+    selectedHncsProfileId: String? = null,
+    availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
+    onSelectHncsProfile: (String?) -> Unit = {},
+    hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
+    onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
+    onAdjustmentStart: () -> Unit = {},
+    onAdjustmentEnd: () -> Unit = {},
+    inlineEngineOptions: Boolean = false,
+    showToneMappingControls: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        RawRenderingEngineSelector(
+            selectedEngine = rawRenderingEngine,
+            onSelectEngine = onRawColorEngineChange,
+            inlineOptions = inlineEngineOptions,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (rawRenderingEngine.isHncs) {
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_hncs_color_branch),
+                description = stringResource(R.string.settings_raw_hncs_color_branch_description),
+                levels = listOf(
+                    RawRenderingEngine.HncsCcm.name to
+                        stringResource(R.string.settings_raw_hncs_color_branch_ccm),
+                    RawRenderingEngine.HncsLut.name to
+                        stringResource(R.string.settings_raw_hncs_color_branch_lut),
+                ),
+                currentLevel = rawRenderingEngine.name,
+                onLevelSelected = { persistedName ->
+                    onRawColorEngineChange(
+                        RawRenderingEngine.fromPersistedName(
+                            persistedName,
+                            RawRenderingEngine.HncsCcm,
+                        )
+                    )
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            if (rawRenderingEngine == RawRenderingEngine.HncsLut &&
+                availableHncsProfiles.isNotEmpty()
+            ) {
+                RawChoiceSetting(
+                    title = stringResource(R.string.settings_raw_hncs_2d_lut),
+                    description = stringResource(R.string.settings_raw_hncs_profile_description),
+                    levels = availableHncsProfiles.map { profile ->
+                        profile.id to profile.displayName
+                    },
+                    currentLevel = selectedHncsProfileId.orEmpty(),
+                    onLevelSelected = onSelectHncsProfile,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_hncs_film_curve),
+                description = stringResource(R.string.settings_raw_hncs_film_curve_description),
+                levels = listOf(
+                    HncsFilmCurveMode.Standard.persistedValue to
+                        stringResource(R.string.settings_raw_hncs_film_curve_standard),
+                    HncsFilmCurveMode.Reproduction.persistedValue to
+                        stringResource(R.string.settings_raw_hncs_film_curve_reproduction),
+                ),
+                currentLevel = hncsFilmCurveMode.persistedValue,
+                onLevelSelected = { persistedValue ->
+                    onHncsFilmCurveModeChange(
+                        HncsFilmCurveMode.fromPersistedValue(persistedValue)
+                    )
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
+            RawDcpSelector(
+                selectedDcpId = selectedDcpId,
+                rawDcpIdsByLens = rawDcpIdsByLens,
+                lensOptions = dcpLensOptions,
+                availableDcps = availableDcps,
+                onSelectDcp = onSelectDcp,
+                onRawDcpIdsByLensChange = onRawDcpIdsByLensChange,
+                onImportDcp = onImportDcp,
+                onDeleteDcp = onDeleteDcp,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            RawProfileToneMapSwitches(
+                params = rawToneMappingParameters.normalized(),
+                selectedDcpName = availableDcps.firstOrNull { it.id == selectedDcpId }?.getName(),
+                hasSelectedDcpId = selectedDcpId != null,
+                embeddedDngProfiles = embeddedDngProfiles,
+                selectedEmbeddedDngProfileId = selectedEmbeddedDngProfileId,
+                onSelectEmbeddedDngProfile = onSelectEmbeddedDngProfile,
+                onParamsChange = onRawToneMappingParametersChange,
+                onAdjustmentEnd = onAdjustmentEnd,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        if (rawRenderingEngine == RawRenderingEngine.Spektrafilm) {
+            val isPositiveFilm = SpectralFilmUiInfo.isPositiveFilm(spectralFilmSelection?.id)
+            RawSpectralFilmSelector(
+                selectedFilm = spectralFilmSelection?.id,
+                onSelectFilm = { film ->
+                    onSpectralFilmSelectionChange(film?.let(::SpectralFilmSelection))
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            if (!isPositiveFilm) {
+                RawSpectralPrintSelector(
+                    selectedPrint = spectralFilmPrint,
+                    onSelectPrint = onSpectralFilmPrintChange,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+
+        if (showToneMappingControls) {
+            RawToneMappingControls(
+                rawRenderingEngine = rawRenderingEngine,
+                params = rawToneMappingParameters.normalized(),
+                spectralFilmSelection = spectralFilmSelection,
+                onParamsChange = onRawToneMappingParametersChange,
+                onSpectralFilmSelectionChange = onSpectralFilmSelectionChange,
+                onAdjustmentStart = onAdjustmentStart,
+                onAdjustmentEnd = onAdjustmentEnd,
+            )
+        }
     }
 }
 
@@ -1012,9 +1080,35 @@ private fun RawSwitchSettingItem(
 @Composable
 private fun RawRenderingEngineSelector(
     selectedEngine: RawRenderingEngine,
-    onSelectEngine: (RawRenderingEngine) -> Unit
+    onSelectEngine: (RawRenderingEngine) -> Unit,
+    inlineOptions: Boolean = false,
 ) {
     var showSheet by remember { mutableStateOf(false) }
+    val visibleEngines = RawRenderingEngine.entries.filterNot { it == RawRenderingEngine.HncsLut }
+
+    fun resolvedEngine(engine: RawRenderingEngine): RawRenderingEngine {
+        return if (engine == RawRenderingEngine.HncsCcm && selectedEngine.isHncs) {
+            selectedEngine
+        } else {
+            engine
+        }
+    }
+
+    if (inlineOptions) {
+        visibleEngines.forEach { engine ->
+            RawColorEngineItem(
+                name = rawRenderingEngineName(engine),
+                description = rawColorEngineDescription(engine),
+                isSelected = if (engine == RawRenderingEngine.HncsCcm) {
+                    selectedEngine.isHncs
+                } else {
+                    selectedEngine == engine
+                },
+                onClick = { onSelectEngine(resolvedEngine(engine)) },
+            )
+        }
+        return
+    }
 
     Row(
         modifier = Modifier
@@ -1063,9 +1157,7 @@ private fun RawRenderingEngineSelector(
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                RawRenderingEngine.entries
-                    .filterNot { it == RawRenderingEngine.HncsLut }
-                    .forEach { engine ->
+                visibleEngines.forEach { engine ->
                     RawColorEngineItem(
                         name = rawRenderingEngineName(engine),
                         description = rawColorEngineDescription(engine),
@@ -1075,13 +1167,7 @@ private fun RawRenderingEngineSelector(
                             selectedEngine == engine
                         },
                         onClick = {
-                            onSelectEngine(
-                                if (engine == RawRenderingEngine.HncsCcm && selectedEngine.isHncs) {
-                                    selectedEngine
-                                } else {
-                                    engine
-                                }
-                            )
+                            onSelectEngine(resolvedEngine(engine))
                             showSheet = false
                         }
                     )

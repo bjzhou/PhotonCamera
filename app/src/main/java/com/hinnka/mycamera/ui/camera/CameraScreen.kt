@@ -41,7 +41,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
@@ -99,6 +98,12 @@ enum class ActivePanel {
     FILTERS,
     EDIT,
     PRESETS
+}
+
+private enum class CameraShootingMode {
+    PROFESSIONAL,
+    PHOTO,
+    VIDEO
 }
 
 private const val InitialPreviewTransitionDelayMillis = 150L
@@ -234,6 +239,7 @@ fun CameraScreen(
     val useJpgMax by viewModel.useJpgMax.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val useRawMax by viewModel.useRawMax.collectAsState()
+    val ultraHdrEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
@@ -249,13 +255,6 @@ fun CameraScreen(
     val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
-    val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
-    val rawAdaptiveExposureMode by viewModel.rawAdaptiveExposureMode.collectAsState()
-    val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
-    val rawShadowsAdjustment by viewModel.rawShadowsAdjustment.collectAsState()
-    val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
-    val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
-    val droMode by viewModel.droMode.collectAsState()
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
     val availableHncsProfiles = remember(context) {
@@ -577,13 +576,36 @@ fun CameraScreen(
         runPreviewTransition { viewModel.switchCamera() }
     }
 
-    fun setCaptureModeWithPreviewTransition(mode: CaptureMode) {
-        if (mode == state.captureMode) return
+    fun setShootingModeWithPreviewTransition(mode: CameraShootingMode) {
+        if (mode == CameraShootingMode.PROFESSIONAL && !state.isRawSupported) return
+
+        val targetCaptureMode = when (mode) {
+            CameraShootingMode.PROFESSIONAL,
+            CameraShootingMode.PHOTO -> CaptureMode.PHOTO
+            CameraShootingMode.VIDEO -> CaptureMode.VIDEO
+        }
+        val targetUseRaw = when (mode) {
+            CameraShootingMode.PROFESSIONAL -> true
+            CameraShootingMode.PHOTO -> false
+            CameraShootingMode.VIDEO -> null
+        }
+        if (
+            targetCaptureMode == state.captureMode &&
+            (targetUseRaw == null || targetUseRaw == useRaw)
+        ) {
+            return
+        }
+
         runPreviewTransition {
-            if (mode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
+            if (targetCaptureMode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
                 viewModel.setAspectRatio(AspectRatio.RATIO_4_3)
             }
-            viewModel.setCaptureMode(mode)
+            if (targetCaptureMode != state.captureMode) {
+                viewModel.setCaptureMode(targetCaptureMode)
+            }
+            if (targetUseRaw != null && targetUseRaw != useRaw) {
+                viewModel.setUseRaw(targetUseRaw)
+            }
         }
     }
 
@@ -1420,13 +1442,14 @@ fun CameraScreen(
                 viewModel = viewModel,
                 galleryViewModel = galleryViewModel,
                 latestPhoto = latestPhoto,
+                useRaw = useRaw && state.isRawSupported,
                 useMultipleExposure = useMultipleExposure,
                 multipleExposureState = multipleExposureState,
                 onGalleryThumbnailBoundsChanged = { bounds ->
                     galleryThumbnailBounds = bounds
                 },
                 onSwitchCameraClick = ::switchCameraWithPreviewTransition,
-                onCaptureModeSelected = ::setCaptureModeWithPreviewTransition,
+                onCaptureModeSelected = ::setShootingModeWithPreviewTransition,
                 onCaptureTap = {
                     val shouldDebounceRawCapture = useRaw && state.captureMode == CaptureMode.PHOTO
                     if (shouldDebounceRawCapture) {
@@ -1586,7 +1609,6 @@ fun CameraScreen(
             videoAudioInputOptions = videoAudioInputOptions,
             onVideoAudioInputChange = { viewModel.setVideoAudioInputId(it) },
             useRaw = useRaw && state.isRawSupported,
-            onRawToggle = { viewModel.setUseRaw(it) },
             isRawSupported = state.isRawSupported,
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
@@ -1595,20 +1617,12 @@ fun CameraScreen(
             rawHncsProfileId = rawHncsProfileId,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode,
             availableHncsProfiles = availableHncsProfiles,
-            rawBaselineLutId = rawBaselineLutId,
-            availableLuts = viewModel.availableLutList,
-            previewThumbnail = viewModel.previewThumbnail,
-            rawExposureCompensation = rawExposureCompensation,
-            rawAdaptiveExposureMode = rawAdaptiveExposureMode,
-            rawHighlightsAdjustment = rawHighlightsAdjustment,
-            rawShadowsAdjustment = rawShadowsAdjustment,
-            rawDROMode = droMode,
-            rawBlackPointCorrection = rawBlackPointCorrection,
-            rawWhitePointCorrection = rawWhitePointCorrection,
             rawRenderingEngine = rawColorEngine,
             rawToneMappingParameters = rawToneMappingParameters,
             rawSpectralFilmSelection = rawSpectralFilmSelection ?: SpectralFilmSelection(rawSpectralFilmStock ?: "kodak_portra_400"),
             rawSpectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
+            ultraHdrEnabled = ultraHdrEnabled,
+            onUltraHdrToggle = viewModel::setUltraHdrGainMapEnabled,
             onRawDcpChange = { viewModel.setRawDcpId(it) },
             onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
             onRawHncsProfileChange = { viewModel.setRawHncsProfileId(it) },
@@ -1623,17 +1637,8 @@ fun CameraScreen(
                     ).show()
                 }
             },
-            onRawBaselineLutChange = {
-                viewModel.setBaselineLut(BaselineColorCorrectionTarget.RAW, it)
-            },
-            onEditRawBaselineRecipe = { lutId ->
-                baselineEditLutId = lutId
-                baselineEditTarget = BaselineColorCorrectionTarget.RAW
-            },
-            onRawDROModeChange = { viewModel.setDroMode(it) },
             onRawColorEngineChange = { viewModel.setRawColorEngine(it) },
             onRawToneMappingParametersChange = { viewModel.setRawToneMappingParameters(it) },
-            onRawAdaptiveExposureModeChange = viewModel::setRawAdaptiveExposureMode,
             onRawSpectralFilmSelectionChange = { viewModel.setRawSpectralFilmSelection(it) },
             onRawSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
             meteringMode = state.meteringMode,
@@ -1661,10 +1666,6 @@ fun CameraScreen(
             useJpgMax = useJpgMax,
             onJpgMaxToggle = {
                 viewModel.setUseJpgMax(it)
-            },
-            useRawMax = useRawMax,
-            onRawMaxToggle = {
-                viewModel.setUseRawMax(it)
             },
             useMultipleExposure = useMultipleExposure,
             onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
@@ -1926,16 +1927,17 @@ fun MultipleExposureOverlay(
 }
 
 @Composable
-fun Controls(
+private fun Controls(
     state: CameraState,
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
     latestPhoto: com.hinnka.mycamera.gallery.MediaData?,
+    useRaw: Boolean,
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
     onSwitchCameraClick: () -> Unit,
-    onCaptureModeSelected: (CaptureMode) -> Unit,
+    onCaptureModeSelected: (CameraShootingMode) -> Unit,
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier.fillMaxSize()
@@ -2061,7 +2063,12 @@ fun Controls(
             Spacer(modifier = Modifier.height(18.dp))
 
             CaptureModeSwitcher(
-                captureMode = state.captureMode,
+                shootingMode = when {
+                    state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
+                    useRaw -> CameraShootingMode.PROFESSIONAL
+                    else -> CameraShootingMode.PHOTO
+                },
+                professionalModeEnabled = state.isRawSupported,
                 enabled = !state.videoRecordingState.isRecording &&
                     !state.videoRecordingState.isProcessing,
                 onModeSelected = onCaptureModeSelected
@@ -2286,54 +2293,75 @@ fun CaptureButton(
 
 @Composable
 private fun CaptureModeSwitcher(
-    captureMode: CaptureMode,
+    shootingMode: CameraShootingMode,
+    professionalModeEnabled: Boolean,
     enabled: Boolean,
-    onModeSelected: (CaptureMode) -> Unit
+    onModeSelected: (CameraShootingMode) -> Unit
 ) {
-
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
-            .width(100.dp)
-            .height(30.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White.copy(alpha = 0.12f))
-            .padding(2.dp)
+            .width(228.dp)
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.Black.copy(alpha = 0.28f))
+            .border(
+                width = 0.5.dp,
+                color = Color.White.copy(alpha = 0.18f),
+                shape = RoundedCornerShape(18.dp)
+            )
+            .padding(3.dp)
     ) {
-        val knobWidth = 48.dp
+        val knobWidth = maxWidth / 3
+        val selectedIndex = when (shootingMode) {
+            CameraShootingMode.PROFESSIONAL -> 0
+            CameraShootingMode.PHOTO -> 1
+            CameraShootingMode.VIDEO -> 2
+        }
         val knobOffset by animateDpAsState(
-            targetValue = when (captureMode) {
-                CaptureMode.PHOTO -> 0.dp
-                CaptureMode.VIDEO -> 48.dp
-            },
+            targetValue = knobWidth * selectedIndex,
             animationSpec = tween(durationMillis = 220),
             label = "modeSwitcher"
+        )
+        val selectedBackground by animateColorAsState(
+            targetValue = if (shootingMode == CameraShootingMode.PROFESSIONAL) {
+                Color(0xFFFFA36C)
+            } else {
+                Color.White
+            },
+            animationSpec = tween(durationMillis = 220),
+            label = "modeSwitcherColor"
         )
         Box(
             modifier = Modifier
                 .offset(x = knobOffset)
                 .width(knobWidth)
                 .fillMaxHeight()
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.White)
+                .clip(RoundedCornerShape(15.dp))
+                .background(selectedBackground)
         )
         Row(
             modifier = Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             ModeSwitcherItem(
-                icon = AppIcons.CameraAlt,
-                selected = captureMode == CaptureMode.PHOTO,
-                enabled = enabled,
-                contentDescription = stringResource(R.string.capture_mode_photo),
-                onClick = { onModeSelected(CaptureMode.PHOTO) },
+                label = stringResource(R.string.capture_mode_professional),
+                selected = shootingMode == CameraShootingMode.PROFESSIONAL,
+                enabled = enabled && professionalModeEnabled,
+                onClick = { onModeSelected(CameraShootingMode.PROFESSIONAL) },
                 modifier = Modifier.weight(1f)
             )
             ModeSwitcherItem(
-                icon = AppIcons.Videocam,
-                selected = captureMode == CaptureMode.VIDEO,
+                label = stringResource(R.string.capture_mode_photo),
+                selected = shootingMode == CameraShootingMode.PHOTO,
                 enabled = enabled,
-                contentDescription = stringResource(R.string.capture_mode_video),
-                onClick = { onModeSelected(CaptureMode.VIDEO) },
+                onClick = { onModeSelected(CameraShootingMode.PHOTO) },
+                modifier = Modifier.weight(1f)
+            )
+            ModeSwitcherItem(
+                label = stringResource(R.string.capture_mode_video),
+                selected = shootingMode == CameraShootingMode.VIDEO,
+                enabled = enabled,
+                onClick = { onModeSelected(CameraShootingMode.VIDEO) },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -2342,10 +2370,9 @@ private fun CaptureModeSwitcher(
 
 @Composable
 private fun ModeSwitcherItem(
-    icon: ImageVector,
+    label: String,
     selected: Boolean,
     enabled: Boolean,
-    contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2356,11 +2383,17 @@ private fun ModeSwitcherItem(
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = if (selected) Color.Black else Color.White,
-            modifier = Modifier.size(18.dp)
+        Text(
+            text = label,
+            color = when {
+                selected -> Color.Black.copy(alpha = 0.88f)
+                enabled -> Color.White.copy(alpha = 0.82f)
+                else -> Color.White.copy(alpha = 0.3f)
+            },
+            fontSize = 12.sp,
+            lineHeight = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1
         )
     }
 }

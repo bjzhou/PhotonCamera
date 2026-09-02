@@ -22,6 +22,9 @@
     <string name="back">กลับ</string>
     <string name="unknown">ไม่ทราบ</string>
     <string name="take_photo">ภาพถ่าย</string>
+    <string name="capture_mode_professional">โปร</string>
+    <string name="capture_mode_photo">ภาพถ่าย</string>
+    <string name="capture_mode_video">วิดีโอ</string>
 
     <!-- Exposure Controls -->
 
@@ -165,8 +168,10 @@
     <string name="settings_eye_focus_description">ตรวจจับใบหน้าและให้ความสำคัญกับดวงตาที่ติดตามได้อย่างเสถียรสำหรับโฟกัสอัตโนมัติ</string>
     <string name="settings_section_capture_storage">การถ่ายภาพและการจัดเก็บ</string>
     <string name="settings_section_quality_perf">คุณภาพของภาพและประสิทธิภาพ</string>
-    <string name="settings_section_color_hdr">การประมวลผลภาพและสี</string>
-    <string name="settings_section_multiframe_exposure">Max &amp; HDR</string>
+    <string name="settings_section_photo_mode">การตั้งค่าโหมดภาพถ่าย</string>
+    <string name="settings_section_professional_mode">การตั้งค่าโหมดโปร</string>
+    <string name="settings_professional_group_max_hdr">การถ่ายภาพ HDR+</string>
+    <string name="settings_professional_group_image_quality">คุณภาพภาพ HDR+</string>
     <string name="settings_section_interface">รูปแบบอินเทอร์เฟซ</string>
     <string name="settings_section_system_control">ระบบและการควบคุม</string>
     <string name="settings_section_data_maintenance">การบำรุงรักษาข้อมูล</string>
@@ -195,7 +200,7 @@
     <string name="settings_section_software_processing">การปรับจูน</string>
     <string name="settings_baseline_jpg_title">การแก้ไขสีพื้นฐาน JPG</string>
     <string name="settings_baseline_jpg_description">ใช้ LUT พื้นฐานและสูตรพื้นฐานก่อนเลือก LUT ครีเอทีฟโฆษณา JPG ปกติ</string>
-    <string name="settings_baseline_raw_title">การแก้ไขสีพื้นฐาน RAW</string>
+    <string name="settings_baseline_raw_title">การแก้ไขสีพื้นฐาน</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">นำเข้า DCP</string>
     <string name="raw_dcp_import_success">DCP ที่นำเข้า: %1$s</string>
@@ -634,8 +639,8 @@
     <string name="settings_hlg_hardware_compatibility_description">ภาพอาจมืดหรือผิดปกติหลังจากเปิด HLG บนอุปกรณ์บางตัว หากคุณพบภาพที่ผิดปกติ โปรดเปิดตัวเลือกนี้สำหรับการถอดรหัสด้วยตนเอง หากภาพเป็นปกติโปรดปิดไว้</string>
     <string name="settings_use_p3_color_space">ช่วงสี P3</string>
     <string name="settings_use_p3_color_space_description">เปิดใช้งานเอาต์พุต Display P3 บนอุปกรณ์ที่รองรับ ปิดโดยค่าเริ่มต้น</string>
-    <string name="settings_ultra_hdr_gain_map">แผนที่เกน Ultra HDR</string>
-    <string name="settings_ultra_hdr_gain_map_description">สร้างแผนที่เกน Ultra HDR สำหรับภาพถ่าย</string>
+    <string name="settings_ultra_hdr_gain_map">Ultra HDR</string>
+    <string name="settings_ultra_hdr_gain_map_description">สร้างเอาต์พุต Ultra HDR สำหรับภาพที่ถ่ายในโหมดมืออาชีพ</string>
     <string name="settings_screen_hdr">จอแสดงผล HDR</string>
     <string name="settings_screen_hdr_description">เปิดใช้งานการแสดงผลช่วงไดนามิกสูง (HDR) บนหน้าต่างหน้าจอ หากการเปิดโหมดนี้ในอุปกรณ์บางอย่างทำให้หน้าจอเปลี่ยนเป็นสีเหลืองหรือมืดลง คุณสามารถปิดได้</string>
     <string name="hdr_label">HDR</string>
@@ -669,8 +674,10 @@
     <string name="settings_raw_dro_description">ในฉากที่มีอัตราส่วนแสงสูง ปรับปรุงรายละเอียดของเงาอย่างชาญฉลาดและปกป้องไฮไลท์</string>
     <string name="settings_raw_blacks_adjustment">สีดำ</string>
     <string name="settings_raw_whites_adjustment">สีขาว</string>
-    <string name="settings_export_dng_with_raw_export">ส่งออก DNG เมื่อส่งออก RAW</string>
-    <string name="settings_export_dng_with_raw_export_description">เมื่อส่งออกภาพถ่าย RAW ไฟล์ DNG ต้นฉบับที่เกี่ยวข้องจะถูกส่งออกไปยังอัลบั้มระบบด้วย</string>
+    <string name="settings_export_dng_with_raw_export">รูปแบบการส่งออก</string>
+    <string name="settings_export_dng_with_raw_export_description">เลือกไฟล์ที่จะส่งออกไปยังอัลบั้มระบบสำหรับภาพถ่ายในโหมดมืออาชีพ</string>
+    <string name="settings_professional_export_jpg">JPG</string>
+    <string name="settings_professional_export_raw_jpg">RAW+JPG</string>
     <string name="settings_raw_black_level_correction">การแก้ไขระดับสีดำ</string>
     <string name="settings_raw_black_level_correction_description">ตั้งค่าระดับสีดำด้วยตนเองในระหว่างการพัฒนา RAW เพื่อแก้ไขปัญหาสีเพี้ยน การตั้งค่าส่วนบุคคลสำหรับเลนส์</string>
     <string name="settings_black_level_default">ค่าเริ่มต้น</string>
@@ -895,13 +902,13 @@
     <string name="preset_custom_badge">ปรับแต่ง</string>
     <string name="preset_builtin_badge">ในตัว</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: ระบบจัดการสีที่ Hasselblad พัฒนาขึ้นอย่างอิสระ</string>
-    <string name="settings_raw_max_quality_tuning">การปรับคุณภาพภาพ RAWmax</string>
-    <string name="settings_raw_max_quality_tuning_description">ปรับการรวมภาพ การลดสัญญาณรบกวน และความคมชัดตามขนาดจริงของเซ็นเซอร์ เมื่อปิด RAWmax จะใช้พารามิเตอร์การประมวลผลภาพเริ่มต้น</string>
+    <string name="settings_raw_max_quality_tuning">การปรับคุณภาพภาพ HDR+</string>
+    <string name="settings_raw_max_quality_tuning_description">ปรับการรวมภาพ การลดสัญญาณรบกวน และความคมชัดตามขนาดจริงของเซ็นเซอร์ เมื่อปิด HDR+ จะใช้พารามิเตอร์การประมวลผลภาพเริ่มต้น</string>
     <string name="settings_raw_default_sharpening_section">ความคมชัดเริ่มต้น</string>
     <string name="settings_raw_default_sharpening">ความคมชัด</string>
     <string name="settings_raw_default_sharpening_description">ความคมชัดที่ใช้เป็นค่าเริ่มต้นเมื่อประมวลผลภาพ RAW</string>
-    <string name="settings_raw_max_default_sharpening">ความคมชัดเริ่มต้นของ RAWmax</string>
-    <string name="settings_raw_max_default_sharpening_description">ความคมชัดที่ใช้เป็นค่าเริ่มต้นเมื่อประมวลผลภาพ RAWmax</string>
+    <string name="settings_raw_max_default_sharpening">ความคมชัดเริ่มต้นของ HDR+</string>
+    <string name="settings_raw_max_default_sharpening_description">ความคมชัดที่ใช้เป็นค่าเริ่มต้นเมื่อประมวลผลภาพ HDR+</string>
     <string name="preset_import">นำเข้าพรีเซ็ต</string>
     <string name="preset_export">ส่งออกพรีเซ็ต</string>
     <string name="preset_import_success">นำเข้าพรีเซ็ตแล้ว %1$d รายการ</string>
