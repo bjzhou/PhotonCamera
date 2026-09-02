@@ -86,6 +86,10 @@ android {
 
     flavorDimensions += "channel"
     productFlavors {
+        create("dev") {
+            dimension = "channel"
+            applicationId = "com.hinnka.mycamera.dev"
+        }
         create("google") {
             dimension = "channel"
         }
@@ -117,6 +121,12 @@ android {
     }
 
     sourceSets {
+        getByName("dev") {
+            java {
+                srcDir("src/default/java")
+            }
+            manifest.srcFile("src/default/AndroidManifest.xml")
+        }
         getByName("samsung") {
             java {
                 srcDir("src/default/java")
@@ -193,6 +203,7 @@ dependencies {
     "defaultImplementation"("com.tencent.bugly:crashreport:latest.release")
     "samsungImplementation"("com.tencent.bugly:crashreport:latest.release")
     "meituImplementation"("com.tencent.bugly:crashreport:latest.release")
+    "devImplementation"("com.tencent.bugly:crashreport:latest.release")
 
     // Billing for google flavor
     "googleImplementation"(libs.google.billing)
