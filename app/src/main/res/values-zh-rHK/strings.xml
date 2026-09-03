@@ -270,8 +270,6 @@
     <string name="settings_frame_style">邊框樣式</string>
     <string name="settings_frame_description">為拍攝的相片添加裝飾性邊框和水印</string>
     <string name="settings_section_software_processing">細節微調</string>
-    <string name="settings_baseline_jpg_title">基準色彩校正</string>
-    <string name="settings_baseline_jpg_description">選擇創意 LUT 之前先應用的基準 LUT 與基準配方。</string>
     <string name="settings_baseline_raw_title">基準色彩校正</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">匯入 DCP</string>
@@ -292,8 +290,6 @@
     <string name="raw_dcp_lens_override_title">當前鏡頭單獨使用 DCP</string>
     <string name="raw_dcp_lens_override_description">關閉時所有鏡頭共用統一 DCP。打開后僅覆蓋 %1$s。</string>
     <string name="raw_dcp_non_adobe_curve_warning">非 Adobe 色彩引擎仍會應用 DCP 色彩渲染和曝光偏移，但不會使用 DCP 內置曲線。</string>
-    <string name="settings_baseline_phantom_title">幻影模式基準色彩校正</string>
-    <string name="settings_baseline_phantom_description">選擇幻影模式創意 LUT 之前先應用的基準 LUT 與基準配方。</string>
     <string name="settings_baseline_dialog_description">為當前目標選擇一個基準 LUT。它會在普通創意 LUT 之前應用。</string>
     <string name="settings_baseline_edit_recipe">編輯配方</string>
     <string name="settings_baseline_clear">清除</string>

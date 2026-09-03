@@ -1,18 +1,11 @@
 package com.hinnka.mycamera.lut
 
-import com.hinnka.mycamera.data.UserPreferences
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.model.ColorRecipeParams
 
 enum class BaselineColorCorrectionTarget {
-    JPG,
-    RAW,
-    PHANTOM
+    RAW
 }
-
-data class BaselineColorCorrectionConfig(
-    val lutId: String? = null
-)
 
 data class LutRenderLayer(
     val lutConfig: LutConfig?,
@@ -20,7 +13,7 @@ data class LutRenderLayer(
 )
 
 data class ResolvedColorCorrectionStack(
-    val target: BaselineColorCorrectionTarget,
+    val target: BaselineColorCorrectionTarget?,
     val baselineLutId: String? = null,
     val creativeLutId: String? = null,
     val baselineLayer: LutRenderLayer? = null,
@@ -33,58 +26,20 @@ data class ResolvedColorCorrectionStack(
         get() = baselineLayer != null && creativeLayer != null
 }
 
-fun UserPreferences.getBaselineColorCorrectionConfig(
-    target: BaselineColorCorrectionTarget
-): BaselineColorCorrectionConfig {
-    val lutId = when (target) {
-        BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
-        BaselineColorCorrectionTarget.RAW -> rawBaselineLutId
-        BaselineColorCorrectionTarget.PHANTOM -> phantomBaselineLutId
-    }
-    return BaselineColorCorrectionConfig(lutId = lutId)
-}
-
-fun UserPreferences.getPrimaryLutId(
-    target: BaselineColorCorrectionTarget
-): String? {
-    return when (target) {
-        BaselineColorCorrectionTarget.PHANTOM,
-        BaselineColorCorrectionTarget.JPG,
-        BaselineColorCorrectionTarget.RAW -> lutId
-    }
-}
-
 class ColorCorrectionPipelineResolver(
     private val lutManager: LutManager
 ) {
-    suspend fun resolveFromPreferences(
-        target: BaselineColorCorrectionTarget,
-        preferences: UserPreferences,
-        creativeRecipeParams: ColorRecipeParams? = null,
-    ): ResolvedColorCorrectionStack {
-        val creativeLutId = preferences.getPrimaryLutId(target)
-        val baselineLutId = preferences.getBaselineColorCorrectionConfig(target).lutId
-        return resolve(
-            target = target,
-            baselineLutId = baselineLutId,
-            baselineRecipeParams = baselineLutId?.let { lutManager.loadColorRecipeParams(it, target) },
-            creativeLutId = creativeLutId,
-            creativeRecipeParams = creativeRecipeParams
-                ?: creativeLutId?.let { lutManager.loadColorRecipeParams(it) }
-        )
-    }
-
     suspend fun resolveFromMetadata(
-        fallbackTarget: BaselineColorCorrectionTarget,
         metadata: MediaMetadata
     ): ResolvedColorCorrectionStack {
-        val target = metadata.baselineTarget ?: fallbackTarget
+        val target = metadata.baselineTarget
         val creativeLutId = metadata.lutId
-        val baselineLutId = metadata.baselineLutId
+        val baselineLutId = metadata.baselineLutId.takeIf { target == BaselineColorCorrectionTarget.RAW }
         return resolve(
             target = target,
             baselineLutId = baselineLutId,
             baselineRecipeParams = metadata.baselineColorRecipeParams
+                .takeIf { target == BaselineColorCorrectionTarget.RAW }
                 ?: baselineLutId?.let { lutManager.loadColorRecipeParams(it, target) },
             creativeLutId = creativeLutId,
             creativeRecipeParams = metadata.colorRecipeParams
@@ -93,7 +48,7 @@ class ColorCorrectionPipelineResolver(
     }
 
     suspend fun resolve(
-        target: BaselineColorCorrectionTarget,
+        target: BaselineColorCorrectionTarget?,
         baselineLutId: String?,
         baselineRecipeParams: ColorRecipeParams?,
         creativeLutId: String?,

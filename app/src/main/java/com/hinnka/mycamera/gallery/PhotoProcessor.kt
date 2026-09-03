@@ -20,7 +20,6 @@ import com.hinnka.mycamera.hdr.LuminanceGainMap
 import com.hinnka.mycamera.hdr.LuminanceGainMapEncoding
 import com.hinnka.mycamera.hdr.RawGainmapMath
 import com.hinnka.mycamera.hdr.SourceKind
-import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.ColorCorrectionPipelineResolver
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
@@ -270,10 +269,7 @@ class PhotoProcessor(
     ): GainmapSourceSet? = withContext(Dispatchers.IO) {
         val displayHdrSdrRatio = readDisplayHdrSdrRatio()
 
-        val colorCorrection = resolveColorCorrection(
-            metadata = metadata,
-            fallbackTarget = BaselineColorCorrectionTarget.RAW
-        )
+        val colorCorrection = resolveColorCorrection(metadata)
 
         var sdrBitmap = preparedSdrBitmap ?: rawResult.sdrBitmap
         var hdrReferenceBitmap = normalizeRawHdrReferenceForGainmap(
@@ -654,10 +650,7 @@ class PhotoProcessor(
         val finalChromaNoiseReduction = resolveChromaNoiseReduction(metadata, chromaNoiseReduction)
 
         // 1. 应用 LUT
-        val colorCorrection = resolveColorCorrection(
-            metadata = metadata,
-            fallbackTarget = BaselineColorCorrectionTarget.RAW
-        )
+        val colorCorrection = resolveColorCorrection(metadata)
         val cropRegion = metadata.cropRegion
 
         val bitmap = RawDemosaicProcessor.getInstance().process(
@@ -758,10 +751,7 @@ class PhotoProcessor(
         val finalChromaNoiseReduction =
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
-        val colorCorrection = resolveColorCorrection(
-            metadata = metadata,
-            fallbackTarget = BaselineColorCorrectionTarget.JPG
-        )
+        val colorCorrection = resolveColorCorrection(metadata)
 
         if (useComputationalAperture) {
             metadata.computationalAperture?.let { aperture ->
@@ -923,13 +913,8 @@ class PhotoProcessor(
         }
     }
 
-    private suspend fun resolveColorCorrection(
-        metadata: MediaMetadata,
-        fallbackTarget: BaselineColorCorrectionTarget
-    ) = colorCorrectionPipelineResolver.resolveFromMetadata(
-        fallbackTarget = fallbackTarget,
-        metadata = metadata
-    )
+    private suspend fun resolveColorCorrection(metadata: MediaMetadata) =
+        colorCorrectionPipelineResolver.resolveFromMetadata(metadata)
 
     private suspend fun applyFrame(
         input: Bitmap,

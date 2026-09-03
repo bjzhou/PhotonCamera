@@ -23,9 +23,7 @@ import kotlinx.coroutines.launch
 
 enum class LutEditorTarget(val baselineTarget: BaselineColorCorrectionTarget? = null) {
     CREATIVE_GLOBAL(),
-    BASELINE_JPG(BaselineColorCorrectionTarget.JPG),
-    BASELINE_RAW(BaselineColorCorrectionTarget.RAW),
-    BASELINE_PHANTOM(BaselineColorCorrectionTarget.PHANTOM)
+    BASELINE_RAW(BaselineColorCorrectionTarget.RAW)
 }
 
 /**

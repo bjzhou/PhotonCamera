@@ -270,8 +270,6 @@
     <string name="settings_frame_style">边框样式</string>
     <string name="settings_frame_description">为拍摄的照片添加装饰性边框和水印</string>
     <string name="settings_section_software_processing">细节微调</string>
-    <string name="settings_baseline_jpg_title">基准色彩校正</string>
-    <string name="settings_baseline_jpg_description">选择创意 LUT 之前先应用的基准 LUT 与基准配方。</string>
     <string name="settings_baseline_raw_title">基准色彩校正</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">导入 DCP</string>
@@ -311,8 +309,6 @@
     <string name="raw_noise_profile_x9_ultra">X9 Ultra</string>
     <string name="raw_noise_profile_x9_ultra_3x">X9 Ultra 3X</string>
     <string name="delete_raw_noise_profile_confirm_message">删除降噪模型“%s”？</string>
-    <string name="settings_baseline_phantom_title">幻影模式基准色彩校正</string>
-    <string name="settings_baseline_phantom_description">选择幻影模式创意 LUT 之前先应用的基准 LUT 与基准配方。</string>
     <string name="settings_baseline_dialog_description">为当前目标选择一个基准 LUT。它会在普通创意 LUT 之前应用。</string>
     <string name="settings_baseline_edit_recipe">编辑配方</string>
     <string name="settings_baseline_clear">清除</string>

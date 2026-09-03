@@ -39,7 +39,6 @@ import com.hinnka.mycamera.lut.BakedLutExporter
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutInfo
-import com.hinnka.mycamera.lut.getBaselineColorCorrectionConfig
 import com.hinnka.mycamera.lut.creator.LutGenerator
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.CameraPreset
@@ -133,11 +132,9 @@ data class MultipleExposureSessionState(
 }
 
 private fun resolvePreviewBaselineTarget(prefs: UserPreferences): BaselineColorCorrectionTarget? {
-    return if (prefs.useRaw) null else BaselineColorCorrectionTarget.JPG
-}
-
-private fun UserPreferences.getBaselineLutId(target: BaselineColorCorrectionTarget): String? {
-    return getBaselineColorCorrectionConfig(target).lutId
+    return BaselineColorCorrectionTarget.RAW.takeIf {
+        prefs.captureMode == CaptureMode.PHOTO && prefs.useRaw && !prefs.phantomMode
+    }
 }
 
 private data class RawSpectralFilmSettings(
@@ -394,9 +391,7 @@ private data class CameraFeatureUpdate(
     val rawSpectralFilmStock: SettingValue<String?>? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
     val droMode: SettingValue<String>? = null,
-    val jpgBaselineLutId: SettingValue<String?>? = null,
     val rawBaselineLutId: SettingValue<String?>? = null,
-    val phantomBaselineLutId: SettingValue<String?>? = null,
     val activePresetId: SettingValue<String?>? = null,
     val useMultipleExposure: SettingValue<Boolean>? = null
 )
@@ -904,9 +899,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 droMode = update.droMode?.let {
                     PreferenceUpdateValue(RawProcessingPreferences.DROMode.fromPersistedName(it.value).name)
                 },
-                jpgBaselineLutId = update.jpgBaselineLutId?.let { PreferenceUpdateValue(it.value) },
                 rawBaselineLutId = update.rawBaselineLutId?.let { PreferenceUpdateValue(it.value) },
-                phantomBaselineLutId = update.phantomBaselineLutId?.let { PreferenceUpdateValue(it.value) },
                 activePresetId = update.activePresetId?.let { PreferenceUpdateValue(it.value) }
             )
         )
@@ -1144,7 +1137,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val currentBaselineRecipeParams: StateFlow<ColorRecipeParams> =
         userPreferencesRepository.userPreferences.flatMapLatest { prefs ->
             val target = resolvePreviewBaselineTarget(prefs)
-            val lutId = target?.let { prefs.getBaselineLutId(it) }
+            val lutId = prefs.rawBaselineLutId.takeIf { target != null }
             if (target == null || lutId == null) {
                 flowOf(ColorRecipeParams.DEFAULT)
             } else {
@@ -1311,14 +1304,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val videoLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.videoLutId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val jpgBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.jpgBaselineLutId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val rawBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.rawBaselineLutId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val phantomBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.phantomBaselineLutId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val phantomFrameId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.phantomFrameId }
@@ -2775,7 +2762,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         chromaNoiseReductionValue: Float = 0f,
         captureMode: String? = null,
         multipleExposureFrameCount: Int? = null,
-        baselineTarget: BaselineColorCorrectionTarget = BaselineColorCorrectionTarget.JPG,
+        baselineTarget: BaselineColorCorrectionTarget? = null,
     ): MediaMetadata {
         val lutIdToSave = currentLutId.value
         val aspectRatio = state.value.aspectRatio
@@ -2892,21 +2879,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun resolvePreviewBaselineLut(userPrefs: UserPreferences): LutConfig? {
-        val baselineLutId = resolvePreviewBaselineTarget(userPrefs)
-            ?.let { userPrefs.getBaselineLutId(it) }
+        val baselineLutId = userPrefs.rawBaselineLutId
+            .takeIf { resolvePreviewBaselineTarget(userPrefs) != null }
         return baselineLutId?.let { contentRepository.lutManager.loadLut(it) }
     }
 
     private suspend fun resolveBaselineMetadata(
-        target: BaselineColorCorrectionTarget,
+        target: BaselineColorCorrectionTarget?,
         userPrefs: UserPreferences? = null
     ): Triple<BaselineColorCorrectionTarget, String, ColorRecipeParams>? {
+        if (target != BaselineColorCorrectionTarget.RAW) return null
         val preferences = userPrefs ?: userPreferencesRepository.userPreferences.firstOrNull() ?: return null
-        val baselineLutId = when (target) {
-            BaselineColorCorrectionTarget.JPG -> preferences.jpgBaselineLutId
-            BaselineColorCorrectionTarget.RAW -> preferences.rawBaselineLutId
-            BaselineColorCorrectionTarget.PHANTOM -> preferences.phantomBaselineLutId
-        } ?: return null
+        val baselineLutId = preferences.rawBaselineLutId ?: return null
         val params = contentRepository.lutManager.loadColorRecipeParams(baselineLutId, target)
         return Triple(target, baselineLutId, params)
     }
@@ -3123,8 +3107,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.startVideoRecording(
                     creativeLutConfig = currentLutConfig.takeIf { currentState.lutEnabled },
                     creativeRecipeParams = getMergedRecipeParams(),
-                    baselineLutConfig = currentBaselineLutConfig,
-                    baselineRecipeParams = currentBaselineRecipeParams.value,
                     orientationOffsetDegrees = orientationOffset
                 )
             }
@@ -4951,17 +4933,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setBaselineLut(target: BaselineColorCorrectionTarget, lutId: String?) {
-        viewModelScope.launch {
-            val update = when (target) {
-                BaselineColorCorrectionTarget.JPG -> CameraFeatureUpdate(jpgBaselineLutId = SettingValue(lutId))
-                BaselineColorCorrectionTarget.RAW -> CameraFeatureUpdate(rawBaselineLutId = SettingValue(lutId))
-                BaselineColorCorrectionTarget.PHANTOM -> CameraFeatureUpdate(phantomBaselineLutId = SettingValue(lutId))
-            }
-            applyCameraFeatureUpdate(update)
-        }
-    }
-
     /**
      * 为指定颜色推荐最合适的 LUT 列表
      */
@@ -5272,10 +5243,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
-            val baselineTarget = if (isRawCaptureFormat(image.format)) {
+            val baselineTarget = if (isRawCapture) {
                 BaselineColorCorrectionTarget.RAW
             } else {
-                BaselineColorCorrectionTarget.JPG
+                null
             }
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
@@ -5449,7 +5420,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
                     (userPrefs?.mirrorFrontCamera ?: true)
-            val baselineMetadata = resolveBaselineMetadata(BaselineColorCorrectionTarget.JPG, userPrefs)
             val currentCameraId = cameraController.getCurrentCameraId()
             val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
@@ -5470,9 +5440,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = currentLutId.value,
                 frameId = currentFrameId,
                 colorRecipeParams = getMergedRecipeParams(),
-                baselineTarget = baselineMetadata?.first,
-                baselineLutId = baselineMetadata?.second,
-                baselineColorRecipeParams = baselineMetadata?.third,
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
@@ -5713,7 +5680,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val baselineTarget = if (isRawStack) {
                 BaselineColorCorrectionTarget.RAW
             } else {
-                BaselineColorCorrectionTarget.JPG
+                null
             }
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
@@ -5958,7 +5925,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 chromaNoiseReductionValue = chromaNoiseReductionValue,
                 captureMode = captureMode,
                 multipleExposureFrameCount = expectedFrameCount,
-                baselineTarget = BaselineColorCorrectionTarget.JPG,
             )
 
             val photoId = GalleryManager.preparePhoto(
@@ -6140,10 +6106,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
 
         val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
-        val baselineTarget = if (isRawCaptureFormat(image.format)) {
+        val baselineTarget = if (isRawCapture) {
             BaselineColorCorrectionTarget.RAW
         } else {
-            BaselineColorCorrectionTarget.JPG
+            null
         }
         val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(

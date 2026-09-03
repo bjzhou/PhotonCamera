@@ -22,7 +22,6 @@ import com.hinnka.mycamera.camera.NoiseReductionLevel
 import com.hinnka.mycamera.camera.VendorCaptureSettings
 import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.gallery.PhotoSavePath
-import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
@@ -106,10 +105,8 @@ data class UserPreferences(
     val lutId: String? = null,  // 默认为 null，由 CameraViewModel 根据配置文件设置
     val separateVideoLutEnabled: Boolean = false,
     val videoLutId: String? = null,
-    val jpgBaselineLutId: String? = null,
     val rawBaselineLutId: String? = null,
     val rawBaselineLutConfigured: Boolean = false,
-    val phantomBaselineLutId: String? = null,
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     val rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
@@ -305,9 +302,7 @@ data class CameraFeaturePreferencesUpdate(
     val rawSpectralFilmStock: PreferenceUpdateValue<String?>? = null,
     val rawSpectralFilmPrint: PreferenceUpdateValue<String?>? = null,
     val droMode: PreferenceUpdateValue<String>? = null,
-    val jpgBaselineLutId: PreferenceUpdateValue<String?>? = null,
     val rawBaselineLutId: PreferenceUpdateValue<String?>? = null,
-    val phantomBaselineLutId: PreferenceUpdateValue<String?>? = null,
     val activePresetId: PreferenceUpdateValue<String?>? = null
 )
 
@@ -329,7 +324,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val SEPARATE_VIDEO_LUT_ENABLED_KEY = booleanPreferencesKey("separate_video_lut_enabled")
         private val VIDEO_LUT_ID_KEY = stringPreferencesKey("video_lut_id")
         private val LEGACY_PHANTOM_LUT_ID_KEY = stringPreferencesKey("phantom_lut_id")
-        private val JPG_BASELINE_LUT_ID_KEY = stringPreferencesKey("jpg_baseline_lut_id")
         private val RAW_BASELINE_LUT_ID_KEY = stringPreferencesKey("raw_baseline_lut_id")
         private val RAW_BASELINE_LUT_CONFIGURED_KEY = booleanPreferencesKey("raw_baseline_lut_configured")
         private val RAW_DCP_ID_KEY = stringPreferencesKey("raw_dcp_id")
@@ -374,7 +368,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_MAX_CHROMA_NOISE_REDUCTION_KEY =
             floatPreferencesKey("raw_max_chroma_noise_reduction")
         private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
-        private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
         private val PHANTOM_FRAME_ID_KEY = stringPreferencesKey("phantom_frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
@@ -568,7 +561,6 @@ class UserPreferencesRepository(private val context: Context) {
                     ?: preferences[LEGACY_PHANTOM_LUT_ID_KEY],  // 不提供默认值，由 CameraViewModel 处理
                 separateVideoLutEnabled = preferences[SEPARATE_VIDEO_LUT_ENABLED_KEY] ?: false,
                 videoLutId = preferences[VIDEO_LUT_ID_KEY],
-                jpgBaselineLutId = preferences[JPG_BASELINE_LUT_ID_KEY],
                 rawBaselineLutId = preferences[RAW_BASELINE_LUT_ID_KEY],
                 rawBaselineLutConfigured = rawBaselineLutConfigured,
                 rawDcpId = preferences[RAW_DCP_ID_KEY],
@@ -637,7 +629,6 @@ class UserPreferencesRepository(private val context: Context) {
                         ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
                 ),
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
-                phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
                 phantomFrameId = preferences[PHANTOM_FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
@@ -1088,27 +1079,6 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[SEPARATE_VIDEO_LUT_ENABLED_KEY] = enabled
             if (enabled && !preferences.contains(VIDEO_LUT_ID_KEY) && initialVideoLutId != null) {
                 preferences[VIDEO_LUT_ID_KEY] = initialVideoLutId
-            }
-        }
-    }
-
-    suspend fun saveBaselineLutConfig(
-        target: BaselineColorCorrectionTarget,
-        lutId: String?
-    ) {
-        val key = when (target) {
-            BaselineColorCorrectionTarget.JPG -> JPG_BASELINE_LUT_ID_KEY
-            BaselineColorCorrectionTarget.RAW -> RAW_BASELINE_LUT_ID_KEY
-            BaselineColorCorrectionTarget.PHANTOM -> PHANTOM_BASELINE_LUT_ID_KEY
-        }
-        context.dataStore.edit { preferences ->
-            if (lutId != null) {
-                preferences[key] = lutId
-            } else {
-                preferences.remove(key)
-            }
-            if (target == BaselineColorCorrectionTarget.RAW) {
-                preferences[RAW_BASELINE_LUT_CONFIGURED_KEY] = true
             }
         }
     }
@@ -2446,13 +2416,6 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[DRO_MODE] = resolvedMode.name
                 preferences[RAW_DRO_ENABLED_KEY] = resolvedMode.isEnabled
             }
-            update.jpgBaselineLutId?.let {
-                if (it.value != null) {
-                    preferences[JPG_BASELINE_LUT_ID_KEY] = it.value
-                } else {
-                    preferences.remove(JPG_BASELINE_LUT_ID_KEY)
-                }
-            }
             update.rawBaselineLutId?.let {
                 if (it.value != null) {
                     preferences[RAW_BASELINE_LUT_ID_KEY] = it.value
@@ -2460,13 +2423,6 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences.remove(RAW_BASELINE_LUT_ID_KEY)
                 }
                 preferences[RAW_BASELINE_LUT_CONFIGURED_KEY] = true
-            }
-            update.phantomBaselineLutId?.let {
-                if (it.value != null) {
-                    preferences[PHANTOM_BASELINE_LUT_ID_KEY] = it.value
-                } else {
-                    preferences.remove(PHANTOM_BASELINE_LUT_ID_KEY)
-                }
             }
             update.activePresetId?.let {
                 if (it.value != null) {

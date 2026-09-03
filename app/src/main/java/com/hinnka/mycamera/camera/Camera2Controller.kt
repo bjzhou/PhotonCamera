@@ -6441,8 +6441,6 @@ class Camera2Controller(private val context: Context) {
     fun startVideoRecording(
         creativeLutConfig: LutConfig? = null,
         creativeRecipeParams: ColorRecipeParams? = null,
-        baselineLutConfig: LutConfig? = null,
-        baselineRecipeParams: ColorRecipeParams? = null,
         orientationOffsetDegrees: Int = 0
     ) {
         if (_state.value.captureMode != CaptureMode.VIDEO ||
@@ -6471,11 +6469,6 @@ class Camera2Controller(private val context: Context) {
         } ?: _state.value.currentPreviewSize
         val shouldFlipEncodedFrame = isFrontCamera && mirrorFrontCameraEnabled
         val colorLayers = buildList {
-            if (!_state.value.videoConfig.logProfile.isEnabled &&
-                (baselineLutConfig != null || baselineRecipeParams?.isDefault() == false)
-            ) {
-                add(VideoColorEffectLayer(baselineLutConfig, baselineRecipeParams))
-            }
             if (creativeLutConfig != null || creativeRecipeParams?.isDefault() == false) {
                 add(VideoColorEffectLayer(creativeLutConfig, creativeRecipeParams))
             }

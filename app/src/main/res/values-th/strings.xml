@@ -198,8 +198,6 @@
     <string name="settings_frame_style">สไตล์กรอบ</string>
     <string name="settings_frame_description">เพิ่มกรอบตกแต่งและลายน้ำให้กับรูปภาพ</string>
     <string name="settings_section_software_processing">การปรับจูน</string>
-    <string name="settings_baseline_jpg_title">การแก้ไขสีพื้นฐาน</string>
-    <string name="settings_baseline_jpg_description">ใช้ LUT พื้นฐานและสูตรพื้นฐานก่อนเลือก LUT ครีเอทีฟ</string>
     <string name="settings_baseline_raw_title">การแก้ไขสีพื้นฐาน</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">นำเข้า DCP</string>
@@ -209,8 +207,6 @@
     <string name="raw_dcp_import_failed">การนำเข้า DCP ล้มเหลว</string>
     <string name="raw_dcp_delete_success">ลบ DCP แล้ว</string>
     <string name="raw_dcp_delete_failed">ลบ DCP ไม่สำเร็จ</string>
-    <string name="settings_baseline_phantom_title">การแก้ไขสีพื้นฐานของโหมด Phantom</string>
-    <string name="settings_baseline_phantom_description">ใช้ LUT พื้นฐานและสูตรพื้นฐานก่อนเลือก LUT ครีเอทีฟโฆษณาโหมด Ghost</string>
     <string name="settings_baseline_dialog_description">เลือก LUT พื้นฐานสำหรับเป้าหมายปัจจุบัน โดยจะใช้ก่อน LUT ครีเอทีฟโฆษณาปกติ</string>
     <string name="settings_baseline_edit_recipe">แก้ไขสูตร</string>
     <string name="settings_baseline_clear">ชัดเจน</string>

@@ -67,7 +67,6 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.data.CaptureButtonStyle
-import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
@@ -252,9 +251,6 @@ fun CameraScreen(
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
-    val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
-    val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
-    val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
     val availableHncsProfiles = remember(context) {
@@ -284,8 +280,6 @@ fun CameraScreen(
     var previewTransitionSawPause by remember { mutableStateOf(false) }
     var hasPlayedInitialPreviewTransition by remember { mutableStateOf(false) }
     var rawCaptureTapLocked by remember { mutableStateOf(false) }
-    var baselineEditLutId by remember { mutableStateOf<String?>(null) }
-    var baselineEditTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
     var zoomStopAnimationJob by remember { mutableStateOf<Job?>(null) }
 
     fun discardTransientLookEdits() {
@@ -322,18 +316,6 @@ fun CameraScreen(
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showVideoParameterRuler by remember { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
-    val activeBaselineTarget = when {
-        phantomMode -> BaselineColorCorrectionTarget.PHANTOM
-        useRaw && state.captureMode == CaptureMode.PHOTO && state.isRawSupported -> BaselineColorCorrectionTarget.RAW
-        else -> BaselineColorCorrectionTarget.JPG
-    }
-    val activeBaselineLutId = when (activeBaselineTarget) {
-        BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
-        BaselineColorCorrectionTarget.RAW -> rawBaselineLutId
-        BaselineColorCorrectionTarget.PHANTOM -> phantomBaselineLutId
-    }
-
-
     val burstCapturingCount = viewModel.burstImageCount
 
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
@@ -1813,21 +1795,6 @@ fun CameraScreen(
                     previewRecipeParamsOverride = null
                     viewModel.refreshActivePresetMatch()
                     activePanel = ActivePanel.FILTERS
-                }
-            )
-        }
-
-        if (baselineEditLutId != null && baselineEditTarget != null) {
-            LutEditBottomSheet(
-                lutId = baselineEditLutId!!,
-                editorTarget = when (baselineEditTarget!!) {
-                    BaselineColorCorrectionTarget.JPG -> LutEditorTarget.BASELINE_JPG
-                    BaselineColorCorrectionTarget.RAW -> LutEditorTarget.BASELINE_RAW
-                    BaselineColorCorrectionTarget.PHANTOM -> LutEditorTarget.BASELINE_PHANTOM
-                },
-                onDismiss = {
-                    baselineEditLutId = null
-                    baselineEditTarget = null
                 }
             )
         }

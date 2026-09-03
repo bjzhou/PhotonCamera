@@ -274,8 +274,6 @@
     <string name="settings_frame_style">Frame Style</string>
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>
     <string name="settings_section_software_processing">Fine Tuning</string>
-    <string name="settings_baseline_jpg_title">Baseline Color Correction</string>
-    <string name="settings_baseline_jpg_description">Choose the baseline LUT and recipe applied before the creative LUT.</string>
     <string name="settings_baseline_raw_title">Baseline Color Correction</string>
     <string name="raw_dcp_title">DCP</string>
     <string name="raw_dcp_import">Import DCP</string>
@@ -315,8 +313,6 @@
     <string name="raw_noise_profile_x9_ultra">X9 Ultra</string>
     <string name="raw_noise_profile_x9_ultra_3x">X9 Ultra 3X</string>
     <string name="delete_raw_noise_profile_confirm_message">Delete noise model "%s"?</string>
-    <string name="settings_baseline_phantom_title">Phantom Baseline Color Correction</string>
-    <string name="settings_baseline_phantom_description">Choose the baseline LUT and recipe used before Phantom mode creative LUT processing.</string>
     <string name="settings_baseline_dialog_description">Select a baseline LUT for this target. It will be applied before the regular creative LUT.</string>
     <string name="settings_baseline_edit_recipe">Edit Recipe</string>
     <string name="settings_baseline_clear">Clear</string>

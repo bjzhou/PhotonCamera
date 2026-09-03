@@ -128,8 +128,6 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.gallery.HeicExportEncoder
 import com.hinnka.mycamera.gallery.Jpeg444ExportEncoder
-import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
-import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.ml.DepthModelDownloadState
 import com.hinnka.mycamera.ml.DepthModelManager
@@ -156,7 +154,6 @@ import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.DepthModelDownloadDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
-import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import com.hinnka.mycamera.ui.components.RawDngMetadataCorrectionSettings
@@ -379,9 +376,7 @@ fun SettingsScreen(
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
     val phantomFrameId by viewModel.phantomFrameId.collectAsState()
     val defaultVirtualAperture by viewModel.defaultVirtualAperture.collectAsState(initial = 0f)
-    val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
-    val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawNoiseProfileId by viewModel.rawNoiseProfileId.collectAsState()
@@ -768,8 +763,7 @@ fun SettingsScreen(
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var downloadedUpdateApk by remember { mutableStateOf<File?>(null) }
     var showInstallUpdateDialog by remember { mutableStateOf(false) }
-    var baselinePickerTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
-    var baselineRecipeEditorTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
+    var showRawBaselineRecipeEditor by remember { mutableStateOf(false) }
     var jpgMultiFrameDenoiseCountSliderValue by remember(jpgMultiFrameDenoiseFrameCount) {
         mutableStateOf(jpgMultiFrameDenoiseFrameCount.toFloat())
     }
@@ -1853,18 +1847,6 @@ fun SettingsScreen(
                             onLevelSelected = { viewModel.setEdgeLevel(it) }
                         )
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        BaselineColorCorrectionSettingItem(
-                            title = stringResource(R.string.settings_baseline_jpg_title),
-                            description = stringResource(R.string.settings_baseline_jpg_description),
-                            selectedLut = availableLuts.find { it.id == jpgBaselineLutId },
-                            onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.JPG }
-                        )
-
                         if (state.isP010Supported) {
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
@@ -2060,8 +2042,8 @@ fun SettingsScreen(
                         dcpLensOptions = rawDcpLensOptions(state.availableCameras),
                         availableDcps = availableDcps,
                         selectedBaselineLutId = rawBaselineLutId,
-                        onSelectBaselineLut = { viewModel.setBaselineLut(BaselineColorCorrectionTarget.RAW, it) },
-                        onEditBaselineRecipe = { baselineRecipeEditorTarget = BaselineColorCorrectionTarget.RAW },
+                        onSelectBaselineLut = viewModel::setRawBaselineLutId,
+                        onEditBaselineRecipe = { showRawBaselineRecipeEditor = true },
                         availableLuts = availableLuts,
                         thumbnail = previewThumbnail,
                         rawExposureCompensation = rawExposureCompensationUi,
@@ -2284,17 +2266,6 @@ fun SettingsScreen(
                                 onFrameSelected = viewModel::setPhantomFrame
                             )
 
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-
-                            BaselineColorCorrectionSettingItem(
-                                title = stringResource(R.string.settings_baseline_phantom_title),
-                                description = stringResource(R.string.settings_baseline_phantom_description),
-                                selectedLut = availableLuts.find { it.id == phantomBaselineLutId },
-                                onClick = { baselinePickerTarget = BaselineColorCorrectionTarget.PHANTOM }
-                            )
                         }
                     }
                 }
@@ -2835,93 +2806,17 @@ fun SettingsScreen(
         )
     }
 
-    baselinePickerTarget?.let { target ->
-        val currentBaselineLutId = when (target) {
-            BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
-            BaselineColorCorrectionTarget.RAW -> rawBaselineLutId
-            BaselineColorCorrectionTarget.PHANTOM -> phantomBaselineLutId
+    LaunchedEffect(rawBaselineLutId) {
+        if (rawBaselineLutId == null) {
+            showRawBaselineRecipeEditor = false
         }
-        AlertDialog(
-            onDismissRequest = { baselinePickerTarget = null },
-            title = {
-                Text(
-                    text = when (target) {
-                        BaselineColorCorrectionTarget.JPG -> stringResource(R.string.settings_baseline_jpg_title)
-                        BaselineColorCorrectionTarget.RAW -> stringResource(R.string.settings_baseline_raw_title)
-                        BaselineColorCorrectionTarget.PHANTOM -> stringResource(R.string.settings_baseline_phantom_title)
-                    }
-                )
-            },
-            text = {
-                Column {
-                    Text(
-                        text = stringResource(R.string.settings_baseline_dialog_description),
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    LutSelector(
-                        availableLuts = availableLuts,
-                        currentLutId = currentBaselineLutId,
-                        thumbnail = previewThumbnail,
-                        onLutSelected = { selected ->
-                            viewModel.setBaselineLut(target, selected)
-                            baselinePickerTarget = null
-                        }
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        baselinePickerTarget = null
-                        if (currentBaselineLutId != null) {
-                            baselineRecipeEditorTarget = target
-                        }
-                    },
-                    enabled = currentBaselineLutId != null
-                ) {
-                    Text(stringResource(R.string.settings_baseline_edit_recipe))
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(
-                        onClick = {
-                            viewModel.setBaselineLut(target, null)
-                            baselinePickerTarget = null
-                        }
-                    ) {
-                        Text(stringResource(R.string.settings_baseline_clear))
-                    }
-                    TextButton(onClick = { baselinePickerTarget = null }) {
-                        Text(stringResource(R.string.cancel))
-                    }
-                }
-            }
-        )
     }
-
-    baselineRecipeEditorTarget?.let { target ->
-        val currentBaselineLutId = when (target) {
-            BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
-            BaselineColorCorrectionTarget.RAW -> rawBaselineLutId
-            BaselineColorCorrectionTarget.PHANTOM -> phantomBaselineLutId
-        }
-        LaunchedEffect(target, currentBaselineLutId) {
-            if (currentBaselineLutId == null) {
-                baselineRecipeEditorTarget = null
-            }
-        }
-        currentBaselineLutId?.let { lutId ->
+    if (showRawBaselineRecipeEditor) {
+        rawBaselineLutId?.let { lutId ->
             LutEditBottomSheet(
                 lutId = lutId,
-                editorTarget = when (target) {
-                    BaselineColorCorrectionTarget.JPG -> LutEditorTarget.BASELINE_JPG
-                    BaselineColorCorrectionTarget.RAW -> LutEditorTarget.BASELINE_RAW
-                    BaselineColorCorrectionTarget.PHANTOM -> LutEditorTarget.BASELINE_PHANTOM
-                },
-                onDismiss = { baselineRecipeEditorTarget = null }
+                editorTarget = LutEditorTarget.BASELINE_RAW,
+                onDismiss = { showRawBaselineRecipeEditor = false }
             )
         }
     }
@@ -3002,8 +2897,7 @@ private fun SettingsCategoryOverview(
             description = listOf(
                 stringResource(R.string.settings_multi_frame_denoise_frame_count),
                 stringResource(R.string.settings_nr_level),
-                stringResource(R.string.settings_edge_level),
-                stringResource(R.string.settings_baseline_jpg_title)
+                stringResource(R.string.settings_edge_level)
             ).joinToString(" · "),
             onClick = { onPageSelected(SettingsPage.PHOTO_MODE) }
         )
@@ -3030,8 +2924,7 @@ private fun SettingsCategoryOverview(
                 description = listOf(
                     stringResource(R.string.settings_phantom_pip_preview),
                     stringResource(R.string.settings_phantom_save_as_new),
-                    stringResource(R.string.settings_phantom_frame_title),
-                    stringResource(R.string.settings_baseline_phantom_title)
+                    stringResource(R.string.settings_phantom_frame_title)
                 ).joinToString(" · "),
                 onClick = { onPageSelected(SettingsPage.PHANTOM) }
             )
@@ -3780,56 +3673,6 @@ fun DropdownSettingItem(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun BaselineColorCorrectionSettingItem(
-    title: String,
-    description: String,
-    selectedLut: LutInfo?,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Normal
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = description,
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = selectedLut?.getName() ?: stringResource(R.string.none),
-                color = if (selectedLut != null) Color(0xFFE5A324) else Color.White.copy(alpha = 0.45f),
-                fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        Spacer(modifier = Modifier.width(16.dp))
-
-        Icon(
-            imageVector = AppIcons.ChevronRight,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.6f)
-        )
     }
 }
 

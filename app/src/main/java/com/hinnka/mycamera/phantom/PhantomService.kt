@@ -98,7 +98,6 @@ import com.hinnka.mycamera.gallery.GalleryManager.saveMetadata
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
-import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -602,12 +601,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             ) ?: run {
                 return@withContext
             }
-        val phantomBaselineLutId = preferences?.phantomBaselineLutId
-        val baselineTarget = if (phantomBaselineLutId != null) BaselineColorCorrectionTarget.PHANTOM else null
-        val baselineLutId = phantomBaselineLutId
-        val baselineColorRecipeParams = phantomBaselineLutId?.let {
-            ContentRepository.getInstance(context).lutManager.loadColorRecipeParams(it, BaselineColorCorrectionTarget.PHANTOM)
-        }
         val creativeColorRecipeParams = lutId?.let {
             ContentRepository.getInstance(context).lutManager.loadColorRecipeParams(it)
         } ?: ColorRecipeParams.DEFAULT
@@ -619,25 +612,14 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             .takeUnless { it.isDefault() }
 
         var updatedMetadata = GalleryManager.updateMetadata(context, photoId) { current ->
-            if (baselineTarget != null) {
-                current.copy(
-                    lutId = lutId,
-                    frameId = phantomFrameId,
-                    colorRecipeParams = metadataCreativeColorRecipeParams,
-                    baselineTarget = baselineTarget,
-                    baselineLutId = baselineLutId,
-                    baselineColorRecipeParams = baselineColorRecipeParams,
-                )
-            } else {
-                current.copy(
-                    lutId = lutId,
-                    frameId = phantomFrameId,
-                    colorRecipeParams = metadataCreativeColorRecipeParams,
-                    baselineTarget = null,
-                    baselineLutId = null,
-                    baselineColorRecipeParams = null,
-                )
-            }
+            current.copy(
+                lutId = lutId,
+                frameId = phantomFrameId,
+                colorRecipeParams = metadataCreativeColorRecipeParams,
+                baselineTarget = null,
+                baselineLutId = null,
+                baselineColorRecipeParams = null,
+            )
         } ?: return@withContext
         if (!isActive) return@withContext
 
