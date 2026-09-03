@@ -130,6 +130,7 @@ class VideoRecorder(
     private var requestedEnhancedStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
     private var cameraInputStarted = false
     private var requestedCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+    private var requestedSensorOrientationDegrees = 0
     private var cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
     private var timelineOriginUs = UNSET_TIMESTAMP
     private var pauseIntervals = mutableListOf<PauseInterval>()
@@ -189,6 +190,7 @@ class VideoRecorder(
         colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
         colorLayers: List<VideoColorEffectLayer> = emptyList(),
         cameraTimestampSource: Int = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
+        sensorOrientationDegrees: Int = 0,
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
         enhancedStabilization: Boolean = false,
@@ -213,6 +215,7 @@ class VideoRecorder(
         requestedColorConfig = colorConfig
         requestedColorLayers = colorLayers.toList()
         requestedCameraTimestampSource = cameraTimestampSource
+        requestedSensorOrientationDegrees = sensorOrientationDegrees
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedEnhancedStabilization = enhancedStabilization
         requestedEnhancedStabilizationStrength =
@@ -255,6 +258,7 @@ class VideoRecorder(
             "Video recording prepared: encoder=${requestedSize.width}x${requestedSize.height}, " +
                 "output=${requestedOutputSize.width}x${requestedOutputSize.height} @ " +
                 "${requestedFps}fps, orientationHint=$requestedOrientationHintDegrees, " +
+                "sensorOrientation=$requestedSensorOrientationDegrees, " +
                 "enhancedStabilization=$requestedEnhancedStabilization, " +
                 "stabilizationStrength=$requestedEnhancedStabilizationStrength, " +
                 "input=${if (requestedEnhancedStabilization) "timestamped-yuv" else "dedicated-surface-texture"}, " +
@@ -354,6 +358,7 @@ class VideoRecorder(
             context = context,
             cameraInputSize = requestedCameraInputSize,
             encoderOutputSize = requestedSize,
+            sensorOrientationDegrees = requestedSensorOrientationDegrees,
             colorLayers = requestedColorLayers,
             videoLogProfile = requestedColorConfig.logProfile,
             mirrorHorizontally =

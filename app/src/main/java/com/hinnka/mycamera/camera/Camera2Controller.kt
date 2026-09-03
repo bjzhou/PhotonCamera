@@ -6487,6 +6487,8 @@ class Camera2Controller(private val context: Context) {
             cameraTimestampSource = getActiveOpenCameraCharacteristics()
                 ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
                 ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
+            sensorOrientationDegrees = _state.value.getCurrentCameraInfo()?.sensorOrientation
+                ?: cachedSensorOrientation,
             orientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees),
             flipEncodedFrame = shouldFlipEncodedFrame,
             enhancedStabilization = useEnhancedStabilization,

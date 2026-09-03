@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import android.graphics.SurfaceTexture
 import android.opengl.Matrix
 import kotlin.math.abs
 
@@ -7,6 +8,23 @@ import kotlin.math.abs
 internal class MgcEisPresentationTransform {
     val matrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private var captured = false
+
+    /**
+     * Initializes the ImageReader presentation transform without waiting for an OES frame.
+     *
+     * Video EIS+ intentionally does not attach the recorder's OES surface to Camera2: frames are
+     * delivered through the timestamp-matched YUV ImageReader instead. Consequently the recorder
+     * cannot discover the producer transform through [SurfaceTexture.getTransformMatrix]. Camera2
+     * guarantees that SENSOR_ORIENTATION is cardinal, so it is sufficient to rotate the raw YUV
+     * image into the same natural-device orientation used by the normal OES recording path.
+     */
+    fun captureFromSensorOrientation(sensorOrientationDegrees: Int): Boolean {
+        if (captured) return true
+        val resolved = resolveMgcEisPresentationMatrix(sensorOrientationDegrees) ?: return false
+        System.arraycopy(resolved, 0, matrix, 0, matrix.size)
+        captured = true
+        return true
+    }
 
     /**
      * Captures the configured stream orientation once. Camera2 may update the
@@ -53,4 +71,38 @@ internal class MgcEisPresentationTransform {
         Matrix.setIdentityM(matrix, 0)
         captured = false
     }
+}
+
+/** Maps natural-display coordinates to the unrotated Camera2 YUV texture. */
+internal fun resolveMgcEisPresentationMatrix(sensorOrientationDegrees: Int): FloatArray? {
+    if (sensorOrientationDegrees % 90 != 0) return null
+    val matrix = FloatArray(16).also {
+        it[10] = 1f
+        it[15] = 1f
+    }
+    when (Math.floorMod(sensorOrientationDegrees, 360)) {
+        0 -> {
+            matrix[0] = 1f
+            matrix[5] = 1f
+        }
+        90 -> {
+            // Clockwise display rotation: source = (1 - outputV, outputU).
+            matrix[4] = -1f
+            matrix[1] = 1f
+            matrix[12] = 1f
+        }
+        180 -> {
+            matrix[0] = -1f
+            matrix[5] = -1f
+            matrix[12] = 1f
+            matrix[13] = 1f
+        }
+        270 -> {
+            // Counter-clockwise display rotation: source = (outputV, 1 - outputU).
+            matrix[4] = 1f
+            matrix[1] = -1f
+            matrix[13] = 1f
+        }
+    }
+    return matrix
 }

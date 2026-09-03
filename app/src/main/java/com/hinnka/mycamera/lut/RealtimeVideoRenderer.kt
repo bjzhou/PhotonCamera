@@ -41,6 +41,7 @@ class RealtimeVideoRenderer(
     context: Context,
     private val cameraInputSize: Size,
     private val encoderOutputSize: Size,
+    private val sensorOrientationDegrees: Int,
     colorLayers: List<VideoColorEffectLayer>,
     private val videoLogProfile: VideoLogProfile,
     private val mirrorHorizontally: Boolean,
@@ -170,6 +171,14 @@ class RealtimeVideoRenderer(
         }
         cameraSurface = Surface(cameraSurfaceTexture)
         if (enhancedStabilizationEnabled) {
+            check(
+                mgcEisPresentationTransform.captureFromSensorOrientation(
+                    sensorOrientationDegrees,
+                )
+            ) {
+                "Camera reported non-cardinal sensor orientation $sensorOrientationDegrees"
+            }
+            updateCameraTransformGeometry(mgcEisPresentationTransform.matrix)
             stabilizationSession = stabilizationCoordinator?.createSession(
                 useCase = StabilizationUseCase.VIDEO,
                 strength = enhancedStabilizationStrength,
@@ -184,6 +193,7 @@ class RealtimeVideoRenderer(
             TAG,
             "Initialized: camera=${cameraInputSize.width}x${cameraInputSize.height}, " +
                 "encoder=${encoderOutputSize.width}x${encoderOutputSize.height}, " +
+                "sensorOrientation=$sensorOrientationDegrees, " +
                 "layers=${layers.size}, log=${videoLogProfile.name}, " +
                 "enhancedStabilization=$enhancedStabilizationEnabled, " +
                 "stabilizationStrength=$enhancedStabilizationStrength, " +
@@ -312,7 +322,13 @@ class RealtimeVideoRenderer(
             ) {
                 PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
             }
-            updateCameraTransformGeometry()
+            updateCameraTransformGeometry(
+                if (enhancedStabilizationEnabled) {
+                    mgcEisPresentationTransform.matrix
+                } else {
+                    stMatrix
+                },
+            )
             true
         } catch (error: RuntimeException) {
             PLog.e(TAG, "Failed to acquire realtime video frame", error)
@@ -333,8 +349,8 @@ class RealtimeVideoRenderer(
         }
     }
 
-    private fun updateCameraTransformGeometry() {
-        val axesSwapped = isTextureTransformAxesSwapped(stMatrix)
+    private fun updateCameraTransformGeometry(presentationMatrix: FloatArray) {
+        val axesSwapped = isTextureTransformAxesSwapped(presentationMatrix)
         if (cameraTransformAxesSwapped == axesSwapped) return
 
         cameraTransformAxesSwapped = axesSwapped
@@ -349,7 +365,7 @@ class RealtimeVideoRenderer(
             "Camera texture transform: axesSwapped=$axesSwapped, " +
                 "effective=${orientedInputSize.width}x${orientedInputSize.height}, " +
                 "crop=${cameraCropRect.joinToString(prefix = "[", postfix = "]")}, " +
-                "matrix=${stMatrix.joinToString(prefix = "[", postfix = "]")}"
+                "matrix=${presentationMatrix.joinToString(prefix = "[", postfix = "]")}"
         )
     }
 
