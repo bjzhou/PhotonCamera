@@ -170,6 +170,7 @@ fun LutSelector(
     onLutIntensityChange: ((Float) -> Unit)? = null,
     // 预设相关参数 (添加默认值以支持向后兼容)
     allPresets: List<CameraPreset> = emptyList(),
+    presetModeEnabled: Boolean = allPresets.isNotEmpty(),
     activePresetId: String? = null,
     selectedMode: LutSelectorMode = LutSelectorMode.Style,
     onModeSelected: (LutSelectorMode) -> Unit = {},
@@ -243,7 +244,7 @@ fun LutSelector(
     var selectedCategory by remember { mutableStateOf<LutCategoryTab>(LutCategoryTab.BuiltIn) }
     val activeLutId = currentLutId
     val supportsFrames = onFrameSelected != null
-    val supportsPresets = allPresets.isNotEmpty()
+    val supportsPresets = presetModeEnabled
     val actualMode = when (selectedMode) {
         LutSelectorMode.Style -> LutSelectorMode.Style
         LutSelectorMode.Frame -> if (supportsFrames) LutSelectorMode.Frame else LutSelectorMode.Style

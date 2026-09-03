@@ -228,6 +228,7 @@
     <string name="settings_section_photo_mode">Photo mode settings</string>
     <string name="settings_section_professional_mode">Professional mode settings</string>
     <string name="settings_professional_parameters">Professional parameters</string>
+    <string name="preset_professional_mode_only">Only available in Professional mode</string>
     <string name="settings_professional_group_max_hdr">HDR+ Capture</string>
     <string name="settings_professional_group_image_quality">HDR+ Image Quality</string>
     <string name="settings_section_interface">Interface Styles</string>

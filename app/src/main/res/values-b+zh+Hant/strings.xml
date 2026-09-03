@@ -224,6 +224,7 @@
     <string name="settings_section_photo_mode">拍照模式設定</string>
     <string name="settings_section_professional_mode">專業模式設定</string>
     <string name="settings_professional_parameters">專業模式參數</string>
+    <string name="preset_professional_mode_only">僅在專業模式下可用</string>
     <string name="settings_professional_group_max_hdr">HDR+ 拍攝</string>
     <string name="settings_professional_group_image_quality">HDR+ 畫質</string>
     <string name="settings_section_interface">界面樣式</string>

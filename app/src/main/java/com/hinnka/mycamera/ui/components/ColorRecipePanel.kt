@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.luminance
@@ -123,6 +124,7 @@ fun ColorRecipePanel(
     currentEffects: EffectParams? = null,
     onEffectsChange: ((EffectParams) -> Unit)? = null,
     headerControls: (@Composable () -> Unit)? = null,
+    containerShape: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
     modifier: Modifier = Modifier
 ) {
     val isBakeable: (RecipeParam) -> Boolean = { param ->
@@ -367,9 +369,9 @@ fun ColorRecipePanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            .clip(containerShape)
             .background(Color(0xF9121316))
-            .border(0.5.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            .border(0.5.dp, Color.White.copy(alpha = 0.08f), containerShape)
             .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {

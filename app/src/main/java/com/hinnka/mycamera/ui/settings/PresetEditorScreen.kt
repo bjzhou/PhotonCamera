@@ -156,10 +156,7 @@ fun PresetEditorScreen(
     var rawBaselineLutId by remember { mutableStateOf(sourcePreset?.rawBaselineLutId) }
 
     // 折叠卡片展开控制
-    var expandSettings by remember { mutableStateOf(false) }
     var expandProfessionalSettings by remember { mutableStateOf(false) }
-    var expandBaseline by remember { mutableStateOf(false) }
-    var showEditSheet by remember { mutableStateOf(false) }
     var baselineRecipeEditLutId by remember { mutableStateOf<String?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<LutEditorTarget?>(null) }
 
@@ -249,30 +246,22 @@ fun PresetEditorScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             SettingsSection(title = stringResource(R.string.preset_name_hint), isExpandable = false) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = stringResource(R.string.preset_name_label),
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    BasicTextField(
-                        value = presetName,
-                        onValueChange = { presetName = it },
-                        textStyle = TextStyle(
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        cursorBrush = SolidColor(Color.White),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 12.dp)
-                    )
-                }
+                BasicTextField(
+                    value = presetName,
+                    onValueChange = { presetName = it },
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    cursorBrush = SolidColor(Color.White),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 12.dp)
+                )
             }
 
             SettingsSection(title = stringResource(R.string.filter), isExpandable = false) {
@@ -285,21 +274,54 @@ fun PresetEditorScreen(
                 )
             }
 
-            SettingsSection(title = stringResource(R.string.edit), isExpandable = false) {
-                OutlinedButton(
-                    onClick = { showEditSheet = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        Color.White.copy(alpha = 0.18f)
-                    )
-                ) {
-                    Text(
-                        text = stringResource(R.string.edit_color_and_effects),
-                        fontSize = 13.sp
-                    )
-                }
+            Column {
+                Text(
+                    text = stringResource(R.string.edit),
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                ColorRecipePanel(
+                    currentParams = colorRecipe,
+                    paletteState = paletteState,
+                    onPaletteStateChange = { newState ->
+                        paletteState = newState
+                        colorRecipe = colorRecipe.copy(
+                            paletteX = newState.x,
+                            paletteY = newState.y,
+                            paletteDensity = newState.density
+                        )
+                    },
+                    onParamChange = { param, value ->
+                        colorRecipe = param.setValue(colorRecipe, value)
+                    },
+                    onParamsChange = { newParams ->
+                        colorRecipe = newParams
+                        paletteState = ColorPaletteState(
+                            x = newParams.paletteX,
+                            y = newParams.paletteY,
+                            density = newParams.paletteDensity
+                        )
+                    },
+                    onRemarksChange = { remarks ->
+                        colorRecipe = colorRecipe.copy(remarks = remarks)
+                    },
+                    onCurveChange = { channel, points ->
+                        colorRecipe = when (channel) {
+                            CurveChannel.MASTER -> colorRecipe.copy(masterCurvePoints = points)
+                            CurveChannel.RED -> colorRecipe.copy(redCurvePoints = points)
+                            CurveChannel.GREEN -> colorRecipe.copy(greenCurvePoints = points)
+                            CurveChannel.BLUE -> colorRecipe.copy(blueCurvePoints = points)
+                        }
+                    },
+                    hideNonBakeable = true,
+                    showLutIntensity = true,
+                    currentEffects = effects,
+                    onEffectsChange = { effects = it },
+                    containerShape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             SettingsSection(title = stringResource(R.string.settings_section_frame), isExpandable = false) {
@@ -312,10 +334,9 @@ fun PresetEditorScreen(
             }
 
             SettingsSection(
-                title = stringResource(R.string.settings_section_capture),
-                isExpandable = true,
-                isExpanded = expandSettings,
-                onToggleExpand = { expandSettings = !expandSettings }
+                title = stringResource(R.string.aspect_ratio),
+                showTitle = false,
+                isExpandable = false
             ) {
                 val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
                 DropdownSettingItem(
@@ -331,57 +352,6 @@ fun PresetEditorScreen(
                         }
                     }
                 )
-            }
-
-            if (showEditSheet) {
-                ModalBottomSheet(
-                    onDismissRequest = { showEditSheet = false },
-                    containerColor = Color.Transparent,
-                    scrimColor = Color.Transparent,
-                    dragHandle = null,
-                ) {
-                    ColorRecipePanel(
-                        currentParams = colorRecipe,
-                        paletteState = paletteState,
-                        onPaletteStateChange = { newState ->
-                            paletteState = newState
-                            colorRecipe = colorRecipe.copy(
-                                paletteX = newState.x,
-                                paletteY = newState.y,
-                                paletteDensity = newState.density
-                            )
-                        },
-                        onParamChange = { param, value ->
-                            colorRecipe = param.setValue(colorRecipe, value)
-                        },
-                        onParamsChange = { newParams ->
-                            colorRecipe = newParams
-                            paletteState = ColorPaletteState(
-                                x = newParams.paletteX,
-                                y = newParams.paletteY,
-                                density = newParams.paletteDensity
-                            )
-                        },
-                        onRemarksChange = { remarks ->
-                            colorRecipe = colorRecipe.copy(remarks = remarks)
-                        },
-                        onCurveChange = { channel, points ->
-                            colorRecipe = when (channel) {
-                                CurveChannel.MASTER -> colorRecipe.copy(masterCurvePoints = points)
-                                CurveChannel.RED -> colorRecipe.copy(redCurvePoints = points)
-                                CurveChannel.GREEN -> colorRecipe.copy(greenCurvePoints = points)
-                                CurveChannel.BLUE -> colorRecipe.copy(blueCurvePoints = points)
-                            }
-                        },
-                        hideNonBakeable = true,
-                        showLutIntensity = true,
-                        currentEffects = effects,
-                        onEffectsChange = { effects = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                    )
-                }
             }
 
             val editBaselineRecipe: (String, LutEditorTarget) -> Unit = { lutId, target ->
@@ -401,7 +371,8 @@ fun PresetEditorScreen(
             }
 
             SettingsSection(
-                title = stringResource(R.string.settings_professional_parameters),
+                title = stringResource(R.string.settings_section_professional_mode),
+                description = stringResource(R.string.preset_professional_mode_only),
                 isExpandable = true,
                 isExpanded = expandProfessionalSettings,
                 onToggleExpand = { expandProfessionalSettings = !expandProfessionalSettings }
@@ -663,14 +634,18 @@ fun PresetEditorScreen(
                         }
                     }
                 )*/
-            }
 
-            SettingsSection(
-                title = stringResource(R.string.lut_selector_baseline_tab),
-                isExpandable = true,
-                isExpanded = expandBaseline,
-                onToggleExpand = { expandBaseline = !expandBaseline }
-            ) {
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.05f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+                Text(
+                    text = stringResource(R.string.lut_selector_baseline_tab),
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
                 RawBaselineColorCorrectionSelector(
                     title = stringResource(R.string.settings_baseline_raw_title),
                     selectedLutId = rawBaselineLutId,

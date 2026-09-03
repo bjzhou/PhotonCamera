@@ -10,7 +10,7 @@ import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 
 /**
- * 专业模式拍摄预设（用户自定义档位配置）
+ * 拍摄预设。通用画面参数适用于全部拍摄模式，RAW 参数仅适用于专业模式。
  */
 @Keep
 data class CameraPreset(

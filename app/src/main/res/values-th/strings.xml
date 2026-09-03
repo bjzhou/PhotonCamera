@@ -170,6 +170,7 @@
     <string name="settings_section_quality_perf">คุณภาพของภาพและประสิทธิภาพ</string>
     <string name="settings_section_photo_mode">การตั้งค่าโหมดภาพถ่าย</string>
     <string name="settings_section_professional_mode">การตั้งค่าโหมดโปร</string>
+    <string name="preset_professional_mode_only">ใช้ได้เฉพาะในโหมดโปรเท่านั้น</string>
     <string name="settings_professional_group_max_hdr">การถ่ายภาพ HDR+</string>
     <string name="settings_professional_group_image_quality">คุณภาพภาพ HDR+</string>
     <string name="settings_section_interface">รูปแบบอินเทอร์เฟซ</string>

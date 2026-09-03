@@ -187,6 +187,7 @@ private data class PresetMatchSnapshot(
     val lutId: String?,
     val colorRecipe: ColorRecipeParams,
     val effects: EffectParams,
+    val captureMode: CaptureMode,
     val aspectRatio: String,
     val isProfessionalMode: Boolean,
     val ultraHdrGainMapEnabled: Boolean,
@@ -200,6 +201,11 @@ private data class PresetMatchSnapshot(
     val rawMaxSharpening: Float,
     val rawMaxNoiseReduction: Float,
     val rawMaxChromaNoiseReduction: Float,
+    val rawExposureCompensation: Float,
+    val rawHighlightsAdjustment: Float,
+    val rawShadowsAdjustment: Float,
+    val rawBlackPointCorrection: Float,
+    val rawWhitePointCorrection: Float,
     val rawOppoMasterToneMap: Boolean,
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
@@ -211,13 +217,18 @@ private data class PresetMatchSnapshot(
             .isSameAs(preset.colorRecipe.withoutIndependentEffects())
         val presetLutId = CameraPreset.normalizeLutId(preset.lutId)
 //        PLog.d("PresetMatchSnapshot", "colorRecipe=$colorRecipe ${preset.colorRecipe} colorRecipe match: $colorRecipeMatches")
-        return lutId == presetLutId &&
+        val sharedSettingsMatch = lutId == presetLutId &&
             colorRecipeMatches &&
             effects == preset.effects &&
-            aspectRatio == preset.aspectRatio &&
-            isProfessionalMode &&
-            ultraHdrGainMapEnabled == preset.ultraHdrGainMapEnabled &&
-            frameId == preset.frameId &&
+            frameId == preset.frameId
+        if (!sharedSettingsMatch) return false
+
+        if (captureMode == CaptureMode.PHOTO && aspectRatio != preset.aspectRatio) {
+            return false
+        }
+        if (!isProfessionalMode) return true
+
+        return ultraHdrGainMapEnabled == preset.ultraHdrGainMapEnabled &&
             rawDcpId == preset.rawDcpId &&
             rawDcpIdsByLens == preset.rawDcpIdsByLens &&
             rawHncsProfileId == preset.rawHncsProfileId &&
@@ -231,6 +242,11 @@ private data class PresetMatchSnapshot(
             rawMaxSharpening == preset.rawMaxSharpening &&
             rawMaxNoiseReduction == preset.rawMaxNoiseReduction &&
             rawMaxChromaNoiseReduction == preset.rawMaxChromaNoiseReduction &&
+            rawExposureCompensation == preset.rawExposureCompensation &&
+            rawHighlightsAdjustment == preset.rawHighlightsAdjustment &&
+            rawShadowsAdjustment == preset.rawShadowsAdjustment &&
+            rawBlackPointCorrection == preset.rawBlackPointCorrection &&
+            rawWhitePointCorrection == preset.rawWhitePointCorrection &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
             rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
@@ -250,73 +266,108 @@ private data class PresetMatchSnapshot(
                 add("colorRecipe differs")
             }
             if (effects != preset.effects) add("effects current=$effects preset=${preset.effects}")
-            if (aspectRatio != preset.aspectRatio) add("aspectRatio current=$aspectRatio preset=${preset.aspectRatio}")
-            if (!isProfessionalMode) add("professional mode is not active")
-            if (ultraHdrGainMapEnabled != preset.ultraHdrGainMapEnabled) {
-                add(
-                    "ultraHdrGainMapEnabled current=$ultraHdrGainMapEnabled " +
-                        "preset=${preset.ultraHdrGainMapEnabled}"
-                )
-            }
             if (frameId != preset.frameId) add("frameId current=$frameId preset=${preset.frameId}")
-            if (rawDcpId != preset.rawDcpId) add("rawDcpId current=$rawDcpId preset=${preset.rawDcpId}")
-            if (rawDcpIdsByLens != preset.rawDcpIdsByLens) {
-                add("rawDcpIdsByLens current=$rawDcpIdsByLens preset=${preset.rawDcpIdsByLens}")
+            if (captureMode == CaptureMode.PHOTO && aspectRatio != preset.aspectRatio) {
+                add("aspectRatio current=$aspectRatio preset=${preset.aspectRatio}")
             }
-            if (rawHncsProfileId != preset.rawHncsProfileId) {
-                add("rawHncsProfileId current=$rawHncsProfileId preset=${preset.rawHncsProfileId}")
-            }
-            val presetHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                preset.rawHncsRenderIntent
-            )
-            if (rawHncsRenderIntent != presetHncsRenderIntent) {
-                add(
-                    "rawHncsRenderIntent current=$rawHncsRenderIntent " +
-                        "preset=$presetHncsRenderIntent"
+            if (isProfessionalMode) {
+                if (ultraHdrGainMapEnabled != preset.ultraHdrGainMapEnabled) {
+                    add(
+                        "ultraHdrGainMapEnabled current=$ultraHdrGainMapEnabled " +
+                            "preset=${preset.ultraHdrGainMapEnabled}"
+                    )
+                }
+                if (rawDcpId != preset.rawDcpId) add("rawDcpId current=$rawDcpId preset=${preset.rawDcpId}")
+                if (rawDcpIdsByLens != preset.rawDcpIdsByLens) {
+                    add("rawDcpIdsByLens current=$rawDcpIdsByLens preset=${preset.rawDcpIdsByLens}")
+                }
+                if (rawHncsProfileId != preset.rawHncsProfileId) {
+                    add("rawHncsProfileId current=$rawHncsProfileId preset=${preset.rawHncsProfileId}")
+                }
+                val presetHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
+                    preset.rawHncsRenderIntent
                 )
-            }
-            val presetHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
-                preset.rawHncsFilmCurveMode
-            )
-            if (rawHncsFilmCurveMode != presetHncsFilmCurveMode) {
-                add(
-                    "rawHncsFilmCurveMode current=$rawHncsFilmCurveMode " +
-                        "preset=$presetHncsFilmCurveMode"
+                if (rawHncsRenderIntent != presetHncsRenderIntent) {
+                    add(
+                        "rawHncsRenderIntent current=$rawHncsRenderIntent " +
+                            "preset=$presetHncsRenderIntent"
+                    )
+                }
+                val presetHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                    preset.rawHncsFilmCurveMode
                 )
-            }
-            if (rawRenderingEngine != presetRawRenderingEngine) {
-                add("rawRenderingEngine current=$rawRenderingEngine preset=$presetRawRenderingEngine")
-            }
-            if (rawMaxSharpening != preset.rawMaxSharpening) {
-                add("rawMaxSharpening current=$rawMaxSharpening preset=${preset.rawMaxSharpening}")
-            }
-            if (rawMaxNoiseReduction != preset.rawMaxNoiseReduction) {
-                add(
-                    "rawMaxNoiseReduction current=$rawMaxNoiseReduction " +
-                        "preset=${preset.rawMaxNoiseReduction}"
-                )
-            }
-            if (rawMaxChromaNoiseReduction != preset.rawMaxChromaNoiseReduction) {
-                add(
-                    "rawMaxChromaNoiseReduction current=$rawMaxChromaNoiseReduction " +
-                        "preset=${preset.rawMaxChromaNoiseReduction}"
-                )
-            }
-            if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
-                add(
-                    "rawOppoMasterToneMap current=$rawOppoMasterToneMap " +
-                        "preset=${preset.rawOppoMasterToneMap}"
-                )
-            }
-            if (rawSpectralFilmStock != preset.rawSpectralFilmStock) {
-                add("rawSpectralFilmStock current=$rawSpectralFilmStock preset=${preset.rawSpectralFilmStock}")
-            }
-            if (rawSpectralFilmPrint != preset.rawSpectralFilmPrint) {
-                add("rawSpectralFilmPrint current=$rawSpectralFilmPrint preset=${preset.rawSpectralFilmPrint}")
-            }
-            if (rawDROMode != preset.rawDROMode) add("rawDROMode current=$rawDROMode preset=${preset.rawDROMode}")
-            if (rawBaselineLutId != preset.rawBaselineLutId) {
-                add("rawBaselineLutId current=$rawBaselineLutId preset=${preset.rawBaselineLutId}")
+                if (rawHncsFilmCurveMode != presetHncsFilmCurveMode) {
+                    add(
+                        "rawHncsFilmCurveMode current=$rawHncsFilmCurveMode " +
+                            "preset=$presetHncsFilmCurveMode"
+                    )
+                }
+                if (rawRenderingEngine != presetRawRenderingEngine) {
+                    add("rawRenderingEngine current=$rawRenderingEngine preset=$presetRawRenderingEngine")
+                }
+                if (rawMaxSharpening != preset.rawMaxSharpening) {
+                    add("rawMaxSharpening current=$rawMaxSharpening preset=${preset.rawMaxSharpening}")
+                }
+                if (rawMaxNoiseReduction != preset.rawMaxNoiseReduction) {
+                    add(
+                        "rawMaxNoiseReduction current=$rawMaxNoiseReduction " +
+                            "preset=${preset.rawMaxNoiseReduction}"
+                    )
+                }
+                if (rawMaxChromaNoiseReduction != preset.rawMaxChromaNoiseReduction) {
+                    add(
+                        "rawMaxChromaNoiseReduction current=$rawMaxChromaNoiseReduction " +
+                            "preset=${preset.rawMaxChromaNoiseReduction}"
+                    )
+                }
+                if (rawExposureCompensation != preset.rawExposureCompensation) {
+                    add(
+                        "rawExposureCompensation current=$rawExposureCompensation " +
+                            "preset=${preset.rawExposureCompensation}"
+                    )
+                }
+                if (rawHighlightsAdjustment != preset.rawHighlightsAdjustment) {
+                    add(
+                        "rawHighlightsAdjustment current=$rawHighlightsAdjustment " +
+                            "preset=${preset.rawHighlightsAdjustment}"
+                    )
+                }
+                if (rawShadowsAdjustment != preset.rawShadowsAdjustment) {
+                    add(
+                        "rawShadowsAdjustment current=$rawShadowsAdjustment " +
+                            "preset=${preset.rawShadowsAdjustment}"
+                    )
+                }
+                if (rawBlackPointCorrection != preset.rawBlackPointCorrection) {
+                    add(
+                        "rawBlackPointCorrection current=$rawBlackPointCorrection " +
+                            "preset=${preset.rawBlackPointCorrection}"
+                    )
+                }
+                if (rawWhitePointCorrection != preset.rawWhitePointCorrection) {
+                    add(
+                        "rawWhitePointCorrection current=$rawWhitePointCorrection " +
+                            "preset=${preset.rawWhitePointCorrection}"
+                    )
+                }
+                if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
+                    add(
+                        "rawOppoMasterToneMap current=$rawOppoMasterToneMap " +
+                            "preset=${preset.rawOppoMasterToneMap}"
+                    )
+                }
+                if (rawSpectralFilmStock != preset.rawSpectralFilmStock) {
+                    add("rawSpectralFilmStock current=$rawSpectralFilmStock preset=${preset.rawSpectralFilmStock}")
+                }
+                if (rawSpectralFilmPrint != preset.rawSpectralFilmPrint) {
+                    add("rawSpectralFilmPrint current=$rawSpectralFilmPrint preset=${preset.rawSpectralFilmPrint}")
+                }
+                if (rawDROMode != preset.rawDROMode) {
+                    add("rawDROMode current=$rawDROMode preset=${preset.rawDROMode}")
+                }
+                if (rawBaselineLutId != preset.rawBaselineLutId) {
+                    add("rawBaselineLutId current=$rawBaselineLutId preset=${preset.rawBaselineLutId}")
+                }
             }
         }
         return differences.joinToString("; ").ifEmpty { "unknown" }
@@ -616,16 +667,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     return@withLock
                 }
                 try {
-                    if (state.value.captureMode != CaptureMode.PHOTO) {
-                        setCaptureMode(CaptureMode.PHOTO)
-                    }
+                    val currentState = state.value
+                    val includePhotoSettings = currentState.captureMode == CaptureMode.PHOTO
+                    val includeProfessionalSettings = includePhotoSettings &&
+                        useRaw.value && currentState.isRawSupported
                     PLog.d(
                         TAG,
-                        "Applying preset id=${preset?.id}, aspectRatio=${preset?.aspectRatio}, " +
-                            "frameId=${preset?.frameId}"
+                        "Applying preset id=${preset?.id}, captureMode=${currentState.captureMode}, " +
+                            "professional=$includeProfessionalSettings, frameId=${preset?.frameId}"
                     )
                     applyCameraFeatureUpdate(
-                        preset.toCameraFeatureUpdate().copy(activePresetId = SettingValue(preset?.id)),
+                        preset.toCameraFeatureUpdate(
+                            includePhotoSettings = includePhotoSettings,
+                            includeProfessionalSettings = includeProfessionalSettings
+                        ).copy(activePresetId = SettingValue(preset?.id)),
                         clearActivePresetOnMismatch = false
                     )
                 } finally {
@@ -637,23 +692,31 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun com.hinnka.mycamera.model.CameraPreset?.toCameraFeatureUpdate(): CameraFeatureUpdate {
-        val ratio = try {
-            AspectRatio.valueOf(this?.aspectRatio ?: AspectRatio.RATIO_4_3.name)
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to apply preset aspectRatio: ${this?.aspectRatio}", e)
-            AspectRatio.RATIO_4_3
+    private fun com.hinnka.mycamera.model.CameraPreset?.toCameraFeatureUpdate(
+        includePhotoSettings: Boolean,
+        includeProfessionalSettings: Boolean
+    ): CameraFeatureUpdate {
+        val ratio = if (includePhotoSettings) {
+            try {
+                AspectRatio.valueOf(this?.aspectRatio ?: AspectRatio.RATIO_4_3.name)
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to apply preset aspectRatio: ${this?.aspectRatio}", e)
+                AspectRatio.RATIO_4_3
+            }
+        } else {
+            null
         }
-        return CameraFeatureUpdate(
+        val sharedUpdate = CameraFeatureUpdate(
             lutId = SettingValue(CameraPreset.normalizeLutId(this?.lutId)),
             colorRecipe = SettingValue(this?.colorRecipe ?: ColorRecipeParams.DEFAULT),
             effects = SettingValue(this?.effects ?: EffectParams.DEFAULT),
-            aspectRatio = SettingValue(ratio),
-            useRaw = SettingValue(true),
-            useJpgMax = SettingValue(false),
-            useRawMax = SettingValue(true),
+            aspectRatio = ratio?.let(::SettingValue),
+            frameId = SettingValue(this?.frameId)
+        )
+        if (!includeProfessionalSettings) return sharedUpdate
+
+        return sharedUpdate.copy(
             ultraHdrGainMapEnabled = SettingValue(this?.ultraHdrGainMapEnabled ?: false),
-            frameId = SettingValue(this?.frameId),
             rawDcpId = SettingValue(this?.rawDcpId),
             rawDcpIdsByLens = SettingValue(this?.rawDcpIdsByLens ?: emptyMap()),
             rawHncsProfileId = SettingValue(this?.rawHncsProfileId),
@@ -663,7 +726,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsFilmCurveMode = SettingValue(
                 HncsFilmCurveMode.fromPersistedValue(this?.rawHncsFilmCurveMode)
             ),
-            rawRenderingEngine = SettingValue(RawRenderingEngine.fromPersistedName(this?.rawRenderingEngine)),
+            rawRenderingEngine = SettingValue(
+                RawRenderingEngine.fromPersistedName(this?.rawRenderingEngine)
+            ),
             rawMaxSharpening = SettingValue(
                 this?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
             ),
@@ -682,7 +747,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
-            droMode = SettingValue(this?.rawDROMode ?: RawProcessingPreferences.DROMode.OFF.name),
+            droMode = SettingValue(
+                this?.rawDROMode ?: RawProcessingPreferences.DROMode.OFF.name
+            ),
             rawBaselineLutId = SettingValue(this?.rawBaselineLutId)
         )
     }
@@ -1084,6 +1151,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             lutId = CameraPreset.normalizeLutId(currentLutId.value),
             colorRecipe = currentRecipeParams.value,
             effects = currentEffectParams.value,
+            captureMode = state.value.captureMode,
             aspectRatio = state.value.aspectRatio.name,
             isProfessionalMode = state.value.captureMode == CaptureMode.PHOTO &&
                 useRaw.value && useRawMax.value && !useJpgMax.value,
@@ -1098,6 +1166,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawMaxSharpening = userPreferences.value.rawMaxSharpening,
             rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
+            rawExposureCompensation = userPreferences.value.rawExposureCompensation,
+            rawHighlightsAdjustment = userPreferences.value.rawHighlightsAdjustment,
+            rawShadowsAdjustment = userPreferences.value.rawShadowsAdjustment,
+            rawBlackPointCorrection = userPreferences.value.rawBlackPointCorrection,
+            rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
@@ -1111,6 +1184,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             lutId = CameraPreset.normalizeLutId(lutId),
             colorRecipe = recipe,
             effects = effects,
+            captureMode = prefs.captureMode,
             aspectRatio = aspectRatio,
             isProfessionalMode = prefs.captureMode == CaptureMode.PHOTO &&
                 prefs.useRaw && prefs.useRawMax && !prefs.useJpgMax,
@@ -1125,6 +1199,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawMaxSharpening = prefs.rawMaxSharpening,
             rawMaxNoiseReduction = prefs.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = prefs.rawMaxChromaNoiseReduction,
+            rawExposureCompensation = prefs.rawExposureCompensation,
+            rawHighlightsAdjustment = prefs.rawHighlightsAdjustment,
+            rawShadowsAdjustment = prefs.rawShadowsAdjustment,
+            rawBlackPointCorrection = prefs.rawBlackPointCorrection,
+            rawWhitePointCorrection = prefs.rawWhitePointCorrection,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,

@@ -600,9 +600,9 @@ fun CameraScreen(
     }
 
     fun presetRequiresPreviewTransition(preset: CameraPreset?): Boolean {
+        if (state.captureMode == CaptureMode.VIDEO) return false
         val targetAspectRatio = presetTargetAspectRatio(preset)
-        return targetAspectRatio != state.aspectRatio ||
-            !useRaw || useJpgMax || !useRawMax
+        return targetAspectRatio != state.aspectRatio
     }
 
     LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
@@ -797,19 +797,6 @@ fun CameraScreen(
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
-        val isProfessionalMode = isPhotoStyleMode && useRaw && state.isRawSupported
-        val effectiveLutSelectorMode = if (
-            !isProfessionalMode && lutSelectorMode == LutSelectorMode.Presets
-        ) {
-            LutSelectorMode.Style
-        } else {
-            lutSelectorMode
-        }
-        LaunchedEffect(isProfessionalMode, lutSelectorMode) {
-            if (!isProfessionalMode && lutSelectorMode == LutSelectorMode.Presets) {
-                viewModel.setLutSelectorMode(LutSelectorMode.Style)
-            }
-        }
         LaunchedEffect(isPhotoStyleMode) {
             if (!isPhotoStyleMode) {
                 parameterRulerBounds = null
@@ -1746,9 +1733,10 @@ fun CameraScreen(
                         previewRecipeParamsOverride = newParams
                         viewModel.updateLutIntensity(newIntensity)
                     },
-                    allPresets = if (isProfessionalMode) allPresets else emptyList(),
-                    activePresetId = activePresetId.takeIf { isProfessionalMode },
-                    selectedMode = effectiveLutSelectorMode,
+                    allPresets = allPresets,
+                    presetModeEnabled = true,
+                    activePresetId = activePresetId,
+                    selectedMode = lutSelectorMode,
                     onModeSelected = { viewModel.setLutSelectorMode(it) },
                     availableFrames = viewModel.availableFrameList,
                     currentFrameId = viewModel.currentFrameId,

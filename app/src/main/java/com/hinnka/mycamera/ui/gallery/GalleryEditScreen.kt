@@ -1279,11 +1279,7 @@ fun GalleryEditScreen(
                     Column(
                         modifier = Modifier
                             .navigationBarsPadding()
-                            .padding(
-                                start = 16.dp,
-                                end = 16.dp,
-                                bottom = if (areEditControlsHidden) 4.dp else 16.dp
-                            )
+                            .padding(bottom = if (areEditControlsHidden) 4.dp else 16.dp)
                     ) {
                         val editPanelToggleDescription = stringResource(
                             if (areEditControlsHidden) {
@@ -1301,6 +1297,7 @@ fun GalleryEditScreen(
                                 ) {
                                     toggleEditControls()
                                 }
+                                .padding(horizontal = 16.dp)
                         ) {
                             if (areEditControlsHidden) {
                                 Text(
@@ -1337,6 +1334,7 @@ fun GalleryEditScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .padding(horizontal = 16.dp)
                                         .horizontalScroll(editTabsScrollState),
                                     horizontalArrangement = Arrangement.spacedBy(24.dp)
                                 ) {
@@ -1383,6 +1381,13 @@ fun GalleryEditScreen(
                                 Column(
                                     modifier = Modifier
                                         .heightIn(max = 550.dp)
+                                        .padding(
+                                            horizontal = if (editTab == EDIT_TAB_ADJUSTMENTS) {
+                                                0.dp
+                                            } else {
+                                                16.dp
+                                            }
+                                        )
                                         .verticalScroll(editPanelScrollState)
                                 ) {
                                     when (editTab) {
