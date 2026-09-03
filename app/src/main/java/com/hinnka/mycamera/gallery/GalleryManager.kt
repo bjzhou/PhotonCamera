@@ -3200,9 +3200,6 @@ object GalleryManager {
                 captureResult = captureResult,
             )
 
-            val noiseProfileSelection = ContentRepository.getInstance(context)
-                .rawNoiseProfileManager
-                .resolveSelection(resolveRawNoiseProfileId(context, metadata))
             val captureRawMetadata = RawMetadata.create(
                 width = firstImageWidth,
                 height = firstImageHeight,
@@ -3214,6 +3211,12 @@ object GalleryManager {
             ).let(physicalRawCrop::rebase).copy(
                 exposureCompensation = captureExposureCompensationEv,
             )
+            val noiseProfileSelection = ContentRepository.getInstance(context)
+                .rawNoiseProfileManager
+                .resolveSelection(
+                    requestedId = resolveRawNoiseProfileId(context, metadata),
+                    metadata = captureRawMetadata,
+                )
             val rawMetadata = captureRawMetadata.withNoiseProfileSelection(noiseProfileSelection)
             val captureRawDefaultCrop = physicalRawCrop.outputBounds
             val captureBlackBorderCrop =

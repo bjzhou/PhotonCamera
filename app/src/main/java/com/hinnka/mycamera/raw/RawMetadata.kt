@@ -163,6 +163,11 @@ data class RawMetadata(
     val maxAnalogSensitivity: Int = 0,
     val shutterSpeed: Long = 0L,
     val aperture: Float = FALLBACK_APERTURE_F_NUMBER,
+    /** CameraCharacteristics sensor geometry used only for adaptive noise-model estimation. */
+    val sensorPhysicalWidthMm: Float = 0f,
+    val sensorPhysicalHeightMm: Float = 0f,
+    val sensorPixelArrayWidth: Int = 0,
+    val sensorPixelArrayHeight: Int = 0,
     val frameCount: Int = 1,
     /**
      * MGC's normalized 128-bin power-correlation spectrum after spatial merge.
@@ -460,6 +465,12 @@ data class RawMetadata(
                     CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES,
                 ),
             )
+            val sensorPhysicalSize = characteristics.get(
+                CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE,
+            )
+            val sensorPixelArraySize = characteristics.get(
+                CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE,
+            )
 
             return RawMetadata(
                 width = width,
@@ -497,6 +508,10 @@ data class RawMetadata(
                 maxAnalogSensitivity = maxAnalogSensitivity,
                 shutterSpeed = shutterSpeed,
                 aperture = aperture,
+                sensorPhysicalWidthMm = sensorPhysicalSize?.width ?: 0f,
+                sensorPhysicalHeightMm = sensorPhysicalSize?.height ?: 0f,
+                sensorPixelArrayWidth = sensorPixelArraySize?.width ?: 0,
+                sensorPixelArrayHeight = sensorPixelArraySize?.height ?: 0,
                 sceneHasFace = captureResult.get(CaptureResult.STATISTICS_FACES)
                     ?.isNotEmpty() == true,
             )

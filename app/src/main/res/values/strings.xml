@@ -296,6 +296,7 @@
     <string name="raw_noise_profile_lens_override_value">Override: %1$s</string>
     <string name="raw_noise_profile_use_unified">Use unified model (%1$s)</string>
     <string name="raw_noise_profile_system">System default (Camera2 API)</string>
+    <string name="raw_noise_profile_adaptive">Adaptive (estimated for current lens)</string>
     <string name="raw_noise_profile_pixel8_pro">Pixel 8 Pro</string>
     <string name="raw_noise_profile_x9_ultra">X9 Ultra</string>
     <string name="raw_noise_profile_x9_ultra_3x">X9 Ultra 3X</string>

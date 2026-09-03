@@ -203,6 +203,10 @@ class RawDemosaicProcessor {
                 frameAperture = dngRawData.aperture,
                 inheritedAperture = baseMetadata?.aperture,
             ),
+            sensorPhysicalWidthMm = baseMetadata?.sensorPhysicalWidthMm ?: 0f,
+            sensorPhysicalHeightMm = baseMetadata?.sensorPhysicalHeightMm ?: 0f,
+            sensorPixelArrayWidth = baseMetadata?.sensorPixelArrayWidth ?: 0,
+            sensorPixelArrayHeight = baseMetadata?.sensorPixelArrayHeight ?: 0,
             activeArray = activeArray,
             channelNoiseProfile = channelNoiseProfile,
             noiseProfileLayout = noiseProfileLayout,
@@ -2490,7 +2494,7 @@ class RawDemosaicProcessor {
         actualMetadata = actualMetadata?.withNoiseProfileSelection(
             ContentRepository.getInstance(context.applicationContext)
                 .rawNoiseProfileManager
-                .resolveSelection(rawNoiseProfileId),
+                .resolveSelection(rawNoiseProfileId, actualMetadata),
         )
         val captureProfilePass = sceneExposureRequest != null ||
             legacyAutoExposureRequest != null || captureProfilePreparationRequested

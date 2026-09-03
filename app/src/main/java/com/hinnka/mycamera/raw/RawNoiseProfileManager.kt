@@ -37,14 +37,28 @@ class RawNoiseProfileManager(context: Context) {
         }
         RawNoiseProfileSelection.Camera2(fallbackProfile)
     }
+    private val adaptiveTemplate: CalibratedRawNoiseProfile by lazy(
+        LazyThreadSafetyMode.SYNCHRONIZED,
+    ) {
+        val templateInfo = checkNotNull(
+            BUILT_IN_PROFILES.firstOrNull { it.id == X9_ULTRA_PROFILE_ID },
+        ) { "Bundled X9 Ultra adaptive RAW noise template is not registered" }
+        checkNotNull(loadCalibratedProfile(templateInfo)) {
+            "Bundled X9 Ultra adaptive RAW noise template could not be loaded"
+        }
+    }
 
     fun getAvailableProfiles(): List<RawNoiseProfileInfo> =
         (BUILT_IN_PROFILES + customImportManager.getCustomRawNoiseProfiles())
             .distinctBy(RawNoiseProfileInfo::id)
 
-    fun resolveSelection(requestedId: String?): RawNoiseProfileSelection {
+    fun resolveSelection(
+        requestedId: String?,
+        metadata: RawMetadata? = null,
+    ): RawNoiseProfileSelection {
         val id = requestedId?.takeIf { it.isNotBlank() } ?: DEFAULT_PROFILE_ID
         if (id == SYSTEM_PROFILE_ID) return systemCamera2Selection
+        if (id == ADAPTIVE_PROFILE_ID) return resolveAdaptiveSelection(metadata)
         val info = getAvailableProfiles().firstOrNull { it.id == id }
         val calibrated = info?.let(::loadCalibratedProfile)
         if (calibrated != null) return RawNoiseProfileSelection.Calibrated(calibrated, id)
@@ -55,6 +69,53 @@ class RawNoiseProfileManager(context: Context) {
                 "$PIXEL8_PRO_PROFILE_ID fallback",
         )
         return systemCamera2Selection
+    }
+
+    private fun resolveAdaptiveSelection(metadata: RawMetadata?): RawNoiseProfileSelection {
+        val estimate = metadata?.let { rawMetadata ->
+            AdaptiveRawNoiseProfileEstimator.estimate(
+                id = ADAPTIVE_PROFILE_ID,
+                template = adaptiveTemplate,
+                target = AdaptiveRawNoiseProfileTarget(
+                    sensorPhysicalWidthMm = rawMetadata.sensorPhysicalWidthMm,
+                    sensorPhysicalHeightMm = rawMetadata.sensorPhysicalHeightMm,
+                    sensorPixelArrayWidth = rawMetadata.sensorPixelArrayWidth,
+                    sensorPixelArrayHeight = rawMetadata.sensorPixelArrayHeight,
+                    aperture = rawMetadata.aperture,
+                    maximumAnalogSensitivityIso = rawMetadata.maxAnalogSensitivity,
+                ),
+            )
+        }
+        if (estimate != null) {
+            val targetMetadata = checkNotNull(metadata)
+            PLog.i(
+                TAG,
+                "Adaptive RAW noise profile generated: " +
+                    "sensor=${targetMetadata.sensorPhysicalWidthMm}x" +
+                    "${targetMetadata.sensorPhysicalHeightMm}mm " +
+                    "pixels=${targetMetadata.sensorPixelArrayWidth}x" +
+                    "${targetMetadata.sensorPixelArrayHeight} " +
+                    "aperture=f/${targetMetadata.aperture} " +
+                    "maxAnalogIso=${targetMetadata.maxAnalogSensitivity} " +
+                    "driver=${estimate.relativeNoiseDriver} shotScale=${estimate.shotScale} " +
+                    "readQuadraticScale=${estimate.readQuadraticScale} " +
+                    "readFloorScale=${estimate.readFloorScale}",
+            )
+            return RawNoiseProfileSelection.Calibrated(
+                profile = estimate.profile,
+                id = ADAPTIVE_PROFILE_ID,
+            )
+        }
+
+        PLog.w(
+            TAG,
+            "Adaptive RAW noise profile lacks complete sensor geometry; using the source " +
+                "Camera2/DNG profile with the X9 Ultra template as fallback",
+        )
+        return RawNoiseProfileSelection.Camera2(
+            fallbackProfile = adaptiveTemplate,
+            id = ADAPTIVE_PROFILE_ID,
+        )
     }
 
     private fun loadCalibratedProfile(info: RawNoiseProfileInfo): CalibratedRawNoiseProfile? {
@@ -79,6 +140,7 @@ class RawNoiseProfileManager(context: Context) {
     companion object {
         private const val TAG = "RawNoiseProfileManager"
         const val SYSTEM_PROFILE_ID = RawNoiseProfileSelection.SYSTEM_CAMERA2_ID
+        const val ADAPTIVE_PROFILE_ID = "adaptive_x9_ultra"
         const val PIXEL8_PRO_PROFILE_ID = "builtin_noise_pixel8_pro"
         const val X9_ULTRA_PROFILE_ID = "builtin_noise_x9_ultra"
         const val X9_ULTRA_3X_PROFILE_ID = "builtin_noise_x9_ultra_3x"
@@ -91,6 +153,13 @@ class RawNoiseProfileManager(context: Context) {
                 filePath = null,
                 isBuiltIn = true,
                 nameResId = R.string.raw_noise_profile_system,
+            ),
+            RawNoiseProfileInfo(
+                id = ADAPTIVE_PROFILE_ID,
+                nameMap = emptyMap(),
+                filePath = null,
+                isBuiltIn = true,
+                nameResId = R.string.raw_noise_profile_adaptive,
             ),
             RawNoiseProfileInfo(
                 id = PIXEL8_PRO_PROFILE_ID,
