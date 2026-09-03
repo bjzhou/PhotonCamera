@@ -385,7 +385,6 @@ fun SettingsScreen(
     val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
-    val rawAdaptiveExposureMode by viewModel.rawAdaptiveExposureMode.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
     val rawShadowsAdjustment by viewModel.rawShadowsAdjustment.collectAsState()
     val rawMinShutterSpeedNs by viewModel.rawMinShutterSpeedNs.collectAsState()
@@ -2024,7 +2023,6 @@ fun SettingsScreen(
                         availableLuts = availableLuts,
                         thumbnail = previewThumbnail,
                         rawExposureCompensation = rawExposureCompensationUi,
-                        rawAdaptiveExposureMode = rawAdaptiveExposureMode,
                         rawHighlightsAdjustment = rawHighlightsAdjustmentUi,
                         rawShadowsAdjustment = rawShadowsAdjustmentUi,
                         rawBlackPointCorrection = rawBlackPointCorrectionUi,
@@ -2047,11 +2045,6 @@ fun SettingsScreen(
                         },
                         onRawExposureCompensationChange = {
                             rawExposureCompensationUi = it
-                        },
-                        onRawAdaptiveExposureModeChange = { mode ->
-                            rawToneMappingParametersUi =
-                                rawToneMappingParametersUi.withPhotonHdr(mode.usesPhotonHdr)
-                            viewModel.setRawAdaptiveExposureMode(mode)
                         },
                         onRawHighlightsAdjustmentChange = {
                             rawHighlightsAdjustmentUi = it

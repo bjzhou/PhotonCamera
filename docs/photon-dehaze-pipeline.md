@@ -1,80 +1,60 @@
-# Photon 独立去雾管线
+# Photon HDRNet Dehaze + DHA 链路
 
-> 当前运行状态：`PhotonDehazeTuning.PROCESSING_ENABLED = false`。整图渲染、分块决策和取景器
-> 曝光匹配统一旁路 Dehaze；已有参数与实现保留，恢复前需重新验证最终输出域的曝光匹配。
+Photon 不再运行独立的全分辨率 Dehaze pass。Dehaze 与 DHA 只属于 HDRNet 路径，并和
+HDRNet 的 bilateral-grid 输出一起烘焙到 DNG `ProfileGainTableMap2`。
 
-## 原版位置与语义
+## 顺序
 
-MGC 9.6 的调用链不是后置滤镜：
-
-```text
-ProcessRaw
-  -> downsampled linear RGB/YUV
-  -> ProcessLowFrequency
-       -> DehazeAndDha
-       -> ShadowLevelMatching
-       -> ApplyColorMap
-  -> FinishRaw
-       -> tone/output
-       -> SharpenTo16Bit
-```
-
-本地 native 代码中的可核对位置：
-
-- `googlex/gcam/finish_raw/finish_raw/dehaze.cc:369`：`BuildHistogram`；
-- `process_low_frequency.cc:599/636`：WithLtm/SkipLtm 两条路径调用 `DehazeAndDha`；
-- `process_low_frequency.cc:777`：后续 `ApplyColorMap`；
-- `DehazeAndDha` 的 `ApplyCurve` 以 `(R+G+B)/3` 选择 gain，同时乘到三个通道。
-
-因此 Photon 的固定位置是：
+MGC v25 的低频处理顺序是 LTM → `DehazeAndDha` → `ShadowLevelMatching` →
+`ApplyColorMap`。Photon 用 HDRNet/PGTM 代替 LTM，因此对应顺序为：
 
 ```text
-full-resolution denoise
-  -> camera RGB to linear working RGB
-  -> PhotonDehazePipeline
-  -> DCP color map / engine tone / output transform
-  -> final GLES adaptive USM
+final-short linear working RGB
+  -> one HDRNet model input / bilateral-grid inference with fixed short gain and HDR ratio
+  -> HDRNet output (256 x 192)
+  -> whole-image Dehaze + DHA histogram and curve
+  -> composed HDRNet + Dehaze/DHA output
+  -> full-coverage 8 x 6 viewfinder matching for one downstream exposure
+  -> bake the fixed HDRNet grid, Dehaze/DHA curve and downstream exposure into PGTM
+  -> DCP HueSatMap / profile exposure / LookTable / tone / output
 ```
 
-去雾不调用 HDR、高光滑杆、gamma、tone curve 或锐化实现。启用 DCP HueSatMap 时，LinearRcd
-先只完成 camera-to-working 变换，去雾结束后才用独立的线性 pass 执行 color map，从而保持原版
-`DehazeAndDha -> ApplyColorMap` 顺序。
+Dehaze 不进入 HDRNet 模型输入。HDR ratio 与 short gain 由拍摄阶段确定，取景器匹配不得修改
+这两个量，否则会把 HDRNet 与 Dehaze/DHA 形成的动态范围和反差当作曝光误差抵消。Dehaze 的
+统计源是唯一一次推理后的完整 256×192 HDRNet 输出；8×6 网格的每格覆盖对应区域的全部像素，
+只用于求一个 HDRNet 下游曝光，不用于估算 Dehaze 曲线。后处理结果的全图 P99 最大通道限制
+正向曝光，避免匹配增益破坏高光余量。
 
-## 算法契约
+## 曲线契约
 
-1. 对整幅线性 RGB 做 `8×8` box reduction，建立连续低频图。
-2. 转换到原版的 12-bit 统计域。
-3. 建立 877-bin haze histogram：`clamp(R+G+B, 0, 876)`。
-4. 建立 5251-bin highlight histogram：`max(RGB) + (max-min)/8`。
-5. 从 haze histogram 的 20 个低百分位样本估算两组 atmospheric haze point。
-6. 从 highlight histogram 的 5 个高百分位样本估算 DHA highlight scale，并夹到
-   `0.78..1.7`。
-7. 构建由黑位二次段和高位线性段组成、值和斜率连续的曲线。
-8. 全分辨率按 RGB 均值计算一个 gain，同时乘到 RGB 三通道并夹回 12-bit 对应范围。
+HDRNet 输出先转换到原版 12-bit 统计域：
 
-Photon 没有接入 GCam 的 AE face-map buffer，统计采用原版的 zero-mask 分支：每个低频样本一票，
-不增加 face 权重，也不减 face luminance offset。管线不使用逐 tile 曲线；去雾开启时要求连续
-全帧低频统计。HDR reference 与 SDR 共用去雾及去雾后的 HueSatMap 结果，再从当前渲染引擎的
-实测基准曲线构造连续的 HDR 高光延伸，避免 gain map 把去雾差异误判为 HDR 增益。
+- 877-bin haze histogram：`clamp(R+G+B, 0, 876)`；
+- 5251-bin highlight histogram：`max(RGB) + (max-min)/8`；
+- 20 个低百分位样本决定两组 atmospheric haze point；
+- 5 个高百分位样本决定 DHA highlight scale，并限制到 `0.78..1.7`；
+- 最终曲线由低端二次段和高端线性段组成，数值和斜率连续。
+
+合成时，曲线按 `(R+G+B)/3` 求共享 gain 并同时乘到三个通道。PGTM 是标量表，生成时使用
+固定的模型输入，从每个 64×48 空间 cell 保留局部色度与 HDRNet luma 的比例，再把相同的
+arithmetic-RGB 曲线及单一匹配曝光合成到 257 点强度轴并反解 ACR3 输入。运行期只查一次
+PGTM，不会再次执行 HDRNet、Dehaze 或 DHA。
 
 ## 控制与持久化
 
-去雾没有设置页或相册编辑页入口，也不保存用户偏好。参数默认值仍为 `strength = 1.0`、
-`dynamicHighlightStrength = 1.0`，但当前总开关使其不参与处理。新拍摄与历史照片继续保留这些
-字段的解析和持久化语义，不用改写元数据来实现临时旁路。
-
-`strength` 是 `dehazed_expo` 实际消费者，直接缩放两组 atmospheric haze point。默认值 `1`
-保持算法基准强度。
-
-元数据中的完整管线控制仍由以下三个字段组成：
+`PhotonDehazeTuning` 仍使用以下字段：
 
 - `photonDehazeEnabled`
-- `photonDehazeStrength`
-- `photonDehazeDynamicHighlightStrength`
+- `photonDehazeStrength`（`0..4`）
+- `photonDehazeDynamicHighlightStrength`（`0..1`）
 
-`strength` 直接缩放 atmospheric haze point，作用等价于原版 `DehazeStrengthFactor` 的实际
-消费者。`dynamicHighlightStrength` 是 Photon 拆出的 DHA 决定量：`0` 保持 highlight scale 为
-`1`，`1` 使用完整直方图估算。隐藏字段可随照片元数据固定处理行为，但应用 UI 不暴露这些字段。
+默认启用，强度均为 `1`。参数只在 HDRNet PGTM 生成或重新生成时消费；Classic 与 Local
+Laplacian 路径不执行 Dehaze/DHA。拍摄时得到的 HDRNet 下游匹配曝光独立保存，重新生成 PGTM
+时恢复并按新的 P99 高光余量重新约束；不会折回 short gain、HDR ratio 或 BaselineExposure。
+已有 DNG 的 PGTM 不在最终渲染时叠加独立去雾。
 
-传感器面积拟合不决定去雾强度；RAW 和 RAWmax 都使用独立去雾默认值，其他核心成像参数继续
-使用各自原有来源。
+## 匹配日志
+
+`PLog_RawExposureMatch` 输出 Classic/Local Laplacian 的候选结果，以及 HDRNet 单曝光最终匹配率、
+平均 EV 误差和校正量。`DngPhotonProfileGainTableAlgorithm` 另外输出固定的 short/ratio、匹配
+曝光及上限、P99 peak、haze point、DHA scale 与全图统计样本数。

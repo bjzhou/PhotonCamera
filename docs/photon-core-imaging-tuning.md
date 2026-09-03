@@ -4,7 +4,7 @@
 
 当前拍摄与处理固定使用默认核心参数，不提供设置项、DataStore 覆盖或基于传感器面积的自动调优。
 旧版本已经写入 RAW metadata 的 Photon 参数仍可读取，以保持历史照片的重处理兼容性。去雾阶段和
-原版调用证据见 [Photon 独立去雾管线](photon-dehaze-pipeline.md)。
+原版调用证据见 [Photon HDRNet Dehaze + DHA 链路](photon-dehaze-pipeline.md)。
 
 ## 领域结构
 
@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 多帧融合 | `PhotonFusionTuning` | Sabre frame merge、参考帧 SNR、融合后噪声相关性 |
 | 空域降噪 | `PhotonDenoiseTuning` | 全分辨率 luma/chroma 金字塔、细节重建、离群点抑制 |
-| 除雾 | `PhotonDehazeTuning` | 独立低频线性 RGB 统计、雾幕曲线和动态高光调整 |
+| 除雾 | `PhotonDehazeTuning` | HDRNet 输出的雾幕曲线和 DHA 动态高光调整，并烘焙进 PGTM |
 
 ## 多帧融合
 
@@ -66,10 +66,7 @@ GPU 强度。锐化不读取 SNR，不触发 RAW 像素统计或 GPU→CPU 回�
 
 ## 除雾
 
-当前 `PhotonDehazeTuning.PROCESSING_ENABLED` 为 `false`，所以下述参数仍会规范化、读取和持久化，
-但 `isActive` 对所有渲染路径统一返回 `false`，Dehaze 暂不进入最终输出或曝光匹配。
-
-`PhotonDehazeTuning` 由独立的 `PhotonDehazePipeline` 消费：
+`PhotonDehazeTuning` 只由 HDRNet PGTM 生成链消费：
 
 - `enabled`
 - `strength`，范围 `0..4`
@@ -79,17 +76,11 @@ GPU 强度。锐化不读取 SNR，不触发 RAW 像素统计或 GPU→CPU 回�
   - `0` 保持白点比例 `1`。
   - `1` 完整采用高光直方图估算的比例；中间值在线性比例域插值。
 
-处理顺序为：全分辨率 luma/chroma 降噪 → LinearRcd 线性工作 RGB → 去雾 → tone/风格 →
-最终锐化。它对应 MGC `ProcessLowFrequency` 中 `DehazeAndDha` 位于 `FinishRaw` tone 和
-`SharpenTo16Bit` 之前的边界；去雾自身不使用 HDR、gamma、用户高光滑杆或锐化参数。
-
-管线先做固定 `8×8` box reduction，再按原版语义建立两个 12-bit 直方图：低端 summed-RGB
-直方图决定雾幕点，高端 `max(RGB) + (max-min)/8` 直方图决定动态高光比例。最终曲线按
-`(R+G+B)/3` 查共享 gain，同时乘到 RGB 三通道，保持色度比例。HDR reference 从去雾及
-PostDehazeColorMap 之后的线性工作 RGB 分支生成，并使用 SDR 的实际线性结果作为颜色基底；
-它沿当前渲染引擎的实测中性基准曲线运行，在高光 shoulder 处以数值/斜率连续的二次段离开，
-场景白点达到 `√2`，白点以上按末端切线继续。去雾与 PGTM 都只在分支前执行一次。
-去雾启用时整幅图必须共享一次统计结果，因此不会退化成逐 tile 独立曲线。
+处理顺序为：固定 final-short 线性工作 RGB → 一次 HDRNet → Dehaze/DHA → 单一取景器匹配曝光
+→ PGTM 烘焙 → DCP 色彩映射与 profile tone → 最终锐化。完整 256×192 HDRNet 输出只建立一次
+两组 12-bit 直方图；合成结果按每格全部像素统计为 8×6，匹配只产生 HDRNet 下游曝光，不修改
+short gain 或 HDR ratio。最终渲染只应用烘焙后的 PGTM，不存在独立 Dehaze pass，也不会逐 tile
+重新统计曲线。Classic 与 Local Laplacian 路径不消费这些参数。
 
 ## 生命周期与持久化
 

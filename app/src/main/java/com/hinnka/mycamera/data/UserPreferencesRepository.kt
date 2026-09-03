@@ -69,21 +69,6 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
     },
 )
 
-private fun resolveStoredRawAutoExposure(mode: String?, legacyValue: Boolean?): Boolean {
-    return when {
-        mode.equals("OFF", ignoreCase = true) -> false
-        mode.equals(RawAdaptiveExposureMode.PHOTON_HDR.persistedValue, ignoreCase = true) -> false
-        mode.equals(
-            RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE.persistedValue,
-            ignoreCase = true,
-        ) -> true
-        // Read the removed thumbnail-matching value as enabled for backward compatibility.
-        mode.equals("VIEWFINDER_MATCH", ignoreCase = true) -> true
-        mode.equals("DYNAMIC_SCENE_ESTIMATION", ignoreCase = true) -> true
-        else -> legacyValue ?: true
-    }
-}
-
 enum class VolumeKeyAction {
     NONE,
     CAPTURE,
@@ -134,7 +119,7 @@ data class UserPreferences(
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val rawExposureCompensation: Float = 0f,
-    val rawAutoExposure: Boolean = true,
+    val rawAutoExposure: Boolean = false,
     val rawHighlightsAdjustment: Float = 0f,
     val rawShadowsAdjustment: Float = 0f,
     val rawMinShutterSpeedNs: Long = 0L,
@@ -614,16 +599,12 @@ class UserPreferencesRepository(private val context: Context) {
                         ?: RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
                     useProfileToneMap = preferences[RAW_PROFILE_TONE_MAP_KEY] ?: true,
                     useOppoMasterToneMap = preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false,
-                    usePhotonHdr =
-                        (preferences[RAW_PHOTON_HDR_KEY] ?: RawToneMappingParameters.PHOTON_HDR_DEFAULT) ||
-                            (preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] ?: false) ||
-                            (preferences[LEGACY_PROFILE_TONE_MAP_KEY] ?: false)
+                    // Capture development has one supported adaptive-exposure path: HDRNet.
+                    // Photo-level metadata may still disable it for an imported DNG.
+                    usePhotonHdr = true
                 ).normalized(),
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
-                rawAutoExposure = resolveStoredRawAutoExposure(
-                    mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
-                    legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
-                ),
+                rawAutoExposure = false,
                 rawHighlightsAdjustment = preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] ?: 0f,
                 rawShadowsAdjustment = preferences[RAW_SHADOWS_ADJUSTMENT_KEY] ?: 0f,
                 rawMinShutterSpeedNs = preferences[RAW_MIN_SHUTTER_SPEED_NS_KEY] ?: 0L,
@@ -1222,7 +1203,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun saveRawToneMappingParameters(value: RawToneMappingParameters) {
-        val normalized = value.normalized()
+        val normalized = value.withPhotonHdr(true)
         context.dataStore.edit { preferences ->
             preferences[RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY] = normalized.agxBlackRelativeExposure
             preferences[RAW_AGX_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.agxWhiteRelativeExposure
@@ -1235,15 +1216,9 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
             preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
             preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
-            val exposureMode = RawAdaptiveExposureMode.resolve(
-                usePhotonHdr = normalized.usePhotonHdr,
-                useLegacyAutoExposure = resolveStoredRawAutoExposure(
-                    mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
-                    legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
-                ),
-            )
-            preferences[RAW_AUTO_EXPOSURE_KEY] = exposureMode.usesLegacyAutoExposure
-            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = exposureMode.persistedValue
+            preferences[RAW_AUTO_EXPOSURE_KEY] = false
+            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] =
+                RawAdaptiveExposureMode.PHOTON_HDR.persistedValue
         }
     }
 
@@ -1253,37 +1228,18 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveRawAdaptiveExposureMode(mode: RawAdaptiveExposureMode) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_AUTO_EXPOSURE_KEY] = mode.usesLegacyAutoExposure
-            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = mode.persistedValue
-            preferences[RAW_PHOTON_HDR_KEY] = mode.usesPhotonHdr
-            preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
-            preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
-        }
-    }
-
     suspend fun restoreCameraStartupDefaultsOnce(): Boolean {
         var restored = false
         context.dataStore.edit { preferences ->
             if (preferences[CAMERA_STARTUP_DEFAULTS_RESTORED_V1] == true) {
                 return@edit
             }
-            val exposureMode = RawAdaptiveExposureMode.fromPersistedValue(
-                value = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
-                usePhotonHdr =
-                    (preferences[RAW_PHOTON_HDR_KEY]
-                        ?: RawToneMappingParameters.PHOTON_HDR_DEFAULT) ||
-                        (preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] ?: false) ||
-                        (preferences[LEGACY_PROFILE_TONE_MAP_KEY] ?: false),
-                useLegacyAutoExposure = resolveStoredRawAutoExposure(
-                    mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
-                    legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
-                ),
-            )
-            preferences[RAW_AUTO_EXPOSURE_KEY] = exposureMode.usesLegacyAutoExposure
-            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = exposureMode.persistedValue
-            preferences[RAW_PHOTON_HDR_KEY] = exposureMode.usesPhotonHdr
+            preferences[RAW_AUTO_EXPOSURE_KEY] = false
+            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] =
+                RawAdaptiveExposureMode.PHOTON_HDR.persistedValue
+            preferences[RAW_PHOTON_HDR_KEY] = true
+            preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
+            preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
             preferences[CAMERA_STARTUP_DEFAULTS_RESTORED_V1] = true
             restored = true
         }
@@ -2395,7 +2351,7 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_COLOR_ENGINE_KEY] = it.value.name
             }
             update.rawToneMappingParameters?.let {
-                val normalized = it.value.normalized()
+                val normalized = it.value.withPhotonHdr(true)
                 preferences[RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY] = normalized.agxBlackRelativeExposure
                 preferences[RAW_AGX_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.agxWhiteRelativeExposure
                 preferences[RAW_AGX_TOE_KEY] = normalized.agxToe
@@ -2406,15 +2362,9 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
                 preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
                 preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
-                val exposureMode = RawAdaptiveExposureMode.resolve(
-                    usePhotonHdr = normalized.usePhotonHdr,
-                    useLegacyAutoExposure = resolveStoredRawAutoExposure(
-                        mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
-                        legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
-                    ),
-                )
-                preferences[RAW_AUTO_EXPOSURE_KEY] = exposureMode.usesLegacyAutoExposure
-                preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = exposureMode.persistedValue
+                preferences[RAW_AUTO_EXPOSURE_KEY] = false
+                preferences[RAW_AUTO_EXPOSURE_MODE_KEY] =
+                    RawAdaptiveExposureMode.PHOTON_HDR.persistedValue
             }
             update.rawMaxSharpening?.let {
                 preferences[RAW_MAX_SHARPENING_KEY] = RawSharpeningDefaults.normalize(it.value)
@@ -2429,16 +2379,11 @@ class UserPreferencesRepository(private val context: Context) {
             update.rawExposureCompensation?.let {
                 preferences[RAW_EXPOSURE_COMPENSATION_KEY] = it.value.coerceIn(-4f, 4f)
             }
-            update.rawAutoExposure?.let {
-                val exposureMode = when {
-                    it.value -> RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE
-                    preferences[RAW_PHOTON_HDR_KEY] == true ->
-                        RawAdaptiveExposureMode.PHOTON_HDR
-                    else -> RawAdaptiveExposureMode.OFF
-                }
-                preferences[RAW_AUTO_EXPOSURE_KEY] = exposureMode.usesLegacyAutoExposure
-                preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = exposureMode.persistedValue
-                preferences[RAW_PHOTON_HDR_KEY] = exposureMode.usesPhotonHdr
+            if (update.rawAutoExposure != null) {
+                preferences[RAW_AUTO_EXPOSURE_KEY] = false
+                preferences[RAW_AUTO_EXPOSURE_MODE_KEY] =
+                    RawAdaptiveExposureMode.PHOTON_HDR.persistedValue
+                preferences[RAW_PHOTON_HDR_KEY] = true
             }
             update.rawHighlightsAdjustment?.let {
                 preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] = it.value.coerceIn(-1f, 1f)

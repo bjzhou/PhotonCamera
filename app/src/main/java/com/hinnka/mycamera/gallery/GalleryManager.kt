@@ -64,7 +64,7 @@ import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawCaptureProfileCoordinator
-import com.hinnka.mycamera.raw.RawPhotonHdrRatioMetadata
+import com.hinnka.mycamera.raw.RawPhotonHdrMetadata
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -276,7 +276,8 @@ object GalleryManager {
                 ?: repository.getAvailableLuts().firstOrNull { it.isDefault }?.id
             val baselineLutId = preferences?.rawBaselineLutId
             val rawToneMappingParameters =
-                (preferences?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT).normalized()
+                (preferences?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT)
+                    .withPhotonHdr(true)
             val spectralFilmStock = preferences?.rawSpectralFilmStock ?: "kodak_portra_400"
             val spectralFilmTuning = (
                 preferences?.rawSpectralFilmTuningsByStock?.get(spectralFilmStock)
@@ -304,7 +305,7 @@ object GalleryManager {
                 chromaNoiseReduction = rawChromaNoiseReduction,
                 rawDcpId = preferences?.rawDcpIdForLens(null),
                 rawExposureCompensation = preferences?.rawExposureCompensation ?: 0f,
-                rawAutoExposure = preferences?.rawAutoExposure ?: true,
+                rawAutoExposure = false,
                 rawHighlightsAdjustment = preferences?.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = preferences?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = preferences?.rawBlackPointCorrection ?: 0f,
@@ -2255,10 +2256,11 @@ object GalleryManager {
             ) ?: return@withContext
             preparedDemosaicSourceToRelease = preparedProfile.gpuDemosaicedRawSource
             updatedMetadata = updatedMetadata.copy(
-                customProperties = RawPhotonHdrRatioMetadata.write(
+                customProperties = RawPhotonHdrMetadata.write(
                     updatedMetadata.customProperties,
                     preparedProfile.hdrRatio,
                     preparedProfile.finalShortGain,
+                    preparedProfile.hdrNetPostExposureEv,
                 ),
             )
 
@@ -3557,10 +3559,11 @@ object GalleryManager {
                     return@withContext
                 }
                 updatedMetadata = updatedMetadata.copy(
-                    customProperties = RawPhotonHdrRatioMetadata.write(
+                    customProperties = RawPhotonHdrMetadata.write(
                         updatedMetadata.customProperties,
                         dngProfilePreparation.hdrRatio,
                         dngProfilePreparation.finalShortGain,
+                        dngProfilePreparation.hdrNetPostExposureEv,
                     ),
                 )
                 val profileElapsedMs = System.currentTimeMillis() - profileStartMs
@@ -5623,10 +5626,13 @@ object GalleryManager {
                     rawRenderingEngine = updatedMetadata?.rawRenderingEngine ?: MediaMetadata().rawRenderingEngine,
                     rawToneMappingParameters = updatedMetadata?.rawToneMappingParameters ?: MediaMetadata().rawToneMappingParameters,
                     forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
-                    photonHdrRatio = RawPhotonHdrRatioMetadata.read(
+                    photonHdrRatio = RawPhotonHdrMetadata.read(
                         rawMetadata.customProperties,
                     ),
-                    photonSourceToShortGain = RawPhotonHdrRatioMetadata.readFinalShortGain(
+                    photonSourceToShortGain = RawPhotonHdrMetadata.readFinalShortGain(
+                        rawMetadata.customProperties,
+                    ),
+                    photonHdrNetPostExposureEv = RawPhotonHdrMetadata.readPostExposureEv(
                         rawMetadata.customProperties,
                     ),
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,

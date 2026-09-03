@@ -1503,7 +1503,6 @@ class RawDemosaicProcessor {
     private val linearFloatToUintPass = RawLinearFloatToUintPass()
     private val warpRectilinearPass = RawWarpRectilinearPass(fullscreenQuad)
     private val linearRcdPass = RawLinearRcdPass(fullscreenQuad)
-    private val photonDehazePipeline = PhotonDehazePipeline()
     private val hdrReferencePass = RawHdrReferencePass(engineTonePass)
     private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
     private val fastMomentsStatsAlgorithm = RawAEStatsAlgorithm()
@@ -1643,6 +1642,7 @@ class RawDemosaicProcessor {
         val linearColorCorrectionMatrix: FloatArray,
         val linearCameraWhite: FloatArray,
         val hueSatMap: DcpHueSatMap?,
+        val deferDcpHueSatUntilAfterPgtm: Boolean,
         val applyLinearDngBaselineExposure: Boolean,
         val hasProfileGainTableMap: Boolean,
         val applyDcpBaselineExposureOffset: Boolean,
@@ -1831,6 +1831,7 @@ class RawDemosaicProcessor {
         forceRegeneratePhotonPgtm: Boolean = false,
         photonHdrRatio: Float? = null,
         photonSourceToShortGain: Float? = null,
+        photonHdrNetPostExposureEv: Float? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         onMetadata: ((RawMetadata) -> Unit)? = null
@@ -1878,6 +1879,7 @@ class RawDemosaicProcessor {
                 forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
                 photonHdrRatio = photonHdrRatio,
                 photonSourceToShortGain = photonSourceToShortGain,
+                photonHdrNetPostExposureEv = photonHdrNetPostExposureEv,
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 dngFile = dngFile,
@@ -2329,6 +2331,7 @@ class RawDemosaicProcessor {
         forceRegeneratePhotonPgtm: Boolean = false,
         photonHdrRatio: Float? = null,
         photonSourceToShortGain: Float? = null,
+        photonHdrNetPostExposureEv: Float? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         dngFile: File? = null,
@@ -2577,8 +2580,21 @@ class RawDemosaicProcessor {
         }
         val normalizedToneMappingParameters = rawToneMappingParameters.normalized()
         val photonHdrRequested = normalizedToneMappingParameters.usePhotonHdr
-        val forcePhotonPgtmRegeneration =
-            photonHdrRequested && forceRegeneratePhotonPgtm
+        val hasReusablePhotonPgtm = if (dngFile != null) {
+            embeddedDngProfiles.any { it.isPhotonHdr && it.hasProfileGainTableMap }
+        } else {
+            sourceProfileGainTableMap != null
+        }
+        // Enabling HDRNet is a rendering contract, not merely a preference hint. Imported DNGs
+        // normally have no Photon profile to reuse, so every render entry point (including SDR
+        // and Ultra HDR export) must generate one instead of silently continuing without PGTM.
+        val regeneratePhotonPgtm = photonHdrRequested &&
+            (forceRegeneratePhotonPgtm || !hasReusablePhotonPgtm)
+        val photonPgtmRegenerationTrigger = when {
+            !regeneratePhotonPgtm -> "reuse-embedded"
+            forceRegeneratePhotonPgtm -> "explicit-force"
+            else -> "missing-photon-pgtm"
+        }
         val useAdobeProfilePipeline = colorEngine == RawRenderingEngine.AdobeCurve
         val embeddedProfileDecision = EmbeddedDngProfilePolicy.resolve(
             hasEmbeddedProfile = embeddedDngRenderPlan != null,
@@ -2666,10 +2682,8 @@ class RawDemosaicProcessor {
                 "unsupported samplesPerPixel=$actualSamplesPerPixel"
             borrowedGpuSource != null -> "GPU-resident stacked source"
             borrowedDemosaicSource != null -> "GPU-resident prepared demosaic"
-            forcePhotonPgtmRegeneration ->
+            regeneratePhotonPgtm ->
                 "HDRNet PGTM regeneration requires continuous linear RGB"
-            actualMetadata.coreImagingTuning.dehaze.isActive ->
-                "Photon dehaze requires one continuous low-frequency image"
             hasActiveWarp && !(captureProfilePreparationRequested && !captureExposureRequested) ->
                 "DNG WarpRectilinear requires a displacement-aware render source region"
             colorEngine == RawRenderingEngine.DarktableFilmic ->
@@ -2817,7 +2831,7 @@ class RawDemosaicProcessor {
             !hasDcpSelection &&
             normalizedToneMappingParameters.profileToneMapMode == RawProfileToneMapMode.Profile
         val embeddedProfileGainTableMap = when {
-            forcePhotonPgtmRegeneration -> null
+            regeneratePhotonPgtm -> null
             photonHdrRequested -> photonProfileGainTableMap
                 ?: sourceProfileGainTableMap.takeIf { dngFile == null }
             selectedEmbeddedProfileIsActive -> selectedProfileGainTableMap
@@ -2831,7 +2845,8 @@ class RawDemosaicProcessor {
                     "selected=${selectedEmbeddedDngProfile?.profileName ?: "none"} " +
                     "engine=$colorEngine customDcp=$hasDcpSelection photonHdr=$photonHdrRequested " +
                     "pgtmSource=${when {
-                        forcePhotonPgtmRegeneration -> "regenerate-hdrnet"
+                        regeneratePhotonPgtm ->
+                            "regenerate-hdrnet:$photonPgtmRegenerationTrigger"
                         embeddedProfileGainTableMap == null -> "none"
                         photonHdrRequested -> "photon-hdr"
                         else -> "selected-profile"
@@ -3321,6 +3336,9 @@ class RawDemosaicProcessor {
                         appendLine("hdrNetFinalShortGain=$outputShortGain")
                         appendLine("hdrNetFinalLongGain=${outputShortGain * outputHdrRatio}")
                         appendLine("hdrNetFinalHdrRatio=$outputHdrRatio")
+                        appendLine(
+                            "hdrNetPostExposureEv=${output.hdrNetPostExposureEv ?: 0f}",
+                        )
                     }.trimEnd()
                 }
                 val captureProfileFailed =
@@ -3343,6 +3361,7 @@ class RawDemosaicProcessor {
                         exposureOffsetEv = solvedExposureEv,
                         hdrRatio = selectedCaptureHdrRatio,
                         finalShortGain = selectedCaptureSourceToShortGain,
+                        hdrNetPostExposureEv = captureProfileOutput?.hdrNetPostExposureEv,
                         rawSceneExposureSummaryText = captureSummaryText,
                         profileGainTableMap = captureProfileGainTableMap,
                         gpuDemosaicedRawSource = reusableDemosaicSource,
@@ -3352,10 +3371,15 @@ class RawDemosaicProcessor {
                 return@withContext null
             }
 
-            if (forcePhotonPgtmRegeneration) {
+            if (regeneratePhotonPgtm) {
                 val persistedHdrRatio = photonHdrRatio?.takeIf { it.isFinite() && it >= 1f }
                 val persistedSourceToShortGain = photonSourceToShortGain
                     ?.takeIf { it.isFinite() && it > 0f }
+                val persistedPostExposureEv = photonHdrNetPostExposureEv
+                    ?.takeIf {
+                        it.isFinite() && it in
+                            MeteringSystem.RAW_EXPOSURE_MIN_EV..MeteringSystem.RAW_EXPOSURE_MAX_EV
+                    }
                 val usePersistedCaptureAe =
                     persistedHdrRatio != null && persistedSourceToShortGain != null
                 val estimatedExposure = if (usePersistedCaptureAe) {
@@ -3381,9 +3405,10 @@ class RawDemosaicProcessor {
                     ?.takeIf { it.isFinite() && it >= 1f }
                 val estimatedSourceToShortGain = estimatedExposure?.finalShortGain
                     ?.takeIf { it.isFinite() && it > 0f }
-                // Capture-time finalShortGain already includes the full-viewfinder spatial match.
-                // Prefer the persisted pair so PGTM refresh is reproducible without the original
-                // in-memory thumbnail. ML AE is only a fallback for older metadata contracts.
+                // Capture-time short gain and HDR ratio describe the fixed HDRNet inference.
+                // The downstream viewfinder-match exposure is persisted independently so PGTM
+                // refresh can reproduce the composed result without changing model inputs.
+                // ML AE remains a fallback for older metadata contracts.
                 val useEstimatedAe = !usePersistedCaptureAe &&
                     estimatedHdrRatio != null && estimatedSourceToShortGain != null
                 val regenerationHdrRatio = when {
@@ -3405,7 +3430,7 @@ class RawDemosaicProcessor {
                     else -> persistedSourceToShortGain ?: 1f
                 }
                 val regenerationAeSource = when {
-                    usePersistedCaptureAe -> "PERSISTED_CAPTURE_VIEWFINDER_MATCH"
+                    usePersistedCaptureAe -> "PERSISTED_CAPTURE_AE"
                     useEstimatedAe ->
                         "MGC_ML_AE_REFRESH_WITHOUT_VIEWFINDER_TARGET"
                     else -> "LEGACY_RATIO_SHORT_UNITY_FALLBACK"
@@ -3415,9 +3440,11 @@ class RawDemosaicProcessor {
                 PLog.i(
                     TAG,
                     "HDRNet PGTM regeneration " +
+                        "trigger=$photonPgtmRegenerationTrigger " +
                         "hdrRatio=$regenerationHdrRatio " +
                         "finalShortGain=$regenerationSourceToShortGain " +
                         "finalLongGain=$regenerationLongGain " +
+                        "postExposureEv=${persistedPostExposureEv ?: 0f} " +
                         "aeSource=$regenerationAeSource " +
                         "sourceBaselineEv=${actualMetadata.baselineExposure} " +
                         "sourceBaselineGain=${exactDngBaselineExposureGain(actualMetadata)} " +
@@ -3443,6 +3470,7 @@ class RawDemosaicProcessor {
                     outputRotation = actualRotation,
                     hdrRatio = regenerationHdrRatio,
                     sourceToShortGain = regenerationSourceToShortGain,
+                    hdrNetPostExposureEv = persistedPostExposureEv,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
                     hueSatMap = activeDcpRenderPlan?.hueSatMap,
                     hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -3465,9 +3493,18 @@ class RawDemosaicProcessor {
                         "${regeneratedPhotonPgtm.map.mapPointsV}x" +
                         regeneratedPhotonPgtm.map.mapPointsN +
                         " hdrRatio=${regeneratedPhotonPgtm.hdrRatio}" +
-                        " finalShortGain=${regeneratedPhotonPgtm.sourceToShortGain}",
+                        " finalShortGain=${regeneratedPhotonPgtm.sourceToShortGain}" +
+                        " postExposureEv=${regeneratedPhotonPgtm.hdrNetPostExposureEv}",
                 )
             }
+
+            // Newly generated HDRNet maps contain the downstream Dehaze + DHA curve. The DCP
+            // color map must therefore execute after PGTM; Local Laplacian and ordinary DNG
+            // profile maps retain their existing ordering.
+            val deferDcpHueSatUntilAfterPgtm =
+                photonHdrRequested && hasProfileGainTableMap &&
+                    (regeneratePhotonPgtm ||
+                        photonHdrRatio?.let { it.isFinite() && it >= 1f } == true)
 
             // BaselineExposure is source metadata plus an optional classic auto-exposure offset.
             // Photon HDR never changes it. Rendering only applies explicit edit controls.
@@ -3531,6 +3568,7 @@ class RawDemosaicProcessor {
                         linearColorCorrectionMatrix = linearColorCorrectionMatrix,
                         linearCameraWhite = linearCameraWhite,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                        deferDcpHueSatUntilAfterPgtm = deferDcpHueSatUntilAfterPgtm,
                         applyLinearDngBaselineExposure = applyLinearDngBaselineExposure,
                         hasProfileGainTableMap = hasProfileGainTableMap,
                         applyDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
@@ -3595,7 +3633,6 @@ class RawDemosaicProcessor {
             // it through ColorCorrectAll's camera-domain inputEV; other linear engines retain
             // the exact post-matrix 2^EV gain.
             checkGlError("Before LinearRcdPass")
-            val dehazeTuning = actualMetadata.coreImagingTuning.dehaze.normalized()
 
             renderLinearRcdPass(
                 metadata = actualMetadata,
@@ -3606,10 +3643,10 @@ class RawDemosaicProcessor {
                 rawExposureCompensation = 0f,
                 colorCorrectionMatrix = linearColorCorrectionMatrix,
                 cameraWhite = linearCameraWhite,
-                // MGC ProcessLowFrequency runs DehazeAndDha before ApplyColorMap. Defer the DCP
-                // hue/sat map to a second linear pass only while standalone dehaze is active.
+                // HDRNet's PGTM contains HDRNet -> Dehaze/DHA, so its DCP color map is deferred
+                // to the profile pass. Other paths retain their established linear-pass order.
                 hueSatMap = activeDcpRenderPlan?.hueSatMap
-                    ?.takeUnless { dehazeTuning.isActive },
+                    ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
                 applyDngBaselineExposure = applyLinearDngBaselineExposure,
                 clampProfileRgb = clampProfileRgb,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -3628,53 +3665,6 @@ class RawDemosaicProcessor {
 
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             checkGlError("After LinearRcdPass Swap")
-            if (dehazeTuning.isActive) {
-                checkNotNull(
-                    photonDehazePipeline.render(
-                        sourceTextureId = demosaicTextureId,
-                        targetTextureId = linearOutputTextureId,
-                        width = actualWidth,
-                        height = actualHeight,
-                        tuning = dehazeTuning,
-                    ),
-                ) { "Photon dehaze pipeline failed" }
-
-                val dehazeTempTexture = demosaicTextureId
-                demosaicTextureId = linearOutputTextureId
-                linearOutputTextureId = dehazeTempTexture
-                val dehazeTempFramebuffer = demosaicFramebufferId
-                demosaicFramebufferId = linearOutputFramebufferId
-                linearOutputFramebufferId = dehazeTempFramebuffer
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                checkGlError("After PhotonDehazePass Swap")
-
-                activeDcpRenderPlan?.hueSatMap?.takeIf { it.isValid }?.let { hueSatMap ->
-                    renderLinearRcdPass(
-                        metadata = actualMetadata,
-                        sourceTextureId = demosaicTextureId,
-                        targetFramebufferId = linearOutputFramebufferId,
-                        viewportWidth = actualWidth,
-                        viewportHeight = actualHeight,
-                        rawExposureCompensation = 0f,
-                        colorCorrectionMatrix = identityMatrix3x3(),
-                        cameraWhite = floatArrayOf(1f, 1f, 1f),
-                        hueSatMap = hueSatMap,
-                        applyDngBaselineExposure = false,
-                        clampProfileRgb = false,
-                        hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
-                        hncsCameraDomainGains = null,
-                        label = "PostDehazeColorMapPass",
-                    )
-                    val colorMapTempTexture = demosaicTextureId
-                    demosaicTextureId = linearOutputTextureId
-                    linearOutputTextureId = colorMapTempTexture
-                    val colorMapTempFramebuffer = demosaicFramebufferId
-                    demosaicFramebufferId = linearOutputFramebufferId
-                    linearOutputFramebufferId = colorMapTempFramebuffer
-                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                    checkGlError("After PostDehazeColorMapPass Swap")
-                }
-            }
             // LinearRcdPass has consumed the camera-RGB NLM result. The post-CCM pipeline uses
             // the full-resolution ping-pong textures, so both denoiseprofile textures can go.
             releaseDenoiseProfileFramebuffers()
@@ -3734,7 +3724,7 @@ class RawDemosaicProcessor {
                     metadata = actualMetadata,
                     inputTextureId = combinedInputTexture,
                     dcpRenderPlan = activeDcpRenderPlan,
-                    applyDcpHueSatMap = false,
+                    applyDcpHueSatMap = deferDcpHueSatUntilAfterPgtm,
                     profileExposureUniforms = combinedProfileExposureUniforms,
                     spectralFilmLut = spektrafilmLut,
                     hncsRenderPlan = hncsRenderPlan,
@@ -3769,6 +3759,7 @@ class RawDemosaicProcessor {
                             profileExposureUniforms = combinedProfileExposureUniforms,
                             rawToneMappingParameters = rawToneMappingParameters,
                             applyProfileGainTableMap = hasProfileGainTableMap,
+                            applyDcpHueSatMap = deferDcpHueSatUntilAfterPgtm,
                             coordinateInput = if (hasProfileGainTableMap) {
                                 RawEngineTonePass.HdrCoordinateInput(
                                     textureId = demosaicTextureId,
@@ -3896,6 +3887,7 @@ class RawDemosaicProcessor {
                             profileExposureUniforms = profileExposureUniforms,
                             rawToneMappingParameters = rawToneMappingParameters,
                             applyProfileGainTableMap = hasProfileGainTableMap,
+                            applyDcpHueSatMap = deferDcpHueSatUntilAfterPgtm,
                         )
                     }
                     renderOutputPass(
@@ -4185,7 +4177,8 @@ class RawDemosaicProcessor {
                     rawExposureCompensation = 0f,
                     colorCorrectionMatrix = config.linearColorCorrectionMatrix,
                     cameraWhite = config.linearCameraWhite,
-                    hueSatMap = config.hueSatMap,
+                    hueSatMap = config.hueSatMap
+                        ?.takeUnless { config.deferDcpHueSatUntilAfterPgtm },
                     applyDngBaselineExposure = config.applyLinearDngBaselineExposure,
                     clampProfileRgb = config.clampProfileRgb,
                     hueSatMapSupportsOverrange = config.hueSatMapSupportsOverrange,
@@ -4204,7 +4197,7 @@ class RawDemosaicProcessor {
                     metadata = config.metadata,
                     inputTextureId = demosaicTextureId,
                     dcpRenderPlan = config.activeDcpRenderPlan,
-                    applyDcpHueSatMap = false,
+                    applyDcpHueSatMap = config.deferDcpHueSatUntilAfterPgtm,
                     profileExposureUniforms = config.profileExposureUniforms,
                     spectralFilmLut = config.spectralFilmLut,
                     hncsRenderPlan = config.hncsRenderPlan,
@@ -4242,6 +4235,7 @@ class RawDemosaicProcessor {
                         profileExposureUniforms = config.profileExposureUniforms,
                         rawToneMappingParameters = config.rawToneMappingParameters,
                         applyProfileGainTableMap = config.hasProfileGainTableMap,
+                        applyDcpHueSatMap = config.deferDcpHueSatUntilAfterPgtm,
                         globalOriginX = working.left,
                         globalOriginY = working.top,
                         fullImageWidth = config.fullWidth,
@@ -4550,6 +4544,7 @@ class RawDemosaicProcessor {
         outputRotation: Int,
         hdrRatio: Float,
         sourceToShortGain: Float,
+        hdrNetPostExposureEv: Float? = null,
         colorCorrectionMatrix: FloatArray,
         hueSatMap: DcpHueSatMap?,
         hueSatMapSupportsOverrange: Boolean,
@@ -4593,6 +4588,7 @@ class RawDemosaicProcessor {
                 outputRotation = outputRotation,
                 hdrRatio = hdrRatio,
                 sourceToShortGain = sourceToShortGain,
+                hdrNetPostExposureEv = hdrNetPostExposureEv,
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 hueSatMap = hueSatMap,
                 hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -7265,6 +7261,7 @@ class RawDemosaicProcessor {
         profileExposureUniforms: ProfileExposureUniforms,
         rawToneMappingParameters: RawToneMappingParameters,
         applyProfileGainTableMap: Boolean,
+        applyDcpHueSatMap: Boolean = false,
         coordinateInput: RawEngineTonePass.HdrCoordinateInput? = null,
         globalOriginX: Int = 0,
         globalOriginY: Int = 0,
@@ -7296,9 +7293,7 @@ class RawDemosaicProcessor {
                         toneMappingParameters = rawToneMappingParameters,
                         profileExposure = profileExposureUniforms,
                         dcpRenderPlan = dcpRenderPlan,
-                        // LinearRcdPass has already applied the profile HueSatMap. Adobe still
-                        // consumes the selected curve and LookTable through the shared binder.
-                        applyDcpHueSatMap = false,
+                        applyDcpHueSatMap = applyDcpHueSatMap,
                         spectralFilmLut = spectralFilmLut,
                         hncsRenderPlan = hncsRenderPlan,
                         bindProfileGainTable = { program ->
@@ -8826,7 +8821,6 @@ class RawDemosaicProcessor {
         fastMomentsStatsAlgorithm.release()
         legacyHighlightHistogramAlgorithm.release()
         linearRcdPass.release()
-        photonDehazePipeline.release()
         warpRectilinearPass.release()
         linearUintToFloatPass.release()
         linearFloatToUintPass.release()

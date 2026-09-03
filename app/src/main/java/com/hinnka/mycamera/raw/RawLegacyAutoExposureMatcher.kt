@@ -4,10 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.utils.PLog
-import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
-import kotlin.math.pow
 
 internal data class RawLegacyExposurePreviewFrame(
     val width: Int,
@@ -76,8 +74,8 @@ internal data class RawLegacyHighlightExposureLimit(
 
 /**
  * Capture-side viewfinder matching derived from PhotonCamera 1.27.1's spatial solver. Native code
- * owns reference linearization, robust grid statistics and both exposure solvers. Kotlin only
- * evaluates the HDRNet candidates requested by native code and retains their inference payloads.
+ * owns reference linearization, robust grid statistics and exposure selection. HDRNet matching
+ * evaluates its completed processing chain once and solves only a downstream scalar exposure.
  */
 internal object RawLegacyAutoExposureMatcher {
     private const val TAG = "RawLegacyAutoExposureMatcher"
@@ -92,10 +90,10 @@ internal object RawLegacyAutoExposureMatcher {
         val areaFraction: Float,
     )
 
-    private data class HdrNetInference<T>(
-        val shortEv: Float,
-        val hdrRatioEv: Float,
-        val payload: T,
+    data class HdrNetPostExposureMatch(
+        val exposureEv: Float,
+        val matchRate: Float,
+        val meanAbsoluteErrorEv: Float,
     )
 
     fun createRequest(
@@ -258,74 +256,53 @@ internal object RawLegacyAutoExposureMatcher {
     }
 
     /**
-     * Drives the native two-dimensional HDRNet matcher.
-     *
-     * Native code jointly searches the model's short-EV and HDR-ratio-EV coordinates. Robust
-     * highlight error anchors short exposure, paired p20..p80 dynamic-range error drives HDR
-     * ratio, and their measured cross-response is retained in the damped Jacobian. Selection and
-     * convergence still use the weighted full-grid direct-EV match rate.
+     * Matches a fully composed HDRNet -> Dehaze/DHA grid with one downstream exposure only.
+     * HDRNet input exposure and HDR ratio remain fixed, so viewfinder matching cannot flatten the
+     * model or Dehaze/DHA tone shape. Native selection maximizes the weighted number of 8 x 6
+     * cells within 0.1 EV, retaining the same spatial and portrait-priority weights as every
+     * other capture path.
      */
-    fun <T> solveHdrNetExposure(
+    fun solveHdrNetPostExposure(
         referenceFrame: RawLegacyExposurePreviewFrame,
-        initialShortGain: Float,
-        initialLongGain: Float,
-        evaluateCandidate: (shortGain: Float, longGain: Float) -> Pair<T, FloatArray>?,
-    ): T? {
-        if (!initialShortGain.isFinite() || !initialLongGain.isFinite() ||
-            initialShortGain <= 0f || initialLongGain < initialShortGain
-        ) {
-            return null
-        }
-        val initialHdrRatio = initialLongGain / initialShortGain
-        if (!initialHdrRatio.isFinite() || initialHdrRatio < 1f) return null
-        val maximumHdrRatio = maxOf(
-            initialHdrRatio,
-            RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
-        )
+        displayLinearLumas: FloatArray,
+        maximumExposureEv: Float,
+    ): HdrNetPostExposureMatch? {
+        if (displayLinearLumas.size !=
+            DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH *
+            DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_HEIGHT ||
+            displayLinearLumas.any { !it.isFinite() || it < 0f } ||
+            !maximumExposureEv.isFinite() ||
+            maximumExposureEv < MeteringSystem.RAW_EXPOSURE_MIN_EV
+        ) return null
         val solver = RawLegacyAutoExposureNativeBridge.Solver.create(referenceFrame)
             ?: run {
-                PLog.w(TAG, "Photon HDR matching skipped: viewfinder grid is unreliable")
+                PLog.w(TAG, "HDRNet post-exposure matching skipped: viewfinder grid is unreliable")
                 return null
             }
         return solver.use {
-            if (!solver.startHdrNetSolve(initialHdrRatio, maximumHdrRatio)) {
-                return@use null
-            }
-            val inferences = ArrayList<HdrNetInference<T>>()
-            while (true) {
-                val parameters = solver.nextHdrNetParameters() ?: break
-                val shortGain = initialShortGain * 2.0f.pow(parameters.shortEv)
-                val hdrRatio = (initialHdrRatio * 2.0f.pow(parameters.hdrRatioEv))
-                    .coerceAtLeast(1f)
-                val longGain = shortGain * hdrRatio
-                if (!shortGain.isFinite() || !longGain.isFinite() ||
-                    shortGain <= 0f || longGain < shortGain
-                ) {
-                    return@use null
-                }
-                val candidate = evaluateCandidate(shortGain, longGain) ?: return@use null
-                if (!solver.submitHdrNetCandidate(
-                    parameters = parameters,
-                    displayLinearLumas = candidate.second,
-                    columns = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH,
-                    rows = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_HEIGHT,
-                )) return@use null
-                inferences += HdrNetInference(
-                    shortEv = parameters.shortEv,
-                    hdrRatioEv = parameters.hdrRatioEv,
-                    payload = candidate.first,
+            solver.solveSingleGridExposure(
+                displayLinearLumas = displayLinearLumas,
+                columns = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH,
+                rows = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_HEIGHT,
+                minimumExposureEv = MeteringSystem.RAW_EXPOSURE_MIN_EV,
+                maximumExposureEv = minOf(
+                    maximumExposureEv,
+                    MeteringSystem.RAW_EXPOSURE_MAX_EV,
+                ),
+            )?.let { result ->
+                PLog.i(
+                    TAG,
+                    "HDRNet post-exposure matching result: " +
+                        "exposureEv=${result.exposureEv} " +
+                        "matchRate=${result.matchRate} " +
+                        "meanAbsoluteErrorEv=${result.meanAbsoluteErrorEv}",
+                )
+                HdrNetPostExposureMatch(
+                    exposureEv = result.exposureEv,
+                    matchRate = result.matchRate,
+                    meanAbsoluteErrorEv = result.meanAbsoluteErrorEv,
                 )
             }
-            val result = solver.hdrNetResult() ?: return@use null
-            val selectedInference = inferences.minByOrNull {
-                abs(it.shortEv - result.shortEv) +
-                    abs(it.hdrRatioEv - result.hdrRatioEv)
-            }?.takeIf {
-                abs(it.shortEv - result.shortEv) < HDRNET_PAYLOAD_LOOKUP_TOLERANCE_EV &&
-                    abs(it.hdrRatioEv - result.hdrRatioEv) <
-                    HDRNET_PAYLOAD_LOOKUP_TOLERANCE_EV
-            } ?: return@use null
-            selectedInference.payload
         }
     }
 
@@ -378,7 +355,6 @@ internal object RawLegacyAutoExposureMatcher {
 
     private data class Size(val width: Int, val height: Int)
 
-    private const val HDRNET_PAYLOAD_LOOKUP_TOLERANCE_EV = 0.001f
 
     private fun resolvePortraitPriority(
         snapshot: PortraitMaskSnapshot?,

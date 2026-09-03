@@ -1354,6 +1354,8 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val outputRotation: Int,
         val hdrRatio: Float,
         val sourceToShortGain: Float,
+        /** Persisted downstream HDRNet exposure used when regenerating without a viewfinder. */
+        val hdrNetPostExposureEv: Float? = null,
         val colorCorrectionMatrix: FloatArray,
         val hueSatMap: DcpHueSatMap?,
         val hueSatMapSupportsOverrange: Boolean,
@@ -1372,16 +1374,12 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val map: DngProfileGainTableMap,
         val hdrRatio: Float? = null,
         val sourceToShortGain: Float? = null,
+        val hdrNetPostExposureEv: Float? = null,
     )
 
     private data class GpuPhotonGainCurves(
         val gains: FloatArray,
         val textureId: Int,
-    )
-
-    private data class HdrNetInferenceCandidate(
-        val plan: HdrNetProfileGainTablePlan,
-        val coefficients: FloatArray,
     )
 
     private var cellSamplesProgram = 0
@@ -1590,109 +1588,111 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uWarpCount"),
                 activeWarpParameters.size / 8,
             )
-            val baseShortGain = basePlan.sourceToShortGain
-            val baseLongGain = baseShortGain * basePlan.hdrRatio
+            val dehazeTuning = input.metadata.coreImagingTuning.dehaze.normalized()
             val modelInputBuffer = ByteBuffer.allocateDirect(inputFloatCount * Float.SIZE_BYTES)
                 .order(ByteOrder.nativeOrder())
             val modelOutputBuffer = ByteBuffer.allocateDirect(
                 DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT * Float.SIZE_BYTES,
             ).order(ByteOrder.nativeOrder())
 
-            fun planCandidate(shortGain: Float, longGain: Float): HdrNetProfileGainTablePlan? {
-                if (!shortGain.isFinite() || !longGain.isFinite() ||
-                    shortGain <= 0f || longGain < shortGain
-                ) return null
-                val candidateHdrRatio = longGain / shortGain
-                if (!candidateHdrRatio.isFinite() || candidateHdrRatio < 1f) return null
-                return DngPhotonProfileGainTableGenerator.hdrNetPlan(
-                    rendererBaselineExposureEv = input.rendererBaselineExposureEv,
-                    hdrRatio = candidateHdrRatio,
-                    sourceToShortGain = shortGain,
-                    samplingArea = samplingArea,
-                )
+            val plan = basePlan
+            GLES31.glUseProgram(hdrNetInputProgram)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bufferIds[0])
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, bufferIds[1])
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_RGB_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, linearRgbTextureId)
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uSourceToShortGain"),
+                plan.sourceToShortGain,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(hdrNetInputProgram, "uHdrRatio"),
+                plan.hdrRatio,
+            )
+            GLES31.glDispatchCompute(
+                GlesComputeWorkGroup.imageGroupCount(
+                    DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH,
+                ),
+                GlesComputeWorkGroup.imageGroupCount(
+                    DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT,
+                ),
+                1,
+            )
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
+            )
+            RawGlesProgram.logErrors("prepare HDRNet input")
+            val modelInput = readFloatStorageBuffer(
+                bufferId = bufferIds[0],
+                floatCount = inputFloatCount,
+                label = "HDRNet input",
+            ) ?: return null
+            if (modelInput.any { !it.isFinite() }) {
+                PLog.e(TAG, "HDRNet input contains a non-finite value")
+                return null
             }
-
-            fun runCandidate(
-                shortGain: Float,
-                longGain: Float,
-            ): Pair<HdrNetInferenceCandidate, FloatArray>? {
-                val candidatePlan = planCandidate(shortGain, longGain) ?: return null
-
-                GLES31.glUseProgram(hdrNetInputProgram)
-                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bufferIds[0])
-                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, bufferIds[1])
-                GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_RGB_TEXTURE_UNIT)
-                GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, linearRgbTextureId)
-                GLES31.glUniform1f(
-                    GLES31.glGetUniformLocation(hdrNetInputProgram, "uSourceToShortGain"),
-                    candidatePlan.sourceToShortGain,
-                )
-                GLES31.glUniform1f(
-                    GLES31.glGetUniformLocation(hdrNetInputProgram, "uHdrRatio"),
-                    candidatePlan.hdrRatio,
-                )
-                GLES31.glDispatchCompute(
-                    GlesComputeWorkGroup.imageGroupCount(
-                        DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH,
-                    ),
-                    GlesComputeWorkGroup.imageGroupCount(
-                        DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT,
-                    ),
-                    1,
-                )
-                GLES31.glMemoryBarrier(
-                    GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
-                )
-                RawGlesProgram.logErrors("prepare HDRNet input")
-                val inputFloats = readFloatStorageBuffer(
-                    bufferId = bufferIds[0],
-                    floatCount = inputFloatCount,
-                    label = "HDRNet input",
-                ) ?: return null
-                if (inputFloats.any { !it.isFinite() }) {
-                    PLog.e(TAG, "HDRNet input contains a non-finite value")
-                    return null
-                }
-                modelInputBuffer.clear()
-                modelInputBuffer.asFloatBuffer().put(inputFloats)
-                modelInputBuffer.rewind()
-                modelOutputBuffer.clear()
-                interpreter.run(modelInputBuffer, modelOutputBuffer)
-                modelOutputBuffer.rewind()
-                val coefficients = FloatArray(
-                    DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
-                )
-                modelOutputBuffer.asFloatBuffer().get(coefficients)
-                val displayLinearLumaGrid =
-                    DngPhotonProfileGainTableGenerator.hdrNetDisplayLinearLumaGrid(
-                        plan = candidatePlan,
-                        coefficients = coefficients,
-                        modelInput = inputFloats,
-                        outputRotation = input.outputRotation,
-                    )
-                if (displayLinearLumaGrid == null) return null
-                return HdrNetInferenceCandidate(
-                    plan = candidatePlan,
-                    coefficients = coefficients,
-                ) to displayLinearLumaGrid
-            }
-
-            val exposureResult = input.viewfinderReference?.let { reference ->
-                RawLegacyAutoExposureMatcher.solveHdrNetExposure(
+            modelInputBuffer.clear()
+            modelInputBuffer.asFloatBuffer().put(modelInput)
+            modelInputBuffer.rewind()
+            modelOutputBuffer.clear()
+            interpreter.run(modelInputBuffer, modelOutputBuffer)
+            modelOutputBuffer.rewind()
+            val coefficients = FloatArray(
+                DngPhotonProfileGainTableGenerator.HDRNET_OUTPUT_FLOAT_COUNT,
+            )
+            modelOutputBuffer.asFloatBuffer().get(coefficients)
+            val evaluation = DngPhotonProfileGainTableGenerator.evaluateHdrNetDehaze(
+                plan = plan,
+                coefficients = coefficients,
+                modelInput = modelInput,
+                outputRotation = input.outputRotation,
+                dehazeTuning = dehazeTuning,
+            ) ?: return null
+            val maximumPostExposureEv = hdrNetPostExposureLimitEv(
+                evaluation.postDehazeP99Peak,
+            )
+            val match = input.viewfinderReference?.let { reference ->
+                RawLegacyAutoExposureMatcher.solveHdrNetPostExposure(
                     referenceFrame = reference,
-                    initialShortGain = baseShortGain,
-                    initialLongGain = baseLongGain,
-                    evaluateCandidate = ::runCandidate,
+                    displayLinearLumas = evaluation.displayLinearLumas,
+                    maximumExposureEv = maximumPostExposureEv,
                 )
             }
-            val selectedCandidate = exposureResult
-                ?: runCandidate(baseShortGain, baseLongGain)?.first
-                ?: return null
-            val plan = selectedCandidate.plan
-            val coefficients = selectedCandidate.coefficients
+            val restoredPostExposureEv = input.hdrNetPostExposureEv
+                ?.takeIf(Float::isFinite)
+                ?.coerceIn(
+                    MeteringSystem.RAW_EXPOSURE_MIN_EV,
+                    maximumPostExposureEv,
+                )
+            val postExposureEv = match?.exposureEv ?: restoredPostExposureEv ?: 0f
+            val postExposureSource = when {
+                match != null -> "VIEWFINDER_MATCH"
+                restoredPostExposureEv != null -> "PERSISTED_CAPTURE_MATCH"
+                else -> "NONE"
+            }
+            PLog.i(
+                TAG,
+                "HDRNET_MATCH stage=SELECTED shortGain=${plan.sourceToShortGain} " +
+                    "hdrRatio=${plan.hdrRatio} " +
+                    "postExposureEv=$postExposureEv " +
+                    "postExposureSource=$postExposureSource " +
+                    "maximumPostExposureEv=$maximumPostExposureEv " +
+                    "matchRate=${match?.matchRate} " +
+                    "meanAbsoluteErrorEv=${match?.meanAbsoluteErrorEv} " +
+                    "postDehazeP99Peak=${evaluation.postDehazeP99Peak} " +
+                    "dehazeActive=${dehazeTuning.isActive} " +
+                    "dehazeLow=${evaluation.dehazeCurve.hazePointLow} " +
+                    "dehazeHigh=${evaluation.dehazeCurve.hazePointHigh} " +
+                    "dhaScale=${evaluation.dehazeCurve.highlightScale} " +
+                    "dhaDetected=${evaluation.dehazeCurve.detectedHighlightScale} " +
+                    "dehazeSamples=${evaluation.dehazeCurve.sampledPixelCount}",
+            )
             val map = DngPhotonProfileGainTableGenerator.mapFromHdrNetCoefficients(
                 plan = plan,
                 coefficients = coefficients,
+                modelInput = modelInput,
+                dehazeCurve = evaluation.dehazeCurve,
+                postExposureEv = postExposureEv,
             ) ?: return null
             val textureId = uploadProfileGainTableTexture(map) ?: return null
             try {
@@ -1705,6 +1705,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 map = map,
                 hdrRatio = plan.hdrRatio,
                 sourceToShortGain = plan.sourceToShortGain,
+                hdrNetPostExposureEv = postExposureEv,
             )
         } catch (error: Throwable) {
             PLog.e(TAG, "HDRNet ProfileGainTableMap generation failed", error)
@@ -3061,5 +3062,14 @@ internal class DngPhotonProfileGainTableAlgorithm {
         const val HUE_SAT_TEXTURE_UNIT = 3
         const val GLES31_MIN_SSBO_BYTES = 16L * 1024L * 1024L
         const val STREAMING_TILE_CORE_EDGE_PX = 3072
+        const val HDRNET_POST_EXPOSURE_P99_TARGET = 0.98f
+    }
+
+    private fun hdrNetPostExposureLimitEv(postDehazeP99Peak: Float): Float {
+        if (!postDehazeP99Peak.isFinite() || postDehazeP99Peak <= 0f) {
+            return MeteringSystem.RAW_EXPOSURE_MAX_EV
+        }
+        val headroomEv = ln(HDRNET_POST_EXPOSURE_P99_TARGET / postDehazeP99Peak) / ln(2f)
+        return max(0f, headroomEv).coerceAtMost(MeteringSystem.RAW_EXPOSURE_MAX_EV)
     }
 }

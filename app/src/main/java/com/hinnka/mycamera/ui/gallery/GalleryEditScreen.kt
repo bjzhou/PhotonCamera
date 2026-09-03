@@ -600,6 +600,11 @@ fun GalleryEditScreen(
         return
     }
     val currentEditSourcePhoto = editSourcePhoto ?: currentPhoto
+    val currentEditMetadata = currentEditSourcePhoto.metadata ?: viewModel.currentMediaMetadata
+    val currentEditMimeType = currentEditMetadata?.mimeType ?: currentEditSourcePhoto.mimeType
+    val isImportedDng = currentEditMetadata?.isImported == true &&
+        (currentEditMimeType?.contains("dng", ignoreCase = true) == true ||
+            currentEditSourcePhoto.displayName.endsWith(".dng", ignoreCase = true))
 
     val previewSourceWidth = previewBitmap?.width?.takeIf { it > 0 }
         ?: currentPhoto.width.takeIf { it > 0 }
@@ -648,10 +653,13 @@ fun GalleryEditScreen(
     var pendingRawPreviewRefresh by remember(currentEditSourcePhoto.id) { mutableStateOf(false) }
     val isRefreshingRawPreview = viewModel.refreshingPhotos.contains(currentEditSourcePhoto.id)
 
-    fun refreshRawPreview(showResultToast: Boolean = false) {
+    fun refreshRawPreview(
+        showResultToast: Boolean = false,
+        forceRegeneratePhotonPgtm: Boolean = forceRegeneratePhotonPgtmOnRefresh,
+    ) {
         viewModel.refreshRawPreview(
             photo = currentEditSourcePhoto,
-            forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtmOnRefresh,
+            forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
         ) { success ->
             if (showResultToast) {
                 Toast.makeText(
@@ -663,13 +671,19 @@ fun GalleryEditScreen(
         }
     }
 
-    fun requestRawPreviewRefresh(showResultToast: Boolean = false) {
+    fun requestRawPreviewRefresh(
+        showResultToast: Boolean = false,
+        forceRegeneratePhotonPgtm: Boolean = forceRegeneratePhotonPgtmOnRefresh,
+    ) {
         if (!isRaw) return
         if (viewModel.refreshingPhotos.contains(currentEditSourcePhoto.id)) {
             pendingRawPreviewRefresh = true
             return
         }
-        refreshRawPreview(showResultToast)
+        refreshRawPreview(
+            showResultToast = showResultToast,
+            forceRegeneratePhotonPgtm = forceRegeneratePhotonPgtm,
+        )
     }
 
     LaunchedEffect(isRefreshingRawPreview, pendingRawPreviewRefresh, currentEditSourcePhoto.id) {
@@ -1823,8 +1837,19 @@ fun GalleryEditScreen(
                                                 if (success) requestRawPreviewRefresh()
                                             }
                                         },
-                                        onRawAdaptiveExposureModeChange =
-                                            viewModel::selectRawAdaptiveExposureModeForEdit,
+                                        onRawAdaptiveExposureModeChange = { mode ->
+                                            viewModel.selectRawAdaptiveExposureModeForEdit(mode)
+                                            viewModel.persistCurrentRawEditMetadata(
+                                                currentEditSourcePhoto
+                                            ) { success ->
+                                                if (success) {
+                                                    requestRawPreviewRefresh(
+                                                        forceRegeneratePhotonPgtm =
+                                                            mode.usesPhotonHdr,
+                                                    )
+                                                }
+                                            }
+                                        },
                                         onRawHighlightsAdjustmentChange = {
                                             viewModel.saveRawHighlightsAdjustmentValue(currentEditSourcePhoto, it)
                                         },
@@ -1898,7 +1923,7 @@ fun GalleryEditScreen(
                                         onOpenBaselineLutSheet = {
                                             showRawBaselineLutSelectorSheet = true
                                         },
-                                        showAdaptiveExposureModeSelector = false,
+                                        showAdaptiveExposureControl = isImportedDng,
                                         showDngMetadataControls = true,
                                         contentMode = RawEditPanelContentMode.FULL,
                                         modifier = Modifier.fillMaxWidth()

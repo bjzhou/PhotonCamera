@@ -859,14 +859,8 @@
     <string name="settings_raw_profile_tone_map_default">預設</string>
     <string name="settings_raw_profile_tone_map_embedded">內嵌</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO 大師</string>
-    <string name="settings_raw_photon_hdr">HDRNet模型</string>
-    <string name="settings_raw_photon_hdr_description">在明暗反差較大的場景中保留更多高光與暗部細節，讓畫面亮度過渡更自然。</string>
-    <string name="settings_raw_photon_hdr_edit_description">為目前照片套用 HDRNet模型，保留更多高光與暗部細節。</string>
-    <string name="settings_raw_adaptive_exposure_mode">HDR+ 動態範圍最佳化</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">選擇 HDR+ 處理方式：HDRNet模型或局部色調映射。</string>
-    <string name="settings_raw_adaptive_exposure_mode_off">關閉</string>
-    <string name="settings_raw_adaptive_exposure_mode_photon_hdr">HDRNet模型</string>
-    <string name="settings_raw_adaptive_exposure_mode_legacy">局部色調映射</string>
+    <string name="settings_raw_photon_hdr">動態範圍最佳化</string>
+    <string name="settings_raw_photon_hdr_edit_description">為目前匯入的 DNG 套用 HDRNet 動態範圍最佳化。</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX 白色相對曝光</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX 黑色相對曝光</string>
     <string name="settings_raw_agx_shoulder">AgX 肩部</string>

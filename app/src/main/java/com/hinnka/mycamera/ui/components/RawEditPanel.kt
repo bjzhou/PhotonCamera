@@ -94,7 +94,6 @@ fun RawEditPanel(
     availableLuts: List<LutInfo>,
     thumbnail: Bitmap?,
     rawExposureCompensation: Float,
-    rawAdaptiveExposureMode: RawAdaptiveExposureMode,
     rawHighlightsAdjustment: Float,
     rawShadowsAdjustment: Float,
     rawBlackPointCorrection: Float,
@@ -113,7 +112,6 @@ fun RawEditPanel(
     onImportDcp: () -> Unit,
     onDeleteDcp: (DcpInfo) -> Unit,
     onRawExposureCompensationChange: (Float) -> Unit,
-    onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit,
     onRawHighlightsAdjustmentChange: (Float) -> Unit,
     onRawShadowsAdjustmentChange: (Float) -> Unit,
     onRawBlackPointCorrectionChange: (Float) -> Unit,
@@ -134,7 +132,9 @@ fun RawEditPanel(
     onAdjustmentEnd: () -> Unit,
     onRawExposureCompensationReset: ((Float) -> Unit)? = null,
     onOpenBaselineLutSheet: (() -> Unit)? = null,
-    showAdaptiveExposureModeSelector: Boolean = true,
+    showAdaptiveExposureControl: Boolean = false,
+    rawAdaptiveExposureMode: RawAdaptiveExposureMode = RawAdaptiveExposureMode.PHOTON_HDR,
+    onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit = {},
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
     selectedHncsProfileId: String? = null,
@@ -157,15 +157,7 @@ fun RawEditPanel(
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        if (showAdaptiveExposureModeSelector) {
-            RawAdaptiveExposureModeSetting(
-                mode = rawAdaptiveExposureMode,
-                onModeChange = { mode ->
-                    onRawAdaptiveExposureModeChange(mode)
-                    onAdjustmentEnd()
-                },
-            )
-        } else {
+        if (showAdaptiveExposureControl) {
             RawSwitchSettingItem(
                 title = stringResource(R.string.settings_raw_photon_hdr),
                 description = stringResource(R.string.settings_raw_photon_hdr_edit_description),
@@ -178,11 +170,10 @@ fun RawEditPanel(
                             RawAdaptiveExposureMode.OFF
                         }
                     )
-                    onAdjustmentEnd()
                 },
             )
+            Spacer(modifier = Modifier.height(16.dp))
         }
-        Spacer(modifier = Modifier.height(16.dp))
 
         RawRenderingEngineSettingsPanel(
             selectedDcpId = selectedDcpId,
@@ -463,33 +454,6 @@ fun RawRenderingEngineSettingsPanel(
             )
         }
     }
-}
-
-@Composable
-fun RawAdaptiveExposureModeSetting(
-    mode: RawAdaptiveExposureMode,
-    onModeChange: (RawAdaptiveExposureMode) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    RawChoiceSetting(
-        title = stringResource(R.string.settings_raw_adaptive_exposure_mode),
-        description = stringResource(R.string.settings_raw_adaptive_exposure_mode_description),
-        levels = listOf(
-            RawAdaptiveExposureMode.PHOTON_HDR.name to
-                stringResource(R.string.settings_raw_adaptive_exposure_mode_photon_hdr),
-            RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE.name to
-                stringResource(R.string.settings_raw_adaptive_exposure_mode_legacy),
-            RawAdaptiveExposureMode.OFF.name to
-                stringResource(R.string.settings_raw_adaptive_exposure_mode_off),
-        ),
-        currentLevel = mode.name,
-        onLevelSelected = { persistedName ->
-            RawAdaptiveExposureMode.entries
-                .firstOrNull { it.name == persistedName }
-                ?.let(onModeChange)
-        },
-        modifier = modifier,
-    )
 }
 
 /** Shared RAW DNG metadata correction controls for a lens-specific configuration. */

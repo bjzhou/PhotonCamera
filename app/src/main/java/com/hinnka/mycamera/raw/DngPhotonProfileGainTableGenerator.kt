@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.processor.PhotonDehazeTuning
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.ln
 
@@ -168,11 +169,17 @@ internal object DngPhotonProfileGainTableGenerator {
      * DNG can only apply a scalar multiplicative gain, so each spatial cell's affine response is
      * resampled to 64 x 48 and converted into a 257-point gain curve per cell. The range
      * coordinate uses MGC's learned 16-segment luma guide from guide_coeffs.pb before trilinear
-     * sampling of the bilateral grid.
+     * sampling of the bilateral grid. The selected model input supplies each cell's local
+     * chromaticity so the downstream arithmetic-RGB Dehaze curve is represented by the scalar
+     * table without reverting to a neutral-gray assumption. [postExposureEv] is applied after
+     * that composed target, so viewfinder matching cannot alter HDRNet inference or its tone shape.
      */
     fun mapFromHdrNetCoefficients(
         plan: HdrNetProfileGainTablePlan,
         coefficients: FloatArray,
+        modelInput: FloatArray,
+        dehazeCurve: PhotonDehazeCurveParameters,
+        postExposureEv: Float,
     ): DngProfileGainTableMap? {
         if (coefficients.size != HDRNET_OUTPUT_FLOAT_COUNT) {
             PLog.e(
@@ -181,9 +188,12 @@ internal object DngPhotonProfileGainTableGenerator {
             )
             return null
         }
+        if (modelInput.size != HDRNET_INPUT_WIDTH * HDRNET_INPUT_HEIGHT * 4) return null
+        if (!postExposureEv.isFinite()) return null
         val gains = DngHdrNetProfileGainTableNative.generateGains(
             plan = plan,
             coefficients = coefficients,
+            modelInput = modelInput,
             guideShifts = HDRNET_GUIDE_SHIFTS,
             guideSlopes = HDRNET_GUIDE_SLOPES,
             acr3Curve = ACR3Curve.samples(),
@@ -192,6 +202,8 @@ internal object DngPhotonProfileGainTableGenerator {
             renderMaxGainBlendThreshold = HDRNET_RENDER_MAX_GAIN_BLEND_THRESHOLD,
             minTableGain = MIN_TABLE_GAIN,
             maxTableGain = MAX_TABLE_GAIN,
+            dehazeCurve = dehazeCurve,
+            postExposureGain = DngBaselineExposure.exactGain(postExposureEv),
         ) ?: run {
             PLog.e(TAG, "Native HDRNet ProfileGainTableMap generation failed")
             return null
@@ -223,22 +235,22 @@ internal object DngPhotonProfileGainTableGenerator {
     }
 
     /**
-     * Evaluates HDRNet across the complete image on the 8 x 6 matching grid and returns clipped
-     * display-linear Rec.709 luma. This is the same post-EOTF domain built from the classic
-     * matcher's ARGB_8888 candidate and reference images.
+     * Builds Dehaze + DHA from the complete 256 x 192 HDRNet candidate, then evaluates the
+     * composed output on the 8 x 6 display-linear Rec.709 matching grid.
      */
-    fun hdrNetDisplayLinearLumaGrid(
+    fun evaluateHdrNetDehaze(
         plan: HdrNetProfileGainTablePlan,
         coefficients: FloatArray,
         modelInput: FloatArray,
         outputRotation: Int,
-    ): FloatArray? {
+        dehazeTuning: PhotonDehazeTuning,
+    ): DngHdrNetProfileGainTableNative.Evaluation? {
         if (coefficients.size != HDRNET_OUTPUT_FLOAT_COUNT) return null
         val expectedInputCount = HDRNET_INPUT_WIDTH * HDRNET_INPUT_HEIGHT * 4
         if (modelInput.size != expectedInputCount) return null
         val rotation = ((outputRotation % 360) + 360) % 360
         if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) return null
-        return DngHdrNetProfileGainTableNative.evaluateDisplayLinearLumaGrid(
+        return DngHdrNetProfileGainTableNative.evaluateDehazedDisplayLinearLumaGrid(
             plan = plan,
             coefficients = coefficients,
             modelInput = modelInput,
@@ -247,13 +259,12 @@ internal object DngPhotonProfileGainTableGenerator {
             guideSlopes = HDRNET_GUIDE_SLOPES,
             renderMinGain = HDRNET_RENDER_MIN_GAIN,
             renderMaxGain = HDRNET_RENDER_MAX_GAIN,
+            renderMaxGainBlendThreshold = HDRNET_RENDER_MAX_GAIN_BLEND_THRESHOLD,
+            dehazeTuning = dehazeTuning,
             outputGridWidth = HDRNET_MATCH_GRID_WIDTH,
             outputGridHeight = HDRNET_MATCH_GRID_HEIGHT,
-            footprintSamplesPerAxis = HDRNET_MATCH_FOOTPRINT_SAMPLES_PER_AXIS,
         )
     }
-
-    private const val HDRNET_MATCH_FOOTPRINT_SAMPLES_PER_AXIS = 4
 
     fun plan(
         width: Int,

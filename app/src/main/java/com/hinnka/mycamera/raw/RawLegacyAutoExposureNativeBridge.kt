@@ -6,14 +6,10 @@ internal object RawLegacyAutoExposureNativeBridge {
         System.loadLibrary("my-native-lib")
     }
 
-    data class HdrNetParameters(
-        val shortEv: Float,
-        val hdrRatioEv: Float,
-    )
-
-    data class HdrNetResult(
-        val shortEv: Float,
-        val hdrRatioEv: Float,
+    data class SingleExposureResult(
+        val exposureEv: Float,
+        val matchRate: Float,
+        val meanAbsoluteErrorEv: Float,
     )
 
     class Solver private constructor(
@@ -54,52 +50,38 @@ internal object RawLegacyAutoExposureNativeBridge {
             )
         }
 
-        fun startHdrNetSolve(
-            initialHdrRatio: Float,
-            maximumHdrRatio: Float,
-        ): Boolean {
-            check(handle != 0L) { "Native exposure solver is closed" }
-            return nativeStartHdrNetSolve(handle, initialHdrRatio, maximumHdrRatio)
-        }
-
-        fun nextHdrNetParameters(): HdrNetParameters? {
-            check(handle != 0L) { "Native exposure solver is closed" }
-            val values = nativeNextHdrNetParameters(handle) ?: return null
-            if (values.size != HDRNET_PARAMETER_VALUE_COUNT) return null
-            return HdrNetParameters(
-                shortEv = values[0],
-                hdrRatioEv = values[1],
-            ).takeIf { it.shortEv.isFinite() && it.hdrRatioEv.isFinite() }
-        }
-
-        fun submitHdrNetCandidate(
-            parameters: HdrNetParameters,
+        fun solveSingleGridExposure(
             displayLinearLumas: FloatArray,
             columns: Int,
             rows: Int,
-        ): Boolean {
+            minimumExposureEv: Float,
+            maximumExposureEv: Float,
+        ): SingleExposureResult? {
             check(handle != 0L) { "Native exposure solver is closed" }
-            if (columns <= 0 || rows <= 0 || displayLinearLumas.size != columns * rows) {
-                return false
+            if (columns <= 0 || rows <= 0 || displayLinearLumas.size != columns * rows ||
+                !minimumExposureEv.isFinite() || !maximumExposureEv.isFinite() ||
+                minimumExposureEv > maximumExposureEv
+            ) {
+                return null
             }
-            return nativeSubmitHdrNetGridCandidate(
+            val values = nativeSolveSingleGridExposure(
                 handle = handle,
-                shortEv = parameters.shortEv,
-                hdrRatioEv = parameters.hdrRatioEv,
                 candidateDisplayLinearLumas = displayLinearLumas,
                 columns = columns,
                 rows = rows,
+                minimumExposureEv = minimumExposureEv,
+                maximumExposureEv = maximumExposureEv,
             )
-        }
-
-        fun hdrNetResult(): HdrNetResult? {
-            check(handle != 0L) { "Native exposure solver is closed" }
-            val values = nativeGetHdrNetResult(handle) ?: return null
-            if (values.size != HDRNET_RESULT_VALUE_COUNT) return null
-            return HdrNetResult(
-                shortEv = values[0],
-                hdrRatioEv = values[1],
-            ).takeIf { it.shortEv.isFinite() && it.hdrRatioEv.isFinite() }
+                ?: return null
+            if (values.size != SINGLE_EXPOSURE_RESULT_VALUE_COUNT) return null
+            return SingleExposureResult(
+                exposureEv = values[0],
+                matchRate = values[1],
+                meanAbsoluteErrorEv = values[2],
+            ).takeIf {
+                it.exposureEv.isFinite() && it.matchRate.isFinite() &&
+                    it.meanAbsoluteErrorEv.isFinite()
+            }
         }
 
         fun configureExposureBounds(minimumEv: Float, maximumEv: Float): Boolean {
@@ -157,24 +139,14 @@ internal object RawLegacyAutoExposureNativeBridge {
         rows: Int,
     ): Boolean
 
-    private external fun nativeStartHdrNetSolve(
+    private external fun nativeSolveSingleGridExposure(
         handle: Long,
-        initialHdrRatio: Float,
-        maximumHdrRatio: Float,
-    ): Boolean
-
-    private external fun nativeNextHdrNetParameters(handle: Long): FloatArray?
-
-    private external fun nativeSubmitHdrNetGridCandidate(
-        handle: Long,
-        shortEv: Float,
-        hdrRatioEv: Float,
         candidateDisplayLinearLumas: FloatArray,
         columns: Int,
         rows: Int,
-    ): Boolean
-
-    private external fun nativeGetHdrNetResult(handle: Long): FloatArray?
+        minimumExposureEv: Float,
+        maximumExposureEv: Float,
+    ): FloatArray?
 
     private external fun nativeConfigureExposureBounds(
         handle: Long,
@@ -185,6 +157,5 @@ internal object RawLegacyAutoExposureNativeBridge {
     private external fun nativeGetResultExposureEv(handle: Long): Float
     private external fun nativeDestroy(handle: Long)
 
-    private const val HDRNET_PARAMETER_VALUE_COUNT = 2
-    private const val HDRNET_RESULT_VALUE_COUNT = 2
+    private const val SINGLE_EXPOSURE_RESULT_VALUE_COUNT = 3
 }

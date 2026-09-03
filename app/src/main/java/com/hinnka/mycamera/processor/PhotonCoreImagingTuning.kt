@@ -11,7 +11,7 @@ package com.hinnka.mycamera.processor
 data class PhotonCoreImagingTuning(
     val fusion: PhotonFusionTuning = PhotonFusionTuning.DEFAULT,
     val denoise: PhotonDenoiseTuning = PhotonDenoiseTuning.DEFAULT,
-    /** Controls the standalone low-frequency dehaze pipeline. */
+    /** Controls Dehaze + DHA baked into HDRNet's ProfileGainTableMap output. */
     val dehaze: PhotonDehazeTuning = PhotonDehazeTuning.DEFAULT,
 ) {
     fun normalized(): PhotonCoreImagingTuning = copy(
@@ -345,7 +345,7 @@ data class PhotonSabreLumaTuningNodes(
 }
 
 /**
- * Controls for the standalone low-frequency dehaze pipeline.
+ * Controls for Dehaze + DHA applied to HDRNet output and baked into its PGTM.
  *
  * [strength] scales the two estimated atmospheric haze points before curve construction.
  * [dynamicHighlightStrength] controls how much of the histogram-derived highlight scale is used;
@@ -369,19 +369,10 @@ data class PhotonDehazeTuning(
 
     val isActive: Boolean
         get() = normalized().let {
-            PROCESSING_ENABLED &&
-                it.enabled && (it.strength > 0f || it.dynamicHighlightStrength > 0f)
+            it.enabled && (it.strength > 0f || it.dynamicHighlightStrength > 0f)
         }
 
     companion object {
-        /**
-         * Temporary master gate for the standalone Dehaze stage.
-         *
-         * Keep persisted tuning intact so captures and presets remain forward-compatible, while
-         * every render/metering path observes the same disabled state until the stage is restored.
-         */
-        const val PROCESSING_ENABLED = false
-
         val DEFAULT = PhotonDehazeTuning()
         val DISABLED = PhotonDehazeTuning(enabled = false)
     }

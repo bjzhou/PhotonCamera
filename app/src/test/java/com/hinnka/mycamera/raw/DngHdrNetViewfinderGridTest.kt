@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.processor.PhotonDehazeTuning
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeNoException
@@ -37,23 +38,27 @@ class DngHdrNetViewfinderGridTest {
         )
 
         val grids = try {
-            DngPhotonProfileGainTableGenerator.hdrNetDisplayLinearLumaGrid(
+            DngPhotonProfileGainTableGenerator.evaluateHdrNetDehaze(
                 plan = neutralBaselinePlan,
                 coefficients = coefficients,
                 modelInput = modelInput,
                 outputRotation = 0,
-            ) to DngPhotonProfileGainTableGenerator.hdrNetDisplayLinearLumaGrid(
+                dehazeTuning = PhotonDehazeTuning.DISABLED,
+            ) to DngPhotonProfileGainTableGenerator.evaluateHdrNetDehaze(
                 plan = brightBaselinePlan,
                 coefficients = coefficients,
                 modelInput = modelInput,
                 outputRotation = 270,
+                dehazeTuning = PhotonDehazeTuning.DISABLED,
             )
         } catch (error: UnsatisfiedLinkError) {
             assumeNoException("Android HDRNet JNI is unavailable on this host", error)
             return
         }
-        val neutralGrid = checkNotNull(grids.first)
-        val brightBaselineGrid = checkNotNull(grids.second)
+        val neutralEvaluation = checkNotNull(grids.first)
+        val brightBaselineEvaluation = checkNotNull(grids.second)
+        val neutralGrid = neutralEvaluation.displayLinearLumas
+        val brightBaselineGrid = brightBaselineEvaluation.displayLinearLumas
 
         assertEquals(
             DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH *
@@ -62,5 +67,11 @@ class DngHdrNetViewfinderGridTest {
         )
         neutralGrid.forEach { assertEquals(0.249999f, it, 2e-6f) }
         assertArrayEquals(neutralGrid, brightBaselineGrid, 2e-6f)
+        assertEquals(0.249999f, neutralEvaluation.postDehazeP99Peak, 2e-6f)
+        assertEquals(
+            neutralEvaluation.postDehazeP99Peak,
+            brightBaselineEvaluation.postDehazeP99Peak,
+            2e-6f,
+        )
     }
 }

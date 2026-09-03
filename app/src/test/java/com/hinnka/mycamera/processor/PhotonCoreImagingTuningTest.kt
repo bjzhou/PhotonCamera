@@ -99,7 +99,7 @@ class PhotonCoreImagingTuningTest {
 
         assertEquals(4f, normalized.strength, 0f)
         assertEquals(0f, normalized.dynamicHighlightStrength, 0f)
-        assertEquals(false, normalized.isActive)
+        assertEquals(true, normalized.isActive)
     }
 
     @Test
@@ -115,7 +115,7 @@ class PhotonCoreImagingTuningTest {
         assertEquals(true, tuning.dehaze.enabled)
         assertEquals(1f, tuning.dehaze.strength, 0f)
         assertEquals(1f, tuning.dehaze.dynamicHighlightStrength, 0f)
-        assertEquals(false, tuning.dehaze.isActive)
+        assertEquals(true, tuning.dehaze.isActive)
     }
 
     @Test

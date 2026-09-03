@@ -1,100 +1,80 @@
 package com.hinnka.mycamera.raw
 
-import com.hinnka.mycamera.processor.PhotonDehazeTuning
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhotonDehazeCurveTest {
     @Test
-    fun zeroStrengthsProduceIdentityCurve() {
-        val histogram = PhotonDehazeHistogram()
-        repeat(4096) { histogram.addLinearRgb(0.2f, 0.4f, 0.6f) }
-
-        val curve = requireNotNull(
-            histogram.estimateCurve(
-                PhotonDehazeTuning(
-                    enabled = true,
-                    strength = 0f,
-                    dynamicHighlightStrength = 0f,
-                ),
-            ),
-        )
-
-        assertEquals(0f, curve.hazePointLow, 0f)
-        assertEquals(0f, curve.hazePointHigh, 0f)
-        assertEquals(1f, curve.highlightScale, 0f)
-        assertEquals(0.37f, curve.mappedLuminance(0.37f), 1e-6f)
+    fun identityCurveLeavesTheCompleteRangeUnchanged() {
+        for (index in 0..1000) {
+            val input = index / 1000f
+            assertEquals(input, mapped(input, PhotonDehazeCurveParameters.IDENTITY), 0f)
+        }
     }
 
     @Test
     fun dehazeCurveIsFiniteContinuousAndMonotonic() {
-        val histogram = PhotonDehazeHistogram()
-        repeat(10000) { index ->
-            val value = index.toFloat() / 9999f
-            histogram.addLinearRgb(value * 0.8f, value, value * 0.6f)
-        }
-        val curve = requireNotNull(
-            histogram.estimateCurve(
-                PhotonDehazeTuning(
-                    enabled = true,
-                    strength = 1f,
-                    dynamicHighlightStrength = 1f,
-                ),
-            ),
-        )
-
-        var previous = curve.mappedLuminance(0f)
+        val curve = testCurve()
+        var previous = mapped(0f, curve)
         for (index in 1..1000) {
-            val mapped = curve.mappedLuminance(index / 1000f)
-            assertTrue(mapped.isFinite())
-            assertTrue("curve regressed at $index", mapped + 1e-6f >= previous)
-            previous = mapped
+            val output = mapped(index / 1000f, curve)
+            assertTrue(output.isFinite())
+            assertTrue("curve regressed at $index", output + 1e-6f >= previous)
+            previous = output
         }
-        val below = curve.mappedLuminance((curve.hazePointHigh - 1e-5f).coerceAtLeast(0f))
-        val above = curve.mappedLuminance((curve.hazePointHigh + 1e-5f).coerceAtMost(1f))
+        val joinInput = curve.hazePointHigh / curve.highlightScale
+        val below = mapped((joinInput - 1e-5f).coerceAtLeast(0f), curve)
+        val above = mapped((joinInput + 1e-5f).coerceAtMost(1f), curve)
         assertTrue(kotlin.math.abs(above - below) < 1e-3f)
     }
 
     @Test
-    fun dynamicHighlightControlDoesNotChangeDetectedSceneScale() {
-        fun estimate(dynamicStrength: Float): PhotonDehazeCurveParameters {
-            val histogram = PhotonDehazeHistogram()
-            repeat(2048) { histogram.addLinearRgb(0.3f, 0.4f, 0.5f) }
-            return requireNotNull(
-                histogram.estimateCurve(
-                    PhotonDehazeTuning(
-                        enabled = true,
-                        strength = 1f,
-                        dynamicHighlightStrength = dynamicStrength,
-                    ),
-                ),
-            )
+    fun nativeCurveContractRoundTripsAndRejectsInvalidPayloads() {
+        val original = testCurve()
+        val restored = requireNotNull(
+            PhotonDehazeCurveParameters.fromNativeArray(original.toNativeArray()),
+        )
+        for (index in 0..100) {
+            val input = index / 100f
+            assertEquals(mapped(input, original), mapped(input, restored), 0f)
         }
-
-        val disabled = estimate(0f)
-        val enabled = estimate(1f)
-        assertEquals(enabled.detectedHighlightScale, disabled.detectedHighlightScale, 0f)
-        assertEquals(1f, disabled.highlightScale, 0f)
-        assertEquals(enabled.detectedHighlightScale, enabled.highlightScale, 0f)
+        assertNull(PhotonDehazeCurveParameters.fromNativeArray(FloatArray(7)))
+        assertNull(
+            PhotonDehazeCurveParameters.fromNativeArray(
+                original.toNativeArray().also { it[2] = Float.NaN },
+            ),
+        )
     }
 
-    @Test
-    fun shaderUsesGpuResidentSharedHistogramAndSharedRgbGain() {
-        val histogram = PhotonDehazePipeline.HISTOGRAM_COMPUTE_SHADER
-        val curve = PhotonDehazePipeline.CURVE_COMPUTE_SHADER
-        val apply = PhotonDehazePipeline.APPLY_COMPUTE_SHADER
+    private fun testCurve(): PhotonDehazeCurveParameters {
+        val hazePointLow = 0.04f
+        val hazePointHigh = 0.08f
+        val interval = hazePointHigh - hazePointLow
+        val quadratic = 1f /
+            (interval * interval + 2f * (1f - hazePointHigh) * interval)
+        val shoulder = interval * interval * quadratic
+        return PhotonDehazeCurveParameters(
+            hazePointLow = hazePointLow,
+            hazePointHigh = hazePointHigh,
+            highlightScale = 1.2f,
+            quadraticCoefficient = quadratic,
+            linearSlope = (1f - shoulder) / (1f - hazePointHigh),
+            shoulderValue = shoulder,
+            detectedHighlightScale = 1.2f,
+            sampledPixelCount = 256 * 192,
+        )
+    }
 
-        assertTrue(histogram.contains("layout(local_size_x = 128, local_size_y = 1)"))
-        assertTrue(histogram.contains("shared vec4 sharedLinearRgb[512]"))
-        assertTrue(histogram.contains("sharedHazeBins[previous] == hazeBin"))
-        assertTrue(histogram.contains("atomicAdd(histogram.hazeHistogram"))
-        assertTrue(histogram.contains("atomicAdd(histogram.highlightHistogram"))
-        assertTrue(curve.contains("index < 5251 && nextHighlight < 5"))
-        assertTrue(curve.contains("index < 877 && nextHaze < 20"))
-        assertTrue(apply.contains("imageStore("))
-        assertTrue(apply.contains("(rgb.r + rgb.g + rgb.b) * (1.0 / 3.0)"))
-        assertTrue(apply.contains("rgb * gain"))
-        assertTrue(!apply.contains("pow("))
+    private fun mapped(input: Float, curve: PhotonDehazeCurveParameters): Float {
+        val scaled = (input.coerceIn(0f, 1f) * curve.highlightScale).coerceAtMost(1f)
+        return if (scaled < curve.hazePointHigh) {
+            val distance = (scaled - curve.hazePointLow).coerceAtLeast(0f)
+            distance * distance * curve.quadraticCoefficient
+        } else {
+            curve.shoulderValue +
+                (scaled - curve.hazePointHigh) * curve.linearSlope
+        }.coerceIn(0f, 1f)
     }
 }
