@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 38,
+    version = 39,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
