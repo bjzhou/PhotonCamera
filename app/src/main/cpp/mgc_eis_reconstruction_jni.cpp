@@ -192,7 +192,8 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processFrame(
     JNIEnv *env, jobject, jlong handle, jlong source_timestamp_ns,
     jlong first_row_center_timestamp_ns,
-    jlong exposure_time_ns, jlong rolling_shutter_skew_ns,
+    jlong exposure_time_ns, jlong frame_duration_ns,
+    jlong rolling_shutter_skew_ns,
     jfloat inverse_focal_length,
     jint active_width, jint active_height, jint crop_width, jint crop_height,
     jint pre_correction_active_width, jint pre_correction_active_height,
@@ -211,6 +212,7 @@ Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processFrame(
     frame.source_timestamp_ns = source_timestamp_ns;
     frame.frame_timestamp_ns = first_row_center_timestamp_ns;
     frame.exposure_time_ns = exposure_time_ns;
+    frame.frame_duration_ns = frame_duration_ns;
     frame.rolling_shutter_skew_ns = rolling_shutter_skew_ns;
     frame.inverse_focal_length = inverse_focal_length;
     frame.active_array_width = active_width;
@@ -231,7 +233,19 @@ Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_processFrame(
       }
       frame.has_nominal_lens_intrinsics = valid;
     }
+    const std::int64_t previous_frame_period_ns = state->engine.framePeriodNs();
     const auto result = state->engine.processFrame(frame);
+    const std::int64_t current_frame_period_ns = state->engine.framePeriodNs();
+    if (current_frame_period_ns != previous_frame_period_ns) {
+      __android_log_print(
+          ANDROID_LOG_INFO, kLogTag,
+          "MGC actual cadence updated periodNs=%lld fps=%.3f "
+          "lookaheadDelayMs=%.3f",
+          static_cast<long long>(current_frame_period_ns),
+          1.0e9 / static_cast<double>(current_frame_period_ns),
+          static_cast<double>(current_frame_period_ns) *
+              kMgcProfileLookaheadFrames / 1.0e6);
+    }
     if (!result) {
       return kPendingTimestamp;
     }

@@ -107,6 +107,9 @@ struct FrameMetadata {
   std::int64_t source_timestamp_ns = 0;
   std::int64_t frame_timestamp_ns = 0;
   std::int64_t exposure_time_ns = 0;
+  // Camera2 SENSOR_FRAME_DURATION for this completed frame. Zero means the
+  // engine must derive cadence from consecutive frame timestamps.
+  std::int64_t frame_duration_ns = 0;
   std::int64_t rolling_shutter_skew_ns = 0;
   int camera_index = 0;
   bool half_resolution_sensor_mode = false;
@@ -202,6 +205,7 @@ public:
 
   int numStrips() const;
   int numFramesToLookAhead() const;
+  std::int64_t framePeriodNs() const;
   bool isTripodMode() const;
 
   bool pushGyro(const GyroSample &sample);

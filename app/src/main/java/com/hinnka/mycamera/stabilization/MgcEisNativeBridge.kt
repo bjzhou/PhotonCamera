@@ -50,6 +50,7 @@ internal object MgcEisNativeBridge {
         sourceTimestampNs: Long,
         firstRowCenterTimestampNs: Long,
         exposureTimeNs: Long,
+        frameDurationNs: Long,
         rollingShutterSkewNs: Long,
         inverseFocalLength: Float,
         activeWidth: Int,

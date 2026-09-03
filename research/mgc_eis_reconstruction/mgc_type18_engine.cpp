@@ -26,6 +26,27 @@ constexpr double kOutputCropZoom =
     1.0 / (1.0 - 2.0 * kLookaheadCropMargin);
 constexpr double kProjectionDenominatorEpsilon = 0.000001;
 constexpr std::int64_t kMaximumLensSampleInterpolationGapNs = 50'000'000;
+constexpr std::int64_t kMinimumSupportedFramePeriodNs = 1'000'000;
+constexpr std::int64_t kMaximumSupportedFramePeriodNs = 1'000'000'000;
+constexpr double kActiveCadenceTolerance = 0.08;
+constexpr double kCandidateCadenceTolerance = 0.05;
+constexpr int kCadenceChangeConfirmationFrames = 3;
+
+bool periodsAreEquivalent(std::int64_t lhs, std::int64_t rhs,
+                          double relative_tolerance) {
+  if (lhs <= 0 || rhs <= 0) {
+    return false;
+  }
+  const auto difference = static_cast<double>(
+      lhs > rhs ? lhs - rhs : rhs - lhs);
+  const auto scale = static_cast<double>(std::max(lhs, rhs));
+  return difference <= scale * relative_tolerance;
+}
+
+bool isPlausibleFramePeriod(std::int64_t period_ns) {
+  return period_ns >= kMinimumSupportedFramePeriodNs &&
+         period_ns <= kMaximumSupportedFramePeriodNs;
+}
 
 type18::Parameters parametersFor(const EngineConfig &config) {
   type18::Parameters parameters;
@@ -60,7 +81,7 @@ public:
   explicit Impl(EngineConfig config)
       : config_(std::move(config)), parameters_(parametersFor(config_)),
         delayed_gyro_(static_cast<std::int64_t>(parameters_.half_window_frames) *
-                      type18::Parameters::kFramePeriodNs),
+                      frame_period_ns_),
         realtime_gyro_(0), motion_filter_(parameters_),
         pressure_filter_(parameters_) {
     if (config_.active_array_width <= 0) {
@@ -111,6 +132,12 @@ public:
     tripod_mode_ = gyro_stationary_detector_.isStationary();
     const bool delayed = delayed_gyro_.push(gated_sample);
     const bool realtime = realtime_gyro_.push(gated_sample);
+    if (delayed && realtime) {
+      gyro_samples_.push_back(gated_sample);
+      while (gyro_samples_.size() > type18::kGyroRingCapacity) {
+        gyro_samples_.pop_front();
+      }
+    }
     return delayed && realtime;
   }
 
@@ -153,13 +180,17 @@ public:
   }
 
   std::optional<StabilizedFrame> processFrame(const FrameMetadata &frame) {
-    if (!pending_frames_.empty() &&
-        frame.frame_timestamp_ns <=
-            pending_frames_.back().frame_timestamp_ns) {
+    if (last_submitted_frame_timestamp_ns_ > 0 &&
+        frame.frame_timestamp_ns <= last_submitted_frame_timestamp_ns_) {
       throw std::invalid_argument("Frame timestamps must be monotonic");
     }
+    observeFrameCadence(frame);
+    last_submitted_frame_timestamp_ns_ = frame.frame_timestamp_ns;
+    last_submitted_source_timestamp_ns_ = frame.source_timestamp_ns;
     if (!(frame.inverse_focal_length > 0.0)) {
-      return dropped(frame.frame_timestamp_ns);
+      StabilizedFrame output = dropped(frame.frame_timestamp_ns);
+      output.source_timestamp_ns = frame.source_timestamp_ns;
+      return emitDeferredFirst(std::move(output));
     }
 
     FrameMetadata queued_frame = frame;
@@ -167,7 +198,7 @@ public:
     pending_frames_.push_back(queued_frame);
     if (pending_frames_.size() <=
         static_cast<std::size_t>(parameters_.half_window_frames)) {
-      return std::nullopt;
+      return emitDeferredFirst(std::nullopt);
     }
 
     StabilizedFrame output = stabilizeFront();
@@ -179,7 +210,7 @@ public:
         pending_frames_.front().frame_timestamp_ns;
     pending_frames_.pop_front();
     cacheOutput(output);
-    return output;
+    return emitDeferredFirst(std::move(output));
   }
 
   std::vector<StabilizedFrame> flush() {
@@ -187,7 +218,11 @@ public:
     // stop path drains those images as unstabilized/dropped rather than
     // reflecting or freezing the last pose.
     std::vector<StabilizedFrame> result;
-    result.reserve(pending_frames_.size());
+    result.reserve(deferred_outputs_.size() + pending_frames_.size());
+    while (!deferred_outputs_.empty()) {
+      result.push_back(std::move(deferred_outputs_.front()));
+      deferred_outputs_.pop_front();
+    }
     while (!pending_frames_.empty()) {
       StabilizedFrame output =
           dropped(pending_frames_.front().frame_timestamp_ns);
@@ -229,6 +264,7 @@ public:
 
   int numStrips() const { return config_.num_strips; }
   int numFramesToLookAhead() const { return parameters_.half_window_frames; }
+  std::int64_t framePeriodNs() const { return frame_period_ns_; }
   bool isTripodMode() const { return tripod_mode_; }
 
 private:
@@ -257,6 +293,116 @@ private:
     StabilizedFrame result;
     result.timestamp_ns = timestamp_ns;
     return result;
+  }
+
+  std::optional<StabilizedFrame>
+  emitDeferredFirst(std::optional<StabilizedFrame> current) {
+    if (deferred_outputs_.empty()) {
+      return current;
+    }
+    if (current) {
+      deferred_outputs_.push_back(std::move(*current));
+    }
+    StabilizedFrame output = std::move(deferred_outputs_.front());
+    deferred_outputs_.pop_front();
+    return output;
+  }
+
+  void resetTemporalStateForCadence() {
+    while (!pending_frames_.empty()) {
+      StabilizedFrame output =
+          dropped(pending_frames_.front().frame_timestamp_ns);
+      output.source_timestamp_ns = pending_frames_.front().source_timestamp_ns;
+      deferred_outputs_.push_back(std::move(output));
+      pending_frames_.pop_front();
+    }
+    output_cache_.clear();
+    projected_motion_magnitudes_.clear();
+    projected_motion_peak_frames_.clear();
+    motion_filter_.reset();
+    pressure_filter_.reset();
+    previous_output_pose_ = Quaternion::identity();
+    next_frame_sequence_ = 0;
+    previous_frame_timestamp_ns_ = 0;
+    projected_motion_history_gain_ = 0.0;
+    previous_projected_candidate_blend_ = 0.0;
+    output_pose_initialized_ = false;
+  }
+
+  void applyFramePeriod(std::int64_t period_ns) {
+    if (!isPlausibleFramePeriod(period_ns)) {
+      return;
+    }
+    const bool was_initialized = frame_period_initialized_;
+    const bool changed = period_ns != frame_period_ns_;
+    frame_period_ns_ = period_ns;
+    frame_period_initialized_ = true;
+    pending_frame_period_ns_ = 0;
+    pending_frame_period_count_ = 0;
+    if (!changed) {
+      return;
+    }
+
+    // Before the first cadence is known, buffered frames have not produced
+    // any filter output and can remain in the new time domain. A confirmed
+    // mid-stream cadence change must not mix temporal/filter state.
+    if (was_initialized) {
+      resetTemporalStateForCadence();
+    }
+    type18::GyroPoseQueue rebuilt_delayed_gyro(
+        static_cast<std::int64_t>(parameters_.half_window_frames) *
+        frame_period_ns_);
+    for (const GyroSample &sample : gyro_samples_) {
+      rebuilt_delayed_gyro.push(sample);
+    }
+    delayed_gyro_ = std::move(rebuilt_delayed_gyro);
+  }
+
+  void observeFrameCadence(const FrameMetadata &frame) {
+    // Consecutive source-buffer timestamps are the authoritative output
+    // cadence: the sensor can report a 60 fps frame duration while a HAL only
+    // delivers every second YUV frame. The per-result duration is solely the
+    // first-frame/fallback seed when no output interval exists yet.
+    std::int64_t observed_period_ns = 0;
+    if (last_submitted_source_timestamp_ns_ > 0) {
+      observed_period_ns =
+          frame.source_timestamp_ns - last_submitted_source_timestamp_ns_;
+    }
+    if (!isPlausibleFramePeriod(observed_period_ns)) {
+      observed_period_ns = frame.frame_duration_ns;
+    }
+    if (!isPlausibleFramePeriod(observed_period_ns)) {
+      return;
+    }
+
+    // The first completed frame supplies an actual sensor period immediately,
+    // so startup never spends its seven-frame look-ahead on the 30 fps
+    // fallback. Later changes require three coherent results to reject a
+    // one-frame HAL anomaly or a missing-result timestamp gap.
+    if (!frame_period_initialized_) {
+      applyFramePeriod(observed_period_ns);
+      return;
+    }
+    if (periodsAreEquivalent(observed_period_ns, frame_period_ns_,
+                             kActiveCadenceTolerance)) {
+      pending_frame_period_ns_ = 0;
+      pending_frame_period_count_ = 0;
+      return;
+    }
+    if (periodsAreEquivalent(observed_period_ns, pending_frame_period_ns_,
+                             kCandidateCadenceTolerance)) {
+      pending_frame_period_ns_ =
+          (pending_frame_period_ns_ * pending_frame_period_count_ +
+           observed_period_ns) /
+          (pending_frame_period_count_ + 1);
+      ++pending_frame_period_count_;
+    } else {
+      pending_frame_period_ns_ = observed_period_ns;
+      pending_frame_period_count_ = 1;
+    }
+    if (pending_frame_period_count_ >= kCadenceChangeConfirmationFrames) {
+      applyFramePeriod(pending_frame_period_ns_);
+    }
   }
 
   Mat3 intrinsicsFor(const FrameMetadata &frame) const {
@@ -470,7 +616,7 @@ private:
       throw std::runtime_error("Current delayed gyro pose is unavailable");
     }
     if (!queryPair(queue,
-                   center_timestamp_ns - type18::Parameters::kFramePeriodNs,
+                   center_timestamp_ns - frame_period_ns_,
                    &window.previous)) {
       window.previous = window.current;
     }
@@ -485,7 +631,7 @@ private:
       type18::PosePair older;
       if (!queryPair(queue,
                      center_timestamp_ns -
-                         type18::Parameters::kFramePeriodNs * distance,
+                         frame_period_ns_ * distance,
                      &older)) {
         break;
       }
@@ -495,7 +641,7 @@ private:
          ++distance) {
       Quaternion future;
       if (!queue.query(center_timestamp_ns +
-                           type18::Parameters::kFramePeriodNs * distance,
+                           frame_period_ns_ * distance,
                        &future)) {
         break;
       }
@@ -504,7 +650,8 @@ private:
     const std::int64_t positive_period =
         std::max<std::int64_t>(measured_frame_period_ns, 1);
     window.nominal_to_measured_period_ratio =
-        33'333'000.0 / static_cast<double>(positive_period);
+        static_cast<double>(frame_period_ns_) /
+        static_cast<double>(positive_period);
     return window;
   }
 
@@ -518,7 +665,7 @@ private:
          distance <= parameters_.half_window_frames; ++distance) {
       Quaternion primary;
       const std::int64_t timestamp =
-          center_timestamp_ns + type18::Parameters::kFramePeriodNs * distance;
+          center_timestamp_ns + frame_period_ns_ * distance;
       bool queried = false;
       if (parameters_.candidate_uses_secondary_pose_stream) {
         Quaternion secondary;
@@ -879,7 +1026,7 @@ private:
       const Vec2 future = projectedExposureMotion(
           queue,
           center_timestamp_ns +
-              type18::Parameters::kFramePeriodNs * distance,
+              frame_period_ns_ * distance,
           exposure_time_ns, intrinsics);
       const double value = projectedMotionCandidateBlend(
           std::hypot(future.x * motion_scale, future.y * motion_scale));
@@ -910,19 +1057,19 @@ private:
       std::int64_t first_row_timestamp_ns,
       std::int64_t statistics_window_ns,
       std::int64_t sample_period_ns) const {
-    // 0x22D5648..0x22D56A8 fixes the future endpoint search to
-    // half_window*33,333,333ns. 0x230F094 backs the endpoint toward the
-    // current frame until the primary pose ring covers it, then computes pose
-    // deltas over the caller-selected interval and minimum sample cadence.
+    // The recovered 30 fps profile expresses this endpoint in frame units.
+    // Use the observed sensor cadence so seven-frame look-ahead remains seven
+    // actual frames at 24/30/50/60 fps. 0x230F094 backs the endpoint toward
+    // the current frame until the primary pose ring covers it.
     std::int64_t end_timestamp_ns =
         first_row_timestamp_ns +
-        parameters_.half_window_frames * type18::Parameters::kFramePeriodNs;
+        parameters_.half_window_frames * frame_period_ns_;
     if (parameters_.half_window_frames >= 1) {
       do {
         if (queue.isTimestampCovered(end_timestamp_ns, false)) {
           break;
         }
-        end_timestamp_ns -= type18::Parameters::kFramePeriodNs;
+        end_timestamp_ns -= frame_period_ns_;
       } while (end_timestamp_ns > first_row_timestamp_ns);
     }
     const std::int64_t start_timestamp_ns =
@@ -1034,10 +1181,10 @@ private:
     raw_two_row_scores.reserve(future_geometry.capacity());
     for (int index = 0; index <= parameters_.half_window_frames; ++index) {
       const std::int64_t future_center =
-          center_timestamp + type18::Parameters::kFramePeriodNs * index;
+          center_timestamp + frame_period_ns_ * index;
       // 0x22FD640 receives the one frame-state/metadata object being
-      // stabilized and advances only its gyro/OIS timestamps by 33,333,333ns.
-      // Later buffered frames are not substituted as future intrinsics.
+      // stabilized and advances only its gyro/OIS timestamps by one actual
+      // frame. Later buffered frames are not substituted as future intrinsics.
       future_geometry.push_back(buildFutureGeometry(
           queue, frame, future_center, false));
       raw_two_row_scores.push_back(twoRowScore(
@@ -1073,7 +1220,7 @@ private:
     // the 10-to-3 future-score horizon.
     const type18::GyroActivityMetrics future_activity = activityMetrics(
         queue, frame.frame_timestamp_ns, 0,
-        type18::Parameters::kFramePeriodNs);
+        frame_period_ns_);
     const int future_index = type18::effectiveFutureIndex(
         future_activity.directional_alignment,
         static_cast<int>(raw_two_row_scores.size()), parameters_);
@@ -1130,7 +1277,7 @@ private:
         continue;
       }
       const std::int64_t future_center =
-          center_timestamp + type18::Parameters::kFramePeriodNs * next;
+          center_timestamp + frame_period_ns_ * next;
       const FutureGeometry full_future = buildFutureGeometry(
           queue, frame, future_center, true);
       Quaternion future_actual;
@@ -1232,22 +1379,33 @@ private:
 
   EngineConfig config_;
   type18::Parameters parameters_;
+  // The reconstruction was recovered from a 30 fps profile, but Camera2 may
+  // actually produce any supported cadence. This value converts frame-domain
+  // look-ahead into the observed sensor timestamp domain.
+  std::int64_t frame_period_ns_ = type18::Parameters::kFramePeriodNs;
   type18::GyroStationaryDetector gyro_stationary_detector_;
   type18::GyroPoseQueue delayed_gyro_;
   type18::GyroPoseQueue realtime_gyro_;
   type18::LowProtrusionMotionFilter motion_filter_;
   type18::TemporalPressureFilter pressure_filter_;
+  std::deque<GyroSample> gyro_samples_;
   std::deque<LensOffsetSample> lens_offsets_;
   std::deque<LensIntrinsicsSample> lens_intrinsics_;
   std::deque<FrameMetadata> pending_frames_;
+  std::deque<StabilizedFrame> deferred_outputs_;
   std::deque<OutputCacheEntry> output_cache_;
   std::deque<double> projected_motion_magnitudes_;
   std::deque<std::int64_t> projected_motion_peak_frames_;
   Quaternion previous_output_pose_ = Quaternion::identity();
   std::int64_t next_frame_sequence_ = 0;
   std::int64_t previous_frame_timestamp_ns_ = 0;
+  std::int64_t last_submitted_frame_timestamp_ns_ = 0;
+  std::int64_t last_submitted_source_timestamp_ns_ = 0;
+  std::int64_t pending_frame_period_ns_ = 0;
+  int pending_frame_period_count_ = 0;
   double projected_motion_history_gain_ = 0.0;
   double previous_projected_candidate_blend_ = 0.0;
+  bool frame_period_initialized_ = false;
   bool output_pose_initialized_ = false;
   bool tripod_mode_ = false;
 };
@@ -1275,6 +1433,7 @@ int Engine::numStrips() const { return impl_->numStrips(); }
 int Engine::numFramesToLookAhead() const {
   return impl_->numFramesToLookAhead();
 }
+std::int64_t Engine::framePeriodNs() const { return impl_->framePeriodNs(); }
 bool Engine::isTripodMode() const { return impl_->isTripodMode(); }
 
 bool Engine::pushGyro(const GyroSample &sample) {

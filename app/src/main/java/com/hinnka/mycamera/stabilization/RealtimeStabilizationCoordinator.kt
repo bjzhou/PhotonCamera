@@ -98,6 +98,7 @@ private data class CameraCalibration(
 private data class FrameMetadata(
     val timestampNs: Long,
     val exposureTimeNs: Long,
+    val frameDurationNs: Long,
     val rollingShutterSkewNs: Long,
     val cropRegion: Rect,
     val focalLengthMm: Float,
@@ -448,6 +449,9 @@ class RealtimeStabilizationCoordinator(context: Context) {
         val metadata = FrameMetadata(
             timestampNs = timestampNs,
             exposureTimeNs = value(CaptureResult.SENSOR_EXPOSURE_TIME)?.coerceAtLeast(0L) ?: 0L,
+            // This is the duration used by the completed sensor frame, not the requested FPS.
+            frameDurationNs = value(CaptureResult.SENSOR_FRAME_DURATION)
+                ?.coerceAtLeast(0L) ?: 0L,
             rollingShutterSkewNs = value(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)
                 ?.coerceAtLeast(0L) ?: 0L,
             cropRegion = value(CaptureResult.SCALER_CROP_REGION)?.let(::Rect)
@@ -928,6 +932,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 MgcEisNativeEngine.FrameInput(
                     sensorTimestampNs = metadata.timestampNs,
                     exposureTimeNs = metadata.exposureTimeNs,
+                    frameDurationNs = metadata.frameDurationNs,
                     rollingShutterSkewNs = metadata.rollingShutterSkewNs,
                     cropRegion = metadata.cropRegion,
                     activeArray = currentCalibration.activeArray,

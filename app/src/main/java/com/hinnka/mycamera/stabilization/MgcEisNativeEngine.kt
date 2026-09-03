@@ -26,6 +26,8 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
     data class FrameInput(
         val sensorTimestampNs: Long,
         val exposureTimeNs: Long,
+        /** Actual Camera2 frame duration; this is never derived from the requested FPS. */
+        val frameDurationNs: Long,
         val rollingShutterSkewNs: Long,
         val cropRegion: Rect,
         val activeArray: Rect,
@@ -238,6 +240,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
                 TAG,
                 "MGC processFrame entry #$frameCallCount: sensorTs=${input.sensorTimestampNs}, " +
                     "firstRowTs=$firstRowCenterTimestampNs, exposure=${input.exposureTimeNs}, " +
+                    "frameDuration=${input.frameDurationNs}, " +
                     "rolling=$croppedRollingShutterSkewNs, active=${activeWidth}x$activeHeight, " +
                     "crop=$crop, focal=${input.focalLengthMm}, " +
                     "inverseFocal=$inverseFocalLength, gyro=$gyroSampleCount, " +
@@ -251,6 +254,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             input.sensorTimestampNs,
             firstRowCenterTimestampNs,
             input.exposureTimeNs,
+            input.frameDurationNs,
             croppedRollingShutterSkewNs,
             inverseFocalLength,
             activeWidth,
