@@ -81,6 +81,7 @@ import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
+import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.ui.camera.ZoomDisplayMode
 import com.hinnka.mycamera.utils.*
@@ -2015,6 +2016,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoEnhancedStabilizationLookahead(
                     it.videoEnhancedStabilizationLookahead
                 )
+                cameraController.setExternalLensStabilizationConfig(
+                    it.externalLensStabilizationConfig
+                )
                 cameraController.setPhotoPreviewStabilizationEnabled(
                     it.photoPreviewStabilizationEnabled
                 )
@@ -2162,6 +2166,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 cameraController.setVideoEnhancedStabilizationLookahead(
                     prefs.videoEnhancedStabilizationLookahead
+                )
+                cameraController.setExternalLensStabilizationConfig(
+                    prefs.externalLensStabilizationConfig
                 )
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
                 cameraController.setVideoLensLockEnabled(prefs.videoLensLockEnabled)
@@ -3518,6 +3525,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoEnhancedStabilizationLookahead(lookahead)
         viewModelScope.launch {
             userPreferencesRepository.saveVideoEnhancedStabilizationLookahead(lookahead)
+        }
+    }
+
+    fun setExternalLensStabilizationConfig(config: ExternalLensStabilizationConfig) {
+        val normalized = config.normalized()
+        cameraController.setExternalLensStabilizationConfig(normalized)
+        viewModelScope.launch {
+            userPreferencesRepository.saveExternalLensStabilizationConfig(normalized)
         }
     }
 

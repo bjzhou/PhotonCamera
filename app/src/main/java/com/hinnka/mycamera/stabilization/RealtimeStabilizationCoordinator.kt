@@ -83,6 +83,7 @@ class StabilizationImage internal constructor(
 }
 
 private data class CameraCalibration(
+    val cameraId: String,
     val activeArray: Rect,
     val preCorrectionActiveArray: Rect,
     val physicalSizeMm: SizeF,
@@ -148,6 +149,26 @@ private fun isPlausibleDynamicLensIntrinsics(
         kotlin.math.abs(values[4] - nominal[4]) <= preWidth * 0.25f
 }
 
+private fun magnifyDynamicLensIntrinsics(
+    values: FloatArray,
+    nominal: FloatArray?,
+    magnification: Float,
+): FloatArray {
+    if (magnification <= MIN_EXTERNAL_LENS_MAGNIFICATION ||
+        nominal == null || nominal.size != 5 || values.size != 5
+    ) {
+        return values
+    }
+    return values.copyOf().also { adjusted ->
+        // The native engine applies dynamic fx/fy as ratios against the nominal calibration;
+        // the frame's effective focal length already carries the external magnification. Keep
+        // those ratios unchanged and magnify only the OIS-induced optical-center/skew deltas.
+        adjusted[2] = nominal[2] + (values[2] - nominal[2]) * magnification
+        adjusted[3] = nominal[3] + (values[3] - nominal[3]) * magnification
+        adjusted[4] = nominal[4] + (values[4] - nominal[4]) * magnification
+    }
+}
+
 private data class SequencedNativeResult(
     val sequence: Long,
     val result: MgcEisNativeEngine.FrameResult,
@@ -202,6 +223,9 @@ class RealtimeStabilizationCoordinator(context: Context) {
     private var calibration: CameraCalibration? = null
 
     @Volatile
+    private var externalLensStabilizationConfig = ExternalLensStabilizationConfig.Disabled
+
+    @Volatile
     private var gyroSourceReady = false
 
     @Volatile
@@ -246,6 +270,22 @@ class RealtimeStabilizationCoordinator(context: Context) {
     /** True after this acquisition has received its first monotonic calibrated gyro sample. */
     val isPoseSourceReady: Boolean
         get() = gyroSourceReady
+
+    fun setExternalLensStabilizationConfig(config: ExternalLensStabilizationConfig) {
+        val normalized = config.normalized()
+        if (externalLensStabilizationConfig == normalized) return
+        externalLensStabilizationConfig = normalized
+        PLog.i(
+            TAG,
+            if (normalized.isEnabled) {
+                "MGC external lens stabilization enabled: " +
+                    "camera=${normalized.physicalCameraId}, " +
+                    "magnification=${normalized.magnification}x"
+            } else {
+                "MGC external lens stabilization disabled"
+            },
+        )
+    }
 
     val isCurrentCameraSupported: Boolean
         get() {
@@ -312,6 +352,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
     }
 
     fun configureCamera(
+        cameraId: String,
         characteristics: CameraCharacteristics,
         timingCharacteristics: CameraCharacteristics = characteristics,
     ) {
@@ -350,6 +391,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             nominalLensIntrinsics != null &&
             resultKeyNames.contains(CaptureResult.STATISTICS_LENS_INTRINSICS_SAMPLES.name)
         calibration = CameraCalibration(
+            cameraId = cameraId,
             activeArray = Rect(activeArray),
             preCorrectionActiveArray = Rect(
                 characteristics.get(
@@ -372,11 +414,13 @@ class RealtimeStabilizationCoordinator(context: Context) {
         )
         PLog.i(
             TAG,
-            "MGC camera calibration: active=$activeArray, physical=$physicalSize, " +
+            "MGC camera calibration: camera=$cameraId, active=$activeArray, physical=$physicalSize, " +
                 "orientation=${calibration?.sensorOrientationDegrees}, " +
                 "facing=${calibration?.lensFacing}, timestampSource=${calibration?.timestampSource}, " +
                 "oisSamples=$supportsOisSamples, " +
-                "lensIntrinsicsSamples=$supportsLensIntrinsicsSamples",
+                "lensIntrinsicsSamples=$supportsLensIntrinsicsSamples, " +
+                "externalMagnification=" +
+                externalLensStabilizationConfig.magnificationFor(cameraId),
         )
     }
 
@@ -385,16 +429,22 @@ class RealtimeStabilizationCoordinator(context: Context) {
         request: CaptureRequest? = null,
         outputPhysicalCameraId: String? = null,
     ) {
-        val physicalResult = (result as? TotalCaptureResult)?.let { totalResult ->
-            val physicalId = outputPhysicalCameraId
-                ?: totalResult.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
-            physicalId?.let(totalResult.physicalCameraResults::get)
+        val totalResult = result as? TotalCaptureResult
+        val resultPhysicalCameraId = outputPhysicalCameraId
+            ?: totalResult?.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+        val physicalResult = resultPhysicalCameraId?.let {
+            totalResult?.physicalCameraResults?.get(it)
         }
         fun <T> value(key: CaptureResult.Key<T>): T? =
             physicalResult?.get(key) ?: result.get(key)
 
         val currentCalibration = calibration ?: return
+        val stabilizationCameraId = resultPhysicalCameraId ?: currentCalibration.cameraId
+        val externalMagnification = externalLensStabilizationConfig
+            .magnificationFor(stabilizationCameraId)
         val timestampNs = value(CaptureResult.SENSOR_TIMESTAMP) ?: return
+        val reportedFocalLengthMm = value(CaptureResult.LENS_FOCAL_LENGTH)
+            ?.coerceAtLeast(0f) ?: 0f
         val metadata = FrameMetadata(
             timestampNs = timestampNs,
             exposureTimeNs = value(CaptureResult.SENSOR_EXPOSURE_TIME)?.coerceAtLeast(0L) ?: 0L,
@@ -402,7 +452,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 ?.coerceAtLeast(0L) ?: 0L,
             cropRegion = value(CaptureResult.SCALER_CROP_REGION)?.let(::Rect)
                 ?: Rect(currentCalibration.activeArray),
-            focalLengthMm = value(CaptureResult.LENS_FOCAL_LENGTH)?.coerceAtLeast(0f) ?: 0f,
+            focalLengthMm = reportedFocalLengthMm * externalMagnification,
         )
         val oisSamples = value(CaptureResult.STATISTICS_OIS_SAMPLES).orEmpty()
         val dynamicLensIntrinsics = if (
@@ -442,7 +492,11 @@ class RealtimeStabilizationCoordinator(context: Context) {
                         return@forEach
                     }
                     if (nativeEngine.processLensIntrinsics(
-                            intrinsics = sample.values,
+                            intrinsics = magnifyDynamicLensIntrinsics(
+                                values = sample.values,
+                                nominal = currentCalibration.nominalLensIntrinsics,
+                                magnification = externalMagnification,
+                            ),
                             timestampNs = sample.timestampNs,
                             cameraType = 0,
                         )
@@ -467,8 +521,8 @@ class RealtimeStabilizationCoordinator(context: Context) {
                         return@forEach
                     }
                     if (nativeEngine.processLensOffset(
-                            xShiftPixels = sample.xshift,
-                            yShiftPixels = sample.yshift,
+                            xShiftPixels = sample.xshift * externalMagnification,
+                            yShiftPixels = sample.yshift * externalMagnification,
                             timestampNs = sample.timestamp,
                             cameraType = 0,
                         )
@@ -487,6 +541,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 PLog.i(
                     TAG,
                     "MGC CaptureResult #$captureResultCount: ts=$timestampNs, " +
+                        "camera=$stabilizationCameraId, " +
+                        "reportedFocal=$reportedFocalLengthMm, " +
+                        "externalMagnification=$externalMagnification, " +
+                        "effectiveFocal=${metadata.focalLengthMm}, " +
                         "requestedVideoStabilization=" +
                         requestedVideoStabilization +
                         ", requestedOpticalStabilization=" +
@@ -1117,6 +1175,7 @@ internal fun remapMgcGyroForTest(
     frontFacing: Boolean,
 ): Triple<Double, Double, Double> {
     val calibration = CameraCalibration(
+        cameraId = "test",
         activeArray = Rect(0, 0, 1, 1),
         preCorrectionActiveArray = Rect(0, 0, 1, 1),
         physicalSizeMm = SizeF(1f, 1f),

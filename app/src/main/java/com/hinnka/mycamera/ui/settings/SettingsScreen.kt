@@ -142,8 +142,11 @@ import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
+import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.stabilization.MIN_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.MAX_VIDEO_STABILIZATION_LOOKAHEAD
+import com.hinnka.mycamera.stabilization.MAX_EXTERNAL_LENS_MAGNIFICATION
+import com.hinnka.mycamera.stabilization.MIN_EXTERNAL_LENS_MAGNIFICATION
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
@@ -165,6 +168,7 @@ import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoStabilizationMode
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
@@ -436,6 +440,7 @@ fun SettingsScreen(
     }
     var showAspectRatioDialog by remember { mutableStateOf(false) }
     var showAddIszLensDialog by remember { mutableStateOf(false) }
+    var showExternalLensStabilizationDialog by remember { mutableStateOf(false) }
     var showCustomVendorKeysDialog by remember { mutableStateOf(false) }
     var backupOperation by remember { mutableStateOf<BackupOperation?>(null) }
 
@@ -1660,6 +1665,43 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
 
+                        val externalLensConfig =
+                            userPreferences.externalLensStabilizationConfig
+                        val externalLensOptions = remember(state.availableCameras) {
+                            externalLensStabilizationOptions(state.availableCameras)
+                        }
+                        val configuredExternalLens = externalLensOptions.firstOrNull {
+                            it.cameraId == externalLensConfig.physicalCameraId
+                        }
+                        val externalLensSummary = if (externalLensConfig.isEnabled) {
+                            stringResource(
+                                R.string.settings_external_lens_stabilization_configured,
+                                configuredExternalLens?.let {
+                                    externalLensStabilizationLabel(it)
+                                } ?: externalLensConfig.physicalCameraId,
+                                IszLensConfig.displayRatioLabel(
+                                    externalLensConfig.magnification
+                                ),
+                            )
+                        } else {
+                            stringResource(
+                                R.string.settings_external_lens_stabilization_description
+                            )
+                        }
+                        NavigationSettingItem(
+                            title = stringResource(
+                                R.string.settings_external_lens_stabilization
+                            ),
+                            description = externalLensSummary,
+                            enabled = viewModel.isAlgorithmicStabilizationSupported,
+                            onClick = { showExternalLensStabilizationDialog = true },
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_separate_video_lut),
                             description = stringResource(R.string.settings_separate_video_lut_description),
@@ -2768,6 +2810,18 @@ fun SettingsScreen(
             },
             onRemoveLens = { viewModel.removeIszLensConfig(it) },
             onDismiss = { showAddIszLensDialog = false }
+        )
+    }
+
+    if (showExternalLensStabilizationDialog) {
+        ExternalLensStabilizationDialog(
+            availableCameras = state.availableCameras,
+            currentConfig = userPreferences.externalLensStabilizationConfig,
+            onApply = { config ->
+                viewModel.setExternalLensStabilizationConfig(config)
+                showExternalLensStabilizationDialog = false
+            },
+            onDismiss = { showExternalLensStabilizationDialog = false },
         )
     }
 
@@ -4437,6 +4491,299 @@ private fun customVendorKeyTextFieldColors() =
         errorBorderColor = Color(0xFFFF8A80),
         cursorColor = Color(0xFFE5A324)
     )
+
+/**
+ * Physical camera selected for external-lens stabilization calibration.
+ */
+private data class ExternalLensStabilizationOption(
+    val cameraId: String,
+    val lensFacing: Int,
+    val focalLength35mmEquivalent: Float,
+)
+
+private fun externalLensStabilizationOptions(
+    availableCameras: List<CameraInfo>,
+): List<ExternalLensStabilizationOption> = buildList {
+    availableCameras
+        .filter {
+            !it.isVirtualIszLens &&
+                it.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+        }
+        .forEach { camera ->
+            val fixedPhysicalCameraId = camera.outputPhysicalCameraId
+            when {
+                fixedPhysicalCameraId != null -> {
+                    val physical = camera.physicalCameras.firstOrNull {
+                        it.cameraId == fixedPhysicalCameraId
+                    }
+                    add(
+                        ExternalLensStabilizationOption(
+                            cameraId = fixedPhysicalCameraId,
+                            lensFacing = camera.lensFacing,
+                            focalLength35mmEquivalent =
+                                physical?.focalLength35mmEquivalent
+                                    ?.takeIf { it > 0f }
+                                    ?: camera.focalLength35mmEquivalent,
+                        )
+                    )
+                }
+
+                camera.physicalCameras.isNotEmpty() -> {
+                    camera.physicalCameras.forEach { physical ->
+                        add(
+                            ExternalLensStabilizationOption(
+                                cameraId = physical.cameraId,
+                                lensFacing = camera.lensFacing,
+                                focalLength35mmEquivalent =
+                                    physical.focalLength35mmEquivalent,
+                            )
+                        )
+                    }
+                }
+
+                else -> add(
+                    ExternalLensStabilizationOption(
+                        cameraId = camera.cameraId,
+                        lensFacing = camera.lensFacing,
+                        focalLength35mmEquivalent = camera.focalLength35mmEquivalent,
+                    )
+                )
+            }
+        }
+}.filter { it.cameraId.isNotBlank() }
+    .distinctBy { it.cameraId }
+    .sortedWith(
+        compareBy<ExternalLensStabilizationOption> {
+            it.focalLength35mmEquivalent.takeIf { focal -> focal > 0f } ?: Float.MAX_VALUE
+        }.thenBy { it.cameraId }
+    )
+
+@Composable
+private fun externalLensStabilizationLabel(
+    option: ExternalLensStabilizationOption,
+): String {
+    val prefix = when (option.lensFacing) {
+        android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK ->
+            stringResource(R.string.rear_camera)
+        android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT ->
+            stringResource(R.string.front_camera)
+        else -> stringResource(R.string.camera)
+    }
+    val focalLength = if (option.focalLength35mmEquivalent > 0f) {
+        stringResource(
+            R.string.settings_isz_lens_focal_length,
+            option.focalLength35mmEquivalent.roundToInt(),
+        )
+    } else {
+        stringResource(R.string.settings_isz_lens_unknown_focal_length)
+    }
+    return stringResource(
+        R.string.settings_isz_lens_label,
+        prefix,
+        option.cameraId,
+        focalLength,
+    )
+}
+
+@Composable
+private fun ExternalLensStabilizationDialog(
+    availableCameras: List<CameraInfo>,
+    currentConfig: ExternalLensStabilizationConfig,
+    onApply: (ExternalLensStabilizationConfig) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val discoveredOptions = remember(availableCameras) {
+        externalLensStabilizationOptions(availableCameras)
+    }
+    val options = remember(discoveredOptions, currentConfig.physicalCameraId) {
+        if (currentConfig.isEnabled &&
+            discoveredOptions.none { it.cameraId == currentConfig.physicalCameraId }
+        ) {
+            discoveredOptions + ExternalLensStabilizationOption(
+                cameraId = currentConfig.physicalCameraId,
+                lensFacing = android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK,
+                focalLength35mmEquivalent = 0f,
+            )
+        } else {
+            discoveredOptions
+        }
+    }
+    var enabled by remember(currentConfig) { mutableStateOf(currentConfig.isEnabled) }
+    var selectedCameraId by remember(options, currentConfig) {
+        mutableStateOf(
+            currentConfig.physicalCameraId.takeIf { configuredId ->
+                options.any { it.cameraId == configuredId }
+            } ?: options.firstOrNull()?.cameraId.orEmpty()
+        )
+    }
+    var magnificationText by remember(currentConfig) {
+        mutableStateOf(
+            editableExternalLensMagnification(
+                currentConfig.magnification.takeIf { currentConfig.isEnabled } ?: 2f
+            )
+        )
+    }
+    val magnification = magnificationText.replace(',', '.').toFloatOrNull()
+    val magnificationValid = magnification != null &&
+        magnification > MIN_EXTERNAL_LENS_MAGNIFICATION &&
+        magnification <= MAX_EXTERNAL_LENS_MAGNIFICATION
+    val lensLabels = options.map { it.cameraId to externalLensStabilizationLabel(it) }
+    val selectedLensLabel = lensLabels.firstOrNull { it.first == selectedCameraId }
+        ?.second.orEmpty()
+    val canApply = !enabled ||
+        (selectedCameraId.isNotBlank() && magnificationValid)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1A1A1A),
+        title = { Text(stringResource(R.string.settings_external_lens_stabilization)) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                SwitchSettingItem(
+                    title = stringResource(
+                        R.string.settings_external_lens_stabilization_enabled
+                    ),
+                    description = stringResource(
+                        R.string.settings_external_lens_stabilization_enabled_description
+                    ),
+                    checked = enabled,
+                    enabled = options.isNotEmpty(),
+                    onCheckedChange = { enabled = it },
+                )
+
+                if (options.isEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(
+                            R.string.settings_external_lens_stabilization_no_physical_lens
+                        ),
+                        color = Color.White.copy(alpha = 0.65f),
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                    )
+                } else if (enabled) {
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                    DropdownSettingItem(
+                        title = stringResource(
+                            R.string.settings_external_lens_stabilization_physical_lens
+                        ),
+                        description = stringResource(
+                            R.string.settings_external_lens_stabilization_physical_lens_description
+                        ),
+                        value = selectedLensLabel,
+                        options = lensLabels.map { it.second },
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { label ->
+                            lensLabels.firstOrNull { it.second == label }?.let {
+                                selectedCameraId = it.first
+                            }
+                        },
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                    QualityLevelSetting(
+                        title = stringResource(
+                            R.string.settings_external_lens_stabilization_magnification
+                        ),
+                        description = stringResource(
+                            R.string.settings_external_lens_stabilization_magnification_description
+                        ),
+                        levels = listOf(1.5f, 2f, 3f).map {
+                            it to IszLensConfig.displayRatioLabel(it)
+                        },
+                        currentLevel = magnification ?: Float.NaN,
+                        onLevelSelected = {
+                            magnificationText = editableExternalLensMagnification(it)
+                        },
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = magnificationText,
+                        onValueChange = {
+                            magnificationText = sanitizeExternalLensMagnificationInput(it)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = {
+                            Text(
+                                stringResource(
+                                    R.string.settings_external_lens_stabilization_custom_magnification
+                                )
+                            )
+                        },
+                        supportingText = {
+                            Text(
+                                stringResource(
+                                    if (magnificationValid) {
+                                        R.string.settings_external_lens_stabilization_custom_magnification_hint
+                                    } else {
+                                        R.string.settings_external_lens_stabilization_magnification_error
+                                    },
+                                    MAX_EXTERNAL_LENS_MAGNIFICATION,
+                                )
+                            )
+                        },
+                        isError = !magnificationValid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        colors = customVendorKeyTextFieldColors(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canApply,
+                onClick = {
+                    onApply(
+                        if (enabled) {
+                            ExternalLensStabilizationConfig(
+                                physicalCameraId = selectedCameraId,
+                                magnification = requireNotNull(magnification),
+                            ).normalized()
+                        } else {
+                            ExternalLensStabilizationConfig.Disabled
+                        }
+                    )
+                },
+            ) {
+                Text(stringResource(R.string.settings_external_lens_stabilization_apply))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+
+private fun editableExternalLensMagnification(magnification: Float): String =
+    String.format(Locale.US, "%.2f", magnification)
+        .trimEnd('0')
+        .trimEnd('.')
+
+private fun sanitizeExternalLensMagnificationInput(value: String): String {
+    val normalized = value.replace(',', '.')
+    val result = StringBuilder()
+    var decimalSeen = false
+    normalized.forEach { character ->
+        when {
+            character.isDigit() -> result.append(character)
+            character == '.' && !decimalSeen -> {
+                decimalSeen = true
+                result.append(character)
+            }
+        }
+    }
+    return result.toString().take(5)
+}
 
 /**
  * 图像质量等级设置（通用组件）

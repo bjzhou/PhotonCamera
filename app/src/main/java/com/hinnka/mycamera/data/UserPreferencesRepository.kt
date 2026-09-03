@@ -39,6 +39,7 @@ import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
+import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import kotlinx.coroutines.flow.Flow
@@ -204,6 +205,8 @@ data class UserPreferences(
     val videoStabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
     val videoEnhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
     val videoEnhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    val externalLensStabilizationConfig: ExternalLensStabilizationConfig =
+        ExternalLensStabilizationConfig.Disabled,
     val photoPreviewStabilizationEnabled: Boolean = false,
     val videoTorchEnabled: Boolean = false,
     val videoLensLockEnabled: Boolean = false,
@@ -453,6 +456,10 @@ class UserPreferencesRepository(private val context: Context) {
             floatPreferencesKey("video_enhanced_stabilization_strength")
         private val VIDEO_ENHANCED_STABILIZATION_LOOKAHEAD =
             intPreferencesKey("video_enhanced_stabilization_lookahead")
+        private val EXTERNAL_LENS_STABILIZATION_CAMERA_ID =
+            stringPreferencesKey("external_lens_stabilization_camera_id")
+        private val EXTERNAL_LENS_STABILIZATION_MAGNIFICATION =
+            floatPreferencesKey("external_lens_stabilization_magnification")
         private val PHOTO_PREVIEW_STABILIZATION_ENABLED =
             booleanPreferencesKey("photo_preview_stabilization_enabled")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
@@ -743,6 +750,12 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[VIDEO_ENHANCED_STABILIZATION_LOOKAHEAD]
                         ?: DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
                 ),
+                externalLensStabilizationConfig = ExternalLensStabilizationConfig(
+                    physicalCameraId = preferences[EXTERNAL_LENS_STABILIZATION_CAMERA_ID]
+                        .orEmpty(),
+                    magnification = preferences[EXTERNAL_LENS_STABILIZATION_MAGNIFICATION]
+                        ?: ExternalLensStabilizationConfig.Disabled.magnification,
+                ).normalized(),
                 photoPreviewStabilizationEnabled =
                     preferences[PHOTO_PREVIEW_STABILIZATION_ENABLED] ?: false,
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
@@ -1538,6 +1551,23 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_ENHANCED_STABILIZATION_LOOKAHEAD] =
                 normalizeStabilizationLookahead(lookahead)
+        }
+    }
+
+    suspend fun saveExternalLensStabilizationConfig(
+        config: ExternalLensStabilizationConfig,
+    ) {
+        val normalized = config.normalized()
+        context.dataStore.edit { preferences ->
+            if (normalized.isEnabled) {
+                preferences[EXTERNAL_LENS_STABILIZATION_CAMERA_ID] =
+                    normalized.physicalCameraId
+                preferences[EXTERNAL_LENS_STABILIZATION_MAGNIFICATION] =
+                    normalized.magnification
+            } else {
+                preferences.remove(EXTERNAL_LENS_STABILIZATION_CAMERA_ID)
+                preferences.remove(EXTERNAL_LENS_STABILIZATION_MAGNIFICATION)
+            }
         }
     }
 

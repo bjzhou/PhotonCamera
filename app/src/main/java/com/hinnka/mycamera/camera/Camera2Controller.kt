@@ -38,6 +38,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
@@ -2143,6 +2144,7 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
                 realtimeStabilizationCoordinator.configureCamera(
+                    cameraId = capabilityCameraId,
                     characteristics = capabilityCharacteristics,
                     timingCharacteristics = openCharacteristics,
                 )
@@ -6358,6 +6360,10 @@ class Camera2Controller(private val context: Context) {
                 enhancedStabilizationLookahead = normalizeStabilizationLookahead(lookahead)
             )
         )
+    }
+
+    fun setExternalLensStabilizationConfig(config: ExternalLensStabilizationConfig) {
+        realtimeStabilizationCoordinator.setExternalLensStabilizationConfig(config)
     }
 
     fun setPhotoPreviewStabilizationEnabled(enabled: Boolean) {
