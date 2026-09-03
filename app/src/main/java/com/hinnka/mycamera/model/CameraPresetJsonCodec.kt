@@ -142,6 +142,7 @@ internal object CameraPresetJsonCodec {
             flash = obj.float("flash", default.flash),
             bleachBypass = obj.float("bleachBypass", default.bleachBypass),
             clarity = obj.float("clarity", default.clarity),
+            sharpness = obj.float("sharpness", default.sharpness),
             bloom = obj.float("bloom", default.bloom),
             softLight = obj.float("softLight", default.softLight),
             halation = default.halation,

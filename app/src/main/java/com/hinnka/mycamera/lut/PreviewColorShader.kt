@@ -51,6 +51,7 @@ internal object PreviewColorShader {
             uniform float uToneToe;
             uniform float uToneShoulder;
             uniform float uTonePivot;
+            uniform float uSharpening;
             ${if (variant.includePreLogFilmGrain) """
             uniform float uFilmGrain;
             uniform float uFilmGrainSeed;
@@ -385,6 +386,37 @@ internal object PreviewColorShader {
                     color.rgb = sanitizeColor(color.rgb);
                 }
                 """ else ""}
+
+                // 锐度是色彩配方的最终 sRGB 空间操作。邻域只用于提取亮度细节，
+                // 调整量直接叠加到完成曲线、LUT 与空间效果后的 sRGB 结果。
+                if (uColorRecipeEnabled && abs(uSharpening) > 0.0001) {
+                    vec2 rawDx = vec2(uTexelSize.x, 0.0);
+                    vec2 rawDy = vec2(0.0, uTexelSize.y);
+                    float centerLuma = getLuma(texture(uCameraTexture, uvCoord).rgb);
+                    float neighborLuma = 0.0;
+                    neighborLuma += getLuma(texture(
+                        uCameraTexture,
+                        (uSTMatrix * vec4(rcCoord - rawDx, 0.0, 1.0)).xy
+                    ).rgb);
+                    neighborLuma += getLuma(texture(
+                        uCameraTexture,
+                        (uSTMatrix * vec4(rcCoord + rawDx, 0.0, 1.0)).xy
+                    ).rgb);
+                    neighborLuma += getLuma(texture(
+                        uCameraTexture,
+                        (uSTMatrix * vec4(rcCoord - rawDy, 0.0, 1.0)).xy
+                    ).rgb);
+                    neighborLuma += getLuma(texture(
+                        uCameraTexture,
+                        (uSTMatrix * vec4(rcCoord + rawDy, 0.0, 1.0)).xy
+                    ).rgb);
+                    float delta = centerLuma - neighborLuma * 0.25;
+                    float detail = sign(delta) * max(abs(delta) - 0.005, 0.0);
+                    float sharpeningStrength = uSharpening > 0.0
+                        ? uSharpening * 2.0
+                        : uSharpening;
+                    color.rgb = sanitizeColor(color.rgb + vec3(detail * sharpeningStrength));
+                }
 
                 fragColor = vec4(clamp(sanitizeColor(color.rgb), 0.0, 1.0), color.a);
             }

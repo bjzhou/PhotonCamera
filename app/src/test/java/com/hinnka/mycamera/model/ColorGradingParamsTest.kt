@@ -39,6 +39,7 @@ class ColorGradingParamsTest {
             gradingHighlightLuminance = 0.24f,
             gradingBalance = -0.16f,
             gradingBlending = 0.81f,
+            sharpness = -0.35f,
         )
 
         val decoded = ColorRecipeParams.fromJson(source.toJson())
@@ -63,5 +64,6 @@ class ColorGradingParamsTest {
         assertEquals(0f, decoded.gradingMidtoneLuminance, 0.0001f)
         assertEquals(0f, decoded.gradingHighlightLuminance, 0.0001f)
         assertEquals(0.5f, decoded.gradingBlending, 0.0001f)
+        assertEquals(0f, decoded.sharpness, 0.0001f)
     }
 }

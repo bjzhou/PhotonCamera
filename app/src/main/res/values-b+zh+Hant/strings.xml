@@ -466,6 +466,7 @@
     <string name="recipe_param_flash">閃光燈</string>
     <string name="recipe_param_bleach_bypass">留銀沖洗</string>
     <string name="recipe_param_clarity">清晰度</string>
+    <string name="recipe_param_sharpness">銳度</string>
     <string name="recipe_param_bloom">泛光</string>
     <string name="recipe_param_soft_light">柔光</string>
     <string name="recipe_param_hdf">HDF</string>
@@ -514,6 +515,7 @@
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">色彩</string>
     <string name="recipe_color_basic">基礎</string>
+    <string name="recipe_panel_advanced">進階</string>
     <string name="recipe_color_style">風格</string>
     <string name="recipe_color_grading">色彩分級</string>
     <string name="recipe_grading_midtones">中間調</string>

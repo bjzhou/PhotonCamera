@@ -319,7 +319,6 @@ class PhotoProcessor(
             sdrBitmap,
             colorCorrection.baselineLayer,
             colorCorrection.creativeLayer,
-            0f,
             noiseReductionValue = 0f,
             chromaNoiseReductionValue = 0f,
             luminanceGainDownsample = RawGainmapMath.DOWNSAMPLE,
@@ -720,7 +719,6 @@ class PhotoProcessor(
                 b,
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
-                0f,
                 noiseReductionValue = 0f,
                 chromaNoiseReductionValue = 0f
             )
@@ -756,7 +754,6 @@ class PhotoProcessor(
         lutLuminanceGainDownsample: Int = 1,
     ): Bitmap = withContext(Dispatchers.IO) {
         var result = input
-        val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
         val finalChromaNoiseReduction =
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
@@ -783,7 +780,6 @@ class PhotoProcessor(
                 result,
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
-                finalSharpening,
                 finalNoiseReduction,
                 finalChromaNoiseReduction,
                 luminanceGainDownsample = lutLuminanceGainDownsample,
@@ -795,7 +791,6 @@ class PhotoProcessor(
                 result,
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
-                finalSharpening,
                 finalNoiseReduction,
                 finalChromaNoiseReduction
             )

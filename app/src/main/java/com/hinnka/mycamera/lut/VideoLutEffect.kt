@@ -20,7 +20,7 @@ import java.nio.ByteOrder
 @UnstableApi
 class VideoLutEffect(
     @Volatile var lutConfig: LutConfig?,
-    recipeParams: ColorRecipeParams?
+    recipeParams: ColorRecipeParams?,
 ) : GlEffect {
     @Volatile
     var recipeParams: ColorRecipeParams? = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
@@ -664,7 +664,7 @@ private class VideoLutShaderProgram(
                     }
                 }
 
-                if (uSharpening > 0.0) {
+                if (abs(uSharpening) > 0.0001) {
                     vec3 inputColor = texture(uImageTexture, uvCoord).rgb;
                     float inputLuma = getLuma(inputColor);
                     float neighborsLuma = 0.0;
@@ -673,8 +673,12 @@ private class VideoLutShaderProgram(
                     neighborsLuma += getLuma(texture(uImageTexture, uvCoord + vec2(0.0, -uTexelSize.y)).rgb);
                     neighborsLuma += getLuma(texture(uImageTexture, uvCoord + vec2(0.0, uTexelSize.y)).rgb);
                     float blurLuma = neighborsLuma * 0.25;
-                    float detail = inputLuma - blurLuma;
-                    color.rgb += detail * uSharpening * 2.0;
+                    float delta = inputLuma - blurLuma;
+                    float detail = sign(delta) * max(abs(delta) - 0.005, 0.0);
+                    float sharpeningStrength = uSharpening > 0.0
+                        ? uSharpening * 2.0
+                        : uSharpening;
+                    color.rgb += detail * sharpeningStrength;
                 }
 
                 if (uFilmGrain > 0.001) {
@@ -964,7 +968,10 @@ private class VideoLutShaderProgram(
 
         GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uInputColorSpace"), 0) // 默认 sRGB
         GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uChromaticAberration"), 0f)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uSharpening"), 0f)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uSharpening"),
+            currentRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f,
+        )
 
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         checkGlError("glDrawArrays")

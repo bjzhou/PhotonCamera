@@ -498,6 +498,7 @@
     <string name="recipe_param_flash">Flash</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
     <string name="recipe_param_clarity">Clarity</string>
+    <string name="recipe_param_sharpness">Sharpness</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Soft Light</string>
     <string name="recipe_param_hdf">HDF</string>
@@ -546,6 +547,7 @@
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">Color</string>
     <string name="recipe_color_basic">Basic</string>
+    <string name="recipe_panel_advanced">Advanced</string>
     <string name="recipe_color_style">Style</string>
     <string name="recipe_color_grading">Grading</string>
     <string name="recipe_grading_midtones">Midtones</string>

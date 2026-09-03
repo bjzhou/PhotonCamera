@@ -558,10 +558,10 @@ fun LutSynthesisScreen(
         ModalBottomSheet(
             onDismissRequest = { showBakeParamsSheet = false },
             sheetState = sheetState,
-            containerColor = Color.Black.copy(alpha = 0.8f),
+            containerColor = Color.Transparent,
             contentColor = Color.White,
             scrimColor = Color.Transparent,
-            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.3f)) }
+            dragHandle = null,
         ) {
             val paletteState = remember(recipe) {
                 ColorPaletteState(

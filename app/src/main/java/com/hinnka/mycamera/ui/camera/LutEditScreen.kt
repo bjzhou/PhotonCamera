@@ -41,7 +41,7 @@ fun LutEditBottomSheet(
     imageHistogram: ImageHistogram? = null,
     showEffects: Boolean = false,
     editorTarget: LutEditorTarget = LutEditorTarget.CREATIVE_GLOBAL,
-    containerColor: Color = Color.Black.copy(alpha = 0.8f),
+    containerColor: Color = Color.Transparent,
     modifier: Modifier = Modifier
 ) {
     val lutEditViewModel: LutEditViewModel = viewModel()
@@ -107,7 +107,8 @@ fun LutEditBottomSheet(
         sheetState = sheetState,
         containerColor = containerColor,
         modifier = modifier,
-        scrimColor = Color.Transparent
+        scrimColor = Color.Transparent,
+        dragHandle = null,
     ) {
         Column(
             modifier = Modifier
@@ -151,7 +152,7 @@ fun LutEditBottomSheet(
                     )
                 },
                 imageHistogram = imageHistogram,
-                showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL,
+                showLutIntensity = false,
                 currentEffects = editingParams.toEffectParams().takeIf { showEffects },
                 onEffectsChange = if (showEffects) {
                     { effects -> onParamsUpdated(effects.applyTo(editingParams)) }

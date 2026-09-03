@@ -520,6 +520,7 @@ class RealtimeVideoRenderer(
         GLES30.glUniform1f(locations.uToneToeLocation, params.toneToe)
         GLES30.glUniform1f(locations.uToneShoulderLocation, params.toneShoulder)
         GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
+        GLES30.glUniform1f(locations.uSharpeningLocation, params.sharpness.coerceIn(-1f, 1f))
         GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
         GLES30.glUniform1f(
             locations.uFilmGrainSeedLocation,

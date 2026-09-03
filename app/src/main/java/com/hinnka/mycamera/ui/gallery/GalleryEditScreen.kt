@@ -1270,7 +1270,7 @@ fun GalleryEditScreen(
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Surface(
-                    color = Color(0x331A1A1A),
+                    color = Color.Transparent,
                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1312,14 +1312,6 @@ fun GalleryEditScreen(
                                         .padding(start = 4.dp)
                                 )
                             }
-                            Icon(
-                                imageVector = AppIcons.DragHandle,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.42f),
-                                modifier = Modifier
-                                    .align(Alignment.Center)
-                                    .size(width = 32.dp, height = 20.dp)
-                            )
                             Icon(
                                 imageVector = if (areEditControlsHidden) {
                                     AppIcons.ExpandLess
@@ -1703,20 +1695,6 @@ fun GalleryEditScreen(
                                         }
                                     }
                                     SliderSettingItem(
-                                        title = stringResource(R.string.settings_sharpening),
-                                        value = editSharpening,
-                                        valueRange = 0f..1f,
-                                        resetValue = 0f,
-                                        onValueChange = { viewModel.setSharpening(it) },
-                                        onValueChangeFinished = {
-                                            if (isRaw) {
-                                                viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
-                                                    if (success) requestRawPreviewRefresh()
-                                                }
-                                            }
-                                        }
-                                    )
-                                    SliderSettingItem(
                                         title = stringResource(R.string.settings_noise_reduction),
                                         value = editNoiseReduction,
                                         valueRange = DenoiseStrength.valueRange,
@@ -1987,7 +1965,7 @@ fun GalleryEditScreen(
                 showBaselineLutEditSheet = false
                 showRawBaselineLutSelectorSheet = true
             },
-            containerColor = Color(0x151A1A1A)
+            containerColor = Color.Transparent
         )
     }
 

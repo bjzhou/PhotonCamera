@@ -1736,9 +1736,8 @@ fun CameraScreen(
                     .fillMaxWidth()
                     .then(
                         if (isXpan) {
-                            Modifier.fillMaxHeight()
+                            Modifier.fillMaxHeight().padding(bottom = 48.dp)
                         } else if (isVideoMode) {
-                            //val bottomPadding = (maxHeight - 160.dp).coerceIn(16.dp, 40.dp)
                             Modifier.height(maxHeight - 170.dp)
                         } else {
                             Modifier
@@ -1748,99 +1747,59 @@ fun CameraScreen(
                     ),
                 contentAlignment = Alignment.BottomCenter
             ) {
-                Column(
+                val allPresets by viewModel.allPresets.collectAsState()
+                val activePresetId by viewModel.activePresetId.collectAsState()
+                val defaultPresetName = stringResource(R.string.preset_new_preset_default)
+
+                // LUT 选择器 (内嵌 Presets 列表与统一控制，无多余背景遮挡)
+                LutSelector(
+                    availableLuts = viewModel.availableLutList,
+                    currentLutId = currentLutId,
+                    thumbnail = viewModel.previewThumbnail,
+                    onLutSelected = { viewModel.setLut(it) },
+                    lutIntensity = (previewRecipeParamsOverride ?: currentRecipeParams).lutIntensity,
+                    onLutIntensityChange = { newIntensity ->
+                        val newParams = (previewRecipeParamsOverride ?: currentRecipeParams)
+                            .copy(lutIntensity = newIntensity)
+                        previewRecipeParamsOverride = newParams
+                        viewModel.updateLutIntensity(newIntensity)
+                    },
+                    allPresets = if (isProfessionalMode) allPresets else emptyList(),
+                    activePresetId = activePresetId.takeIf { isProfessionalMode },
+                    selectedMode = effectiveLutSelectorMode,
+                    onModeSelected = { viewModel.setLutSelectorMode(it) },
+                    availableFrames = viewModel.availableFrameList,
+                    currentFrameId = viewModel.currentFrameId,
+                    onFrameSelected = { viewModel.setFrame(it) },
+                    onFrameManagementClick = {
+                        activePanel = ActivePanel.NONE
+                        onFrameManagementClick()
+                    },
+                    onPresetSelected = { preset ->
+                        discardTransientLookEdits()
+                        if (presetRequiresPreviewTransition(preset)) {
+                            runPreviewTransition { viewModel.applyPreset(preset) }
+                        } else {
+                            viewModel.applyPreset(preset)
+                        }
+                    },
+                    onCreatePresetClick = {
+                        viewModel.prepareCurrentSettingsPresetDraft(defaultPresetName)
+                        onPresetEditClick(null)
+                    },
+                    onPresetManagementClick = onPresetManagementClick,
+                    onEditClick = {
+                        activePanel = ActivePanel.EDIT
+                    },
+                    onManageClick = { lutId ->
+                        activePanel = ActivePanel.NONE
+                        onFilterManagementClick(lutId)
+                    },
+                    categoryOrder = categoryOrder,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(
-                            if (isXpan) {
-                                Modifier
-                                    .padding(bottom = 48.dp)
-                                    .background(Color.Black)
-                            } else {
-                                Modifier.background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Transparent,
-                                            Color.Black.copy(alpha = 0.2f),
-                                            Color.Black.copy(alpha = 0.6f)
-                                        )
-                                    )
-                                )
-                            }
-                        )
-                        .padding(horizontal = 8.dp)
-                        .padding(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    if (effectiveLutSelectorMode == LutSelectorMode.Style) {
-                        val currentLut = viewModel.availableLutList.find { it.id == currentLutId }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = currentLut?.getName() ?: "",
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f).basicMarquee()
-                            )
-
-                            LutEditButton(
-                                onClick = {
-                                    activePanel = ActivePanel.EDIT
-                                }
-                            )
-                        }
-                    }
-
-                    val allPresets by viewModel.allPresets.collectAsState()
-                    val activePresetId by viewModel.activePresetId.collectAsState()
-                    val defaultPresetName = stringResource(R.string.preset_new_preset_default)
-
-                    // LUT 选择器 (内嵌 Presets 列表)
-                    LutSelector(
-                        availableLuts = viewModel.availableLutList,
-                        currentLutId = currentLutId,
-                        thumbnail = viewModel.previewThumbnail,
-                        onLutSelected = { viewModel.setLut(it) },
-                        allPresets = if (isProfessionalMode) allPresets else emptyList(),
-                        activePresetId = activePresetId.takeIf { isProfessionalMode },
-                        selectedMode = effectiveLutSelectorMode,
-                        onModeSelected = { viewModel.setLutSelectorMode(it) },
-                        availableFrames = viewModel.availableFrameList,
-                        currentFrameId = viewModel.currentFrameId,
-                        onFrameSelected = { viewModel.setFrame(it) },
-                        onFrameManagementClick = {
-                            activePanel = ActivePanel.NONE
-                            onFrameManagementClick()
-                        },
-                        onPresetSelected = { preset ->
-                            discardTransientLookEdits()
-                            if (presetRequiresPreviewTransition(preset)) {
-                                runPreviewTransition { viewModel.applyPreset(preset) }
-                            } else {
-                                viewModel.applyPreset(preset)
-                            }
-                        },
-                        onCreatePresetClick = {
-                            viewModel.prepareCurrentSettingsPresetDraft(defaultPresetName)
-                            onPresetEditClick(null)
-                        },
-                        onPresetManagementClick = onPresetManagementClick,
-                        onEditClick = {
-                            activePanel = ActivePanel.EDIT
-                        },
-                        onManageClick = { lutId ->
-                            activePanel = ActivePanel.NONE
-                            onFilterManagementClick(lutId)
-                        },
-                        categoryOrder = categoryOrder
-                    )
-                }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
             }
         }
 

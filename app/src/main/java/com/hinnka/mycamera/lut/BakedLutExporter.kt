@@ -70,6 +70,7 @@ object BakedLutExporter {
 
     private fun ColorRecipeParams.toBakeableRecipe(): ColorRecipeParams {
         return copy(
+            sharpness = 0f,
             filmGrain = 0f,
             clarity = 0f,
             vignette = 0f,

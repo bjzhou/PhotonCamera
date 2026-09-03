@@ -26,6 +26,7 @@ fun LutIntensitySlider(
     enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
+    val displayPercent = (intensity.coerceIn(0f, 1f) * 100f).toInt()
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -44,16 +45,17 @@ fun LutIntensitySlider(
             )
 
             Text(
-                text = "${(intensity * 100).toInt()}%",
+                text = "$displayPercent%",
                 color = if (enabled) Color.White else Color.Gray,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
                 lineHeight = 14.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             )
         }
 
         CustomSlider(
-            value = intensity,
+            value = intensity.coerceIn(0f, 1f),
             onValueChange = onIntensityChange,
             onDoubleTap = {
                 if (enabled) onIntensityChange(1f)

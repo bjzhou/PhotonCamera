@@ -3837,6 +3837,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private var lutIntensitySaveJob: Job? = null
+
+    fun updateLutIntensity(intensity: Float) {
+        val lutId = currentLutId.value
+        if (lutId == "none") return
+        val current = currentRecipeParams.value
+        val updated = current.copy(lutIntensity = intensity.coerceIn(0f, 1f))
+        lutIntensitySaveJob?.cancel()
+        lutIntensitySaveJob = viewModelScope.launch {
+            delay(200)
+            contentRepository.lutManager.saveColorRecipeParams(lutId, updated)
+        }
+    }
+
     fun setPhotoLut(lutId: String?) {
         val normalizedLutId = lutId ?: "none"
         val shouldApply = state.value.captureMode != CaptureMode.VIDEO ||

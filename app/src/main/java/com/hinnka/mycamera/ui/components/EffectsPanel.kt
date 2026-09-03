@@ -95,6 +95,7 @@ private val effectGroupTabs = listOf(
 fun EffectsPanel(
     currentParams: EffectParams,
     onParamsChange: (EffectParams) -> Unit,
+    excludedEffects: Set<EffectType> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     var selectedGroup by remember {
@@ -109,6 +110,7 @@ fun EffectsPanel(
     val visibleEffects = effectGroups
         .first { (group) -> group == selectedGroup }
         .second
+        .filterNot(excludedEffects::contains)
 
     Column(
         modifier = modifier.fillMaxWidth(),

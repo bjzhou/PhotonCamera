@@ -18,7 +18,6 @@ import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.DenoiseProfileNlmConfig
 import com.hinnka.mycamera.raw.DenoiseProfileShaders
-import com.hinnka.mycamera.raw.RawSharpenPass
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -336,7 +335,6 @@ class LutImageProcessor(context: Context? = null) {
      * @param argbData RGBA 16-bit 格式的像素数据 (ShortBuffer) [width, height, r1, g1, b1, a1, ...]
      * @param lutConfig LUT 配置
      * @param colorRecipeParams 色彩配方参数
-     * @param sharpeningValue 锐化强度
      * @param noiseReductionValue 降噪强度
      * @param chromaNoiseReductionValue 减少杂色强度
      */
@@ -347,7 +345,6 @@ class LutImageProcessor(context: Context? = null) {
         colorSpace: ColorSpace,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
-        sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
         lutMaskType: Int = 0,
@@ -366,8 +363,8 @@ class LutImageProcessor(context: Context? = null) {
         val softLight = effectiveRecipeParams?.softLight ?: 0f
         val redHalation = effectiveRecipeParams?.redHalation ?: 0f
 
-        // 后期处理参数
-        val sharpening: Float = sharpeningValue
+        // 锐度属于色彩配方，在完成 sRGB 调色后统一处理；不读取 RAW/元数据锐化值。
+        val sharpening: Float = effectiveRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
         val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
@@ -440,7 +437,6 @@ class LutImageProcessor(context: Context? = null) {
         colorSpace: ColorSpace,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
-        sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
     ): Bitmap {
@@ -462,7 +458,6 @@ class LutImageProcessor(context: Context? = null) {
                     bitmap = baseBitmap,
                     lutConfig = creativeLayer.lutConfig,
                     colorRecipeParams = creativeLayer.colorRecipeParams,
-                    sharpeningValue = sharpeningValue,
                     noiseReductionValue = noiseReductionValue,
                     chromaNoiseReductionValue = chromaNoiseReductionValue
                 )
@@ -474,7 +469,6 @@ class LutImageProcessor(context: Context? = null) {
                 colorSpace = colorSpace,
                 lutConfig = baselineLayer.lutConfig,
                 colorRecipeParams = baselineLayer.colorRecipeParams,
-                sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
                 chromaNoiseReductionValue = chromaNoiseReductionValue
             )
@@ -485,7 +479,6 @@ class LutImageProcessor(context: Context? = null) {
                 colorSpace = colorSpace,
                 lutConfig = creativeLayer?.lutConfig,
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
-                sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
                 chromaNoiseReductionValue = chromaNoiseReductionValue
             )
@@ -498,7 +491,6 @@ class LutImageProcessor(context: Context? = null) {
      * @param bitmap 输入图片
      * @param lutConfig LUT 配置
      * @param colorRecipeParams 色彩配方参数
-     * @param sharpeningValue 锐化强度
      * @param noiseReductionValue 降噪强度
      * @param chromaNoiseReductionValue 减少杂色强度
      */
@@ -506,7 +498,6 @@ class LutImageProcessor(context: Context? = null) {
         bitmap: Bitmap,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
-        sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
         lutMaskType: Int = 0,
@@ -524,8 +515,8 @@ class LutImageProcessor(context: Context? = null) {
         val softLight = effectiveRecipeParams?.softLight ?: 0f
         val redHalation = effectiveRecipeParams?.redHalation ?: 0f
 
-        // 后期处理参数（仅在软件处理模式下生效）
-        val sharpening: Float = sharpeningValue
+        // 锐度属于色彩配方，在完成 sRGB 调色后统一处理；不读取 RAW/元数据锐化值。
+        val sharpening: Float = effectiveRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
         val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
@@ -599,7 +590,6 @@ class LutImageProcessor(context: Context? = null) {
         bitmap: Bitmap,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
-        sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
     ): Bitmap {
@@ -618,7 +608,6 @@ class LutImageProcessor(context: Context? = null) {
                     bitmap = baseBitmap,
                     lutConfig = creativeLayer.lutConfig,
                     colorRecipeParams = creativeLayer.colorRecipeParams,
-                    sharpeningValue = sharpeningValue,
                     noiseReductionValue = noiseReductionValue,
                     chromaNoiseReductionValue = chromaNoiseReductionValue
                 )
@@ -627,7 +616,6 @@ class LutImageProcessor(context: Context? = null) {
                 bitmap = bitmap,
                 lutConfig = baselineLayer.lutConfig,
                 colorRecipeParams = baselineLayer.colorRecipeParams,
-                sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
                 chromaNoiseReductionValue = chromaNoiseReductionValue
             )
@@ -635,7 +623,6 @@ class LutImageProcessor(context: Context? = null) {
                 bitmap = bitmap,
                 lutConfig = creativeLayer?.lutConfig,
                 colorRecipeParams = creativeLayer?.colorRecipeParams,
-                sharpeningValue = sharpeningValue,
                 noiseReductionValue = noiseReductionValue,
                 chromaNoiseReductionValue = chromaNoiseReductionValue
             )
@@ -651,7 +638,6 @@ class LutImageProcessor(context: Context? = null) {
         bitmap: Bitmap,
         baselineLayer: LutRenderLayer?,
         creativeLayer: LutRenderLayer?,
-        sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
         luminanceGainDownsample: Int = 1,
@@ -660,7 +646,6 @@ class LutImageProcessor(context: Context? = null) {
             bitmap = bitmap,
             baselineLayer = baselineLayer,
             creativeLayer = creativeLayer,
-            sharpeningValue = sharpeningValue,
             noiseReductionValue = noiseReductionValue,
             chromaNoiseReductionValue = chromaNoiseReductionValue,
         )
@@ -1068,7 +1053,7 @@ class LutImageProcessor(context: Context? = null) {
         val postClarityTextureId = if (clarityApplied) clarityOutputTextureId else outputTextureId
         val postClarityFramebufferId = if (clarityApplied) clarityOutputFboId else framebufferId
 
-        val sharpened = sharpening > 0f &&
+        val sharpened = kotlin.math.abs(sharpening) > 0.0001f &&
             renderLutSharpenPass(postClarityTextureId, width, height, sharpening)
         val postSharpenTextureId = if (sharpened) lutSharpenTextureId else postClarityTextureId
         val postSharpenFramebufferId = if (sharpened) lutSharpenFboId else postClarityFramebufferId
@@ -1445,8 +1430,8 @@ class LutImageProcessor(context: Context? = null) {
         if (lutSharpenProgram == 0) {
             lutSharpenProgram = createFragmentProgram(
                 IMAGE_VERTEX_SHADER,
-                RawSharpenPass.FRAGMENT_SHADER,
-                "LutSharpen",
+                SrgbSharpnessShader.FRAGMENT_SHADER,
+                "SrgbSharpness",
             )
         }
     }
@@ -1831,7 +1816,7 @@ class LutImageProcessor(context: Context? = null) {
         height: Int,
         sharpening: Float
     ): Boolean {
-        if (sharpening <= 0f) return false
+        if (kotlin.math.abs(sharpening) <= 0.0001f) return false
         ensureLutSharpenProgram()
         if (lutSharpenProgram == 0 || !setupLutSharpenFramebuffer(width, height)) {
             return false
@@ -1859,11 +1844,11 @@ class LutImageProcessor(context: Context? = null) {
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(lutSharpenProgram, "uRadius"),
-            RawSharpenPass.DEFAULT_RADIUS
+            SrgbSharpnessShader.DEFAULT_RADIUS
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(lutSharpenProgram, "uThreshold"),
-            RawSharpenPass.DEFAULT_THRESHOLD
+            SrgbSharpnessShader.DEFAULT_THRESHOLD
         )
         GLES30.glUniformMatrix4fv(
             GLES30.glGetUniformLocation(lutSharpenProgram, "uMVPMatrix"),

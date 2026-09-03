@@ -276,6 +276,7 @@ class LutSynthesisViewModel(application: Application) : AndroidViewModel(applica
                 // 2. 应用去除空间类后的调色烘焙配方
                 val recipe = _colorRecipe.value
                 val bakeableRecipe = recipe.copy(
+                    sharpness = 0f,
                     filmGrain = 0f,
                     vignette = 0f,
                     flash = 0f,

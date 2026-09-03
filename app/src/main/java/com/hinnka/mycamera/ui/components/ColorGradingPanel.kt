@@ -45,7 +45,6 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
-import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -167,8 +166,12 @@ fun ColorGradingPanel(
         )
 
         Text(
-            text = "${(selected.hue.coerceIn(0f, 1f) * 360f).roundToInt()}° · " +
-                "${(selected.amount.coerceIn(0f, 1f) * 100f).roundToInt()}%",
+            text = String.format(
+                java.util.Locale.getDefault(),
+                "%.1f · %.1f",
+                selected.hue.coerceIn(0f, 1f) * 10f,
+                selected.amount.coerceIn(0f, 1f) * 10f,
+            ),
             color = if (selected.amount > 0.001f) selectedColor else Color.White.copy(alpha = 0.48f),
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
@@ -177,35 +180,39 @@ fun ColorGradingPanel(
 
         GradingSliderRow(
             label = stringResource(R.string.recipe_grading_luminance),
-            value = selected.luminance,
-            valueRange = -1f..1f,
+            value = selected.luminance * 10f,
+            valueRange = -10f..10f,
             defaultValue = 0f,
-            valueText = formatSignedPercent(selected.luminance),
+            valueText = formatSignedValue(selected.luminance * 10f),
             onValueChange = {
                 onParamsChange(
-                    currentParams.withLuminance(selectedRange, it.coerceIn(-1f, 1f))
+                    currentParams.withLuminance(selectedRange, (it / 10f).coerceIn(-1f, 1f))
                 )
             },
         )
 
         GradingSliderRow(
             label = stringResource(R.string.recipe_grading_balance),
-            value = currentParams.gradingBalance,
-            valueRange = -1f..1f,
+            value = currentParams.gradingBalance * 10f,
+            valueRange = -10f..10f,
             defaultValue = 0f,
-            valueText = formatSignedPercent(currentParams.gradingBalance),
+            valueText = formatSignedValue(currentParams.gradingBalance * 10f),
             onValueChange = {
-                onParamsChange(currentParams.copy(gradingBalance = it.coerceIn(-1f, 1f)))
+                onParamsChange(currentParams.copy(gradingBalance = (it / 10f).coerceIn(-1f, 1f)))
             },
         )
         GradingSliderRow(
             label = stringResource(R.string.recipe_grading_blending),
-            value = currentParams.gradingBlending,
-            valueRange = 0f..1f,
-            defaultValue = 0.5f,
-            valueText = "${(currentParams.gradingBlending.coerceIn(0f, 1f) * 100f).roundToInt()}",
+            value = currentParams.gradingBlending * 10f,
+            valueRange = 0f..10f,
+            defaultValue = 5f,
+            valueText = String.format(
+                java.util.Locale.getDefault(),
+                "%.1f",
+                currentParams.gradingBlending.coerceIn(0f, 1f) * 10f,
+            ),
             onValueChange = {
-                onParamsChange(currentParams.copy(gradingBlending = it.coerceIn(0f, 1f)))
+                onParamsChange(currentParams.copy(gradingBlending = (it / 10f).coerceIn(0f, 1f)))
             },
         )
     }
@@ -582,9 +589,8 @@ private fun previewToneColor(
     )
 }
 
-private fun formatSignedPercent(value: Float): String {
-    val percent = (value.coerceIn(-1f, 1f) * 100f).roundToInt()
-    return if (percent > 0) "+$percent" else percent.toString()
+private fun formatSignedValue(value: Float): String {
+    return String.format(java.util.Locale.getDefault(), "%+.1f", value)
 }
 
 private const val GRADING_LUMINANCE_PREVIEW_STRENGTH = 0.17f

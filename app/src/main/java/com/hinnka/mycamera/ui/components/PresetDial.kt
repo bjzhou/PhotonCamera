@@ -31,6 +31,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.ui.camera.ViewfinderTextShadow
 
 /**
  * 拍摄预设面板组件 (取代原先的 PresetDial 拨盘)
@@ -50,7 +51,7 @@ fun PresetsPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 12.dp),
+            .padding(vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // 横向滑动的预设列表
@@ -58,23 +59,23 @@ fun PresetsPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(scrollState)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // “新建预设”卡片
             Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.3f)),
+                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                 modifier = Modifier
-                    .width(80.dp)
-                    .height(80.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    .width(56.dp)
+                    .height(56.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .clickable {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onCreatePreset()
                     }
-                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
@@ -84,16 +85,17 @@ fun PresetsPanel(
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = stringResource(R.string.preset_new),
-                        tint = Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier.size(22.dp)
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = stringResource(R.string.preset_new),
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 11.sp,
+                        color = Color.White,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
                     )
                 }
             }
@@ -102,7 +104,7 @@ fun PresetsPanel(
             allPresets.forEach { preset ->
                 val isSelected = activePresetId == preset.id
                 val presetBorderColor by animateColorAsState(
-                    targetValue = if (isSelected) Color(0xFFFFD700) else Color.White.copy(alpha = 0.15f),
+                    targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.2f),
                     label = "presetBorderColor"
                 )
 
@@ -119,14 +121,14 @@ fun PresetsPanel(
                 }
 
                 Card(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (isSelected) Color(0xFFFFD700).copy(alpha = 0.1f) else Color.Black.copy(alpha = 0.15f)
+                        containerColor = if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent
                     ),
                     modifier = Modifier
-                        .width(80.dp)
-                        .height(80.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                        .width(68.dp)
+                        .height(56.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .combinedClickable(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -137,32 +139,31 @@ fun PresetsPanel(
                                 onManagePresets()
                             }
                         )
-                        .border(1.2.dp, presetBorderColor, RoundedCornerShape(16.dp))
+                        .border(if (isSelected) 1.5.dp else 1.dp, presetBorderColor, RoundedCornerShape(8.dp))
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(8.dp),
-                        verticalArrangement = Arrangement.Center,
+                            .padding(horizontal = 4.dp, vertical = 5.dp),
+                        verticalArrangement = Arrangement.SpaceBetween,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // 预设名
                         Text(
                             text = displayName,
-                            color = if (isSelected) Color(0xFFFFD700) else Color.White,
-                            fontSize = 11.sp,
+                            color = Color.White,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             textAlign = TextAlign.Center,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
                             modifier = Modifier.padding(horizontal = 2.dp).basicMarquee()
                         )
 
-                        Spacer(Modifier.height(8.dp))
-
                         // 包含的特性微小徽章（Film, Lut, DCP等）
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val rawRenderingEngine = RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine)
@@ -195,9 +196,10 @@ private fun FeatureBadge(text: String) {
     ) {
         Text(
             text = text,
-            color = Color.White.copy(alpha = 0.6f),
+            color = Color.White,
             fontSize = 6.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
         )
     }
 }

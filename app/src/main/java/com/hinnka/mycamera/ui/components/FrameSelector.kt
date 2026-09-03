@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
+import com.hinnka.mycamera.ui.camera.ViewfinderTextShadow
 import com.hinnka.mycamera.ui.theme.AccentOrange
 
 /**
@@ -49,11 +51,10 @@ fun FrameSelector(
     }
 
     LazyRow(
-        modifier = modifier
-            .fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         state = listState,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp)
     ) {
         // 无边框选项
         item(key = "frame:none") {
@@ -87,30 +88,45 @@ private fun FrameItem(
     isCustom: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val backgroundColor = if (isSelected) {
+        Color.White.copy(alpha = 0.2f)
+    } else {
+        Color.Transparent
+    }
+
+    val borderColor = if (isSelected) {
+        Color.White
+    } else {
+        Color.White.copy(alpha = 0.2f)
+    }
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .width(64.dp)
+            .width(56.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(backgroundColor)
+            .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(8.dp)
+            )
             .clickable { onClick() }
+            .padding(horizontal = 4.dp, vertical = 5.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(56.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(
-                    if (isSelected) AccentOrange.copy(alpha = 0.3f)
-                    else Color.White.copy(alpha = 0.1f)
-                )
-                .then(
-                    if (isSelected) Modifier.border(2.dp, AccentOrange, RoundedCornerShape(8.dp))
-                    else Modifier
-                ),
+                .size(42.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(if (isSelected) Color.White.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.08f)),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = name.take(2).uppercase(),
-                color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
-                fontSize = 16.sp
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
             )
 
             if (isCustom) {
@@ -121,14 +137,14 @@ private fun FrameItem(
                             color = Color(0xFF4CAF50),
                             shape = RoundedCornerShape(bottomEnd = 4.dp)
                         )
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .padding(horizontal = 3.dp, vertical = 1.dp)
                 ) {
                     Text(
                         text = stringResource(R.string.custom_tag),
                         color = Color.White,
-                        fontSize = 8.sp,
+                        fontSize = 7.sp,
                         fontWeight = FontWeight.Bold,
-                        lineHeight = 8.sp
+                        lineHeight = 7.sp
                     )
                 }
             }
@@ -138,11 +154,14 @@ private fun FrameItem(
         
         Text(
             text = name,
-            color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
-            fontSize = 11.sp,
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
+            textAlign = TextAlign.Center,
+            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
+            modifier = Modifier.fillMaxWidth().basicMarquee()
         )
     }
 }
@@ -181,7 +200,8 @@ fun FrameControlPanel(
                 Text(
                     text = stringResource(R.string.show_app_branding),
                     color = Color.White,
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
                 )
                 
                 Switch(

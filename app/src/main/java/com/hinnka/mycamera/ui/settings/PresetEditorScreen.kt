@@ -336,9 +336,9 @@ fun PresetEditorScreen(
             if (showEditSheet) {
                 ModalBottomSheet(
                     onDismissRequest = { showEditSheet = false },
-                    containerColor = Color.Black.copy(alpha = 0.86f),
+                    containerColor = Color.Transparent,
                     scrimColor = Color.Transparent,
-                    dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
+                    dragHandle = null,
                 ) {
                     ColorRecipePanel(
                         currentParams = colorRecipe,

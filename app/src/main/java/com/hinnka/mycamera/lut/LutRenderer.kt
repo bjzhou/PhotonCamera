@@ -443,6 +443,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var clarity: Float = 0f // -1.0 ~ +1.0
 
     @Volatile
+    var sharpness: Float = 0f // -1.0 ~ +1.0，sRGB 锐度
+
+    @Volatile
     var bloom: Float = 0f // 0.0 ~ 1.0
 
     @Volatile
@@ -903,6 +906,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uToneToeLocation, params.toneToe)
             GLES30.glUniform1f(locations.uToneShoulderLocation, params.toneShoulder)
             GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
+            GLES30.glUniform1f(locations.uSharpeningLocation, params.sharpness.coerceIn(-1f, 1f))
             GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
             GLES30.glUniform1f(
                 locations.uFilmGrainSeedLocation,
@@ -3583,6 +3587,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             flash = flash,
             bleachBypass = bleachBypass,
             clarity = clarity,
+            sharpness = sharpness,
             bloom = bloom,
             softLight = softLight,
             chromaticAberration = chromaticAberration,
@@ -3677,6 +3682,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         flash = params.flash
         bleachBypass = params.bleachBypass
         clarity = params.clarity
+        sharpness = params.sharpness
         bloom = params.bloom
         softLight = params.softLight
         chromaticAberration = params.chromaticAberration

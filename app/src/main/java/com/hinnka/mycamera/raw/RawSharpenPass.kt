@@ -276,57 +276,6 @@ internal class RawSharpenPass(
         const val DEFAULT_NOISE_LIMIT = DEFAULT_THRESHOLD + 128f / 16384f
         const val DEFAULT_DARK_LIMIT = 0.08f
 
-        /** Single-target shader retained for the bitmap LUT renderer. */
-        val FRAGMENT_SHADER = """
-            #version 300 es
-            precision highp float;
-
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-
-            uniform sampler2D uInputTexture;
-            uniform vec2 uTexelSize;
-            uniform float uSharpening;
-            uniform float uRadius;
-            uniform float uThreshold;
-
-            float luminance(vec3 color) {
-                return dot(color, vec3(0.2126, 0.7152, 0.0722));
-            }
-
-            void main() {
-                vec3 center = texture(uInputTexture, vTexCoord).rgb;
-                if (uSharpening <= 0.0) {
-                    fragColor = vec4(center, 1.0);
-                    return;
-                }
-
-                float r = max(uRadius, 0.001);
-                float sigma = max(r * 0.5, 0.001);
-                float twoSigma2 = 2.0 * sigma * sigma;
-                vec3 blur = vec3(0.0);
-                float weightSum = 0.0;
-
-                for (int y = -2; y <= 2; y++) {
-                    for (int x = -2; x <= 2; x++) {
-                        vec2 offset = vec2(float(x), float(y));
-                        float dist2 = dot(offset, offset);
-                        float weight = exp(-dist2 / twoSigma2);
-                        blur += texture(uInputTexture, vTexCoord + offset * uTexelSize * r).rgb * weight;
-                        weightSum += weight;
-                    }
-                }
-                blur /= max(weightSum, 1e-5);
-
-                float centerLuma = luminance(center);
-                float blurLuma = luminance(blur);
-                float delta = centerLuma - blurLuma;
-                float detail = sign(delta) * max(abs(delta) - uThreshold, 0.0);
-                vec3 result = center + center * (detail / max(centerLuma, 1e-5)) * uSharpening;
-                fragColor = vec4(clamp(result, 0.0, 1.0), 1.0);
-            }
-        """.trimIndent()
-
         val VERTICAL_BLUR_FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
