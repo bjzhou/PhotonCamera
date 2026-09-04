@@ -17,9 +17,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -53,6 +56,7 @@ fun ZoomControlBarVerticel(
     onZoomStopClick: (Float) -> Unit,
     onLensSwitch: (String) -> Unit,
     onFilterClick: () -> Unit,
+    onFilterButtonBoundsChanged: (Rect) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val displayMode by viewModel.zoomDisplayMode.collectAsState()
@@ -233,7 +237,11 @@ fun ZoomControlBarVerticel(
             // 底部滤镜按钮
             IconButton(
                 onClick = onFilterClick,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier
+                    .size(32.dp)
+                    .onGloballyPositioned { coordinates ->
+                        onFilterButtonBoundsChanged(coordinates.boundsInRoot())
+                    }
             ) {
                 Icon(
                     imageVector = AppIcons.AutoAwesome,

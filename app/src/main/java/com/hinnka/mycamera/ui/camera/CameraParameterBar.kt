@@ -31,7 +31,7 @@ fun CameraParameterBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, top = 12.dp, end = 16.dp),
+            .padding(start = 16.dp, top = 8.dp, end = 16.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {

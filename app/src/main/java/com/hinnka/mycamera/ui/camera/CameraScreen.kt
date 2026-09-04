@@ -274,6 +274,8 @@ fun CameraScreen(
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
     var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
+    var filterButtonBounds by remember { mutableStateOf<Rect?>(null) }
+    var captureButtonBounds by remember { mutableStateOf<Rect?>(null) }
     var parameterRulerBounds by remember { mutableStateOf<Rect?>(null) }
     var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
     var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
@@ -918,6 +920,9 @@ fun CameraScreen(
                     onFilterClick = {
                         activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
                     },
+                    onFilterButtonBoundsChanged = { bounds ->
+                        filterButtonBounds = bounds
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .onGloballyPositioned { coordinates ->
@@ -1431,7 +1436,10 @@ fun CameraScreen(
                             onFilterClick = {
                                 activePanel =
                                     if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                            }
+                            },
+                            onFilterButtonBoundsChanged = { bounds ->
+                                filterButtonBounds = bounds
+                            },
                         )
                     }
                     Box(
@@ -1463,6 +1471,9 @@ fun CameraScreen(
                 multipleExposureState = multipleExposureState,
                 onGalleryThumbnailBoundsChanged = { bounds ->
                     galleryThumbnailBounds = bounds
+                },
+                onCaptureButtonBoundsChanged = { bounds ->
+                    captureButtonBounds = bounds
                 },
                 onSwitchCameraClick = ::switchCameraWithPreviewTransition,
                 onCaptureModeSelected = ::setShootingModeWithPreviewTransition,
@@ -1674,6 +1685,22 @@ fun CameraScreen(
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding
         )
 
+        val filterPanelTop = if (!isXpan && !isVideoMode) topBarHeight else 0.dp
+        val fallbackFilterPanelBottom = when {
+            isXpan -> maxHeight - 48.dp
+            isVideoMode -> maxHeight - 170.dp
+            else -> topBarHeight + cardHeight - 48.dp
+        }
+        val filterPanelAnchorY = if (isXpan) {
+            captureButtonBounds?.top
+        } else {
+            filterButtonBounds?.bottom
+        }
+        val filterPanelBottom = filterPanelAnchorY?.let { anchorY ->
+            val parentTop = cameraScreenBounds?.top ?: 0f
+            with(density) { (anchorY - parentTop).toDp() }
+        }?.coerceIn(filterPanelTop, maxHeight) ?: fallbackFilterPanelBottom
+
         AnimatedVisibility(
             activePanel == ActivePanel.FILTERS,
             enter = if (isXpan) {slideInVertically(initialOffsetY = { it })} else fadeIn(),
@@ -1682,17 +1709,8 @@ fun CameraScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(
-                        if (isXpan) {
-                            Modifier.fillMaxHeight().padding(bottom = 48.dp)
-                        } else if (isVideoMode) {
-                            Modifier.height(maxHeight - 170.dp)
-                        } else {
-                            Modifier
-                                .padding(top = topBarHeight)
-                                .height(cardHeight - 48.dp)
-                        }
-                    ),
+                    .height(filterPanelBottom)
+                    .padding(top = filterPanelTop),
                 contentAlignment = Alignment.BottomCenter
             ) {
                 val allPresets by viewModel.allPresets.collectAsState()
@@ -1750,7 +1768,7 @@ fun CameraScreen(
                     categoryOrder = categoryOrder,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 10.dp)
+                        .padding(start = 6.dp, top = 10.dp, end = 6.dp)
                 )
             }
         }
@@ -1884,6 +1902,7 @@ private fun Controls(
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
+    onCaptureButtonBoundsChanged: (Rect) -> Unit,
     onSwitchCameraClick: () -> Unit,
     onCaptureModeSelected: (CameraShootingMode) -> Unit,
     modeSwitchEnabled: Boolean,
@@ -1943,7 +1962,10 @@ private fun Controls(
                     customImagePath = captureButtonImagePath,
                     onTap = onCaptureTap,
                     onLongPressStart = { viewModel.startContinuousCapture() },
-                    onLongPressEnd = { viewModel.stopContinuousCapture() }
+                    onLongPressEnd = { viewModel.stopContinuousCapture() },
+                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                        onCaptureButtonBoundsChanged(coordinates.boundsInRoot())
+                    },
                 )
 
                 if (state.videoRecordingState.isRecording) {
