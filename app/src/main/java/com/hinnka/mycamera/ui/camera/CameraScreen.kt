@@ -114,11 +114,14 @@ private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
 private const val DefaultIso = 100f
 private const val DefaultAwbTemperature = 5000f
 private const val DefaultFocusDistance = 0f
+private val ProfessionalModeColor = Color(0xFFFFA36C)
 private val CameraTopBarBaseTopPadding = 32.dp
 private val CameraTopBarBaseHeight = 80.dp
-private val VideoViewfinderRaisedOffset = 16.dp
-private val OpenGateVideoViewfinderRaisedOffset = 56.dp
+private val VideoTopBarBaseHeight = 80.dp
 private val VideoTopBarLoweredOffset = 36.dp
+private val XpanViewfinderInnerBorder = 4.dp
+private val XpanSideControlReservedWidth = 56.dp
+private val XpanBottomControlClearance = 64.dp
 
 private fun formatVirtualApertureFStop(aperture: Float): String {
     val rounded = aperture.roundToInt()
@@ -316,6 +319,7 @@ fun CameraScreen(
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showVideoParameterRuler by remember { mutableStateOf(false) }
+    var showPhotoParameterRuler by remember { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
     val burstCapturingCount = viewModel.burstImageCount
 
@@ -345,8 +349,8 @@ fun CameraScreen(
         }
     }
 
-    LaunchedEffect(useRaw, state.captureMode) {
-        if (!useRaw || state.captureMode != CaptureMode.PHOTO) {
+    LaunchedEffect(state.useRaw, state.captureMode) {
+        if (!state.useRaw || state.captureMode != CaptureMode.PHOTO) {
             rawCaptureTapLocked = false
         }
     }
@@ -574,7 +578,7 @@ fun CameraScreen(
         }
         if (
             targetCaptureMode == state.captureMode &&
-            (targetUseRaw == null || targetUseRaw == useRaw)
+            (targetUseRaw == null || targetUseRaw == state.useRaw)
         ) {
             return
         }
@@ -583,12 +587,7 @@ fun CameraScreen(
             if (targetCaptureMode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
                 viewModel.setAspectRatio(AspectRatio.RATIO_4_3)
             }
-            if (targetCaptureMode != state.captureMode) {
-                viewModel.setCaptureMode(targetCaptureMode)
-            }
-            if (targetUseRaw != null && targetUseRaw != useRaw) {
-                viewModel.setUseRaw(targetUseRaw)
-            }
+            viewModel.setShootingMode(targetCaptureMode, targetUseRaw)
         }
     }
 
@@ -670,10 +669,9 @@ fun CameraScreen(
 
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.captureMode) {
-        if (state.captureMode != CaptureMode.PHOTO) {
-            showVideoParameterRuler = false
-        }
+    LaunchedEffect(state.captureMode, state.useRaw) {
+        showVideoParameterRuler = false
+        showPhotoParameterRuler = false
     }
 
     LaunchedEffect(viewModel.showGhostPermissions) {
@@ -798,13 +796,25 @@ fun CameraScreen(
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
+        val isProfessionalMode = isPhotoStyleMode && state.useRaw && state.isRawSupported
+        val isPhotoParameterRulerVisible = isProfessionalMode || showPhotoParameterRuler
+        val onPhotoParameterClick: (CameraParameter) -> Unit = { parameter ->
+            val wasSelected = selectedParameter == parameter
+            selectedParameter = parameter
+            if (!isProfessionalMode) {
+                showPhotoParameterRuler = !wasSelected || !showPhotoParameterRuler
+            }
+        }
         LaunchedEffect(isPhotoStyleMode) {
             if (!isPhotoStyleMode) {
                 parameterRulerBounds = null
             }
         }
-        val videoAspectRatio =
-            state.videoConfig.aspectRatio.getPortraitAspectRatio(state.videoCapabilities.openGatePortraitAspectRatio)
+        LaunchedEffect(isPhotoParameterRulerVisible) {
+            if (!isPhotoParameterRulerVisible) {
+                parameterRulerBounds = null
+            }
+        }
         val isOpenGateVideo =
             isVideoMode && state.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
 
@@ -812,39 +822,52 @@ fun CameraScreen(
         val width = with(density) { constraints.maxWidth.toDp() }
         val height = with(density) { constraints.maxHeight.toDp() }
         val topSafePadding = cameraTopSafePadding()
-        val topBarHeight = CameraTopBarBaseHeight + topSafePadding
+        val topBarOffset = 0.dp
+        val topBarBaseHeight = if (isVideoMode) {
+            VideoTopBarBaseHeight
+        } else {
+            CameraTopBarBaseHeight
+        }
+        val topBarHeight = topBarBaseHeight + topSafePadding
+        val topBarBottom = topBarHeight + topBarOffset - 4.dp
         val navigationBarHeight = with(density) {
             WindowInsets.navigationBars.getBottom(this).toDp()
         }
-        val cardWidth = if (isXpan) {
-            (height - topSafePadding - 280.dp) * 24 / 65 + 8.dp
+        val contentHeight = (height - navigationBarHeight).coerceAtLeast(0.dp)
+        val viewfinderFramePadding = if (isXpan) XpanViewfinderInnerBorder * 2 else 0.dp
+        val sideControlSpace = if (isXpan) XpanSideControlReservedWidth else 0.dp
+        val maxCardWidth = (width - sideControlSpace * 2)
+            .coerceAtLeast(viewfinderFramePadding)
+        val maxCardHeight = if (isXpan) {
+            (contentHeight - topBarBottom - XpanBottomControlClearance)
+                .coerceAtLeast(viewfinderFramePadding)
         } else {
-            width
+            contentHeight
         }
-        val cardHeight = if (isXpan) {
-            height - topSafePadding - 272.dp
-        } else if (isVideoMode) {
-            width / videoAspectRatio
+        val maxViewfinderContentWidth = (maxCardWidth - viewfinderFramePadding)
+            .coerceAtLeast(0.dp)
+        val maxViewfinderContentHeight = (maxCardHeight - viewfinderFramePadding)
+            .coerceAtLeast(0.dp)
+        val viewfinderContentWidth = minOf(
+            maxViewfinderContentWidth,
+            maxViewfinderContentHeight * previewAspectRatio
+        )
+        val cardWidth = viewfinderContentWidth + viewfinderFramePadding
+        val cardHeight = viewfinderContentWidth / previewAspectRatio + viewfinderFramePadding
+        val xpanSideWidth = ((width - cardWidth) / 2).coerceAtLeast(0.dp)
+        val placeViewfinderBelowTopBar = contentHeight - cardHeight >= topBarBottom
+        val viewfinderAlignment = if (placeViewfinderBelowTopBar) {
+            Alignment.TopCenter
         } else {
-            val standardHeight = width * 4 / 3
-            val bottomMinHeight = 188.dp // parameterBar (44.dp) + controls (136.dp min) + 8.dp buffer
-            val maxCardHeight = (height - topBarHeight - bottomMinHeight - navigationBarHeight).coerceAtLeast(300.dp)
-            standardHeight.coerceAtMost(maxCardHeight)
+            Alignment.Center
         }
-        val videoContentHeight = (height - navigationBarHeight).coerceAtLeast(0.dp)
-        val requestedVideoViewfinderOffset = if (isOpenGateVideo) {
-            OpenGateVideoViewfinderRaisedOffset
+        val viewfinderOffset = if (placeViewfinderBelowTopBar) topBarBottom else 0.dp
+        val viewfinderTop = if (placeViewfinderBelowTopBar) {
+            topBarBottom
         } else {
-            VideoViewfinderRaisedOffset
+            ((contentHeight - cardHeight) / 2).coerceAtLeast(0.dp)
         }
-        val videoViewfinderOffset = if (
-            isVideoMode &&
-            (videoContentHeight - cardHeight) / 2 >= requestedVideoViewfinderOffset
-        ) {
-            -requestedVideoViewfinderOffset
-        } else {
-            0.dp
-        }
+        val viewfinderTopOverlayPadding = (topBarBottom - viewfinderTop).coerceAtLeast(0.dp)
 
         val topBar = @Composable {
             CameraTopBar(
@@ -878,13 +901,7 @@ fun CameraScreen(
                 },
                 modifier = Modifier
                     .padding(top = topSafePadding)
-                    .offset(
-                        y = if (isVideoMode && !isOpenGateVideo) {
-                            VideoTopBarLoweredOffset
-                        } else {
-                            0.dp
-                        }
-                    )
+                    .offset(y = topBarOffset)
             )
         }
 
@@ -1000,10 +1017,12 @@ fun CameraScreen(
             )
         }
 
-        val parameterBar = @Composable { onParameterClick: (CameraParameter) -> Unit ->
+        val parameterBar = @Composable {
+                activeParameter: CameraParameter?,
+                onParameterClick: (CameraParameter) -> Unit ->
             CameraParameterBar(
                 state = state,
-                selectedParameter = selectedParameter,
+                selectedParameter = activeParameter,
                 onParameterClick = onParameterClick
             )
         }
@@ -1014,14 +1033,12 @@ fun CameraScreen(
                     .animateContentSize(alignment = Alignment.Center)
                     .width(cardWidth)
                     .height(cardHeight),
-                shape = RoundedCornerShape(if (isXpan) 4.dp else 0.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color.Black
-                )
+                shape = RoundedCornerShape(if (isXpan) XpanViewfinderInnerBorder else 0.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Black)
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(if (isXpan) 4.dp else 0.dp)
+                        .padding(if (isXpan) XpanViewfinderInnerBorder else 0.dp)
                         .fillMaxSize()
                         .background(Color.Black)
                         .onGloballyPositioned { coordinates ->
@@ -1245,7 +1262,8 @@ fun CameraScreen(
                         Column(
                             modifier = Modifier
                                 .padding(
-                                    top = CameraParameterValuesOverlayHeight + 8.dp,
+                                    top = viewfinderTopOverlayPadding +
+                                        CameraParameterValuesOverlayHeight + 8.dp,
                                     end = 12.dp
                                 )
                                 .align(Alignment.TopEnd),
@@ -1311,7 +1329,8 @@ fun CameraScreen(
                                 modifier = Modifier
                                     .padding(
                                         start = 8.dp,
-                                        top = CameraParameterValuesOverlayHeight + 8.dp
+                                        top = viewfinderTopOverlayPadding +
+                                            CameraParameterValuesOverlayHeight + 8.dp
                                     )
                                     .size(80.dp, 40.dp)
                                     .align(Alignment.TopStart)
@@ -1364,39 +1383,22 @@ fun CameraScreen(
                             )
                         }
 
-                        // Zoom bar overlaid on preview for photo-style modes.
-                        if (isPhotoStyleMode) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(bottom = CameraParameterRulerHeight),
-                                contentAlignment = Alignment.BottomCenter
-                            ) {
-                                zoomBar()
-                            }
-                        }
                     }
 
-                    CornerOverlay(
-                        modifier = Modifier.fillMaxSize(),
-                        radius = if (isXpan) 4.dp else 0.dp,
-                        color = Color.Black
-                    )
+                    if (isXpan) {
+                        CornerOverlay(
+                            modifier = Modifier.fillMaxSize(),
+                            radius = XpanViewfinderInnerBorder,
+                            color = Color.Black
+                        )
+                    }
 
                     CameraParameterValuesOverlay(
                         state = state,
-                        modifier = Modifier.align(Alignment.TopCenter)
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = viewfinderTopOverlayPadding)
                     )
-
-                    if (isPhotoStyleMode) {
-                        parameterRuler(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .onGloballyPositioned { coordinates ->
-                                    parameterRulerBounds = coordinates.boundsInRoot()
-                                }
-                        )
-                    }
 
                     LutNameOverlay(
                         state = lutNameOverlayState,
@@ -1415,7 +1417,8 @@ fun CameraScreen(
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
-                            .width((width - cardWidth) / 2)
+                            .width(xpanSideWidth),
+                        contentAlignment = Alignment.Center
                     ) {
                         ZoomControlBarVerticel(
                             viewModel = viewModel,
@@ -1426,27 +1429,23 @@ fun CameraScreen(
                             onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                             onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                             onFilterClick = {
-                                // Toggle Filter Panel
                                 activePanel =
                                     if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                            },
-                            modifier = Modifier
-                                .align(Alignment.Center)
+                            }
                         )
                     }
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
-                            .width((width - cardWidth) / 2)
+                            .width(xpanSideWidth),
+                        contentAlignment = Alignment.Center
                     ) {
                         CameraParameterBarVerticel(
                             state = state,
-                            selectedParameter = selectedParameter,
-                            onParameterClick = { param ->
-                                selectedParameter = param
+                            selectedParameter = selectedParameter.takeIf {
+                                isPhotoParameterRulerVisible
                             },
-                            modifier = Modifier
-                                .align(Alignment.Center)
+                            onParameterClick = onPhotoParameterClick,
                         )
                     }
                 }
@@ -1460,7 +1459,6 @@ fun CameraScreen(
                 viewModel = viewModel,
                 galleryViewModel = galleryViewModel,
                 latestPhoto = latestPhoto,
-                useRaw = useRaw && state.isRawSupported,
                 useMultipleExposure = useMultipleExposure,
                 multipleExposureState = multipleExposureState,
                 onGalleryThumbnailBoundsChanged = { bounds ->
@@ -1468,8 +1466,10 @@ fun CameraScreen(
                 },
                 onSwitchCameraClick = ::switchCameraWithPreviewTransition,
                 onCaptureModeSelected = ::setShootingModeWithPreviewTransition,
+                modeSwitchEnabled = !previewTransitionActive,
                 onCaptureTap = {
-                    val shouldDebounceRawCapture = useRaw && state.captureMode == CaptureMode.PHOTO
+                    val shouldDebounceRawCapture =
+                        state.useRaw && state.captureMode == CaptureMode.PHOTO
                     if (shouldDebounceRawCapture) {
                         if (rawCaptureTapLocked) {
                             return@Controls
@@ -1496,99 +1496,77 @@ fun CameraScreen(
             )
         }
 
-        if (isVideoMode) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .paint(backgroundPainter, contentScale = ContentScale.Crop)
+                .navigationBarsPadding(),
+        ) {
+            // The viewfinder is always the bottom layer. Its selected aspect ratio is fitted
+            // to the full available area before camera controls are overlaid.
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .paint(backgroundPainter, contentScale = ContentScale.Crop)
-                    .navigationBarsPadding(),
+                    .fillMaxWidth()
+                    .height(cardHeight)
+                    .align(viewfinderAlignment)
+                    .offset(y = viewfinderOffset)
+                    .onGloballyPositioned { coordinates ->
+                        viewfinderAreaBounds = coordinates.boundsInRoot()
+                    },
+                contentAlignment = Alignment.Center
             ) {
-                // Keep the viewfinder centered on compact screens; use spare height on taller screens.
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(cardHeight)
-                        .align(Alignment.Center)
-                        .offset(y = videoViewfinderOffset)
-                        .onGloballyPositioned { coordinates ->
-                            viewfinderAreaBounds = coordinates.boundsInRoot()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    viewfinder()
-                }
+                viewfinder()
+            }
 
-                // UI Overlays
-                topBar()
+            topBar()
 
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        zoomBar()
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    zoomBar()
+                    if (isVideoMode) {
                         AnimatedVisibility(visible = showVideoParameterRuler) {
                             parameterRuler(Modifier)
                         }
-                        parameterBar { param ->
-                            val wasSelected = selectedParameter == param
-                            selectedParameter = param
+                        parameterBar(
+                            selectedParameter.takeIf { showVideoParameterRuler }
+                        ) { parameter ->
+                            val wasSelected = selectedParameter == parameter
+                            selectedParameter = parameter
                             showVideoParameterRuler = if (wasSelected) {
                                 !showVideoParameterRuler
                             } else {
                                 true
                             }
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        controls(Modifier
-                            .fillMaxWidth()
-                            .wrapContentHeight())
-                    }
-                }
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .paint(backgroundPainter, contentScale = ContentScale.Crop)
-                    .navigationBarsPadding(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                topBar()
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(cardHeight)
-                        .onGloballyPositioned { coordinates ->
-                            viewfinderAreaBounds = coordinates.boundsInRoot()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    viewfinder()
-                }
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f)),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-
-
-                    AnimatedVisibility(
-                        visible = !isXpan && isPhotoStyleMode,
-                    ) {
-                        parameterBar { param ->
-                            selectedParameter = param
+                    } else {
+                        AnimatedVisibility(visible = isPhotoParameterRulerVisible) {
+                            parameterRuler(
+                                Modifier
+                                    .then(
+                                        if (isXpan) Modifier.width(viewfinderContentWidth)
+                                        else Modifier
+                                    )
+                                    .onGloballyPositioned { coordinates ->
+                                        parameterRulerBounds = coordinates.boundsInRoot()
+                                    }
+                            )
+                        }
+                        AnimatedVisibility(visible = !isXpan) {
+                            parameterBar(
+                                selectedParameter.takeIf { isPhotoParameterRulerVisible },
+                                onPhotoParameterClick,
+                            )
                         }
                     }
-
-                    Box(
-                        modifier = Modifier
+                    Spacer(modifier = Modifier.height(8.dp))
+                    controls(
+                        Modifier
                             .fillMaxWidth()
-                            .then(if (isXpan) Modifier.height(144.dp) else Modifier.weight(1f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        controls(Modifier.fillMaxSize())
-                    }
+                            .then(
+                                if (isXpan) Modifier.height(144.dp)
+                                else Modifier.wrapContentHeight()
+                            )
+                    )
                 }
             }
         }
@@ -1903,12 +1881,12 @@ private fun Controls(
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
     latestPhoto: com.hinnka.mycamera.gallery.MediaData?,
-    useRaw: Boolean,
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
     onSwitchCameraClick: () -> Unit,
     onCaptureModeSelected: (CameraShootingMode) -> Unit,
+    modeSwitchEnabled: Boolean,
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier.fillMaxSize()
@@ -1950,6 +1928,7 @@ private fun Controls(
 
                 CaptureButton(
                     captureMode = state.captureMode,
+                    isProfessionalMode = state.useRaw && state.isRawSupported,
                     isCapturing = state.isCapturing,
                     isVideoRecording = state.videoRecordingState.isRecording,
                     isVideoProcessing = state.videoRecordingState.isProcessing,
@@ -2036,11 +2015,12 @@ private fun Controls(
             CaptureModeSwitcher(
                 shootingMode = when {
                     state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
-                    useRaw -> CameraShootingMode.PROFESSIONAL
+                    state.useRaw && state.isRawSupported -> CameraShootingMode.PROFESSIONAL
                     else -> CameraShootingMode.PHOTO
                 },
                 professionalModeEnabled = state.isRawSupported,
-                enabled = !state.videoRecordingState.isRecording &&
+                enabled = modeSwitchEnabled &&
+                    !state.videoRecordingState.isRecording &&
                     !state.videoRecordingState.isProcessing,
                 onModeSelected = onCaptureModeSelected
             )
@@ -2055,6 +2035,7 @@ private fun Controls(
 @Composable
 fun CaptureButton(
     captureMode: CaptureMode,
+    isProfessionalMode: Boolean,
     isCapturing: Boolean,
     isVideoRecording: Boolean,
     isVideoProcessing: Boolean,
@@ -2168,8 +2149,7 @@ fun CaptureButton(
                 if (isPaused) Color.White.copy(alpha = 0.8f)
                 else Color.Red.copy(alpha = pulseAlpha)
             }
-            captureMode == CaptureMode.VIDEO -> Color.White.copy(alpha = 0.32f)
-            else -> Color.Transparent
+            else -> Color.White.copy(alpha = 0.32f)
         }
 
         Box(
@@ -2208,26 +2188,34 @@ fun CaptureButton(
             targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 8.dp else 36.dp,
             label = "centerCorner"
         )
-        val defaultCenterBrush = if (captureMode == CaptureMode.VIDEO) {
-            Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFFFF6668),
-                    Color(0xFFE4383C)
+        val defaultCenterBackground = when {
+            captureMode == CaptureMode.VIDEO -> {
+                Modifier.background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFFFF6668),
+                            Color(0xFFE4383C)
+                        )
+                    )
                 )
-            )
-        } else {
-            Brush.verticalGradient(
-                colors = listOf(
-                    Color.White,
-                    Color(0xFFD7D7D7)
+            }
+            isProfessionalMode -> Modifier.background(ProfessionalModeColor)
+            else -> {
+                Modifier.background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White,
+                            Color(0xFFD7D7D7)
+                        )
+                    )
                 )
-            )
+            }
         }
         val useCustomAppearance = captureMode != CaptureMode.VIDEO
         val centerBackgroundModifier = when {
             useCustomAppearance && customStyle == CaptureButtonStyle.COLOR ->
                 Modifier.background(Color(customColor))
-            else -> Modifier.background(defaultCenterBrush)
+            else -> defaultCenterBackground
         }
 
         Box(
@@ -2295,7 +2283,7 @@ private fun CaptureModeSwitcher(
         )
         val selectedBackground by animateColorAsState(
             targetValue = if (shootingMode == CameraShootingMode.PROFESSIONAL) {
-                Color(0xFFFFA36C)
+                ProfessionalModeColor
             } else {
                 Color.White
             },
@@ -2474,35 +2462,32 @@ fun Modifier.autoRotate(
     }
 }
 
-
 @Composable
-fun CornerOverlay(
+private fun CornerOverlay(
     modifier: Modifier = Modifier,
     radius: Dp,
     color: Color = Color.Black
 ) {
     Canvas(modifier = modifier) {
-        val path = Path().apply {
-            // 创建一个全屏矩形
+        val frame = Path().apply {
             addRect(Rect(0f, 0f, size.width, size.height))
-            // 减去中间的圆角矩形
-            val roundedRect = Path().apply {
-                addRoundRect(
-                    RoundRect(
-                        left = 0f,
-                        top = 0f,
-                        right = size.width,
-                        bottom = size.height,
-                        cornerRadius = CornerRadius(radius.toPx(), radius.toPx()),
-                    )
-                )
-            }
-            // 关键：计算差集 (全屏 - 圆角矩形 = 四个角)
-            op(this, roundedRect, PathOperation.Difference)
         }
-        drawPath(path, color)
+        val roundedContent = Path().apply {
+            addRoundRect(
+                RoundRect(
+                    left = 0f,
+                    top = 0f,
+                    right = size.width,
+                    bottom = size.height,
+                    cornerRadius = CornerRadius(radius.toPx(), radius.toPx())
+                )
+            )
+        }
+        frame.op(frame, roundedContent, PathOperation.Difference)
+        drawPath(frame, color)
     }
 }
+
 
 private fun Context.findActivity(): Activity? {
     var context = this

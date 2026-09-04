@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -15,11 +14,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +40,13 @@ enum class CameraParameter {
 }
 
 internal val CameraParameterRulerHeight = 40.dp
+private val ParameterRulerElementSize = 18.dp
+private val ParameterRulerNormalTickHeight = 10.dp
+private val ParameterRulerVerticalPadding = 4.dp
+private val ParameterRulerAutoButtonOffset =
+    CameraParameterRulerHeight / 2 -
+        ParameterRulerVerticalPadding -
+        ParameterRulerElementSize / 2
 
 /**
  * Parameter ruler component for adjusting camera parameters
@@ -71,6 +74,7 @@ fun ParameterRuler(
     val currentValueState by rememberUpdatedState(currentValue)
     val resetValueState by rememberUpdatedState(resetValue)
     var selectedValue by remember(parameter) { mutableStateOf(currentValue) }
+    var isDragging by remember(parameter) { mutableStateOf(false) }
     val isAdjustableState by rememberUpdatedState(isAdjustable)
     val scaleValues = remember(parameter, minValue, maxValue) {
         getScaleValues(parameter, minValue, maxValue)
@@ -97,7 +101,8 @@ fun ParameterRuler(
                     enabled = isAutoModeToggleEnabled,
                     modifier = Modifier
                         .padding(start = 8.dp)
-                        .size(25.dp),
+                        .offset(y = ParameterRulerAutoButtonOffset)
+                        .size(ParameterRulerElementSize),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (!isAdjustable) yellow else Color.Gray.copy(alpha = 0.5f),
                         contentColor = if (!isAdjustable) Color.Black else Color.White,
@@ -109,7 +114,7 @@ fun ParameterRuler(
                 ) {
                     Text(
                         text = "A",
-                        fontSize = 12.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -129,7 +134,7 @@ fun ParameterRuler(
                     .weight(1f)
                     .fillMaxHeight()
                     .padding(horizontal = 16.dp)
-                    .pointerInput(minValue, maxValue) {
+                    .pointerInput(parameter, minValue, maxValue) {
                         detectTapGestures(
                             onDoubleTap = {
                                 val value = resetValueState
@@ -153,20 +158,32 @@ fun ParameterRuler(
                             }
                         )
                     }
-                    .pointerInput(minValue, maxValue) {
-                        detectDragGestures { change, _ ->
-                            if (isAdjustableState) {
-                                change.consume()
-                                val width = size.width
-                                val stepWidth = width / (scaleValues.size - 1).coerceAtLeast(1)
-                                val index =
-                                    (change.position.x / stepWidth).roundToInt().coerceIn(0, scaleValues.lastIndex)
-                                selectedValue = scaleValues[index]
-                                if (selectedValue != currentValueState) {
-                                    onValueChange(selectedValue)
+                    .pointerInput(parameter, minValue, maxValue) {
+                        detectDragGestures(
+                            onDragStart = {
+                                isDragging = isAdjustableState
+                            },
+                            onDragEnd = {
+                                isDragging = false
+                            },
+                            onDragCancel = {
+                                isDragging = false
+                            },
+                            onDrag = { change, _ ->
+                                if (isAdjustableState) {
+                                    change.consume()
+                                    val width = size.width
+                                    val stepWidth = width / (scaleValues.size - 1).coerceAtLeast(1)
+                                    val index = (change.position.x / stepWidth)
+                                        .roundToInt()
+                                        .coerceIn(0, scaleValues.lastIndex)
+                                    selectedValue = scaleValues[index]
+                                    if (selectedValue != currentValueState) {
+                                        onValueChange(selectedValue)
+                                    }
                                 }
                             }
-                        }
+                        )
                     }
             ) {
                 // Scale marks
@@ -174,7 +191,8 @@ fun ParameterRuler(
                     parameter = parameter,
                     minValue = minValue,
                     maxValue = maxValue,
-                    currentValue = selectedValue
+                    currentValue = selectedValue,
+                    showCurrentValue = isDragging,
                 )
             }
         }
@@ -192,13 +210,14 @@ private fun HyperfocalFocusButton(
         onClick = onToggle,
         modifier = Modifier
             .padding(start = 6.dp)
+            .offset(y = ParameterRulerAutoButtonOffset)
             .width(58.dp)
-            .height(34.dp),
+            .height(ParameterRulerElementSize),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (enabled) yellow else Color.Gray.copy(alpha = 0.45f),
             contentColor = if (enabled) Color.Black else Color.White
         ),
-        shape = RoundedCornerShape(17.dp),
+        shape = RoundedCornerShape(ParameterRulerElementSize / 2),
         contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
     ) {
         Column(
@@ -207,16 +226,16 @@ private fun HyperfocalFocusButton(
         ) {
             Text(
                 text = stringResource(R.string.camera_hyperfocal_label),
-                fontSize = 9.sp,
-                lineHeight = 9.sp,
+                fontSize = 8.sp,
+                lineHeight = 8.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1
             )
             if (enabled && distanceMeters > 0f) {
                 Text(
                     text = formatHyperfocalDistance(distanceMeters),
-                    fontSize = 8.sp,
-                    lineHeight = 8.sp,
+                    fontSize = 7.sp,
+                    lineHeight = 7.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
@@ -245,41 +264,46 @@ private fun RulerScale(
     parameter: CameraParameter,
     minValue: Float,
     maxValue: Float,
-    currentValue: Float
+    currentValue: Float,
+    showCurrentValue: Boolean,
 ) {
     val scaleValues = getScaleValues(parameter, minValue, maxValue)
     val yellow = Color(0xFFFFD700)
     val textMeasurer = rememberTextMeasurer()
 
-    Canvas(modifier = Modifier.fillMaxSize().padding(vertical = 4.dp)) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(vertical = ParameterRulerVerticalPadding)
+    ) {
         val width = size.width
         val height = size.height
         val stepCount = scaleValues.size
         
         if (stepCount <= 1) return@Canvas
         
-        // Calculate step width
         val stepWidth = width / (stepCount - 1)
-        
-        // Find current value position
-        val currentPosition = findValuePosition(currentValue, scaleValues, stepWidth)
-        
-        // Draw each scale value
+        val matchingIndex = scaleValues.indexOfFirst {
+            isSameParameterValue(it, currentValue, parameter)
+        }
+        val selectedIndex = if (matchingIndex >= 0) {
+            matchingIndex
+        } else {
+            scaleValues.indices.minByOrNull { index ->
+                abs(scaleValues[index] - currentValue)
+            } ?: 0
+        }
+
         scaleValues.forEachIndexed { index, value ->
             val x = index * stepWidth
-            
-            val isCurrent = isSameParameterValue(value, currentValue, parameter)
-            
-            // Determine if we should show label
-            val shouldShowLabel = isCurrent || index == 0 || index == scaleValues.lastIndex || value == 0f
-            
-            // Draw label
-            if (shouldShowLabel) {
+            val isCurrent = index == selectedIndex
+
+            if (showCurrentValue && isCurrent) {
                 val text = formatParameterValue(parameter, value)
                 val textStyle = TextStyle(
-                    fontSize = if (isCurrent) 12.sp else 10.sp,
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isCurrent) yellow else Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = yellow,
                     textAlign = TextAlign.Center,
                     shadow = ViewfinderTextShadow
                 )
@@ -294,20 +318,25 @@ private fun RulerScale(
                     softWrap = false,
                     maxLines = 1
                 )
-                
-                // Draw text centered on the tick mark
+                val textX = (x - textLayoutResult.size.width / 2f).coerceIn(
+                    minimumValue = 0f,
+                    maximumValue = (width - textLayoutResult.size.width).coerceAtLeast(0f),
+                )
                 drawText(
                     textLayoutResult = textLayoutResult,
                     topLeft = Offset(
-                        x = x - textLayoutResult.size.width / 2f,
+                        x = textX,
                         y = 0f
                     )
                 )
             }
-            
-            // Draw tick mark
-            val tickHeight = if (isCurrent) 13.dp.toPx() else 9.dp.toPx()
-            val tickWidth = if (isCurrent) 2.dp.toPx() else 1.dp.toPx()
+
+            val tickHeight = if (isCurrent) {
+                ParameterRulerElementSize.toPx()
+            } else {
+                ParameterRulerNormalTickHeight.toPx()
+            }
+            val tickWidth = if (isCurrent) 1.5.dp.toPx() else 1.dp.toPx()
             val tickColor = if (isCurrent) yellow else Color.White.copy(alpha = 0.6f)
             
             drawRect(
@@ -316,27 +345,7 @@ private fun RulerScale(
                 size = androidx.compose.ui.geometry.Size(tickWidth, tickHeight)
             )
         }
-        
-        // Draw indicator if current value is between two scale values
-        if (!isValueOnScale(currentValue, scaleValues, parameter)) {
-            drawCurrentValueIndicator(
-                currentPosition = currentPosition,
-                height = height,
-                yellow = yellow
-            )
-        }
     }
-}
-
-/**
- * Check if current value matches any scale value
- */
-private fun isValueOnScale(
-    currentValue: Float,
-    scaleValues: List<Float>,
-    parameter: CameraParameter
-): Boolean {
-    return scaleValues.any { isSameParameterValue(it, currentValue, parameter) }
 }
 
 private fun isSameParameterValue(
@@ -353,65 +362,6 @@ private fun isSameParameterValue(
     return abs(value - currentValue) < tolerance
 }
 
-/**
- * Find the position (x coordinate) of the current value
- */
-private fun findValuePosition(
-    currentValue: Float,
-    scaleValues: List<Float>,
-    stepWidth: Float
-): Float {
-    if (scaleValues.isEmpty()) return 0f
-    if (scaleValues.size == 1) return 0f
-    
-    // Find the two scale values that bracket the current value
-    for (i in 0 until scaleValues.size - 1) {
-        val v1 = scaleValues[i]
-        val v2 = scaleValues[i + 1]
-        
-        if (currentValue in v1..v2 || currentValue in v2..v1) {
-            // Linear interpolation
-            val ratio = if (v2 != v1) {
-                (currentValue - v1) / (v2 - v1)
-            } else {
-                0f
-            }
-            return i * stepWidth + ratio * stepWidth
-        }
-    }
-    
-    // If not found, clamp to edges
-    return when {
-        currentValue < scaleValues.first() -> 0f
-        currentValue > scaleValues.last() -> (scaleValues.size - 1) * stepWidth
-        else -> 0f
-    }
-}
-
-/**
- * Draw a triangle indicator at the current value position
- */
-private fun DrawScope.drawCurrentValueIndicator(
-    currentPosition: Float,
-    height: Float,
-    yellow: Color
-) {
-    val trianglePath = Path().apply {
-        val triangleHeight = 8.dp.toPx()
-        val triangleWidth = 6.dp.toPx()
-        val y = height - 13.dp.toPx() - 2.dp.toPx() // Position above the tallest tick
-        
-        moveTo(currentPosition, y)
-        lineTo(currentPosition - triangleWidth / 2f, y - triangleHeight)
-        lineTo(currentPosition + triangleWidth / 2f, y - triangleHeight)
-        close()
-    }
-    
-    drawPath(
-        path = trianglePath,
-        color = yellow
-    )
-}
 
 /**
  * Get scale values for the parameter

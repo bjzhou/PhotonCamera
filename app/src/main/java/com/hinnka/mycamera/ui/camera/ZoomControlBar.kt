@@ -166,7 +166,7 @@ fun ZoomControlBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(8.dp)
+            .padding(horizontal = 8.dp)
             .height(32.dp)
             .pointerInput(isCameraReady, minZoom, maxZoom, zoomStops) {
                 if (!isCameraReady) return@pointerInput

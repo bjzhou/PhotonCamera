@@ -67,8 +67,8 @@ private val LutPanelAccent = Color(0xFFFFD700)
 private val LutPanelSurface = Color.Black.copy(alpha = 0.15f)
 internal val LutPanelOptionSize = 64.dp
 internal val LutPanelOptionShape = RoundedCornerShape(8.dp)
-internal val LutPanelOptionSurface = Color.Black.copy(alpha = 0.18f)
-internal val LutPanelOptionSelectedSurface = Color.White.copy(alpha = 0.2f)
+internal val LutPanelOptionSurface = Color.Black.copy(alpha = 0.2f)
+internal val LutPanelOptionSelectedSurface = Color.White.copy(alpha = 0.3f)
 internal val LutPanelOptionBorder = Color.White.copy(alpha = 0.2f)
 internal val LutPanelOptionSelectedBorder = Color.White
 

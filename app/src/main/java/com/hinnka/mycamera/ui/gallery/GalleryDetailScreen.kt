@@ -1890,9 +1890,7 @@ private fun GalleryCircleActionButton(
         onClick = onClick,
         enabled = isInteractive,
         shape = CircleShape,
-        backgroundColor = GalleryToolbarButton,
-        highlightBorderWidth = 0.5.dp,
-        highlightGlowWidth = 1.5.dp
+        backgroundColor = GalleryToolbarButton
     ) {
         if (isLoading) {
             CircularProgressIndicator(
@@ -1967,9 +1965,7 @@ private fun GalleryMoreActionCard(
             onClick = action.onClick,
             enabled = isInteractive,
             shape = CircleShape,
-            backgroundColor = GalleryToolbarButton,
-            highlightBorderWidth = 0.5.dp,
-            highlightGlowWidth = 1.5.dp
+            backgroundColor = GalleryToolbarButton
         ) {
             if (action.isLoading) {
                 CircularProgressIndicator(

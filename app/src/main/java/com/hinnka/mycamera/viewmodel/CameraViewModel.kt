@@ -414,6 +414,7 @@ internal fun resolveLutIdForCaptureMode(
 }
 
 private data class CameraFeatureUpdate(
+    val captureMode: SettingValue<CaptureMode>? = null,
     val lutId: SettingValue<String?>? = null,
     val colorRecipe: SettingValue<ColorRecipeParams>? = null,
     val effects: SettingValue<EffectParams>? = null,
@@ -671,6 +672,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var presetApplyGeneration = 0L
     private var lutLoadJob: Job? = null
     private var lutLoadGeneration = 0L
+    private var shootingModeSwitchJob: Job? = null
 
     fun prepareCurrentSettingsPresetDraft(name: String): com.hinnka.mycamera.model.CameraPreset {
         return createPresetFromCurrentSettings(
@@ -827,7 +829,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private suspend fun applyCameraFeatureUpdate(update: CameraFeatureUpdate) {
+    private suspend fun applyCameraFeatureUpdate(
+        update: CameraFeatureUpdate,
+        reconfigureCameraIfNeeded: Boolean = true,
+    ) {
         val prefs = userPreferencesRepository.userPreferences.first()
         var desiredUseRaw = prefs.useRaw
         var desiredUseJpgMax = prefs.useJpgMax
@@ -875,6 +880,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawMaxOutputScale = prefs.rawMaxOutputScale,
         )
         val currentState = state.value
+        val targetCaptureMode = update.captureMode?.value ?: currentState.captureMode
+        val captureModeWillChange = targetCaptureMode != currentState.captureMode
         val persistLutInVideoSlot = currentState.captureMode == CaptureMode.VIDEO &&
             prefs.separateVideoLutEnabled && update.lutId != null
         val targetAspectRatio = update.aspectRatio?.value
@@ -916,13 +923,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 enabled = desiredUseRaw,
                 // This transaction already performs the required reopen below. Avoid a
                 // duplicate restart, but still let same-value calls repair a stale output.
-                reconfigureCaptureOutputIfNeeded = !needsCameraReopen
+                reconfigureCaptureOutputIfNeeded =
+                    reconfigureCameraIfNeeded &&
+                        !needsCameraReopen &&
+                        !captureModeWillChange
             )
         }
         if (update.useJpgMax != null || update.useRawMax != null ||
             desiredMultiFrameOutputScale != currentState.multiFrameOutputScale
         ) {
             cameraController.setMultiFrameOutputScale(desiredMultiFrameOutputScale)
+        }
+
+        if (captureModeWillChange) {
+            cameraController.setCaptureMode(targetCaptureMode)
+            resolveLutIdForMode(prefs, targetCaptureMode)?.let(::applyLut)
+            currentSurfaceTexture = null
+            cameraController.closeCamera()
         }
 
         update.frameId?.let {
@@ -955,6 +972,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         userPreferencesRepository.saveCameraFeaturePreferences(
             CameraFeaturePreferencesUpdate(
+                captureMode = update.captureMode?.let { PreferenceUpdateValue(it.value) },
+                videoLogProfile = update.captureMode
+                    ?.takeIf {
+                        it.value != CaptureMode.VIDEO &&
+                            prefs.videoLogProfile != VideoLogProfile.OFF
+                    }
+                    ?.let { PreferenceUpdateValue(VideoLogProfile.OFF) },
                 lutId = if (persistLutInVideoSlot) {
                     null
                 } else {
@@ -1044,7 +1068,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             userPreferencesRepository.saveVideoLutConfig(update.lutId.value ?: "none")
         }
 
-        if (needsCameraReopen) {
+        if (reconfigureCameraIfNeeded && needsCameraReopen && !captureModeWillChange) {
             reopenCamera()
         }
     }
@@ -3475,20 +3499,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setCaptureMode(mode: CaptureMode) {
-        if (state.value.videoRecordingState.isRecording && mode != state.value.captureMode) return
-        val shouldDisableVideoLog = mode != CaptureMode.VIDEO &&
-            state.value.videoConfig.logProfile != VideoLogProfile.OFF
-        cameraController.setCaptureMode(mode)
-        resolveLutIdForMode(userPreferences.value, mode)?.let {
-            applyLut(it)
+        setShootingMode(mode, useRaw = null)
+    }
+
+    /**
+     * Applies the three-way shooting mode selection as one ordered operation.
+     *
+     * RAW is updated before leaving video mode so the public camera state never passes through
+     * the other photo mode (VIDEO -> PROFESSIONAL -> PHOTO, for example). The capture-mode
+     * change then owns the single camera restart required by the operation.
+     */
+    fun setShootingMode(mode: CaptureMode, useRaw: Boolean?) {
+        if (state.value.videoRecordingState.isRecording ||
+            state.value.videoRecordingState.isProcessing
+        ) {
+            return
         }
-        currentSurfaceTexture = null
-        cameraController.closeCamera()
-        viewModelScope.launch {
-            userPreferencesRepository.saveCaptureMode(mode)
-            if (shouldDisableVideoLog) {
-                userPreferencesRepository.saveVideoLogProfile(VideoLogProfile.OFF)
-            }
+
+        shootingModeSwitchJob?.cancel()
+        val rawNeedsUpdate = useRaw != null &&
+            (state.value.useRaw != useRaw || this.useRaw.value != useRaw)
+        if (state.value.captureMode == mode && !rawNeedsUpdate) return
+
+        shootingModeSwitchJob = viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(
+                    captureMode = SettingValue(mode),
+                    useRaw = useRaw?.let(::SettingValue),
+                )
+            )
         }
     }
 
