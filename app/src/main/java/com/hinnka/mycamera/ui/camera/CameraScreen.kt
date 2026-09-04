@@ -1698,7 +1698,7 @@ fun CameraScreen(
         }
         val filterPanelBottom = filterPanelAnchorY?.let { anchorY ->
             val parentTop = cameraScreenBounds?.top ?: 0f
-            with(density) { (anchorY - parentTop).toDp() }
+            with(density) { (anchorY - parentTop).toDp() - 8.dp }
         }?.coerceIn(filterPanelTop, maxHeight) ?: fallbackFilterPanelBottom
 
         AnimatedVisibility(
