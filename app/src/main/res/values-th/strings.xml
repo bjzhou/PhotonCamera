@@ -298,7 +298,7 @@
     <string name="recipe_param_soft_light">แสงนุ่ม</string>
     <string name="recipe_param_hdf">HDF</string>
     <string name="recipe_param_halation">แสงเรืองรอง (Halation)</string>
-    <string name="recipe_param_chromatic_aberration">การกระจายตัว (CA)</string>
+    <string name="recipe_param_chromatic_aberration">การกระจายตัว</string>
     <string name="recipe_param_noise">เสียงรบกวน</string>
     <string name="recipe_param_low_res">พิกเซลต่ำ</string>
     <string name="recipe_param_lut_intensity">LUT</string>

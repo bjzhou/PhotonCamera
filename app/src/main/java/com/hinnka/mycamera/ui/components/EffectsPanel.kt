@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.RecipeParam
 
@@ -19,8 +18,7 @@ enum class EffectType(
     SOFT_LIGHT(RecipeParam.SOFT_LIGHT),
     HALATION(RecipeParam.HALATION),
     CHROMATIC_ABERRATION(RecipeParam.CHROMATIC_ABERRATION),
-    NOISE(RecipeParam.NOISE),
-    LOW_RES(RecipeParam.LOW_RES);
+    NOISE(RecipeParam.NOISE);
 
     val defaultValue: Float
         get() = recipeParam.defaultValue
@@ -36,7 +34,6 @@ enum class EffectType(
             HALATION -> params.halation
             CHROMATIC_ABERRATION -> params.chromaticAberration
             NOISE -> params.noise
-            LOW_RES -> params.lowRes
         }
     }
 
@@ -52,41 +49,9 @@ enum class EffectType(
             HALATION -> params.copy(halation = clamped)
             CHROMATIC_ABERRATION -> params.copy(chromaticAberration = clamped)
             NOISE -> params.copy(noise = clamped)
-            LOW_RES -> params.copy(lowRes = clamped)
         }
     }
 }
-
-private enum class EffectGroup {
-    LIGHT,
-    ATMOSPHERE,
-    TEXTURE,
-}
-
-private val effectGroups = listOf(
-    EffectGroup.LIGHT to listOf(
-        EffectType.FLASH,
-        EffectType.BLOOM,
-        EffectType.SOFT_LIGHT,
-    ),
-    EffectGroup.ATMOSPHERE to listOf(
-        EffectType.VIGNETTE,
-        EffectType.HALATION,
-        EffectType.CHROMATIC_ABERRATION,
-    ),
-    EffectGroup.TEXTURE to listOf(
-        EffectType.CLARITY,
-        EffectType.FILM_GRAIN,
-        EffectType.NOISE,
-        EffectType.LOW_RES,
-    ),
-)
-
-private val effectGroupTabs = listOf(
-    EffectGroup.LIGHT to R.string.effects_group_light,
-    EffectGroup.ATMOSPHERE to R.string.effects_group_optics,
-    EffectGroup.TEXTURE to R.string.effects_group_texture,
-)
 
 /**
  * 物理画面效果内容，由统一编辑面板作为“效果”参数组承载。
@@ -98,30 +63,12 @@ fun EffectsPanel(
     excludedEffects: Set<EffectType> = emptySet(),
     modifier: Modifier = Modifier
 ) {
-    var selectedGroup by remember {
-        mutableStateOf(
-            effectGroups.firstOrNull { (_, effects) ->
-                effects.any { effect ->
-                    effect.getValue(currentParams) != effect.defaultValue
-                }
-            }?.first ?: EffectGroup.LIGHT
-        )
-    }
-    val visibleEffects = effectGroups
-        .first { (group) -> group == selectedGroup }
-        .second
-        .filterNot(excludedEffects::contains)
+    val visibleEffects = EffectType.entries.filterNot(excludedEffects::contains)
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        RecipeSectionTabs(
-            tabs = effectGroupTabs,
-            selectedTab = selectedGroup,
-            onTabSelected = { selectedGroup = it },
-        )
-
         visibleEffects.forEach { effect ->
             ColorRecipeSlider(
                 param = effect.recipeParam,

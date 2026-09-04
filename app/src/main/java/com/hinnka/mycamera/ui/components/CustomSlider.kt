@@ -46,6 +46,7 @@ fun CustomSlider(
     onValueChange: (Float) -> Unit,
     onDoubleTap: (() -> Unit)? = null,
     onValueChangeFinished: (() -> Unit)? = null,
+    onDragStateChange: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
@@ -60,6 +61,7 @@ fun CustomSlider(
     val currentOnValueChange by rememberUpdatedState(onValueChange)
     val currentOnDoubleTap by rememberUpdatedState(onDoubleTap)
     val currentOnValueChangeFinished by rememberUpdatedState(onValueChangeFinished)
+    val currentOnDragStateChange by rememberUpdatedState(onDragStateChange)
 
     val density = LocalDensity.current
     val thumbRadiusPx = with(density) { thumbRadius.toPx() }
@@ -85,9 +87,20 @@ fun CustomSlider(
                     enabled = enabled,
                     key1 = valueRange,
                     key2 = thumbRadiusPx,
-                    onDragStart = { isDragging = true },
-                    onDragEnd = { isDragging = false; currentOnValueChangeFinished?.invoke() },
-                    onDragCancel = { isDragging = false; currentOnValueChangeFinished?.invoke() }
+                    onDragStart = {
+                        isDragging = true
+                        currentOnDragStateChange?.invoke(true)
+                    },
+                    onDragEnd = {
+                        isDragging = false
+                        currentOnDragStateChange?.invoke(false)
+                        currentOnValueChangeFinished?.invoke()
+                    },
+                    onDragCancel = {
+                        isDragging = false
+                        currentOnDragStateChange?.invoke(false)
+                        currentOnValueChangeFinished?.invoke()
+                    }
                 ) { positionX ->
                     val trackWidth = size.width - thumbRadiusPx * 2
                     val trackStart = thumbRadiusPx

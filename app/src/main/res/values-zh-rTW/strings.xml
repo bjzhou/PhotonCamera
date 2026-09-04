@@ -470,7 +470,7 @@
     <string name="recipe_param_soft_light">柔光</string>
     <string name="recipe_param_hdf">HDF</string>
     <string name="recipe_param_halation">光暈</string>
-    <string name="recipe_param_chromatic_aberration">色散(CA)</string>
+    <string name="recipe_param_chromatic_aberration">色散</string>
     <string name="recipe_param_noise">噪點</string>
     <string name="recipe_param_low_res">低像素</string>
     <string name="recipe_param_lut_intensity">LUT強度</string>

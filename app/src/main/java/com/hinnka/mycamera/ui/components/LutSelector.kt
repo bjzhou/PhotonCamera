@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
 import android.graphics.Bitmap
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -26,7 +27,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,7 +47,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.hinnka.mycamera.ui.icons.AppIcons
-import kotlin.math.roundToInt
 
 private sealed class LutCategoryTab {
     data object Favorite : LutCategoryTab()
@@ -64,6 +63,14 @@ private fun LutCategoryTab.stableKey(): String = when (this) {
 }
 
 private const val NONE_LUT_ITEM_KEY = "__photon_lut_selector_none__"
+private val LutPanelAccent = Color(0xFFFFD700)
+private val LutPanelSurface = Color.Black.copy(alpha = 0.15f)
+internal val LutPanelOptionSize = 64.dp
+internal val LutPanelOptionShape = RoundedCornerShape(8.dp)
+internal val LutPanelOptionSurface = Color.Black.copy(alpha = 0.18f)
+internal val LutPanelOptionSelectedSurface = Color.White.copy(alpha = 0.2f)
+internal val LutPanelOptionBorder = Color.White.copy(alpha = 0.2f)
+internal val LutPanelOptionSelectedBorder = Color.White
 
 /**
  * LUT 面板右上角的编辑入口。相机页与跨应用 LUT 面板共享同一套样式。
@@ -73,11 +80,12 @@ fun LutEditButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val shape = RoundedCornerShape(12.dp)
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = 0.15f))
-            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .clip(shape)
+            .background(LutPanelSurface)
+            .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -110,8 +118,8 @@ private fun LutPanelIconButton(
         modifier = modifier
             .size(26.dp)
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.15f))
-            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+            .background(LutPanelSurface)
+            .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -129,11 +137,12 @@ private fun LutPanelNewPresetButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val shape = RoundedCornerShape(12.dp)
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = 0.15f))
-            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .clip(shape)
+            .background(LutPanelSurface)
+            .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -166,8 +175,6 @@ fun LutSelector(
     currentLutId: String?,
     thumbnail: Bitmap?,
     onLutSelected: (String?) -> Unit,
-    lutIntensity: Float? = null,
-    onLutIntensityChange: ((Float) -> Unit)? = null,
     // 预设相关参数 (添加默认值以支持向后兼容)
     allPresets: List<CameraPreset> = emptyList(),
     presetModeEnabled: Boolean = allPresets.isNotEmpty(),
@@ -291,13 +298,14 @@ fun LutSelector(
     CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)) {
         Column(
             modifier = modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // 顶栏第 1 行：当前项名称（居左）+ 操作按钮（编辑 / 新建）与设置图标（居右）
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                    .heightIn(min = 28.dp)
+                    .padding(horizontal = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -412,8 +420,8 @@ fun LutSelector(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     LutSelectorModeTab(
@@ -440,148 +448,103 @@ fun LutSelector(
 
             when (actualMode) {
                 LutSelectorMode.Style -> {
-                // 分类选择器 (小芯片样式)
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp)
-                ) {
-                    items(categoryTabs, key = { it.stableKey() }) { category ->
-                        val isSelected = selectedCategory == category
-                        val categoryName = when (category) {
-                            LutCategoryTab.Favorite -> favoriteText
-                            LutCategoryTab.BuiltIn -> builtInText
-                            LutCategoryTab.Uncategorized -> uncategorizedText
-                            is LutCategoryTab.Category -> category.name
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // 分类使用白色文字保证取景画面上的可读性，选中项以金色区分。
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            items(categoryTabs, key = { it.stableKey() }) { category ->
+                                val isSelected = selectedCategory == category
+                                val categoryName = when (category) {
+                                    LutCategoryTab.Favorite -> favoriteText
+                                    LutCategoryTab.BuiltIn -> builtInText
+                                    LutCategoryTab.Uncategorized -> uncategorizedText
+                                    is LutCategoryTab.Category -> category.name
+                                }
+
+                                Text(
+                                    text = categoryName,
+                                    color = if (isSelected) LutPanelAccent else Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                    style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
+                                    modifier = Modifier
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) {
+                                            selectedCategory = category
+                                        }
+                                        .padding(horizontal = 9.dp, vertical = 3.dp)
+                                )
+                            }
                         }
 
-                        Text(
-                            text = categoryName,
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent)
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isSelected) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.15f),
-                                    shape = CircleShape
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            state = scrollState
+                        ) {
+                            // LUT 列表
+                            items(filteredLuts, key = { it.id }) { lut ->
+                                var lastManageClickTime by remember { mutableLongStateOf(0L) }
+                                LutItem(
+                                    id = lut.id,
+                                    name = lut.getName(),
+                                    previewBitmap = thumbnail,
+                                    isSelected = activeLutId == lut.id,
+                                    isVip = lut.isVip,
+                                    isCustom = !lut.isBuiltIn,
+                                    onClick = {
+                                        if (currentLutId == lut.id) {
+                                            onEditClick?.invoke()
+                                        } else {
+                                            onLutSelected(lut.id)
+                                        }
+                                    },
+                                    onManageClick = if (onManageClick != null) {
+                                        {
+                                            val currentTime = System.currentTimeMillis()
+                                            if (currentTime - lastManageClickTime > 1000) {
+                                                lastManageClickTime = currentTime
+                                                onManageClick(lut.id)
+                                            }
+                                        }
+                                    } else null
                                 )
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    selectedCategory = category
-                                }
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
+                            }
+                        }
                     }
                 }
-
-                // 滤镜强度滑块（显示在选择的滤镜上方）
-                if (activeLutId != null && activeLutId != "none" && lutIntensity != null && onLutIntensityChange != null) {
-                    Row(
+                LutSelectorMode.Frame -> {
+                    FrameSelector(
+                        availableFrames = availableFrames,
+                        currentFrameId = currentFrameId,
+                        onFrameSelected = requireNotNull(onFrameSelected),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(24.dp)
-                            .padding(horizontal = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.filter_intensity),
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium,
-                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
-                        )
-                        CustomSlider(
-                            value = lutIntensity.coerceIn(0f, 1f),
-                            onValueChange = onLutIntensityChange,
-                            onDoubleTap = { onLutIntensityChange(1f) },
-                            valueRange = 0f..1f,
-                            activeTrackColor = Color.White,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.2f),
-                            thumbColor = Color.White,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(18.dp)
-                        )
-                        Text(
-                            text = "${(lutIntensity.coerceIn(0f, 1f) * 100).roundToInt()}%",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
-                        )
-                    }
+                            .padding(vertical = 2.dp)
+                    )
                 }
-
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp),
-                    state = scrollState
-                ) {
-                    // LUT 列表
-                    items(filteredLuts, key = { it.id }) { lut ->
-                        var lastManageClickTime by remember { mutableLongStateOf(0L) }
-                        LutItem(
-                            id = lut.id,
-                            name = lut.getName(),
-                            previewBitmap = thumbnail,
-                            isSelected = activeLutId == lut.id,
-                            isVip = lut.isVip,
-                            isCustom = !lut.isBuiltIn,
-                            onClick = {
-                                if (currentLutId == lut.id) {
-                                    onEditClick?.invoke()
-                                } else {
-                                    onLutSelected(lut.id)
-                                }
-                            },
-                            onManageClick = if (onManageClick != null) {
-                                {
-                                    val currentTime = System.currentTimeMillis()
-                                    if (currentTime - lastManageClickTime > 1000) {
-                                        lastManageClickTime = currentTime
-                                        onManageClick(lut.id)
-                                    }
-                                }
-                            } else null
-                        )
-                    }
+                LutSelectorMode.Presets -> {
+                    // 预设列表
+                    PresetsPanel(
+                        activePresetId = activePresetId,
+                        allPresets = allPresets,
+                        onPresetSelected = onPresetSelected,
+                        onManagePresets = onPresetManagementClick,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
-            }
-            LutSelectorMode.Frame -> {
-                FrameSelector(
-                    availableFrames = availableFrames,
-                    currentFrameId = currentFrameId,
-                    onFrameSelected = requireNotNull(onFrameSelected),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp)
-                )
-            }
-            LutSelectorMode.Presets -> {
-                // 预设列表
-                PresetsPanel(
-                    activePresetId = activePresetId,
-                    allPresets = allPresets,
-                    onPresetSelected = onPresetSelected,
-                    onCreatePreset = onCreatePresetClick,
-                    onManagePresets = onPresetManagementClick,
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
         }
     }
-}
 }
 
 @Composable
@@ -591,14 +554,15 @@ private fun LutSelectorModeTab(
     onClick: () -> Unit,
     badgeText: String? = null
 ) {
+    val shape = RoundedCornerShape(12.dp)
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (isSelected) Color.White.copy(alpha = 0.18f) else Color.Transparent)
+            .clip(shape)
+            .background(if (isSelected) LutPanelAccent.copy(alpha = 0.12f) else LutPanelSurface)
             .border(
                 width = 1.dp,
-                color = if (isSelected) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.15f),
-                shape = RoundedCornerShape(14.dp)
+                color = if (isSelected) LutPanelAccent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.12f),
+                shape = shape
             )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -611,7 +575,7 @@ private fun LutSelectorModeTab(
     ) {
         Text(
             text = text,
-            color = Color.White,
+            color = if (isSelected) LutPanelAccent else Color.White.copy(alpha = 0.88f),
             fontSize = 11.sp,
             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
             style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
@@ -650,41 +614,33 @@ private fun LutItem(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val backgroundColor = if (isSelected) {
-        Color.White.copy(alpha = 0.2f)
-    } else {
-        Color.Transparent
-    }
-
-    val borderColor = if (isSelected) {
-        Color.White
-    } else {
-        Color.White.copy(alpha = 0.2f)
-    }
+    val itemShape = RoundedCornerShape(8.dp)
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) LutPanelAccent else Color.White.copy(alpha = 0.15f),
+        label = "lutItemBorder"
+    )
 
     Column(
         modifier = modifier
-            .width(56.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(backgroundColor)
+            .width(64.dp)
+            .aspectRatio(1f)
+            .clip(itemShape)
             .border(
-                width = if (isSelected) 1.5.dp else 1.dp,
+                width = if (isSelected) 1.2.dp else 1.dp,
                 color = borderColor,
-                shape = RoundedCornerShape(8.dp)
+                shape = itemShape
             )
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onManageClick
-            )
-            .padding(horizontal = 4.dp, vertical = 5.dp),
+            ),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         // 预览区域
         Box(
             modifier = Modifier
-                .size(42.dp)
-                .clip(RoundedCornerShape(5.dp))
+                .fillMaxSize()
                 .then(
                     if (isNone) {
                         Modifier.background(Color.DarkGray)
@@ -777,21 +733,31 @@ private fun LutItem(
                     )
                 }
             }
+
+            // 背景只包裹文字，不再形成覆盖缩略图宽度的底栏。
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 3.dp, vertical = 3.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(horizontal = 3.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = name,
+                    color = if (isSelected) LutPanelAccent else Color.White,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
+                    modifier = Modifier
+                        .widthIn(max = 52.dp)
+                        .basicMarquee()
+                )
+            }
         }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // 名称
-        Text(
-            text = name,
-            color = Color.White,
-            fontSize = 10.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
-            modifier = Modifier.fillMaxWidth().basicMarquee()
-        )
     }
 }

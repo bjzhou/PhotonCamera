@@ -53,6 +53,7 @@ fun CurveEditorPanel(
     currentParams: ColorRecipeParams,
     onCurveChange: (CurveChannel, FloatArray?) -> Unit,
     imageHistogram: ImageHistogram? = null,
+    onDragStateChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var activeChannel by remember { mutableStateOf(CurveChannel.MASTER) }
@@ -81,6 +82,7 @@ fun CurveEditorPanel(
                 curveColor = activeChannel.color,
                 inactiveCurves = inactiveCurves,
                 histogram = imageHistogram?.binsFor(activeChannel),
+                onDragStateChange = onDragStateChange,
                 onPointsChange = { newPoints ->
                     val arr = if (
                         newPoints.size <= 4 && CurveUtils.isIdentityCurve(newPoints)
@@ -159,6 +161,7 @@ private fun CurveCanvas(
     curveColor: Color,
     inactiveCurves: List<DisplayCurve>,
     histogram: IntArray?,
+    onDragStateChange: (Boolean) -> Unit,
     onPointsChange: (FloatArray) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -169,6 +172,20 @@ private fun CurveCanvas(
     // 内部拖动状态；pointerInput key 使用 state 对象引用（稳定）
     val controlPointsState = remember { mutableStateOf(parsePoints(points)) }
     val controlPoints = controlPointsState.value
+    var isDragging by remember { mutableStateOf(false) }
+    val onDragStateChangeState by rememberUpdatedState(onDragStateChange)
+
+    fun updateDragging(dragging: Boolean) {
+        if (isDragging == dragging) return
+        isDragging = dragging
+        onDragStateChangeState(dragging)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (isDragging) onDragStateChangeState(false)
+        }
+    }
 
     // 普通 holder（非 Compose State），避免异步快照时序导致 LaunchedEffect 误判
     val lastEmitted = remember { arrayOf(points) }
@@ -227,30 +244,41 @@ private fun CurveCanvas(
                                 // 用相邻点夹紧代替排序，避免 index 跳变导致的抖动。
                                 val dragIdx = nearIdx
                                 val dragOrigin = controlPointsState.value[dragIdx]
-                                drag@ while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id }
-                                    if (change == null || !change.pressed) break@drag
-                                    change.consume()
+                                var dragStarted = false
+                                try {
+                                    drag@ while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                        if (change == null || !change.pressed) break@drag
+                                        change.consume()
 
-                                    val current = controlPointsState.value
-                                    val (rawX, ny) = curvePointAfterDrag(
-                                        origin = dragOrigin,
-                                        pointerStart = downPos,
-                                        pointerPosition = change.position,
-                                        size = size,
-                                        graphInset = graphInsetPx,
-                                    )
+                                        if (!dragStarted) {
+                                            if ((change.position - downPos).getDistance() <= 4f) continue@drag
+                                            dragStarted = true
+                                            updateDragging(true)
+                                        }
 
-                                    // x 轴：由相邻点边界夹紧，不排序——消除抖动
-                                    val nx = safeCoerceX(rawX, dragIdx, current)
+                                        val current = controlPointsState.value
+                                        val (rawX, ny) = curvePointAfterDrag(
+                                            origin = dragOrigin,
+                                            pointerStart = downPos,
+                                            pointerPosition = change.position,
+                                            size = size,
+                                            graphInset = graphInsetPx,
+                                        )
 
-                                    val updated = current.toMutableList()
-                                    updated[dragIdx] = Pair(nx, ny)
-                                    controlPointsState.value = updated
-                                    val arr = updated.toFloatArray()
-                                    lastEmitted[0] = arr
-                                    onPointsChange(arr)
+                                        // x 轴：由相邻点边界夹紧，不排序——消除抖动
+                                        val nx = safeCoerceX(rawX, dragIdx, current)
+
+                                        val updated = current.toMutableList()
+                                        updated[dragIdx] = Pair(nx, ny)
+                                        controlPointsState.value = updated
+                                        val arr = updated.toFloatArray()
+                                        lastEmitted[0] = arr
+                                        onPointsChange(arr)
+                                    }
+                                } finally {
+                                    if (dragStarted) updateDragging(false)
                                 }
                             } else {
                                 // Issue 1: 点击空白区域 →
@@ -261,44 +289,49 @@ private fun CurveCanvas(
                                 var upPos = downPos
                                 var newPointOrigin = Pair(0f, 0f)
 
-                                tap@ while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id }
-                                    if (change == null || !change.pressed) {
-                                        upPos = change?.position ?: upPos
-                                        break@tap
-                                    }
-                                    change.consume()
+                                try {
+                                    tap@ while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                        if (change == null || !change.pressed) {
+                                            upPos = change?.position ?: upPos
+                                            break@tap
+                                        }
+                                        change.consume()
 
-                                    if (!newPointAdded && (change.position - downPos).getDistance() > 4f) {
-                                        // 手指开始移动：在 down 位置插入新点，立即进入拖动模式
-                                        val nx0 = normalizeCurveX(downPos.x, size, graphInsetPx).coerceIn(0.001f, 0.999f)
-                                        val ny0 = normalizeCurveY(downPos.y, size, graphInsetPx)
-                                        val newPt = Pair(nx0, ny0)
-                                        val withNew = (controlPointsState.value + newPt).sortedBy { it.first }
-                                        controlPointsState.value = withNew
-                                        dragIdx = withNew.indexOf(newPt)
-                                        newPointOrigin = newPt
-                                        newPointAdded = true
-                                    }
+                                        if (!newPointAdded && (change.position - downPos).getDistance() > 4f) {
+                                            // 手指开始移动：在 down 位置插入新点，立即进入拖动模式
+                                            val nx0 = normalizeCurveX(downPos.x, size, graphInsetPx).coerceIn(0.001f, 0.999f)
+                                            val ny0 = normalizeCurveY(downPos.y, size, graphInsetPx)
+                                            val newPt = Pair(nx0, ny0)
+                                            val withNew = (controlPointsState.value + newPt).sortedBy { it.first }
+                                            controlPointsState.value = withNew
+                                            dragIdx = withNew.indexOf(newPt)
+                                            newPointOrigin = newPt
+                                            newPointAdded = true
+                                            updateDragging(true)
+                                        }
 
-                                    if (newPointAdded && dragIdx >= 0) {
-                                        val current = controlPointsState.value
-                                        val (rawX, ny) = curvePointAfterDrag(
-                                            origin = newPointOrigin,
-                                            pointerStart = downPos,
-                                            pointerPosition = change.position,
-                                            size = size,
-                                            graphInset = graphInsetPx,
-                                        )
-                                        val nx = safeCoerceX(rawX, dragIdx, current)
-                                        val updated = current.toMutableList()
-                                        updated[dragIdx] = Pair(nx, ny)
-                                        controlPointsState.value = updated
-                                        val arr = updated.toFloatArray()
-                                        lastEmitted[0] = arr
-                                        onPointsChange(arr)
+                                        if (newPointAdded && dragIdx >= 0) {
+                                            val current = controlPointsState.value
+                                            val (rawX, ny) = curvePointAfterDrag(
+                                                origin = newPointOrigin,
+                                                pointerStart = downPos,
+                                                pointerPosition = change.position,
+                                                size = size,
+                                                graphInset = graphInsetPx,
+                                            )
+                                            val nx = safeCoerceX(rawX, dragIdx, current)
+                                            val updated = current.toMutableList()
+                                            updated[dragIdx] = Pair(nx, ny)
+                                            controlPointsState.value = updated
+                                            val arr = updated.toFloatArray()
+                                            lastEmitted[0] = arr
+                                            onPointsChange(arr)
+                                        }
                                     }
+                                } finally {
+                                    if (newPointAdded) updateDragging(false)
                                 }
 
                                 // 纯点击（未拖动）：在抬起位置添加点
@@ -323,7 +356,8 @@ private fun CurveCanvas(
                 inactiveCurves = inactiveCurves,
                 histogram = histogram,
                 canvasSize = size,
-                graphInset = graphInsetPx
+                graphInset = graphInsetPx,
+                drawBackground = !isDragging,
             )
         }
     }
@@ -335,19 +369,21 @@ private fun DrawScope.drawCurveCanvas(
     inactiveCurves: List<DisplayCurve>,
     histogram: IntArray?,
     canvasSize: Size,
-    graphInset: Float
+    graphInset: Float,
+    drawBackground: Boolean,
 ) {
     val left = graphInset
     val top = graphInset
     val w = (canvasSize.width - graphInset * 2f).coerceAtLeast(1f)
     val h = (canvasSize.height - graphInset * 2f).coerceAtLeast(1f)
 
-    // 背景
-    drawRect(
-        color = Color(0x661A1A1A),
-        topLeft = Offset(left, top),
-        size = Size(w, h)
-    )
+    if (drawBackground) {
+        drawRect(
+            color = Color(0x661A1A1A),
+            topLeft = Offset(left, top),
+            size = Size(w, h)
+        )
+    }
 
     drawImageHistogram(
         histogram = histogram,

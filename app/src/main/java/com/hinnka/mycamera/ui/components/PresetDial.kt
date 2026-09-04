@@ -4,15 +4,12 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,7 +38,6 @@ fun PresetsPanel(
     activePresetId: String?,
     allPresets: List<CameraPreset>,
     onPresetSelected: (CameraPreset?) -> Unit,
-    onCreatePreset: () -> Unit,
     onManagePresets: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -63,48 +59,11 @@ fun PresetsPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // “新建预设”卡片
-            Card(
-                shape = RoundedCornerShape(8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-                modifier = Modifier
-                    .width(56.dp)
-                    .height(56.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onCreatePreset()
-                    }
-                    .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = stringResource(R.string.preset_new),
-                        tint = Color.White.copy(alpha = 0.85f),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text(
-                        text = stringResource(R.string.preset_new),
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.Center,
-                        style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
-                    )
-                }
-            }
-
             // 各个预设卡片
             allPresets.forEach { preset ->
                 val isSelected = activePresetId == preset.id
                 val presetBorderColor by animateColorAsState(
-                    targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.2f),
+                    targetValue = if (isSelected) LutPanelOptionSelectedBorder else LutPanelOptionBorder,
                     label = "presetBorderColor"
                 )
 
@@ -121,14 +80,17 @@ fun PresetsPanel(
                 }
 
                 Card(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = LutPanelOptionShape,
                     colors = CardDefaults.cardColors(
-                        containerColor = if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent
+                        containerColor = if (isSelected) {
+                            LutPanelOptionSelectedSurface
+                        } else {
+                            LutPanelOptionSurface
+                        }
                     ),
                     modifier = Modifier
-                        .width(68.dp)
-                        .height(56.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .size(LutPanelOptionSize)
+                        .clip(LutPanelOptionShape)
                         .combinedClickable(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -139,7 +101,7 @@ fun PresetsPanel(
                                 onManagePresets()
                             }
                         )
-                        .border(if (isSelected) 1.5.dp else 1.dp, presetBorderColor, RoundedCornerShape(8.dp))
+                        .border(if (isSelected) 1.5.dp else 1.dp, presetBorderColor, LutPanelOptionShape)
                 ) {
                     Column(
                         modifier = Modifier

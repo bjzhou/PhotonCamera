@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.ui.components
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -70,7 +69,6 @@ fun FrameSelector(
             FrameItem(
                 name = frame.name,
                 isSelected = currentFrameId == frame.id,
-                isCustom = !frame.isBuiltIn,
                 onClick = { onFrameSelected(frame.id) }
             )
         }
@@ -85,84 +83,52 @@ private fun FrameItem(
     name: String,
     isSelected: Boolean,
     onClick: () -> Unit,
-    isCustom: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val backgroundColor = if (isSelected) {
-        Color.White.copy(alpha = 0.2f)
-    } else {
-        Color.Transparent
-    }
+    val borderColor = animateColorAsState(
+        targetValue = if (isSelected) LutPanelOptionSelectedBorder else LutPanelOptionBorder,
+        label = "frameBorderColor"
+    ).value
 
-    val borderColor = if (isSelected) {
-        Color.White
-    } else {
-        Color.White.copy(alpha = 0.2f)
-    }
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Card(
+        shape = LutPanelOptionShape,
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) {
+                LutPanelOptionSelectedSurface
+            } else {
+                LutPanelOptionSurface
+            }
+        ),
         modifier = modifier
-            .width(56.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(backgroundColor)
+            .size(LutPanelOptionSize)
+            .clip(LutPanelOptionShape)
+            .clickable(onClick = onClick)
             .border(
                 width = if (isSelected) 1.5.dp else 1.dp,
                 color = borderColor,
-                shape = RoundedCornerShape(8.dp)
+                shape = LutPanelOptionShape
             )
-            .clickable { onClick() }
-            .padding(horizontal = 4.dp, vertical = 5.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(42.dp)
-                .clip(RoundedCornerShape(5.dp))
-                .background(if (isSelected) Color.White.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.08f)),
+                .fillMaxSize()
+                .padding(horizontal = 6.dp, vertical = 5.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = name.take(2).uppercase(),
+                text = name,
                 color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
+                fontSize = 10.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .basicMarquee()
             )
-
-            if (isCustom) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .background(
-                            color = Color(0xFF4CAF50),
-                            shape = RoundedCornerShape(bottomEnd = 4.dp)
-                        )
-                        .padding(horizontal = 3.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = stringResource(R.string.custom_tag),
-                        color = Color.White,
-                        fontSize = 7.sp,
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = 7.sp
-                    )
-                }
-            }
         }
-        
-        Spacer(modifier = Modifier.height(4.dp))
-        
-        Text(
-            text = name,
-            color = Color.White,
-            fontSize = 10.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
-            modifier = Modifier.fillMaxWidth().basicMarquee()
-        )
     }
 }
 

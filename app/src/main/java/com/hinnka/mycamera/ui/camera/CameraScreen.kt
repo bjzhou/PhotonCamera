@@ -1726,13 +1726,6 @@ fun CameraScreen(
                     currentLutId = currentLutId,
                     thumbnail = viewModel.previewThumbnail,
                     onLutSelected = { viewModel.setLut(it) },
-                    lutIntensity = (previewRecipeParamsOverride ?: currentRecipeParams).lutIntensity,
-                    onLutIntensityChange = { newIntensity ->
-                        val newParams = (previewRecipeParamsOverride ?: currentRecipeParams)
-                            .copy(lutIntensity = newIntensity)
-                        previewRecipeParamsOverride = newParams
-                        viewModel.updateLutIntensity(newIntensity)
-                    },
                     allPresets = allPresets,
                     presetModeEnabled = true,
                     activePresetId = activePresetId,
@@ -1768,7 +1761,7 @@ fun CameraScreen(
                     categoryOrder = categoryOrder,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(horizontal = 6.dp, vertical = 10.dp)
                 )
             }
         }

@@ -69,9 +69,8 @@ private enum class ColorPanelSection {
     STYLE,
 }
 
-private enum class EffectSection {
+private enum class EffectPanelSection {
     LIGHT,
-    OPTICS,
     TEXTURE,
 }
 
@@ -146,9 +145,10 @@ fun ColorRecipePanel(
     var selectedTab by remember { mutableStateOf(RecipePanelTab.CURVE) }
     var selectedBasicControl by remember { mutableStateOf(BasicRecipeControl.EXPOSURE) }
     var selectedColorSection by remember { mutableStateOf(ColorPanelSection.CALIBRATION) }
-    var selectedEffectSection by remember { mutableStateOf(EffectSection.LIGHT) }
+    var selectedEffectSection by remember { mutableStateOf(EffectPanelSection.LIGHT) }
     var selectedLchTabIndex by remember { mutableIntStateOf(0) }
     var selectedCalibrationTabIndex by remember { mutableIntStateOf(0) }
+    var isCurveDragging by remember { mutableStateOf(false) }
 
     val showEffects = !hideNonBakeable || (currentEffects != null && onEffectsChange != null)
 
@@ -228,24 +228,19 @@ fun ColorRecipePanel(
         ),
     )
 
-    val effectGroups = listOf(
-        EffectSection.LIGHT to listOf(
+    val advancedEffectGroups = listOf(
+        EffectPanelSection.LIGHT to listOf(
             EffectType.FLASH,
             EffectType.BLOOM,
             EffectType.SOFT_LIGHT,
         ),
-        EffectSection.OPTICS to listOf(
-            EffectType.VIGNETTE,
+        EffectPanelSection.TEXTURE to listOf(
             EffectType.HALATION,
             EffectType.CHROMATIC_ABERRATION,
-        ),
-        EffectSection.TEXTURE to listOf(
-            EffectType.CLARITY,
-            EffectType.FILM_GRAIN,
             EffectType.NOISE,
-            EffectType.LOW_RES,
         ),
     )
+    val advancedEffects = advancedEffectGroups.flatMap { it.second }
 
     fun resetTab(tab: RecipePanelTab) {
         when (tab) {
@@ -270,9 +265,13 @@ fun ColorRecipePanel(
             }
             RecipePanelTab.EFFECTS -> {
                 if (currentEffects != null && onEffectsChange != null) {
-                    onEffectsChange(EffectParams.DEFAULT)
+                    onEffectsChange(
+                        advancedEffects.fold(currentEffects) { params, effect ->
+                            effect.setValue(params, effect.defaultValue)
+                        }
+                    )
                 } else {
-                    val effectParams = effectGroups.flatMap { it.second }.map { it.recipeParam }
+                    val effectParams = advancedEffects.map { it.recipeParam }
                     onParamsChange(resetParams(currentParams, effectParams))
                 }
             }
@@ -369,232 +368,252 @@ fun ColorRecipePanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(containerShape)
-            .background(Color(0xF9121316))
-            .border(0.5.dp, Color.White.copy(alpha = 0.08f), containerShape)
-            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 最上层：滤镜强度（若启用，无边框极简单行）
+        // 滤镜强度独立放在透明区域，不随下方调节面板绘制黑色背景。
         if (showLutIntensity) {
-            FlatLutIntensityRow(
-                intensity = currentParams.lutIntensity,
-                onIntensityChange = { onParamChange(RecipeParam.LUT_INTENSITY, it) },
-                modifier = Modifier.fillMaxWidth()
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 14.dp)
+            ) {
+                FlatLutIntensityRow(
+                    intensity = currentParams.lutIntensity,
+                    onIntensityChange = { onParamChange(RecipeParam.LUT_INTENSITY, it) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
 
-        // 模式切换与重置栏：大圆角胶囊按钮，文字大小统一为 11.sp
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(30.dp)
-                .padding(horizontal = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .clip(containerShape)
+                .background(
+                    if (isCurveDragging) Color.Transparent
+                    else Color(0xF9121316).copy(alpha = 0.95f)
+                )
+                .border(
+                    0.5.dp,
+                    Color.White.copy(alpha = if (isCurveDragging) 0f else 0.08f),
+                    containerShape
+                )
+                .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            RecipeFlatModeToggle(
-                isAdvanced = showAdvanced,
-                onModeChange = { showAdvanced = it },
-            )
-
-            headerControls?.let { controls ->
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 6.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    controls()
-                }
-            }
-
+            // 模式切换与重置栏：大圆角胶囊按钮，文字大小统一为 11.sp
             Row(
                 modifier = Modifier
+                    .fillMaxWidth()
                     .height(30.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .clickable { resetAllParams() }
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = null,
-                    tint = Color(0xFFFFC46B),
-                    modifier = Modifier.size(12.dp)
+                RecipeFlatModeToggle(
+                    isAdvanced = showAdvanced,
+                    onModeChange = { showAdvanced = it },
                 )
-                Text(
-                    text = stringResource(R.string.color_recipe_reset_all),
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1
-                )
+
+                headerControls?.let { controls ->
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 6.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        controls()
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .height(30.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable { resetAllParams() }
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = Color(0xFFFFC46B),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.color_recipe_reset_all),
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1
+                    )
+                }
             }
-        }
 
-        if (!showAdvanced) {
-            // 基础模式：4 x 3 扁平规整矩阵（12 项参数清晰全显）
-            BasicRecipeGrid(
-                controls = basicRecipeControls,
-                selectedControl = selectedBasicControl,
-                valueFor = { control -> basicDisplayValue(control, basicRawValue(control)) },
-                enabledFor = { true },
-                onControlSelected = { selectedBasicControl = it },
-                onControlReset = { control ->
-                    val defaultVal = basicDefaultRawValue(control)
-                    setBasicRawValue(control, defaultVal)
-                }
-            )
+            if (!showAdvanced) {
+                // 基础模式：4 x 3 无边框参数矩阵，数值为主、名称为辅
+                BasicRecipeGrid(
+                    controls = basicRecipeControls,
+                    selectedControl = selectedBasicControl,
+                    valueFor = { control -> basicDisplayValue(control, basicRawValue(control)) },
+                    enabledFor = { true },
+                    onControlSelected = { selectedBasicControl = it },
+                    onControlReset = { control ->
+                        val defaultVal = basicDefaultRawValue(control)
+                        setBasicRawValue(control, defaultVal)
+                    }
+                )
 
-            // 专属精细调参底座（带标题与大刻度尺）
-            BasicRecipeAdjuster(
-                control = selectedBasicControl,
-                displayValue = basicDisplayValue(
-                    selectedBasicControl,
-                    basicRawValue(selectedBasicControl)
-                ),
-                onDisplayValueChange = { newDisplayValue ->
-                    setBasicRawValue(
+                // 专属精细调参底座（带标题与大刻度尺）
+                BasicRecipeAdjuster(
+                    control = selectedBasicControl,
+                    displayValue = basicDisplayValue(
                         selectedBasicControl,
-                        basicRawValue(selectedBasicControl, newDisplayValue)
-                    )
-                },
-                onReset = {
-                    setBasicRawValue(
-                        selectedBasicControl,
-                        basicDefaultRawValue(selectedBasicControl)
-                    )
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
+                        basicRawValue(selectedBasicControl)
+                    ),
+                    onDisplayValueChange = { newDisplayValue ->
+                        setBasicRawValue(
+                            selectedBasicControl,
+                            basicRawValue(selectedBasicControl, newDisplayValue)
+                        )
+                    },
+                    onReset = {
+                        setBasicRawValue(
+                            selectedBasicControl,
+                            basicDefaultRawValue(selectedBasicControl)
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-            Spacer(modifier = Modifier.height(6.dp))
-        } else {
-            // 高级模式主标签栏：曲线、色彩、效果、备注
-            RecipeAdvancedTabs(
-                tabs = tabs,
-                selectedTab = selectedTab,
-                onTabSelected = { selectedTab = it },
-                onTabReset = ::resetTab,
-            )
+                Spacer(modifier = Modifier.height(6.dp))
+            } else {
+                // 高级模式主标签栏：曲线、色彩、效果、备注
+                RecipeAdvancedTabs(
+                    tabs = tabs,
+                    selectedTab = selectedTab,
+                    onTabSelected = { selectedTab = it },
+                    onTabReset = ::resetTab,
+                )
 
-            Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-            when (selectedTab) {
-                RecipePanelTab.CURVE -> {
-                    CurveEditorPanel(
-                        currentParams = currentParams,
-                        onCurveChange = onCurveChange,
-                        imageHistogram = imageHistogram,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                RecipePanelTab.COLOR -> {
-                    ColorSectionTabs(
-                        selectedSection = selectedColorSection,
-                        onSectionSelected = { selectedColorSection = it }
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    when (selectedColorSection) {
-                        ColorPanelSection.CALIBRATION -> {
-                            ColorRingTabs(
-                                count = calibrationGroups.size,
-                                selectedTabIndex = selectedCalibrationTabIndex,
-                                onTabSelected = { selectedCalibrationTabIndex = it },
-                                getColor = { index ->
-                                    when (index) {
-                                        0 -> Color(0xFFE53935)
-                                        1 -> Color(0xFF43A047)
-                                        2 -> Color(0xFF1E88E5)
-                                        else -> Color.White
+                when (selectedTab) {
+                    RecipePanelTab.CURVE -> {
+                        CurveEditorPanel(
+                            currentParams = currentParams,
+                            onCurveChange = onCurveChange,
+                            imageHistogram = imageHistogram,
+                            onDragStateChange = { isDragging ->
+                                isCurveDragging = isDragging
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    RecipePanelTab.COLOR -> {
+                        ColorSectionTabs(
+                            selectedSection = selectedColorSection,
+                            onSectionSelected = { selectedColorSection = it }
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        when (selectedColorSection) {
+                            ColorPanelSection.CALIBRATION -> {
+                                ColorRingTabs(
+                                    count = calibrationGroups.size,
+                                    selectedTabIndex = selectedCalibrationTabIndex,
+                                    onTabSelected = { selectedCalibrationTabIndex = it },
+                                    getColor = { index ->
+                                        when (index) {
+                                            0 -> Color(0xFFE53935)
+                                            1 -> Color(0xFF43A047)
+                                            2 -> Color(0xFF1E88E5)
+                                            else -> Color.White
+                                        }
+                                    }
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    calibrationGroups[selectedCalibrationTabIndex].second.forEach { param ->
+                                        RecipeIntegerParamItem(
+                                            param = param,
+                                            value = param.getValue(currentParams),
+                                            onValueChange = { onParamChange(param, it) },
+                                        )
                                     }
                                 }
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                calibrationGroups[selectedCalibrationTabIndex].second.forEach { param ->
-                                    RecipeIntegerParamItem(
-                                        param = param,
-                                        value = param.getValue(currentParams),
-                                        onValueChange = { onParamChange(param, it) },
-                                    )
+                            }
+                            ColorPanelSection.GRADING -> {
+                                ColorGradingPanel(
+                                    currentParams = currentParams,
+                                    onParamsChange = onParamsChange,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            ColorPanelSection.LCH -> {
+                                ColorRingTabs(
+                                    count = lchGroups.size,
+                                    selectedTabIndex = selectedLchTabIndex,
+                                    onTabSelected = { selectedLchTabIndex = it },
+                                    getColor = { getLchTabColor(it) }
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    lchGroups[selectedLchTabIndex].second.forEach { param ->
+                                        RecipeIntegerParamItem(
+                                            param = param,
+                                            value = param.getValue(currentParams),
+                                            onValueChange = { onParamChange(param, it) },
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        ColorPanelSection.GRADING -> {
-                            ColorGradingPanel(
-                                currentParams = currentParams,
-                                onParamsChange = onParamsChange,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        ColorPanelSection.LCH -> {
-                            ColorRingTabs(
-                                count = lchGroups.size,
-                                selectedTabIndex = selectedLchTabIndex,
-                                onTabSelected = { selectedLchTabIndex = it },
-                                getColor = { getLchTabColor(it) }
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                lchGroups[selectedLchTabIndex].second.forEach { param ->
-                                    RecipeIntegerParamItem(
-                                        param = param,
-                                        value = param.getValue(currentParams),
-                                        onValueChange = { onParamChange(param, it) },
-                                    )
+                            ColorPanelSection.STYLE -> {
+                                val visibleParams = if (hideNonBakeable) {
+                                    colorStyleParams.filter(isBakeable)
+                                } else {
+                                    colorStyleParams
                                 }
-                            }
-                        }
-                        ColorPanelSection.STYLE -> {
-                            val visibleParams = if (hideNonBakeable) {
-                                colorStyleParams.filter(isBakeable)
-                            } else {
-                                colorStyleParams
-                            }
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                visibleParams.forEach { param ->
-                                    RecipeIntegerParamItem(
-                                        param = param,
-                                        value = param.getValue(currentParams),
-                                        onValueChange = { onParamChange(param, it) },
-                                    )
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    visibleParams.forEach { param ->
+                                        RecipeIntegerParamItem(
+                                            param = param,
+                                            value = param.getValue(currentParams),
+                                            onValueChange = { onParamChange(param, it) },
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                RecipePanelTab.EFFECTS -> {
-                    EffectSectionTabs(
-                        selectedSection = selectedEffectSection,
-                        onSectionSelected = { selectedEffectSection = it }
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    val visibleEffects = effectGroups
-                        .first { it.first == selectedEffectSection }
-                        .second
-
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        visibleEffects.forEach { effect ->
-                            RecipeEffectParamItem(
-                                effect = effect,
-                                value = getEffectRawValue(effect),
-                                onValueChange = { setEffectRawValue(effect, it) },
-                            )
+                    RecipePanelTab.EFFECTS -> {
+                        EffectPanelSectionTabs(
+                            selectedSection = selectedEffectSection,
+                            onSectionSelected = { selectedEffectSection = it },
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val visibleEffects = advancedEffectGroups
+                            .first { it.first == selectedEffectSection }
+                            .second
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            visibleEffects.forEach { effect ->
+                                RecipeEffectParamItem(
+                                    effect = effect,
+                                    value = getEffectRawValue(effect),
+                                    onValueChange = { setEffectRawValue(effect, it) },
+                                )
+                            }
                         }
                     }
-                }
-                RecipePanelTab.REMARKS -> {
-                    ColorRecipeRemarksBar(
-                        remarks = currentParams.remarks ?: "",
-                        onRemarksChange = onRemarksChange,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    RecipePanelTab.REMARKS -> {
+                        ColorRecipeRemarksBar(
+                            remarks = currentParams.remarks ?: "",
+                            onRemarksChange = onRemarksChange,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         }
@@ -812,12 +831,12 @@ private fun BasicRecipeGrid(
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         controls.chunked(4).forEach { rowControls ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 rowControls.forEach { control ->
                     BasicRecipeTile(
@@ -851,24 +870,9 @@ private fun BasicRecipeTile(
     val accent = getBasicControlColor(control)
     val haptic = LocalHapticFeedback.current
 
-    val tileBg = when {
-        isSelected -> Color(0xFF242730)
-        isModified -> Color(0xFF1B1D22)
-        else -> Color(0xFF16171B)
-    }
-
-    val borderColor = when {
-        isSelected -> accent.copy(alpha = 0.92f)
-        isModified -> Color.White.copy(alpha = 0.16f)
-        else -> Color.White.copy(alpha = 0.06f)
-    }
-
-    Column(
+    Box(
         modifier = modifier
-            .height(54.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(tileBg)
-            .border(if (isSelected) 1.2.dp else 0.5.dp, borderColor, RoundedCornerShape(8.dp))
+            .height(62.dp)
             .pointerInput(enabled) {
                 if (enabled) {
                     detectTapGestures(
@@ -882,45 +886,54 @@ private fun BasicRecipeTile(
                         }
                     )
                 }
-            }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
+                text = formatBasicDisplayValue(control, value),
+                color = when {
+                    !enabled -> Color.White.copy(alpha = 0.26f)
+                    isSelected -> accent
+                    else -> Color.White.copy(alpha = 0.92f)
+                },
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+
+            Text(
                 text = stringResource(control.titleRes),
-                color = if (isSelected) accent else Color.White.copy(alpha = if (enabled) 0.68f else 0.28f),
-                fontSize = 11.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                color = when {
+                    !enabled -> Color.White.copy(alpha = 0.2f)
+                    isSelected -> accent.copy(alpha = 0.78f)
+                    isModified -> Color.White.copy(alpha = 0.5f)
+                    else -> Color.White.copy(alpha = 0.38f)
+                },
+                fontSize = 10.sp,
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                textAlign = TextAlign.Center,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (isModified && !isSelected) {
-                Box(
-                    modifier = Modifier
-                        .size(4.dp)
-                        .clip(CircleShape)
-                        .background(accent)
-                )
-            }
         }
 
-        Text(
-            text = formatBasicDisplayValue(control, value),
-            color = when {
-                isSelected -> accent
-                isModified -> Color.White
-                else -> Color.White.copy(alpha = 0.35f)
-            },
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            maxLines = 1,
-        )
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .width(16.dp)
+                    .height(2.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.9f))
+            )
+        }
     }
 }
 
@@ -1342,21 +1355,19 @@ private fun ColorSectionTabs(
 }
 
 @Composable
-private fun EffectSectionTabs(
-    selectedSection: EffectSection,
-    onSectionSelected: (EffectSection) -> Unit,
-    modifier: Modifier = Modifier
+private fun EffectPanelSectionTabs(
+    selectedSection: EffectPanelSection,
+    onSectionSelected: (EffectPanelSection) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val tabs = listOf(
-        EffectSection.LIGHT to R.string.effects_group_light,
-        EffectSection.OPTICS to R.string.effects_group_optics,
-        EffectSection.TEXTURE to R.string.effects_group_texture,
-    )
     RecipeSectionTabs(
-        tabs = tabs,
+        tabs = listOf(
+            EffectPanelSection.LIGHT to R.string.effects_group_light,
+            EffectPanelSection.TEXTURE to R.string.effects_group_texture,
+        ),
         selectedTab = selectedSection,
         onTabSelected = onSectionSelected,
-        modifier = modifier
+        modifier = modifier,
     )
 }
 
