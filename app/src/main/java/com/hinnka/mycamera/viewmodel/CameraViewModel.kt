@@ -574,6 +574,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawMaxSharpening = saved.rawMaxSharpening,
                             rawMaxNoiseReduction = saved.rawMaxNoiseReduction,
                             rawMaxChromaNoiseReduction = saved.rawMaxChromaNoiseReduction,
+                            rawExposureCompensation = saved.rawExposureCompensation,
+                            rawHighlightsAdjustment = saved.rawHighlightsAdjustment,
+                            rawShadowsAdjustment = saved.rawShadowsAdjustment,
+                            rawBlackPointCorrection = saved.rawBlackPointCorrection,
+                            rawWhitePointCorrection = saved.rawWhitePointCorrection,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
@@ -609,10 +614,58 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.activePresetId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    private val activePresetMatchState: StateFlow<ActivePresetMatchState?> = combine(
+        combine(
+            userPreferencesRepository.userPreferences,
+            allPresets,
+            isInitialized
+        ) { prefs, presets, initialized ->
+            if (initialized) prefs to presets else null
+        },
+        state.map { it.aspectRatio.name }.distinctUntilChanged(),
+        currentLutId.flatMapLatest { lutId ->
+            contentRepository.lutManager.getColorRecipeParams(lutId).map { recipe ->
+                lutId to recipe
+            }
+        }
+    ) { inputs, aspectRatio, (lutId, recipe) ->
+        inputs?.let { (prefs, presets) ->
+            ActivePresetMatchState(
+                prefs = prefs,
+                presets = presets,
+                aspectRatio = aspectRatio,
+                lutId = lutId,
+                recipe = recipe,
+                effects = recipe.toEffectParams()
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private val presetApplyInProgress = MutableStateFlow(false)
+
+    /**
+     * Whether the settings currently in use differ from the selected preset.
+     * Selection and matching are deliberately independent: editing a setting keeps the preset
+     * selected and only marks it as modified.
+     */
+    val isActivePresetModified: StateFlow<Boolean> = combine(
+        activePresetMatchState,
+        presetApplyInProgress
+    ) { matchState, applyingPreset ->
+        if (applyingPreset) {
+            false
+        } else {
+            val presetId = matchState?.prefs?.activePresetId ?: return@combine false
+            val preset = matchState.presets.firstOrNull { it.id == presetId }
+                ?: return@combine false
+            !matchState.toPresetMatchSnapshot().matches(preset)
+        }
+    }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     var draftPreset: com.hinnka.mycamera.model.CameraPreset? = null
 
-    @Volatile
-    private var isApplyingPreset = false
     private val presetApplyMutex = Mutex()
     private val presetMutationMutex = Mutex()
     private var presetApplyGeneration = 0L
@@ -620,8 +673,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var lutLoadGeneration = 0L
 
     fun prepareCurrentSettingsPresetDraft(name: String): com.hinnka.mycamera.model.CameraPreset {
-        return com.hinnka.mycamera.model.CameraPreset(
+        return createPresetFromCurrentSettings(
             id = UUID.randomUUID().toString(),
+            name = name,
+            isBuiltIn = false
+        ).also {
+            draftPreset = it
+        }
+    }
+
+    private fun createPresetFromCurrentSettings(
+        id: String,
+        name: String,
+        isBuiltIn: Boolean
+    ): com.hinnka.mycamera.model.CameraPreset {
+        return com.hinnka.mycamera.model.CameraPreset(
+            id = id,
             name = name,
             lutId = CameraPreset.normalizeLutId(currentLutId.value),
             colorRecipe = currentRecipeParams.value.withoutIndependentEffects(),
@@ -648,10 +715,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
             rawBaselineLutId = rawBaselineLutId.value,
-            isBuiltIn = false
-        ).also {
-            draftPreset = it
-        }
+            isBuiltIn = isBuiltIn
+        )
     }
 
     fun getMergedRecipeParams(recipe: ColorRecipeParams = currentRecipeParams.value): ColorRecipeParams {
@@ -660,13 +725,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun applyPreset(preset: com.hinnka.mycamera.model.CameraPreset?) {
         val applyGeneration = ++presetApplyGeneration
-        isApplyingPreset = true
+        presetApplyInProgress.value = true
         viewModelScope.launch {
-            presetApplyMutex.withLock {
-                if (presetApplyGeneration != applyGeneration) {
-                    return@withLock
-                }
-                try {
+            var applied = false
+            try {
+                presetApplyMutex.withLock {
+                    if (presetApplyGeneration != applyGeneration) {
+                        return@withLock
+                    }
                     val currentState = state.value
                     val includePhotoSettings = currentState.captureMode == CaptureMode.PHOTO
                     val includeProfessionalSettings = includePhotoSettings &&
@@ -680,13 +746,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         preset.toCameraFeatureUpdate(
                             includePhotoSettings = includePhotoSettings,
                             includeProfessionalSettings = includeProfessionalSettings
-                        ).copy(activePresetId = SettingValue(preset?.id)),
-                        clearActivePresetOnMismatch = false
+                        ).copy(activePresetId = SettingValue(preset?.id))
                     )
-                } finally {
-                    if (presetApplyGeneration == applyGeneration) {
-                        isApplyingPreset = false
+                    applied = true
+                }
+
+                if (applied && presetApplyGeneration == applyGeneration) {
+                    activePresetMatchState.filterNotNull().first { matchState ->
+                        matchState.prefs.activePresetId == preset?.id &&
+                            (preset == null || matchState.toPresetMatchSnapshot().matches(preset))
                     }
+                }
+            } finally {
+                if (presetApplyGeneration == applyGeneration) {
+                    presetApplyInProgress.value = false
                 }
             }
         }
@@ -754,10 +827,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private suspend fun applyCameraFeatureUpdate(
-        update: CameraFeatureUpdate,
-        clearActivePresetOnMismatch: Boolean = true
-    ) {
+    private suspend fun applyCameraFeatureUpdate(update: CameraFeatureUpdate) {
         val prefs = userPreferencesRepository.userPreferences.first()
         var desiredUseRaw = prefs.useRaw
         var desiredUseJpgMax = prefs.useJpgMax
@@ -977,9 +1047,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (needsCameraReopen) {
             reopenCamera()
         }
-        if (clearActivePresetOnMismatch) {
-            clearActivePresetIfCurrentSettingsMismatch()
-        }
     }
 
     private fun resolveCaptureRawRenderingEngine(userPrefs: UserPreferences?): RawRenderingEngine {
@@ -1012,6 +1079,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             applyPreset(resolvedPreset)
         }
+    }
+
+    fun resetActivePreset() {
+        val presetId = activePresetId.value ?: return
+        val preset = allPresets.value.firstOrNull { it.id == presetId } ?: return
+        applyPreset(preset)
+    }
+
+    fun saveCurrentSettingsToActivePreset() {
+        val presetId = activePresetId.value ?: return
+        val preset = allPresets.value.firstOrNull { it.id == presetId } ?: return
+        savePreset(
+            createPresetFromCurrentSettings(
+                id = preset.id,
+                name = preset.name,
+                isBuiltIn = preset.isBuiltIn
+            )
+        )
     }
 
     suspend fun exportPresetPackage(
@@ -1100,83 +1185,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 userPreferencesRepository.saveCustomPresets(orderedPresets + concurrentlyAddedPresets)
             }
         }
-    }
-
-    fun refreshActivePresetMatch() {
-        viewModelScope.launch {
-            clearActivePresetIfCurrentSettingsMismatch()
-        }
-    }
-
-    private suspend fun clearActivePresetIfCurrentSettingsMismatch() {
-        if (isApplyingPreset) return
-        val presetId = activePresetId.value ?: return
-        val preset = allPresets.value.firstOrNull { it.id == presetId }
-        if (preset == null) {
-            userPreferencesRepository.saveActivePresetId(null)
-            return
-        }
-        val snapshot = currentPresetMatchSnapshot()
-        if (!snapshot.matches(preset)) {
-            PLog.d(
-                TAG,
-                "Active preset [$presetId] no longer matches current settings; " +
-                    "mismatch=${snapshot.mismatchSummary(preset)}; showing default preset"
-            )
-            userPreferencesRepository.saveActivePresetId(null)
-        }
-    }
-
-    private suspend fun clearActivePresetIfCurrentSettingsMismatch(matchState: ActivePresetMatchState) {
-        if (isApplyingPreset) return
-        val presetId = matchState.prefs.activePresetId ?: return
-        val preset = matchState.presets.firstOrNull { it.id == presetId }
-        if (preset == null) {
-            userPreferencesRepository.saveActivePresetId(null)
-            return
-        }
-        val snapshot = matchState.toPresetMatchSnapshot()
-        if (!snapshot.matches(preset)) {
-            PLog.d(
-                TAG,
-                "Active preset [$presetId] no longer matches current settings; " +
-                    "mismatch=${snapshot.mismatchSummary(preset)}; showing default preset"
-            )
-            userPreferencesRepository.saveActivePresetId(null)
-        }
-    }
-
-    private fun currentPresetMatchSnapshot(): PresetMatchSnapshot {
-        return PresetMatchSnapshot(
-            lutId = CameraPreset.normalizeLutId(currentLutId.value),
-            colorRecipe = currentRecipeParams.value,
-            effects = currentEffectParams.value,
-            captureMode = state.value.captureMode,
-            aspectRatio = state.value.aspectRatio.name,
-            isProfessionalMode = state.value.captureMode == CaptureMode.PHOTO &&
-                useRaw.value && useRawMax.value && !useJpgMax.value,
-            ultraHdrGainMapEnabled = ultraHdrGainMapEnabled.value,
-            frameId = currentFrameId,
-            rawDcpId = rawDcpId.value,
-            rawDcpIdsByLens = rawDcpIdsByLens.value,
-            rawHncsProfileId = rawHncsProfileId.value,
-            rawHncsRenderIntent = rawHncsRenderIntent.value,
-            rawHncsFilmCurveMode = rawHncsFilmCurveMode.value,
-            rawRenderingEngine = rawRenderingEngine.value,
-            rawMaxSharpening = userPreferences.value.rawMaxSharpening,
-            rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
-            rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
-            rawExposureCompensation = userPreferences.value.rawExposureCompensation,
-            rawHighlightsAdjustment = userPreferences.value.rawHighlightsAdjustment,
-            rawShadowsAdjustment = userPreferences.value.rawShadowsAdjustment,
-            rawBlackPointCorrection = userPreferences.value.rawBlackPointCorrection,
-            rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
-            rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
-            rawSpectralFilmStock = rawSpectralFilmStock.value,
-            rawSpectralFilmPrint = rawSpectralFilmPrint.value,
-            rawDROMode = droMode.value,
-            rawBaselineLutId = rawBaselineLutId.value
-        )
     }
 
     private fun ActivePresetMatchState.toPresetMatchSnapshot(): PresetMatchSnapshot {
@@ -2178,38 +2186,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        viewModelScope.launch {
-            val presetInputs = combine(
-                userPreferencesRepository.userPreferences,
-                allPresets,
-                isInitialized
-            ) { prefs, presets, initialized ->
-                if (initialized) prefs to presets else null
-            }
-
-            combine(
-                presetInputs,
-                state.map { it.aspectRatio.name }.distinctUntilChanged(),
-                currentLutId.flatMapLatest { lutId -> contentRepository.lutManager.getColorRecipeParams(lutId) },
-                currentEffectParams
-            ) { inputs, aspectRatio, recipe, effects ->
-                inputs?.let { (prefs, presets) ->
-                    ActivePresetMatchState(
-                        prefs = prefs,
-                        presets = presets,
-                        aspectRatio = aspectRatio,
-                        lutId = currentLutId.value,
-                        recipe = recipe,
-                        effects = effects
-                    )
-                }
-            }.collect { matchState ->
-                if (matchState != null) {
-                    clearActivePresetIfCurrentSettingsMismatch(matchState)
-                }
-            }
-        }
-
         // 加载用户偏好设置
         viewModelScope.launch {
             val prefs = userPreferencesRepository.userPreferences.firstOrNull()
@@ -2442,7 +2418,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (selection != null && selection.id == previousStock) {
                 userPreferencesRepository.saveRawSpectralFilmTuning(selection.id, selection.tuning)
             }
-            clearActivePresetIfCurrentSettingsMismatch()
         }
     }
     fun setRawToneMappingParameters(value: RawToneMappingParameters) {
@@ -3902,7 +3877,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     userPreferencesRepository.saveVideoLutConfig(normalizedLutId)
                 } else {
                     userPreferencesRepository.saveLutConfig(normalizedLutId)
-                    clearActivePresetIfCurrentSettingsMismatch()
                 }
             }
         }
@@ -3931,7 +3905,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             userPreferencesRepository.saveLutConfig(normalizedLutId)
-            clearActivePresetIfCurrentSettingsMismatch()
         }
     }
 

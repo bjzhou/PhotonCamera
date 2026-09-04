@@ -878,6 +878,9 @@
     <string name="preset_builtin_cinematic">ภาพยนตร์กว้าง</string>
     <string name="preset_builtin_leica_m9_moment">ช่วงเวลาไลก้า</string>
     <string name="preset_save">บันทึก</string>
+    <string name="preset_reset">รีเซ็ต</string>
+    <string name="preset_update">อัปเดต</string>
+    <string name="preset_save_as">บันทึกเป็น</string>
     <string name="preset_editor_title">แก้ไขการตั้งค่าการถ่ายภาพล่วงหน้า</string>
     <string name="preset_new_preset_default">ค่าที่ตั้งล่วงหน้าใหม่</string>
     <string name="preset_name_label">ชื่อเริ่มต้น</string>

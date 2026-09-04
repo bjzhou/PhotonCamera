@@ -1148,6 +1148,9 @@
     <string name="preset_builtin_cinematic">電影寬幅</string>
     <string name="preset_builtin_leica_m9_moment">徠卡一瞬</string>
     <string name="preset_save">儲存</string>
+    <string name="preset_reset">重設</string>
+    <string name="preset_update">同步儲存</string>
+    <string name="preset_save_as">另存新檔</string>
     <string name="preset_editor_title">編輯拍攝預設</string>
     <string name="preset_new_preset_default">新預設</string>
     <string name="preset_name_label">預設名稱</string>

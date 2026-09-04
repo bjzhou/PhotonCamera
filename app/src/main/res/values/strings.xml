@@ -1169,6 +1169,9 @@
     <string name="preset_builtin_cinematic">Cinematic</string>
     <string name="preset_builtin_leica_m9_moment">Leica Moment</string>
     <string name="preset_save">Save</string>
+    <string name="preset_reset">Reset</string>
+    <string name="preset_update">Update</string>
+    <string name="preset_save_as">Save As</string>
 
     <!-- Preset Editor & Management Extensions -->
     <string name="preset_editor_title">Edit Preset</string>

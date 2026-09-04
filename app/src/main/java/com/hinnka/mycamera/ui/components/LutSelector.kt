@@ -133,8 +133,10 @@ private fun LutPanelIconButton(
 }
 
 @Composable
-private fun LutPanelNewPresetButton(
+private fun LutPanelPresetActionButton(
+    text: String,
     onClick: () -> Unit,
+    showAddIcon: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val shape = RoundedCornerShape(12.dp)
@@ -148,14 +150,16 @@ private fun LutPanelNewPresetButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(12.dp)
-        )
+        if (showAddIcon) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(12.dp)
+            )
+        }
         Text(
-            text = stringResource(R.string.preset_new),
+            text = text,
             color = Color.White,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
@@ -179,6 +183,7 @@ fun LutSelector(
     allPresets: List<CameraPreset> = emptyList(),
     presetModeEnabled: Boolean = allPresets.isNotEmpty(),
     activePresetId: String? = null,
+    activePresetModified: Boolean = false,
     selectedMode: LutSelectorMode = LutSelectorMode.Style,
     onModeSelected: (LutSelectorMode) -> Unit = {},
     availableFrames: List<FrameInfo> = emptyList(),
@@ -187,6 +192,8 @@ fun LutSelector(
     onFrameManagementClick: (() -> Unit)? = null,
     onPresetSelected: (CameraPreset?) -> Unit = {},
     onCreatePresetClick: () -> Unit = {},
+    onResetPresetClick: () -> Unit = {},
+    onSavePresetClick: () -> Unit = {},
     onPresetManagementClick: () -> Unit = {},
     onEditClick: (() -> Unit)? = null,
     onManageClick: ((String) -> Unit)? = null,
@@ -389,7 +396,11 @@ fun LutSelector(
                             }
                         } ?: ""
                         Text(
-                            text = currentName,
+                            text = if (currentPreset != null && activePresetModified) {
+                                "$currentName*"
+                            } else {
+                                currentName
+                            },
                             color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
@@ -403,7 +414,27 @@ fun LutSelector(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            LutPanelNewPresetButton(onClick = onCreatePresetClick)
+                            if (currentPreset != null && activePresetModified) {
+                                LutPanelPresetActionButton(
+                                    text = stringResource(R.string.preset_reset),
+                                    onClick = onResetPresetClick,
+                                    showAddIcon = false
+                                )
+                                LutPanelPresetActionButton(
+                                    text = stringResource(R.string.preset_update),
+                                    onClick = onSavePresetClick,
+                                    showAddIcon = false
+                                )
+                                LutPanelPresetActionButton(
+                                    text = stringResource(R.string.preset_save_as),
+                                    onClick = onCreatePresetClick
+                                )
+                            } else {
+                                LutPanelPresetActionButton(
+                                    text = stringResource(R.string.preset_new),
+                                    onClick = onCreatePresetClick
+                                )
+                            }
 
                             LutPanelIconButton(
                                 imageVector = Icons.Default.Settings,
@@ -440,7 +471,8 @@ fun LutSelector(
                         LutSelectorModeTab(
                             text = presetText,
                             isSelected = actualMode == LutSelectorMode.Presets,
-                            onClick = { onModeSelected(LutSelectorMode.Presets) }
+                            onClick = { onModeSelected(LutSelectorMode.Presets) },
+                            badgeText = if (activePresetModified) "*" else null
                         )
                     }
                 }
@@ -536,6 +568,7 @@ fun LutSelector(
                     // 预设列表
                     PresetsPanel(
                         activePresetId = activePresetId,
+                        activePresetModified = activePresetModified,
                         allPresets = allPresets,
                         onPresetSelected = onPresetSelected,
                         onManagePresets = onPresetManagementClick,
@@ -583,13 +616,11 @@ private fun LutSelectorModeTab(
         if (badgeText != null) {
             Text(
                 text = badgeText,
-                color = Color.Black,
-                fontSize = 8.sp,
+                color = LutPanelAccent,
+                fontSize = 12.sp,
+                lineHeight = 12.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(Color(0xFFFFD700))
-                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                modifier = Modifier.offset(y = 1.dp)
             )
         }
     }
@@ -614,7 +645,7 @@ private fun LutItem(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val itemShape = RoundedCornerShape(8.dp)
+    val itemShape = RoundedCornerShape(6.dp)
     val borderColor by animateColorAsState(
         targetValue = if (isSelected) LutPanelAccent else Color.White.copy(alpha = 0.15f),
         label = "lutItemBorder"

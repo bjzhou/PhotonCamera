@@ -232,6 +232,7 @@ fun CameraScreen(
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
     val activePresetId by viewModel.activePresetId.collectAsState()
+    val activePresetModified by viewModel.isActivePresetModified.collectAsState()
     val customPresets by viewModel.customPresets.collectAsState()
     val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
@@ -1717,7 +1718,6 @@ fun CameraScreen(
                 contentAlignment = Alignment.BottomCenter
             ) {
                 val allPresets by viewModel.allPresets.collectAsState()
-                val activePresetId by viewModel.activePresetId.collectAsState()
                 val defaultPresetName = stringResource(R.string.preset_new_preset_default)
 
                 // LUT 选择器 (内嵌 Presets 列表与统一控制，无多余背景遮挡)
@@ -1729,6 +1729,7 @@ fun CameraScreen(
                     allPresets = allPresets,
                     presetModeEnabled = true,
                     activePresetId = activePresetId,
+                    activePresetModified = activePresetModified,
                     selectedMode = lutSelectorMode,
                     onModeSelected = { viewModel.setLutSelectorMode(it) },
                     availableFrames = viewModel.availableFrameList,
@@ -1750,6 +1751,16 @@ fun CameraScreen(
                         viewModel.prepareCurrentSettingsPresetDraft(defaultPresetName)
                         onPresetEditClick(null)
                     },
+                    onResetPresetClick = {
+                        discardTransientLookEdits()
+                        val preset = allPresets.firstOrNull { it.id == activePresetId }
+                        if (presetRequiresPreviewTransition(preset)) {
+                            runPreviewTransition { viewModel.resetActivePreset() }
+                        } else {
+                            viewModel.resetActivePreset()
+                        }
+                    },
+                    onSavePresetClick = viewModel::saveCurrentSettingsToActivePreset,
                     onPresetManagementClick = onPresetManagementClick,
                     onEditClick = {
                         activePanel = ActivePanel.EDIT
@@ -1774,7 +1785,6 @@ fun CameraScreen(
                 showEffects = true,
                 onDismiss = {
                     previewRecipeParamsOverride = null
-                    viewModel.refreshActivePresetMatch()
                     activePanel = ActivePanel.FILTERS
                 }
             )

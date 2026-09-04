@@ -36,6 +36,7 @@ import com.hinnka.mycamera.ui.camera.ViewfinderTextShadow
 @Composable
 fun PresetsPanel(
     activePresetId: String?,
+    activePresetModified: Boolean,
     allPresets: List<CameraPreset>,
     onPresetSelected: (CameraPreset?) -> Unit,
     onManagePresets: () -> Unit,
@@ -112,7 +113,7 @@ fun PresetsPanel(
                     ) {
                         // 预设名
                         Text(
-                            text = displayName,
+                            text = if (isSelected && activePresetModified) "$displayName*" else displayName,
                             color = Color.White,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,

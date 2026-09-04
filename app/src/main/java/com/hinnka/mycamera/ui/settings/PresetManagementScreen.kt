@@ -96,6 +96,7 @@ fun PresetManagementScreen(
 ) {
     val allPresets by viewModel.allPresets.collectAsState()
     val activePresetId by viewModel.activePresetId.collectAsState()
+    val activePresetModified by viewModel.isActivePresetModified.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var localPresets by remember { mutableStateOf(allPresets) }
@@ -278,6 +279,7 @@ fun PresetManagementScreen(
                         preset = preset,
                         displayName = displayName,
                         isActive = activePresetId == preset.id,
+                        isModified = activePresetModified && activePresetId == preset.id,
                         isDragging = isDragging,
                         isExporting = exportingPresetId == preset.id,
                         dragModifier = Modifier.draggableHandle(),
@@ -364,6 +366,7 @@ private fun PresetManagementItem(
     preset: CameraPreset,
     displayName: String,
     isActive: Boolean,
+    isModified: Boolean,
     isDragging: Boolean,
     isExporting: Boolean,
     dragModifier: Modifier,
@@ -407,7 +410,7 @@ private fun PresetManagementItem(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = displayName,
+                        text = if (isModified) "$displayName*" else displayName,
                         color = if (isActive) Color(0xFFFFD700) else Color.White,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
