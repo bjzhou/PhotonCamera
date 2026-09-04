@@ -848,7 +848,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         if (update.useRaw?.value == true) {
             desiredUseMultipleExposure = false
-            desiredUseJpgMax = false
             desiredUseRawMax = true
         } else if (update.useRaw?.value == false) {
             desiredUseRawMax = false
@@ -861,7 +860,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (update.useRawMax?.value == true) {
             desiredUseRaw = true
             desiredUseMultipleExposure = false
-            desiredUseJpgMax = false
         }
         if (update.useMultipleExposure?.value == true) {
             desiredUseRaw = false
@@ -870,12 +868,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         // 专业模式与 HDR+ 是同一个拍摄能力，不再保留可独立关闭的状态。
         desiredUseRawMax = desiredUseRaw
-        if (desiredUseJpgMax && prefs.useLivePhoto) {
+        val activeUseJpgMax = desiredUseJpgMax && !desiredUseRaw
+        if (activeUseJpgMax && prefs.useLivePhoto) {
             cameraController.setUseLivePhoto(false)
             userPreferencesRepository.saveUseLivePhoto(false)
         }
         val desiredMultiFrameOutputScale = resolveMultiFrameOutputScale(
-            useJpgMax = desiredUseJpgMax,
+            useJpgMax = activeUseJpgMax,
             useRawMax = desiredUseRawMax,
             rawMaxOutputScale = prefs.rawMaxOutputScale,
         )
@@ -1219,7 +1218,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             captureMode = prefs.captureMode,
             aspectRatio = aspectRatio,
             isProfessionalMode = prefs.captureMode == CaptureMode.PHOTO &&
-                prefs.useRaw && prefs.useRawMax && !prefs.useJpgMax,
+                prefs.useRaw && prefs.useRawMax,
             ultraHdrGainMapEnabled = prefs.ultraHdrGainMapEnabled,
             frameId = prefs.frameId,
             rawDcpId = prefs.rawDcpId,
@@ -2033,8 +2032,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 同步 RAW 设置到相机控制器
                 val multipleExposureEnabled = it.useMultipleExposure
                 val effectiveUseRaw = it.useRaw && !multipleExposureEnabled
-                val effectiveUseJpgMax = it.useJpgMax && !multipleExposureEnabled
-                val effectiveUseRawMax = it.useRawMax && !multipleExposureEnabled
+                val effectiveUseJpgMax =
+                    it.useJpgMax && !effectiveUseRaw && !multipleExposureEnabled
+                val effectiveUseRawMax =
+                    it.useRawMax && effectiveUseRaw && !multipleExposureEnabled
                 val effectiveMultiFrameOutputScale = resolveMultiFrameOutputScale(
                     useJpgMax = effectiveUseJpgMax,
                     useRawMax = effectiveUseRawMax,
@@ -2134,7 +2135,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 // 同步 Live Photo 设置到相机控制器
                 cameraController.setUseLivePhoto(
-                    it.useLivePhoto && !effectiveUseJpgMax && it.captureMode == CaptureMode.PHOTO
+                    it.useLivePhoto && !effectiveUseRaw && !effectiveUseJpgMax &&
+                        it.captureMode == CaptureMode.PHOTO
                 )
                 // 同步 Ultra HDR 设置到相机控制器
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
@@ -2263,8 +2265,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
                 cameraController.setMultiFrameOutputScale(
                     resolveMultiFrameOutputScale(
-                        useJpgMax = prefs.useJpgMax && !prefs.useMultipleExposure,
-                        useRawMax = prefs.useRawMax && !prefs.useMultipleExposure,
+                        useJpgMax = prefs.useJpgMax && !prefs.useRaw &&
+                            !prefs.useMultipleExposure,
+                        useRawMax = prefs.useRawMax && prefs.useRaw &&
+                            !prefs.useMultipleExposure,
                         rawMaxOutputScale = prefs.rawMaxOutputScale,
                     )
                 )
@@ -2277,7 +2281,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     prefs.hdrPlusBracketExposureEnabled
                 )
                 cameraController.setUseLivePhoto(
-                    prefs.useLivePhoto && !prefs.useJpgMax && prefs.captureMode == CaptureMode.PHOTO
+                    prefs.useLivePhoto && !prefs.useRaw && !prefs.useJpgMax &&
+                        prefs.captureMode == CaptureMode.PHOTO
                 )
                 // 应用保存的虚拟光圈
                 applyDefaultVirtualAperture(prefs.defaultVirtualAperture)
@@ -4505,8 +4510,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val prefs = userPreferencesRepository.userPreferences.first()
             cameraController.setMultiFrameOutputScale(
                 resolveMultiFrameOutputScale(
-                    useJpgMax = prefs.useJpgMax && !prefs.useMultipleExposure,
-                    useRawMax = prefs.useRawMax && !prefs.useMultipleExposure,
+                    useJpgMax = prefs.useJpgMax && !prefs.useRaw &&
+                        !prefs.useMultipleExposure,
+                    useRawMax = prefs.useRawMax && prefs.useRaw &&
+                        !prefs.useMultipleExposure,
                     rawMaxOutputScale = normalizedScale,
                 )
             )
