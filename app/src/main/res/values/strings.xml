@@ -202,6 +202,8 @@
     <string name="settings_video_stabilization_mode_eis">Electronic (EIS)</string>
     <string name="settings_video_stabilization_mode_ois">Optical (OIS)</string>
     <string name="settings_video_stabilization_mode_enhanced">Enhanced (EIS+)</string>
+    <string name="settings_oppo_super_stabilization">OPPO Ultra Steady</string>
+    <string name="settings_oppo_super_stabilization_description">Use OPPO\'s Ultra Steady mode for video recording.</string>
     <string name="settings_video_stabilization_strength">EIS+ Strength</string>
     <string name="settings_video_stabilization_strength_description">Higher values apply more of the recovered pose correction; lower values follow camera movement more closely. Changes take effect when the next recording starts.</string>
     <string name="settings_video_stabilization_strength_value">%1$d%%</string>

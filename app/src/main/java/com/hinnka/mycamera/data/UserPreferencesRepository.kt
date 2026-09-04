@@ -200,6 +200,7 @@ data class UserPreferences(
     val videoRecordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
     val videoRecordingTreeUri: String? = null,
     val videoStabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OIS,
+    val oppoSuperStabilizationEnabled: Boolean = false,
     val videoEnhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
     val videoEnhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     val externalLensStabilizationConfig: ExternalLensStabilizationConfig =
@@ -443,6 +444,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_RECORDING_PATH = stringPreferencesKey("video_recording_path")
         private val VIDEO_RECORDING_TREE_URI = stringPreferencesKey("video_recording_tree_uri")
         private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
+        private val OPPO_SUPER_STABILIZATION_ENABLED =
+            booleanPreferencesKey("oppo_super_stabilization_enabled")
         private val VIDEO_ENHANCED_STABILIZATION_ENABLED =
             booleanPreferencesKey("video_enhanced_stabilization_enabled")
         private val VIDEO_ENHANCED_STABILIZATION_STRENGTH =
@@ -733,6 +736,8 @@ class UserPreferencesRepository(private val context: Context) {
                 videoRecordingPath = VideoRecordingPath.fromPersistedName(preferences[VIDEO_RECORDING_PATH]),
                 videoRecordingTreeUri = preferences[VIDEO_RECORDING_TREE_URI]?.takeIf { it.isNotBlank() },
                 videoStabilizationMode = videoStabilizationMode,
+                oppoSuperStabilizationEnabled =
+                    preferences[OPPO_SUPER_STABILIZATION_ENABLED] ?: false,
                 videoEnhancedStabilizationStrength = normalizeStabilizationStrength(
                     preferences[VIDEO_ENHANCED_STABILIZATION_STRENGTH]
                         ?: DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -1494,6 +1499,12 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_STABILIZATION_MODE] = mode.name
             preferences.remove(VIDEO_ENHANCED_STABILIZATION_ENABLED)
+        }
+    }
+
+    suspend fun saveOppoSuperStabilizationEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[OPPO_SUPER_STABILIZATION_ENABLED] = enabled
         }
     }
 

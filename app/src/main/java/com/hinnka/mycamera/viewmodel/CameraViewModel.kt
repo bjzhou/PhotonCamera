@@ -2076,6 +2076,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoAudioInputId(it.videoAudioInputId)
                 cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
+                cameraController.setOppoSuperStabilizationEnabled(
+                    it.oppoSuperStabilizationEnabled
+                )
                 cameraController.setVideoEnhancedStabilizationStrength(
                     it.videoEnhancedStabilizationStrength
                 )
@@ -3572,6 +3575,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val resolvedEnabled = state.value.photoPreviewStabilizationEnabled
         viewModelScope.launch {
             userPreferencesRepository.savePhotoPreviewStabilizationEnabled(resolvedEnabled)
+        }
+    }
+
+    fun setOppoSuperStabilizationEnabled(enabled: Boolean) {
+        cameraController.setOppoSuperStabilizationEnabled(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveOppoSuperStabilizationEnabled(enabled)
         }
     }
 

@@ -1573,6 +1573,25 @@ fun SettingsScreen(
                             },
                         )
 
+                        if (DeviceUtil.isOppo) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(
+                                    R.string.settings_oppo_super_stabilization
+                                ),
+                                description = stringResource(
+                                    R.string.settings_oppo_super_stabilization_description
+                                ),
+                                checked = userPreferences.oppoSuperStabilizationEnabled,
+                                onCheckedChange =
+                                    viewModel::setOppoSuperStabilizationEnabled,
+                            )
+                        }
+
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
                             modifier = Modifier.padding(vertical = 8.dp)

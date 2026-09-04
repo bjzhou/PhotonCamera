@@ -60,6 +60,7 @@ internal object BackupPreferenceSanitizer {
         "logical_camera_binding_whitelist",
         "hidden_focal_lengths",
         "video_audio_input_id",
+        "oppo_super_stabilization_enabled",
         "camera_startup_defaults_restored_v1",
     )
 

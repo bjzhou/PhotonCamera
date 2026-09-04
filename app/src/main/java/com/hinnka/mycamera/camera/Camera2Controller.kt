@@ -108,6 +108,8 @@ class Camera2Controller(private val context: Context) {
         private const val PRECAPTURE_TIMEOUT_MS = 3_000L
         private const val MULTI_FRAME_TORCH_WARMUP_TIMEOUT_MS = 2_000L
         private const val EIS_PLUS_INPUT_WATCHDOG_MS = 2_000L
+        private const val OPPO_SUPER_STABILIZATION_REAR_SESSION_MODE = 0x8028
+        private const val OPPO_SUPER_STABILIZATION_FRONT_SESSION_MODE = 0x802B
 
         // 场景变化检测阈值
         private const val SCENE_CHANGE_EXPOSURE_RATIO = 1.5   // 曝光乘积变化判定为场景变化
@@ -270,6 +272,7 @@ class Camera2Controller(private val context: Context) {
     private var previewSessionGeneration: Long = 0L
     private val previewUpdateScheduled = AtomicBoolean(false)
     private var pendingVendorSessionParameterRestart = false
+    private var oppoSuperStabilizationEnabled = false
 
     private var previewSurface: Surface? = null
     private var previewSurfaceTexture: SurfaceTexture? = null
@@ -2712,8 +2715,15 @@ class Camera2Controller(private val context: Context) {
             }
 
             if (captureMode == CaptureMode.VIDEO) {
+                val sessionOperatingMode = resolveVideoSessionOperatingMode()
+                PLog.i(
+                    TAG,
+                    "Creating video session: operatingMode=0x${sessionOperatingMode.toString(16)}, " +
+                        "oppoSuperStabilization=$oppoSuperStabilizationEnabled, " +
+                        "lensFacing=${if (isCurrentCameraFrontFacing()) "front" else "rear"}"
+                )
                 val sessionConfig = SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR,
+                    sessionOperatingMode,
                     buildList {
                         add(createOutputConfiguration(surface))
                         stabilizationReader?.surface?.let { eisSurface ->
@@ -6328,6 +6338,19 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    fun setOppoSuperStabilizationEnabled(enabled: Boolean) {
+        val resolvedEnabled = enabled && DeviceUtil.isOppo
+        if (oppoSuperStabilizationEnabled == resolvedEnabled) return
+        oppoSuperStabilizationEnabled = resolvedEnabled
+        PLog.i(TAG, "OPPO super stabilization enabled=$resolvedEnabled")
+        if (_state.value.captureMode == CaptureMode.VIDEO &&
+            !_state.value.videoRecordingState.isRecording &&
+            cameraDevice != null && previewSurface != null
+        ) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
+    }
+
     fun setVideoBitrate(bitrate: VideoBitratePreset) {
         _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(bitrate = bitrate))
         refreshVideoCapabilities()
@@ -6526,6 +6549,17 @@ class Camera2Controller(private val context: Context) {
     private fun isCurrentCameraFrontFacing(): Boolean {
         return cachedLensFacing == CameraCharacteristics.LENS_FACING_FRONT ||
             _state.value.getCurrentCameraInfo()?.lensType == LensType.FRONT
+    }
+
+    private fun resolveVideoSessionOperatingMode(): Int {
+        if (!oppoSuperStabilizationEnabled || !DeviceUtil.isOppo) {
+            return SessionConfiguration.SESSION_REGULAR
+        }
+        return if (isCurrentCameraFrontFacing()) {
+            OPPO_SUPER_STABILIZATION_FRONT_SESSION_MODE
+        } else {
+            OPPO_SUPER_STABILIZATION_REAR_SESSION_MODE
+        }
     }
 
     private fun shouldUseVideoEnhancedStabilization(): Boolean {

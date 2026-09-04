@@ -198,6 +198,8 @@
     <string name="settings_video_stabilization_mode_eis">電子防震 (EIS)</string>
     <string name="settings_video_stabilization_mode_ois">光學防震 (OIS)</string>
     <string name="settings_video_stabilization_mode_enhanced">增強防震 (EIS+)</string>
+    <string name="settings_oppo_super_stabilization">OPPO 超級防震</string>
+    <string name="settings_oppo_super_stabilization_description">錄影時使用 OPPO 超級防震模式。</string>
     <string name="settings_video_stabilization_strength">EIS+ 防震強度</string>
     <string name="settings_video_stabilization_strength_description">數值越高，套用的姿態修正越完整；數值越低，畫面越貼近手機移動。下次開始錄影時生效。</string>
     <string name="settings_video_stabilization_strength_value">%1$d%%</string>

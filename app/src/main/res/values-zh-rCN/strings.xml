@@ -198,6 +198,8 @@
     <string name="settings_video_stabilization_mode_eis">电子防抖 (EIS)</string>
     <string name="settings_video_stabilization_mode_ois">光学防抖 (OIS)</string>
     <string name="settings_video_stabilization_mode_enhanced">增强防抖 (EIS+)</string>
+    <string name="settings_oppo_super_stabilization">OPPO 超级防抖</string>
+    <string name="settings_oppo_super_stabilization_description">录像时使用 OPPO 超级防抖模式。</string>
     <string name="settings_video_stabilization_strength">EIS+ 防抖强度</string>
     <string name="settings_video_stabilization_strength_description">数值越高，应用的姿态修正越完整；数值越低，画面越贴近手机移动。下次开始录像时生效。</string>
     <string name="settings_video_stabilization_strength_value">%1$d%%</string>
