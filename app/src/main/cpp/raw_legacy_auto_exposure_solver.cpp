@@ -1,4 +1,5 @@
 #include <jni.h>
+#include "raw_hdrnet_post_exposure.h"
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -84,6 +85,12 @@ float ReferenceReliabilityWeight(float luma) {
         kHighlightWeightZeroDisplayLinearLuma,
         luma);
     return std::clamp(shadow_weight * highlight_weight, 0.0f, 1.0f);
+}
+
+float HdrNetShadowPriority(float reference_luma) {
+    // Modest preference only within the existing reliable-reference cells.
+    // Near-black rejection, spatial weights and portrait priority remain in effect.
+    return 1.0f + 0.25f * (1.0f - SmoothStep(0.02f, 0.25f, reference_luma));
 }
 
 float SpatialGridWeight(int cell) {
@@ -440,116 +447,94 @@ public:
     }
 
     /**
-     * Solves a fixed 8 x 6 result with one downstream exposure. Candidate EVs are derived from
-     * every +/-0.1 EV interval boundary, so the primary selection is the exact maximum weighted
-     * overlap rather than an iterative approximation. HDRNet and Dehaze/DHA are never rerun.
+     * Retains the reference's 8 x 6 scoring, using the full RGB pixels to evaluate
+     * the nonlinear SLM gain response before averaging each cell. Invert that
+     * monotone response at each reference match boundary to retain weighted
+     * interval selection without rerunning HDRNet or Dehaze/DHA.
      */
     std::optional<Sample> SolveSingleGridExposure(
-        const float* display_linear_lumas,
-        int columns,
-        int rows,
+        const float* display_linear_rgb,
+        int width,
+        int height,
         float minimum_ev,
         float maximum_ev) const {
-        if (display_linear_lumas == nullptr || columns != kGridColumns ||
-            rows != kGridRows || !std::isfinite(minimum_ev) ||
-            !std::isfinite(maximum_ev)) {
+        if (display_linear_rgb == nullptr || width < kGridColumns || height < kGridRows ||
+            !std::isfinite(minimum_ev) || !std::isfinite(maximum_ev) ||
+            static_cast<int64_t>(width) * height > std::numeric_limits<int>::max() / 3) {
             return std::nullopt;
         }
         const float safe_minimum = std::clamp(minimum_ev, kMinExposureEv, kMaxExposureEv);
         const float safe_maximum = std::clamp(maximum_ev, kMinExposureEv, kMaxExposureEv);
         if (safe_minimum > safe_maximum) return std::nullopt;
 
-        std::vector<WeightedValue> corrections;
-        std::vector<WeightedValue> initial_residuals;
-        std::vector<float> interval_boundaries;
-        corrections.reserve(eligible_cell_indices_.size());
-        initial_residuals.reserve(eligible_cell_indices_.size());
-        interval_boundaries.reserve(eligible_cell_indices_.size() * 2 + 2);
-        interval_boundaries.push_back(safe_minimum);
-        interval_boundaries.push_back(safe_maximum);
-        for (size_t index = 0; index < eligible_cell_indices_.size(); ++index) {
-            const float candidate_luma =
-                display_linear_lumas[eligible_cell_indices_[index]];
-            if (!std::isfinite(candidate_luma) || candidate_luma < 0.0f) {
-                return std::nullopt;
+        namespace post = photon::hdrnet_post_exposure;
+        std::vector<std::vector<post::Rgb>> cells(kGridCellCount);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const int offset = (y * width + x) * 3;
+                const post::Rgb rgb{display_linear_rgb[offset], display_linear_rgb[offset + 1],
+                                    display_linear_rgb[offset + 2]};
+                if (!std::isfinite(rgb.red) || !std::isfinite(rgb.green) || !std::isfinite(rgb.blue) ||
+                    std::min({rgb.red, rgb.green, rgb.blue}) < 0.0f ||
+                    std::max({rgb.red, rgb.green, rgb.blue}) > 1.0f) return std::nullopt;
+                const int cell = (y * kGridRows / height) * kGridColumns + x * kGridColumns / width;
+                cells[cell].push_back(rgb);
             }
-            const float candidate_ev = std::log2(
-                std::max(candidate_luma, kDisplayLinearLumaFloor));
-            const float residual_ev = std::clamp(
-                candidate_ev - reference_cell_log2_lumas_[index],
-                -kMaximumAbsoluteLog2Residual,
-                kMaximumAbsoluteLog2Residual);
-            const float correction_ev = -residual_ev;
-            const float weight = reference_cell_weights_[index];
-            corrections.push_back(WeightedValue{correction_ev, weight});
-            initial_residuals.push_back(WeightedValue{residual_ev, weight});
-            interval_boundaries.push_back(std::clamp(
-                correction_ev - kMatchResidualToleranceEv,
-                safe_minimum,
-                safe_maximum));
-            interval_boundaries.push_back(std::clamp(
-                correction_ev + kMatchResidualToleranceEv,
-                safe_minimum,
-                safe_maximum));
         }
-        if (corrections.empty()) return std::nullopt;
+        const auto response = [&](int cell, float ev) {
+            const auto gains = post::SplitGain(std::exp2(ev));
+            double sum = 0.0;
+            for (const auto& rgb : cells[cell]) sum += post::DisplayLuma(post::Apply(rgb, gains));
+            return static_cast<float>(sum / cells[cell].size());
+        };
+        const auto exposure_for_luma = [&](int cell, float target) {
+            if (response(cell, safe_minimum) >= target) return safe_minimum;
+            if (response(cell, safe_maximum) <= target) return safe_maximum;
+            float lower = safe_minimum, upper = safe_maximum;
+            for (int iteration = 0; iteration < 24; ++iteration) {
+                const float middle = (lower + upper) * 0.5f;
+                if (response(cell, middle) < target) lower = middle;
+                else upper = middle;
+            }
+            return (lower + upper) * 0.5f;
+        };
 
-        std::sort(interval_boundaries.begin(), interval_boundaries.end());
-        interval_boundaries.erase(
-            std::unique(
-                interval_boundaries.begin(),
-                interval_boundaries.end(),
-                [](float first, float second) {
-                    return std::abs(first - second) <= kScoreEqualityEpsilon;
-                }),
-            interval_boundaries.end());
-        std::vector<float> proposals = interval_boundaries;
-        proposals.reserve(interval_boundaries.size() * 2 + 2);
-        for (size_t index = 0; index + 1 < interval_boundaries.size(); ++index) {
-            proposals.push_back(
-                (interval_boundaries[index] + interval_boundaries[index + 1]) * 0.5f);
+        std::vector<float> weights = reference_cell_weights_;
+        std::vector<float> boundaries{safe_minimum, safe_maximum};
+        std::vector<float> proposals{std::clamp(0.0f, safe_minimum, safe_maximum)};
+        for (size_t index = 0; index < eligible_cell_indices_.size(); ++index) {
+            const int cell = eligible_cell_indices_[index];
+            const float reference_luma = reference_grid_lumas_[cell];
+            weights[index] *= HdrNetShadowPriority(reference_luma);
+            boundaries.push_back(exposure_for_luma(cell,
+                reference_luma * std::exp2(-kMatchResidualToleranceEv)));
+            boundaries.push_back(exposure_for_luma(cell,
+                reference_luma * std::exp2(kMatchResidualToleranceEv)));
+            proposals.push_back(exposure_for_luma(cell, reference_luma));
         }
-        const float weighted_median = WeightedMedian(
-            &corrections,
-            reference_weight_sum_);
-        const float robust_correction = RobustExposureCorrection(
-            initial_residuals,
-            reference_weight_sum_);
-        if (std::isfinite(weighted_median)) {
-            proposals.push_back(std::clamp(
-                weighted_median, safe_minimum, safe_maximum));
+        std::sort(boundaries.begin(), boundaries.end());
+        boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+        proposals.insert(proposals.end(), boundaries.begin(), boundaries.end());
+        for (size_t index = 0; index + 1 < boundaries.size(); ++index) {
+            proposals.push_back((boundaries[index] + boundaries[index + 1]) * 0.5f);
         }
-        if (std::isfinite(robust_correction)) {
-            proposals.push_back(std::clamp(
-                robust_correction, safe_minimum, safe_maximum));
-        }
+        std::sort(proposals.begin(), proposals.end());
+        proposals.erase(std::unique(proposals.begin(), proposals.end()), proposals.end());
 
         std::vector<float> adjusted_lumas(kGridCellCount);
         std::optional<Sample> selected;
         for (float exposure_ev : proposals) {
-            const float exposure_gain = std::exp2(exposure_ev);
-            for (int cell = 0; cell < kGridCellCount; ++cell) {
-                const float luma = display_linear_lumas[cell];
-                if (!std::isfinite(luma) || luma < 0.0f) return std::nullopt;
-                adjusted_lumas[cell] = std::clamp(luma * exposure_gain, 0.0f, 1.0f);
-            }
+            for (int cell : eligible_cell_indices_) adjusted_lumas[cell] = response(cell, exposure_ev);
             MatchResult match;
-            if (!EvaluateGridLumas(
-                    adjusted_lumas.data(), kGridCellCount, &match)) {
+            if (!EvaluateGridLumas(adjusted_lumas.data(), kGridCellCount, &match, &weights)) {
                 return std::nullopt;
             }
             const Sample sample{exposure_ev, match};
-            if (!selected.has_value() || IsBetter(sample, *selected)) {
-                selected = sample;
-            }
+            if (!selected.has_value() || IsBetter(sample, *selected)) selected = sample;
         }
-        if (selected.has_value()) {
-            LogSelectedMatch(
-                "HDRNET_POST", selected->exposure_ev, selected->match);
-        }
+        if (selected.has_value()) LogSelectedMatch("HDRNET_ROLLOFF", selected->exposure_ev, selected->match);
         return selected;
     }
-
     bool ConfigureExposureBounds(float minimum_ev, float maximum_ev) {
         if (!std::isfinite(minimum_ev) || !std::isfinite(maximum_ev) ||
             pending_exposure_ev_.has_value()) {
@@ -704,9 +689,11 @@ private:
     bool EvaluateGridLumas(
         const float* candidate_grid_lumas,
         int candidate_count,
-        MatchResult* output) const {
+        MatchResult* output,
+        const std::vector<float>* weights_override = nullptr) const {
         if (candidate_grid_lumas == nullptr || output == nullptr ||
-            candidate_count != kGridCellCount) {
+            candidate_count != kGridCellCount ||
+            (weights_override != nullptr && weights_override->size() != reference_cell_weights_.size())) {
             return false;
         }
         const int valid_count = static_cast<int>(eligible_cell_indices_.size());
@@ -726,7 +713,8 @@ private:
                 log2_ratios[index] = WeightedValue{};
                 continue;
             }
-            const float weight = reference_cell_weights_[index];
+            const float weight = weights_override != nullptr
+                ? (*weights_override)[index] : reference_cell_weights_[index];
             const float safe_candidate = std::max(candidate_luma, kDisplayLinearLumaFloor);
             const float candidate_ev = std::log2(safe_candidate);
             const float log2_ratio = std::clamp(
@@ -1062,32 +1050,33 @@ Java_com_hinnka_mycamera_raw_RawLegacyAutoExposureNativeBridge_nativeSolveSingle
     JNIEnv* env,
     jobject,
     jlong handle,
-    jfloatArray candidate_display_linear_lumas,
-    jint columns,
-    jint rows,
+    jfloatArray candidate_display_linear_rgb,
+    jint width,
+    jint height,
     jfloat minimum_exposure_ev,
     jfloat maximum_exposure_ev) {
     ExposureSolver* solver = FromHandle(handle);
-    if (solver == nullptr || candidate_display_linear_lumas == nullptr ||
-        columns != kGridColumns || rows != kGridRows ||
-        env->GetArrayLength(candidate_display_linear_lumas) != kGridCellCount) {
+    const int64_t value_count = static_cast<int64_t>(width) * height * 3;
+    if (solver == nullptr || candidate_display_linear_rgb == nullptr ||
+        width < kGridColumns || height < kGridRows ||
+        value_count > std::numeric_limits<jsize>::max() ||
+        env->GetArrayLength(candidate_display_linear_rgb) != value_count) {
         return nullptr;
     }
-    jfloat* lumas =
-        env->GetFloatArrayElements(candidate_display_linear_lumas, nullptr);
-    if (lumas == nullptr) return nullptr;
+    jfloat* rgb = env->GetFloatArrayElements(candidate_display_linear_rgb, nullptr);
+    if (rgb == nullptr) return nullptr;
     std::optional<Sample> result;
     try {
         result = solver->SolveSingleGridExposure(
-            lumas,
-            columns,
-            rows,
+            rgb,
+            width,
+            height,
             minimum_exposure_ev,
             maximum_exposure_ev);
     } catch (const std::bad_alloc&) {
         result.reset();
     }
-    env->ReleaseFloatArrayElements(candidate_display_linear_lumas, lumas, JNI_ABORT);
+    env->ReleaseFloatArrayElements(candidate_display_linear_rgb, rgb, JNI_ABORT);
     if (!result.has_value()) return nullptr;
     const jfloat values[] = {
         result->exposure_ev,

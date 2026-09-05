@@ -53,6 +53,7 @@ internal object DngHdrNetProfileGainTableNative {
             acr3Curve = acr3Curve,
             dehazeCurve = dehazeCurve.toNativeArray(),
             postExposureGain = postExposureGain,
+            mapInputWeights = plan.mapInputWeights,
             outputGains = output,
         )
         return output.takeIf { completed }
@@ -63,6 +64,10 @@ internal object DngHdrNetProfileGainTableNative {
         val dehazeCurve: PhotonDehazeCurveParameters,
         /** Full 256 x 192 post-Dehaze/DHA p99 maximum RGB channel. */
         val postDehazeP99Peak: Float,
+        /** Post-Dehaze/DHA RGB in clockwise-rotated, top-left row-major order. */
+        val displayLinearRgb: FloatArray,
+        val sampleWidth: Int,
+        val sampleHeight: Int,
     )
 
     fun evaluateDehazedDisplayLinearLumaGrid(
@@ -79,9 +84,21 @@ internal object DngHdrNetProfileGainTableNative {
         outputGridWidth: Int,
         outputGridHeight: Int,
     ): Evaluation? {
+        val swapsAxes = when (outputRotation) {
+            0, 180 -> false
+            90, 270 -> true
+            else -> return null
+        }
+        val inputWidth = DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH
+        val inputHeight = DngPhotonProfileGainTableGenerator.HDRNET_INPUT_HEIGHT
+        val sampleWidth = if (swapsAxes) inputHeight else inputWidth
+        val sampleHeight = if (swapsAxes) inputWidth else inputHeight
         val outputCount = outputGridWidth.toLong() * outputGridHeight
-        if (outputCount !in 1..Int.MAX_VALUE.toLong()) return null
+        if (outputGridWidth <= 0 || outputGridHeight <= 0 ||
+            outputCount !in 1..Int.MAX_VALUE.toLong()
+        ) return null
         val output = FloatArray(outputCount.toInt())
+        val outputRgb = FloatArray(sampleWidth * sampleHeight * 3)
         val curveValues = FloatArray(PhotonDehazeCurveParameters.NATIVE_VALUE_COUNT)
         val metrics = FloatArray(EVALUATION_METRIC_COUNT)
         val normalizedTuning = dehazeTuning.normalized()
@@ -110,6 +127,7 @@ internal object DngHdrNetProfileGainTableNative {
             outputLumas = output,
             outputDehazeCurve = curveValues,
             outputMetrics = metrics,
+            outputRgb = outputRgb,
         )
         if (!completed) return null
         val curve = PhotonDehazeCurveParameters.fromNativeArray(curveValues) ?: return null
@@ -120,6 +138,9 @@ internal object DngHdrNetProfileGainTableNative {
             displayLinearLumas = output,
             dehazeCurve = curve,
             postDehazeP99Peak = postDehazeP99Peak,
+            displayLinearRgb = outputRgb,
+            sampleWidth = sampleWidth,
+            sampleHeight = sampleHeight,
         )
     }
 
@@ -148,6 +169,7 @@ internal object DngHdrNetProfileGainTableNative {
         outputLumas: FloatArray,
         outputDehazeCurve: FloatArray,
         outputMetrics: FloatArray,
+        outputRgb: FloatArray,
     ): Boolean
 
     private external fun nativeGenerateGains(
@@ -176,6 +198,7 @@ internal object DngHdrNetProfileGainTableNative {
         acr3Curve: FloatArray,
         dehazeCurve: FloatArray,
         postExposureGain: Float,
+        mapInputWeights: FloatArray,
         outputGains: FloatArray,
     ): Boolean
 

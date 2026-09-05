@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -6,6 +7,8 @@
 #include <limits>
 #include <new>
 #include <vector>
+
+#include "raw_hdrnet_post_exposure.h"
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -135,11 +138,7 @@ AxisSample MakeNormalizedAxisSample(float coordinate, int source_size) {
   };
 }
 
-struct RgbSample {
-  float red;
-  float green;
-  float blue;
-};
+using RgbSample = photon::hdrnet_post_exposure::Rgb;
 
 RgbSample SampleModelRgb(const float* model_input, int input_width,
                          int input_channels, const AxisSample& sample_x,
@@ -453,31 +452,36 @@ RgbSample ApplyDehaze(const RgbSample& rgb, const DehazeCurve& curve) {
   };
 }
 
-float DehazedHdrNetTargetLuma(float short_intensity, float render_gain,
-                              const RgbSample& cell_rgb,
-                              float cell_intensity,
-                              const DehazeCurve& curve) {
-  const float hdrnet_target_luma = std::clamp(
-      short_intensity * render_gain, 0.0f, 1.0f);
-  const float source_scale = cell_intensity > kHdrNetGainEpsilon
-      ? short_intensity / cell_intensity
-      : 0.0f;
-  const RgbSample hdrnet_rgb = cell_intensity > kHdrNetGainEpsilon
-      ? RgbSample{
-            std::clamp(cell_rgb.red * source_scale * render_gain, 0.0f, 1.0f),
-            std::clamp(cell_rgb.green * source_scale * render_gain, 0.0f, 1.0f),
-            std::clamp(cell_rgb.blue * source_scale * render_gain, 0.0f, 1.0f),
-        }
-      : RgbSample{
-            hdrnet_target_luma,
-            hdrnet_target_luma,
-            hdrnet_target_luma,
-        };
-  const float hdrnet_mean =
-      (hdrnet_rgb.red + hdrnet_rgb.green + hdrnet_rgb.blue) / 3.0f;
-  const float dehaze_gain = MappedDehazeLuminance(hdrnet_mean, curve) /
-      std::max(std::clamp(hdrnet_mean, 0.0f, 1.0f), 1.0e-6f);
-  return std::clamp(hdrnet_target_luma * dehaze_gain, 0.0f, 1.0f);
+float HdrNetLuma(const RgbSample& rgb) {
+  return rgb.red * kHdrNetLumaRed + rgb.green * kHdrNetLumaGreen + rgb.blue * kHdrNetLumaBlue;
+}
+
+float TableIntensity(const RgbSample& rgb, const float* weights) {
+  return rgb.red * weights[0] + rgb.green * weights[1] + rgb.blue * weights[2] +
+      std::min({rgb.red, rgb.green, rgb.blue}) * weights[3] +
+      std::max({rgb.red, rgb.green, rgb.blue}) * weights[4];
+}
+
+RgbSample RgbForTableCoordinate(float coordinate, const RgbSample& cell_rgb,
+                                float cell_coordinate, float weight_sum) {
+  // A positive scalar table cannot reproduce a positive target from non-positive
+  // source luma. Define black/signed-noise cells on the neutral axis instead.
+  if (cell_coordinate <= kHdrNetGainEpsilon || HdrNetLuma(cell_rgb) <= kHdrNetGainEpsilon) {
+    const float gray = coordinate / weight_sum;
+    return {gray, gray, gray};
+  }
+  const float scale = coordinate / cell_coordinate;
+  return {cell_rgb.red * scale, cell_rgb.green * scale, cell_rgb.blue * scale};
+}
+
+float PostExposedHdrNetTargetLuma(const RgbSample& short_rgb, float render_gain,
+                                 const DehazeCurve& curve,
+                                 const photon::hdrnet_post_exposure::Gains& gains) {
+  const RgbSample hdrnet_rgb{
+      std::clamp(short_rgb.red * render_gain, 0.0f, 1.0f),
+      std::clamp(short_rgb.green * render_gain, 0.0f, 1.0f),
+      std::clamp(short_rgb.blue * render_gain, 0.0f, 1.0f)};
+  return HdrNetLuma(photon::hdrnet_post_exposure::Apply(ApplyDehaze(hdrnet_rgb, curve), gains));
 }
 
 void WriteDehazeCurve(const DehazeCurve& curve, float* values) {
@@ -522,11 +526,11 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeEvaluateDispl
     jint output_rotation,
     jfloatArray guide_shifts_array, jfloatArray guide_slopes_array,
     jfloatArray output_lumas_array, jfloatArray output_dehaze_curve_array,
-    jfloatArray output_metrics_array) {
+    jfloatArray output_metrics_array, jfloatArray output_rgb_array) {
   if (coefficients_array == nullptr || model_input_array == nullptr ||
       guide_shifts_array == nullptr || guide_slopes_array == nullptr ||
       output_lumas_array == nullptr || output_dehaze_curve_array == nullptr ||
-      output_metrics_array == nullptr ||
+      output_metrics_array == nullptr || output_rgb_array == nullptr ||
       source_grid_width <= 0 ||
       source_grid_height <= 0 || source_grid_depth <= 0 ||
       coefficient_count != 2 || input_width <= 0 || input_height <= 0 ||
@@ -563,6 +567,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeEvaluateDispl
       env->GetArrayLength(guide_slopes_array) != guide_count ||
       env->GetArrayLength(output_lumas_array) != output_values ||
       env->GetArrayLength(output_dehaze_curve_array) != kDehazeCurveValueCount ||
+      env->GetArrayLength(output_rgb_array) != static_cast<int64_t>(input_width) * input_height * 3 ||
       env->GetArrayLength(output_metrics_array) != kEvaluationMetricCount) {
     LogError("Rejected mismatched HDRNet display-grid geometry");
     return JNI_FALSE;
@@ -575,10 +580,11 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeEvaluateDispl
   ScopedFloatArray output_lumas(env, output_lumas_array);
   ScopedFloatArray output_dehaze_curve(env, output_dehaze_curve_array);
   ScopedFloatArray output_metrics(env, output_metrics_array);
+  ScopedFloatArray output_rgb(env, output_rgb_array);
   if (coefficients.data() == nullptr || model_input.data() == nullptr ||
       guide_shifts.data() == nullptr || guide_slopes.data() == nullptr ||
       output_lumas.data() == nullptr || output_dehaze_curve.data() == nullptr ||
-      output_metrics.data() == nullptr) {
+      output_metrics.data() == nullptr || output_rgb.data() == nullptr) {
     LogError("Unable to acquire HDRNet display-grid arrays");
     return JNI_FALSE;
   }
@@ -684,12 +690,16 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeEvaluateDispl
             (static_cast<float>(output_x) + 0.5f) / oriented_width;
         const NormalizedImagePoint source = MapTopLeftOutputToSource(
             output_u, output_v_top, output_rotation);
-        const int source_x = std::clamp(
+        const int source_x = std::clamp<int>(
             static_cast<int>(source.u * input_width), 0, input_width - 1);
-        const int source_y = std::clamp(
+        const int source_y = std::clamp<int>(
             static_cast<int>(source.v * input_height), 0, input_height - 1);
         const RgbSample display_rgb = full_image_display_rgb[
             static_cast<size_t>(source_y * input_width + source_x)];
+        const size_t output_offset = (static_cast<size_t>(output_y) * oriented_width + output_x) * 3;
+        output_rgb.data()[output_offset] = display_rgb.red;
+        output_rgb.data()[output_offset + 1] = display_rgb.green;
+        output_rgb.data()[output_offset + 2] = display_rgb.blue;
         luma_sum += display_rgb.red * kDisplayLumaRed +
             display_rgb.green * kDisplayLumaGreen +
             display_rgb.blue * kDisplayLumaBlue;
@@ -710,6 +720,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeEvaluateDispl
   output_lumas.CommitOnRelease();
   output_dehaze_curve.CommitOnRelease();
   output_metrics.CommitOnRelease();
+  output_rgb.CommitOnRelease();
   return env->ExceptionCheck() ? JNI_FALSE : JNI_TRUE;
 }
 
@@ -727,12 +738,12 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     jfloat min_table_gain, jfloat max_table_gain,
     jfloatArray guide_shifts_array,
     jfloatArray guide_slopes_array, jfloatArray acr_curve_array,
-    jfloatArray dehaze_curve_array, jfloat post_exposure_gain,
+    jfloatArray dehaze_curve_array, jfloat post_exposure_gain, jfloatArray map_input_weights_array,
     jfloatArray output_gains_array) {
   if (coefficients_array == nullptr || model_input_array == nullptr ||
       guide_shifts_array == nullptr ||
       guide_slopes_array == nullptr || acr_curve_array == nullptr ||
-      dehaze_curve_array == nullptr || output_gains_array == nullptr ||
+      dehaze_curve_array == nullptr || map_input_weights_array == nullptr || output_gains_array == nullptr ||
       input_width <= 0 || input_height <= 0 || input_channels < 3 ||
       source_grid_width <= 0 ||
       source_grid_height <= 0 || source_grid_depth <= 0 ||
@@ -772,6 +783,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       env->GetArrayLength(guide_slopes_array) != guide_count ||
       acr_curve_count < 2 ||
       env->GetArrayLength(dehaze_curve_array) != kDehazeCurveValueCount ||
+      env->GetArrayLength(map_input_weights_array) != 5 ||
       env->GetArrayLength(output_gains_array) != output_values) {
     LogError("Rejected mismatched HDRNet PGTM array geometry");
     return JNI_FALSE;
@@ -782,11 +794,12 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
   ScopedFloatArray guide_slopes(env, guide_slopes_array);
   ScopedFloatArray acr_curve(env, acr_curve_array);
   ScopedFloatArray dehaze_curve_values(env, dehaze_curve_array);
+  ScopedFloatArray map_input_weights(env, map_input_weights_array);
   ScopedFloatArray output_gains(env, output_gains_array);
   if (coefficients.data() == nullptr || model_input.data() == nullptr ||
       guide_shifts.data() == nullptr ||
       guide_slopes.data() == nullptr || acr_curve.data() == nullptr ||
-      dehaze_curve_values.data() == nullptr || output_gains.data() == nullptr) {
+      dehaze_curve_values.data() == nullptr || map_input_weights.data() == nullptr || output_gains.data() == nullptr) {
     LogError("Unable to acquire HDRNet PGTM arrays");
     return JNI_FALSE;
   }
@@ -795,6 +808,7 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       !IsFiniteArray(model_input.data(), static_cast<int>(input_values)) ||
       !IsFiniteArray(guide_shifts.data(), guide_count) ||
       !IsFiniteArray(guide_slopes.data(), guide_count) ||
+      !IsFiniteArray(map_input_weights.data(), 5) ||
       !IsValidAcrCurve(acr_curve.data(), acr_curve_count) ||
       !ReadDehazeCurve(
           dehaze_curve_values.data(), kDehazeCurveValueCount, &dehaze_curve)) {
@@ -802,13 +816,27 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
     return JNI_FALSE;
   }
 
+  std::array<float, 5> short_input_weights{};
+  float weight_sum = 0.0f;
+  for (int index = 0; index < 5; ++index) {
+    const float weight = map_input_weights.data()[index] * renderer_baseline_gain / source_to_short_gain;
+    if (!std::isfinite(weight) || weight < 0.0f) return JNI_FALSE;
+    short_input_weights[index] = weight;
+    weight_sum += weight;
+  }
+  if (!std::isfinite(weight_sum) || weight_sum <= 0.0f) return JNI_FALSE;
+  const auto post_exposure = photon::hdrnet_post_exposure::SplitGain(post_exposure_gain);
+#if defined(__ANDROID__)
+  __android_log_print(ANDROID_LOG_INFO, kLogTag,
+      "POST_EXPOSURE gain=%.4f rolloffGain=%.4f digitalGain=%.4f",
+      post_exposure_gain, post_exposure.rolloff, post_exposure.digital);
+#endif
+
   try {
     std::vector<AxisSample> x_samples(static_cast<size_t>(output_grid_width));
     std::vector<AxisSample> y_samples(static_cast<size_t>(output_grid_height));
     std::vector<AxisSample> model_x_samples(static_cast<size_t>(output_grid_width));
     std::vector<AxisSample> model_y_samples(static_cast<size_t>(output_grid_height));
-    std::vector<AxisSample> range_samples(static_cast<size_t>(point_count));
-    std::vector<float> short_intensities(static_cast<size_t>(point_count));
     std::vector<RgbSample> local_model_rgb(static_cast<size_t>(cell_count));
     for (int x = 0; x < output_grid_width; ++x) {
       x_samples[static_cast<size_t>(x)] =
@@ -830,44 +858,27 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
           model_x_samples[static_cast<size_t>(x)],
           model_y_samples[static_cast<size_t>(y)]);
     }
-    for (int point = 0; point < point_count; ++point) {
-      const int evaluated_point = point == 0 ? 1 : point;
-      // Adobe indexes a table with weight * tableSize, so entry p represents p / tableSize.
-      // MapInputWeights already reparameterizes this N axis into Pixel's final-short intensity.
-      const float short_intensity =
-          static_cast<float>(evaluated_point) / point_count;
-      short_intensities[static_cast<size_t>(point)] = short_intensity;
-      const float guide =
-          EvaluateGuide(short_intensity, guide_shifts.data(), guide_slopes.data(),
-                        guide_count);
-      const float range_position = guide * source_grid_depth - 0.5f;
-      const float range_floor = std::floor(range_position);
-      const int lower_unclamped = static_cast<int>(range_floor);
-      range_samples[static_cast<size_t>(point)] = {
-          std::clamp(lower_unclamped, 0, source_grid_depth - 1),
-          std::clamp(lower_unclamped + 1, 0, source_grid_depth - 1),
-          range_position - range_floor,
-      };
-    }
-
     std::atomic<bool> targets_valid{true};
 #pragma omp parallel for schedule(static)
     for (int cell = 0; cell < cell_count; ++cell) {
       const int x = cell % output_grid_width;
       const int y = cell / output_grid_width;
       const RgbSample cell_rgb = local_model_rgb[static_cast<size_t>(cell)];
-      const float cell_intensity = std::clamp(
-          cell_rgb.red * kHdrNetLumaRed +
-              cell_rgb.green * kHdrNetLumaGreen +
-              cell_rgb.blue * kHdrNetLumaBlue,
-          0.0f, 1.0f);
+      const float cell_coordinate = TableIntensity(cell_rgb, short_input_weights.data());
       float* const gain_curve =
           output_gains.data() + static_cast<size_t>(cell) * point_count;
       for (int point = 0; point < point_count; ++point) {
-        const float short_intensity =
-            short_intensities[static_cast<size_t>(point)];
-        const AxisSample& range_sample =
-            range_samples[static_cast<size_t>(point)];
+        // PXL N includes min/max RGB weights; it is not HDRNet Rec.601 luma.
+        // Reconstruct RGB first so colored highlights enter rolloff at the same level
+        // as the image evaluated by the viewfinder solver.
+        const float coordinate = static_cast<float>(point == 0 ? 1 : point) / point_count;
+        const RgbSample short_rgb = RgbForTableCoordinate(
+            coordinate, cell_rgb, cell_coordinate, weight_sum);
+        const float source_luma = HdrNetLuma(short_rgb);
+        const float short_intensity = std::clamp(source_luma, 0.0f, 1.0f);
+        const float guide = EvaluateGuide(
+            short_intensity, guide_shifts.data(), guide_slopes.data(), guide_count);
+        const AxisSample range_sample = MakeNormalizedAxisSample(guide, source_grid_depth);
         const float raw_scale = SampleCoefficient(
             coefficients.data(), source_grid_width, source_grid_depth,
             coefficient_count, x_samples[static_cast<size_t>(x)],
@@ -888,34 +899,28 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
         // prediction to a gain first, then apply uGainLimits. Clamping the
         // affine output itself to zero would turn negative local predictions
         // into DNG's 1/4096 legal minimum and produce grid-shaped black areas.
-        float render_max_gain_for_luma = render_max_gain;
-        if (render_max_gain_blend_threshold > 0.0f) {
-          const float blend = std::clamp(
-              short_intensity / render_max_gain_blend_threshold, 0.0f, 1.0f);
-          render_max_gain_for_luma = Lerp(1.0f, render_max_gain, blend);
-        }
         const float render_gain = std::clamp(
             predicted_luma / (short_intensity + kHdrNetGainEpsilon),
-            render_min_gain, render_max_gain_for_luma);
-        // Dehaze + DHA is downstream of HDRNet. Folding its scalar neutral-axis response into
-        // the same table makes the runtime order HdrNet -> Dehaze/DHA -> profile processing.
-        // Reuse the selected model input's local chromaticity so the arithmetic-RGB curve lookup
-        // agrees with candidate evaluation instead of assuming every table cell is neutral gray.
-        const float target_luma = std::clamp(
-            DehazedHdrNetTargetLuma(
-                short_intensity, render_gain, cell_rgb, cell_intensity,
-                dehaze_curve) * post_exposure_gain,
-            0.0f, 1.0f);
+            render_min_gain, RenderMaximumGain(
+                short_intensity, render_max_gain, render_max_gain_blend_threshold));
+        // Apply the same post-Dehaze RGB rolloff/clipping response used by matching.
+        const float target_luma = PostExposedHdrNetTargetLuma(
+            short_rgb, render_gain, dehaze_curve, post_exposure);
+        if (!std::isfinite(target_luma)) {
+          targets_valid.store(false, std::memory_order_relaxed);
+          gain_curve[point] = min_table_gain;
+          continue;
+        }
         const float pre_curve_target = InputForAcrOutput(
             target_luma, acr_curve.data(), acr_curve_count);
-        // The N axis is final-short intensity = stored source * sourceToShortGain. PGTM itself is
-        // applied before the renderer's BaselineExposure, so divide by the source value after that
+        // PGTM is applied before BaselineExposure, so divide by source luma after that
         // pending exposure. The subsequent exposure ramp then restores pre_curve_target exactly.
         const float baseline_applied_source_intensity =
-            short_intensity * renderer_baseline_gain / source_to_short_gain;
+            source_luma * renderer_baseline_gain / source_to_short_gain;
         const float gain = std::clamp(
             pre_curve_target / baseline_applied_source_intensity, min_table_gain,
             max_table_gain);
+        if (!std::isfinite(gain)) targets_valid.store(false, std::memory_order_relaxed);
         gain_curve[point] = gain;
       }
     }

@@ -171,8 +171,8 @@ internal object DngPhotonProfileGainTableGenerator {
      * coordinate uses MGC's learned 16-segment luma guide from guide_coeffs.pb before trilinear
      * sampling of the bilateral grid. The selected model input supplies each cell's local
      * chromaticity so the downstream arithmetic-RGB Dehaze curve is represented by the scalar
-     * table without reverting to a neutral-gray assumption. [postExposureEv] is applied after
-     * that composed target, so viewfinder matching cannot alter HDRNet inference or its tone shape.
+     * table without reverting to a neutral-gray assumption. [postExposureEv] controls the SLM
+     * rolloff/digital response after that composed target, independently of HDRNet inference.
      */
     fun mapFromHdrNetCoefficients(
         plan: HdrNetProfileGainTablePlan,

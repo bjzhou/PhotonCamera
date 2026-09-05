@@ -1648,16 +1648,14 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 outputRotation = input.outputRotation,
                 dehazeTuning = dehazeTuning,
             ) ?: return null
-            val maximumPostExposureEv = hdrNetPostExposureLimitEv(
-                evaluation.postDehazeP99Peak,
-            )
             val match = input.viewfinderReference
                 ?.takeIf { HDRNET_VIEWFINDER_BRIGHTNESS_MATCH_ENABLED }
                 ?.let { reference ->
                     RawLegacyAutoExposureMatcher.solveHdrNetPostExposure(
                         referenceFrame = reference,
-                        displayLinearLumas = evaluation.displayLinearLumas,
-                        maximumExposureEv = maximumPostExposureEv,
+                        displayLinearRgb = evaluation.displayLinearRgb,
+                        sampleWidth = evaluation.sampleWidth,
+                        sampleHeight = evaluation.sampleHeight,
                     )
                 }
             val restoredPostExposureEv = input.hdrNetPostExposureEv
@@ -1665,7 +1663,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 ?.takeIf(Float::isFinite)
                 ?.coerceIn(
                     MeteringSystem.RAW_EXPOSURE_MIN_EV,
-                    maximumPostExposureEv,
+                    MeteringSystem.RAW_EXPOSURE_MAX_EV,
                 )
             val postExposureEv = match?.exposureEv ?: restoredPostExposureEv ?: 0f
             val postExposureSource = when {
@@ -1680,7 +1678,6 @@ internal class DngPhotonProfileGainTableAlgorithm {
                     "hdrRatio=${plan.hdrRatio} " +
                     "postExposureEv=$postExposureEv " +
                     "postExposureSource=$postExposureSource " +
-                    "maximumPostExposureEv=$maximumPostExposureEv " +
                     "matchRate=${match?.matchRate} " +
                     "meanAbsoluteErrorEv=${match?.meanAbsoluteErrorEv} " +
                     "postDehazeP99Peak=${evaluation.postDehazeP99Peak} " +
@@ -3067,14 +3064,5 @@ internal class DngPhotonProfileGainTableAlgorithm {
         const val GLES31_MIN_SSBO_BYTES = 16L * 1024L * 1024L
         const val STREAMING_TILE_CORE_EDGE_PX = 3072
         const val HDRNET_VIEWFINDER_BRIGHTNESS_MATCH_ENABLED = true
-        const val HDRNET_POST_EXPOSURE_P99_TARGET = 0.98f
-    }
-
-    private fun hdrNetPostExposureLimitEv(postDehazeP99Peak: Float): Float {
-        if (!postDehazeP99Peak.isFinite() || postDehazeP99Peak <= 0f) {
-            return MeteringSystem.RAW_EXPOSURE_MAX_EV
-        }
-        val headroomEv = ln(HDRNET_POST_EXPOSURE_P99_TARGET / postDehazeP99Peak) / ln(2f)
-        return max(0f, headroomEv).coerceAtMost(MeteringSystem.RAW_EXPOSURE_MAX_EV)
     }
 }

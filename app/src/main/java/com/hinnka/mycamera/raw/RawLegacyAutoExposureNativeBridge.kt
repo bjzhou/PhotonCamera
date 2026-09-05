@@ -51,14 +51,15 @@ internal object RawLegacyAutoExposureNativeBridge {
         }
 
         fun solveSingleGridExposure(
-            displayLinearLumas: FloatArray,
-            columns: Int,
-            rows: Int,
+            displayLinearRgb: FloatArray,
+            width: Int,
+            height: Int,
             minimumExposureEv: Float,
             maximumExposureEv: Float,
         ): SingleExposureResult? {
             check(handle != 0L) { "Native exposure solver is closed" }
-            if (columns <= 0 || rows <= 0 || displayLinearLumas.size != columns * rows ||
+            if (width <= 0 || height <= 0 ||
+                displayLinearRgb.size.toLong() != width.toLong() * height * 3 ||
                 !minimumExposureEv.isFinite() || !maximumExposureEv.isFinite() ||
                 minimumExposureEv > maximumExposureEv
             ) {
@@ -66,9 +67,9 @@ internal object RawLegacyAutoExposureNativeBridge {
             }
             val values = nativeSolveSingleGridExposure(
                 handle = handle,
-                candidateDisplayLinearLumas = displayLinearLumas,
-                columns = columns,
-                rows = rows,
+                candidateDisplayLinearRgb = displayLinearRgb,
+                width = width,
+                height = height,
                 minimumExposureEv = minimumExposureEv,
                 maximumExposureEv = maximumExposureEv,
             )
@@ -141,9 +142,9 @@ internal object RawLegacyAutoExposureNativeBridge {
 
     private external fun nativeSolveSingleGridExposure(
         handle: Long,
-        candidateDisplayLinearLumas: FloatArray,
-        columns: Int,
-        rows: Int,
+        candidateDisplayLinearRgb: FloatArray,
+        width: Int,
+        height: Int,
         minimumExposureEv: Float,
         maximumExposureEv: Float,
     ): FloatArray?

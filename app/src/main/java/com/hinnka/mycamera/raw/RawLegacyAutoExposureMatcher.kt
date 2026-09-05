@@ -256,23 +256,20 @@ internal object RawLegacyAutoExposureMatcher {
     }
 
     /**
-     * Matches a fully composed HDRNet -> Dehaze/DHA grid with one downstream exposure only.
-     * HDRNet input exposure and HDR ratio remain fixed, so viewfinder matching cannot flatten the
-     * model or Dehaze/DHA tone shape. Native selection maximizes the weighted number of 8 x 6
-     * cells within 0.1 EV, retaining the same spatial and portrait-priority weights as every
-     * other capture path.
+     * Matches the composed HDRNet -> Dehaze/DHA RGB through the downstream SLM gain response.
+     * HDRNet input exposure and HDR ratio remain fixed. Native selection maximizes the weighted
+     * number of 8 x 6 cells within 0.1 EV, retaining the spatial and portrait-priority weights
+     * with a modest shadow preference. Positive gain splits into rolloff and digital gain.
      */
     fun solveHdrNetPostExposure(
         referenceFrame: RawLegacyExposurePreviewFrame,
-        displayLinearLumas: FloatArray,
-        maximumExposureEv: Float,
+        displayLinearRgb: FloatArray,
+        sampleWidth: Int,
+        sampleHeight: Int,
     ): HdrNetPostExposureMatch? {
-        if (displayLinearLumas.size !=
-            DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH *
-            DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_HEIGHT ||
-            displayLinearLumas.any { !it.isFinite() || it < 0f } ||
-            !maximumExposureEv.isFinite() ||
-            maximumExposureEv < MeteringSystem.RAW_EXPOSURE_MIN_EV
+        if (sampleWidth <= 0 || sampleHeight <= 0 ||
+            displayLinearRgb.size.toLong() != sampleWidth.toLong() * sampleHeight * 3 ||
+            displayLinearRgb.any { !it.isFinite() || it < 0f }
         ) return null
         val solver = RawLegacyAutoExposureNativeBridge.Solver.create(referenceFrame)
             ?: run {
@@ -281,14 +278,11 @@ internal object RawLegacyAutoExposureMatcher {
             }
         return solver.use {
             solver.solveSingleGridExposure(
-                displayLinearLumas = displayLinearLumas,
-                columns = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_WIDTH,
-                rows = DngPhotonProfileGainTableGenerator.HDRNET_MATCH_GRID_HEIGHT,
+                displayLinearRgb = displayLinearRgb,
+                width = sampleWidth,
+                height = sampleHeight,
                 minimumExposureEv = MeteringSystem.RAW_EXPOSURE_MIN_EV,
-                maximumExposureEv = minOf(
-                    maximumExposureEv,
-                    MeteringSystem.RAW_EXPOSURE_MAX_EV,
-                ),
+                maximumExposureEv = MeteringSystem.RAW_EXPOSURE_MAX_EV,
             )?.let { result ->
                 PLog.i(
                     TAG,

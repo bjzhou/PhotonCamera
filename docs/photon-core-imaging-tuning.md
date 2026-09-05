@@ -76,10 +76,11 @@ GPU 强度。锐化不读取 SNR，不触发 RAW 像素统计或 GPU→CPU 回�
   - `0` 保持白点比例 `1`。
   - `1` 完整采用高光直方图估算的比例；中间值在线性比例域插值。
 
-处理顺序为：固定 final-short 线性工作 RGB → 一次 HDRNet → Dehaze/DHA → 单一取景器匹配曝光
+处理顺序为：固定 final-short 线性工作 RGB → 一次 HDRNet → Dehaze/DHA → 取景器匹配与 SLM rolloff
 → PGTM 烘焙 → DCP 色彩映射与 profile tone → 最终锐化。完整 256×192 HDRNet 输出只建立一次
-两组 12-bit 直方图；合成结果按每格全部像素统计为 8×6，匹配只产生 HDRNet 下游曝光，不修改
-short gain 或 HDR ratio。最终渲染只应用烘焙后的 PGTM，不存在独立 Dehaze pass，也不会逐 tile
+两组 12-bit 直方图；匹配沿用 8×6 网格权重，可靠暗部最多增加 25% 权重。候选先对每个像素
+执行 rolloff/digital gain，再统计每格亮度；不施加 P99 匹配限制，不修改 short gain 或 HDR
+ratio。最终渲染只应用烘焙后的 PGTM，不存在独立 Dehaze pass，也不会逐 tile
 重新统计曲线。Classic 与 Local Laplacian 路径不消费这些参数。
 
 ## 生命周期与持久化

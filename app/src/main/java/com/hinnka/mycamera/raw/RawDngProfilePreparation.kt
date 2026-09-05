@@ -154,7 +154,7 @@ internal object RawPhotonHdrMetadata {
     private const val POST_EXPOSURE_CONTRACT_PROPERTY =
         "photonHdrNetPostExposureEvContract"
     private const val CURRENT_POST_EXPOSURE_CONTRACT =
-        "hdrnet_post_dehaze_viewfinder_v1"
+        "hdrnet_post_dehaze_viewfinder_rolloff_v2"
 
     fun read(properties: Map<String, String>): Float? = properties[PROPERTY]
         ?.toFloatOrNull()
