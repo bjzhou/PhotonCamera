@@ -111,7 +111,7 @@
     <string name="settings_auto_save">自動保存</string>
     <string name="settings_auto_save_description">撮影後に写真を自動的に保存します</string>
     <string name="settings_nr_level">ノイズ低減レベル</string>
-    <string name="settings_nr_level_description">ハードウェアのノイズ低減モードを調整します。「オフ」はソフトウェア処理時に詳細を保持するのに役立ちます。</string>
+    <string name="settings_nr_level_description">ハードウェアのノイズ低減モードを調整します。「オフ」はマルチフレームノイズ低減アルゴリズムと組み合わせることで、より多くのディテールを得られます。</string>
     <string name="settings_nr_level_off">オフ</string>
     <string name="settings_nr_level_minimal">最小</string>
     <string name="settings_nr_level_fast">高速</string>

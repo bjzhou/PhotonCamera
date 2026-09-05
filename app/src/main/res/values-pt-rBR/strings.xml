@@ -112,7 +112,7 @@
     <string name="settings_auto_save">Salvar Automaticamente</string>
     <string name="settings_auto_save_description">Salvar fotos automaticamente após a captura</string>
     <string name="settings_nr_level">Nível de Redução de Ruído</string>
-    <string name="settings_nr_level_description">Ajustar o modo de redução de ruído por hardware. \"Desligado\" ajuda a preservar detalhes ao usar processamento por software.</string>
+    <string name="settings_nr_level_description">Ajustar o modo de redução de ruído por hardware. \"Desligado\" pode ser usado com algoritmos de redução de ruído de múltiplos quadros para obter mais detalhes.</string>
     <string name="settings_nr_level_off">Desligado</string>
     <string name="settings_nr_level_minimal">Mínimo</string>
     <string name="settings_nr_level_fast">Rápido</string>

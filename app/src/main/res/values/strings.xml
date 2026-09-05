@@ -358,7 +358,7 @@
     <string name="settings_save_location">Save Location</string>
     <string name="settings_save_location_description">Save location info (GPS) in photo metadata</string>
     <string name="settings_nr_level">Noise Reduction Level</string>
-    <string name="settings_nr_level_description">Adjust the hardware noise reduction mode. "Off" helps preserve details when using software processing.</string>
+    <string name="settings_nr_level_description">Adjust the hardware noise reduction mode. "Off" can be used with multi-frame denoising algorithms to capture more detail.</string>
     <string name="settings_nr_level_off">Off</string>
     <string name="settings_nr_level_minimal">Minimal</string>
     <string name="settings_nr_level_fast">Fast</string>

@@ -329,7 +329,7 @@
     <string name="settings_save_location">儲存地理位置</string>
     <string name="settings_save_location_description">開啟后在相片 EXIF 資訊中記錄經緯度</string>
     <string name="settings_nr_level">降噪等級</string>
-    <string name="settings_nr_level_description">調整系統硬體降噪模式。“關閉”常用于配合軟體算法以獲得更多細節。</string>
+    <string name="settings_nr_level_description">調整系統硬體降噪模式。“關閉”可用於配合多幀降噪演算法以獲得更多細節。</string>
     <string name="settings_nr_level_off">關閉</string>
     <string name="settings_nr_level_minimal">極低</string>
     <string name="settings_nr_level_fast">快速</string>

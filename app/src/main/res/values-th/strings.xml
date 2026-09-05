@@ -234,7 +234,7 @@
     <string name="settings_save_location">บันทึกตำแหน่ง</string>
     <string name="settings_save_location_description">หลังจากเปิดใช้งานแล้วให้บันทึกละติจูดและลองจิจูดในข้อมูล EXIF ​​​​ของรูปภาพ</string>
     <string name="settings_nr_level">ระดับการลดสัญญาณรบกวน</string>
-    <string name="settings_nr_level_description">ปรับโหมดการลดสัญญาณรบกวนด้วยฮาร์ดแวร์ \\"ปิด\\" ช่วยรักษาความคมชัดเมื่อใช้การประมวลผลด้วยซอฟต์แวร์</string>
+    <string name="settings_nr_level_description">ปรับโหมดการลดสัญญาณรบกวนด้วยฮาร์ดแวร์ \\"ปิด\\" สามารถใช้ร่วมกับอัลกอริทึมลดสัญญาณรบกวนแบบหลายเฟรมเพื่อให้ได้รายละเอียดมากขึ้น</string>
     <string name="settings_nr_level_off">ปิด</string>
     <string name="settings_nr_level_minimal">น้อยที่สุด</string>
     <string name="settings_nr_level_fast">เร็ว</string>

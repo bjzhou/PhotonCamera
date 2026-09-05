@@ -111,7 +111,7 @@
     <string name="settings_auto_save">Auto-Speichern</string>
     <string name="settings_auto_save_description">Fotos nach der Aufnahme automatisch speichern</string>
     <string name="settings_nr_level">Rauschunterdrückungs-Level</string>
-    <string name="settings_nr_level_description">Hardware-Rauschunterdrückungsmodus anpassen. \"Aus\" hilft, Details bei der Softwareverarbeitung zu erhalten.</string>
+    <string name="settings_nr_level_description">Hardware-Rauschunterdrückungsmodus anpassen. \"Aus\" kann zusammen mit Algorithmen zur Mehrbild-Rauschunterdrückung verwendet werden, um mehr Details zu erhalten.</string>
     <string name="settings_nr_level_off">Aus</string>
     <string name="settings_nr_level_minimal">Minimal</string>
     <string name="settings_nr_level_fast">Schnell</string>

@@ -111,7 +111,7 @@
     <string name="settings_auto_save">Simpan Otomatis</string>
     <string name="settings_auto_save_description">Simpan foto secara otomatis setelah tangkapan</string>
     <string name="settings_nr_level">Tingkat Pengurangan Noise</string>
-    <string name="settings_nr_level_description">Sesuaikan mode pengurangan noise perangkat keras. \"Off\" membantu menjaga detail saat menggunakan pemrosesan perangkat lunak.</string>
+    <string name="settings_nr_level_description">Sesuaikan mode pengurangan noise perangkat keras. \"Off\" dapat digunakan bersama algoritma pengurangan noise multi-frame untuk mendapatkan lebih banyak detail.</string>
     <string name="settings_nr_level_off">Mati</string>
     <string name="settings_nr_level_minimal">Minimal</string>
     <string name="settings_nr_level_fast">Cepat</string>

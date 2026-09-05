@@ -111,7 +111,7 @@
     <string name="settings_auto_save">Enregistrement automatique</string>
     <string name="settings_auto_save_description">Enregistrer automatiquement les photos après la capture</string>
     <string name="settings_nr_level">Niveau de réduction de bruit</string>
-    <string name="settings_nr_level_description">Ajuster le mode de réduction de bruit matériel. \"Désactivé\" aide à préserver les détails lors de l\'utilisation d\'un traitement logiciel.</string>
+    <string name="settings_nr_level_description">Ajuster le mode de réduction de bruit matériel. \"Désactivé\" peut être utilisé avec des algorithmes de réduction de bruit multi-images pour obtenir davantage de détails.</string>
     <string name="settings_nr_level_off">Désactivé</string>
     <string name="settings_nr_level_minimal">Minimal</string>
     <string name="settings_nr_level_fast">Rapide</string>

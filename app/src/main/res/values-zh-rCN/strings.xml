@@ -348,7 +348,7 @@
     <string name="settings_save_location">保存地理位置</string>
     <string name="settings_save_location_description">开启后在照片 EXIF 信息中记录经纬度</string>
     <string name="settings_nr_level">降噪等级</string>
-    <string name="settings_nr_level_description">调整系统硬件降噪模式。“关闭”常用于配合软件算法以获得更多细节。</string>
+    <string name="settings_nr_level_description">调整系统硬件降噪模式。“关闭”可用于配合多帧降噪算法以获得更多细节。</string>
     <string name="settings_nr_level_off">关闭</string>
     <string name="settings_nr_level_minimal">极低</string>
     <string name="settings_nr_level_fast">快速</string>
