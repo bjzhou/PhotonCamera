@@ -2347,10 +2347,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val scale = (previewLongEdge.toFloat() / captureLongEdge.toFloat()).coerceIn(0.25f, 1f)
         if (abs(scale - lastLoggedSpatialEffectScale) > 0.01f) {
             lastLoggedSpatialEffectScale = scale
-            PLog.d(
-                TAG,
-                "Preview spatial effect scale=$scale preview=${width}x${height} capture=${photoCaptureWidth}x${photoCaptureHeight}"
-            )
+//            PLog.d(
+//                TAG,
+//                "Preview spatial effect scale=$scale preview=${width}x${height} capture=${photoCaptureWidth}x${photoCaptureHeight}"
+//            )
         }
         return scale
     }

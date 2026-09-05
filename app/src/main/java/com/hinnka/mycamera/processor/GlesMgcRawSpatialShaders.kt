@@ -416,18 +416,25 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    val rejection = """
+    val rejection = rejectionWithFlowSource("""
+        uniform sampler2D uFlow;
+        uniform vec4 uFlowScaleOffset;
+        vec4 rejectionFlow(vec2 uv) {
+            return texture(uFlow, uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw);
+        }
+    """.trimIndent())
+
+    /** Share rejection equations while allowing the caller to supply dense or tiled flow. */
+    fun rejectionWithFlowSource(flowSource: String) = """
         #version 300 es
         precision highp float;
         precision highp int;
         uniform sampler2D uBaseGuide;
         uniform sampler2D uAltGuide;
-        uniform sampler2D uFlow;
         uniform sampler2D uUnblocker;
         uniform sampler2D uNoiseEstimates;
         uniform ivec2 uGuideSize;
         uniform ivec2 uRejectionSize;
-        uniform vec4 uFlowScaleOffset;
         uniform vec2 uUnblockerScale;
         uniform vec4 uNoiseTextureScaleBias;
         uniform vec2 uColorDifferenceMultiplier;
@@ -437,6 +444,8 @@ internal object GlesMgcRawSpatialShaders {
         uniform float uExtraMotionRobustnessMotionThreshold;
         layout(location = 0) out float oReverseWeight;
         layout(location = 1) out float oPixelDifference;
+
+        $flowSource
 
         vec2 mirrorUv(vec2 uv) {
             uv = mod(uv, 2.0);
@@ -463,8 +472,7 @@ internal object GlesMgcRawSpatialShaders {
             // V25 requires GenerateRejectionTexture and GuideImage to share the RAW/2
             // Bayer-quad domain.
             vec2 uv = gl_FragCoord.xy / vec2(uRejectionSize);
-            vec2 flowUv = uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw;
-            vec4 flow = texture(uFlow, flowUv);
+            vec4 flow = rejectionFlow(uv);
             vec2 warpedUv = mirrorUv(uv + flow.xy);
             float unblocker = texture(uUnblocker, uv * uUnblockerScale).r;
             if (flow.z < uUnblockerReductionThreshold) unblocker = 0.0;
@@ -532,7 +540,7 @@ internal object GlesMgcRawSpatialShaders {
             oReverseWeight = 1.0 - weight;
             oPixelDifference = pixelDifference;
         }
-    """.trimIndent()
+    """.trimIndent().trimStart()
 
     /** Applies AdjustRejectionWeights' signal-invariant scale to RAW/4 acceptance. */
     val rejectionAcceptance = """
@@ -2424,7 +2432,11 @@ internal object GlesMgcRawSpatialShaders {
      * against the target-level S16 images, avoiding a synthesized motion vector
      * across an alignment discontinuity.
      */
-    val upsampleAlignment = """
+    val upsampleAlignment = buildUpsampleAlignment(globalCandidateTexture = false)
+
+    val upsampleAlignmentWithGpuCandidate = buildUpsampleAlignment(globalCandidateTexture = true)
+
+    private fun buildUpsampleAlignment(globalCandidateTexture: Boolean) = """
         #version 300 es
         precision highp float;
         precision highp int;
@@ -2441,7 +2453,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform int uTargetTileSize;
         uniform float uInitialScale;
         uniform int uHasGlobalCandidate;
-        uniform vec2 uGlobalCandidate;
+        ${if (globalCandidateTexture) "uniform highp sampler2D uGlobalCandidateTexture;" else "uniform vec2 uGlobalCandidate;"}
         out vec4 oAlignment;
 
         int valueAt(highp isampler2D image, ivec2 p) {
@@ -2513,13 +2525,16 @@ internal object GlesMgcRawSpatialShaders {
 
             ivec2 origin = targetLogicalTile * uTargetTileStride;
             vec2 bestFlow = candidateFlow(nearest);
+            vec2 nearestFlow = bestFlow;
             float bestCost = candidateCost(origin, bestFlow);
+            float nearestCost = bestCost;
             float candidateIndex = 0.0;
 
             // The generated worker's candidate order is nearest, next Y, next X.
             // Strict less-than comparison makes this ordering observable on equal costs.
             vec2 flowY = candidateFlow(nextY);
-            float costY = candidateCost(origin, flowY);
+            float costY = ${if (globalCandidateTexture) "all(equal(roundEven(flowY), roundEven(nearestFlow))) ? nearestCost :" else ""}
+                candidateCost(origin, flowY);
             if (costY < bestCost) {
                 bestFlow = flowY;
                 bestCost = costY;
@@ -2527,7 +2542,8 @@ internal object GlesMgcRawSpatialShaders {
             }
 
             vec2 flowX = candidateFlow(nextX);
-            float costX = candidateCost(origin, flowX);
+            float costX = ${if (globalCandidateTexture) "all(equal(roundEven(flowX), roundEven(nearestFlow))) ? nearestCost : all(equal(roundEven(flowX), roundEven(flowY))) ? costY :" else ""}
+                candidateCost(origin, flowX);
             if (costX < bestCost) {
                 bestFlow = flowX;
                 bestCost = costX;
@@ -2537,8 +2553,9 @@ internal object GlesMgcRawSpatialShaders {
             // AlignPyramid::AlignAlt's final merge-grid pass supplies the robust global
             // translation as the fourth candidate. Pyramid-level transitions leave it absent.
             if (uHasGlobalCandidate != 0) {
-                vec2 globalFlow = uGlobalCandidate * uInitialScale;
-                float globalCost = candidateCost(origin, globalFlow);
+                vec2 globalFlow = ${if (globalCandidateTexture) "texelFetch(uGlobalCandidateTexture, ivec2(0), 0).xy" else "uGlobalCandidate"} * uInitialScale;
+                float globalCost = ${if (globalCandidateTexture) "all(equal(roundEven(globalFlow), roundEven(nearestFlow))) ? nearestCost : all(equal(roundEven(globalFlow), roundEven(flowY))) ? costY : all(equal(roundEven(globalFlow), roundEven(flowX))) ? costX :" else ""}
+                    candidateCost(origin, globalFlow);
                 if (globalCost < bestCost) {
                     bestFlow = globalFlow;
                     bestCost = globalCost;

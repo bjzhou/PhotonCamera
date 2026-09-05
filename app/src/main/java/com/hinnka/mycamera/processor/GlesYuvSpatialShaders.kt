@@ -3,56 +3,10 @@ package com.hinnka.mycamera.processor
 /** YUV adapters around the alignment, rejection and merge contracts used by MGC Spatial. */
 internal object GlesYuvSpatialShaders {
     /**
-     * Produces Spatial's signed Fixed14 alignment input at one sample per 2x2 YUV block.
-     * The asymmetric half-add ordering of the RAW worker is algebraically preserved before the
-     * single final S16 quantization.
+     * Decode each 2x2 block once for both rejection and alignment. Clamp individual RGB samples
+     * before averaging, as the Spatial guide does; alpha retains the unscaled Y average.
      */
-    val alignmentInput = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        uniform sampler2D uLuma;
-        uniform ivec2 uInputSize;
-        uniform ivec2 uGuideSize;
-        uniform float uExposureScale;
-        layout(location = 0) out highp int oGray;
-
-        float quadAverage(ivec2 quad) {
-            quad = clamp(quad, ivec2(0), uGuideSize - ivec2(1));
-            ivec2 p = quad * 2;
-            float value = 0.0;
-            for (int y = 0; y < 2; ++y) {
-                for (int x = 0; x < 2; ++x) {
-                    value += texelFetch(
-                        uLuma,
-                        clamp(p + ivec2(x, y), ivec2(0), uInputSize - ivec2(1)),
-                        0
-                    ).r;
-                }
-            }
-            return 0.25 * value;
-        }
-
-        float verticalAt(ivec2 quad) {
-            return 0.5 * quadAverage(quad) + 0.25 * (
-                quadAverage(quad + ivec2(0, -1)) +
-                quadAverage(quad + ivec2(0, 1))
-            );
-        }
-
-        void main() {
-            ivec2 quad = ivec2(gl_FragCoord.xy);
-            float filtered = 0.5 * verticalAt(quad) + 0.25 * (
-                verticalAt(quad + ivec2(-1, 0)) +
-                verticalAt(quad + ivec2(1, 0))
-            );
-            float value = clamp(filtered * uExposureScale, 0.0, 1.0);
-            oGray = int(floor(value * 16383.0 + 0.5));
-        }
-    """.trimIndent()
-
-    /** Builds the half-resolution RGB/variance guide consumed by Spatial rejection. */
-    val guide = """
+    val prepareBlocks = """
         #version 300 es
         precision highp float;
         precision highp int;
@@ -60,51 +14,44 @@ internal object GlesYuvSpatialShaders {
         uniform sampler2D uChroma;
         uniform ivec2 uInputSize;
         uniform ivec2 uChromaSize;
+        uniform int uIsP010;
+        out vec4 oBlock;
+
+        void main() {
+            ivec2 block = ivec2(gl_FragCoord.xy);
+            ivec2 p = block * 2;
+            vec2 cbcr = texelFetch(uChroma, min(block, uChromaSize - 1), 0).rg - 0.5;
+            vec3 chroma = uIsP010 != 0
+                ? vec3(1.4746 * cbcr.y, -0.16455 * cbcr.x - 0.57135 * cbcr.y, 1.8814 * cbcr.x)
+                : vec3(1.402 * cbcr.y, -0.344136 * cbcr.x - 0.714136 * cbcr.y, 1.772 * cbcr.x);
+            vec4 sum = vec4(0.0);
+            for (int y = 0; y < 2; ++y) {
+                for (int x = 0; x < 2; ++x) {
+                    float luma = texelFetch(
+                        uLuma,
+                        clamp(p + ivec2(x, y), ivec2(0), uInputSize - ivec2(1)),
+                        0
+                    ).r;
+                    sum += vec4(clamp(vec3(luma) + chroma, 0.0, 1.0), luma);
+                }
+            }
+            oBlock = sum * 0.25;
+        }
+    """.trimIndent()
+
+    /** Share the 3x3 low-pass reads between the RGB/variance guide and Fixed14 alignment input. */
+    val guideAndAlignment = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uBlocks;
         uniform ivec2 uGuideSize;
         uniform float uExposureScale;
         uniform float uNoiseAlpha;
         uniform float uNoiseBeta;
         uniform float uGreenClippingPoint;
-        uniform int uIsP010;
-        out vec4 oGuide;
-
-        vec3 yccToRgb(vec3 ycc) {
-            float cb = ycc.y - 0.5;
-            float cr = ycc.z - 0.5;
-            if (uIsP010 != 0) {
-                return vec3(
-                    ycc.x + 1.4746 * cr,
-                    ycc.x - 0.16455 * cb - 0.57135 * cr,
-                    ycc.x + 1.8814 * cb
-                );
-            }
-            return vec3(
-                ycc.x + 1.402 * cr,
-                ycc.x - 0.344136 * cb - 0.714136 * cr,
-                ycc.x + 1.772 * cb
-            );
-        }
-
-        vec3 rgbAt(ivec2 p) {
-            p = clamp(p, ivec2(0), uInputSize - ivec2(1));
-            float y = texelFetch(uLuma, p, 0).r;
-            vec2 cbcr = texelFetch(
-                uChroma,
-                clamp(p / 2, ivec2(0), uChromaSize - ivec2(1)),
-                0
-            ).rg;
-            return clamp(yccToRgb(vec3(y, cbcr)), vec3(0.0), vec3(1.0)) *
-                uExposureScale;
-        }
-
-        vec3 blockRgb(ivec2 block) {
-            block = clamp(block, ivec2(0), uGuideSize - ivec2(1));
-            ivec2 p = block * 2;
-            return 0.25 * (
-                rgbAt(p) + rgbAt(p + ivec2(1, 0)) +
-                rgbAt(p + ivec2(0, 1)) + rgbAt(p + ivec2(1, 1))
-            );
-        }
+        layout(location = 0) out vec4 oGuide;
+        layout(location = 1) out highp int oGray;
 
         float kernelWeight(int offset) {
             return offset == 0 ? 0.5 : 0.25;
@@ -115,11 +62,17 @@ internal object GlesYuvSpatialShaders {
             vec3 weightedRgb = vec3(0.0);
             vec3 meanRgb = vec3(0.0);
             vec3 meanRgb2 = vec3(0.0);
-            vec3 centerRgb = blockRgb(center);
+            vec3 centerRgb = vec3(0.0);
+            float weightedLuma = 0.0;
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    vec3 rgb = blockRgb(center + ivec2(x, y));
-                    weightedRgb += rgb * kernelWeight(x) * kernelWeight(y);
+                    vec4 block = texelFetch(uBlocks,
+                        clamp(center + ivec2(x, y), ivec2(0), uGuideSize - 1), 0);
+                    vec3 rgb = block.rgb * uExposureScale;
+                    float weight = kernelWeight(x) * kernelWeight(y);
+                    weightedRgb += rgb * weight;
+                    weightedLuma += block.a * weight;
+                    if (x == 0 && y == 0) centerRgb = rgb;
                     meanRgb += rgb;
                     meanRgb2 += rgb * rgb;
                 }
@@ -127,8 +80,11 @@ internal object GlesYuvSpatialShaders {
             meanRgb /= 9.0;
             meanRgb2 /= 9.0;
             vec3 variance = max(meanRgb2 - meanRgb * meanRgb, vec3(0.0));
+            // Spatial evaluates the green-noise threshold at its RGB luma coordinate.
+            // Using G alone changes greenOnly selection for colored static textures.
+            float averageLuma = dot(weightedRgb, vec3(0.25, 0.5, 0.25));
             float greenNoise = max(
-                uNoiseAlpha * max(weightedRgb.g, 0.0) + uNoiseBeta,
+                uNoiseAlpha * max(averageLuma, 0.0) + uNoiseBeta,
                 1.0e-8
             );
             bool greenOnly = variance.g > 3.0 * greenNoise;
@@ -142,6 +98,105 @@ internal object GlesYuvSpatialShaders {
                 referenceColor = vec3(10000.0);
             }
             oGuide = vec4(referenceColor, referenceVariance * 1024.0);
+            oGray = int(floor(clamp(weightedLuma * uExposureScale, 0.0, 1.0) * 16383.0 + 0.5));
+        }
+    """.trimIndent()
+
+    /** Resolve the small alignment grid at the rejection consumer, without a dense flow texture. */
+    val tiledRejectionFlow = """
+        uniform sampler2D uAlignment;
+        uniform ivec2 uAlignmentGridSize;
+        uniform int uAlignmentTileSize;
+        uniform int uAlignmentGridMin;
+        uniform float uAlignmentScale;
+        ivec2 alignmentTile(ivec2 p) {
+            p = clamp(p, ivec2(0), uGuideSize - 1);
+            return clamp(p / uAlignmentTileSize - uAlignmentGridMin,
+                ivec2(0), uAlignmentGridSize - 1);
+        }
+        vec2 alignmentAt(ivec2 tile) {
+            return texelFetch(uAlignment, tile, 0).xy * uAlignmentScale;
+        }
+        vec4 rejectionFlow(vec2 uv) {
+            ivec2 p = ivec2(uv * vec2(uGuideSize));
+            ivec2 center = alignmentTile(p);
+            ivec2 first = alignmentTile(p - 1);
+            ivec2 last = alignmentTile(p + 1);
+            vec2 flow = alignmentAt(center);
+            vec2 minimumFlow = flow;
+            vec2 maximumFlow = flow;
+            // A 3x3 guide neighborhood intersects at most four merge tiles. Interior pixels
+            // only fetch their own tile; boundary pixels visit each distinct neighbor once.
+            for (int y = 0; y < 2; ++y) {
+                if (first.y + y > last.y) break;
+                for (int x = 0; x < 2; ++x) {
+                    ivec2 tile = first + ivec2(x, y);
+                    if (tile.x > last.x) break;
+                    if (all(equal(tile, center))) continue;
+                    vec2 value = alignmentAt(tile);
+                    minimumFlow = min(minimumFlow, value);
+                    maximumFlow = max(maximumFlow, value);
+                }
+            }
+            vec2 size = vec2(uGuideSize);
+            return vec4(flow / size, length((maximumFlow - minimumFlow) / size), 0.0);
+        }
+    """.trimIndent()
+
+    val rejection = GlesMgcRawSpatialShaders.rejectionWithFlowSource(tiledRejectionFlow)
+
+    /** Produce both quarter-resolution rejection inputs in one framebuffer pass. */
+    val rejectionDownsample = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uRejection;
+        uniform sampler2D uPixelDifference;
+        uniform ivec2 uInputSize;
+        layout(location = 0) out float oWeight;
+        layout(location = 1) out float oPixelDifference;
+        float rejectionAt(vec2 p) {
+            return texture(uRejection, p / vec2(uInputSize)).r;
+        }
+        void main() {
+            vec2 source = 2.0 * floor(gl_FragCoord.xy);
+            vec2 p = source + vec2(1.5);
+            float rejection =
+                4.0 * rejectionAt(p + vec2(-1.5, -1.5)) +
+                4.0 * rejectionAt(p + vec2( 0.5, -1.5)) +
+                2.0 * rejectionAt(p + vec2( 2.0, -1.5)) +
+                4.0 * rejectionAt(p + vec2(-1.5,  0.5)) +
+                4.0 * rejectionAt(p + vec2( 0.5,  0.5)) +
+                2.0 * rejectionAt(p + vec2( 2.0,  0.5)) +
+                2.0 * rejectionAt(p + vec2(-1.5,  2.0)) +
+                2.0 * rejectionAt(p + vec2( 0.5,  2.0)) +
+                      rejectionAt(p + vec2( 2.0,  2.0));
+            oWeight = 1.0 - (rejection - 0.2) * 0.5;
+            oPixelDifference = texture(uPixelDifference, (source + 1.0) / vec2(uInputSize)).r;
+        }
+    """.trimIndent()
+
+    /** Pair adjacent Gaussian taps through linear filtering; the asymmetric -9..10 support stays. */
+    val clippedGaussian = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uInput;
+        uniform ivec2 uSize;
+        uniform vec2 uDirection;
+        uniform vec2 uPairedKernel[10];
+        uniform int uQuantize;
+        out float oFiltered;
+        void main() {
+            vec2 uv = gl_FragCoord.xy / vec2(uSize);
+            float filtered = 0.0;
+            for (int tap = 0; tap < 10; ++tap) {
+                vec2 kernel = uPairedKernel[tap];
+                filtered += kernel.x * texture(uInput,
+                    uv + uDirection * kernel.y / vec2(uSize)).r;
+            }
+            float value = min(texelFetch(uInput, ivec2(gl_FragCoord.xy), 0).r, filtered);
+            oFiltered = uQuantize != 0 ? round(255.0 * clamp(value, 0.0, 1.0)) / 255.0 : value;
         }
     """.trimIndent()
 
