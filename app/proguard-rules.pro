@@ -33,10 +33,35 @@
     native <methods>;
 }
 
-# Protobuf Lite builds schemas by reflecting on generated message field names.
-# MediaPipe TaskRunner serializes SystemInfo during face detector initialization;
-# removing/renaming platform_ and related fields breaks that path in release builds.
-# https://github.com/protocolbuffers/protobuf/blob/main/java/lite.md
+# Generated messages live in MediaPipe packages, not in com.google.protobuf.
+# Keep their fields for Protobuf Lite's reflective schema construction.
 -keep class * extends com.google.protobuf.GeneratedMessageLite {
+    *;
+}
+
+# Preserve the stack frames used by Flogger to discover its caller.
+-keep class com.google.common.flogger.** {
+    *;
+}
+
+# MediaPipe's Java entry points and data accessed by JNI. Keep this in sync with:
+# https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/java/com/google/mediapipe/framework/proguard.pgcfg
+# Native-to-Java calls are not visible to R8; keeping native declarations alone
+# does not preserve callback methods, constructors, or SerializedMessage fields.
+-keep public interface com.google.mediapipe.framework.* {
+    public *;
+}
+-keep public class com.google.mediapipe.framework.Packet {
+    public static *** create(***);
+    public long getNativeHandle();
+    public void release();
+}
+-keep public class com.google.mediapipe.framework.PacketCreator {
+    *** releaseWithSyncToken(...);
+}
+-keep public class com.google.mediapipe.framework.MediaPipeException {
+    <init>(int, byte[]);
+}
+-keep class com.google.mediapipe.framework.ProtoUtil$SerializedMessage {
     *;
 }
