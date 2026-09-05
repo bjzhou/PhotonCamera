@@ -1651,14 +1651,17 @@ internal class DngPhotonProfileGainTableAlgorithm {
             val maximumPostExposureEv = hdrNetPostExposureLimitEv(
                 evaluation.postDehazeP99Peak,
             )
-            val match = input.viewfinderReference?.let { reference ->
-                RawLegacyAutoExposureMatcher.solveHdrNetPostExposure(
-                    referenceFrame = reference,
-                    displayLinearLumas = evaluation.displayLinearLumas,
-                    maximumExposureEv = maximumPostExposureEv,
-                )
-            }
+            val match = input.viewfinderReference
+                ?.takeIf { HDRNET_VIEWFINDER_BRIGHTNESS_MATCH_ENABLED }
+                ?.let { reference ->
+                    RawLegacyAutoExposureMatcher.solveHdrNetPostExposure(
+                        referenceFrame = reference,
+                        displayLinearLumas = evaluation.displayLinearLumas,
+                        maximumExposureEv = maximumPostExposureEv,
+                    )
+                }
             val restoredPostExposureEv = input.hdrNetPostExposureEv
+                ?.takeIf { HDRNET_VIEWFINDER_BRIGHTNESS_MATCH_ENABLED }
                 ?.takeIf(Float::isFinite)
                 ?.coerceIn(
                     MeteringSystem.RAW_EXPOSURE_MIN_EV,
@@ -1666,6 +1669,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 )
             val postExposureEv = match?.exposureEv ?: restoredPostExposureEv ?: 0f
             val postExposureSource = when {
+                !HDRNET_VIEWFINDER_BRIGHTNESS_MATCH_ENABLED -> "DISABLED"
                 match != null -> "VIEWFINDER_MATCH"
                 restoredPostExposureEv != null -> "PERSISTED_CAPTURE_MATCH"
                 else -> "NONE"
@@ -3062,6 +3066,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
         const val HUE_SAT_TEXTURE_UNIT = 3
         const val GLES31_MIN_SSBO_BYTES = 16L * 1024L * 1024L
         const val STREAMING_TILE_CORE_EDGE_PX = 3072
+        const val HDRNET_VIEWFINDER_BRIGHTNESS_MATCH_ENABLED = true
         const val HDRNET_POST_EXPOSURE_P99_TARGET = 0.98f
     }
 
