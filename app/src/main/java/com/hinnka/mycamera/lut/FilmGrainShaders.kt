@@ -90,7 +90,8 @@ internal object FilmGrainShaders {
             float frameSeed,
             float pixelScale
         ) {
-            float grainAmount = pow(clamp(amount, 0.0, 1.0), 0.58);
+            float normalizedAmount = clamp(amount, 0.0, 1.0);
+            float grainAmount = pow(normalizedAmount, 0.58);
             vec3 linearColor = max(grainSrgbToLinear(srgbColor), vec3(1e-4));
             vec3 density = -log(linearColor) * 0.4342944819;
             vec3 densityMin = vec3(0.03);
@@ -113,6 +114,11 @@ internal object FilmGrainShaders {
             float seedPlane = mod(frameSeed, 4096.0) * 0.03125;
             vec2 grainPixel = outputPixel / max(pixelScale, 0.25) + seedOffset;
             float lumaGrain = grainSimplex(vec3(grainPixel * 0.42, seedPlane));
+            // Thin weak grain regions at low settings; restore full coverage by the midpoint.
+            float sparseThreshold = 0.08 * (1.0 - smoothstep(0.0, 0.5, normalizedAmount));
+            float grainCoverage = 1.0 - clamp(
+                sparseThreshold / max(abs(lumaGrain), 1e-4), 0.0, 1.0
+            );
             float dyeR = grainSimplex(vec3(grainPixel * 0.12, seedPlane + 17.0));
             float dyeB = grainSimplex(vec3(grainPixel * 0.12, seedPlane + 43.0));
             vec3 dyeCloud = vec3(dyeR, (dyeR + dyeB) * 0.5, dyeB);
@@ -122,8 +128,8 @@ internal object FilmGrainShaders {
             float highlightVisibility = mix(1.0, 0.32, highlightMask);
             vec3 densityNoise = vec3(lumaGrain * lumaDensityStd * 2.7);
             densityNoise += dyeCloud * densityStd * 0.22;
-            densityNoise *= highlightVisibility;
-            density = max(density + densityNoise * grainAmount * 1.8, vec3(0.0));
+            densityNoise *= highlightVisibility * grainCoverage;
+            density = max(density + densityNoise * grainAmount * 1.5, vec3(0.0));
             return grainLinearToSrgb(exp(-density * 2.302585093));
         }
     """.trimIndent()

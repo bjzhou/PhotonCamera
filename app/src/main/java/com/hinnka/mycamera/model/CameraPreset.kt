@@ -162,26 +162,18 @@ data class CameraPreset(
             CameraPreset(
                 id = "builtin_default",
                 name = "builtin_default",
-                lutId = null,
+                lutId = "standard",
                 colorRecipe = ColorRecipeParams.DEFAULT,
                 effects = EffectParams.DEFAULT,
                 frameId = null,
                 rawDcpId = null,
-                rawDROMode = "DR100",
                 isBuiltIn = true
             ),
             CameraPreset(
                 id = "builtin_hasselblad_natural",
                 name = "builtin_hasselblad_natural",
-                lutId = null,
-                colorRecipe = ColorRecipeParams.DEFAULT.copy(
-                    masterCurvePoints = floatArrayOf(
-                        0f, 0f,
-                        0.2784f, 0.2392f,
-                        0.7216f, 0.7569f,
-                        1f, 1f
-                    )
-                ),
+                lutId = "Hasselblad",
+                colorRecipe = ColorRecipeParams.DEFAULT,
                 effects = EffectParams.DEFAULT,
                 rawRenderingEngine = RawRenderingEngine.HncsCcm.name,
                 isBuiltIn = true
@@ -189,14 +181,16 @@ data class CameraPreset(
             CameraPreset(
                 id = "builtin_portrait",
                 name = "builtin_portrait",
-                lutId = "standard",
+                lutId = "astia",
                 colorRecipe = ColorRecipeParams.DEFAULT.copy(
-                    exposure = 0.2f,
+                    paletteY = 0.8f,
+                    sharpness = -0.2f
                 ),
-                effects = EffectParams.DEFAULT,
+                effects = EffectParams.DEFAULT.copy(
+                    clarity = -0.2f,
+                ),
                 frameId = "polaroid",
                 rawDcpId = null,
-                rawDROMode = "DR100",
                 isBuiltIn = true
             ),
             CameraPreset(
