@@ -645,7 +645,7 @@ private fun LutItem(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val itemShape = RoundedCornerShape(6.dp)
+    val itemShape = RoundedCornerShape(12.dp)
     val borderColor by animateColorAsState(
         targetValue = if (isSelected) LutPanelAccent else Color.White.copy(alpha = 0.15f),
         label = "lutItemBorder"
@@ -653,25 +653,25 @@ private fun LutItem(
 
     Column(
         modifier = modifier
-            .width(64.dp)
-            .aspectRatio(1f)
-            .clip(itemShape)
-            .border(
-                width = if (isSelected) 1.2.dp else 1.dp,
-                color = borderColor,
-                shape = itemShape
-            )
+            .width(56.dp)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onManageClick
             ),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // 预览区域
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(itemShape)
+                .border(
+                    width = if (isSelected) 1.2.dp else 1.dp,
+                    color = borderColor,
+                    shape = itemShape
+                )
                 .then(
                     if (isNone) {
                         Modifier.background(Color.DarkGray)
@@ -765,30 +765,22 @@ private fun LutItem(
                 }
             }
 
-            // 背景只包裹文字，不再形成覆盖缩略图宽度的底栏。
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 3.dp, vertical = 3.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .padding(horizontal = 3.dp, vertical = 1.dp)
-            ) {
-                Text(
-                    text = name,
-                    color = if (isSelected) LutPanelAccent else Color.White,
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
-                    modifier = Modifier
-                        .widthIn(max = 52.dp)
-                        .basicMarquee()
-                )
-            }
         }
+
+        Text(
+            text = name,
+            color = if (isSelected) LutPanelAccent else Color.White,
+            fontSize = 9.sp,
+            lineHeight = 11.sp,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp, vertical = 1.dp)
+                .basicMarquee()
+        )
     }
 }

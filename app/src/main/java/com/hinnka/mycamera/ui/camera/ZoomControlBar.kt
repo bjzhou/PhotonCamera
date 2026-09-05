@@ -171,7 +171,7 @@ fun ZoomControlBar(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
-            .height(32.dp)
+            .height(CameraControlsLayoutDefaults.ZoomBarHeight)
             .pointerInput(isCameraReady, minZoom, maxZoom, zoomStops) {
                 if (!isCameraReady) return@pointerInput
                 var dragAccumulated = 0f

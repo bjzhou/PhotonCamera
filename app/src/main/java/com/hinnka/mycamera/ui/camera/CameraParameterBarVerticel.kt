@@ -17,46 +17,17 @@ fun CameraParameterBarVerticel(
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 16.dp),
+        modifier = modifier.verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        ParameterItem(
-            label = "AE",
-            isSelected = selectedParameter == CameraParameter.EXPOSURE_COMPENSATION,
-            isEnabled = state.isAutoExposure, // Only available in auto exposure mode
-            onClick = { onParameterClick(CameraParameter.EXPOSURE_COMPENSATION) },
-            vertical = true
-        )
-        ParameterItem(
-            label = "Tv",
-            isSelected = selectedParameter == CameraParameter.SHUTTER_SPEED,
-            isEnabled = true,
-            onClick = { onParameterClick(CameraParameter.SHUTTER_SPEED) },
-            vertical = true
-        )
-        ParameterItem(
-            label = "ISO",
-            isSelected = selectedParameter == CameraParameter.ISO,
-            isEnabled = true,
-            onClick = { onParameterClick(CameraParameter.ISO) },
-            vertical = true
-        )
-        ParameterItem(
-            label = "AF",
-            isSelected = selectedParameter == CameraParameter.FOCUS,
-            isEnabled = true,
-            onClick = { onParameterClick(CameraParameter.FOCUS) },
-            vertical = true
-        )
-        ParameterItem(
-            label = "AWB",
-            isSelected = selectedParameter == CameraParameter.WHITE_BALANCE,
-            isEnabled = state.canAdjustWhiteBalance || state.actualAwbTemperature != null,
-            onClick = { onParameterClick(CameraParameter.WHITE_BALANCE) },
-            vertical = true
-        )
+        cameraParameterItems(state).forEach { item ->
+            ParameterItem(
+                item = item,
+                isSelected = selectedParameter == item.parameter,
+                onClick = { onParameterClick(item.parameter) },
+                vertical = true
+            )
+        }
     }
 }

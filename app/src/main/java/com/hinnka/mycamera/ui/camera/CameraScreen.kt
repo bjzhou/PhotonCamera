@@ -121,7 +121,6 @@ private val VideoTopBarBaseHeight = 80.dp
 private val VideoTopBarLoweredOffset = 36.dp
 private val XpanViewfinderInnerBorder = 4.dp
 private val XpanSideControlReservedWidth = 56.dp
-private val XpanBottomControlClearance = 64.dp
 
 private fun formatVirtualApertureFStop(aperture: Float): String {
     val rounded = aperture.roundToInt()
@@ -320,8 +319,7 @@ fun CameraScreen(
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
-    var showVideoParameterRuler by remember { mutableStateOf(false) }
-    var showPhotoParameterRuler by remember { mutableStateOf(false) }
+    var showParameterRuler by remember(state.captureMode, state.useRaw) { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
     val burstCapturingCount = viewModel.burstImageCount
 
@@ -671,11 +669,6 @@ fun CameraScreen(
 
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.captureMode, state.useRaw) {
-        showVideoParameterRuler = false
-        showPhotoParameterRuler = false
-    }
-
     LaunchedEffect(viewModel.showGhostPermissions) {
         if (viewModel.showGhostPermissions) {
             showGhostPermissionDialog = true
@@ -798,22 +791,13 @@ fun CameraScreen(
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
-        val isProfessionalMode = isPhotoStyleMode && state.useRaw && state.isRawSupported
-        val isPhotoParameterRulerVisible = isProfessionalMode || showPhotoParameterRuler
-        val onPhotoParameterClick: (CameraParameter) -> Unit = { parameter ->
+        val onParameterClick: (CameraParameter) -> Unit = { parameter ->
             val wasSelected = selectedParameter == parameter
             selectedParameter = parameter
-            if (!isProfessionalMode) {
-                showPhotoParameterRuler = !wasSelected || !showPhotoParameterRuler
-            }
+            showParameterRuler = !wasSelected || !showParameterRuler
         }
-        LaunchedEffect(isPhotoStyleMode) {
-            if (!isPhotoStyleMode) {
-                parameterRulerBounds = null
-            }
-        }
-        LaunchedEffect(isPhotoParameterRulerVisible) {
-            if (!isPhotoParameterRulerVisible) {
+        LaunchedEffect(showParameterRuler) {
+            if (!showParameterRuler) {
                 parameterRulerBounds = null
             }
         }
@@ -841,7 +825,7 @@ fun CameraScreen(
         val maxCardWidth = (width - sideControlSpace * 2)
             .coerceAtLeast(viewfinderFramePadding)
         val maxCardHeight = if (isXpan) {
-            (contentHeight - topBarBottom - XpanBottomControlClearance)
+            (contentHeight - topBarBottom - CameraControlsLayoutDefaults.XpanViewfinderClearance)
                 .coerceAtLeast(viewfinderFramePadding)
         } else {
             contentHeight
@@ -858,14 +842,16 @@ fun CameraScreen(
         val cardHeight = viewfinderContentWidth / previewAspectRatio + viewfinderFramePadding
         val xpanSideWidth = ((width - cardWidth) / 2).coerceAtLeast(0.dp)
         val placeViewfinderBelowTopBar = contentHeight - cardHeight >= topBarBottom
-        val viewfinderAlignment = if (placeViewfinderBelowTopBar) {
-            Alignment.TopCenter
+        // Balance small previews between the toolbar and collapsed controls. Reserving both
+        // bars first prevents the downward shift from pushing parameters back into the image.
+        val extraViewfinderTopSpacing = if (isXpan) {
+            0.dp
         } else {
-            Alignment.Center
+            ((contentHeight - topBarBottom - cardHeight -
+                CameraControlsLayoutDefaults.CollapsedControlsHeight) / 2).coerceAtLeast(0.dp)
         }
-        val viewfinderOffset = if (placeViewfinderBelowTopBar) topBarBottom else 0.dp
         val viewfinderTop = if (placeViewfinderBelowTopBar) {
-            topBarBottom
+            topBarBottom + extraViewfinderTopSpacing
         } else {
             ((contentHeight - cardHeight) / 2).coerceAtLeast(0.dp)
         }
@@ -955,26 +941,31 @@ fun CameraScreen(
                 },
                 minValue = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
-                    CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
+                    CameraParameter.SHUTTER_SPEED -> state.getManualShutterSpeedRange().lower.toFloat()
                     CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
                     CameraParameter.FOCUS -> 0f
                     CameraParameter.WHITE_BALANCE -> state.awbTemperatureMin.toFloat()
                 },
                 maxValue = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
-                    CameraParameter.SHUTTER_SPEED -> maxOf(state.getShutterSpeedRange().upper, 1_000_000_000L * 15).toFloat()
-                    CameraParameter.ISO -> maxOf(state.getIsoRange().upper, 3200).toFloat()
+                    CameraParameter.SHUTTER_SPEED -> state.getManualShutterSpeedRange().upper.toFloat()
+                    CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
                     CameraParameter.FOCUS -> state.minimumFocusDistance
                     CameraParameter.WHITE_BALANCE -> state.awbTemperatureMax.toFloat()
                 },
                 isAdjustable = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
-                    CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
-                    CameraParameter.ISO -> !state.isIsoAuto
-                    CameraParameter.FOCUS -> !state.isAutoFocus
+                    CameraParameter.SHUTTER_SPEED, CameraParameter.ISO -> true
+                    CameraParameter.FOCUS -> state.minimumFocusDistance > 0f
+                    CameraParameter.WHITE_BALANCE -> state.canAdjustWhiteBalance
+                },
+                isAutoMode = when (selectedParameter) {
+                    CameraParameter.SHUTTER_SPEED -> state.isShutterSpeedAuto
+                    CameraParameter.ISO -> state.isIsoAuto
+                    CameraParameter.FOCUS -> state.isAutoFocus
                     CameraParameter.WHITE_BALANCE ->
-                        state.canAdjustWhiteBalance &&
-                                state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                        state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                    CameraParameter.EXPOSURE_COMPENSATION -> false
                 },
                 showAutoButton = when (selectedParameter) {
                     CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.FOCUS -> true
@@ -982,8 +973,10 @@ fun CameraScreen(
                 },
                 isAutoModeToggleEnabled = when (selectedParameter) {
                     CameraParameter.WHITE_BALANCE -> state.canAdjustWhiteBalance
+                    CameraParameter.FOCUS -> state.minimumFocusDistance > 0f
                     else -> true
                 },
+                valueStep = state.getExposureCompensationStep(),
                 resetValue = selectedParameter.defaultResetValue(),
                 showHyperfocalButton = selectedParameter == CameraParameter.FOCUS && state.minimumFocusDistance > 0f,
                 hyperfocalEnabled = state.isHyperfocalFocusEnabled,
@@ -996,7 +989,10 @@ fun CameraScreen(
                         CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
                         CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
                         CameraParameter.ISO -> viewModel.setIso(value.toInt())
-                        CameraParameter.FOCUS -> viewModel.setFocusDistance(value)
+                        CameraParameter.FOCUS -> {
+                            if (state.isAutoFocus) viewModel.setAutoFocus(false)
+                            viewModel.setFocusDistance(value)
+                        }
                         CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
                     }
                 },
@@ -1267,8 +1263,7 @@ fun CameraScreen(
                         Column(
                             modifier = Modifier
                                 .padding(
-                                    top = viewfinderTopOverlayPadding +
-                                        CameraParameterValuesOverlayHeight + 8.dp,
+                                    top = viewfinderTopOverlayPadding + 8.dp,
                                     end = 12.dp
                                 )
                                 .align(Alignment.TopEnd),
@@ -1334,8 +1329,7 @@ fun CameraScreen(
                                 modifier = Modifier
                                     .padding(
                                         start = 8.dp,
-                                        top = viewfinderTopOverlayPadding +
-                                            CameraParameterValuesOverlayHeight + 8.dp
+                                        top = viewfinderTopOverlayPadding + 8.dp
                                     )
                                     .size(80.dp, 40.dp)
                                     .align(Alignment.TopStart)
@@ -1372,7 +1366,7 @@ fun CameraScreen(
                                 count = burstCapturingCount,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(top = CameraParameterValuesOverlayHeight)
+                                    .padding(top = viewfinderTopOverlayPadding)
                             )
                         }
 
@@ -1384,7 +1378,7 @@ fun CameraScreen(
                                 onCancel = { viewModel.cancelMultipleExposureSession() },
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(top = CameraParameterValuesOverlayHeight)
+                                    .padding(top = viewfinderTopOverlayPadding)
                             )
                         }
 
@@ -1397,13 +1391,6 @@ fun CameraScreen(
                             color = Color.Black
                         )
                     }
-
-                    CameraParameterValuesOverlay(
-                        state = state,
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = viewfinderTopOverlayPadding)
-                    )
 
                     LutNameOverlay(
                         state = lutNameOverlayState,
@@ -1451,9 +1438,9 @@ fun CameraScreen(
                         CameraParameterBarVerticel(
                             state = state,
                             selectedParameter = selectedParameter.takeIf {
-                                isPhotoParameterRulerVisible
+                                showParameterRuler
                             },
-                            onParameterClick = onPhotoParameterClick,
+                            onParameterClick = onParameterClick,
                         )
                     }
                 }
@@ -1503,6 +1490,11 @@ fun CameraScreen(
                 onGalleryClick = {
                     onGalleryClick()
                 },
+                sideControlInset = if (isXpan) {
+                    (xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2
+                } else {
+                    null
+                },
                 modifier = modifier
             )
         }
@@ -1519,8 +1511,8 @@ fun CameraScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(cardHeight)
-                    .align(viewfinderAlignment)
-                    .offset(y = viewfinderOffset)
+                    .align(Alignment.TopCenter)
+                    .offset(y = viewfinderTop)
                     .onGloballyPositioned { coordinates ->
                         viewfinderAreaBounds = coordinates.boundsInRoot()
                     },
@@ -1531,57 +1523,51 @@ fun CameraScreen(
 
             topBar()
 
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    zoomBar()
-                    if (isVideoMode) {
-                        AnimatedVisibility(visible = showVideoParameterRuler) {
-                            parameterRuler(Modifier)
-                        }
-                        parameterBar(
-                            selectedParameter.takeIf { showVideoParameterRuler }
-                        ) { parameter ->
-                            val wasSelected = selectedParameter == parameter
-                            selectedParameter = parameter
-                            showVideoParameterRuler = if (wasSelected) {
-                                !showVideoParameterRuler
-                            } else {
-                                true
-                            }
-                        }
-                    } else {
-                        AnimatedVisibility(visible = isPhotoParameterRulerVisible) {
-                            parameterRuler(
-                                Modifier
-                                    .then(
-                                        if (isXpan) Modifier.width(viewfinderContentWidth)
-                                        else Modifier
-                                    )
-                                    .onGloballyPositioned { coordinates ->
-                                        parameterRulerBounds = coordinates.boundsInRoot()
-                                    }
-                            )
-                        }
-                        AnimatedVisibility(visible = !isXpan) {
-                            parameterBar(
-                                selectedParameter.takeIf { isPhotoParameterRulerVisible },
-                                onPhotoParameterClick,
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    controls(
-                        Modifier
+            CameraBottomControlsLayout(
+                viewfinderBottom = viewfinderTop + cardHeight,
+                modifier = Modifier.fillMaxSize(),
+                zoomBar = {
+                    // Panel visibility changes the zoom content, not the space used to
+                    // position the parameter row beneath it. XPAN has no horizontal bar.
+                    Box(
+                        modifier = if (isXpan) Modifier else Modifier
                             .fillMaxWidth()
-                            .then(
-                                if (isXpan) Modifier.height(144.dp)
-                                else Modifier.wrapContentHeight()
-                            )
-                    )
+                            .height(CameraControlsLayoutDefaults.ZoomBarHeight)
+                    ) {
+                        zoomBar()
+                    }
+                },
+                parameterRuler = {
+                    AnimatedVisibility(
+                        visible = showParameterRuler,
+                        enter = expandVertically(
+                            animationSpec = tween(220, easing = FastOutSlowInEasing),
+                            expandFrom = Alignment.Bottom
+                        ) + fadeIn(tween(160)),
+                        exit = shrinkVertically(
+                            animationSpec = tween(180, easing = FastOutSlowInEasing),
+                            shrinkTowards = Alignment.Bottom
+                        ) + fadeOut(tween(120))
+                    ) {
+                        parameterRuler(
+                            Modifier
+                                .then(if (isXpan) Modifier.width(viewfinderContentWidth) else Modifier)
+                                .onGloballyPositioned { coordinates ->
+                                    parameterRulerBounds = coordinates.boundsInRoot()
+                                }
+                        )
+                    }
+                },
+                parameterBar = {
+                    if (!isXpan) {
+                        parameterBar(selectedParameter.takeIf { showParameterRuler }, onParameterClick)
+                    }
+                },
+                captureControls = {
+                    controls(Modifier.fillMaxWidth())
                 }
-            }
+            )
         }
-
         val panelDismissBounds = if (isXpan) {
             viewfinderAreaBounds ?: previewBounds
         } else {
@@ -1908,21 +1894,21 @@ private fun Controls(
     modeSwitchEnabled: Boolean,
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
+    sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
     val captureButtonStyle by viewModel.captureButtonStyle.collectAsState()
     val captureButtonColor by viewModel.captureButtonColor.collectAsState()
     val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
 
-    BoxWithConstraints(
+    Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        val bottomPadding = (maxHeight - 160.dp).coerceIn(16.dp, 40.dp)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = bottomPadding),
+                .padding(bottom = CameraControlsLayoutDefaults.BottomPadding),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
@@ -1932,7 +1918,7 @@ private fun Controls(
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
-                        .padding(start = 32.dp)
+                        .padding(start = sideControlInset ?: 32.dp)
                         .onGloballyPositioned { coordinates ->
                             onGalleryThumbnailBoundsChanged(coordinates.boundsInRoot())
                         }
@@ -1973,8 +1959,8 @@ private fun Controls(
                         onClick = { viewModel.captureVideoFrame() },
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
-                            .padding(end = 40.dp)
-                            .size(48.dp)
+                            .padding(end = sideControlInset ?: 40.dp)
+                            .size(CameraControlsLayoutDefaults.SideButtonSize)
                             .autoRotate()
                     ) {
                         Icon(
@@ -2015,8 +2001,8 @@ private fun Controls(
                         },
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
-                            .padding(end = 40.dp)
-                            .size(48.dp)
+                            .padding(end = sideControlInset ?: 40.dp)
+                            .size(CameraControlsLayoutDefaults.SideButtonSize)
                             .autoRotate(),
                         shape = CircleShape
                     ) {
@@ -2032,7 +2018,7 @@ private fun Controls(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
 
             CaptureModeSwitcher(
                 shootingMode = when {
@@ -2112,7 +2098,7 @@ fun CaptureButton(
 
     PhysicalButton(
         modifier = modifier
-            .size(72.dp)
+            .size(CameraControlsLayoutDefaults.CaptureButtonSize)
             .scale(scale)
             .pointerInput(allowLongPress) {
                 var isLongPressStarted = false
@@ -2282,7 +2268,7 @@ private fun CaptureModeSwitcher(
     BoxWithConstraints(
         modifier = Modifier
             .width(228.dp)
-            .height(36.dp)
+            .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
             .clip(RoundedCornerShape(18.dp))
             .background(Color.Black.copy(alpha = 0.28f))
             .border(
