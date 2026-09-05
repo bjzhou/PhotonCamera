@@ -95,6 +95,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.processor.MgcRawMaxMode
 import androidx.core.net.toUri
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.Lifecycle
@@ -341,7 +342,10 @@ fun SettingsScreen(
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
     val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsState()
+    val hdrPlusMergeMode by viewModel.hdrPlusMergeMode.collectAsState()
     val hdrPlusBracketExposureEnabled by viewModel.hdrPlusBracketExposureEnabled.collectAsState()
+    val effectiveHdrPlusBracketExposure = hdrPlusMergeMode.supportsBracketExposure &&
+        hdrPlusBracketExposureEnabled
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
@@ -1897,17 +1901,33 @@ fun SettingsScreen(
                 }
 
                 SettingsPage.PROFESSIONAL_MODE -> {
-                    // 专业模式固定使用 HDR+ 与 Spatial 融合。
+                    // 专业模式使用 HDR+，融合模式决定是否支持包围曝光。
                     SettingsSection(
                         title = stringResource(R.string.settings_professional_group_max_hdr)
                     ) {
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_raw_max_spatial_mode),
+                            description = stringResource(R.string.settings_raw_max_spatial_mode_description),
+                            levels = listOf(
+                                MgcRawMaxMode.SPATIAL to stringResource(R.string.settings_raw_max_mode_spatial),
+                                MgcRawMaxMode.SABRE to stringResource(R.string.settings_raw_max_mode_sabre),
+                            ),
+                            currentLevel = hdrPlusMergeMode,
+                            onLevelSelected = viewModel::setHdrPlusMergeMode,
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         SliderSettingItem(
                             title = stringResource(R.string.settings_hdr_plus_frame_count),
                             description = stringResource(
                                 R.string.settings_hdr_plus_frame_count_description
                             ),
                             value = hdrPlusFrameCountSliderValue,
-                            valueRange = (if (hdrPlusBracketExposureEnabled) {
+                            valueRange = (if (effectiveHdrPlusBracketExposure) {
                                 MultiFrameConfig.MIN_HDR_PLUS_BRACKET_FRAME_COUNT
                             } else {
                                 MultiFrameConfig.MIN_HDR_PLUS_FRAME_COUNT
@@ -1933,10 +1953,15 @@ fun SettingsScreen(
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_hdr_plus_bracket_exposure),
                             description = stringResource(
-                                R.string.settings_hdr_plus_bracket_exposure_description
+                                if (hdrPlusMergeMode.supportsBracketExposure) {
+                                    R.string.settings_hdr_plus_bracket_exposure_description
+                                } else {
+                                    R.string.settings_hdr_plus_bracket_exposure_sabre_disabled
+                                }
                             ),
-                            checked = hdrPlusBracketExposureEnabled,
+                            checked = effectiveHdrPlusBracketExposure,
                             onCheckedChange = viewModel::setHdrPlusBracketExposureEnabled,
+                            enabled = hdrPlusMergeMode.supportsBracketExposure,
                         )
 
                         HorizontalDivider(

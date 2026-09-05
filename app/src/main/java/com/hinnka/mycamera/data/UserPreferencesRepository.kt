@@ -57,6 +57,7 @@ import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.mgc.PhotonLookContract
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.processor.MgcRawMaxMode
 import org.json.JSONObject
 
 /**
@@ -170,7 +171,8 @@ data class UserPreferences(
     val jpgMultiFrameDenoiseFrameCount: Int = MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
-    val useRawMax: Boolean = false, // HDR+：RAW Radiance 管线
+    val useRawMax: Boolean = false, // HDR+：RAW 多帧融合
+    val hdrPlusMergeMode: MgcRawMaxMode = MgcRawMaxMode.DEFAULT,
     val hdrPlusFrameCount: Int = MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
     val hdrPlusBracketExposureEnabled: Boolean =
         MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
@@ -415,6 +417,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val JPG_MULTI_FRAME_DENOISE_FRAME_COUNT =
             intPreferencesKey("jpg_multi_frame_denoise_frame_count")
         private val HDR_PLUS_FRAME_COUNT = intPreferencesKey("hdr_plus_frame_count")
+        private val HDR_PLUS_MERGE_MODE = stringPreferencesKey("hdr_plus_merge_mode")
         private val HDR_PLUS_BRACKET_EXPOSURE_ENABLED =
             booleanPreferencesKey("hdr_plus_bracket_exposure_enabled")
         private val USE_MULTIPLE_EXPOSURE = booleanPreferencesKey("use_multiple_exposure")
@@ -536,8 +539,12 @@ class UserPreferencesRepository(private val context: Context) {
             val useHeicExport = preferences[USE_HEIC_EXPORT] ?: false
             val useJpeg444Export =
                 (preferences[USE_JPEG_444_EXPORT] ?: false) && !useHeicExport
-            val hdrPlusBracketExposureEnabled = preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED]
-                ?: MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE
+            val hdrPlusMergeMode = MgcRawMaxMode.entries.firstOrNull {
+                it.name == preferences[HDR_PLUS_MERGE_MODE]
+            } ?: MgcRawMaxMode.DEFAULT
+            val hdrPlusBracketExposureEnabled = hdrPlusMergeMode.supportsBracketExposure &&
+                (preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED]
+                    ?: MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE)
             val storedVideoStabilizationMode = VideoStabilizationMode.entries.firstOrNull {
                 it.name == preferences[VIDEO_STABILIZATION_MODE]
             } ?: VideoStabilizationMode.OIS
@@ -690,6 +697,7 @@ class UserPreferencesRepository(private val context: Context) {
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useRawMax = useRawMax,
+                hdrPlusMergeMode = hdrPlusMergeMode,
                 hdrPlusFrameCount = preferences[HDR_PLUS_FRAME_COUNT]
                     ?.let {
                         MultiFrameConfig.normalizeHdrPlusFrameCount(
@@ -1868,13 +1876,38 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun saveHdrPlusFrameCount(count: Int) {
         context.dataStore.edit { preferences ->
-            preferences[HDR_PLUS_FRAME_COUNT] = MultiFrameConfig.normalizeHdrPlusFrameCount(count)
+            val mode = MgcRawMaxMode.entries.firstOrNull {
+                it.name == preferences[HDR_PLUS_MERGE_MODE]
+            } ?: MgcRawMaxMode.DEFAULT
+            preferences[HDR_PLUS_FRAME_COUNT] = MultiFrameConfig.normalizeHdrPlusFrameCount(
+                count,
+                bracketExposureEnabled = mode.supportsBracketExposure &&
+                    (preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED]
+                        ?: MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE),
+            )
+        }
+    }
+
+    suspend fun saveHdrPlusMergeMode(mode: MgcRawMaxMode) {
+        context.dataStore.edit { preferences ->
+            preferences[HDR_PLUS_MERGE_MODE] = mode.name
+            if (!mode.supportsBracketExposure) {
+                preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED] = false
+            }
         }
     }
 
     suspend fun saveHdrPlusBracketExposureEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
-            preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED] = enabled
+            val mode = MgcRawMaxMode.entries.firstOrNull {
+                it.name == preferences[HDR_PLUS_MERGE_MODE]
+            } ?: MgcRawMaxMode.DEFAULT
+            val bracketExposureEnabled = enabled && mode.supportsBracketExposure
+            preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED] = bracketExposureEnabled
+            preferences[HDR_PLUS_FRAME_COUNT] = MultiFrameConfig.normalizeHdrPlusFrameCount(
+                preferences[HDR_PLUS_FRAME_COUNT] ?: MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
+                bracketExposureEnabled = bracketExposureEnabled,
+            )
         }
     }
 

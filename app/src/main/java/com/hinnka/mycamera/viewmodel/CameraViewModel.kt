@@ -1556,6 +1556,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             SharingStarted.Eagerly,
             MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
         )
+    val hdrPlusMergeMode: StateFlow<MgcRawMaxMode> = userPreferencesRepository.userPreferences
+        .map { it.hdrPlusMergeMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MgcRawMaxMode.DEFAULT)
     val hdrPlusBracketExposureEnabled: StateFlow<Boolean> =
         userPreferencesRepository.userPreferences
             .map { it.hdrPlusBracketExposureEnabled }
@@ -1876,7 +1879,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val chronologicalFrames = pendingRawStackFrames
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
-                    val rawMaxHdrFusionEnabled = state.value.isHdrPlusBracketExposureEnabled
+                    val captureState = state.value
+                    val rawMaxMode = captureState.hdrPlusMergeMode
+                    val rawMaxHdrFusionEnabled = captureState.isHdrPlusBracketExposureEnabled
                     val capturePortraitMask = consumeCapturePortraitMask()
                     viewModelScope.launch {
                         val exposurePlan = RawmaxExposurePlanner.plan(
@@ -1940,6 +1945,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             characteristics = characteristics,
                             captureResult = referenceCaptureResult,
                             rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
+                            rawMaxMode = rawMaxMode,
                             capturePortraitMask = capturePortraitMask,
                         )
                     }
@@ -2063,6 +2069,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     cameraController.setJpgMultiFrameDenoiseFrameCount(
                         it.jpgMultiFrameDenoiseFrameCount
                     )
+                }
+                if (currentCameraState.hdrPlusMergeMode != it.hdrPlusMergeMode) {
+                    cameraController.setHdrPlusMergeMode(it.hdrPlusMergeMode)
                 }
                 if (currentCameraState.hdrPlusFrameCount != it.hdrPlusFrameCount) {
                     cameraController.setHdrPlusFrameCount(it.hdrPlusFrameCount)
@@ -2275,6 +2284,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setJpgMultiFrameDenoiseFrameCount(
                     prefs.jpgMultiFrameDenoiseFrameCount
                 )
+                cameraController.setHdrPlusMergeMode(prefs.hdrPlusMergeMode)
                 cameraController.setHdrPlusFrameCount(prefs.hdrPlusFrameCount)
                 cameraController.setUseJpgMaxHdrComposition(prefs.useJpgMaxHdrComposition)
                 cameraController.setHdrPlusBracketExposureEnabled(
@@ -4468,6 +4478,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setHdrPlusMergeMode(mode: MgcRawMaxMode) {
+        cameraController.setHdrPlusMergeMode(mode)
+        viewModelScope.launch {
+            userPreferencesRepository.saveHdrPlusMergeMode(mode)
+        }
+    }
+
     fun setHdrPlusFrameCount(count: Int) {
         val normalizedCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
             count,
@@ -4480,14 +4497,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setHdrPlusBracketExposureEnabled(enabled: Boolean) {
-        val normalizedFrameCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
-            cameraController.state.value.hdrPlusFrameCount,
-            bracketExposureEnabled = enabled,
-        )
-        cameraController.setHdrPlusFrameCount(normalizedFrameCount)
         cameraController.setHdrPlusBracketExposureEnabled(enabled)
         viewModelScope.launch {
-            userPreferencesRepository.saveHdrPlusFrameCount(normalizedFrameCount)
             userPreferencesRepository.saveHdrPlusBracketExposureEnabled(enabled)
         }
     }
@@ -5706,6 +5717,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?,
         rawMaxHdrFusionEnabled: Boolean,
+        rawMaxMode: MgcRawMaxMode,
         capturePortraitMask: PortraitMaskSnapshot?,
     ) {
         try {
@@ -5755,7 +5767,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            val rawMaxMode = MgcRawMaxMode.SPATIAL
             val rawSpatialOutputMode = if (isRawStack) {
                 rawMaxMode.outputMode
             } else {
@@ -5778,7 +5789,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (isRawStack) {
                 PLog.i(
                     TAG,
-                    "RAWmax output layout=${rawSpatialOutputMode.name} " +
+                    "RAWmax mergeMode=${rawMaxMode.name} output layout=${rawSpatialOutputMode.name} " +
                         "outputScale=$superResScale " +
                         "superResolution=${rawSpatialOutputMode == MgcSpatialOutputMode.RGB}",
                 )

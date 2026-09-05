@@ -38,6 +38,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
@@ -6766,12 +6767,22 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    fun setHdrPlusMergeMode(mode: MgcRawMaxMode) {
+        val currentState = _state.value
+        _state.value = currentState.copy(
+            hdrPlusMergeMode = mode,
+            hdrPlusBracketExposureEnabled = currentState.hdrPlusBracketExposureEnabled &&
+                mode.supportsBracketExposure,
+        )
+    }
+
     fun setHdrPlusFrameCount(frameCount: Int) {
         val currentState = _state.value
         _state.value = _state.value.copy(
             hdrPlusFrameCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
                 frameCount,
-                bracketExposureEnabled = currentState.hdrPlusBracketExposureEnabled,
+                bracketExposureEnabled = currentState.hdrPlusMergeMode.supportsBracketExposure &&
+                    currentState.hdrPlusBracketExposureEnabled,
             ),
         )
     }
@@ -6782,11 +6793,12 @@ class Camera2Controller(private val context: Context) {
 
     fun setHdrPlusBracketExposureEnabled(enabled: Boolean) {
         val currentState = _state.value
+        val bracketExposureEnabled = enabled && currentState.hdrPlusMergeMode.supportsBracketExposure
         _state.value = currentState.copy(
-            hdrPlusBracketExposureEnabled = enabled,
+            hdrPlusBracketExposureEnabled = bracketExposureEnabled,
             hdrPlusFrameCount = MultiFrameConfig.normalizeHdrPlusFrameCount(
                 currentState.hdrPlusFrameCount,
-                bracketExposureEnabled = enabled,
+                bracketExposureEnabled = bracketExposureEnabled,
             ),
         )
     }

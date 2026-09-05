@@ -32,7 +32,7 @@ enum class MgcMergeMethod(val mgcValue: Int) {
     SPATIAL_RGB(3),
 }
 
-/** Legacy processor choices retained for the internal fusion implementation. */
+/** HDR+ fusion modes exposed in professional-mode settings. */
 enum class MgcRawMaxMode {
     SABRE,
     SPATIAL;
@@ -40,6 +40,9 @@ enum class MgcRawMaxMode {
     companion object {
         val DEFAULT: MgcRawMaxMode = SPATIAL
     }
+
+    val supportsBracketExposure: Boolean
+        get() = this == SPATIAL
 
     val outputMode: MgcSpatialOutputMode
         get() = MgcSpatialOutputMode.RGB

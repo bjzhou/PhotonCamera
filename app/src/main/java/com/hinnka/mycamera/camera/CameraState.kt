@@ -3,6 +3,7 @@ package com.hinnka.mycamera.camera
 import android.graphics.Rect
 import android.util.Range
 import android.util.Size
+import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
@@ -365,6 +366,7 @@ data class CameraState(
     val multiFrameOutputScale: Float? = null,
     val jpgMultiFrameDenoiseFrameCount: Int = MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
     val hdrPlusFrameCount: Int = MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
+    val hdrPlusMergeMode: MgcRawMaxMode = MgcRawMaxMode.DEFAULT,
     val useJpgMaxHdrComposition: Boolean = false,
     val hdrPlusBracketExposureEnabled: Boolean = MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
     val useRaw: Boolean = false,
@@ -418,7 +420,8 @@ data class CameraState(
         get() = isMultiFrameEnabled && useRaw
 
     val isHdrPlusBracketExposureEnabled: Boolean
-        get() = isRawMaxEnabled && hdrPlusBracketExposureEnabled
+        get() = isRawMaxEnabled && hdrPlusMergeMode.supportsBracketExposure &&
+            hdrPlusBracketExposureEnabled
 
     val activeMultiFrameCount: Int
         get() = when {
@@ -427,7 +430,7 @@ data class CameraState(
             )
             isRawMaxEnabled -> MultiFrameConfig.normalizeHdrPlusFrameCount(
                 hdrPlusFrameCount,
-                bracketExposureEnabled = hdrPlusBracketExposureEnabled,
+                bracketExposureEnabled = isHdrPlusBracketExposureEnabled,
             )
             else -> 1
         }

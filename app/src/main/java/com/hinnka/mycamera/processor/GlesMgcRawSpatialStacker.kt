@@ -513,6 +513,7 @@ internal class GlesMgcRawSpatialStacker(
     private var sabreMergeBayerProgram = 0
     private var sabreExtractBayerProgram = 0
     private var sabreGuideAndCovarianceProgram = 0
+    private var sabreBaseFrameReferenceColorProgram = 0
     private var sabreMergeProgram = 0
     private var sabreCopyMaskProgram = 0
     private var sabreCopyAlphaProgram = 0
@@ -2201,7 +2202,7 @@ internal class GlesMgcRawSpatialStacker(
                     "${sabreKernelParameters.coherenceScale} " +
                     "forceReferenceColorRgb=${sabreKernelParameters.forceReferenceColorRgb} " +
                     "mergeGradientThreshold=${coreImagingTuning.fusion.mergeGradientThreshold ?: "adaptive"} " +
-                    "guideColorSpace=sqrt noiseLut=qmc64x10 " +
+                    "guideColorSpace=sqrt noiseLut=qmc64x10 rejectionGuideFilter=bicubic-both-frames " +
                     "alignmentInputGain=${referenceCalibration.alignmentGain} " +
                     "alignmentDomain=signed-s16",
             )
@@ -2215,11 +2216,20 @@ internal class GlesMgcRawSpatialStacker(
                 extracted = referenceExtracted,
                 noiseTexture = referenceNoise,
                 calibration = referenceCalibration,
-                guide = referenceGuide,
+                guide = currentGuide,
                 covariance = referenceCovariance,
                 guideWidth = extractedWidth,
                 guideHeight = extractedHeight,
                 kernelParameters = sabreKernelParameters,
+            )
+            // The base and alternate guides must have the same rejection filter. Reuse the
+            // alternate guide as scratch before the loop; its unfiltered base data is no longer
+            // needed once the reference color has been prepared (V25 kBaseFrameRefColorEntryPoint).
+            renderSabreBaseFrameReferenceColor(
+                guide = currentGuide,
+                referenceColor = referenceGuide,
+                guideWidth = extractedWidth,
+                guideHeight = extractedHeight,
             )
             val referenceGrayPyramid = buildGrayPyramid(referenceRaw, referenceCalibration)
             val referenceAlignmentProducts = buildReferenceAlignmentProducts(referenceGrayPyramid)
@@ -2695,6 +2705,19 @@ internal class GlesMgcRawSpatialStacker(
             0f,
         )
         draw(program, guideWidth, guideHeight, intArrayOf(guide, covariance))
+    }
+
+    private fun renderSabreBaseFrameReferenceColor(
+        guide: Int,
+        referenceColor: Int,
+        guideWidth: Int,
+        guideHeight: Int,
+    ) {
+        val program = sabreBaseFrameReferenceColorProgram
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uBaseGuide", 0, guide)
+        uniform2i(program, "uGuideSize", guideWidth, guideHeight)
+        draw(program, guideWidth, guideHeight, intArrayOf(referenceColor))
     }
 
     private fun renderSabreRejection(
@@ -3198,6 +3221,10 @@ internal class GlesMgcRawSpatialStacker(
         sabreGuideAndCovarianceProgram = linkProgram(
             GlesMgcRawSabreShaders.guideAndCovariance,
             "mgc_sabre_guide_covariance",
+        )
+        sabreBaseFrameReferenceColorProgram = linkProgram(
+            GlesMgcRawSabreShaders.baseFrameReferenceColor,
+            "mgc_sabre_base_frame_reference_color",
         )
         rawToGrayProgram = linkProgram(GlesMgcRawSpatialShaders.rawToGray, "mgc_sabre_raw_to_gray")
         downsampleProgram = linkProgram(

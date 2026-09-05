@@ -257,7 +257,7 @@
     <string name="settings_use_jpg_max">Multi-frame denoise</string>
     <string name="settings_use_raw_max">HDR+</string>
     <string name="settings_raw_max_spatial_mode">HDR+ merge mode</string>
-    <string name="settings_raw_max_spatial_mode_description">Sabre merges same-exposure frames for noise reduction. Spatial captures bracketed exposures and fuses highlight and shadow detail.</string>
+    <string name="settings_raw_max_spatial_mode_description">Spatial supports bracket exposure to preserve highlight and shadow detail. Sabre merges same-exposure frames for noise reduction and disables bracket exposure.</string>
     <string name="settings_raw_max_mode_sabre">Sabre</string>
     <string name="settings_raw_max_mode_spatial">Spatial</string>
     <string name="settings_use_multiple_exposure">Multiple Exposure</string>
@@ -275,6 +275,7 @@
     <string name="settings_hdr_plus_frame_count_description">Number of frames captured by HDR+. With bracket exposure enabled, 2 frames use normal plus long exposure when available, and 3 or more use the complete bracket plan.</string>
     <string name="settings_hdr_plus_bracket_exposure">HDR+ bracket exposure</string>
     <string name="settings_hdr_plus_bracket_exposure_description">Capture bracketed exposures to preserve more highlight and shadow detail. Off by default.</string>
+    <string name="settings_hdr_plus_bracket_exposure_sabre_disabled">Sabre does not support bracket exposure. Select Spatial to enable it.</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capture a short video clip along with your photo for a dynamic live photo effect.</string>
     <string name="settings_develop_animation">Develop Animation</string>

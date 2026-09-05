@@ -267,6 +267,55 @@ internal object GlesMgcRawSabreShaders {
         }
     """.trimIndent()
 
+    // V25 kFunctionSampleBicubic (0x5e2284). Classic Sabre constructs its programs with
+    // REJECTION_ONLY=false; both sides of the comparison use this B-spline filter.
+    private val sampleBicubicAbsolute = """
+        vec4 sampleBicubicAbsolute(sampler2D image, vec2 uv) {
+            vec2 pixel = uv * vec2(uGuideSize) + 0.5;
+            vec2 integerPixel = floor(pixel);
+            vec2 a = fract(pixel);
+            vec2 w0 = (1.0 / 6.0) * (a * (a * (-a + 3.0) - 3.0) + 1.0);
+            vec2 w1 = (1.0 / 6.0) * (a * a * (3.0 * a - 6.0) + 4.0);
+            vec2 w2 = (1.0 / 6.0) * (a * (a * (-3.0 * a + 3.0) + 3.0) + 1.0);
+            vec2 w3 = (1.0 / 6.0) * (a * a * a);
+            vec2 g0 = w0 + w1;
+            vec2 g1 = w2 + w3;
+            vec2 h0 = -1.0 + w1 / g0;
+            vec2 h1 = 1.0 + w3 / g1;
+            vec2 reciprocalSize = 1.0 / vec2(uGuideSize);
+            vec2 p0 = (integerPixel + h0 - 0.5) * reciprocalSize;
+            vec2 p1 = (integerPixel + h1 - 0.5) * reciprocalSize;
+            // Take abs after each bilinear lookup, exactly as MGC does: guide alpha stores
+            // the green-only flag in its sign, while RGB and variance share the same filter.
+            return g0.y * (
+                g0.x * abs(texture(image, vec2(p0.x, p0.y))) +
+                g1.x * abs(texture(image, vec2(p1.x, p0.y)))
+            ) + g1.y * (
+                g0.x * abs(texture(image, vec2(p0.x, p1.y))) +
+                g1.x * abs(texture(image, vec2(p1.x, p1.y)))
+            );
+        }
+    """.trimIndent()
+
+    /** V25 kBaseFrameRefColorEntryPoint (0x4d9fd9), run once before alternate-frame rejection. */
+    val baseFrameReferenceColor = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uBaseGuide;
+        uniform ivec2 uGuideSize;
+        layout(location = 0) out vec4 oReferenceColor;
+
+        ${sampleBicubicAbsolute.prependIndent("        ")}
+
+        void main() {
+            vec2 uv = gl_FragCoord.xy / vec2(uGuideSize);
+            vec4 reference = sampleBicubicAbsolute(uBaseGuide, uv);
+            if (texture(uBaseGuide, uv).w < 0.0) reference.w = -reference.w;
+            oReferenceColor = reference;
+        }
+    """.trimIndent()
+
     val rejection = """
         #version 300 es
         precision highp float;
@@ -306,19 +355,7 @@ internal object GlesMgcRawSabreShaders {
             return sampleUv;
         }
 
-        vec4 sampleBiquadraticAbsolute(sampler2D image, vec2 uv) {
-            vec2 fractionalOffset = fract(uv * vec2(uGuideSize));
-            vec2 c = fractionalOffset * fractionalOffset - fractionalOffset + 0.5;
-            vec2 reciprocalSize = 1.0 / vec2(uGuideSize);
-            vec2 w0 = uv - c * reciprocalSize;
-            vec2 w1 = uv + c * reciprocalSize;
-            return 0.25 * (
-                abs(texture(image, vec2(w0.x, w0.y))) +
-                abs(texture(image, vec2(w0.x, w1.y))) +
-                abs(texture(image, vec2(w1.x, w1.y))) +
-                abs(texture(image, vec2(w1.x, w0.y)))
-            );
-        }
+        ${sampleBicubicAbsolute.prependIndent("        ")}
 
         void main() {
             vec2 referenceUv = gl_FragCoord.xy / vec2(uRejectionSize);
@@ -336,7 +373,7 @@ internal object GlesMgcRawSabreShaders {
             vec4 reference = texture(uBaseGuide, referenceUv);
             bool greenOnly = reference.w < 0.0;
             reference.w = abs(reference.w) / 1024.0;
-            vec4 current = sampleBiquadraticAbsolute(uAltGuide, warpedUv);
+            vec4 current = sampleBicubicAbsolute(uAltGuide, warpedUv);
             current.w /= 1024.0;
             float referenceLuma = greenOnly
                 ? reference.y
@@ -349,7 +386,7 @@ internal object GlesMgcRawSabreShaders {
                 uNoiseTextureScaleBias.zw;
             vec3 referenceNoise = texture(uNoiseEstimates, referenceNoiseUv).xyz;
             vec3 currentNoise = texture(uNoiseEstimates, currentNoiseUv).xyz;
-            float filterVarianceScale = greenOnly ? 0.25 : 0.0976597;
+            float filterVarianceScale = greenOnly ? 0.211665 : 0.0898866;
             referenceNoise *= filterVarianceScale;
             currentNoise *= filterVarianceScale;
             reference.w *= filterVarianceScale;

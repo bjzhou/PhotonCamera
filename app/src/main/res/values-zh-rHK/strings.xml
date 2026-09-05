@@ -247,7 +247,7 @@
     <string name="settings_use_jpg_max">多幀降噪</string>
     <string name="settings_use_raw_max">HDR+</string>
     <string name="settings_raw_max_spatial_mode">HDR+ 融合模式</string>
-    <string name="settings_raw_max_spatial_mode_description">Sabre 融合相同曝光的多幀以降低雜訊；Spatial 會啟用包圍曝光拍攝，並融合高光與暗部細節。</string>
+    <string name="settings_raw_max_spatial_mode_description">Spatial 支援包圍曝光，保留高光與暗部細節；Sabre 融合相同曝光的多幀以降低雜訊，並停用包圍曝光。</string>
     <string name="settings_raw_max_mode_sabre">Sabre</string>
     <string name="settings_raw_max_mode_spatial">Spatial</string>
     <string name="settings_use_multiple_exposure">多重曝光</string>
@@ -265,6 +265,7 @@
     <string name="settings_hdr_plus_frame_count_description">HDR+ 拍攝使用的幀數。開啟包圍曝光後，最低為 2 幀，使用一般曝光與可用的長曝光；3 幀及以上使用完整包圍曝光方案。</string>
     <string name="settings_hdr_plus_bracket_exposure">HDR+ 包圍曝光</string>
     <string name="settings_hdr_plus_bracket_exposure_description">使用包圍曝光保留更多高光與暗部細節，預設關閉。</string>
+    <string name="settings_hdr_plus_bracket_exposure_sabre_disabled">Sabre 不支援包圍曝光，切換到 Spatial 後可開啟。</string>
     <string name="settings_use_live_photo">動態相片 (Live Photo)</string>
     <string name="settings_use_live_photo_description">在拍照時同時錄制一段短影片，讓相片動起來。</string>
     <string name="settings_develop_animation">顯影動畫</string>
