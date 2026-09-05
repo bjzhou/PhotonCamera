@@ -237,7 +237,7 @@ fun GalleryEditScreen(
     var showBaselineLutEditSheet by remember { mutableStateOf(false) }
     var baselineLutEditId by remember { mutableStateOf<String?>(null) }
     var showRawBaselineLutSelectorSheet by remember { mutableStateOf(false) }
-    var syncAdjustmentsToLut by remember(editLutId) { mutableStateOf(false) }
+    val syncAdjustmentsToLut = viewModel.editSyncAdjustmentsToLut
 
     BackHandler {
         viewModel.exitEditMode()
@@ -1413,8 +1413,7 @@ fun GalleryEditScreen(
                                                         RecipeParam.LUT_INTENSITY.setValue(
                                                             effectiveRecipe,
                                                             intensity
-                                                        ),
-                                                        syncToCurrentLut = syncAdjustmentsToLut
+                                                        )
                                                     )
                                                 },
                                                 enabled = editLutId != null,
@@ -1515,26 +1514,22 @@ fun GalleryEditScreen(
                                                 ColorPaletteMapper.updatePaletteState(
                                                     effectiveRecipe,
                                                     state.normalized()
-                                                ),
-                                                syncToCurrentLut = syncAdjustmentsToLut
+                                                )
                                             )
                                         },
                                         onParamChange = { param, value ->
                                             viewModel.setPhotoRecipeParams(
-                                                param.setValue(effectiveRecipe, value),
-                                                syncToCurrentLut = syncAdjustmentsToLut
+                                                param.setValue(effectiveRecipe, value)
                                             )
                                         },
                                         onParamsChange = { params ->
                                             viewModel.setPhotoRecipeParams(
-                                                params,
-                                                syncToCurrentLut = syncAdjustmentsToLut
+                                                params
                                             )
                                         },
                                         onRemarksChange = { remarks ->
                                             viewModel.setPhotoRecipeParams(
-                                                effectiveRecipe.copy(remarks = remarks),
-                                                syncToCurrentLut = syncAdjustmentsToLut
+                                                effectiveRecipe.copy(remarks = remarks)
                                             )
                                         },
                                         onCurveChange = { channel, points ->
@@ -1545,8 +1540,7 @@ fun GalleryEditScreen(
                                                 CurveChannel.BLUE -> effectiveRecipe.copy(blueCurvePoints = points)
                                             }
                                             viewModel.setPhotoRecipeParams(
-                                                updated,
-                                                syncToCurrentLut = syncAdjustmentsToLut
+                                                updated
                                             )
                                         },
                                         imageHistogram = imageHistogram,
@@ -1555,8 +1549,7 @@ fun GalleryEditScreen(
                                             val latestRecipe = viewModel.editPhotoRecipeParams.value
                                                 ?: viewModel.editLutRecipeParams.value
                                             viewModel.setPhotoRecipeParams(
-                                                effects.applyTo(latestRecipe),
-                                                syncToCurrentLut = syncAdjustmentsToLut
+                                                effects.applyTo(latestRecipe)
                                             )
                                         },
                                         headerControls = if (
@@ -1573,15 +1566,7 @@ fun GalleryEditScreen(
                                                                 R.string.edit_sync_lut_recipe
                                                             ),
                                                             checked = syncAdjustmentsToLut,
-                                                            onCheckedChange = { enabled ->
-                                                                syncAdjustmentsToLut = enabled
-                                                                if (enabled) {
-                                                                    viewModel.setPhotoRecipeParams(
-                                                                        effectiveRecipe,
-                                                                        syncToCurrentLut = true
-                                                                    )
-                                                                }
-                                                            }
+                                                            onCheckedChange = viewModel::setSyncAdjustmentsToLut
                                                         )
                                                     }
 

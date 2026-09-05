@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.stabilization
 
 const val MIN_EXTERNAL_LENS_MAGNIFICATION = 1f
-const val MAX_EXTERNAL_LENS_MAGNIFICATION = 4f
 
 /** Optical calibration applied only while a teleconverter covers [physicalCameraId]. */
 data class ExternalLensStabilizationConfig(
@@ -14,22 +13,14 @@ data class ExternalLensStabilizationConfig(
 
     fun normalized(): ExternalLensStabilizationConfig {
         val normalizedCameraId = physicalCameraId.trim()
-        val normalizedMagnification = if (magnification.isFinite()) {
-            magnification.coerceIn(
-                MIN_EXTERNAL_LENS_MAGNIFICATION,
-                MAX_EXTERNAL_LENS_MAGNIFICATION,
-            )
-        } else {
-            MIN_EXTERNAL_LENS_MAGNIFICATION
-        }
         return if (normalizedCameraId.isEmpty() ||
-            normalizedMagnification <= MIN_EXTERNAL_LENS_MAGNIFICATION
+            !magnification.isFinite() || magnification <= MIN_EXTERNAL_LENS_MAGNIFICATION
         ) {
             Disabled
         } else {
             ExternalLensStabilizationConfig(
                 physicalCameraId = normalizedCameraId,
-                magnification = normalizedMagnification,
+                magnification = magnification,
             )
         }
     }

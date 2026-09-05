@@ -226,8 +226,8 @@
     <string name="settings_external_lens_stabilization_magnification">External magnification</string>
     <string name="settings_external_lens_stabilization_magnification_description">Use the real optical magnification of the teleconverter. This corrects focal length and OIS motion for EIS+.</string>
     <string name="settings_external_lens_stabilization_custom_magnification">Custom magnification</string>
-    <string name="settings_external_lens_stabilization_custom_magnification_hint">Greater than 1.0x, up to %1$.1fx</string>
-    <string name="settings_external_lens_stabilization_magnification_error">Enter a value greater than 1.0x and no more than %1$.1fx</string>
+    <string name="settings_external_lens_stabilization_custom_magnification_hint">Greater than 1.0x</string>
+    <string name="settings_external_lens_stabilization_magnification_error">Enter a valid magnification greater than 1.0x</string>
     <string name="settings_external_lens_stabilization_no_physical_lens">No compatible rear physical lens was discovered.</string>
     <string name="settings_external_lens_stabilization_apply">Apply</string>
     <string name="settings_video_lock_white_balance">Lock White Balance</string>

@@ -216,8 +216,8 @@
     <string name="settings_external_lens_stabilization_magnification">外接倍率</string>
     <string name="settings_external_lens_stabilization_magnification_description">填寫增倍鏡的實際光學倍率，用於校正 EIS+ 的焦距和 OIS 位移。</string>
     <string name="settings_external_lens_stabilization_custom_magnification">自訂倍率</string>
-    <string name="settings_external_lens_stabilization_custom_magnification_hint">大於 1.0x，最大 %1$.1fx</string>
-    <string name="settings_external_lens_stabilization_magnification_error">請輸入大於 1.0x 且不超過 %1$.1fx 的倍率</string>
+    <string name="settings_external_lens_stabilization_custom_magnification_hint">大於 1.0x</string>
+    <string name="settings_external_lens_stabilization_magnification_error">請輸入有效且大於 1.0x 的倍率</string>
     <string name="settings_external_lens_stabilization_no_physical_lens">未發現相容的後置物理鏡頭。</string>
     <string name="settings_external_lens_stabilization_apply">套用</string>
     <string name="settings_video_lock_white_balance">鎖定白平衡</string>

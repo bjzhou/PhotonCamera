@@ -143,7 +143,6 @@ import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
 import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.stabilization.MIN_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.MAX_VIDEO_STABILIZATION_LOOKAHEAD
-import com.hinnka.mycamera.stabilization.MAX_EXTERNAL_LENS_MAGNIFICATION
 import com.hinnka.mycamera.stabilization.MIN_EXTERNAL_LENS_MAGNIFICATION
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
@@ -4487,8 +4486,7 @@ private fun ExternalLensStabilizationDialog(
     }
     val magnification = magnificationText.replace(',', '.').toFloatOrNull()
     val magnificationValid = magnification != null &&
-        magnification > MIN_EXTERNAL_LENS_MAGNIFICATION &&
-        magnification <= MAX_EXTERNAL_LENS_MAGNIFICATION
+        magnification.isFinite() && magnification > MIN_EXTERNAL_LENS_MAGNIFICATION
     val lensLabels = options.map { it.cameraId to externalLensStabilizationLabel(it) }
     val selectedLensLabel = lensLabels.firstOrNull { it.first == selectedCameraId }
         ?.second.orEmpty()
@@ -4587,7 +4585,6 @@ private fun ExternalLensStabilizationDialog(
                                     } else {
                                         R.string.settings_external_lens_stabilization_magnification_error
                                     },
-                                    MAX_EXTERNAL_LENS_MAGNIFICATION,
                                 )
                             )
                         },
@@ -4627,9 +4624,7 @@ private fun ExternalLensStabilizationDialog(
 }
 
 private fun editableExternalLensMagnification(magnification: Float): String =
-    String.format(Locale.US, "%.2f", magnification)
-        .trimEnd('0')
-        .trimEnd('.')
+    magnification.toString().toBigDecimal().stripTrailingZeros().toPlainString()
 
 private fun sanitizeExternalLensMagnificationInput(value: String): String {
     val normalized = value.replace(',', '.')
@@ -4644,7 +4639,7 @@ private fun sanitizeExternalLensMagnificationInput(value: String): String {
             }
         }
     }
-    return result.toString().take(5)
+    return result.toString()
 }
 
 /**
