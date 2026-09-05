@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.mgc.PhotonLookContract
+import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.Flow
@@ -140,12 +141,25 @@ class LutManager(private val context: Context) {
                 gradingBlending = f("gradingBlending", 0.5f),
                 lutIntensity = f("lutIntensity", 1f),
                 remarks = s("remarks"),
-            )
+            ).let(ColorPaletteMapper::mergeIntoEffectiveParams)
         }
 
         private fun androidx.datastore.preferences.core.MutablePreferences.removeLegacyKeys(lutId: String) {
             legacyFieldNames.forEach { name -> remove(floatPreferencesKey("${lutId}_$name")) }
             remove(stringPreferencesKey("${lutId}_remarks"))
+        }
+
+        private fun readSavedColorRecipeParams(
+            preferences: Preferences,
+            lutId: String,
+            target: BaselineColorCorrectionTarget?
+        ): ColorRecipeParams? {
+            preferences[recipeKey(lutId, target)]?.let { return ColorRecipeParams.fromJson(it) }
+            if (target != null) return null
+            val hasLegacyRecipe = legacyFieldNames.any { name ->
+                preferences[floatPreferencesKey("${lutId}_$name")] != null
+            } || preferences[stringPreferencesKey("${lutId}_remarks")] != null
+            return if (hasLegacyRecipe) readLegacyParams(preferences, lutId) else null
         }
     }
 
@@ -169,9 +183,7 @@ class LutManager(private val context: Context) {
         target: BaselineColorCorrectionTarget? = null
     ): Flow<ColorRecipeParams> {
         return context.colorRecipeDataStore.data.map { preferences ->
-            val json = preferences[recipeKey(lutId, target)]
-            if (json != null) ColorRecipeParams.fromJson(json)
-            else if (target == null) readLegacyParams(preferences, lutId) else ColorRecipeParams.DEFAULT
+            readSavedColorRecipeParams(preferences, lutId, target) ?: ColorRecipeParams.DEFAULT
         }
     }
 
@@ -350,11 +362,16 @@ class LutManager(private val context: Context) {
         lutId: String,
         target: BaselineColorCorrectionTarget? = null
     ): ColorRecipeParams {
-        return context.colorRecipeDataStore.data.map { preferences ->
-            val json = preferences[recipeKey(lutId, target)]
-            if (json != null) ColorRecipeParams.fromJson(json)
-            else if (target == null) readLegacyParams(preferences, lutId) else ColorRecipeParams.DEFAULT
-        }.firstOrNull() ?: ColorRecipeParams.DEFAULT
+        return loadSavedColorRecipeParams(lutId, target) ?: ColorRecipeParams.DEFAULT
+    }
+
+    /** null 表示没有绑定配方，与用户明确保存的默认配方区分。 */
+    suspend fun loadSavedColorRecipeParams(
+        lutId: String,
+        target: BaselineColorCorrectionTarget? = null
+    ): ColorRecipeParams? {
+        val preferences = context.colorRecipeDataStore.data.firstOrNull() ?: return null
+        return readSavedColorRecipeParams(preferences, lutId, target)
     }
 
     /**

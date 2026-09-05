@@ -1496,6 +1496,7 @@ fun FilterManagementScreen(
         if (showColorRecipeSheet && editingLutId != null) {
             LutEditBottomSheet(
                 lutId = editingLutId!!,
+                containerColor = backgroundColor,
                 onDismiss = {
                     showColorRecipeSheet = false
                     editingLutId = null

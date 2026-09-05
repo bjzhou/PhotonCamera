@@ -339,7 +339,7 @@ fun LutSelector(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            if (onEditClick != null && activeLutId != null && activeLutId != "none") {
+                            if (onEditClick != null && activeLutId != null) {
                                 LutEditButton(onClick = onEditClick)
                             }
 

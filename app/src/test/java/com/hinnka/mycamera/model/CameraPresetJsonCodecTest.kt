@@ -11,6 +11,42 @@ import org.junit.Test
 
 class CameraPresetJsonCodecTest {
     @Test
+    fun legacyPaletteSaturation_isMergedWhenReadingAndSavingPresets() {
+        val legacyJson = """
+            {
+                "id": "legacy_palette",
+                "name": "Legacy Palette",
+                "colorRecipe": {
+                    "saturation": 0.8,
+                    "paletteX": 1.0,
+                    "paletteY": 0.25,
+                    "paletteDensity": 0.5
+                }
+            }
+        """.trimIndent()
+        val parsed = requireNotNull(CameraPreset.fromJson(legacyJson))
+        val inMemory = parsed.copy(
+            colorRecipe = ColorRecipeParams(
+                saturation = 0.8f,
+                paletteX = 1f,
+                paletteY = 0.25f,
+                paletteDensity = 0.5f,
+            )
+        )
+        val roundTripped = requireNotNull(CameraPreset.fromJson(inMemory.toJson()))
+        for (preset in listOf(parsed, roundTripped)) {
+            assertEquals(1.1f, preset.colorRecipe.saturation, 0.0001f)
+            assertEquals(0.5f, preset.colorRecipe.paletteX, 0f)
+            assertEquals(0.25f, ColorPaletteMapper.basicToneAmount(preset.colorRecipe), 0.0001f)
+            assertEquals(
+                1.1f,
+                ColorPaletteMapper.mergeIntoEffectiveParams(preset.colorRecipe).saturation,
+                0.0001f,
+            )
+        }
+    }
+
+    @Test
     fun contentReferences_includeAndRemapProfessionalLutSlots() {
         val source = CameraPreset(
             id = "preset_resource_mapping",

@@ -5,6 +5,63 @@ import org.junit.Test
 
 class ColorPaletteMapperTest {
     @Test
+    fun legacySaturation_matchesSliderAndSurvivesSerializationWithoutDoubleApplication() {
+        val legacy = ColorRecipeParams(
+            saturation = 0.9f,
+            paletteX = 0.75f,
+            paletteY = 0.125f,
+            paletteDensity = 0.5f,
+        )
+        assertEquals(1.05f, RecipeParam.SATURATION.getValue(legacy), 0.0001f)
+
+        val restored = ColorRecipeParams.fromJson(
+            """{"saturation":0.9,"paletteX":0.75,"paletteY":0.125,"paletteDensity":0.5}"""
+        )
+        val roundTripped = ColorRecipeParams.fromJson(legacy.toJson())
+        for (recipe in listOf(restored, roundTripped)) {
+            assertEquals(1.05f, recipe.saturation, 0.0001f)
+            assertEquals(0.5f, recipe.paletteX, 0f)
+            assertEquals(0.375f, ColorPaletteMapper.basicToneAmount(recipe), 0.0001f)
+            val rendered = ColorPaletteMapper.mergeIntoEffectiveParams(recipe)
+            val renderedAgain = ColorPaletteMapper.mergeIntoEffectiveParams(rendered)
+            assertEquals(recipe.saturation, renderedAgain.saturation, 0f)
+        }
+    }
+
+    @Test
+    fun saturationEdit_replacesLegacyOffsetAndToneEditDoesNotRestoreIt() {
+        val legacy = ColorRecipeParams(paletteX = 1f, paletteDensity = 0.5f)
+        val edited = RecipeParam.SATURATION.setValue(legacy, 0f)
+        assertEquals(0f, ColorPaletteMapper.mergeIntoEffectiveParams(edited).saturation, 0f)
+
+        val toneEdited = ColorPaletteMapper.updatePaletteState(
+            edited,
+            ColorPaletteMapper.deriveFromParams(edited).withValues(tone = 80f),
+        )
+        val rendered = ColorPaletteMapper.mergeIntoEffectiveParams(toneEdited)
+        assertEquals(0f, rendered.saturation, 0f)
+        assertEquals(0.4f, ColorPaletteMapper.basicToneAmount(rendered), 0.0001f)
+
+        val reset = RecipeParam.SATURATION.setValue(legacy, RecipeParam.SATURATION.defaultValue)
+        assertEquals(1f, ColorPaletteMapper.mergeIntoEffectiveParams(reset).saturation, 0f)
+    }
+
+    @Test
+    fun legacySaturation_respectsDensityAndExistingRange() {
+        val cases = listOf(
+            ColorRecipeParams(saturation = 0.2f, paletteX = 0f) to 0f,
+            ColorRecipeParams(saturation = 1.8f, paletteX = 1f) to 2f,
+            ColorRecipeParams(saturation = 1.2f, paletteX = 0f, paletteDensity = 0f) to 1.2f,
+        )
+        for ((legacy, expected) in cases) {
+            assertEquals(expected, RecipeParam.SATURATION.getValue(legacy), 0.0001f)
+            val migrated = ColorPaletteMapper.mergeIntoEffectiveParams(legacy)
+            assertEquals(expected, migrated.saturation, 0.0001f)
+            assertEquals(0.5f, migrated.paletteX, 0f)
+        }
+    }
+
+    @Test
     fun paletteAxes_useContinuousOplusValueRange() {
         assertEquals(-100f, ColorPaletteState(x = 0f).saturationValue, 0.0001f)
         assertEquals(-25f, ColorPaletteState(x = 0.375f).saturationValue, 0.0001f)

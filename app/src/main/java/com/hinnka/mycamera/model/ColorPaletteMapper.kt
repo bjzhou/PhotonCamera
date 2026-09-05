@@ -41,33 +41,31 @@ object ColorPaletteMapper {
         )
     }
 
-    fun mergeIntoEffectiveParams(manualParams: ColorRecipeParams): ColorRecipeParams {
+    fun effectiveSaturation(params: ColorRecipeParams): Float {
+        if (params.paletteX == ColorPaletteState.DEFAULT.x) {
+            return RecipeParam.SATURATION.clamp(params.saturation)
+        }
         val paletteContribution = buildPaletteContribution(
             ColorPaletteState(
-                x = manualParams.paletteX,
-                y = manualParams.paletteY,
-                density = manualParams.paletteDensity
+                x = params.paletteX,
+                y = params.paletteY,
+                density = params.paletteDensity
             )
         )
+        return RecipeParam.SATURATION.clamp(
+            params.saturation + paletteContribution.saturation - RecipeParam.SATURATION.defaultValue
+        )
+    }
 
-        fun combine(
-            manualValue: Float,
-            paletteValue: Float,
-            defaultValue: Float,
-            minValue: Float,
-            maxValue: Float
-        ): Float {
-            return (manualValue + paletteValue - defaultValue).coerceIn(minValue, maxValue)
+    /** 将旧横轴的饱和度分量并入唯一的饱和度参数，可在读取、保存和渲染边界重复调用。 */
+    fun mergeIntoEffectiveParams(manualParams: ColorRecipeParams): ColorRecipeParams {
+        val saturation = effectiveSaturation(manualParams)
+        if (manualParams.paletteX == ColorPaletteState.DEFAULT.x && manualParams.saturation == saturation) {
+            return manualParams
         }
-
         return manualParams.copy(
-            saturation = combine(
-                manualValue = manualParams.saturation,
-                paletteValue = paletteContribution.saturation,
-                defaultValue = RecipeParam.SATURATION.defaultValue,
-                minValue = RecipeParam.SATURATION.minValue,
-                maxValue = RecipeParam.SATURATION.maxValue
-            )
+            saturation = saturation,
+            paletteX = ColorPaletteState.DEFAULT.x
         )
     }
 

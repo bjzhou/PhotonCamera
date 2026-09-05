@@ -120,8 +120,10 @@ data class CameraPreset(
     }
 
     fun normalizedForPersistence(): CameraPreset {
-        return withoutLegacyHdf()
+        val normalized = withoutLegacyHdf()
+        return normalized
             .copy(
+                colorRecipe = ColorPaletteMapper.mergeIntoEffectiveParams(normalized.colorRecipe),
                 lutId = normalizeLutId(lutId),
                 rawDcpId = rawDcpId?.takeIf { it.isNotBlank() },
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),

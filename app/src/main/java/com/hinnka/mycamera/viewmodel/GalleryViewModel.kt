@@ -285,9 +285,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         initialValue = ColorRecipeParams.DEFAULT
     )
 
-    /** 照片独立的色彩配方；仅开启同步并切换 LUT 时，null 表示读取该 LUT 的配方。 */
+    /** 当前预览、保存使用的完整配方，与独立调节草稿分开保存。 */
     var editPhotoRecipeParams = MutableStateFlow<ColorRecipeParams?>(null)
         private set
+
+    private var independentEditPhotoRecipeParams = ColorRecipeParams.DEFAULT
 
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
@@ -2016,11 +2018,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         isEditing = true
         editSyncAdjustmentsToLut = false
+        independentEditPhotoRecipeParams = ColorRecipeParams.DEFAULT
         // 从当前元数据恢复编辑状态
         currentMediaMetadata?.let { metadata ->
             editLutId.value = metadata.lutId
             editFrameId.value = metadata.frameId
-            editPhotoRecipeParams.value = snapshotEditRecipe(metadata.colorRecipeParams, metadata.lutId)
+            val recipe = snapshotEditRecipe(metadata.colorRecipeParams, metadata.lutId)
+            editPhotoRecipeParams.value = recipe
+            independentEditPhotoRecipeParams = recipe.deepCopy()
             editApplyEffectsToVideo.value = metadata.applyEffectsToVideo
             
             if (!targetPhoto.isVideo) {
@@ -2200,6 +2205,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editLutConfig = null
         editFrameId.value = null
         editPhotoRecipeParams.value = null
+        independentEditPhotoRecipeParams = ColorRecipeParams.DEFAULT
         editApplyEffectsToVideo.value = false
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
@@ -2243,7 +2249,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         val params = snapshotEditRecipe(editPhotoRecipeParams.value, editLutId.value)
         editSyncAdjustmentsToLut = shouldSync
-        setPhotoRecipeParams(params)
+        if (shouldSync) {
+            setPhotoRecipeParams(params)
+        } else {
+            editPhotoRecipeParams.value = params
+        }
     }
 
     private fun snapshotEditRecipe(params: ColorRecipeParams?, lutId: String?): ColorRecipeParams {
@@ -2260,6 +2270,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /** 设置照片调节，并根据本次编辑的绑定状态同步到 LUT。 */
     fun setPhotoRecipeParams(params: ColorRecipeParams) {
         editPhotoRecipeParams.value = params
+        if (!editSyncAdjustmentsToLut) {
+            independentEditPhotoRecipeParams = params.deepCopy()
+        }
         if (editSyncAdjustmentsToLut) {
             val lutId = editLutId.value ?: return
             pendingEditLutRecipeSync[lutId] = params.deepCopy()
@@ -2292,10 +2305,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun setEditLut(lutId: String?) {
         if (lutId == null) {
-            setSyncAdjustmentsToLut(false)
+            editSyncAdjustmentsToLut = false
         }
-        if (editLutId.value != lutId && editSyncAdjustmentsToLut) {
-            editPhotoRecipeParams.value = null
+        if (editLutId.value != lutId) {
+            val lutRecipe = lutId?.let { id ->
+                pendingEditLutRecipeSync[id] ?: runBlocking(Dispatchers.IO) {
+                    contentRepository.lutManager.loadSavedColorRecipeParams(id)
+                }
+            }
+            // LUT 配方完整应用，但不能覆盖独立调节草稿；离开带配方的 LUT 后恢复草稿。
+            editPhotoRecipeParams.value = (
+                lutRecipe ?: if (editSyncAdjustmentsToLut) {
+                    ColorRecipeParams.DEFAULT
+                } else {
+                    independentEditPhotoRecipeParams
+                }
+            ).deepCopy()
         }
         editLutId.value = lutId
         if (lutId == null) {
@@ -2304,8 +2329,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
 
         viewModelScope.launch {
-            editLutConfig = withContext(Dispatchers.IO) {
+            val config = withContext(Dispatchers.IO) {
                 contentRepository.lutManager.loadLut(lutId)
+            }
+            if (editLutId.value == lutId) {
+                editLutConfig = config
             }
         }
     }
@@ -2489,7 +2517,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editSyncAdjustmentsToLut = false
 
         editLutId.value = settings.lutId
-        editPhotoRecipeParams.value = snapshotEditRecipe(settings.colorRecipeParams, settings.lutId)
+        val recipe = snapshotEditRecipe(settings.colorRecipeParams, settings.lutId)
+        editPhotoRecipeParams.value = recipe
+        independentEditPhotoRecipeParams = recipe.deepCopy()
         editFrameId.value = settings.frameId
         val targetIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
         if (!targetIsRaw) {

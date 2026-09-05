@@ -14,6 +14,7 @@ import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -213,10 +214,10 @@ object GalleryMediaStore {
             version = metadata.version,
             lutId = metadata.lutId,
             tonemapMode = metadata.tonemapMode,
-            colorRecipeParams = metadata.colorRecipeParams,
+            colorRecipeParams = metadata.colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams),
             baselineTarget = metadata.baselineTarget?.name,
             baselineLutId = metadata.baselineLutId,
-            baselineColorRecipeParams = metadata.baselineColorRecipeParams,
+            baselineColorRecipeParams = metadata.baselineColorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams),
             sharpening = metadata.sharpening,
             noiseReduction = metadata.noiseReduction,
             chromaNoiseReduction = metadata.chromaNoiseReduction,
@@ -414,10 +415,10 @@ object GalleryMediaStore {
             mediaType = runCatching { MediaType.valueOf(mediaType) }.getOrDefault(MediaType.IMAGE),
             lutId = lutId,
             tonemapMode = tonemapMode,
-            colorRecipeParams = colorRecipeParams,
+            colorRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams),
             baselineTarget = baselineTarget?.let { runCatching { BaselineColorCorrectionTarget.valueOf(it) }.getOrNull() },
             baselineLutId = baselineLutId,
-            baselineColorRecipeParams = baselineColorRecipeParams,
+            baselineColorRecipeParams = baselineColorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams),
             sharpening = sharpening,
             noiseReduction = noiseReduction,
             chromaNoiseReduction = chromaNoiseReduction,

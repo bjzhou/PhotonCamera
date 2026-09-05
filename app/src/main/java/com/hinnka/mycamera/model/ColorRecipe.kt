@@ -24,7 +24,7 @@ data class ColorRecipeParams(
     val toneToe: Float = 0f,        // -1.0 ~ +1.0 (影调曲线暗部塑形)
     val toneShoulder: Float = 0f,   // -1.0 ~ +1.0 (影调曲线亮部塑形)
     val tonePivot: Float = 0f,      // -1.0 ~ +1.0 (影调曲线中点偏移)
-    val paletteX: Float = 0.5f,     // 调色盘横向落点
+    val paletteX: Float = 0.5f,     // 旧调色盘横向落点，读取和保存时合并入 saturation
     val paletteY: Float = 0.5f,     // 调色盘纵向落点
     val paletteDensity: Float = 1f, // 调色盘浓度
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
@@ -269,7 +269,9 @@ data class ColorRecipeParams(
     /**
      * 序列化为 JSON 字符串
      */
-    fun toJson(): String = gson.toJson(copy(halation = 0f))
+    fun toJson(): String = gson.toJson(
+        ColorPaletteMapper.mergeIntoEffectiveParams(this).copy(halation = 0f)
+    )
 
     companion object {
         private val gson = Gson()
@@ -290,7 +292,7 @@ data class ColorRecipeParams(
                     } else {
                         DEFAULT.gradingBlending
                     }
-                )
+                ).let(ColorPaletteMapper::mergeIntoEffectiveParams)
             } catch (_: Exception) {
                 DEFAULT
             }
@@ -388,7 +390,7 @@ enum class RecipeParam(
         return when (this) {
             EXPOSURE -> params.exposure
             CONTRAST -> params.contrast
-            SATURATION -> params.saturation
+            SATURATION -> ColorPaletteMapper.effectiveSaturation(params)
             TEMPERATURE -> params.temperature
             TINT -> params.tint
             FADE -> params.fade
@@ -456,7 +458,7 @@ enum class RecipeParam(
         return when (this) {
             EXPOSURE -> params.copy(exposure = clampedValue)
             CONTRAST -> params.copy(contrast = clampedValue)
-            SATURATION -> params.copy(saturation = clampedValue)
+            SATURATION -> params.copy(saturation = clampedValue, paletteX = ColorPaletteState.DEFAULT.x)
             TEMPERATURE -> params.copy(temperature = clampedValue)
             TINT -> params.copy(tint = clampedValue)
             FADE -> params.copy(fade = clampedValue)

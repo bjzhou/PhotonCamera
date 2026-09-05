@@ -150,7 +150,7 @@ fun LutEditBottomSheet(
                     )
                 },
                 imageHistogram = imageHistogram,
-                showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL,
+                showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL && lutId != "none",
                 currentEffects = editingParams.toEffectParams().takeIf { showEffects },
                 onEffectsChange = if (showEffects) {
                     { effects -> onParamsUpdated(effects.applyTo(editingParams)) }

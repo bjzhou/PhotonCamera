@@ -333,6 +333,11 @@ fun ColorRecipePanel(
     }
 
     fun setBasicRawValue(control: BasicRecipeControl, value: Float) {
+        if (control == BasicRecipeControl.SATURATION) {
+            // 同时更新配方和调色盘状态，避免随后调节影调时重新带回旧横轴。
+            onParamsChange(RecipeParam.SATURATION.setValue(currentParams, value))
+            return
+        }
         if (control == BasicRecipeControl.TONE) {
             onPaletteStateChange(
                 paletteState.withValues(
