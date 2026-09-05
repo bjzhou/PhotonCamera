@@ -32,3 +32,11 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# Protobuf Lite builds schemas by reflecting on generated message field names.
+# MediaPipe TaskRunner serializes SystemInfo during face detector initialization;
+# removing/renaming platform_ and related fields breaks that path in release builds.
+# https://github.com/protocolbuffers/protobuf/blob/main/java/lite.md
+-keep class * extends com.google.protobuf.GeneratedMessageLite {
+    *;
+}

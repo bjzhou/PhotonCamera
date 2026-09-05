@@ -317,6 +317,40 @@ class CalibratedRawNoiseProfileTest {
         assertTrue(shotModel.evaluate(uiIso) > shotModel.evaluate(tuningGain) * 400.0)
     }
 
+    @Test
+    fun lowIsoWithNegativeReadInterceptUsesCommonPositiveBoundary() {
+        val profile = CalibratedRawNoiseProfile(
+            id = "lower-bounded",
+            shotSlopeA = DoubleArray(4) { 1e-6 },
+            shotInterceptB = DoubleArray(4),
+            readQuadraticC = DoubleArray(4) { 1.0 },
+            readDigitalGainD = doubleArrayOf(-10_000.0, -40_000.0, -40_000.0, -10_000.0),
+            maxAnalogSensitivity = 3200,
+        )
+        assertEquals(201, profile.minimumCompatibleSensitivity)
+        assertEquals(Int.MAX_VALUE, profile.maximumCompatibleSensitivity)
+        assertEquals(201, profile.compatibleSensitivityAt(100))
+        assertEquals(3201, profile.compatibleSensitivityAt(3201))
+        assertNull(profile.compatibleSensitivityAt(0))
+        val low = requireNotNull(profile.evaluate(100))
+        val boundary = requireNotNull(profile.evaluate(201))
+        assertTrue(low.readNoise.all { it > 0f })
+        assertTrue(low.readNoise.contentEquals(boundary.readNoise))
+        assertTrue(low.shotNoise.contentEquals(boundary.shotNoise))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsNonOverlappingChannelReadNoiseIntervals() {
+        CalibratedRawNoiseProfile(
+            id = "disjoint",
+            shotSlopeA = DoubleArray(4) { 1e-6 },
+            shotInterceptB = DoubleArray(4),
+            readQuadraticC = doubleArrayOf(1.0, -1.0, 1.0, 1.0),
+            readDigitalGainD = doubleArrayOf(-40_000.0, 10_000.0, 0.0, 0.0),
+            maxAnalogSensitivity = 3200,
+        )
+    }
+
     private fun fitLinear(x: DoubleArray, y: DoubleArray): LinearModel {
         require(x.size == y.size && x.isNotEmpty())
         val meanX = x.average()

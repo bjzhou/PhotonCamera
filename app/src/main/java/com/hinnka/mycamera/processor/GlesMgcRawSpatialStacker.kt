@@ -779,7 +779,7 @@ internal class GlesMgcRawSpatialStacker(
                         "minimumIso=${frames.map { it.minimumSensitivityIso }} " +
                         "maximumAnalogIso=${frames.map { it.maximumAnalogSensitivityIso }} " +
                         "compatibleIso=$compatibleIso " +
-                        "compatibleMax=$compatibleMax " +
+                        "compatibleMin=${profile.minimumCompatibleSensitivity} compatibleMax=$compatibleMax " +
                         "overallGain=${compatibleIso.mapIndexed { index, iso ->
                             iso?.let {
                                 profile.overallGainAt(it, frames[index].minimumSensitivityIso)

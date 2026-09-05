@@ -51,6 +51,13 @@ data class CalibratedRawNoiseProfile(
         }
     }
 
+    /** Lowest integer ISO whose read variance is positive in every plane. */
+    val minimumCompatibleSensitivity: Int = minimumCompatibleReadSensitivity().also { minimum ->
+        require(minimum <= maximumCompatibleSensitivity) {
+            "RAW noise model has no common sensitivity with positive read variance in every plane"
+        }
+    }
+
     fun evaluate(
         sensitivity: Int,
         minimumSensitivityIso: Int = 0,
@@ -95,7 +102,7 @@ data class CalibratedRawNoiseProfile(
     }
 
     fun compatibleSensitivityAt(sensitivity: Int): Int? =
-        sensitivity.takeIf { it > 0 }?.coerceAtMost(maximumCompatibleSensitivity)
+        sensitivity.takeIf { it > 0 }?.coerceIn(minimumCompatibleSensitivity, maximumCompatibleSensitivity)
 
     /** MGC's total gain, or the legacy ISO/100 display coordinate for an external `.c`. */
     fun overallGainAt(sensitivity: Int, minimumSensitivityIso: Int = 0): Double? =
@@ -173,6 +180,30 @@ data class CalibratedRawNoiseProfile(
         val analogGain: Double,
         val digitalGain: Double,
     )
+
+    private fun minimumCompatibleReadSensitivity(): Int {
+        var minimum = 1
+        for (plane in 0 until CHANNEL_COUNT) {
+            val quadratic = readQuadraticC[plane]
+            val digital = readDigitalGainD[plane]
+            if (quadratic <= 0.0 || digital > 0.0) continue
+            // Above the external analog limit, digital gain preserves the variance sign.
+            var low = 1
+            var high = minOf(maxAnalogSensitivity ?: Int.MAX_VALUE, maximumCompatibleSensitivity)
+            fun positiveRead(iso: Int): Boolean =
+                (quadratic * iso.toDouble() * iso.toDouble() + digital).toFloat() > 0f
+            require(positiveRead(high)) {
+                "RAW noise model has no sensitivity with positive read variance in plane $plane"
+            }
+            // Evaluate the polynomial itself to exclude exact roots and rounded zeroes.
+            while (low < high) {
+                val middle = low + (high - low) / 2
+                if (positiveRead(middle)) high = middle else low = middle + 1
+            }
+            minimum = maxOf(minimum, low)
+        }
+        return minimum
+    }
 
     private fun maximumCompatibleReadSensitivity(): Int {
         var maximum = Int.MAX_VALUE
