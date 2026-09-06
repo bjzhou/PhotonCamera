@@ -7,7 +7,7 @@ import android.opengl.EGLSync
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import android.opengl.GLES31
-import com.hinnka.mycamera.stabilization.MgcEisNativeBridge
+import com.hinnka.mycamera.processor.GlesHardwareBufferImage
 import com.hinnka.mycamera.stabilization.STABILIZATION_ROW_COUNT
 import com.hinnka.mycamera.stabilization.StabilizationFrame
 import com.hinnka.mycamera.utils.PLog
@@ -69,7 +69,7 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
         } ?: return null
         if (!ensure(width, height)) return null
 
-        val imageHandle = MgcEisNativeBridge.createHardwareBufferImage(hardwareBuffer)
+        val imageHandle = GlesHardwareBufferImage.create(hardwareBuffer)
         if (imageHandle == 0L) {
             if (!loggedImportFailure) {
                 loggedImportFailure = true
@@ -79,7 +79,7 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
         }
 
         return try {
-            if (!MgcEisNativeBridge.bindHardwareBufferImage(imageHandle, sourceTextureId)) {
+            if (!GlesHardwareBufferImage.bind(imageHandle, sourceTextureId)) {
                 PLog.w(tag, "MGC EGLImage bind failed ts=${frame.timestampNs}")
                 return null
             }
@@ -116,7 +116,7 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
             PLog.w(tag, "MGC EGLImage draw failed ts=${frame.timestampNs}: ${error.message}")
             null
         } finally {
-            MgcEisNativeBridge.destroyHardwareBufferImage(imageHandle)
+            GlesHardwareBufferImage.destroy(imageHandle)
         }
     }
 

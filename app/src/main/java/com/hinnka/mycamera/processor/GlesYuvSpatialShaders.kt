@@ -52,6 +52,7 @@ internal object GlesYuvSpatialShaders {
         uniform float uGreenClippingPoint;
         layout(location = 0) out vec4 oGuide;
         layout(location = 1) out highp int oGray;
+        layout(location = 2) out highp vec2 oLinearGray;
 
         float kernelWeight(int offset) {
             return offset == 0 ? 0.5 : 0.25;
@@ -99,6 +100,10 @@ internal object GlesYuvSpatialShaders {
             }
             oGuide = vec4(referenceColor, referenceVariance * 1024.0);
             oGray = int(floor(clamp(weightedLuma * uExposureScale, 0.0, 1.0) * 16383.0 + 0.5));
+            // Both components are exact in FP16. Filtering then recombining preserves
+            // Fixed14 levels without R16F's loss of low bits on nearly flat patches.
+            float coarseGray = floor(float(oGray) * (1.0 / 16.0));
+            oLinearGray = vec2(coarseGray, float(oGray) - coarseGray * 16.0);
         }
     """.trimIndent()
 

@@ -1,7 +1,5 @@
 package com.hinnka.mycamera.stabilization
 
-import android.hardware.HardwareBuffer
-
 /** JNI boundary for Photon’s source-reconstructed MGC EIS engine. */
 internal object MgcEisNativeBridge {
     init {
@@ -63,17 +61,4 @@ internal object MgcEisNativeBridge {
         rowHomographies: FloatArray,
         state: FloatArray,
     ): Long
-
-    /**
-     * Imports a Camera2 [HardwareBuffer] into the current EGL context as an EGLImage.
-     *
-     * The returned handle owns the acquired native buffer reference and must be released on the
-     * same GL thread with [destroyHardwareBufferImage] after the draw that samples it.
-     */
-    external fun createHardwareBufferImage(buffer: HardwareBuffer): Long
-
-    /** Binds an imported EGLImage to [textureId], which must be a GL_TEXTURE_EXTERNAL_OES. */
-    external fun bindHardwareBufferImage(imageHandle: Long, textureId: Int): Boolean
-
-    external fun destroyHardwareBufferImage(imageHandle: Long)
 }

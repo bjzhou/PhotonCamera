@@ -2,11 +2,50 @@ package com.hinnka.mycamera.camera
 
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MultiFrameFocusLockPolicyTest {
+    @Test
+    fun unfinishedContinuousFocusUsesAnExplicitAutoSweep() {
+        for (mode in intArrayOf(
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+        )) {
+            assertEquals(CaptureRequest.CONTROL_AF_MODE_AUTO,
+                MultiFrameFocusLockPolicy.triggerMode(mode, supportsAuto = true))
+        }
+    }
+
+    @Test
+    fun explicitFocusModeAndDeviceCapabilitiesArePreserved() {
+        assertEquals(CaptureRequest.CONTROL_AF_MODE_MACRO,
+            MultiFrameFocusLockPolicy.triggerMode(CaptureRequest.CONTROL_AF_MODE_MACRO, supportsAuto = true))
+        assertEquals(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+            MultiFrameFocusLockPolicy.triggerMode(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE, supportsAuto = false))
+    }
+
+    @Test
+    fun oldLockedPreviewResultsCannotCompleteANewTrigger() {
+        val auto = CaptureRequest.CONTROL_AF_MODE_AUTO
+        val continuous = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        assertFalse(MultiFrameFocusLockPolicy.isResultFromTrigger(null, 337, auto, auto, auto))
+        assertFalse(MultiFrameFocusLockPolicy.isResultFromTrigger(340, 339, auto, auto, auto))
+        assertFalse(MultiFrameFocusLockPolicy.isResultFromTrigger(340, 341, auto, continuous, continuous))
+        assertFalse(MultiFrameFocusLockPolicy.isResultFromTrigger(340, 341, auto, auto, continuous))
+    }
+
+    @Test
+    fun triggerAndFollowingResultsCanReportAnImmediateLock() {
+        val auto = CaptureRequest.CONTROL_AF_MODE_AUTO
+        assertTrue(MultiFrameFocusLockPolicy.isResultFromTrigger(340, 340, auto, auto, auto))
+        assertTrue(MultiFrameFocusLockPolicy.isResultFromTrigger(340, 341, auto, auto, auto))
+        // Optional result metadata can be absent; the submitted request must still match.
+        assertTrue(MultiFrameFocusLockPolicy.isResultFromTrigger(340, 341, auto, auto, null))
+    }
+
     @Test
     fun focusedLockWithStationaryLensIsReady() {
         assertTrue(

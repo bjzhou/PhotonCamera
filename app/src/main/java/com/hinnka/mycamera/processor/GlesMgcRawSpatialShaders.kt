@@ -2274,7 +2274,10 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    val grayDownsample = """
+    val grayDownsample = buildGrayDownsample(linearOutput = false)
+    val yuvGrayDownsample = buildGrayDownsample(linearOutput = true)
+
+    private fun buildGrayDownsample(linearOutput: Boolean) = """
         #version 300 es
         precision highp float;
         precision highp int;
@@ -2282,6 +2285,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform highp isampler2D uInput;
         uniform ivec2 uInputSize;
         layout(location = 0) out highp int oGray;
+        ${if (linearOutput) "layout(location = 1) out highp vec2 oLinearGray;" else ""}
         float valueAt(ivec2 p) {
             return float(texelFetch(
                 uInput,
@@ -2302,6 +2306,7 @@ internal object GlesMgcRawSpatialShaders {
             // GrayPyramidDownsample converts the complete 3x3 result to S16 once,
             // using floor(value + 0.5) for signed samples.
             oGray = int(clamp(floor(value + 0.5), -32768.0, 32767.0));
+            ${if (linearOutput) "float coarseGray = floor(float(oGray) / 16.0); oLinearGray = vec2(coarseGray, float(oGray) - coarseGray * 16.0);" else ""}
         }
     """.trimIndent()
 
@@ -2310,7 +2315,10 @@ internal object GlesMgcRawSpatialShaders {
      * 2x passes, the original evaluates the complete separable seven-tap triangle
      * and converts to S16 only once.
      */
-    val grayDownsample4 = """
+    val grayDownsample4 = buildGrayDownsample4(linearOutput = false)
+    val yuvGrayDownsample4 = buildGrayDownsample4(linearOutput = true)
+
+    private fun buildGrayDownsample4(linearOutput: Boolean) = """
         #version 300 es
         precision highp float;
         precision highp int;
@@ -2318,6 +2326,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform highp isampler2D uInput;
         uniform ivec2 uInputSize;
         layout(location = 0) out highp int oGray;
+        ${if (linearOutput) "layout(location = 1) out highp vec2 oLinearGray;" else ""}
         float valueAt(ivec2 p) {
             return float(texelFetch(
                 uInput,
@@ -2339,6 +2348,7 @@ internal object GlesMgcRawSpatialShaders {
                 }
             }
             oGray = int(clamp(floor(value + 0.5), -32768.0, 32767.0));
+            ${if (linearOutput) "float coarseGray = floor(float(oGray) / 16.0); oLinearGray = vec2(coarseGray, float(oGray) - coarseGray * 16.0);" else ""}
         }
     """.trimIndent()
 
@@ -2347,7 +2357,10 @@ internal object GlesMgcRawSpatialShaders {
      * stores central differences as saturated S16 and five per-tile Float32 products in this
      * order: xx, yy, xy, base*x and base*y.
      */
-    val alignmentGradientProducts = """
+    val alignmentGradientProducts = buildAlignmentGradientProducts(sparseFineLevels = false)
+    val yuvAlignmentGradientProducts = buildAlignmentGradientProducts(sparseFineLevels = true)
+
+    private fun buildAlignmentGradientProducts(sparseFineLevels: Boolean) = """
         #version 300 es
         precision highp float;
         precision highp int;
@@ -2382,12 +2395,13 @@ internal object GlesMgcRawSpatialShaders {
             // Halide's LK buffers have min=(1,1); the texture stores only that
             // interior extent, so local texel zero is logical tile (1,1).
             ivec2 origin = (tile + ivec2(1)) * uTileStride;
-            float count = float(uTileSize * uTileSize);
+            int sampleStep = ${if (sparseFineLevels) "uTileSize >= 32 ? 2 : 1" else "1"};
+            float count = float((uTileSize / sampleStep) * (uTileSize / sampleStep));
             float meanBase = 0.0;
             if (uNormalize != 0) {
-                for (int y = 0; y < 64; ++y) {
+                for (int y = 0; y < 64; y += sampleStep) {
                     if (y >= uTileSize) break;
-                    for (int x = 0; x < 64; ++x) {
+                    for (int x = 0; x < 64; x += sampleStep) {
                         if (x >= uTileSize) break;
                         meanBase += valueAt(origin + ivec2(x, y));
                     }
@@ -2400,9 +2414,9 @@ internal object GlesMgcRawSpatialShaders {
             float xy = 0.0;
             float baseX = 0.0;
             float baseY = 0.0;
-            for (int y = 0; y < 64; ++y) {
+            for (int y = 0; y < 64; y += sampleStep) {
                 if (y >= uTileSize) break;
-                for (int x = 0; x < 64; ++x) {
+                for (int x = 0; x < 64; x += sampleStep) {
                     if (x >= uTileSize) break;
                     ivec2 p = origin + ivec2(x, y);
                     vec2 gradient = gradientAt(p);
@@ -2435,8 +2449,9 @@ internal object GlesMgcRawSpatialShaders {
     val upsampleAlignment = buildUpsampleAlignment(globalCandidateTexture = false)
 
     val upsampleAlignmentWithGpuCandidate = buildUpsampleAlignment(globalCandidateTexture = true)
+    val yuvUpsampleAlignment = buildUpsampleAlignment(globalCandidateTexture = true, sampleStep = 2)
 
-    private fun buildUpsampleAlignment(globalCandidateTexture: Boolean) = """
+    private fun buildUpsampleAlignment(globalCandidateTexture: Boolean, sampleStep: Int = 1) = """
         #version 300 es
         precision highp float;
         precision highp int;
@@ -2481,9 +2496,9 @@ internal object GlesMgcRawSpatialShaders {
             // candidate, exposing the mistake as a 16-pixel mosaic tile.
             ivec2 displacement = ivec2(roundEven(flow));
             int cost = 0;
-            for (int y = 0; y < 64; ++y) {
+            for (int y = 0; y < 64; y += $sampleStep) {
                 if (y >= uTargetTileSize) break;
-                for (int x = 0; x < 64; ++x) {
+                for (int x = 0; x < 64; x += $sampleStep) {
                     if (x >= uTargetTileSize) break;
                     ivec2 p = origin + ivec2(x, y);
                     cost += abs(
@@ -2492,7 +2507,7 @@ internal object GlesMgcRawSpatialShaders {
                     );
                 }
             }
-            return float(cost) / float(uTargetTileSize * uTargetTileSize);
+            return float(cost) / float((uTargetTileSize / $sampleStep) * (uTargetTileSize / $sampleStep));
         }
         void main() {
             ivec2 targetTile = ivec2(gl_FragCoord.xy);

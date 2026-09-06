@@ -8,6 +8,25 @@ import android.hardware.camera2.CaptureResult
  * A terminal AF state alone is insufficient while the lens actuator is still moving.
  */
 internal object MultiFrameFocusLockPolicy {
+    /** A capture-owned sweep must not wait for an unfinished continuous-picture passive scan. */
+    fun triggerMode(afMode: Int, supportsAuto: Boolean): Int {
+        val continuous = afMode == CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
+            afMode == CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+        return if (continuous && supportsAuto) CaptureRequest.CONTROL_AF_MODE_AUTO else afMode
+    }
+
+    /** Ignore in-flight preview results from before this trigger or from a different AF mode. */
+    fun isResultFromTrigger(
+        triggerFrameNumber: Long?,
+        frameNumber: Long,
+        triggerMode: Int,
+        requestMode: Int?,
+        resultMode: Int?,
+    ): Boolean {
+        return triggerFrameNumber != null && frameNumber >= triggerFrameNumber &&
+            requestMode == triggerMode && (resultMode == null || resultMode == triggerMode)
+    }
+
     fun isReadyForCapture(afState: Int?, lensState: Int?): Boolean {
         val afLocked = afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
             afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
