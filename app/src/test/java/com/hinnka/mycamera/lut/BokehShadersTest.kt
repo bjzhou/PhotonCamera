@@ -17,6 +17,7 @@ class BokehShadersTest {
             "uInputTexture",
             "uDepthTexture",
             "uHighlightSourceTexture",
+            "uLayerColorTexture",
             "uDepthMatrix",
             "uMaxBlurRadius",
             "uAperture",
@@ -329,30 +330,26 @@ class BokehShadersTest {
     }
 
     @Test
-    fun depthUpsamplingUsesARealBoundedSpatialRefinement() {
+    fun layeredDepthPassesDeclareTheirGuideAndFocusInputs() {
         val upsample = Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER
         val refine = Shaders.DEPTH_REFINE_FRAGMENT_SHADER
 
-        assertTrue(upsample.contains("for (int y = -1; y <= 2; y++)"))
-        assertTrue(upsample.contains("for (int x = -1; x <= 2; x++)"))
-        assertTrue(upsample.contains("textureGrad("))
-        assertTrue(upsample.contains("const float SIGMA_S = 1.05"))
-        assertTrue(upsample.contains("const float SIGMA_R = 0.22"))
-        assertTrue(refine.contains("float blurred"))
-        assertTrue(refine.contains("for (int y = -2; y <= 2; y++)"))
-        assertTrue(refine.contains("for (int x = -2; x <= 2; x++)"))
-        assertTrue(refine.contains("uTexelSize * 2.0"))
-        assertTrue(refine.contains("mix(center, blurred, 0.60 * edgeGate)"))
-        assertFalse(refine.contains("center - blurred"))
-        assertTrue(refine.contains("localMin"))
-        assertTrue(refine.contains("localMax"))
-        assertFalse(refine.contains("smoothstep(0.05, 0.95, center)"))
+        assertTrue(upsample.contains("uniform sampler2D uSubjectMask;"))
+        assertTrue(upsample.contains("uniform vec2 uMaskTexelSize;"))
+        assertTrue(upsample.contains("uniform vec4 uMaskBounds;"))
+        assertTrue(refine.contains("uniform int uProtectSubject;"))
+        listOf(upsample, refine).forEach { shader ->
+            listOf("uHighResGuide", "uFocusDepth", "uLinearInput").forEach { uniform ->
+                assertTrue(Regex("""uniform\s+\w+\s+$uniform\s*;""").containsMatchIn(shader))
+            }
+            assertTrue(shader.startsWith("#version 300 es"))
+        }
     }
 
     @Test
     fun offlineBokehPassesAvailableNdkShaderValidator() {
-        val localPropertiesSdk = File("local.properties")
-            .takeIf(File::isFile)
+        val localPropertiesSdk = listOf(File("local.properties"), File("../local.properties"))
+            .firstOrNull(File::isFile)
             ?.inputStream()
             ?.use { input ->
                 Properties().apply { load(input) }.getProperty("sdk.dir")
@@ -377,6 +374,7 @@ class BokehShadersTest {
             "frag" to Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER,
             "frag" to Shaders.DEPTH_REFINE_FRAGMENT_SHADER,
             "frag" to Shaders.DEPTH_READBACK_FRAGMENT_SHADER,
+            "frag" to Shaders.BOKEH_LAYER_COLOR_FRAGMENT_SHADER,
             "frag" to Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
             "frag" to Shaders.compactBokehHighlightFragmentShader(true),
             "frag" to Shaders.PSF_SPLAT_FRAGMENT_SHADER,
@@ -392,6 +390,7 @@ class BokehShadersTest {
             "frag" to Shaders.BOKEH_COMPOSITE_FRAGMENT_SHADER,
         )
         shaders.forEachIndexed { index, (stage, shader) ->
+            assertTrue("shader $index must start with #version for Mali drivers", shader.startsWith("#version 300 es"))
             val sourceFile = File.createTempFile("offline-bokeh-$index-", ".$stage")
             val outputFile = File.createTempFile("offline-bokeh-$index-", ".spv")
             try {

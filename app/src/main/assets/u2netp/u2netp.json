@@ -1,0 +1,52 @@
+{
+  "source_url": "https://huggingface.co/edgetools/u2netp/resolve/25dee37/u2netp.onnx",
+  "source_sha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
+  "source_bytes": 4574861,
+  "tflite_sha256": "1bd35cc6a71451df7a2c6d98ccda17f6b8c397624192436d50e5b0fc62b5b746",
+  "tflite_bytes": 4562128,
+  "tensorflow": "2.17.1",
+  "onnx": "1.17.0",
+  "onnxruntime": "1.20.1",
+  "input": "float32[1,320,320,3] NHWC RGB, (pixel / resized_rgb_max - ImageNet mean) / std",
+  "output": "float32[1,320,320,1] fused saliency sigmoid, min/max normalize to mask",
+  "operators": {
+    "CONV_2D": 119,
+    "MAX_POOL_2D": 33,
+    "CONCATENATION": 51,
+    "RESIZE_BILINEAR": 38,
+    "ADD": 11,
+    "LOGISTIC": 1
+  },
+  "validation": {
+    "black": {
+      "max_abs_error": 5.33275306224823e-06,
+      "mean_abs_error": 9.450013749301434e-08,
+      "normalized_mask_mae": 1.728217853269598e-06
+    },
+    "white": {
+      "max_abs_error": 4.157191142439842e-07,
+      "mean_abs_error": 3.3990165348996015e-08,
+      "normalized_mask_mae": 1.8776365322992206e-05
+    },
+    "noise": {
+      "max_abs_error": 2.1338462829589844e-05,
+      "mean_abs_error": 1.4815887539043615e-07,
+      "normalized_mask_mae": 2.691088525352825e-07
+    },
+    "gradient": {
+      "max_abs_error": 2.3581087589263916e-06,
+      "mean_abs_error": 3.451568986179154e-08,
+      "normalized_mask_mae": 2.8251765797904227e-06
+    },
+    "bokeh_style_natural_preview.jpg": {
+      "max_abs_error": 3.512948751449585e-06,
+      "mean_abs_error": 1.1810202238393686e-07,
+      "normalized_mask_mae": 5.787776899524033e-06
+    },
+    "bokeh_style_swirl_preview.jpg": {
+      "max_abs_error": 5.5849552154541016e-05,
+      "mean_abs_error": 1.292275214836991e-06,
+      "normalized_mask_mae": 1.3408343875198625e-06
+    }
+  }
+}

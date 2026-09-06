@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.processor
 
 import com.hinnka.mycamera.ml.RelativeDepthMap
+import com.hinnka.mycamera.ml.SubjectMask
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.max
 import kotlin.math.pow
@@ -9,9 +10,8 @@ import kotlin.math.pow
  * Adapts relative monocular depth for the background-first bokeh renderer.
  *
  * The renderer assumes a disparity-style map where larger values are closer to
- * camera and background is lower than the focused subject. Monocular depth
- * models can flip that polarity image-by-image, so score both directions before
- * rendering.
+ * camera. Use the segmented subject as a stable polarity reference for imported
+ * depth models; changing the focus point must never reverse the scene geometry.
  */
 internal object DepthBokehDepthPreprocessor {
     private const val TAG = "DepthBokehDepthPreprocessor"
@@ -28,7 +28,7 @@ internal object DepthBokehDepthPreprocessor {
         val invertedScore: Float
     )
 
-    fun prepare(depthMap: RelativeDepthMap, focusX: Float, focusY: Float): Result {
+    fun prepare(depthMap: RelativeDepthMap, focusX: Float, focusY: Float, subjectMask: SubjectMask): Result {
         val width = depthMap.width
         val height = depthMap.height
         val values = depthMap.values
@@ -39,8 +39,20 @@ internal object DepthBokehDepthPreprocessor {
 
         val normalFocus = estimateFocusDepth(values, width, height, focusX, focusY)
         val invertedFocus = estimateFocusDepth(invertedValues, width, height, focusX, focusY)
-        val normalScore = scoreBackgroundPotential(values, normalFocus)
-        val invertedScore = scoreBackgroundPotential(invertedValues, invertedFocus)
+        val coverage = FloatArray(values.size) { index ->
+            subjectMask.sample((index % width + 0.5f) / width, (index / width + 0.5f) / height)
+        }
+        val subjectSamples = FloatArray(values.size)
+        var subjectCount = 0
+        for (index in values.indices) {
+            if (coverage[index] >= 0.8f) subjectSamples[subjectCount++] = values[index]
+        }
+        java.util.Arrays.sort(subjectSamples, 0, subjectCount)
+        // No reliable segmented interior means no evidence for changing the
+        // input's disparity polarity. Keep this decision independent of focus.
+        val subjectDepth = if (subjectCount > 0) subjectSamples[subjectCount / 2] else null
+        val normalScore = subjectDepth?.let { scoreBackgroundPotential(values, coverage, it) } ?: 0f
+        val invertedScore = subjectDepth?.let { scoreBackgroundPotential(invertedValues, coverage, 1f - it) } ?: 0f
         val shouldInvert = invertedScore > normalScore * INVERT_SCORE_MARGIN
 
         if (!shouldInvert) {
@@ -96,12 +108,15 @@ internal object DepthBokehDepthPreprocessor {
         return samples[samples.size / 2]
     }
 
-    private fun scoreBackgroundPotential(values: FloatArray, focusDepth: Float): Float {
+    private fun scoreBackgroundPotential(values: FloatArray, coverage: FloatArray, subjectDepth: Float): Float {
         var sum = 0.0
-        for (value in values) {
-            val backgroundGap = max(focusDepth - value - FOCUS_PROTECT_WIDTH, 0.0f)
-            sum += backgroundGap.pow(BACKGROUND_BLUR_GAMMA).toDouble()
+        var totalWeight = 0.0
+        for (index in values.indices) {
+            val weight = (1.0f - coverage[index]).toDouble().let { it * it }
+            val backgroundGap = max(subjectDepth - values[index] - FOCUS_PROTECT_WIDTH, 0.0f)
+            sum += backgroundGap.pow(BACKGROUND_BLUR_GAMMA).toDouble() * weight
+            totalWeight += weight
         }
-        return (sum / values.size).toFloat()
+        return if (totalWeight > 0.0) (sum / totalWeight).toFloat() else 0f
     }
 }

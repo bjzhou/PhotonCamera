@@ -7,6 +7,7 @@ import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.ml.RelativeDepthMap
 import com.hinnka.mycamera.ml.RelativeDepthMapFile
 import com.hinnka.mycamera.ml.SharedDepthEstimator
+import com.hinnka.mycamera.ml.SharedSubjectMaskEstimator
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -98,21 +99,32 @@ class DepthBokehProcessor(context: Context) {
 
         var result: Bitmap? = null
         if (depthMap != null) {
+            val subjectMask = SharedSubjectMaskEstimator.estimateMask(appContext, originalImage, depthMap)
+            if (subjectMask == null) {
+                PLog.e(TAG, "U2NetP subject mask unavailable; bokeh was not applied")
+                return@withLock originalImage
+            }
+            val resolvedFocusX = focusX ?: 0.5f
+            val resolvedFocusY = focusY ?: 0.5f
+            val focusMask = subjectMask.sample(resolvedFocusX, resolvedFocusY)
             val preparedDepth = DepthBokehDepthPreprocessor.prepare(
                 depthMap,
-                focusX ?: 0.5f,
-                focusY ?: 0.5f
+                resolvedFocusX,
+                resolvedFocusY,
+                subjectMask,
             )
             PLog.d(
                 TAG,
-                "Prepared bokeh depth: inverted=${preparedDepth.inverted} focusDepth=${preparedDepth.focusDepth} normalScore=${preparedDepth.normalScore} invertedScore=${preparedDepth.invertedScore}"
+                "Prepared bokeh depth: inverted=${preparedDepth.inverted} focusDepth=${preparedDepth.focusDepth} focusMask=$focusMask normalScore=${preparedDepth.normalScore} invertedScore=${preparedDepth.invertedScore}"
             )
             val bokehResult = processor.applyBokeh(
                 originalImage,
                 preparedDepth.depthMap,
+                subjectMask,
                 preparedDepth.focusDepth,
                 aperture,
                 bokehStyle,
+                protectSubject = focusMask >= 0.5f,
             )
             result = bokehResult
         }

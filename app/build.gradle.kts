@@ -120,6 +120,10 @@ android {
         buildConfig = true
     }
 
+    androidResources {
+        noCompress += "tflite"
+    }
+
     sourceSets {
         getByName("dev") {
             java {

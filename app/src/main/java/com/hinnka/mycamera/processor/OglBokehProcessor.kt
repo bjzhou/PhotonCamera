@@ -10,6 +10,7 @@ import android.util.Half
 import com.hinnka.mycamera.lut.GlUtils
 import com.hinnka.mycamera.lut.Shaders
 import com.hinnka.mycamera.ml.RelativeDepthMap
+import com.hinnka.mycamera.ml.SubjectMask
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteOrder
@@ -80,6 +81,11 @@ class OglBokehProcessor {
         val alpha: Float,
     )
 
+    private data class DepthClassification(
+        val otherDepth: ByteArray,
+        val subjectMask: ByteArray,
+    )
+
     private var uDepthMatrixLoc: Int = 0
     private var compactHighlightProgramId = 0
     private var bokehProgramId = 0
@@ -88,6 +94,7 @@ class OglBokehProcessor {
     private var jbuUpsampleProgramId = 0
     private var depthRefineProgramId = 0
     private var depthReadbackProgramId = 0
+    private var layerColorProgramId = 0
     private var vertexBufferId = 0
     private var texCoordBufferId = 0
     private var indexBufferId = 0
@@ -100,9 +107,11 @@ class OglBokehProcessor {
     fun applyBokeh(
         originalImage: Bitmap,
         lowResDepthMap: RelativeDepthMap,
+        subjectMask: SubjectMask,
         focusDepth: Float,
         aperture: Float,
         bokehStyle: BokehStyle = BokehStyle.DEFAULT,
+        protectSubject: Boolean = true,
     ): Bitmap? {
         val startedAtMs = SystemClock.elapsedRealtime()
         try {
@@ -121,7 +130,12 @@ class OglBokehProcessor {
             initGL(bokehStyle)
 
             val inputTex = createTexture(originalImage, mipmap = true)
-            val lowResDepthTex = createDepthTexture(lowResDepthMap)
+            val lowResDepthTex = createScalarTexture(
+                lowResDepthMap.width, lowResDepthMap.height, lowResDepthMap.values, "relative depth",
+            )
+            val subjectMaskTex = createScalarTexture(
+                subjectMask.width, subjectMask.height, subjectMask.values, "U2NetP subject mask",
+            )
             val renderStartedAtMs = SystemClock.elapsedRealtime()
 
             val fbo = IntArray(1)
@@ -131,12 +145,12 @@ class OglBokehProcessor {
             val refinedDepthTex = IntArray(1)
             val depthReadbackTex = IntArray(1)
 
-            // Step 1: 4x4 JBU upsample. Render depth remains half-float from
-            // this point through every bokeh consumer.
+            // RGBA16F: composed disparity / subject disparity / complement
+            // disparity / subject coverage. All consumers share this contract.
             GLES30.glDisable(GLES30.GL_DITHER)
             GLES30.glGenTextures(1, highResDepthTex, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, highResDepthTex[0])
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R16F, bokehWidth, bokehHeight, 0, GLES30.GL_RED, GLES30.GL_HALF_FLOAT, null)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, bokehWidth, bokehHeight, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
@@ -157,14 +171,22 @@ class OglBokehProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uHighResGuide"), 1)
 
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uLowResTexelSize"), 1.0f / lowResDepthMap.width, 1.0f / lowResDepthMap.height)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, subjectMaskTex)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uSubjectMask"), 2)
+            GLES30.glUniform2f(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uMaskTexelSize"), 1.0f / subjectMask.width, 1.0f / subjectMask.height)
+            GLES30.glUniform4f(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uMaskBounds"),
+                subjectMask.region.left, subjectMask.region.top, subjectMask.region.width, subjectMask.region.height)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uFocusDepth"), focusDepth)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uLinearInput"), if (linearInput) 1 else 0)
 
             drawQuad(jbuUpsampleProgramId)
+            requireNoGlError("subject mask / layered upsample RGBA16F")
 
-            // Step 2: bounded spatial depth softening in the same R16F domain.
+            // Refine the RGB-guided mask and each depth layer independently.
             GLES30.glGenTextures(1, refinedDepthTex, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, refinedDepthTex[0])
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R16F, bokehWidth, bokehHeight, 0, GLES30.GL_RED, GLES30.GL_HALF_FLOAT, null)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, bokehWidth, bokehHeight, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
@@ -178,25 +200,47 @@ class OglBokehProcessor {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, highResDepthTex[0])
             GLES30.glUniform1i(GLES30.glGetUniformLocation(depthRefineProgramId, "uDepthTexture"), 0)
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(depthRefineProgramId, "uTexelSize"), 1.0f / bokehWidth, 1.0f / bokehHeight)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(depthRefineProgramId, "uHighResGuide"), 1)
+            // The uncertainty band follows the source mask footprint, not the
+            // photo's resolution or aperture. Never undersample working pixels.
+            GLES30.glUniform2f(
+                GLES30.glGetUniformLocation(depthRefineProgramId, "uRefineStep"),
+                maxOf(1.0f / bokehWidth, 0.5f * subjectMask.region.width / subjectMask.width),
+                maxOf(1.0f / bokehHeight, 0.5f * subjectMask.region.height / subjectMask.height),
+            )
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(depthRefineProgramId, "uFocusDepth"), focusDepth)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(depthRefineProgramId, "uLinearInput"), if (linearInput) 1 else 0)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(depthRefineProgramId, "uProtectSubject"), if (protectSubject) 1 else 0)
 
             drawQuad(depthRefineProgramId)
+            requireNoGlError("RGB mask / layered depth refine RGBA16F")
 
             val finalDepthTex = refinedDepthTex[0]
+            GLES30.glDeleteTextures(1, highResDepthTex, 0)
+            highResDepthTex[0] = 0
+            val layerColorTex = createLayerColorTexture(
+                fbo[0], inputTex, finalDepthTex, bokehWidth, bokehHeight, linearInput,
+            )
+            PLog.d(TAG, "Bokeh subject mask: U2NetP / RGB layered refinement, " +
+                "depth=${lowResDepthMap.width}x${lowResDepthMap.height}, " +
+                "mask=${subjectMask.width}x${subjectMask.height}, region=${subjectMask.region}, protect=$protectSubject, " +
+                "working=${bokehWidth}x${bokehHeight}, focus=$focusDepth, linear=$linearInput")
             val maxBlurRadius = originalImage.width.toFloat() / 26.0f
             val identity = FloatArray(16)
             android.opengl.Matrix.setIdentityM(identity, 0)
 
             val compactHighlightTex = IntArray(1)
             val analyticHighlights = if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
-                val refinedDepthPixels = if (bokehStyle == BokehStyle.DEFAULT) {
+                val depthClassification = if (bokehStyle == BokehStyle.DEFAULT) {
                     // Only the default style performs CPU highlight topology. Its
-                    // conservative R8 copy never feeds the renderer; finalDepthTex
-                    // remains R16F. Avoid this synchronizing readback for the fully
+                    // RGBA8 depth/mask copy never feeds the renderer; finalDepthTex
+                    // remains RGBA16F. Avoid this synchronizing readback for the fully
                     // GPU-integrated natural and bubble styles.
                     GLES30.glGenTextures(1, depthReadbackTex, 0)
                     GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthReadbackTex[0])
-                    GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, bokehWidth, bokehHeight, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, null)
+                    GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, bokehWidth, bokehHeight, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
                     GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
                     GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
                     GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
@@ -209,7 +253,7 @@ class OglBokehProcessor {
                     GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, refinedDepthTex[0])
                     GLES30.glUniform1i(GLES30.glGetUniformLocation(depthReadbackProgramId, "uDepthTexture"), 0)
                     drawQuad(depthReadbackProgramId)
-                    readCurrentR8Framebuffer(bokehWidth, bokehHeight)
+                    readDepthClassification(bokehWidth, bokehHeight)
                 } else {
                     null
                 }
@@ -317,9 +361,10 @@ class OglBokehProcessor {
                         width = bokehWidth,
                         height = bokehHeight,
                         halfFloat = halfFloatOutput,
-                        refinedDepthPixels = checkNotNull(refinedDepthPixels) {
+                        refinedDepthPixels = checkNotNull(depthClassification) {
                             "Default bokeh requires resolved depth topology"
-                        },
+                        }.otherDepth,
+                        subjectMaskPixels = depthClassification.subjectMask,
                         originalWidth = originalImage.width,
                         originalHeight = originalImage.height,
                         focusDepth = focusDepth,
@@ -383,6 +428,9 @@ class OglBokehProcessor {
                 GLES30.glGetUniformLocation(bokehProgramId, "uHighlightSourceTexture"),
                 2,
             )
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, layerColorTex)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uLayerColorTexture"), 3)
 
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uMaxBlurRadius"), maxBlurRadius)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uAperture"), aperture)
@@ -517,8 +565,8 @@ class OglBokehProcessor {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehCompositeProgramId, "uFocusDepth"), focusDepth)
             GLES30.glUniform2f(
                 GLES30.glGetUniformLocation(bokehCompositeProgramId, "uDepthTexelSize"),
-                1.0f / bokehWidth,
-                1.0f / bokehHeight,
+                1.0f / originalImage.width,
+                1.0f / originalImage.height,
             )
             GLES30.glUniform1i(
                 GLES30.glGetUniformLocation(bokehCompositeProgramId, "uLinearInput"),
@@ -556,8 +604,10 @@ class OglBokehProcessor {
             // Clean up
             GLES30.glDeleteTextures(1, intArrayOf(inputTex), 0)
             GLES30.glDeleteTextures(1, intArrayOf(lowResDepthTex), 0)
+            GLES30.glDeleteTextures(1, intArrayOf(subjectMaskTex), 0)
             GLES30.glDeleteTextures(1, highResDepthTex, 0)
             GLES30.glDeleteTextures(1, refinedDepthTex, 0)
+            GLES30.glDeleteTextures(1, intArrayOf(layerColorTex), 0)
             GLES30.glDeleteTextures(1, depthReadbackTex, 0)
             GLES30.glDeleteTextures(1, compactHighlightTex, 0)
             GLES30.glDeleteTextures(1, bokehTex, 0)
@@ -582,8 +632,48 @@ class OglBokehProcessor {
         }
     }
 
-    private fun readCurrentR8Framebuffer(width: Int, height: Int): ByteArray {
-        val byteCount = width.toLong() * height.toLong()
+    private fun createLayerColorTexture(
+        framebuffer: Int,
+        inputTexture: Int,
+        depthTexture: Int,
+        width: Int,
+        height: Int,
+        linearInput: Boolean,
+    ): Int {
+        val texture = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height,
+            0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, texture[0], 0)
+        requireFramebufferComplete("premultiplied bokeh layer")
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glUseProgram(layerColorProgramId)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTexture)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(layerColorProgramId, "uInputTexture"), 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthTexture)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(layerColorProgramId, "uDepthTexture"), 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(layerColorProgramId, "uLinearInput"), if (linearInput) 1 else 0)
+        drawQuad(layerColorProgramId)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        requireNoGlError("premultiplied bokeh layer RGBA16F / mipmaps")
+        return texture[0]
+    }
+
+    private fun readDepthClassification(width: Int, height: Int): DepthClassification {
+        val pixelCount = width * height
+        val byteCount = pixelCount.toLong() * 4L
         val buffer = LargeDirectBuffer.allocate(byteCount, "OGL bokeh refined-depth readback")
             ?: throw IllegalStateException("Unable to allocate refined-depth readback buffer")
         return try {
@@ -593,12 +683,19 @@ class OglBokehProcessor {
                 0,
                 width,
                 height,
-                GLES30.GL_RED,
+                GLES30.GL_RGBA,
                 GLES30.GL_UNSIGNED_BYTE,
                 buffer,
             )
+            requireNoGlError("depth / subject mask RGBA8 readback")
             buffer.position(0)
-            ByteArray(byteCount.toInt()).also(buffer::get)
+            val depth = ByteArray(pixelCount)
+            val mask = ByteArray(pixelCount)
+            for (index in 0 until pixelCount) {
+                depth[index] = buffer.get(index * 4)
+                mask[index] = buffer.get(index * 4 + 1)
+            }
+            DepthClassification(depth, mask)
         } finally {
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
             LargeDirectBuffer.free(buffer)
@@ -610,6 +707,7 @@ class OglBokehProcessor {
         height: Int,
         halfFloat: Boolean,
         refinedDepthPixels: ByteArray,
+        subjectMaskPixels: ByteArray,
         originalWidth: Int,
         originalHeight: Int,
         focusDepth: Float,
@@ -621,6 +719,7 @@ class OglBokehProcessor {
         check(pixelCount == refinedDepthPixels.size.toLong()) {
             "Highlight/depth working domains do not match"
         }
+        check(subjectMaskPixels.size == refinedDepthPixels.size) { "Subject mask/depth domains do not match" }
         val bytesPerPixel = if (halfFloat) 8L else 4L
         val buffer = LargeDirectBuffer.allocate(
             pixelCount * bytesPerPixel,
@@ -718,12 +817,17 @@ class OglBokehProcessor {
                 isPreExistingBokeh: Boolean,
                 sourceRadiusPixels: Float = 0.0f,
             ) {
+                if (sampleWorkingDepth(subjectMaskPixels, width, height, centerX, centerY) > 0.01f) {
+                    depthGateRejectedCount++
+                    return
+                }
                 val centerDepth = sampleWorkingDepth(
                     refinedDepthPixels,
                     width,
                     height,
                     centerX,
                     centerY,
+                    interpolate = false,
                 )
 
                 val depthCocPixels = computeCocPixels(
@@ -769,6 +873,7 @@ class OglBokehProcessor {
                 if (cocPixels < minimumCocPixels) return
                 if (!hasEligibleDefocusedSupport(
                         refinedDepthPixels = refinedDepthPixels,
+                        subjectMaskPixels = subjectMaskPixels,
                         width = width,
                         height = height,
                         originalWidth = originalWidth,
@@ -1058,7 +1163,13 @@ class OglBokehProcessor {
         height: Int,
         x: Float,
         y: Float,
+        interpolate: Boolean = true,
     ): Float {
+        if (!interpolate) {
+            val sampleX = floor(x + 0.5f).toInt().coerceIn(0, width - 1)
+            val sampleY = floor(y + 0.5f).toInt().coerceIn(0, height - 1)
+            return (depthPixels[sampleY * width + sampleX].toInt() and 0xff) / 255.0f
+        }
         val x0 = floor(x).toInt().coerceIn(0, width - 1)
         val y0 = floor(y).toInt().coerceIn(0, height - 1)
         val x1 = minOf(x0 + 1, width - 1)
@@ -1102,6 +1213,7 @@ class OglBokehProcessor {
 
     private fun hasEligibleDefocusedSupport(
         refinedDepthPixels: ByteArray,
+        subjectMaskPixels: ByteArray,
         width: Int,
         height: Int,
         originalWidth: Int,
@@ -1138,6 +1250,7 @@ class OglBokehProcessor {
             for (sampleX in xStart..xEnd) {
                 val deltaX = (sampleX.toFloat() - centerX) * originalPixelsPerWorkingX
                 if (deltaX * deltaX + deltaY * deltaY > clearanceRadiusSquared) continue
+                if ((subjectMaskPixels[sampleY * width + sampleX].toInt() and 0xff) > 2) return false
                 val depthByte = refinedDepthPixels[sampleY * width + sampleX].toInt() and 0xff
                 val depth = depthByte / 255.0f
                 val eligibleDepth = if (bokehStyle == BokehStyle.BUBBLE) {
@@ -1175,18 +1288,24 @@ class OglBokehProcessor {
         }
     }
 
-    private fun createDepthTexture(depthMap: RelativeDepthMap): Int {
-        val byteCount = depthMap.values.size.toLong() * Float.SIZE_BYTES
-        val uploadBuffer = LargeDirectBuffer.allocate(byteCount, "OGL relative-depth upload")
-            ?: throw IllegalStateException("Unable to allocate relative-depth upload buffer")
+    private fun requireNoGlError(label: String) {
+        val error = GLES30.glGetError()
+        check(error == GLES30.GL_NO_ERROR) { "$label: GL error 0x${error.toString(16)}" }
+    }
+
+    private fun createScalarTexture(width: Int, height: Int, values: FloatArray, label: String): Int {
+        val byteCount = values.size.toLong() * Float.SIZE_BYTES
+        val uploadBuffer = LargeDirectBuffer.allocate(byteCount, "OGL $label upload")
+            ?: throw IllegalStateException("Unable to allocate $label upload buffer")
         val texture = IntArray(1)
         try {
             uploadBuffer.order(ByteOrder.nativeOrder())
             val floatBuffer = uploadBuffer.asFloatBuffer()
-            floatBuffer.put(depthMap.values)
+            floatBuffer.put(values)
             floatBuffer.position(0)
 
             GLES30.glGenTextures(1, texture, 0)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -1196,13 +1315,14 @@ class OglBokehProcessor {
                 GLES30.GL_TEXTURE_2D,
                 0,
                 GLES30.GL_R16F,
-                depthMap.width,
-                depthMap.height,
+                width,
+                height,
                 0,
                 GLES30.GL_RED,
                 GLES30.GL_FLOAT,
                 floatBuffer,
             )
+            requireNoGlError("$label R16F upload")
             return texture[0]
         } catch (error: Throwable) {
             if (texture[0] != 0) GLES30.glDeleteTextures(1, texture, 0)
@@ -1420,7 +1540,15 @@ class OglBokehProcessor {
             EGL14.EGL_NONE
         )
         eglSurface = EGL14.eglCreatePbufferSurface(eglDisplay, config, surfaceAttribs, 0)
-        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        check(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            "Bokeh eglMakeCurrent failed: 0x${EGL14.eglGetError().toString(16)}"
+        }
+        val textureLimit = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, textureLimit, 0)
+        PLog.d(TAG, "Bokeh GLES: vendor=${GLES30.glGetString(GLES30.GL_VENDOR)}, " +
+            "renderer=${GLES30.glGetString(GLES30.GL_RENDERER)}, " +
+            "version=${GLES30.glGetString(GLES30.GL_VERSION)}, maxTexture=${textureLimit[0]}")
+        check(maxOf(width, height) <= textureLimit[0]) { "Bokeh image exceeds GL_MAX_TEXTURE_SIZE" }
     }
 
     private fun initGL(bokehStyle: BokehStyle) {
@@ -1453,6 +1581,7 @@ class OglBokehProcessor {
             )
             jbuUpsampleProgramId = createProgram(vs, Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER, "depth upsample")
             depthRefineProgramId = createProgram(vs, Shaders.DEPTH_REFINE_FRAGMENT_SHADER, "depth refine")
+            layerColorProgramId = createProgram(vs, Shaders.BOKEH_LAYER_COLOR_FRAGMENT_SHADER, "premultiplied bokeh layer")
             if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && needsAnalyticOverlay) {
                 depthReadbackProgramId = createProgram(
                     vs,
@@ -1542,6 +1671,7 @@ class OglBokehProcessor {
         if (jbuUpsampleProgramId != 0) GLES30.glDeleteProgram(jbuUpsampleProgramId)
         if (depthRefineProgramId != 0) GLES30.glDeleteProgram(depthRefineProgramId)
         if (depthReadbackProgramId != 0) GLES30.glDeleteProgram(depthReadbackProgramId)
+        if (layerColorProgramId != 0) GLES30.glDeleteProgram(layerColorProgramId)
         if (vertexBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(vertexBufferId), 0)
         if (texCoordBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(texCoordBufferId), 0)
         if (indexBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(indexBufferId), 0)
@@ -1565,6 +1695,7 @@ class OglBokehProcessor {
         jbuUpsampleProgramId = 0
         depthRefineProgramId = 0
         depthReadbackProgramId = 0
+        layerColorProgramId = 0
         vertexBufferId = 0
         texCoordBufferId = 0
         indexBufferId = 0

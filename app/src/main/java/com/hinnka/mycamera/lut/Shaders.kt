@@ -530,12 +530,24 @@ object Shaders {
         1, 3, 2   // 第二个三角形
     )
 
+    // Coverage stays bilinear; depth belongs to a surface. Interpolating the
+    // complement disparity across opposite sides of focus creates a false
+    // in-focus line. Fetch its owning texel without blending those surfaces.
+    private val BOKEH_LAYER_SAMPLING = """
+        vec4 sampleBokehLayers(vec2 uv) {
+            vec4 layers = texture(uDepthTexture, uv);
+            ivec2 size = textureSize(uDepthTexture, 0);
+            ivec2 pixel = clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1);
+            layers.gb = texelFetch(uDepthTexture, pixel, 0).gb;
+            return layers;
+        }
+    """.trimIndent().prependIndent("        ")
+
     /**
-     * 4x4 联合双边上采样。
-     *
-     * 正值高斯空间核替代仅覆盖单个低分辨率 cell 的 2x2 双线性核，跨 cell
-     * 移动时权重保持连续。低分辨率引导样本使用与深度 texel 相同的面积足迹，
-     * 避免高频纹理在单点采样时错误主导深度边缘。
+     * U2NetP 显著性 mask 经 RGB 引导上采样，并分别重建 M / 1-M 的深度。
+     * 借鉴 Kim et al., CVPR 2022 的分层契约；深度细化使用同层归一化卷积。
+     * RGBA16F 契约：R=合成视差，G=主体视差，B=非主体视差，A=主体覆盖率。
+     * 非主体的焦前/焦后样本分开归一化，避免平均后凭空生成焦平面。
      */
     val JBU_UPSAMPLE_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
@@ -543,104 +555,182 @@ object Shaders {
         out vec4 fragColor;
 
         uniform sampler2D uLowResDepth;  
+        uniform sampler2D uSubjectMask;
         uniform sampler2D uHighResGuide; 
-        uniform vec2 uLowResTexelSize;   
+        uniform vec2 uMaskTexelSize;
+        uniform vec4 uMaskBounds; // original-image origin.xy and extent.zw
+        uniform float uFocusDepth;
+        uniform int uLinearInput;
 
         const float SIGMA_S = 1.05;
         const float SIGMA_R = 0.22;
 
+        vec3 guideSpace(vec3 color) {
+            vec3 linear = uLinearInput != 0 ? max(color, vec3(0.0))
+                : pow(clamp(color, 0.0, 1.0), vec3(2.2));
+            return sqrt(linear / (1.0 + dot(linear, vec3(0.2126, 0.7152, 0.0722))));
+        }
+
         void main() {
-            vec3 guideColor = texture(uHighResGuide, vTexCoord).rgb;
+            vec3 guideColor = guideSpace(texture(uHighResGuide, vTexCoord).rgb);
             
-            // 基础线性混合深度，作为极端情况下的保底
             float baseDepth = texture(uLowResDepth, vTexCoord).r;
             
-            ivec2 lowResSize = textureSize(uLowResDepth, 0);
-            vec2 pos = vTexCoord / uLowResTexelSize - 0.5;
+            ivec2 lowResSize = textureSize(uSubjectMask, 0);
+            vec2 imageMaskTexel = uMaskTexelSize * uMaskBounds.zw;
+            vec2 pos = (vTexCoord - uMaskBounds.xy) / imageMaskTexel - 0.5;
             ivec2 p0 = ivec2(floor(pos));
             vec2 f = fract(pos);
             
             float totalWeight = 0.0;
-            float totalDepth = 0.0;
+            float totalMask = 0.0;
+            vec3 layerDepth = vec3(0.0);
+            vec3 layerWeight = vec3(0.0);
 
             for (int y = -1; y <= 2; y++) {
                 for (int x = -1; x <= 2; x++) {
                     ivec2 sampleIndex = p0 + ivec2(x, y);
-                    if (any(lessThan(sampleIndex, ivec2(0))) ||
-                        any(greaterThanEqual(sampleIndex, lowResSize))) {
+                    // Extend the local grid over the image with zero mask support.
+                    // Outside the crop, depth and guide still need valid samples.
+                    vec2 sampleCoord = uMaskBounds.xy + (vec2(sampleIndex) + 0.5) * imageMaskTexel;
+                    if (any(lessThan(sampleCoord, vec2(0.0))) ||
+                        any(greaterThan(sampleCoord, vec2(1.0)))) {
                         continue;
                     }
 
-                    vec2 sampleCoord = (vec2(sampleIndex) + 0.5) * uLowResTexelSize;
-                    float d = texelFetch(uLowResDepth, sampleIndex, 0).r;
-                    vec3 c = textureGrad(
+                    // Mask and depth models have independent output grids but
+                    // share original-image UVs; never use mask indices for depth.
+                    float d = texture(uLowResDepth, sampleCoord).r;
+                    vec3 c = guideSpace(textureGrad(
                         uHighResGuide,
                         sampleCoord,
-                        vec2(uLowResTexelSize.x, 0.0),
-                        vec2(0.0, uLowResTexelSize.y)
-                    ).rgb;
+                        vec2(imageMaskTexel.x, 0.0),
+                        vec2(0.0, imageMaskTexel.y)
+                    ).rgb);
 
                     vec2 delta = vec2(float(x), float(y)) - f;
                     float wS = exp(
                         -dot(delta, delta) / (2.0 * SIGMA_S * SIGMA_S)
                     );
                     float dC = distance(guideColor, c);
-                    float wC = exp(-(dC * dC) / (2.0 * SIGMA_R * SIGMA_R));
+                    // A positive range kernel keeps normalized convolution defined
+                    // even for HDR highlights far from the local guide colors.
+                    float wC = 1.0 / (1.0 + dC * dC / (SIGMA_R * SIGMA_R));
+                    wC *= wC;
 
                     float w = wS * wC;
-                    totalDepth += d * w;
+                    float m = 0.0;
+                    if (all(greaterThanEqual(sampleIndex, ivec2(0))) &&
+                        all(lessThan(sampleIndex, lowResSize))) {
+                        m = texelFetch(uSubjectMask, sampleIndex, 0).r;
+                    }
+                    float subjectWeight = m * m * m * m;
+                    float otherWeight = (1.0 - m) * (1.0 - m);
+                    otherWeight *= otherWeight;
+                    vec3 membership = vec3(subjectWeight,
+                        d < uFocusDepth ? otherWeight : 0.0,
+                        d >= uFocusDepth ? otherWeight : 0.0);
+                    layerDepth += d * w * membership;
+                    layerWeight += w * membership;
+                    totalMask += m * w;
                     totalWeight += w;
                 }
             }
 
-            float finalDepth = totalWeight > 0.001 ? totalDepth / totalWeight : baseDepth;
-            fragColor = vec4(vec3(finalDepth), 1.0);
+            float mask = totalMask / totalWeight;
+            float subjectDepth = layerWeight.x > 0.0
+                ? layerDepth.x / layerWeight.x : baseDepth;
+            bool nearLayer = layerWeight.z > layerWeight.y;
+            float otherWeight = nearLayer ? layerWeight.z : layerWeight.y;
+            float otherDepth = otherWeight > 0.0
+                ? (nearLayer ? layerDepth.z : layerDepth.y) / otherWeight : baseDepth;
+            fragColor = vec4(mix(otherDepth, subjectDepth, mask), subjectDepth, otherDepth, mask);
         }
     """.trimIndent()
 
-    /** 对深度边缘做有界软化，避免单目深度的离散台阶直接进入 CoC 合成。 */
+    /** RGB 局部双颜色模型细化软 mask；仅在轮廓带内以同层可靠样本补全深度。 */
     val DEPTH_REFINE_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
 
         uniform sampler2D uDepthTexture;
-        uniform vec2 uTexelSize;
+        uniform sampler2D uHighResGuide;
+        uniform vec2 uRefineStep;
+        uniform float uFocusDepth;
+        uniform int uLinearInput;
+        uniform int uProtectSubject;
+
+        $BOKEH_LAYER_SAMPLING
+
+        vec3 guideSpace(vec3 color) {
+            vec3 linear = uLinearInput != 0 ? max(color, vec3(0.0))
+                : pow(clamp(color, 0.0, 1.0), vec3(2.2));
+            return sqrt(linear / (1.0 + dot(linear, vec3(0.2126, 0.7152, 0.0722))));
+        }
 
         void main() {
-            float center = texture(uDepthTexture, vTexCoord).r;
-            float weightedDepth = 0.0;
-            float totalWeight = 0.0;
-            float localMin = center;
-            float localMax = center;
+            vec4 center = sampleBokehLayers(vTexCoord);
+            vec3 color = guideSpace(texture(uHighResGuide, vTexCoord).rgb);
+            vec2 depthSum = vec2(0.0);
+            vec2 depthWeight = vec2(0.0);
+            vec2 modelWeight = vec2(0.0);
+            vec3 subjectColor = vec3(0.0);
+            vec3 otherColor = vec3(0.0);
+            vec2 colorSquared = vec2(0.0);
             for (int y = -2; y <= 2; y++) {
                 for (int x = -2; x <= 2; x++) {
-                    vec2 offset = vec2(float(x), float(y))
-                        * uTexelSize * 2.0;
-                    float sampleDepth = texture(
-                        uDepthTexture,
-                        clamp(vTexCoord + offset, 0.0, 1.0)
-                    ).r;
-                    float radiusSquared = float(x * x + y * y);
-                    float spatialWeight = exp(-radiusSquared * 0.38);
-                    weightedDepth += sampleDepth * spatialWeight;
-                    totalWeight += spatialWeight;
-                    localMin = min(localMin, sampleDepth);
-                    localMax = max(localMax, sampleDepth);
+                    vec2 uv = clamp(vTexCoord + vec2(float(x), float(y)) * uRefineStep, 0.0, 1.0);
+                    vec4 layer = sampleBokehLayers(uv);
+                    vec3 guide = guideSpace(texture(uHighResGuide, uv).rgb);
+                    float spatialWeight = exp(-float(x * x + y * y) * 0.38);
+                    // Uncertain boundary pixels must not define either color model.
+                    vec2 reliable = vec2(smoothstep(0.65, 0.95, layer.a),
+                        1.0 - smoothstep(0.05, 0.35, layer.a)) * spatialWeight;
+                    modelWeight += reliable;
+                    subjectColor += guide * reliable.x;
+                    otherColor += guide * reliable.y;
+                    colorSquared += dot(guide, guide) * reliable;
+                    vec2 delta = layer.gb - center.gb;
+                    vec2 weights = reliable / (vec2(1.0) + delta * delta / (0.06 * 0.06));
+                    if ((layer.b - uFocusDepth) * (center.b - uFocusDepth) < 0.0) {
+                        weights.y = 0.0;
+                    }
+                    depthSum += layer.gb * weights;
+                    depthWeight += weights;
                 }
             }
-            float blurred = weightedDepth / max(totalWeight, 0.001);
-            float edgeGate = smoothstep(0.004, 0.035, localMax - localMin);
-            float refined = clamp(
-                mix(center, blurred, 0.60 * edgeGate),
-                localMin,
-                localMax
-            );
-            fragColor = vec4(vec3(clamp(refined, 0.0, 1.0)), 1.0);
+            float mask = center.a;
+            vec2 depths = center.gb;
+            if (min(modelWeight.x, modelWeight.y) > 0.01) {
+                subjectColor /= modelWeight.x;
+                otherColor /= modelWeight.y;
+                vec2 variance = max(colorSquared / modelWeight
+                    - vec2(dot(subjectColor, subjectColor), dot(otherColor, otherColor)), 0.0);
+                vec3 axis = subjectColor - otherColor;
+                float separation = dot(axis, axis);
+                float matte = clamp(dot(color - otherColor, axis) / max(separation, 0.0001), 0.0, 1.0);
+                vec3 residual = color - mix(otherColor, subjectColor, matte);
+                float confidence = separation / (separation + variance.x + variance.y + 0.005);
+                confidence *= 1.0 / (1.0 + dot(residual, residual) / 0.01);
+                mask = mix(mask, matte, confidence);
+                if (depthWeight.x > 0.0) depths.x = depthSum.x / depthWeight.x;
+                if (depthWeight.y > 0.0) depths.y = depthSum.y / depthWeight.y;
+            }
+            float composedDepth = mix(depths.y, depths.x, mask);
+            if (uProtectSubject == 0) {
+                // A focus point outside the salient subject must allow it to
+                // defocus. Keep the mask-guided geometry, then expose the visible
+                // surface to the ordinary bidirectional PSF without sharp protection.
+                float visibleDepth = mask >= 0.5 ? depths.x : depths.y;
+                fragColor = vec4(composedDepth, depths.x, visibleDepth, 0.0);
+            } else {
+                fragColor = vec4(composedDepth, depths, mask);
+            }
         }
     """.trimIndent()
 
-    /** 供 CPU 遮挡判定使用的有损副本；渲染深度始终保留在 R16F。 */
+    /** CPU 高光判定副本：R=非主体视差，G=主体 mask；渲染仍使用 RGBA16F 分层数据。 */
     val DEPTH_READBACK_FRAGMENT_SHADER = """#version 300 es
         precision highp float;
         in vec2 vTexCoord;
@@ -649,8 +739,37 @@ object Shaders {
         uniform sampler2D uDepthTexture;
 
         void main() {
-            float depth = texture(uDepthTexture, vTexCoord).r;
-            fragColor = vec4(vec3(clamp(depth, 0.0, 1.0)), 1.0);
+            vec4 layers = texture(uDepthTexture, vTexCoord);
+            fragColor = vec4(layers.b, layers.a, 0.0, 1.0);
+        }
+    """.trimIndent()
+
+    /** 在线性域预乘非主体覆盖率，然后生成 mipmap，避免主体颜色进入背景采样足迹。 */
+    val BOKEH_LAYER_COLOR_FRAGMENT_SHADER = """#version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+        uniform sampler2D uInputTexture;
+        uniform sampler2D uDepthTexture;
+        uniform int uLinearInput;
+
+        void main() {
+            vec2 texel = 1.0 / vec2(textureSize(uDepthTexture, 0));
+            vec4 sum = vec4(0.0);
+            for (int y = 0; y < 2; y++) {
+                for (int x = 0; x < 2; x++) {
+                    vec2 uv = clamp(vTexCoord + (vec2(float(x), float(y)) - 0.5)
+                        * texel * 0.5, 0.0, 1.0);
+                    // Mask before working-resolution reduction as well as before
+                    // mipmap generation. Original-image mipmaps contain subject RGB.
+                    vec3 color = textureLod(uInputTexture, uv, 0.0).rgb;
+                    vec3 linear = uLinearInput != 0 ? max(color, vec3(0.0))
+                        : pow(clamp(color, 0.0, 1.0), vec3(2.2));
+                    float coverage = 1.0 - texture(uDepthTexture, uv).a;
+                    sum += vec4(linear * coverage, coverage);
+                }
+            }
+            fragColor = sum * 0.25;
         }
     """.trimIndent()
 
@@ -677,6 +796,8 @@ object Shaders {
         uniform vec2 uTexelSize;
         uniform float uMinNeighborhoodLumaDifference;
         uniform int uLinearInput;
+
+        $BOKEH_LAYER_SAMPLING
 
         const float LENS_GAMMA = 2.2;
         const float MIN_HIGHLIGHT_CORE_RADIUS_PIXELS = 2.5;
@@ -775,9 +896,10 @@ object Shaders {
                 0.0,
                 1.0
             );
-            float centerDepth = texture(uDepthTexture, depthUV).r;
+            vec4 centerLayers = sampleBokehLayers(depthUV);
+            float centerDepth = centerLayers.b;
             float coc = computeCoc(centerDepth);
-            if (coc < 1.5) {
+            if (coc < 1.5 || centerLayers.a > 0.01) {
                 fragColor = vec4(0.0);
                 return;
             }
@@ -896,7 +1018,12 @@ object Shaders {
                     0.0,
                     1.0
                 );
-                float coreDepth = texture(uDepthTexture, coreDepthUV).r;
+                vec4 coreLayers = sampleBokehLayers(coreDepthUV);
+                if (coreLayers.a > 0.01) {
+                    fragColor = vec4(0.0);
+                    return;
+                }
+                float coreDepth = coreLayers.b;
                 maximumCoreDepthDelta = max(
                     maximumCoreDepthDelta,
                     abs(coreDepth - centerDepth)
@@ -1000,6 +1127,7 @@ object Shaders {
         uniform sampler2D uInputTexture;
         uniform sampler2D uDepthTexture;
         uniform sampler2D uHighlightSourceTexture;
+        uniform sampler2D uLayerColorTexture;
 
         uniform mat4 uDepthMatrix;
         uniform float uMaxBlurRadius;
@@ -1007,6 +1135,8 @@ object Shaders {
         uniform float uFocusDepth;
         uniform vec2 uTexelSize;
         uniform int uLinearInput;
+
+        $BOKEH_LAYER_SAMPLING
 
         const float GOLDEN_ANGLE = 2.39996323;
         const int SAMPLES = 640;
@@ -1153,10 +1283,8 @@ object Shaders {
                         0.0,
                         1.0
                     );
-                    float sampleDepth = texture(
-                        uDepthTexture,
-                        sampleDepthUV
-                    ).r;
+                    vec4 sampleLayers = sampleBokehLayers(sampleDepthUV);
+                    float sampleDepth = sampleLayers.b;
                     float nearer = smoothstep(
                         0.012,
                         0.075,
@@ -1169,7 +1297,7 @@ object Shaders {
                     );
                     float radiusSquared = float(x * x + y * y);
                     float spatialWeight = exp(-radiusSquared * 0.26);
-                    weightedPotential += nearer * sampleDefocus * spatialWeight;
+                    weightedPotential += nearer * sampleDefocus * spatialWeight * (1.0 - sampleLayers.a);
                     totalWeight += spatialWeight;
                 }
             }
@@ -1179,14 +1307,16 @@ object Shaders {
         void main() {
             vec2 depthUV = clamp((uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy, 0.0, 1.0);
             vec4 centerColor = texture(uInputTexture, vTexCoord);
-            float centerDepth = texture(uDepthTexture, depthUV).r;
+            vec4 centerLayers = sampleBokehLayers(depthUV);
+            float centerDepth = centerLayers.a >= 0.5 ? centerLayers.g : centerLayers.b;
+            // Render the complement layer's full PSF. Coverage is applied in
+            // composition, never used to shrink the disc at a subject boundary.
+            float centerCoc = computeCoc(centerLayers.b);
 
-            float centerCoc = computeCoc(centerDepth);
-
-            float foregroundPotential = centerCoc < 0.2
+            float foregroundPotential = (centerCoc < 0.2 || centerLayers.a > 0.99)
                 ? foregroundDefocusPotential(depthUV, centerDepth)
                 : 0.0;
-            if (centerCoc < 0.2 && foregroundPotential < 0.008) {
+            if ((centerCoc < 0.2 || centerLayers.a > 0.99) && foregroundPotential < 0.008) {
                 fragColor = centerColor;
                 return;
             }
@@ -1208,17 +1338,16 @@ object Shaders {
                 / sqrt(float(SAMPLES));
             float inputIntegrationLod = max(
                 0.0,
-                log2(sampleFootprintUv * float(textureSize(uInputTexture, 0).x))
+                log2(sampleFootprintUv * float(textureSize(uLayerColorTexture, 0).x))
             );
             #if SOAP_BUBBLE_BOKEH == 1
             float sceneIntegrationLod = inputIntegrationLod;
             #else
             float sceneIntegrationLod = inputIntegrationLod;
             #endif
-            vec3 centerLinear = toLinear(centerColor.rgb);
-            vec3 centerBaseLinear = centerLinear;
-            vec3 accColor = centerBaseLinear * centerWeight;
-            float accWeight = centerWeight;
+            vec4 centerLayerColor = textureLod(uLayerColorTexture, vTexCoord, 0.0);
+            vec3 accColor = centerLayerColor.rgb * centerWeight;
+            float accWeight = centerLayerColor.a * centerWeight;
 
             #if SOAP_BUBBLE_BOKEH == 1
             float softBase = max(4.5, uMaxBlurRadius * 0.16);
@@ -1240,13 +1369,15 @@ object Shaders {
                 // A constant footprint matches the uniform area density of the
                 // Vogel samples. Radius-dependent LOD smears point lights before
                 // the aperture kernel can form a disc.
-                vec3 sColor = textureLod(
-                    uInputTexture,
+                vec4 sampleLayerColor = textureLod(
+                    uLayerColorTexture,
                     sampleUV,
                     sceneIntegrationLod
-                ).rgb;
+                );
+                if (sampleLayerColor.a < 0.001) continue;
                 vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
-                float sDepth = texture(uDepthTexture, sDepthUV).r;
+                vec4 sampleLayers = sampleBokehLayers(sDepthUV);
+                float sDepth = sampleLayers.b;
 
                 float sCoc = computeCoc(sDepth);
 
@@ -1270,7 +1401,7 @@ object Shaders {
                 float focusedSurfaceProtection = 1.0 - smoothstep(
                     0.8,
                     4.0,
-                    centerCoc
+                    computeCoc(centerDepth)
                 );
                 float occlusionStrength = mix(
                     0.28,
@@ -1282,7 +1413,7 @@ object Shaders {
 
                 float commonWeight = mix(bW, fW, sourceIsNearer)
                     * sourceVisibility;
-                vec3 sLinear = toLinear(sColor);
+                vec3 sLinear = sampleLayerColor.rgb / sampleLayerColor.a;
                 float sampleLuma = dot(
                     sLinear,
                     vec3(0.2126, 0.7152, 0.0722)
@@ -1330,7 +1461,7 @@ object Shaders {
                     bubbleMix
                 );
                 #endif
-                float weight = commonWeight * apertureResponse;
+                float weight = commonWeight * apertureResponse * sampleLayerColor.a;
 
                 if (weight > 0.0001) {
                     vec3 baseLinear = sLinear;
@@ -1609,8 +1740,8 @@ object Shaders {
     /**
      * 三层最终合成：普通双向虚化、解析光斑、原图焦平面细节。
      *
-     * 光斑先与虚化层结合，再以局部 CoC 覆盖率连续混合原图和虚化图。
-     * 覆盖率在深度边缘跨多个采样点渐变，避免离散保护区形成抠图断层。
+     * 主体 mask 决定原图覆盖率，非主体深度决定 CoC，两者保持独立。
+     * 焦前散焦物仍可遮挡焦点层；背景高光不能借该覆盖率溢入主体。
      */
     val BOKEH_COMPOSITE_FRAGMENT_SHADER = """
         #version 300 es
@@ -1629,6 +1760,8 @@ object Shaders {
         uniform float uFocusDepth;
         uniform vec2 uDepthTexelSize;
         uniform int uLinearInput;
+
+        $BOKEH_LAYER_SAMPLING
 
         float computeCoc(float depth) {
             float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
@@ -1658,7 +1791,8 @@ object Shaders {
                         0.0,
                         1.0
                     );
-                    float sampleDepth = texture(uDepthTexture, sampleUV).r;
+                    vec4 sampleLayers = sampleBokehLayers(sampleUV);
+                    float sampleDepth = sampleLayers.b;
                     float nearer = smoothstep(
                         0.012,
                         0.075,
@@ -1671,7 +1805,7 @@ object Shaders {
                     );
                     float radiusSquared = float(x * x + y * y);
                     float spatialWeight = exp(-radiusSquared * 0.24);
-                    weightedCoverage += nearer * sampleDefocus * spatialWeight;
+                    weightedCoverage += nearer * sampleDefocus * spatialWeight * (1.0 - sampleLayers.a);
                     totalWeight += spatialWeight;
                 }
             }
@@ -1687,9 +1821,11 @@ object Shaders {
                 0.0,
                 1.0
             );
-            float centerDepth = texture(uDepthTexture, depthUV).r;
-            float coc = computeCoc(centerDepth);
-            float defocusMix = smoothstep(0.2, 1.2, coc);
+            vec4 centerLayers = sampleBokehLayers(depthUV);
+            float centerDepth = centerLayers.a >= 0.5 ? centerLayers.g : centerLayers.b;
+            float coc = computeCoc(centerLayers.b);
+            float defocusMix = (1.0 - centerLayers.a) * smoothstep(0.2, 1.2, coc);
+            highlightLayer *= 1.0 - centerLayers.a;
             float foregroundCoverage = foregroundDefocusCoverage(
                 depthUV,
                 centerDepth
