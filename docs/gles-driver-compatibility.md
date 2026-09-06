@@ -20,10 +20,20 @@
 | `uint16 -> float` | 已确认，Mali | 首次转换走 compute image load/store，不走 fragment sampler 直接转换 |
 | 纹理/sampler 状态 | 跨驱动约束 | 每次 draw 显式绑定 program、framebuffer、texture unit 和所有 sampler |
 | `imageStore` 可见性 | 跨驱动约束 | barrier 必须覆盖下一位 consumer，而非只覆盖 producer |
+| CPU/GPU Float 除法 | 已确认，Adreno；跨驱动精度约束 | CPU 算法迁到 GPU 时不能假定 `/` 与 JVM Float 逐位一致 |
 | 后台 compute 调度 | 已确认，Mali | 以资源 RAW/WAR/WAW 冲突和 fence 管理并发，不以队列长度代替所有权 |
 | IMG/PowerVR `imageSize` | 研究线索，项目未复现 | 只做对照验证，复现前不建立全局兼容分支 |
 
 ## 全局基线
+
+### CPU/GPU 全局位移均值精度
+
+PMA110 / Adreno 840 / GLES 3.2 V@0842.44 上，直方图的整数统计与 CPU 一致，但
+`float(sum) / float(count)` 在部分输入上与 JVM Float 相差 1 ULP，并可传到候选位移。
+这是浮点除法精度差异，不能仅凭 `highp` 声明认定迁移无损。
+RAW Spatial 的 `GlesSpatialGlobalAlignment(cpuCompatibleMean = true)` 在无十票峰值时，
+以整数长除法生成 Float 有效位并执行 ties-to-even 舍入；此分支的票数与整数和都可被
+Float 精确表示。实机验证需同时比较均值纹理和最终候选输出，不能只比较直方图票数。
 
 ### 能力快照
 

@@ -148,3 +148,31 @@ P010 误差位于现有半精度存储的舍入范围，两次全部 8 帧直接
   梯度产品的半精度溢出；桌面性能倍率不作为手机收益依据。
 
 本次日志不能证明原照片局部噪点已经消失；该结论仍需对应成片的画质对照。
+
+## RAW Spatial 的无损移植
+
+从 `e2c3fa7c9`、`486a4bc85` 中移植的部分：
+
+- 全局位移的直方图与归约提取为 `GlesSpatialGlobalAlignment`，Spatial 在 GLES 3.1+
+  将候选留在 GPU；不支持或初始化失败时保留原 CPU 直方图路径。
+  RAW 启用精确均值舍入，匹配原 JVM Float 除法；YUV 保留原浮点均值模式。
+- 相同整数位移复用 SAD 结果，仍遍历完整采样区域，保留 nearest、Y、X、global
+  的严格小于比较顺序、原始亚像素位移与候选编号。
+- 拒绝图 dilation 与 pixel-difference downsample 合并为一次 MRT，仍分别写 R8。
+  RAW 的九个 bilinear dilation 抽头、pixel-difference 四次 `texelFetch`、加法顺序
+  和边界 clamp 均保留。Sabre 继续使用单输出 dilation。
+- 每次金字塔对齐按网格尺寸交替复用两张 RGBA32F 临时纹理；帧级 scratch arena
+  仍管理其生命周期。按四组噪声参数的 Float 位模式缓存 LUT，缓存纹理不进入 scratch
+  复用池，阶段回收后还需验证原分配身份，避免 GL 名称复用造成错误命中。
+- 参考帧/Bento 的 RAW 读取全部提交后，普通帧交替使用已有的两个 R16UI 上传纹理，
+  不增加 RAW 全尺寸分配；高光短帧不推进这个普通帧上传序号。
+
+未移植稀疏 SAD/LK、硬件插值 LK、高斯成对抽头、去掉 FP16 稠密流场等会改变计算
+或量化的部分。YUV 的 HardwareBuffer 原始采样入口面向 P010/YUV_420_888，不能直接
+用于 RAW16；RAW 保留 plane 上传。RAW 已有 uniform location 缓存，无需重复添加。
+
+PMA110 / Adreno 840 / GLES 3.2 V@0842.44 的独立 EGL 对照共 530 项全部逐值一致：
+220 项全局直方图（含正负半值附近、支持数 9/10、同票与均值）、96 项完整采样的候选
+选择及 GPU 归约到下游采样、192 项 R8 MRT/单输出降采样、12 项 LK 交替纹理和 10 项
+含行跨度的 RAW16 连续双槽上传。检查覆盖奇数尺寸、边界和 MRT attachment 减少。
+这是受控输入下的输出一致性验证，未使用 Android Test；整体拍摄收益尚需 RAW 实拍计时。

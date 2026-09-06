@@ -846,13 +846,29 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    val dilateRejection = """
+    val dilateRejection = buildDilateRejection(includePixelDifference = false)
+
+    // MRT combines the two RAW downsample draws without changing their sampling or R8 stores.
+    val rejectionDownsample = buildDilateRejection(includePixelDifference = true)
+
+    private fun buildDilateRejection(includePixelDifference: Boolean) = """
         #version 300 es
         precision highp float;
         precision highp int;
         uniform sampler2D uRejection;
         uniform ivec2 uInputSize;
-        out float oWeight;
+        layout(location = 0) out float oWeight;
+        ${if (includePixelDifference) """
+        uniform sampler2D uPixelDifference;
+        layout(location = 1) out float oPixelDifference;
+        float valueAt(ivec2 p) {
+            return texelFetch(
+                uPixelDifference,
+                clamp(p, ivec2(0), uInputSize - ivec2(1)),
+                0
+            ).r;
+        }
+        """ else ""}
         float rejectionAt(vec2 p) {
             return texture(uRejection, p / vec2(uInputSize)).r;
         }
@@ -874,6 +890,15 @@ internal object GlesMgcRawSpatialShaders {
                       rejectionAt(texCoord + vec2( 2.0,  2.0));
             rejection = (rejection - 0.2) * 0.5;
             oWeight = 1.0 - rejection;
+            ${if (includePixelDifference) """
+            ivec2 source = ivec2(gl_FragCoord.xy) * 2;
+            oPixelDifference = 0.25 * (
+                valueAt(source) +
+                valueAt(source + ivec2(1, 0)) +
+                valueAt(source + ivec2(0, 1)) +
+                valueAt(source + ivec2(1, 1))
+            );
+            """ else ""}
         }
     """.trimIndent()
 
@@ -2547,8 +2572,10 @@ internal object GlesMgcRawSpatialShaders {
 
             // The generated worker's candidate order is nearest, next Y, next X.
             // Strict less-than comparison makes this ordering observable on equal costs.
+            // SAD depends only on the rounded displacement. Reuse its cost, but keep the
+            // original fractional flow and candidate order even when displacements coincide.
             vec2 flowY = candidateFlow(nextY);
-            float costY = ${if (globalCandidateTexture) "all(equal(roundEven(flowY), roundEven(nearestFlow))) ? nearestCost :" else ""}
+            float costY = all(equal(roundEven(flowY), roundEven(nearestFlow))) ? nearestCost :
                 candidateCost(origin, flowY);
             if (costY < bestCost) {
                 bestFlow = flowY;
@@ -2557,7 +2584,8 @@ internal object GlesMgcRawSpatialShaders {
             }
 
             vec2 flowX = candidateFlow(nextX);
-            float costX = ${if (globalCandidateTexture) "all(equal(roundEven(flowX), roundEven(nearestFlow))) ? nearestCost : all(equal(roundEven(flowX), roundEven(flowY))) ? costY :" else ""}
+            float costX = all(equal(roundEven(flowX), roundEven(nearestFlow))) ? nearestCost :
+                all(equal(roundEven(flowX), roundEven(flowY))) ? costY :
                 candidateCost(origin, flowX);
             if (costX < bestCost) {
                 bestFlow = flowX;
@@ -2569,7 +2597,9 @@ internal object GlesMgcRawSpatialShaders {
             // translation as the fourth candidate. Pyramid-level transitions leave it absent.
             if (uHasGlobalCandidate != 0) {
                 vec2 globalFlow = ${if (globalCandidateTexture) "texelFetch(uGlobalCandidateTexture, ivec2(0), 0).xy" else "uGlobalCandidate"} * uInitialScale;
-                float globalCost = ${if (globalCandidateTexture) "all(equal(roundEven(globalFlow), roundEven(nearestFlow))) ? nearestCost : all(equal(roundEven(globalFlow), roundEven(flowY))) ? costY : all(equal(roundEven(globalFlow), roundEven(flowX))) ? costX :" else ""}
+                float globalCost = all(equal(roundEven(globalFlow), roundEven(nearestFlow))) ? nearestCost :
+                    all(equal(roundEven(globalFlow), roundEven(flowY))) ? costY :
+                    all(equal(roundEven(globalFlow), roundEven(flowX))) ? costX :
                     candidateCost(origin, globalFlow);
                 if (globalCost < bestCost) {
                     bestFlow = globalFlow;

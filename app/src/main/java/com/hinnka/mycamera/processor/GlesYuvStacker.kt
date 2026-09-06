@@ -139,7 +139,7 @@ class GlesYuvStacker(
     private val uniformLocations = HashMap<Int, MutableMap<String, Int>>()
     private val alignmentScratch = HashMap<Pair<Int, Int>, IntArray>()
     private val noiseLuts = HashMap<Pair<Float, Float>, Int>()
-    private val globalAlignment = GlesYuvGlobalAlignment()
+    private val globalAlignment = GlesSpatialGlobalAlignment()
     private val timing = GlesYuvTiming()
     private val hardwareInput = GlesYuvHardwareBufferInput()
     private var hardwareInputProgram = 0

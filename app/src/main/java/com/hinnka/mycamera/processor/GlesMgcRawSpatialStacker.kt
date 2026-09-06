@@ -99,6 +99,19 @@ internal class GlesMgcRawSpatialStacker(
         val usedHistogramPeak: Boolean,
     )
 
+    /** Only the immediately preceding flow is live inside one pyramid solve. */
+    private class AlignmentScratch(private val allocate: (Int, Int) -> Int) {
+        private val pairs = HashMap<Pair<Int, Int>, MutableList<Int>>()
+
+        fun target(width: Int, height: Int, input: Int): Int {
+            val textures = pairs.getOrPut(width to height) { ArrayList(2) }
+            return textures.firstOrNull { it != input }
+                ?: allocate(width, height).also { textures += it }
+        }
+    }
+
+    private data class CachedNoiseLut(val texture: Int, val allocation: TextureSpec)
+
     /** Normalized flow plus the reference-UV to alignment-texture transform. */
     private data class ConvertedAlignment(
         val texture: Int,
@@ -470,6 +483,8 @@ internal class GlesMgcRawSpatialStacker(
     private val programs = ArrayList<Int>()
     private val uniformLocations = HashMap<Int, HashMap<String, Int>>()
     private val textureSpecs = HashMap<Int, TextureSpec>()
+    private val noiseLutCache = HashMap<List<Int>, CachedNoiseLut>()
+    private var globalAlignment: GlesSpatialGlobalAlignment? = null
     private val validatedRenderTargetSpecs = HashSet<List<TextureSpec>>()
     private val temporalScratchTextures = SequentialScratchTextures()
     private var activeSequentialScratchTextures: SequentialScratchTextures? = null
@@ -493,7 +508,7 @@ internal class GlesMgcRawSpatialStacker(
     private var unblockerBlurProgram = 0
     private var rejectionProgram = 0
     private var rejectionAcceptanceProgram = 0
-    private var rejectionPixelDifferenceDownsampleProgram = 0
+    private var rejectionDownsampleProgram = 0
     private var clippedGaussianHorizontalProgram = 0
     private var clippedGaussianVerticalProgram = 0
     private var rejectionFilterDownsampleProgram = 0
@@ -1537,6 +1552,9 @@ internal class GlesMgcRawSpatialStacker(
 
             GlesGpuScheduler.yieldToUiRenderer()
 
+            // Reference/Bento contributions have all been submitted. Their RAW source is no
+            // longer sampled below; alternate these two existing allocations for uploads.
+            var uploadSlot = 0
             for (index in temporalFrameRange) {
                 val frame = frames[index]
                 if (frame.role == RawBurstFrameRole.HIGHLIGHT_SHORT) continue
@@ -1546,7 +1564,7 @@ internal class GlesMgcRawSpatialStacker(
                 var postPrepareSubmitNs = 0L
                 beginTemporalScratchFrame()
                 try {
-                    val temporalRaw = currentRaw.also { texture ->
+                    val temporalRaw = (if (uploadSlot++ % 2 == 0) currentRaw else referenceRaw).also { texture ->
                         val uploadStartNs = System.nanoTime()
                         uploadRaw(images[index], texture, "frame $index")
                         uploadCallNs = System.nanoTime() - uploadStartNs
@@ -3310,6 +3328,25 @@ internal class GlesMgcRawSpatialStacker(
         ).also { it.initPrograms() }
     }
 
+    private fun initSpatialUpsampleAlignment(): Int {
+        if (supportsComputePrograms) {
+            val reduction = GlesSpatialGlobalAlignment(cpuCompatibleMean = true)
+            try {
+                reduction.init()
+                val program = linkProgram(
+                    GlesMgcRawSpatialShaders.upsampleAlignmentWithGpuCandidate,
+                    "mgc_upsample_alignment_gpu_candidate",
+                )
+                globalAlignment = reduction
+                return program
+            } catch (error: Exception) {
+                reduction.release()
+                PLog.w(TAG, "Spatial GPU global alignment unavailable; using CPU histogram: $error")
+            }
+        }
+        return linkProgram(GlesMgcRawSpatialShaders.upsampleAlignment, "mgc_upsample_alignment")
+    }
+
     private fun initPrograms(
         includeBentoAssessment: Boolean,
         includeReferenceHighlightMask: Boolean = includeBentoAssessment,
@@ -3336,10 +3373,7 @@ internal class GlesMgcRawSpatialStacker(
                 GlesMgcRawSpatialShaders.alignmentGradientProducts,
                 "mgc_alignment_gradient_products",
             )
-            upsampleAlignmentProgram = linkProgram(
-                GlesMgcRawSpatialShaders.upsampleAlignment,
-                "mgc_upsample_alignment",
-            )
+            upsampleAlignmentProgram = initSpatialUpsampleAlignment()
             blockLucasKanadeProgram = linkProgram(
                 GlesMgcRawSpatialShaders.blockLucasKanade,
                 "mgc_block_lucas_kanade",
@@ -3374,9 +3408,9 @@ internal class GlesMgcRawSpatialStacker(
                     "mgc_spatial_rgb_rejection_acceptance",
                 )
             }
-            rejectionPixelDifferenceDownsampleProgram = linkProgram(
-                GlesMgcRawSpatialShaders.rejectionPixelDifferenceDownsample,
-                "mgc_rejection_pixel_difference_downsample",
+            rejectionDownsampleProgram = linkProgram(
+                GlesMgcRawSpatialShaders.rejectionDownsample,
+                "mgc_rejection_downsample",
             )
             clippedGaussianHorizontalProgram = linkProgram(
                 GlesMgcRawSpatialShaders.clippedGaussianHorizontal,
@@ -3397,10 +3431,6 @@ internal class GlesMgcRawSpatialStacker(
             rejectionPostprocessProgram = linkProgram(
                 GlesMgcRawSpatialShaders.rejectionPostprocess,
                 "mgc_rejection_postprocess",
-            )
-            dilationProgram = linkProgram(
-                GlesMgcRawSpatialShaders.dilateRejection,
-                "mgc_rejection_dilation",
             )
         }
         if (includeBentoAssessment) {
@@ -4055,6 +4085,10 @@ internal class GlesMgcRawSpatialStacker(
         check(reference.size == current.size)
         check(reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
         check(referenceProducts.size == reference.size)
+        // Scoped to this solve: the frame arena may recycle these names on the next frame.
+        val scratch = AlignmentScratch { w, h ->
+            createTexture(w, h, GLES30.GL_RGBA32F, GLES30.GL_NEAREST)
+        }
         val coarseIndex = reference.lastIndex
         val coarse = reference[coarseIndex]
         var alignment = renderLucasKanadeLevel(
@@ -4066,6 +4100,7 @@ internal class GlesMgcRawSpatialStacker(
             iterations = ALIGN_LK_ITERATIONS_COARSER,
             normalize = true,
             referenceProducts = referenceProducts[coarseIndex],
+            scratch = scratch,
         )
 
         val schedule = ArrayList<String>().apply {
@@ -4097,6 +4132,7 @@ internal class GlesMgcRawSpatialStacker(
                 targetGridMin = ALIGN_LK_GRID_MIN,
                 targetTileStride = tileSize,
                 targetTileSize = tileSize,
+                scratch = scratch,
             )
             alignment = renderLucasKanadeLevel(
                 reference = level,
@@ -4107,6 +4143,7 @@ internal class GlesMgcRawSpatialStacker(
                 iterations = iterations,
                 normalize = normalize,
                 referenceProducts = referenceProducts[levelIndex],
+                scratch = scratch,
             )
             schedule +=
                 "${level.width}x${level.height}:${tileSize}px," +
@@ -4114,7 +4151,10 @@ internal class GlesMgcRawSpatialStacker(
                     "levelScale=$scale"
         }
         val finalUpsampleMode = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
-            val globalCandidate = estimateGlobalAlignmentCandidate(alignment)
+            val gpuCandidate = globalAlignment?.estimate(
+                alignment.texture, alignment.gridWidth, alignment.gridHeight,
+            ) ?: 0
+            val globalCandidate = if (gpuCandidate == 0) estimateGlobalAlignmentCandidate(alignment) else null
             alignment = renderUpsampledAlignment(
                 reference = reference.first(),
                 current = current.first(),
@@ -4125,6 +4165,8 @@ internal class GlesMgcRawSpatialStacker(
                 targetTileStride = MERGE_BAYER_RAW_TILE_SIZE / 2,
                 targetTileSize = MERGE_BAYER_RAW_TILE_SIZE,
                 globalCandidate = globalCandidate,
+                gpuGlobalCandidateTexture = gpuCandidate,
+                scratch = scratch,
             )
             schedule +=
                 "${reference.first().width}x${reference.first().height}:" +
@@ -4139,8 +4181,12 @@ internal class GlesMgcRawSpatialStacker(
             ) {
                 "Spatial AlignAlt final output does not match MergeBayerRaw16's alignment grid"
             }
-            "merge-grid/global-${if (globalCandidate.usedHistogramPeak) "mode" else "mean"}" +
-                "(${globalCandidate.x},${globalCandidate.y},n=${globalCandidate.peakSupport})"
+            if (globalCandidate == null) {
+                "merge-grid/global-gpu"
+            } else {
+                "merge-grid/global-${if (globalCandidate.usedHistogramPeak) "mode" else "mean"}" +
+                    "(${globalCandidate.x},${globalCandidate.y},n=${globalCandidate.peakSupport})"
+            }
         } else {
             "level-transitions-only"
         }
@@ -4178,7 +4224,9 @@ internal class GlesMgcRawSpatialStacker(
         targetGridMin: Int,
         targetTileStride: Int,
         targetTileSize: Int,
+        scratch: AlignmentScratch,
         globalCandidate: GlobalAlignmentCandidate? = null,
+        gpuGlobalCandidateTexture: Int = 0,
     ): Alignment {
         require(reference.width == current.width && reference.height == current.height)
         require(targetGridWidth > 0 && targetGridHeight > 0)
@@ -4186,12 +4234,7 @@ internal class GlesMgcRawSpatialStacker(
         val initialScale =
             initial.scaleToBayerQuads / reference.scaleToBayerQuads
         require(initialScale.isFinite() && initialScale > 0f)
-        val output = createTexture(
-            targetGridWidth,
-            targetGridHeight,
-            GLES30.GL_RGBA32F,
-            GLES30.GL_NEAREST,
-        )
+        val output = scratch.target(targetGridWidth, targetGridHeight, initial.texture)
         GLES30.glUseProgram(upsampleAlignmentProgram)
         bindTexture(upsampleAlignmentProgram, "uReference", 0, reference.texture)
         bindTexture(upsampleAlignmentProgram, "uCurrent", 1, current.texture)
@@ -4217,14 +4260,20 @@ internal class GlesMgcRawSpatialStacker(
         uniform1i(
             upsampleAlignmentProgram,
             "uHasGlobalCandidate",
-            if (globalCandidate != null) 1 else 0,
+            if (globalCandidate != null || gpuGlobalCandidateTexture != 0) 1 else 0,
         )
-        uniform2f(
-            upsampleAlignmentProgram,
-            "uGlobalCandidate",
-            globalCandidate?.x ?: 0f,
-            globalCandidate?.y ?: 0f,
-        )
+        if (globalAlignment != null) {
+            // Bind a valid float sampler even at transitions where the global branch is off.
+            bindTexture(
+                upsampleAlignmentProgram, "uGlobalCandidateTexture", 3,
+                gpuGlobalCandidateTexture.takeIf { it != 0 } ?: initial.texture,
+            )
+        } else {
+            uniform2f(
+                upsampleAlignmentProgram, "uGlobalCandidate",
+                globalCandidate?.x ?: 0f, globalCandidate?.y ?: 0f,
+            )
+        }
         draw(
             upsampleAlignmentProgram,
             targetGridWidth,
@@ -4347,6 +4396,7 @@ internal class GlesMgcRawSpatialStacker(
         iterations: Int,
         normalize: Boolean,
         referenceProducts: ReferenceAlignmentProducts,
+        scratch: AlignmentScratch,
     ): Alignment {
         check(iterations > 0)
         val gridWidth = alignmentGridWidth(reference, tileStride)
@@ -4376,12 +4426,7 @@ internal class GlesMgcRawSpatialStacker(
 
         var input = initial
         repeat(iterations) {
-            val output = createTexture(
-                gridWidth,
-                gridHeight,
-                GLES30.GL_RGBA32F,
-                GLES30.GL_NEAREST,
-            )
+            val output = scratch.target(gridWidth, gridHeight, input?.texture ?: 0)
             GLES30.glUseProgram(blockLucasKanadeProgram)
             bindTexture(blockLucasKanadeProgram, "uReference", 0, reference.texture)
             bindTexture(blockLucasKanadeProgram, "uCurrent", 1, current.texture)
@@ -4919,23 +4964,26 @@ internal class GlesMgcRawSpatialStacker(
         GlesGpuScheduler.yieldToUiRenderer()
     }
 
-    private fun renderPixelDifferenceDownsample(
-        input: Int,
-        output: Int,
+    private fun renderRejectionDownsample(
+        reverseWeight: Int,
+        pixelDifference: Int,
+        outputWeight: Int,
+        outputPixelDifference: Int,
     ) {
-        GLES30.glUseProgram(rejectionPixelDifferenceDownsampleProgram)
-        bindTexture(rejectionPixelDifferenceDownsampleProgram, "uInput", 0, input)
+        GLES30.glUseProgram(rejectionDownsampleProgram)
+        bindTexture(rejectionDownsampleProgram, "uRejection", 0, reverseWeight)
+        bindTexture(rejectionDownsampleProgram, "uPixelDifference", 1, pixelDifference)
         uniform2i(
-            rejectionPixelDifferenceDownsampleProgram,
+            rejectionDownsampleProgram,
             "uInputSize",
             rejectionWidth,
             rejectionHeight,
         )
         draw(
-            rejectionPixelDifferenceDownsampleProgram,
+            rejectionDownsampleProgram,
             mergeWeightWidth,
             mergeWeightHeight,
-            intArrayOf(output),
+            intArrayOf(outputWeight, outputPixelDifference),
         )
         GlesGpuScheduler.yieldToUiRenderer()
     }
@@ -5260,8 +5308,7 @@ internal class GlesMgcRawSpatialStacker(
         // DilateMask converts RAW/2 rejection to RAW/4 acceptance, while Downsample2x
         // brings pixel difference to that same domain. FilterRejectionMap then smooths
         // pixel difference and postprocesses the RAW/4 acceptance in place.
-        renderDilation(rawReverseWeight, initialWeight)
-        renderPixelDifferenceDownsample(rawPixelDifference, pixelDifference)
+        renderRejectionDownsample(rawReverseWeight, rawPixelDifference, initialWeight, pixelDifference)
         renderClippedGaussianPixelDifference(
             input = pixelDifference,
             horizontal = pixelDifferenceHorizontal,
@@ -8654,20 +8701,34 @@ internal class GlesMgcRawSpatialStacker(
         reference: FrameCalibration,
         current: FrameCalibration,
     ): Int {
+        val key = buildList {
+            for (noise in arrayOf(reference.shotNoise, reference.readNoise, current.shotNoise, current.readNoise)) {
+                require(noise.size >= MgcSpatialNoiseEstimatesLut.CHANNELS)
+                for (channel in 0 until MgcSpatialNoiseEstimatesLut.CHANNELS) add(noise[channel].toRawBits())
+            }
+        }
+        noiseLutCache[key]?.let { cached ->
+            // Bento/temporal phase retirement may delete an allocation and GL may reuse its
+            // numeric name. Only the exact registered allocation can satisfy this cache hit.
+            if (textureSpecs[cached.texture] === cached.allocation) return cached.texture
+        }
         val values = MgcSpatialNoiseEstimatesLut.create(
             referenceShotNoise = reference.shotNoise,
             referenceReadNoise = reference.readNoise,
             currentShotNoise = current.shotNoise,
             currentReadNoise = current.readNoise,
         )
-        return createFloatTexture(
+        val texture = createFloatTexture(
             width = MgcSpatialNoiseEstimatesLut.WIDTH,
             height = MgcSpatialNoiseEstimatesLut.ROWS,
             internalFormat = GLES30.GL_RGBA16F,
             format = GLES30.GL_RGBA,
             values = values,
             filter = GLES30.GL_LINEAR,
+            persistent = true,
         )
+        noiseLutCache[key] = CachedNoiseLut(texture, checkNotNull(textureSpecs[texture]))
+        return texture
     }
 
     private fun createSabreNoiseLut(
@@ -8996,6 +9057,7 @@ internal class GlesMgcRawSpatialStacker(
         format: Int,
         values: FloatArray,
         filter: Int,
+        persistent: Boolean = false,
     ): Int {
         val buffer = ByteBuffer.allocateDirect(values.size * Float.SIZE_BYTES)
             .order(ByteOrder.nativeOrder())
@@ -9004,7 +9066,10 @@ internal class GlesMgcRawSpatialStacker(
                 put(values)
                 rewind()
             }
-        val texture = createTexture(
+        val texture = if (persistent) {
+            // Cached LUTs must never become a sequential-frame scratch target.
+            allocateTexture(TextureSpec(width, height, internalFormat, filter))
+        } else createTexture(
             textureWidth = width,
             textureHeight = height,
             internalFormat = internalFormat,
@@ -9562,7 +9627,12 @@ internal class GlesMgcRawSpatialStacker(
     private fun linkProgram(fragmentSource: String, name: String): Int {
         val vertexSource = GlesGraphicsShaderSources.fullscreenVertexFor(fragmentSource)
         val vertex = compileShader(GLES30.GL_VERTEX_SHADER, vertexSource, "$name vertex")
-        val fragment = compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource, "$name fragment")
+        val fragment = try {
+            compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource, "$name fragment")
+        } catch (error: Throwable) {
+            GLES30.glDeleteShader(vertex)
+            throw error
+        }
         val program = GLES30.glCreateProgram()
         GLES30.glAttachShader(program, vertex)
         GLES30.glAttachShader(program, fragment)
@@ -9787,6 +9857,9 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun release() {
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            globalAlignment?.release()
+            globalAlignment = null
+            noiseLutCache.clear()
             rgbChromaPostprocessor?.release()
             rgbChromaPostprocessor = null
             if (programs.isNotEmpty()) {

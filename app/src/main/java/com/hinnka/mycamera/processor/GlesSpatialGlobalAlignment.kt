@@ -10,7 +10,7 @@ import com.hinnka.mycamera.utils.PLog
  * The output is a 1x1 RGBA32F texture: x/y are the selected displacement, z is peak support,
  * and w is 1 when the histogram peak was selected (0 means the clamped-bin mean was selected).
  */
-internal class GlesYuvGlobalAlignment {
+internal class GlesSpatialGlobalAlignment(private val cpuCompatibleMean: Boolean = false) {
     private var histogramProgram = 0
     private var clearProgram = 0
     private var reduceProgram = 0
@@ -22,22 +22,24 @@ internal class GlesYuvGlobalAlignment {
     private var histogramSize = -1
     private var histogramBinSide = -1
     private var reducePixelCount = -1
+    private var reduceCpuCompatibleMean = -1
 
     fun init() {
         if (initialized) return
         checkLimits()
-        GlesComputeWorkGroup.requireBaselineCompatible(CLEAR_SHADER, "YUV global alignment clear")
-        GlesComputeWorkGroup.requireBaselineCompatible(HISTOGRAM_SHADER, "YUV global alignment histogram")
-        GlesComputeWorkGroup.requireBaselineCompatible(REDUCE_SHADER, "YUV global alignment reduction")
+        GlesComputeWorkGroup.requireBaselineCompatible(CLEAR_SHADER, "Spatial global alignment clear")
+        GlesComputeWorkGroup.requireBaselineCompatible(HISTOGRAM_SHADER, "Spatial global alignment histogram")
+        GlesComputeWorkGroup.requireBaselineCompatible(REDUCE_SHADER, "Spatial global alignment reduction")
         try {
-            clearProgram = linkCompute(CLEAR_SHADER, "YUV global alignment clear")
-            histogramProgram = linkCompute(HISTOGRAM_SHADER, "YUV global alignment histogram")
-            reduceProgram = linkCompute(REDUCE_SHADER, "YUV global alignment reduction")
+            clearProgram = linkCompute(CLEAR_SHADER, "Spatial global alignment clear")
+            histogramProgram = linkCompute(HISTOGRAM_SHADER, "Spatial global alignment histogram")
+            reduceProgram = linkCompute(REDUCE_SHADER, "Spatial global alignment reduction")
             clearBinCount = GLES31.glGetUniformLocation(clearProgram, "uBinCount")
             histogramAlignment = GLES31.glGetUniformLocation(histogramProgram, "uAlignment")
             histogramSize = GLES31.glGetUniformLocation(histogramProgram, "uSize")
             histogramBinSide = GLES31.glGetUniformLocation(histogramProgram, "uBinSide")
             reducePixelCount = GLES31.glGetUniformLocation(reduceProgram, "uPixelCount")
+            reduceCpuCompatibleMean = GLES31.glGetUniformLocation(reduceProgram, "uCpuCompatibleMean")
             val ids = IntArray(1)
             GLES30.glGenBuffers(1, ids, 0)
             histogramBuffer = ids[0]
@@ -59,7 +61,7 @@ internal class GlesYuvGlobalAlignment {
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA32F, 1, 1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-            checkGl("YUV global alignment allocation RGBA32F write-only / SSBO binding=0")
+            checkGl("Spatial global alignment allocation RGBA32F write-only / SSBO binding=0")
             initialized = true
         } catch (error: Throwable) {
             release()
@@ -73,7 +75,7 @@ internal class GlesYuvGlobalAlignment {
         require(alignmentTexture != 0 && width > 0 && height > 0)
         val pixelCount = Math.multiplyExact(width, height)
         require(pixelCount <= Int.MAX_VALUE / MAX_ABS_BIN) {
-            "YUV global alignment grid is too large for signed histogram sums"
+            "Spatial global alignment grid is too large for signed histogram sums"
         }
 
         // The preceding frame sampled outputTexture and the preceding reduction read the SSBO.
@@ -109,6 +111,7 @@ internal class GlesYuvGlobalAlignment {
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, histogramBuffer)
         GLES31.glBindImageTexture(0, outputTexture, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F)
         GLES31.glUniform1i(reducePixelCount, pixelCount)
+        GLES31.glUniform1i(reduceCpuCompatibleMean, if (cpuCompatibleMean) 1 else 0)
         GLES31.glDispatchCompute(1, 1, 1)
         GLES31.glMemoryBarrier(
             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
@@ -118,7 +121,7 @@ internal class GlesYuvGlobalAlignment {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
         GLES31.glUseProgram(0)
-        checkGl("YUV global alignment estimate")
+        checkGl("Spatial global alignment estimate")
         return outputTexture
     }
 
@@ -139,6 +142,7 @@ internal class GlesYuvGlobalAlignment {
         histogramSize = -1
         histogramBinSide = -1
         reducePixelCount = -1
+        reduceCpuCompatibleMean = -1
     }
 
     private fun checkLimits() {
@@ -150,10 +154,10 @@ internal class GlesYuvGlobalAlignment {
         GLES31.glGetIntegeri_v(GLES31.GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, group, 2)
         GLES30.glGetIntegerv(GLES31.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, value, 0)
         val ssboBindings = value[0]
-        require(value[0] >= 1) { "YUV global alignment requires one SSBO binding" }
+        require(value[0] >= 1) { "Spatial global alignment requires one SSBO binding" }
         GLES30.glGetIntegerv(GLES31.GL_MAX_IMAGE_UNITS, value, 0)
         val imageUnits = value[0]
-        require(value[0] >= 1) { "YUV global alignment requires one image unit" }
+        require(value[0] >= 1) { "Spatial global alignment requires one image unit" }
         GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, value, 0)
         val invocations = value[0]
         require(value[0] >= GlesComputeWorkGroup.LINEAR_SIZE &&
@@ -164,7 +168,7 @@ internal class GlesYuvGlobalAlignment {
         require(maxBlock[0] >= BIN_COUNT.toLong() * 3L * Int.SIZE_BYTES)
         PLog.i(
             TAG,
-            "YUV global alignment GL vendor=${GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()} " +
+            "Spatial global alignment GL vendor=${GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()} " +
                 "renderer=${GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()} version=$version " +
                 "group=${group.contentToString()} invocations=$invocations " +
                 "ssboBindings=$ssboBindings imageUnits=$imageUnits ssboBlock=${maxBlock[0]}",
@@ -202,7 +206,7 @@ internal class GlesYuvGlobalAlignment {
     }
 
     companion object {
-        private const val TAG = "GlesYuvGlobalAlignment"
+        private const val TAG = "GlesSpatialGlobalAlignment"
         private const val BIN_SIDE = 129
         private const val BIN_COUNT = BIN_SIDE * BIN_SIDE
         private const val MAX_ABS_BIN = 64
@@ -251,14 +255,48 @@ void main() {
 """
 
         private val REDUCE_SHADER = """#version 310 es
+precision highp float;
+precision highp int;
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 layout(std430, binding = 0) readonly buffer Histogram { int values[]; };
 layout(rgba32f, binding = 0) writeonly uniform highp image2D uOutput;
 uniform int uPixelCount;
+uniform int uCpuCompatibleMean;
 shared int support[128];
 shared int bin[128];
 shared int sumX[128];
 shared int sumY[128];
+// A mean is used only when every bin has fewer than 10 votes. Consequently count <=
+// 9*129*129 and abs(sum) <= 9*129*(1+...+64): both CPU Float conversions are exact.
+// Generate the normalized significand with integer long division and round ties to even,
+// matching JVM Float division without relying on a driver's approximate float reciprocal.
+float cpuRoundedMean(int total, int count) {
+    if (total == 0) return 0.0;
+    uint numerator = uint(abs(total));
+    uint divisor = uint(count);
+    int exponent = findMSB(numerator) - findMSB(divisor);
+    if (exponent >= 0) {
+        if (numerator < (divisor << uint(exponent))) --exponent;
+    } else {
+        if ((numerator << uint(-exponent)) < divisor) --exponent;
+    }
+    if (exponent >= 0) divisor <<= uint(exponent);
+    else numerator <<= uint(-exponent);
+    uint remainder = numerator - divisor;
+    uint significand = 0x800000u;
+    for (int bit = 22; bit >= 0; --bit) {
+        remainder <<= 1u;
+        if (remainder >= divisor) {
+            remainder -= divisor;
+            significand |= 1u << uint(bit);
+        }
+    }
+    uint twiceRemainder = remainder << 1u;
+    if (twiceRemainder > divisor ||
+        (twiceRemainder == divisor && (significand & 1u) != 0u)) ++significand;
+    uint magnitude = (uint(exponent + 127) << 23u) + (significand - 0x800000u);
+    return uintBitsToFloat(magnitude | (total < 0 ? 0x80000000u : 0u));
+}
 void main() {
     uint lane = gl_LocalInvocationID.x;
     int bestSupport = -1;
@@ -293,8 +331,12 @@ void main() {
     if (lane == 0u) {
         int peak = support[0];
         bool usePeak = peak >= 10;
-        float meanX = float(sumX[0]) / float(uPixelCount);
-        float meanY = float(sumY[0]) / float(uPixelCount);
+        float meanX = 0.0;
+        float meanY = 0.0;
+        if (!usePeak) {
+            meanX = uCpuCompatibleMean != 0 ? cpuRoundedMean(sumX[0], uPixelCount) : float(sumX[0]) / float(uPixelCount);
+            meanY = uCpuCompatibleMean != 0 ? cpuRoundedMean(sumY[0], uPixelCount) : float(sumY[0]) / float(uPixelCount);
+        }
         float peakX = float((bin[0] % 129) - 64);
         float peakY = float((bin[0] / 129) - 64);
         imageStore(uOutput, ivec2(0), vec4(usePeak ? peakX : meanX, usePeak ? peakY : meanY, float(peak), usePeak ? 1.0 : 0.0));
