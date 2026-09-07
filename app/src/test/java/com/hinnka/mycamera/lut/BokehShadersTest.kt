@@ -14,7 +14,6 @@ class BokehShadersTest {
     fun offlineBokehDeclaresEveryUniformRequiredByItsRenderer() {
         val shader = Shaders.PSF_SPLAT_FRAGMENT_SHADER
         val expectedUniforms = listOf(
-            "uInputTexture",
             "uDepthTexture",
             "uHighlightSourceTexture",
             "uLayerColorTexture",
@@ -23,7 +22,6 @@ class BokehShadersTest {
             "uAperture",
             "uFocusDepth",
             "uTexelSize",
-            "uLinearInput",
         )
 
         expectedUniforms.forEach { uniform ->

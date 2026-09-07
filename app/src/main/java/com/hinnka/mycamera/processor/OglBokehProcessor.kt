@@ -390,33 +390,33 @@ class OglBokehProcessor {
                 emptyList()
             }
 
-            // Step 4: Render the expensive PSF at a bounded working resolution.
+            // Step 4: Render linear premultiplied background / valid support.
+            // This intermediate stays RGBA16F even for SDR: its alpha is not
+            // bitmap opacity, and linear dark colors must survive normalization.
             val bokehTex = IntArray(1)
             GLES30.glGenTextures(1, bokehTex, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bokehTex[0])
             GLES30.glTexImage2D(
                 GLES30.GL_TEXTURE_2D,
                 0,
-                if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
+                GLES30.GL_RGBA16F,
                 bokehWidth,
                 bokehHeight,
                 0,
                 GLES30.GL_RGBA,
-                if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                GLES30.GL_HALF_FLOAT,
                 null
             )
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
             GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, bokehTex[0], 0)
             requireFramebufferComplete("PSF bokeh")
             GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             GLES30.glUseProgram(bokehProgramId)
-
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uInputTexture"), 0)
 
             GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
@@ -436,14 +436,10 @@ class OglBokehProcessor {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uAperture"), aperture)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uFocusDepth"), focusDepth)
             GLES30.glUniform2f(GLES30.glGetUniformLocation(bokehProgramId, "uTexelSize"), 1.0f / originalImage.width, 1.0f / originalImage.height)
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(bokehProgramId, "uLinearInput"),
-                if (linearInput) 1 else 0
-            )
-
             GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(bokehProgramId, "uDepthMatrix"), 1, false, identity, 0)
 
             drawQuad(bokehProgramId)
+            requireNoGlError("PSF linear background / support RGBA16F")
 
             // Keep analytic bokeh on its own transparent layer. It is combined
             // with the blurred background only in the final, foreground-aware

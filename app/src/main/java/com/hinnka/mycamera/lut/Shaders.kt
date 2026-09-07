@@ -753,6 +753,31 @@ object Shaders {
         uniform sampler2D uDepthTexture;
         uniform int uLinearInput;
 
+        vec4 premultipliedSourceTexel(ivec2 position) {
+            ivec2 size = textureSize(uInputTexture, 0);
+            position = clamp(position, ivec2(0), size - 1);
+            vec2 uv = (vec2(position) + 0.5) / vec2(size);
+            vec3 color = texelFetch(uInputTexture, position, 0).rgb;
+            vec3 linear = uLinearInput != 0 ? max(color, vec3(0.0))
+                : pow(clamp(color, 0.0, 1.0), vec3(2.2));
+            float coverage = 1.0 - textureLod(uDepthTexture, uv, 0.0).a;
+            return vec4(linear * coverage, coverage);
+        }
+
+        vec4 samplePremultipliedSource(vec2 uv) {
+            vec2 position = uv * vec2(textureSize(uInputTexture, 0)) - 0.5;
+            ivec2 base = ivec2(floor(position));
+            vec2 fraction = fract(position);
+            // Interpolate radiance and coverage together. Filtering RGB first
+            // would already mix protected subject colors into a background tap.
+            return mix(
+                mix(premultipliedSourceTexel(base),
+                    premultipliedSourceTexel(base + ivec2(1, 0)), fraction.x),
+                mix(premultipliedSourceTexel(base + ivec2(0, 1)),
+                    premultipliedSourceTexel(base + ivec2(1, 1)), fraction.x),
+                fraction.y);
+        }
+
         void main() {
             vec2 texel = 1.0 / vec2(textureSize(uDepthTexture, 0));
             vec4 sum = vec4(0.0);
@@ -760,13 +785,7 @@ object Shaders {
                 for (int x = 0; x < 2; x++) {
                     vec2 uv = clamp(vTexCoord + (vec2(float(x), float(y)) - 0.5)
                         * texel * 0.5, 0.0, 1.0);
-                    // Mask before working-resolution reduction as well as before
-                    // mipmap generation. Original-image mipmaps contain subject RGB.
-                    vec3 color = textureLod(uInputTexture, uv, 0.0).rgb;
-                    vec3 linear = uLinearInput != 0 ? max(color, vec3(0.0))
-                        : pow(clamp(color, 0.0, 1.0), vec3(2.2));
-                    float coverage = 1.0 - texture(uDepthTexture, uv).a;
-                    sum += vec4(linear * coverage, coverage);
+                    sum += samplePremultipliedSource(uv);
                 }
             }
             fragColor = sum * 0.25;
@@ -1124,7 +1143,6 @@ object Shaders {
         in vec2 vTexCoord;
         out vec4 fragColor;
 
-        uniform sampler2D uInputTexture;
         uniform sampler2D uDepthTexture;
         uniform sampler2D uHighlightSourceTexture;
         uniform sampler2D uLayerColorTexture;
@@ -1134,13 +1152,11 @@ object Shaders {
         uniform float uAperture;
         uniform float uFocusDepth;
         uniform vec2 uTexelSize;
-        uniform int uLinearInput;
 
         $BOKEH_LAYER_SAMPLING
 
         const float GOLDEN_ANGLE = 2.39996323;
         const int SAMPLES = 640;
-        const float LENS_GAMMA = 2.2;
 
         float computeCoc(float depth) {
             float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
@@ -1163,8 +1179,7 @@ object Shaders {
             vec2 sourceUV,
             float coc
         ) {
-            vec2 imageSize = vec2(textureSize(uInputTexture, 0));
-            float aspect = imageSize.x / max(imageSize.y, 1.0);
+            float aspect = uTexelSize.y / uTexelSize.x;
             vec2 field = (sourceUV * 2.0 - 1.0) * vec2(aspect, 1.0);
             float fieldRadius = length(field);
             vec2 radial = fieldRadius > 0.0001
@@ -1261,16 +1276,6 @@ object Shaders {
             );
         }
 
-        vec3 toLinear(vec3 color) {
-            if (uLinearInput != 0) return max(color, vec3(0.0));
-            return pow(clamp(color, 0.0, 1.0), vec3(LENS_GAMMA));
-        }
-
-        vec3 toDisplay(vec3 color) {
-            if (uLinearInput != 0) return max(color, vec3(0.0));
-            return pow(max(color, vec3(0.0)), vec3(1.0 / LENS_GAMMA));
-        }
-
         float foregroundDefocusPotential(vec2 depthUV, float centerDepth) {
             float weightedPotential = 0.0;
             float totalWeight = 0.0;
@@ -1306,18 +1311,21 @@ object Shaders {
 
         void main() {
             vec2 depthUV = clamp((uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy, 0.0, 1.0);
-            vec4 centerColor = texture(uInputTexture, vTexCoord);
             vec4 centerLayers = sampleBokehLayers(depthUV);
             float centerDepth = centerLayers.a >= 0.5 ? centerLayers.g : centerLayers.b;
             // Render the complement layer's full PSF. Coverage is applied in
             // composition, never used to shrink the disc at a subject boundary.
             float centerCoc = computeCoc(centerLayers.b);
 
-            float foregroundPotential = (centerCoc < 0.2 || centerLayers.a > 0.99)
+            vec4 centerLayerColor = textureLod(uLayerColorTexture, vTexCoord, 0.0);
+            float foregroundPotential = (centerCoc < 0.2 || centerLayers.a >= 1.0)
                 ? foregroundDefocusPotential(depthUV, centerDepth)
                 : 0.0;
-            if ((centerCoc < 0.2 || centerLayers.a > 0.99) && foregroundPotential < 0.008) {
-                fragColor = centerColor;
+            if ((centerCoc < 0.2 || centerLayers.a >= 1.0) && foregroundPotential < 0.008) {
+                // The PSF texture contains only complement radiance. A protected
+                // subject is missing background data, never an original-RGB fill.
+                // Keep coverage for normalized filtering in the full-size resolve.
+                fragColor = centerLayers.a >= 1.0 ? vec4(0.0) : centerLayerColor;
                 return;
             }
 
@@ -1345,7 +1353,6 @@ object Shaders {
             #else
             float sceneIntegrationLod = inputIntegrationLod;
             #endif
-            vec4 centerLayerColor = textureLod(uLayerColorTexture, vTexCoord, 0.0);
             vec3 accColor = centerLayerColor.rgb * centerWeight;
             float accWeight = centerLayerColor.a * centerWeight;
 
@@ -1489,15 +1496,10 @@ object Shaders {
 
             }
 
-            vec3 finalLinear = accWeight > 0.001
-                ? accColor / accWeight
-                : toLinear(centerColor.rgb);
-            vec3 finalColor = toDisplay(finalLinear);
-            if (uLinearInput == 0) {
-                finalColor = clamp(finalColor, 0.0, 1.0);
-            }
-
-            fragColor = vec4(finalColor, centerColor.a);
+            // A=1 denotes a reconstructed background estimate; A=0 denotes no
+            // support. Interpolation must never pull subject RGB across this edge.
+            fragColor = accWeight > 0.001
+                ? vec4(accColor / accWeight, 1.0) : vec4(0.0);
         }
     """.trimIndent()
 
@@ -1814,7 +1816,17 @@ object Shaders {
 
         void main() {
             vec4 originalColor = texture(uOriginalTexture, vTexCoord);
-            vec3 backgroundColor = texture(uBokehTexture, vTexCoord).rgb;
+            vec4 backgroundEstimate = texture(uBokehTexture, vTexCoord);
+            // PSF RGBA16F is linear premultiplied radiance / valid support,
+            // independent of the original bitmap's transfer function and alpha.
+            if (backgroundEstimate.a <= 0.0) {
+                fragColor = originalColor;
+                return;
+            }
+            vec3 backgroundLinear = backgroundEstimate.rgb / backgroundEstimate.a;
+            vec3 backgroundColor = uLinearInput != 0 ? backgroundLinear
+                : pow(max(backgroundLinear, vec3(0.0)), vec3(1.0 / 2.2));
+            if (uLinearInput == 0) backgroundColor = clamp(backgroundColor, 0.0, 1.0);
             vec3 highlightLayer = texture(uHighlightTexture, vTexCoord).rgb;
             vec2 depthUV = clamp(
                 (uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy,
