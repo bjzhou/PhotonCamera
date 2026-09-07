@@ -1200,4 +1200,6 @@
     <string name="settings_language_system">跟随系统</string>
     <string name="eis_plus_unavailable_title">EIS+ 无法使用</string>
     <string name="eis_plus_unavailable_message">此设备无法关闭系统防抖。为避免双重防抖导致画面抖动，已退出 EIS+。</string>
+    <string name="settings_video_nr_level_description">单独设置视频预览和录制的硬件降噪模式，不影响照片设置。</string>
+    <string name="settings_video_edge_level_description">单独设置视频预览和录制的硬件锐化模式，不影响照片设置。</string>
 </resources>

@@ -1181,4 +1181,6 @@
     <string name="settings_language_system">跟隨系統</string>
     <string name="eis_plus_unavailable_title">EIS+ 無法使用</string>
     <string name="eis_plus_unavailable_message">此裝置無法關閉系統防震。為避免雙重防震導致畫面抖動，已退出 EIS+。</string>
+    <string name="settings_video_nr_level_description">單獨設定影片預覽和錄製的硬體降噪模式，不影響照片設定。</string>
+    <string name="settings_video_edge_level_description">單獨設定影片預覽和錄製的硬體銳化模式，不影響照片設定。</string>
 </resources>

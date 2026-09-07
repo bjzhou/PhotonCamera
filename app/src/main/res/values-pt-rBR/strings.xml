@@ -285,4 +285,6 @@
     <string name="settings_language">Idioma</string>
     <string name="settings_language_description">Escolha o idioma usado pelo aplicativo</string>
     <string name="settings_language_system">Seguir o sistema</string>
+    <string name="settings_video_nr_level_description">Defina a redução de ruído por hardware para prévia e gravação de vídeo independentemente das fotos.</string>
+    <string name="settings_video_edge_level_description">Defina a nitidez por hardware para prévia e gravação de vídeo independentemente das fotos.</string>
 </resources>

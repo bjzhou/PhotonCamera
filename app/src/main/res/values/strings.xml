@@ -1221,4 +1221,6 @@
     <string name="settings_language_chinese_traditional" translatable="false">繁體中文（台灣）</string>
     <string name="eis_plus_unavailable_title">EIS+ unavailable</string>
     <string name="eis_plus_unavailable_message">This device cannot disable its built-in camera stabilization. EIS+ has been turned off to avoid unstable video caused by double stabilization.</string>
+    <string name="settings_video_nr_level_description">Set hardware noise reduction for video preview and recording independently of photos.</string>
+    <string name="settings_video_edge_level_description">Set hardware sharpening for video preview and recording independently of photos.</string>
 </resources>

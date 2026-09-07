@@ -153,6 +153,8 @@ data class UserPreferences(
     val photoSaveTreeUri: String? = null,
     val nrLevel: Int = NoiseReductionLevel.DEFAULT,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal
     val edgeLevel: Int = 1, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
+    val videoNrLevel: Int = NoiseReductionLevel.DEFAULT,
+    val videoEdgeLevel: Int = 1,
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
     val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
     val useRaw: Boolean = false,                // 使用 RAW 格式拍摄
@@ -390,6 +392,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHOTO_SAVE_TREE_URI = stringPreferencesKey("photo_save_tree_uri")
         private val NR_LEVEL = intPreferencesKey("nr_level")
         private val EDGE_LEVEL = intPreferencesKey("edge_level")
+        private val VIDEO_NR_LEVEL = intPreferencesKey("video_nr_level")
+        private val VIDEO_EDGE_LEVEL = intPreferencesKey("video_edge_level")
         private val VENDOR_CAPTURE_SETTINGS = stringPreferencesKey("vendor_capture_settings")
         private val CUSTOM_VENDOR_KEY_SETTINGS = stringPreferencesKey("custom_vendor_key_settings")
         private val USE_RAW = booleanPreferencesKey("use_raw")
@@ -664,6 +668,10 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[NR_LEVEL] ?: NoiseReductionLevel.DEFAULT
                 ),
                 edgeLevel = preferences[EDGE_LEVEL] ?: 1,
+                videoNrLevel = NoiseReductionLevel.normalize(
+                    preferences[VIDEO_NR_LEVEL] ?: NoiseReductionLevel.DEFAULT
+                ),
+                videoEdgeLevel = preferences[VIDEO_EDGE_LEVEL] ?: 1,
                 vendorCaptureSettingsByLens = VendorCaptureSettingsByLens.deserialize(
                     preferences[VENDOR_CAPTURE_SETTINGS]
                 ),
@@ -1615,6 +1623,18 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveEdgeLevel(level: Int) {
         context.dataStore.edit { preferences ->
             preferences[EDGE_LEVEL] = level
+        }
+    }
+
+    suspend fun saveVideoNRLevel(level: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_NR_LEVEL] = NoiseReductionLevel.normalize(level)
+        }
+    }
+
+    suspend fun saveVideoEdgeLevel(level: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_EDGE_LEVEL] = level
         }
     }
 

@@ -284,4 +284,6 @@
     <string name="settings_language">Sprache</string>
     <string name="settings_language_description">Sprache der App auswählen</string>
     <string name="settings_language_system">Systemsprache verwenden</string>
+    <string name="settings_video_nr_level_description">Hardware-Rauschunterdrückung für Videovorschau und Aufnahme unabhängig von Fotos einstellen.</string>
+    <string name="settings_video_edge_level_description">Hardware-Schärfung für Videovorschau und Aufnahme unabhängig von Fotos einstellen.</string>
 </resources>

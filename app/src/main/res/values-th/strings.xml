@@ -901,4 +901,6 @@
     <string name="settings_language">ภาษา</string>
     <string name="settings_language_description">เลือกภาษาที่ใช้ในแอป</string>
     <string name="settings_language_system">ตามระบบ</string>
+    <string name="settings_video_nr_level_description">ตั้งค่าการลดสัญญาณรบกวนด้วยฮาร์ดแวร์สำหรับการแสดงตัวอย่างและการบันทึกวิดีโอแยกจากภาพถ่าย</string>
+    <string name="settings_video_edge_level_description">ตั้งค่าความคมชัดด้วยฮาร์ดแวร์สำหรับการแสดงตัวอย่างและการบันทึกวิดีโอแยกจากภาพถ่าย</string>
 </resources>

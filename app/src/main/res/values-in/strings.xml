@@ -284,4 +284,6 @@
     <string name="settings_language">Bahasa</string>
     <string name="settings_language_description">Pilih bahasa yang digunakan aplikasi</string>
     <string name="settings_language_system">Ikuti sistem</string>
+    <string name="settings_video_nr_level_description">Atur pengurangan noise perangkat keras untuk pratinjau dan perekaman video secara terpisah dari foto.</string>
+    <string name="settings_video_edge_level_description">Atur penajaman perangkat keras untuk pratinjau dan perekaman video secara terpisah dari foto.</string>
 </resources>

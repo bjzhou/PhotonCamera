@@ -284,4 +284,6 @@
     <string name="settings_language">Langue</string>
     <string name="settings_language_description">Choisir la langue de l’application</string>
     <string name="settings_language_system">Langue du système</string>
+    <string name="settings_video_nr_level_description">Régler la réduction du bruit matérielle pour l’aperçu et l’enregistrement vidéo indépendamment des photos.</string>
+    <string name="settings_video_edge_level_description">Régler la netteté matérielle pour l’aperçu et l’enregistrement vidéo indépendamment des photos.</string>
 </resources>

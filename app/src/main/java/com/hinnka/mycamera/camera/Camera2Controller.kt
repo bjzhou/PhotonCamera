@@ -294,6 +294,9 @@ class Camera2Controller(private val context: Context) {
     // 锐化等级 (0=Off, 1=Fast, 2=High Quality, 3=Zero Shutter Lag/Real-time)
     private var edgeLevel = 1
 
+    private var videoNrLevel = NoiseReductionLevel.DEFAULT
+    private var videoEdgeLevel = 1
+
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
     private val burstGyroRecorder = BurstGyroRecorder(context)
@@ -3482,7 +3485,7 @@ class Camera2Controller(private val context: Context) {
 
         if (!isRawCapture) {
             // 6. 图像质量设置（锐化、降噪）
-            applyImageQualitySettings(builder)
+            applyImageQualitySettings(builder, currentState)
 
         }
 
@@ -4637,16 +4640,18 @@ class Camera2Controller(private val context: Context) {
     /**
      * 应用图像质量设置（锐化、降噪）
      *
-     * 这些设置直接影响照片清晰度和细节保留
+     * 照片与视频使用各自的参数，视频预览和录制保持一致。
      *
      * @param builder 需要配置的 Builder
-     * @param isCapture 是否为拍摄请求（拍摄时使用高质量模式）
+     * @param currentState 当前拍摄模式及多帧配置
      */
-    private fun applyImageQualitySettings(builder: CaptureRequest.Builder) {
+    private fun applyImageQualitySettings(builder: CaptureRequest.Builder, currentState: CameraState) {
         try {
-            val currentState = _state.value
-            val isBurst = currentState.requiresMultiFrameCaptureSequence
-            val effectiveEdgeLevel = if (isBurst && edgeLevel == 2) 1 else edgeLevel
+            val isVideo = currentState.captureMode == CaptureMode.VIDEO
+            val selectedEdgeLevel = if (isVideo) videoEdgeLevel else edgeLevel
+            val selectedNrLevel = if (isVideo) videoNrLevel else nrLevel
+            val isBurst = !isVideo && currentState.requiresMultiFrameCaptureSequence
+            val effectiveEdgeLevel = if (isBurst && selectedEdgeLevel == 2) 1 else selectedEdgeLevel
             val edgeMode = when (effectiveEdgeLevel) {
                 0 -> CaptureRequest.EDGE_MODE_OFF
                 1 -> CaptureRequest.EDGE_MODE_FAST
@@ -4665,11 +4670,11 @@ class Camera2Controller(private val context: Context) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
             val effectiveNrLevel = if (
-                isBurst && nrLevel == NoiseReductionLevel.HIGH_QUALITY
+                isBurst && selectedNrLevel == NoiseReductionLevel.HIGH_QUALITY
             ) {
                 NoiseReductionLevel.FAST
             } else {
-                nrLevel
+                selectedNrLevel
             }
             val noiseReductionMode = when (effectiveNrLevel) {
                 NoiseReductionLevel.OFF -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
@@ -4804,6 +4809,28 @@ class Camera2Controller(private val context: Context) {
         val normalizedLevel = NoiseReductionLevel.normalize(level)
         nrLevel = normalizedLevel
         _state.value = _state.value.copy(nrLevel = normalizedLevel)
+    }
+
+    fun setVideoImageQualitySettings(nrLevel: Int, edgeLevel: Int) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setVideoImageQualitySettings(nrLevel, edgeLevel) }
+            return
+        }
+
+        val normalizedNrLevel = NoiseReductionLevel.normalize(nrLevel)
+        if (videoNrLevel == normalizedNrLevel && videoEdgeLevel == edgeLevel) return
+        videoNrLevel = normalizedNrLevel
+        videoEdgeLevel = edgeLevel
+        PLog.d(TAG, "Video image quality settings: nr=$videoNrLevel, edge=$videoEdgeLevel")
+
+        val currentState = _state.value
+        if (currentState.captureMode == CaptureMode.VIDEO) {
+            previewRequestBuilder?.let { builder ->
+                applyImageQualitySettings(builder, currentState)
+                updatePreview()
+            }
+        }
     }
 
     fun setVendorCaptureSettingsByLens(settingsByLens: VendorCaptureSettingsByLens) {

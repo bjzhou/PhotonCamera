@@ -1562,6 +1562,43 @@ fun SettingsScreen(
                         title = stringResource(R.string.settings_section_video),
                         showTitle = false
                     ) {
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_nr_level),
+                            description = stringResource(R.string.settings_video_nr_level_description),
+                            levels = listOf(
+                                NoiseReductionLevel.OFF to stringResource(R.string.settings_nr_level_off),
+                                NoiseReductionLevel.FAST to stringResource(R.string.settings_nr_level_fast),
+                                NoiseReductionLevel.HIGH_QUALITY to stringResource(R.string.settings_nr_level_high_quality),
+                                NoiseReductionLevel.ZERO_SHUTTER_LAG to stringResource(R.string.settings_nr_level_zsl),
+                                NoiseReductionLevel.MINIMAL to stringResource(R.string.settings_nr_level_minimal)
+                            ),
+                            currentLevel = userPreferences.videoNrLevel,
+                            onLevelSelected = viewModel::setVideoNRLevel
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_edge_level),
+                            description = stringResource(R.string.settings_video_edge_level_description),
+                            levels = listOf(
+                                0 to stringResource(R.string.settings_nr_level_off),
+                                1 to stringResource(R.string.settings_nr_level_fast),
+                                2 to stringResource(R.string.settings_nr_level_high_quality),
+                                3 to stringResource(R.string.settings_nr_level_zsl)
+                            ),
+                            currentLevel = userPreferences.videoEdgeLevel,
+                            onLevelSelected = viewModel::setVideoEdgeLevel
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         DropdownSettingItem(
                             title = stringResource(R.string.settings_video_stabilization_default),
                             description = stringResource(
@@ -2921,6 +2958,8 @@ private fun SettingsCategoryOverview(
         NavigationSettingItem(
             title = stringResource(R.string.settings_section_video),
             description = listOf(
+                stringResource(R.string.settings_nr_level),
+                stringResource(R.string.settings_edge_level),
                 stringResource(R.string.settings_separate_video_lut),
                 stringResource(R.string.settings_video_lock_lens),
                 stringResource(R.string.settings_video_lock_white_balance),

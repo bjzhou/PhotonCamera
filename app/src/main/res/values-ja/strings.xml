@@ -284,4 +284,6 @@
     <string name="settings_language">言語</string>
     <string name="settings_language_description">アプリで使用する言語を選択します</string>
     <string name="settings_language_system">システム設定に従う</string>
+    <string name="settings_video_nr_level_description">動画のプレビューと録画のハードウェアノイズ低減を、写真とは個別に設定します。</string>
+    <string name="settings_video_edge_level_description">動画のプレビューと録画のハードウェアシャープネスを、写真とは個別に設定します。</string>
 </resources>
