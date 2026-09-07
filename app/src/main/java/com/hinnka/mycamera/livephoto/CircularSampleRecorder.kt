@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentLinkedDeque
+import java.util.concurrent.ConcurrentSkipListSet
 
 /**
  * 循环采样缓冲器
@@ -25,6 +26,7 @@ class CircularSampleRecorder(
     )
 
     private val samples = ConcurrentLinkedDeque<Sample>()
+    private val retainedStarts = ConcurrentSkipListSet<Long>()
 
     @Volatile
     var isRecording: Boolean = false
@@ -35,7 +37,17 @@ class CircularSampleRecorder(
      */
     fun startRecording() {
         samples.clear()
+        retainedStarts.clear()
         isRecording = true
+    }
+
+    /** Keep an in-flight capture's start until its export has taken a snapshot. */
+    fun retainFrom(timestampUs: Long) {
+        retainedStarts.add(timestampUs)
+    }
+
+    fun releaseRetention(timestampUs: Long) {
+        retainedStarts.remove(timestampUs)
     }
 
     /**
@@ -73,7 +85,9 @@ class CircularSampleRecorder(
         if (samples.isEmpty()) return
 
         val lastTimestamp = samples.last().info.presentationTimeUs
-        val threshold = lastTimestamp - bufferDurationMs * 1000
+        val rollingThreshold = lastTimestamp - bufferDurationMs * 1000
+        val threshold = retainedStarts.firstOrNull()?.let { minOf(it, rollingThreshold) }
+            ?: rollingThreshold
 
         while (samples.size > 1) {
             val first = samples.first()

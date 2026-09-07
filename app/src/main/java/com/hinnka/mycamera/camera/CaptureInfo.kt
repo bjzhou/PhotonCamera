@@ -38,6 +38,8 @@ data class CaptureInfo(
     
     // 时间
     val captureTime: Long = System.currentTimeMillis(),
+    // Exact first video keyframe for a torch Live Photo; null preserves normal pre-roll.
+    val livePhotoVideoStartTimestampUs: Long? = null,
     
     // GPS（可选）
     val latitude: Double? = null,

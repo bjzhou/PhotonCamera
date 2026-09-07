@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.*
 import android.opengl.*
+import android.os.Bundle
 import android.view.Surface
 import androidx.core.app.ActivityCompat
 import com.hinnka.mycamera.lut.LutConfig
@@ -16,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Live Photo 录制管理器 (重构版 - 解决 OOM)
@@ -36,6 +38,7 @@ class LivePhotoRecorder(
         private const val MIME_TYPE_VIDEO = MediaFormat.MIMETYPE_VIDEO_AVC
         private const val VIDEO_BITRATE = 8_000_000
         private const val I_FRAME_INTERVAL = 1
+        private const val CAPTURE_START_TIMEOUT_MS = 2_000L
 
         private const val MIME_TYPE_AUDIO = MediaFormat.MIMETYPE_AUDIO_AAC
         private const val AUDIO_SAMPLE_RATE = 44100
@@ -73,6 +76,19 @@ class LivePhotoRecorder(
     private var isCapturing = false
     private var snapshotTimestampUs: Long = 0
 
+    private class PendingCaptureStart(val minimumTimestampUs: Long) {
+        val ready = CompletableDeferred<Long>()
+        var syncFrameRequested = false // Only accessed on renderDispatcher.
+    }
+
+    private val pendingCaptureStart = AtomicReference<PendingCaptureStart?>(null)
+    @Volatile
+    private var preCaptureBufferingEnabled = true
+    @Volatile
+    private var captureMinimumTimestampUs: Long? = null
+    @Volatile
+    private var acceptingTorchFrames = false
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var videoDrainJob: Job? = null
     private var audioDrainJob: Job? = null
@@ -103,6 +119,8 @@ class LivePhotoRecorder(
         circularAudioRecorder.startRecording()
         isRunning = true
         lastFrameTimestampUs = 0
+        captureMinimumTimestampUs = null
+        acceptingTorchFrames = false
         PLog.d(TAG, "Live Photo recording prepared")
     }
 
@@ -111,6 +129,10 @@ class LivePhotoRecorder(
      */
     fun stopRecording() {
         isRunning = false
+        pendingCaptureStart.getAndSet(null)?.let {
+            isCapturing = false
+            it.ready.cancel()
+        }
         circularVideoRecorder.stopRecording()
         circularAudioRecorder.stopRecording()
         if (isCapturing) {
@@ -137,6 +159,8 @@ class LivePhotoRecorder(
         sharedDisplay: EGLDisplay
     ) {
         if (!isRunning) return
+        if (!preCaptureBufferingEnabled && !acceptingTorchFrames) return
+        if (timestampNs / 1000 < (captureMinimumTimestampUs ?: Long.MIN_VALUE)) return
 
         lastFrameTimestampUs = timestampNs / 1000
 
@@ -144,6 +168,8 @@ class LivePhotoRecorder(
         scope.launch(renderDispatcher) {
             hardwareMutex.withLock {
                 if (!isRunning) return@withLock
+                if (!preCaptureBufferingEnabled && !acceptingTorchFrames) return@withLock
+                if (timestampNs / 1000 < (captureMinimumTimestampUs ?: Long.MIN_VALUE)) return@withLock
 
                 // 如果上下文发生了变化（比如 App 重入）或者分辨率发生了变化（旋转），必须释放旧编码器并重新创建
                 if (videoEncoder != null && (
@@ -169,8 +195,17 @@ class LivePhotoRecorder(
                 if (!isRunning) return@withLock
 
                 try {
+                    pendingCaptureStart.get()?.let { pending ->
+                        if (!pending.syncFrameRequested && timestampNs / 1000 >= pending.minimumTimestampUs) {
+                            videoEncoder?.setParameters(Bundle().apply {
+                                putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                            })
+                            pending.syncFrameRequested = true
+                        }
+                    }
                     lutRenderer?.renderFrame(textureId, matrix, timestampNs / 1000)
                 } catch (e: Exception) {
+                    pendingCaptureStart.get()?.ready?.completeExceptionally(e)
                 }
             }
         }
@@ -327,11 +362,69 @@ class LivePhotoRecorder(
         }
     }
 
+    fun setPreCaptureBufferingEnabled(enabled: Boolean) {
+        preCaptureBufferingEnabled = enabled
+    }
+
+    fun finishTorchRecording(cancelled: Boolean = false) {
+        acceptingTorchFrames = false
+        if (cancelled) {
+            isCapturing = false
+            captureMinimumTimestampUs?.let(::releaseCaptureRetention)
+        }
+    }
+
+    private fun retainCaptureFrom(timestampUs: Long) {
+        circularVideoRecorder.retainFrom(timestampUs)
+        circularAudioRecorder.retainFrom(timestampUs)
+    }
+
+    private fun releaseCaptureRetention(timestampUs: Long) {
+        circularVideoRecorder.releaseRetention(timestampUs)
+        circularAudioRecorder.releaseRetention(timestampUs)
+    }
+
+    /** Begin a capture on a decodable frame after the camera confirms torch illumination. */
+    fun startCaptureAfterTorch(minimumTimestampUs: Long, onReady: (Long?) -> Unit): Job {
+        val pending = PendingCaptureStart(minimumTimestampUs)
+        retainCaptureFrom(minimumTimestampUs)
+        captureMinimumTimestampUs = minimumTimestampUs
+        pendingCaptureStart.getAndSet(pending)?.ready?.cancel()
+        isCapturing = true
+        acceptingTorchFrames = true
+        return scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            var startTimestampUs: Long? = null
+            try {
+                check(isRunning) { "Live Photo recorder is not running" }
+                startTimestampUs = withTimeout(CAPTURE_START_TIMEOUT_MS) { pending.ready.await() }
+                retainCaptureFrom(startTimestampUs)
+                if (startTimestampUs != minimumTimestampUs) releaseCaptureRetention(minimumTimestampUs)
+                captureMinimumTimestampUs = startTimestampUs
+                snapshotTimestampUs = startTimestampUs
+                PLog.i(TAG, "Torch video started: minimum=$minimumTimestampUs, keyframe=$startTimestampUs")
+            } catch (e: TimeoutCancellationException) {
+                PLog.e(TAG, "Timed out waiting for torch video keyframe", e)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to start torch video", e)
+            } finally {
+                if (pendingCaptureStart.compareAndSet(pending, null) && startTimestampUs == null) {
+                    isCapturing = false
+                    acceptingTorchFrames = false
+                }
+                if (startTimestampUs == null) releaseCaptureRetention(minimumTimestampUs)
+            }
+            onReady(startTimestampUs)
+        }
+    }
+
     /**
      * 触发快照 (拍照时调用)
      */
     fun snapshot(): List<CircularSampleRecorder.Sample> {
         if (!isRunning) return emptyList()
+        captureMinimumTimestampUs = null
 
         // 使用最近一帧的时间戳作为基准，避免时钟源不一致问题
         snapshotTimestampUs = lastFrameTimestampUs
@@ -350,8 +443,10 @@ class LivePhotoRecorder(
      */
     fun recordVideo(
         imageTimestampUs: Long? = null,
+        captureStartTimestampUs: Long? = null,
         onCaptured: (File, Long) -> Unit
     ) {
+        val centerTs = imageTimestampUs ?: snapshotTimestampUs
         scope.launch {
             try {
                 // 等待后半段录制 + 额外 500ms 缓冲时间确保编码器完成工作
@@ -359,17 +454,15 @@ class LivePhotoRecorder(
 
                 val currentVideoSamples = circularVideoRecorder.snapshot()
                 val currentAudioSamples = circularAudioRecorder.snapshot()
+                captureStartTimestampUs?.let(::releaseCaptureRetention)
                 if (currentVideoSamples.isEmpty()) {
                     PLog.e(TAG, "No video samples in buffer")
-                    isCapturing = false
+                    onCaptured(File("error"), 0L)
                     return@launch
                 }
 
-                // 中心时间点
-                val centerTs = imageTimestampUs ?: snapshotTimestampUs
-
                 // 目标时间范围：[中心前 1.5s, 中心后 1.5s]
-                var startTimeUs = centerTs - bufferDurationMs * 1000
+                var startTimeUs = captureStartTimestampUs ?: (centerTs - bufferDurationMs * 1000)
                 val endTimeUs = centerTs + postCaptureDurationMs * 1000
 
                 // 安全检查：如果中心点完全超出了缓冲区（可能由于长曝光导致延迟太久被裁掉了）
@@ -377,7 +470,7 @@ class LivePhotoRecorder(
                 val firstSampleTs = currentVideoSamples.first().info.presentationTimeUs
                 val lastSampleTs = currentVideoSamples.last().info.presentationTimeUs
 
-                if (centerTs < firstSampleTs || centerTs > lastSampleTs) {
+                if (captureStartTimestampUs == null && (centerTs < firstSampleTs || centerTs > lastSampleTs)) {
                     PLog.w(
                         TAG,
                         "Center timestamp $centerTs out of buffer range [$firstSampleTs, $lastSampleTs]. Fallback to latest available."
@@ -388,20 +481,21 @@ class LivePhotoRecorder(
 
                 PLog.d(TAG, "Filtering samples: center=$centerTs, range=[$startTimeUs, $endTimeUs]")
 
-                // 策略：寻找 startTimeUs 之前的最后一个关键帧作为视频起点
-                var startIndex = -1
-                for (i in currentVideoSamples.indices.reversed()) {
-                    val sample = currentVideoSamples[i]
-                    if (sample.info.presentationTimeUs <= startTimeUs &&
-                        (sample.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                    ) {
-                        startIndex = i
-                        break
+                // Torch captures own an exact keyframe boundary; never fall back to dark pre-roll.
+                var startIndex = if (captureStartTimestampUs != null) {
+                    currentVideoSamples.indexOfFirst {
+                        it.info.presentationTimeUs == captureStartTimestampUs &&
+                            (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                    }
+                } else {
+                    currentVideoSamples.indexOfLast {
+                        it.info.presentationTimeUs <= startTimeUs &&
+                            (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                     }
                 }
 
                 // 如果没找到 startTimeUs 之前的关键帧，则寻找整个缓冲区中的第一个关键帧
-                if (startIndex == -1) {
+                if (startIndex == -1 && captureStartTimestampUs == null) {
                     startIndex = currentVideoSamples.indexOfFirst {
                         (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                     }
@@ -430,6 +524,9 @@ class LivePhotoRecorder(
 
                 val finalVideoStartTs = muxVideoSamples.first().info.presentationTimeUs
                 val finalVideoEndTs = muxVideoSamples.last().info.presentationTimeUs
+                check(captureStartTimestampUs == null || centerTs in finalVideoStartTs..finalVideoEndTs) {
+                    "Still timestamp $centerTs outside torch video [$finalVideoStartTs, $finalVideoEndTs]"
+                }
 
                 // 过滤出相同时间段的音频样本
                 val muxAudioSamples = currentAudioSamples.filter {
@@ -463,7 +560,10 @@ class LivePhotoRecorder(
                 PLog.e(TAG, "Failed to finish Live Photo capture", e)
                 onCaptured(File("error"), 0L)
             } finally {
-                isCapturing = false
+                captureStartTimestampUs?.let(::releaseCaptureRetention)
+                if (captureMinimumTimestampUs == captureStartTimestampUs) {
+                    isCapturing = false
+                }
                 if (pendingRelease) {
                     PLog.d(TAG, "Executing delayed encoder release")
                     release()
@@ -499,6 +599,13 @@ class LivePhotoRecorder(
                         val outputBuffer = encoderRef.getOutputBuffer(outputBufferIndex)
                         if (outputBuffer != null && bufferInfo.size > 0) {
                             circularVideoRecorder.addSample(outputBuffer, bufferInfo)
+                            pendingCaptureStart.get()?.let { pending ->
+                                if (bufferInfo.presentationTimeUs >= pending.minimumTimestampUs &&
+                                    (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                                ) {
+                                    pending.ready.complete(bufferInfo.presentationTimeUs)
+                                }
+                            }
                         }
                         encoderRef.releaseOutputBuffer(outputBufferIndex, false)
                     }

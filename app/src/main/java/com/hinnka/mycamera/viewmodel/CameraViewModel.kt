@@ -3242,7 +3242,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 generateThumbnail()
                 // 倒计时结束，拍照
                 cameraController.setCountdownValue(0)
-                if (useLivePhoto.value) {
+                if (useLivePhoto.value && !cameraController.usesTorchForLivePhotoCapture()) {
                     cameraController.setCapturingLivePhoto(true)
                     viewModelScope.launch {
                         delay(1500)
@@ -3257,7 +3257,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             pendingRawStackFrames.forEach { it.frame.image.close() }
             pendingRawStackFrames.clear()
 
-            if (useLivePhoto.value) {
+            if (useLivePhoto.value && !cameraController.usesTorchForLivePhotoCapture()) {
                 cameraController.setCapturingLivePhoto(true)
                 viewModelScope.launch {
                     delay(1500)
@@ -5468,7 +5468,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
                 val deferred = CompletableDeferred<Pair<File, Long>?>()
-                cameraController.recordLivePhotoVideo(image.timestamp / 1000) { file, ts ->
+                cameraController.recordLivePhotoVideo(
+                    image.timestamp / 1000,
+                    captureInfo.livePhotoVideoStartTimestampUs,
+                ) { file, ts ->
                     deferred.complete(if (file.name == "error") null else Pair(file, ts))
                 }
                 deferred
@@ -5904,7 +5907,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
                 val deferred = CompletableDeferred<Pair<File, Long>?>()
                 images.firstOrNull()?.let {
-                    cameraController.recordLivePhotoVideo(it.timestamp / 1000) { file, ts ->
+                    cameraController.recordLivePhotoVideo(
+                        it.timestamp / 1000,
+                        captureInfo.livePhotoVideoStartTimestampUs,
+                    ) { file, ts ->
                         deferred.complete(if (file.name == "error") null else Pair(file, ts))
                     }
                 } ?: deferred.complete(null)
