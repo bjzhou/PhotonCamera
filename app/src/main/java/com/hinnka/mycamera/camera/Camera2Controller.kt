@@ -261,6 +261,8 @@ class Camera2Controller(private val context: Context) {
     private var multiFrameTorchWarmupTriggerResultSeen = false
     private var isMultiFrameTorchCaptureActive = false
     private var isContinuousBurstTorchActive = false
+    private var isLivePhotoTorchCaptureActive = false
+    private var livePhotoTorchOffRunnable: Runnable? = null
     private var pendingMultiFrameFocusCapture: PendingMultiFrameFocusCapture? = null
     private var pendingMultiFrameFocusResult: TotalCaptureResult? = null
     private var activeMultiFrameFocusSnapshot: MultiFrameFocusSnapshot? = null
@@ -1732,6 +1734,7 @@ class Camera2Controller(private val context: Context) {
     private fun clearCameraSessionState(reason: String, closeImageReader: Boolean = true) {
         previewSessionGeneration++
         previewUpdateScheduled.set(false)
+        clearLivePhotoTorchCapture()
         clearPrecaptureTracking()
         clearMultiFrameTorchWarmupTracking()
         isMultiFrameTorchCaptureActive = false
@@ -3986,10 +3989,23 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun resolvePhotoFlashMode(state: CameraState): Int {
+        // Single flash in Live Photo uses torch only for the capture and its post-roll.
+        return if (state.useLivePhoto && state.flashMode == CameraMetadata.FLASH_MODE_SINGLE) {
+            if (isLivePhotoTorchCaptureActive) {
+                CameraMetadata.FLASH_MODE_TORCH
+            } else {
+                CameraMetadata.FLASH_MODE_OFF
+            }
+        } else {
+            state.flashMode
+        }
+    }
+
     private fun shouldUsePreviewStillFlashAeMode(state: CameraState): Boolean {
         return isFlashSupported &&
             state.captureMode == CaptureMode.PHOTO &&
-            state.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
+            resolvePhotoFlashMode(state) == CameraMetadata.FLASH_MODE_SINGLE &&
             state.isIsoAuto &&
             state.isShutterSpeedAuto &&
             availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
@@ -4017,7 +4033,7 @@ class Camera2Controller(private val context: Context) {
                     resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
                 } else {
                     when {
-                        state.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
+                        resolvePhotoFlashMode(state) == CameraMetadata.FLASH_MODE_SINGLE &&
                                 effectiveUseStillFlashAeMode ->
                             resolveStillFlashAeMode()
 
@@ -4128,7 +4144,7 @@ class Camera2Controller(private val context: Context) {
                 state.rawMinShutterSpeedNs > 0L &&
                 state.isIsoAuto &&
                 state.isShutterSpeedAuto &&
-                state.flashMode != CameraMetadata.FLASH_MODE_SINGLE
+                resolvePhotoFlashMode(state) != CameraMetadata.FLASH_MODE_SINGLE
     }
 
     private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
@@ -4377,7 +4393,7 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        when (state.flashMode) {
+        when (resolvePhotoFlashMode(state)) {
             CameraMetadata.FLASH_MODE_SINGLE -> {
                 if (!state.isIsoAuto || !state.isShutterSpeedAuto) {
                     // Manual/semi-manual exposure has no AE precapture convergence.
@@ -5159,10 +5175,25 @@ class Camera2Controller(private val context: Context) {
 
     fun setFlashMode(value: Int) {
         _state.value = _state.value.copy(flashMode = value)
+        updatePhotoFlashPreview()
+    }
+
+    private fun updatePhotoFlashPreview() {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { updatePhotoFlashPreview() }
+            return
+        }
+
+        if (!_state.value.useLivePhoto ||
+            _state.value.flashMode != CameraMetadata.FLASH_MODE_SINGLE ||
+            _state.value.captureMode != CaptureMode.PHOTO
+        ) {
+            clearLivePhotoTorchCapture()
+        }
 
         previewRequestBuilder?.apply {
-            // 预览不发送预闪触发器；支持 ON_ALWAYS_FLASH 时由 AE 模式保留闪光会话配置，
-            // 实际闪光仍只由静态拍摄/预闪序列触发。
+            // Reapply AE and flash together when either flash mode or Live Photo changes.
             applyBaseCameraSettings(this, isCapture = false)
             setAePrecaptureTriggerIfSupported(
                 this,
@@ -7177,11 +7208,11 @@ class Camera2Controller(private val context: Context) {
         baseExposureResult: CaptureResult?,
     ) {
         val currentState = _state.value
-        val useMultiFrameTorch = shouldUseMultiFrameTorch(currentState)
+        val useMultiFrameTorch = shouldUseTorchForCapture(currentState)
         val needsPrecapture =
             isFlashSupported &&
             isAePrecaptureSupported() &&
-            currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
+            resolvePhotoFlashMode(currentState) == CameraMetadata.FLASH_MODE_SINGLE &&
             currentState.isIsoAuto &&
             currentState.isShutterSpeedAuto &&
             resolveStillFlashAeMode() != CaptureRequest.CONTROL_AE_MODE_OFF
@@ -7191,7 +7222,8 @@ class Camera2Controller(private val context: Context) {
             pendingCaptureReader = reader
             pendingCaptureBaseExposureResult = baseExposureResult
             isMultiFrameTorchCaptureActive = true
-            PLog.d(TAG, "Starting multi-frame torch warm-up")
+            isLivePhotoTorchCaptureActive = currentState.useLivePhoto
+            PLog.d(TAG, "Starting capture torch warm-up: livePhoto=${currentState.useLivePhoto}")
             runMultiFrameTorchWarmupSequence { torchResult ->
                 pendingCaptureBaseExposureResult = torchResult ?: pendingCaptureBaseExposureResult
                 internalCaptureState = STATE_PICTURE_TAKEN
@@ -7228,6 +7260,10 @@ class Camera2Controller(private val context: Context) {
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
 
+        // A previous Live Photo's post-roll must not switch off a new capture's torch.
+        livePhotoTorchOffRunnable?.let { handler?.removeCallbacks(it) }
+        livePhotoTorchOffRunnable = null
+
         val baseExposureResult = lastCaptureResult
         // 关键修复：每次拍照前重置拍摄结果
         lastCaptureResult = null
@@ -7260,7 +7296,7 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "拍照失败", e)
             _state.value = _state.value.copy(isCapturing = false)
             burstGyroRecorder.stop()
-            clearMultiFrameFocusState("capture setup failure")
+            resetPreviewAfterCapture()
         }
     }
 
@@ -7848,8 +7884,8 @@ class Camera2Controller(private val context: Context) {
                 !state.useLivePhoto
     }
 
-    private fun shouldUseMultiFrameTorch(state: CameraState): Boolean {
-        return state.requiresMultiFrameCaptureSequence &&
+    private fun shouldUseTorchForCapture(state: CameraState): Boolean {
+        return (state.requiresMultiFrameCaptureSequence || state.useLivePhoto) &&
                 isFlashSupported &&
                 state.flashMode == CameraMetadata.FLASH_MODE_SINGLE
     }
@@ -8131,7 +8167,7 @@ class Camera2Controller(private val context: Context) {
                         if (completedCaptureCount == 0) {
                             _state.value = _state.value.copy(isCapturing = false)
                         }
-                        resetPreviewAfterCapture()
+                        resetPreviewAfterCapture(keepLivePhotoTorch = completedCaptureCount > 0)
                     }
 
                     override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
@@ -8190,6 +8226,12 @@ class Camera2Controller(private val context: Context) {
                                 "timestamp=$timestamp. Pending images: ${pendingImages.size}, " +
                                 "Pending results: ${pendingResults.size}"
                         )
+                        resetPreviewAfterCapture(keepLivePhotoTorch = true)
+                    }
+
+                    override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
+                        PLog.w(TAG, "Single capture sequence aborted")
+                        _state.value = _state.value.copy(isCapturing = false)
                         resetPreviewAfterCapture()
                     }
 
@@ -8213,7 +8255,32 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun resetPreviewAfterCapture() {
+    private fun clearLivePhotoTorchCapture() {
+        livePhotoTorchOffRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        livePhotoTorchOffRunnable = null
+        isLivePhotoTorchCaptureActive = false
+    }
+
+    private fun finishLivePhotoTorchCapture(keepForPostCapture: Boolean) {
+        val handler = cameraHandler
+        if (!keepForPostCapture || !isLivePhotoTorchCaptureActive || handler == null) {
+            clearLivePhotoTorchCapture()
+            return
+        }
+        livePhotoTorchOffRunnable?.let { handler.removeCallbacks(it) }
+        val turnOff = Runnable {
+            clearLivePhotoTorchCapture()
+            updatePhotoFlashPreview()
+            PLog.d(TAG, "Live Photo capture torch switched off after post-roll")
+        }
+        livePhotoTorchOffRunnable = turnOff
+        // Start the post-roll window after still capture completes, so torch warm-up
+        // and long exposures cannot consume the time reserved for the trailing video.
+        handler.postDelayed(turnOff, livePhotoRecorder.postCaptureDurationMs)
+    }
+
+    private fun resetPreviewAfterCapture(keepLivePhotoTorch: Boolean = false) {
+        finishLivePhotoTorchCapture(keepLivePhotoTorch)
         // 重置拍照状态机
         clearPrecaptureTracking()
         clearMultiFrameTorchWarmupTracking()
@@ -8237,6 +8304,9 @@ class Camera2Controller(private val context: Context) {
         }
 
         try {
+            // The reset request must use the same illumination as the resumed preview.
+            applyExposureSettings(builder, _state.value, isCapture = false)
+            applyFlashSettings(builder, _state.value, isCapture = false)
             if (afTriggerModeToCancel != null) {
                 builder.set(CaptureRequest.CONTROL_AF_MODE, afTriggerModeToCancel)
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
@@ -8736,6 +8806,7 @@ class Camera2Controller(private val context: Context) {
      */
     fun setUseLivePhoto(enabled: Boolean) {
         _state.value = _state.value.copy(useLivePhoto = enabled)
+        updatePhotoFlashPreview()
         if (enabled && _state.value.captureMode == CaptureMode.PHOTO) {
             livePhotoRecorder.startRecording()
         } else {
