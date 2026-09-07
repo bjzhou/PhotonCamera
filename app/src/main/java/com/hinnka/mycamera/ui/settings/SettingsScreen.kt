@@ -1809,7 +1809,7 @@ fun SettingsScreen(
                 }
 
                 SettingsPage.PHOTO_MODE -> {
-                    // 拍照模式设置
+                    // 照片模式设置
                     SettingsSection(
                         title = stringResource(R.string.settings_section_photo_mode),
                         showTitle = false

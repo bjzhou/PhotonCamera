@@ -23,7 +23,7 @@
     <string name="unknown">未知</string>
     <string name="take_photo">拍照</string>
     <string name="capture_mode_professional">专业</string>
-    <string name="capture_mode_photo">拍照</string>
+    <string name="capture_mode_photo">照片</string>
     <string name="capture_mode_video">视频</string>
 
     <!-- Exposure Controls -->
@@ -223,7 +223,7 @@
     <string name="settings_video_lock_white_balance">锁定白平衡</string>
     <string name="settings_video_lock_white_balance_description">视频录制过程中锁定白平衡。</string>
     <string name="settings_section_quality_perf">画质与性能</string>
-    <string name="settings_section_photo_mode">拍照模式设置</string>
+    <string name="settings_section_photo_mode">照片模式设置</string>
     <string name="settings_section_professional_mode">专业模式设置</string>
     <string name="settings_professional_parameters">专业模式参数</string>
     <string name="preset_professional_mode_only">仅在专业模式下可用</string>
@@ -260,7 +260,7 @@
     <string name="settings_raw_max_output_scale_description">调整 HDR+ 照片的输出尺寸。倍率越高，照片尺寸和文件体积越大，处理时间也可能更长。</string>
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
     <string name="settings_multi_frame_denoise_frame_count">多帧降噪帧数</string>
-    <string name="settings_multi_frame_denoise_frame_count_description">拍照模式下多帧降噪使用的帧数。帧数越多降噪越明显，但处理时间也越长。</string>
+    <string name="settings_multi_frame_denoise_frame_count_description">照片模式下多帧降噪使用的帧数。帧数越多降噪越明显，但处理时间也越长。</string>
     <string name="settings_hdr_plus_frame_count">HDR+ 帧数</string>
     <string name="settings_hdr_plus_frame_count_description">HDR+ 拍摄使用的帧数。开启包围曝光后，最低为 2 帧，使用普通曝光和可用的长曝光；3 帧及以上使用完整包围曝光方案。</string>
     <string name="settings_hdr_plus_bracket_exposure">HDR+ 包围曝光</string>

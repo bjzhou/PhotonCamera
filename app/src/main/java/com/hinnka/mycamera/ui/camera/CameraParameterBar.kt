@@ -3,9 +3,11 @@ package com.hinnka.mycamera.ui.camera
 import android.hardware.camera2.CameraMetadata
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
+import com.hinnka.mycamera.video.CaptureMode
 import kotlin.math.roundToLong
 
 internal val CameraParameterAccent = Color(0xFFFFD700)
@@ -55,43 +58,50 @@ fun CameraParameterBar(
 internal data class CameraParameterItem(
     val parameter: CameraParameter,
     val label: String,
-    val value: String,
+    val value: String?,
     val isEnabled: Boolean = true,
     val isWarning: Boolean = false
 )
 
 @Composable
-internal fun cameraParameterItems(state: CameraState): List<CameraParameterItem> = listOf(
-    CameraParameterItem(
-        CameraParameter.EXPOSURE_COMPENSATION,
-        stringResource(R.string.camera_parameter_exposure),
-        CameraUtils.formatExposureCompensation(state.exposureCompensation, state.getExposureCompensationStep()),
-        isEnabled = state.isAutoExposure
-    ),
-    CameraParameterItem(
-        CameraParameter.SHUTTER_SPEED,
-        stringResource(R.string.camera_parameter_shutter),
-        formatShutterSpeedValue(state.shutterSpeed),
-        isWarning = state.isPreviewExposureLimited()
-    ),
-    CameraParameterItem(
-        CameraParameter.ISO,
-        stringResource(R.string.camera_parameter_iso),
-        state.iso.toString()
-    ),
-    CameraParameterItem(
-        CameraParameter.FOCUS,
-        stringResource(R.string.camera_parameter_focus),
-        formatFocusDistance(state.focusDistance),
-        isEnabled = state.minimumFocusDistance > 0f
-    ),
-    CameraParameterItem(
-        CameraParameter.WHITE_BALANCE,
-        stringResource(R.string.camera_parameter_white_balance),
-        formatWhiteBalanceValue(state),
-        isEnabled = state.canAdjustWhiteBalance || state.actualAwbTemperature != null
+internal fun cameraParameterItems(state: CameraState): List<CameraParameterItem> {
+    // Match the mode switcher: PHOTO capture also backs the RAW professional mode.
+    val showValues = state.captureMode == CaptureMode.VIDEO ||
+        (state.useRaw && state.isRawSupported)
+    return listOf(
+        CameraParameterItem(
+            CameraParameter.EXPOSURE_COMPENSATION,
+            stringResource(R.string.camera_parameter_exposure),
+            if (showValues) CameraUtils.formatExposureCompensation(
+                state.exposureCompensation, state.getExposureCompensationStep()
+            ) else null,
+            isEnabled = state.isAutoExposure
+        ),
+        CameraParameterItem(
+            CameraParameter.SHUTTER_SPEED,
+            stringResource(R.string.camera_parameter_shutter),
+            if (showValues) formatShutterSpeedValue(state.shutterSpeed) else null,
+            isWarning = showValues && state.isPreviewExposureLimited()
+        ),
+        CameraParameterItem(
+            CameraParameter.ISO,
+            stringResource(R.string.camera_parameter_iso),
+            if (showValues) state.iso.toString() else null
+        ),
+        CameraParameterItem(
+            CameraParameter.FOCUS,
+            stringResource(R.string.camera_parameter_focus),
+            if (showValues) formatFocusDistance(state.focusDistance) else null,
+            isEnabled = state.minimumFocusDistance > 0f
+        ),
+        CameraParameterItem(
+            CameraParameter.WHITE_BALANCE,
+            stringResource(R.string.camera_parameter_white_balance),
+            if (showValues) formatWhiteBalanceValue(state) else null,
+            isEnabled = state.canAdjustWhiteBalance || state.actualAwbTemperature != null
+        )
     )
-)
+}
 
 @Composable
 internal fun ParameterItem(
@@ -101,6 +111,7 @@ internal fun ParameterItem(
     vertical: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val titleOnly = item.value == null
     val valueColor by animateColorAsState(
         targetValue = when {
             item.isWarning -> Color(0xFFFF6666)
@@ -113,7 +124,8 @@ internal fun ParameterItem(
     val labelColor by animateColorAsState(
         targetValue = when {
             !item.isEnabled -> Color.White.copy(alpha = 0.3f)
-            isSelected -> CameraParameterAccent.copy(alpha = 0.8f)
+            isSelected -> CameraParameterAccent.copy(alpha = if (titleOnly) 1f else 0.8f)
+            titleOnly -> Color.White.copy(alpha = 0.9f)
             else -> Color.White.copy(alpha = 0.6f)
         },
         label = "parameterLabelColor"
@@ -124,6 +136,7 @@ internal fun ParameterItem(
                 if (vertical) Modifier.size(48.dp, 76.dp)
                 else Modifier.height(CameraControlsLayoutDefaults.ParameterBarHeight)
             )
+            .then(if (titleOnly) Modifier.clip(RoundedCornerShape(8.dp)) else Modifier)
             .semantics { selected = isSelected }
             .clickable(enabled = item.isEnabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
@@ -136,30 +149,39 @@ internal fun ParameterItem(
             },
             contentAlignment = Alignment.Center
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(1.dp)
-            ) {
-                Text(
-                    text = item.value,
-                    color = valueColor,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    style = TextStyle(shadow = ViewfinderTextShadow),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    softWrap = false
-                )
-                Text(
-                    text = item.label,
+            if (item.value == null) {
+                PhotoParameterTitle(
+                    label = item.label,
                     color = labelColor,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Medium,
-                    style = TextStyle(shadow = ViewfinderTextShadow),
-                    maxLines = 1
+                    isSelected = isSelected,
+                    isEnabled = item.isEnabled
                 )
+            } else {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                ) {
+                    Text(
+                        text = item.value,
+                        color = valueColor,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        style = TextStyle(shadow = ViewfinderTextShadow),
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    Text(
+                        text = item.label,
+                        color = labelColor,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Medium,
+                        style = TextStyle(shadow = ViewfinderTextShadow),
+                        maxLines = 1
+                    )
+                }
             }
-            if (isSelected) {
+            if (isSelected && !titleOnly) {
                 Box(
                     Modifier.align(Alignment.BottomCenter)
                         .padding(bottom = 3.dp)
@@ -169,6 +191,51 @@ internal fun ParameterItem(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PhotoParameterTitle(
+    label: String,
+    color: Color,
+    isSelected: Boolean,
+    isEnabled: Boolean
+) {
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            !isEnabled -> Color.Black.copy(alpha = 0.12f)
+            isSelected -> CameraParameterAccent.copy(alpha = 0.16f)
+            else -> Color.Black.copy(alpha = 0.28f)
+        },
+        label = "photoParameterBackground"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            !isEnabled -> Color.White.copy(alpha = 0.05f)
+            isSelected -> CameraParameterAccent.copy(alpha = 0.6f)
+            else -> Color.White.copy(alpha = 0.12f)
+        },
+        label = "photoParameterBorder"
+    )
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .fillMaxWidth()
+            .height(34.dp)
+            .background(backgroundColor, shape),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = color,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            style = TextStyle(shadow = ViewfinderTextShadow),
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            softWrap = false
+        )
     }
 }
 

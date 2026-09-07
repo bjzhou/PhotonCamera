@@ -1400,10 +1400,20 @@ fun CameraScreen(
             }
 
             if (isXpan) {
+                // Center both side bars in the space above the capture controls, which
+                // overlap the lower part of the XPAN viewfinder.
+                val sideControlsBottom = minOf(
+                    viewfinderTop + cardHeight,
+                    contentHeight - CameraControlsLayoutDefaults.CaptureAreaHeight -
+                        CameraControlsLayoutDefaults.CaptureClearance
+                )
+                val sideControlsHeight = (sideControlsBottom - viewfinderTop)
+                    .coerceIn(0.dp, cardHeight)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(cardHeight),
+                        .height(cardHeight)
+                        .padding(bottom = cardHeight - sideControlsHeight),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
