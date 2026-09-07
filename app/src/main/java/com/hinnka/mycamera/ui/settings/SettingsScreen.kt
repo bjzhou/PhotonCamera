@@ -6029,7 +6029,7 @@ fun BackgroundSetting(
         uri?.let { viewModel.saveCustomBackgroundImage(it) }
     }
 
-    val bgList = listOf("camera_bg", "camera_bg2", "camera_bg3", "camera_bg4")
+    val bgList = listOf("camera_bg", "camera_bg_black", "camera_bg2", "camera_bg3", "camera_bg4")
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
