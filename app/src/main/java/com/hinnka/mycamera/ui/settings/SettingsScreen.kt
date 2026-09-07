@@ -492,6 +492,7 @@ fun SettingsScreen(
     LaunchedEffect(
         customLensIds,
         lensIdBlacklist,
+        preferredMainCameraId,
         preferredMacroCameraId,
         enableLogicalMultiCameraDiscovery,
         logicalCameraBindingWhitelist
@@ -1148,6 +1149,7 @@ fun SettingsScreen(
                             val selectedMainCameraId = preferredMainCameraId
                                 ?.takeIf { mainCameraIdOptions.contains(it) }
                                 ?: currentMainCameraId?.takeIf { mainCameraIdOptions.contains(it) }
+                                // Discovery orders eligible IDs by default main-camera priority.
                                 ?: mainCameraIdOptions.first()
                             val mainCameraIdLabels = mainCameraIdOptions.map { cameraId ->
                                 cameraId to stringResource(R.string.settings_main_camera_id_option, cameraId)

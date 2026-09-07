@@ -67,7 +67,7 @@ class CameraDiscovery(private val context: Context) {
         val preferredMacroCameraId = loadPreferredMacroCameraId()
 
         val discoveredCameras = discoverCameraCandidates(
-            includeDuplicateMainCameraIds = false,
+            includeDuplicateMainCameraIds = true,
             preferredMainCameraId = preferredMainCameraId,
             preferredMacroCameraId = preferredMacroCameraId,
             lensIdBlacklist = lensIdBlacklist
@@ -118,9 +118,11 @@ class CameraDiscovery(private val context: Context) {
 
     fun discoverMainCameraIdOptions(): List<String> {
         val lensIdBlacklist = loadLensIdBlacklist().toSet()
+        val preferredMainCameraId = loadPreferredMainCameraId()
         val preferredMacroCameraId = loadPreferredMacroCameraId()
         val discoveredCameras = discoverCameraCandidates(
             includeDuplicateMainCameraIds = true,
+            preferredMainCameraId = preferredMainCameraId,
             preferredMacroCameraId = preferredMacroCameraId,
             lensIdBlacklist = lensIdBlacklist
         )
@@ -128,14 +130,7 @@ class CameraDiscovery(private val context: Context) {
             cameras = discoveredCameras.backCameras,
             preferredMacroCameraId = preferredMacroCameraId
         )
-        val options = adjustedCameras
-            .filter { !it.isMacro && isSameFocalLength(it.intrinsicZoomRatio, 1f) }
-            .sortedWith(
-                compareBy<CameraInfoWithZoom>(
-                    { it.info.cameraId.toIntOrNull() ?: Int.MAX_VALUE },
-                    { it.info.cameraId }
-                )
-            )
+        val options = getMainCameraCandidates(adjustedCameras)
             .map { it.info.cameraId }
             .distinct()
 
@@ -230,6 +225,8 @@ class CameraDiscovery(private val context: Context) {
                                 info = info,
                                 intrinsicZoomRatio = intrinsicZoomRatio,
                                 isMacro = isMacro,
+                                hasAutoFocus = !hasMissingOrFixedAutoFocus(characteristics) &&
+                                        characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) != 0f,
                                 preserveMacroClassification = isMacroByCharacteristics &&
                                         hasMissingOrFixedAutoFocus(characteristics)
                             )
@@ -747,7 +744,8 @@ class CameraDiscovery(private val context: Context) {
             CameraInfoWithZoom(
                 info = virtualInfo,
                 intrinsicZoomRatio = displayZoomRatio,
-                isMacro = config.isMacro
+                isMacro = config.isMacro,
+                hasAutoFocus = baseCamera.hasAutoFocus
             )
         }
     }
@@ -1235,6 +1233,16 @@ class CameraDiscovery(private val context: Context) {
             cameras = cameras,
             preferredMacroCameraId = preferredMacroCameraId
         )
+        // Resolve the main camera before same-focal-length deduplication can discard it.
+        val mainCameraCandidates = getMainCameraCandidates(adjustedCameras)
+        val selectedMainCameraId = mainCameraCandidates.firstOrNull {
+            isPreferredCameraId(it.info.cameraId, preferredMainCameraId)
+        }?.info?.cameraId ?: mainCameraCandidates.firstOrNull()?.info?.cameraId
+        PLog.d(
+            TAG,
+            "Main camera selection: preferred=$preferredMainCameraId, selected=$selectedMainCameraId, " +
+                    "candidates=${mainCameraCandidates.map { it.info.cameraId }}"
+        )
 
         // 分离微距镜头和普通镜头
         val macroCameras = preferCustomCameraForSameFocalLength(
@@ -1243,7 +1251,7 @@ class CameraDiscovery(private val context: Context) {
         )
         val normalCameras = preferCustomCameraForSameFocalLength(
             cameras = adjustedCameras.filter { !it.isMacro },
-            preferredMainCameraId = preferredMainCameraId
+            preferredMainCameraId = selectedMainCameraId
         )
 
         if (normalCameras.isEmpty()) {
@@ -1262,7 +1270,7 @@ class CameraDiscovery(private val context: Context) {
             val sorted = normalCameras.sortedBy { it.intrinsicZoomRatio }
 
             // 找到最接近 1.0 的作为主摄
-            val mainCameraIndex = findMainCameraIndex(sorted, preferredMainCameraId)
+            val mainCameraIndex = findMainCameraIndex(sorted, selectedMainCameraId)
 
             result.addAll(sorted.mapIndexed { index, camera ->
                 val lensType = when {
@@ -1278,6 +1286,22 @@ class CameraDiscovery(private val context: Context) {
         result.addAll(macroCameras.map { it.info.copy(lensType = LensType.BACK_MACRO) })
 
         return result
+    }
+
+    // Share eligibility and default priority with the settings list. Keep ID 0 selectable.
+    private fun getMainCameraCandidates(cameras: List<CameraInfoWithZoom>): List<CameraInfoWithZoom> {
+        return cameras
+            .filter {
+                !it.isMacro && !it.info.isVirtualIszLens && it.hasAutoFocus &&
+                        isSameFocalLength(it.intrinsicZoomRatio, 1f)
+            }
+            .sortedWith(
+                compareBy<CameraInfoWithZoom>(
+                    { it.info.cameraId == "0" },
+                    { it.info.cameraId.toIntOrNull() ?: Int.MAX_VALUE },
+                    { it.info.cameraId }
+                )
+            )
     }
 
     private fun findMainCameraIndex(
@@ -1406,7 +1430,9 @@ class CameraDiscovery(private val context: Context) {
         val candidateIsPreferredMacro = isPreferredCameraId(candidate.info.cameraId, preferredMacroCameraId)
         if (existingIsPreferredMacro != candidateIsPreferredMacro) return candidateIsPreferredMacro
 
-        if (isSameFocalLength(candidate.intrinsicZoomRatio, 1f)) {
+        if (isSameFocalLength(existing.intrinsicZoomRatio, 1f) ||
+            isSameFocalLength(candidate.intrinsicZoomRatio, 1f)
+        ) {
             val existingIsPreferred = existing.info.cameraId == preferredMainCameraId
             val candidateIsPreferred = candidate.info.cameraId == preferredMainCameraId
             if (existingIsPreferred != candidateIsPreferred) return candidateIsPreferred
@@ -1582,6 +1608,7 @@ class CameraDiscovery(private val context: Context) {
         val info: CameraInfo,
         val intrinsicZoomRatio: Float,
         val isMacro: Boolean,
+        val hasAutoFocus: Boolean,
         val preserveMacroClassification: Boolean = false
     )
 
