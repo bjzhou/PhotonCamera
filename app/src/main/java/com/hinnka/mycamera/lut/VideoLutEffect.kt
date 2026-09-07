@@ -11,6 +11,8 @@ import androidx.media3.effect.GlShaderProgram
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -27,6 +29,16 @@ class VideoLutEffect(
         private set
 
     private var shaderProgram: VideoLutShaderProgram? = null
+
+    private val _outputSize = MutableStateFlow<Size?>(null)
+
+    // Effect-space dimensions, after Media3 has applied input rotation and pixel aspect ratio.
+    // Keep these across pause/end-of-stream so preview layout never depends on a new video frame.
+    val outputSize = _outputSize.asStateFlow()
+
+    internal fun onOutputSizeConfigured(size: Size) {
+        _outputSize.value = size
+    }
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
         PLog.d("VideoLutEffect", "toGlShaderProgram called, useHdr: $useHdr, initialLut: ${lutConfig?.title}, recipeEnabled: ${recipeParams != null}")
@@ -755,7 +767,7 @@ private class VideoLutShaderProgram(
         PLog.d("VideoLutShaderProgram", "configure called, inputWidth: $inputWidth, inputHeight: $inputHeight")
         this.inputWidth = inputWidth.coerceAtLeast(1)
         this.inputHeight = inputHeight.coerceAtLeast(1)
-        return Size(inputWidth, inputHeight)
+        return Size(inputWidth, inputHeight).also(effect::onOutputSizeConfigured)
     }
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {

@@ -2124,9 +2124,15 @@ private fun VideoDetailPlayer(
     }
 
     // Maintain the video LUT effect
-    val videoLutEffect = remember {
+    val videoLutEffect = remember(photo.id, mediaUri) {
         PLog.d("VideoDetailPlayer", "Instantiating new VideoLutEffect.")
         VideoLutEffect(lutConfig, recipeParams)
+    }
+    val videoOutputSize by videoLutEffect.outputSize.collectAsState()
+    LaunchedEffect(videoOutputSize) {
+        videoOutputSize?.let { size ->
+            PLog.d("VideoDetailPlayer", "Effect output size: photo=${photo.id}, size=${size.width}x${size.height}")
+        }
     }
 
     // Update effect parameters dynamically on the GL pipeline without reconstruction
@@ -2184,6 +2190,13 @@ private fun VideoDetailPlayer(
                 PLog.d("VideoDetailPlayer", "Updating PlayerView with player.")
                 it.player = exoPlayer
                 it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                // With effects, Player.videoSize may remain UNKNOWN. Fit the Surface itself
+                // to the effect output so a paused/ended buffer has no baked-in letterboxing
+                // that would be stretched when autoRotate swaps the container dimensions.
+                videoOutputSize?.let { size ->
+                    it.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
+                        .setAspectRatio(size.width.toFloat() / size.height)
+                }
                 it.useController = true
                 it.controllerAutoShow = false
                 it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
