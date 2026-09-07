@@ -410,7 +410,9 @@ fun SettingsScreen(
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
     val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val availableDcps = viewModel.availableDcps
-    val availableRawNoiseProfiles = viewModel.availableRawNoiseProfiles
+    val availableRawNoiseProfiles = viewModel.availableRawNoiseProfiles.filterNot {
+        it.id == RawNoiseProfileManager.ADAPTIVE_PROFILE_ID
+    }
     val availableLuts = viewModel.availableLutList
     val availableFrames = viewModel.availableFrameList
     val previewThumbnail = viewModel.previewThumbnail
