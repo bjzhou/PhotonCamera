@@ -1486,6 +1486,8 @@ class LutImageProcessor(context: Context? = null) {
     }
 
     private fun ensureBloomPrograms() {
+        // Bloom composite copies the source before adding highlights, even when denoise is disabled.
+        ensureBitmapDenoisePassthroughProgram()
         if (bloomDownsampleFirstProgram == 0) {
             bloomDownsampleFirstProgram = createFragmentProgram(
                 Shaders.SIMPLE_VERTEX_SHADER,
@@ -2721,13 +2723,24 @@ class LutImageProcessor(context: Context? = null) {
 
     private fun renderLdrBloom(sourceTextureId: Int, width: Int, height: Int, bloomStrength: Float): Boolean {
         ensureBloomPrograms()
+        if (bitmapDenoisePassthroughProgram == 0 || bloomDownsampleFirstProgram == 0 ||
+            bloomDownsampleProgram == 0 || bloomUpsampleProgram == 0 || bloomCompositeProgram == 0
+        ) {
+            PLog.e(
+                TAG,
+                "Bloom programs unavailable: passthrough=$bitmapDenoisePassthroughProgram " +
+                    "first=$bloomDownsampleFirstProgram downsample=$bloomDownsampleProgram " +
+                    "upsample=$bloomUpsampleProgram composite=$bloomCompositeProgram"
+            )
+            return false
+        }
         if (!setupBloomFramebuffers(width, height)) {
             return false
         }
         if (!setupBloomOutputFramebuffer(width, height)) {
             return false
         }
-        if (bloomMipCount <= 0 || bloomDownsampleFirstProgram == 0 || bloomDownsampleProgram == 0 || bloomUpsampleProgram == 0 || bloomCompositeProgram == 0) {
+        if (bloomMipCount <= 0) {
             return false
         }
 
@@ -2781,9 +2794,6 @@ class LutImageProcessor(context: Context? = null) {
         val compositeMipLower = BloomLdrSettings.compositeMipLowerIndex(bloomMipCount, bloomStrength)
         val compositeMipUpper = BloomLdrSettings.compositeMipUpperIndex(bloomMipCount, bloomStrength)
         val compositeMipBlend = BloomLdrSettings.compositeMipBlend(bloomMipCount, bloomStrength)
-        if (bitmapDenoisePassthroughProgram == 0) {
-            return false
-        }
         renderTexturePassthrough(sourceTextureId, bloomOutputFboId, width, height)
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
