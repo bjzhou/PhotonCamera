@@ -14,6 +14,7 @@ internal object PreviewColorShader {
         }
         val needsOklab = variant.includeOklchDensity || variant.includeLchMixer
         val needsClassifiers = variant.includeLchMixer || variant.includeLutMask
+        val needsLogInput = variant.includeVideoLog || variant.includeExtendedLutCurves
         return """
             #version 300 es
             ${extension}
@@ -89,6 +90,7 @@ internal object PreviewColorShader {
             const float PI = 3.14159265359;
 
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
+            ${if (needsLogInput) LogInputGl.GLSL else ""}
             ${PreviewColorShaderModules.EXPOSURE}
             ${DirectFlashShader.GLSL}
             ${ThreeWayColorGradingShader.GLSL}
@@ -349,11 +351,14 @@ internal object PreviewColorShader {
                 }
                 """ else ""}
 
+                ${if (variant.includeVideoLog) """
                 if (uVideoLogEnabled) {
                     vec3 linearColor = srgbToLinear(max(color.rgb, vec3(0.0)));
+                    linearColor = prepareLogLinearInput(linearColor);
                     vec3 outputColorSpace = applyLutColorSpace(linearColor, uVideoColorSpace);
                     color.rgb = sanitizeColor(applyLutCurve(outputColorSpace, uVideoLogCurve));
                 }
+                """ else ""}
 
                 if (uLutEnabled && uLutIntensity > 0.0) {
                     vec3 lutInColor;
@@ -363,6 +368,7 @@ internal object PreviewColorShader {
                     } else {
                         vec3 linearRGB = srgbToLinear(max(color.rgb, vec3(0.0)));
                         effectiveLutIntensity *= lutMaskWeight(uLutMaskType, linearRGB);
+                        ${if (needsLogInput) "linearRGB = prepareLutLinearInput(linearRGB, uLutCurve);" else ""}
                         vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
                         lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
                     }

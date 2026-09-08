@@ -72,6 +72,7 @@ class LutImageProcessor(context: Context? = null) {
     private var imageTextureId = 0
     private var lutTextureId = 0
     private val basicToneTextures = BasicToneGlTextures()
+    private val logInput = LogInputGl()
     private var framebufferId = 0
     private var outputTextureId = 0
     private var outputFramebufferWidth = 0
@@ -877,6 +878,7 @@ class LutImageProcessor(context: Context? = null) {
         // 绘制
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(program)
+        logInput.bind(GLES30.glGetUniformLocation(program, "uInverseAcr3Texture"), textureUnit = 7)
 
         // 设置纹理 uniform
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -3053,6 +3055,7 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
         }
         basicToneTextures.release()
+        logInput.release()
         releaseOutputFramebuffer()
         if (pboId != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
@@ -3272,6 +3275,7 @@ class LutImageProcessor(context: Context? = null) {
             }
 
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
+            ${LogInputGl.GLSL}
             ${PreviewColorShaderModules.EXPOSURE}
             ${DirectFlashShader.GLSL}
             ${ThreeWayColorGradingShader.GLSL}
@@ -3595,13 +3599,15 @@ class LutImageProcessor(context: Context? = null) {
                 if (uLutEnabled && uLutIntensity > 0.0) {
                     bool isP3 = (uInputColorSpace == 1);
                     vec3 linearInput = srgbToLinear(color.rgb);
+                    vec3 lutLinearInput = prepareLutLinearInput(linearInput, uLutCurve);
                     
                     if (isP3) {
                          linearInput = mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * linearInput;
+                         lutLinearInput = mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * lutLinearInput;
                     }
                     float effectiveLutIntensity = uLutIntensity * lutMaskWeight(uLutMaskType, linearInput);
 
-                    vec3 colorSpaceRGB = applyLutColorSpace(linearInput, uLutColorSpace);
+                    vec3 colorSpaceRGB = applyLutColorSpace(lutLinearInput, uLutColorSpace);
                     vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
                     
                     float scale = (uLutSize - 1.0) / uLutSize;

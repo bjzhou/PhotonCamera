@@ -178,6 +178,7 @@ private class VideoLutShaderProgram(
             }
 
             ${DirectFlashShader.GLSL}
+            ${LogInputGl.GLSL}
             ${ThreeWayColorGradingShader.GLSL}
 
             float sanitizeFloat(float value) {
@@ -655,11 +656,13 @@ private class VideoLutShaderProgram(
                 if (uLutEnabled != 0 && uLutIntensity > 0.0) {
                     bool isP3 = (uInputColorSpace == 1);
                     vec3 linearInput = srgbToLinear(color.rgb);
+                    vec3 lutLinearInput = prepareLutLinearInput(linearInput, uLutCurve);
                     if (isP3) {
                          linearInput = mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * linearInput;
+                         lutLinearInput = mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * lutLinearInput;
                     }
                     float effectiveLutIntensity = uLutIntensity * lutMaskWeight(uLutMaskType, linearInput);
-                    vec3 colorSpaceRGB = applyLutColorSpace(linearInput, uLutColorSpace);
+                    vec3 colorSpaceRGB = applyLutColorSpace(lutLinearInput, uLutColorSpace);
                     vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
                     
                     float scale = (uLutSize - 1.0) / uLutSize;
@@ -733,6 +736,7 @@ private class VideoLutShaderProgram(
     private var lutTextureId = 0
     private var curveTextureId = 0
     private val basicToneTextures = BasicToneGlTextures()
+    private val logInput = LogInputGl()
     private var lastLutConfig: LutConfig? = null
     private var lastRecipeParams: ColorRecipeParams? = null
 
@@ -805,6 +809,7 @@ private class VideoLutShaderProgram(
         }
 
         GLES30.glUseProgram(programId)
+        logInput.bind(GLES30.glGetUniformLocation(programId, "uInverseAcr3Texture"), textureUnit = 4)
 
         var previousVao = 0
         if (isGles3Context) {
@@ -1088,6 +1093,7 @@ private class VideoLutShaderProgram(
         deleteLutTexture()
         deleteCurveTexture()
         basicToneTextures.release()
+        logInput.release()
         if (positionVbo != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(positionVbo), 0)
             positionVbo = 0

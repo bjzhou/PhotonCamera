@@ -1974,17 +1974,23 @@ class Camera2Controller(private val context: Context) {
             return _state.value.currentPreviewSize
         }
 
+        val requestedConfig = _state.value.videoConfig
         val snapshot = VideoCapabilitiesResolver.resolve(
             characteristics = resolvedCharacteristics,
-            requestedConfig = _state.value.videoConfig,
-            availableTonemapModes = availableTonemapModes,
-            availableVideoStabilizationModes = availableVideoStabilizationModes,
-            availableOpticalStabilizationModes = availableOpticalStabilizationModes,
+            requestedConfig = requestedConfig,
             algorithmicStabilizationSupported =
                 realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics) &&
                     !isEnhancedStabilizationUnavailableForCurrentCamera(),
-            isFlashSupported = isFlashSupported
         )
+        if (snapshot.config.logProfile != requestedConfig.logProfile) {
+            PLog.w(
+                TAG,
+                "Video Log capability resolved: camera=$openCameraId, " +
+                    "requested=${requestedConfig.logProfile.name}, resolved=${snapshot.config.logProfile.name}, " +
+                    "available=${snapshot.capabilities.availableLogProfiles.map { it.name }}, " +
+                    "lifecycle=$cameraDeviceLifecycle"
+            )
+        }
 
         if (_state.value.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) {
             val enhancedInput = snapshot.capabilities
@@ -6387,6 +6393,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setVideoLogProfile(logProfile: VideoLogProfile) {
+        val previousProfile = _state.value.videoConfig.logProfile
         val resolvedProfile = if (_state.value.captureMode == CaptureMode.VIDEO) {
             logProfile
         } else {
@@ -6394,6 +6401,15 @@ class Camera2Controller(private val context: Context) {
         }
         _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(logProfile = resolvedProfile))
         refreshVideoCapabilities()
+        val appliedProfile = _state.value.videoConfig.logProfile
+        if (previousProfile != appliedProfile || logProfile != appliedProfile) {
+            PLog.d(
+                TAG,
+                "Video Log selection: requested=${logProfile.name}, previous=${previousProfile.name}, " +
+                    "applied=${appliedProfile.name}, mode=${_state.value.captureMode}, " +
+                    "lifecycle=$cameraDeviceLifecycle"
+            )
+        }
         previewRequestBuilder?.apply {
             applyBaseCameraSettings(this, isCapture = false)
             updatePreview()

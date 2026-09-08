@@ -853,6 +853,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(locations.programId)
+        colorProgramCache.bindLogInput(locations)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(sourceTextureTarget, sourceTextureId)

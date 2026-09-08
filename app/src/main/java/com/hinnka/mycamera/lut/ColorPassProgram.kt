@@ -18,6 +18,7 @@ internal data class ColorPassLocations(
     val uVideoLogEnabledLocation: Int,
     val uVideoLogCurveLocation: Int,
     val uVideoColorSpaceLocation: Int,
+    val uInverseAcr3TextureLocation: Int,
     val uColorRecipeEnabledLocation: Int,
     val uExposureLocation: Int,
     val uContrastLocation: Int,
@@ -64,6 +65,11 @@ internal data class ColorPassLocations(
 
 internal class PreviewColorProgramCache {
     private val programs = mutableMapOf<PreviewColorShaderVariant, ColorPassLocations>()
+    private val logInput = LogInputGl()
+
+    fun bindLogInput(locations: ColorPassLocations) {
+        logInput.bind(locations.uInverseAcr3TextureLocation, textureUnit = 4)
+    }
 
     fun get(variant: PreviewColorShaderVariant): ColorPassLocations? {
         programs[variant]?.let { return it }
@@ -95,11 +101,13 @@ internal class PreviewColorProgramCache {
     }
 
     fun release() {
+        logInput.release()
         programs.values.forEach { GlUtils.deleteProgram(it.programId) }
         programs.clear()
     }
 
     fun reset() {
+        logInput.reset()
         programs.clear()
     }
 
@@ -119,6 +127,7 @@ internal class PreviewColorProgramCache {
             uVideoLogEnabledLocation = GLES30.glGetUniformLocation(program, "uVideoLogEnabled"),
             uVideoLogCurveLocation = GLES30.glGetUniformLocation(program, "uVideoLogCurve"),
             uVideoColorSpaceLocation = GLES30.glGetUniformLocation(program, "uVideoColorSpace"),
+            uInverseAcr3TextureLocation = GLES30.glGetUniformLocation(program, "uInverseAcr3Texture"),
             uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(program, "uColorRecipeEnabled"),
             uExposureLocation = GLES30.glGetUniformLocation(program, "uExposure"),
             uContrastLocation = GLES30.glGetUniformLocation(program, "uContrast"),

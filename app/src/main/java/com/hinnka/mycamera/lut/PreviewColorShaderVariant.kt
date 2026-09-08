@@ -18,6 +18,7 @@ internal data class PreviewColorShaderVariant(
     val includeLutMask: Boolean = false,
     val includeJpegInputToneCurve: Boolean = false,
     val includeSpatialRecipeEffects: Boolean = false,
+    val includeVideoLog: Boolean = false,
 ) {
     companion object {
         fun forPass(
@@ -38,6 +39,7 @@ internal data class PreviewColorShaderVariant(
                 includePreLogFilmGrain = videoLogEnabled &&
                     !lutEnabled &&
                     params.filmGrain > EPSILON,
+                includeVideoLog = videoLogEnabled,
             )
         }
 

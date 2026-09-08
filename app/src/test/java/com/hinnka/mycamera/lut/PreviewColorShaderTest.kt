@@ -71,6 +71,7 @@ class PreviewColorShaderTest {
             includeOklchDensity = false,
             includeLchMixer = false,
             includePreLogFilmGrain = true,
+            includeVideoLog = true,
         )
         val source = PreviewColorShader.source(variant)
 

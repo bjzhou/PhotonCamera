@@ -21,12 +21,20 @@ object VideoCapabilitiesResolver {
     fun resolve(
         characteristics: CameraCharacteristics,
         requestedConfig: VideoConfig,
-        availableTonemapModes: IntArray = intArrayOf(),
-        availableVideoStabilizationModes: IntArray = intArrayOf(),
-        availableOpticalStabilizationModes: IntArray = intArrayOf(),
         algorithmicStabilizationSupported: Boolean = false,
-        isFlashSupported: Boolean = false
     ): VideoCapabilitySnapshot {
+        // Resolve from one metadata snapshot. Session caches are cleared while reopening,
+        // which must not turn a supported user selection into an unsupported capability.
+        val availableTonemapModes = characteristics.get(
+            CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES
+        ) ?: intArrayOf()
+        val availableVideoStabilizationModes = characteristics.get(
+            CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES
+        ) ?: intArrayOf()
+        val availableOpticalStabilizationModes = characteristics.get(
+            CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION
+        ) ?: intArrayOf()
+        val isFlashSupported = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val previewOutputSizes = streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
         val yuvOutputSizes = streamConfigMap?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
