@@ -102,10 +102,11 @@ internal object RawGainmapMath {
     ): Float {
         val safeHdr = hdrReferenceLuma.coerceAtLeast(0f)
         val lutGain = lutLuminanceGain.coerceAtLeast(0f)
-        val hdrBase = safeHdr.coerceAtMost(1f)
-        val hdrHeadroom = (safeHdr - 1f).coerceAtLeast(0f)
-        val adjustedBase = ((hdrBase + offset) * lutGain - offset).coerceAtLeast(0f)
-        return adjustedBase + hdrHeadroom
+        // The sidecar is (SDR_after + offset) / (SDR_before + offset).
+        // Applying it to the complete reference preserves the RAW HDR/SDR ratio.
+        // Splitting at absolute white changes that ratio according to the LUT gain
+        // and can make a darker branch brighter than the surrounding sky.
+        return ((safeHdr + offset) * lutGain - offset).coerceAtLeast(0f)
     }
 
     fun reconstructLinear(

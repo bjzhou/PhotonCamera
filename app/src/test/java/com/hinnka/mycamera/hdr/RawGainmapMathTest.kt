@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.hdr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RawGainmapMathTest {
@@ -99,12 +100,38 @@ class RawGainmapMathTest {
     }
 
     @Test
-    fun keepsExtendedHdrHeadroomLinearAfterLutAdjustedBase() {
-        val lutGain = RawGainmapMath.computeLutLuminanceGain(0.5f, 0.35f)
-        val adjustedWhite = RawGainmapMath.applyLutLuminanceGain(lutGain, 1.0f)
-        val adjustedExtended = RawGainmapMath.applyLutLuminanceGain(lutGain, 2.25f)
+    fun preservesRawHdrRatioAcrossLutEditsAndReferenceWhite() {
+        val offset = RawGainmapMath.OFFSET
+        for (before in listOf(0.1f, 0.5f, 0.6f, 1f)) {
+            for (after in listOf(0.05f, 0.35f, 0.85f, 1f)) {
+                for (ratio in listOf(1f, 1.5f, 2f, 3.5f)) {
+                    val hdr = (before + offset) * ratio - offset
+                    val adjusted = RawGainmapMath.applyLutLuminanceGain(
+                        RawGainmapMath.computeLutLuminanceGain(before, after),
+                        hdr,
+                    )
+                    assertEquals(ratio, (adjusted + offset) / (after + offset), 0.00001f)
+                }
+            }
+        }
+    }
 
-        assertEquals(1.25f, adjustedExtended - adjustedWhite, 0.00001f)
+    @Test
+    fun brightLutShoulderDoesNotInvertBranchAgainstSky() {
+        // Both the RAW reference and the LUT keep the branch darker than the sky.
+        // Splitting HDR at absolute white applies the branch's larger LUT gain to
+        // too much of its reference and reverses this ordering (about 1.70 > 1.63).
+        val offset = RawGainmapMath.OFFSET
+        fun render(before: Float, after: Float): Float = RawGainmapMath.applyLutLuminanceGain(
+            RawGainmapMath.computeLutLuminanceGain(before, after),
+            (before + offset) * 2f - offset,
+        )
+        val branch = render(0.5f, 0.85f)
+        val sky = render(0.6f, 0.86f)
+
+        assertTrue("Branch $branch must remain darker than sky $sky", branch < sky)
+        assertEquals(1.7001f, branch, 0.00001f)
+        assertEquals(1.7201f, sky, 0.00001f)
     }
 
     @Test

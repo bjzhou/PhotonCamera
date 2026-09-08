@@ -95,7 +95,7 @@ class GpuReferenceGainmapProducer : GainmapProducer {
                 PLog.e(TAG, "GPU gainmap failed for ${source.sourceKind}", it)
             }.getOrNull()
         }
-        PLog.d(TAG, "GPU gainmap build took ${elapsed}ms, source=${source.sourceKind}, success=${result != null}")
+        PLog.d(TAG, "GPU gainmap build took ${elapsed}ms, source=${source.sourceKind}, lutTransfer=full_reference, success=${result != null}")
         result
     }
 
@@ -504,9 +504,10 @@ class GpuReferenceGainmapProducer : GainmapProducer {
         """.trimIndent()
 
         /**
-         * RAW path: consume the LUT stack's linear-light luminance sidecar, transfer it onto the
-         * 0..1 base of the linear-sRGB HDR reference, preserve the >1 headroom, and encode one
-         * shared gain. Playback retains both LUT color and LUT luminance rendering.
+         * Transfer the LUT's luminance ratio onto the complete linear-sRGB HDR reference.
+         * With sidecar = (SDR_after + offset) / (SDR_before + offset), the encoded gain is
+         * (HDR_before + offset) / (SDR_before + offset). LUT rendering changes the playback
+         * base without introducing a second HDR contrast curve at absolute white.
          */
         private val RAW_LUMA_RESIDUAL_FRAGMENT_SHADER = """
             #version 300 es
@@ -546,13 +547,10 @@ class GpuReferenceGainmapProducer : GainmapProducer {
                     texture(uLutLuminanceGainTexture, vTexCoord).r,
                     0.0
                 );
-                float hdrBaseLuma = min(hdrLuma, 1.0);
-                float hdrHeadroomLuma = max(hdrLuma - 1.0, 0.0);
-                float lutAdjustedHdrBaseLuma = max(
-                    (hdrBaseLuma + uOffset) * lutLumaGain - uOffset,
+                float targetHdrLuma = max(
+                    (hdrLuma + uOffset) * lutLumaGain - uOffset,
                     0.0
                 );
-                float targetHdrLuma = lutAdjustedHdrBaseLuma + hdrHeadroomLuma;
                 float candidateRatio = clamp(
                     (targetHdrLuma + uOffset) / (sdrLuma + uOffset),
                     uMinGainRatio,
