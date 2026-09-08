@@ -7320,6 +7320,9 @@ class Camera2Controller(private val context: Context) {
         livePhotoTorchOffRunnable?.let { handler?.removeCallbacks(it) }
         livePhotoTorchOffRunnable = null
         livePhotoVideoStartTimestampUs = null
+        if (_state.value.useLivePhoto && !usesTorchForLivePhotoCapture()) {
+            snapshotLivePhoto()
+        }
 
         val baseExposureResult = lastCaptureResult
         // 关键修复：每次拍照前重置拍摄结果
@@ -8347,6 +8350,12 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun resetPreviewAfterCapture(keepLivePhotoTorch: Boolean = false) {
+        if (!keepLivePhotoTorch) {
+            if (!isLivePhotoTorchCaptureActive) {
+                livePhotoVideoStartTimestampUs?.let(livePhotoRecorder::cancelCapture)
+            }
+            livePhotoVideoStartTimestampUs = null
+        }
         finishLivePhotoTorchCapture(keepLivePhotoTorch)
         // 重置拍照状态机
         clearPrecaptureTracking()
@@ -8899,7 +8908,7 @@ class Camera2Controller(private val context: Context) {
      */
     fun snapshotLivePhoto() {
         if (usesTorchForLivePhotoCapture()) return
-        livePhotoRecorder.snapshot()
+        livePhotoVideoStartTimestampUs = livePhotoRecorder.snapshot()
     }
 
     /**

@@ -38,7 +38,7 @@ data class CaptureInfo(
     
     // 时间
     val captureTime: Long = System.currentTimeMillis(),
-    // Exact first video keyframe for a torch Live Photo; null preserves normal pre-roll.
+    // Earliest retained Live Photo keyframe, kept until the asynchronous video export.
     val livePhotoVideoStartTimestampUs: Long? = null,
     
     // GPS（可选）

@@ -2144,10 +2144,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     targetCount = it.multipleExposureCount
                 )
                 // 同步 Live Photo 设置到相机控制器
-                cameraController.setUseLivePhoto(
-                    it.useLivePhoto && !effectiveUseRaw && !effectiveUseJpgMax &&
-                        it.captureMode == CaptureMode.PHOTO
-                )
+                cameraController.setUseLivePhoto(shouldEnableLivePhoto(it))
                 // 同步 Ultra HDR 设置到相机控制器
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
                 // 同步 P010 设置到相机控制器
@@ -2291,10 +2288,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setHdrPlusBracketExposureEnabled(
                     prefs.hdrPlusBracketExposureEnabled
                 )
-                cameraController.setUseLivePhoto(
-                    prefs.useLivePhoto && !prefs.useRaw && !prefs.useJpgMax &&
-                        prefs.captureMode == CaptureMode.PHOTO
-                )
+                cameraController.setUseLivePhoto(shouldEnableLivePhoto(prefs))
                 // 应用保存的虚拟光圈
                 applyDefaultVirtualAperture(prefs.defaultVirtualAperture)
             } else {
@@ -3263,7 +3257,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     delay(1500)
                     cameraController.setCapturingLivePhoto(false)
                 }
-                cameraController.snapshotLivePhoto()
             }
             cameraController.capture()
         }
@@ -4532,6 +4525,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun shouldEnableLivePhoto(prefs: UserPreferences): Boolean {
+        // RAWmax supports Live Photo. A saved JPGmax preference is inactive in RAW mode.
+        val activeUseJpgMax = prefs.useJpgMax && !prefs.useRaw
+        return prefs.useLivePhoto && !activeUseJpgMax && !prefs.useMultipleExposure &&
+            prefs.captureMode == CaptureMode.PHOTO
+    }
+
     /**
      * 设置是否启用 Live Photo
      */
@@ -5520,7 +5520,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     capturePortraitMask = capturePortraitMask,
                 )
             }
-            PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+            PLog.d(TAG, "Image save scheduled: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
             _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
@@ -5964,7 +5964,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     rawMaxMergeMethod = rawMaxMergeMethod,
                 )
             }
-            PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+            PLog.d(TAG, "Image save scheduled: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
             _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
