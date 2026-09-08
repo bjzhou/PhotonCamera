@@ -19,6 +19,8 @@ internal class RawOutputPass(
         val targetTextureId: Int,
         val targetWidth: Int = bounds.width(),
         val targetHeight: Int = bounds.height(),
+        /** When present, [textureId] contains HDR ratios applied to this finalized sRGB base. */
+        val hdrSdrBaseTextureId: Int? = null,
     )
 
     data class Output(val textureId: Int, val width: Int, val height: Int)
@@ -79,6 +81,7 @@ internal class RawOutputPass(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, input.textureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(activeProgram, "uTexture"), 0)
+        bindHdrBase(activeProgram, input.hdrSdrBaseTextureId, input.textureId)
         quad.draw(activeProgram)
         RawGlesProgram.logErrors("RawOutputPass.render")
         return Output(input.targetTextureId, input.targetWidth, input.targetHeight)
@@ -100,9 +103,21 @@ internal class RawOutputPass(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(activeProgram, "uTexture"), 0)
+        bindHdrBase(activeProgram, null, textureId)
         quad.draw(activeProgram)
         RawGlesProgram.logErrors("RawOutputPass.copy")
         return Output(targetTextureId, width, height)
+    }
+
+    private fun bindHdrBase(program: Int, sdrBaseTextureId: Int?, sourceTextureId: Int) {
+        require(sdrBaseTextureId == null || sdrBaseTextureId != 0)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uApplyHdrGain"),
+            if (sdrBaseTextureId != null) 1 else 0,
+        )
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sdrBaseTextureId ?: sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSdrBase"), 1)
     }
 
     fun release() {
@@ -128,9 +143,24 @@ internal class RawOutputPass(
             out vec4 fragColor;
 
             uniform sampler2D uTexture;
+            uniform sampler2D uSdrBase;
+            uniform int uApplyHdrGain;
+
+            vec3 srgbToLinear(vec3 color) {
+                return mix(
+                    color / 12.92,
+                    pow((color + 0.055) / 1.055, vec3(2.4)),
+                    step(vec3(0.04045), color)
+                );
+            }
 
             void main() {
-                fragColor = texture(uTexture, vTexCoord);
+                vec4 source = texture(uTexture, vTexCoord);
+                if (uApplyHdrGain != 0) {
+                    vec3 sdrLinear = srgbToLinear(texture(uSdrBase, vTexCoord).rgb);
+                    source = vec4(sdrLinear * source.r, 1.0);
+                }
+                fragColor = source;
             }
         """.trimIndent()
     }

@@ -77,7 +77,7 @@ internal abstract class RawRenderingEngineToneAlgorithm(
 
     fun renderHdrReference(
         input: RawEngineTonePass.Input,
-        sdrLinearTextureId: Int,
+        sceneExposureGain: Float,
         coordinateInput: RawEngineTonePass.HdrCoordinateInput?,
     ): RawEngineTonePass.Output? {
         val activeProgram = ensureHdrReferenceProgram()
@@ -91,12 +91,6 @@ internal abstract class RawRenderingEngineToneAlgorithm(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, input.textureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(activeProgram, "uInputTexture"), 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + HDR_SDR_LINEAR_TEXTURE_UNIT)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sdrLinearTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(activeProgram, "uHdrSdrLinearTexture"),
-            HDR_SDR_LINEAR_TEXTURE_UNIT,
-        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + HDR_BASE_CURVE_TEXTURE_UNIT)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdrBaseCurveTextureId)
         GLES30.glUniform1i(
@@ -105,6 +99,15 @@ internal abstract class RawRenderingEngineToneAlgorithm(
         )
         bindSharedPipelineResources(activeProgram, input)
         bindHdrCoordinateInput(activeProgram, input, coordinateInput)
+        require(sceneExposureGain.isFinite() && sceneExposureGain > 0f)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(activeProgram, "uHdrSceneExposureGain"),
+            sceneExposureGain,
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uHdrCurveExtendsBase"),
+            if (curveExtension.extendsBaseCurve) 1 else 0,
+        )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(activeProgram, "uHdrCurveJoinInput"),
             curveExtension.joinInput,
@@ -138,12 +141,6 @@ internal abstract class RawRenderingEngineToneAlgorithm(
         GLES30.glUniform1i(
             GLES30.glGetUniformLocation(activeProgram, "uHdrBaseCurveTexture"),
             HDR_BASE_CURVE_TEXTURE_UNIT,
-        )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + HDR_SDR_LINEAR_TEXTURE_UNIT)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sdrLinearTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(activeProgram, "uHdrSdrLinearTexture"),
-            HDR_SDR_LINEAR_TEXTURE_UNIT,
         )
         if (coordinateInput != null) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + HDR_COORDINATE_TEXTURE_UNIT)
@@ -274,7 +271,7 @@ internal abstract class RawRenderingEngineToneAlgorithm(
                     "RAW HDR curve engine=${input.colorEngine} " +
                         "join=${curve.joinInput}/${curve.joinOutput} " +
                         "joinSlope=${curve.joinSlope} white=${curve.whiteOutput} " +
-                        "whiteSlope=${curve.whiteSlope}",
+                        "whiteSlope=${curve.whiteSlope} extendsBase=${curve.extendsBaseCurve}",
                 )
             }
     }
@@ -458,6 +455,5 @@ internal abstract class RawRenderingEngineToneAlgorithm(
         private const val TAG = "RawRenderingEngineToneAlgorithm"
         private const val HDR_COORDINATE_TEXTURE_UNIT = 2
         private const val HDR_BASE_CURVE_TEXTURE_UNIT = 4
-        private const val HDR_SDR_LINEAR_TEXTURE_UNIT = 5
     }
 }

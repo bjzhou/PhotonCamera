@@ -29,6 +29,7 @@ import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawHdrRenderResult
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawPhotonHdrMetadata
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -573,6 +574,9 @@ class PhotoProcessor(
             context = context,
             dngFilePath = dngPath,
             includeHdrReference = true,
+            photonHdrRatio = RawPhotonHdrMetadata.read(metadata.customProperties),
+            photonSourceToShortGain = RawPhotonHdrMetadata.readFinalShortGain(metadata.customProperties),
+            photonHdrNetPostExposureEv = RawPhotonHdrMetadata.readPostExposureEv(metadata.customProperties),
             aspectRatio = resolveRawAspectRatio(metadata),
             cropRegion = metadata.cropRegion,
             rotation = metadata.rotation,

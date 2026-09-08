@@ -5,13 +5,14 @@ package com.hinnka.mycamera.raw
  *
  * The engine pass owns the shader and all engine-specific resources. This wrapper keeps the HDR
  * branch explicit at the processor level without duplicating DCP, exposure, PGTM, or tone logic.
+ * The output is a scalar HDR/SDR ratio; RawOutputPass applies it to the finalized SDR color.
  */
 internal class RawHdrReferencePass(
     private val engineTonePass: RawEngineTonePass,
 ) {
     data class Input(
         val engineInput: RawEngineTonePass.Input,
-        val sdrLinearTextureId: Int,
+        val sceneExposureGain: Float,
         val coordinateInput: RawEngineTonePass.HdrCoordinateInput? = null,
     )
 
@@ -22,7 +23,7 @@ internal class RawHdrReferencePass(
     fun render(input: Input): Output? {
         return engineTonePass.renderHdrReference(
             input = input.engineInput,
-            sdrLinearTextureId = input.sdrLinearTextureId,
+            sceneExposureGain = input.sceneExposureGain,
             coordinateInput = input.coordinateInput,
         )?.let { Output(it.textureId, it.width, it.height) }
     }

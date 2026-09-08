@@ -2402,6 +2402,9 @@ object GalleryManager {
                 processor.processDngBufferForHdrSources(
                     context = context,
                     includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
+                    photonHdrRatio = preparedProfile.hdrRatio,
+                    photonSourceToShortGain = preparedProfile.finalShortGain,
+                    photonHdrNetPostExposureEv = preparedProfile.hdrNetPostExposureEv,
                     rawData = rawBuffer.duplicate(),
                     width = rawWidth,
                     height = rawHeight,
@@ -3697,6 +3700,9 @@ object GalleryManager {
                     val inMemoryResult = processor.processDngBufferForHdrSources(
                         context = context,
                         includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
+                        photonHdrRatio = dngProfilePreparation.hdrRatio,
+                        photonSourceToShortGain = dngProfilePreparation.finalShortGain,
+                        photonHdrNetPostExposureEv = dngProfilePreparation.hdrNetPostExposureEv,
                         rawData = null,
                         width = finalStackResult.width,
                         height = finalStackResult.height,

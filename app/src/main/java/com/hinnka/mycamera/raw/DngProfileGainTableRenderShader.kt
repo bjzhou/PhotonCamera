@@ -74,26 +74,34 @@ internal object DngProfileGainTableRenderShader {
 
         vec3 applyProfileGainTableMapWithLinearHighlights(
             vec3 profileRgb,
-            float linearStart
+            float linearStart,
+            float exposureGain,
+            float sceneExposureGain
         ) {
             if (uProfileGainEnabled == 0) return profileRgb;
-            // PGTM is a scalar local response, but a compressed table does not imply that its
-            // gain itself decreases. Build the extension in the pre-gamma linear input domain:
-            // preserve the exact mapped value at the shoulder, reach an unattenuated (or locally
-            // boosted) white, then continue with that positive linear white slope.
-            float linearInput = profileGainTableLinearInput(profileRgb);
-            float tableInput = pow(clamp(linearInput, 0.0, 1.0), uProfileGainGamma);
-            float shoulderTableInput = clamp(linearStart, 0.0, 1.0);
-            if (tableInput <= shoulderTableInput) {
+            // The N axis is an arbitrary weighted lookup coordinate. HDRNet stores short-
+            // exposure values there, independently of render exposure. Test the shoulder in
+            // profile RGB at the HDR scene exposure, then map its anchors back onto N along
+            // this pixel's RGB ray. SDR preparation retains its own render exposure.
+            float linearInput = max(max(profileRgb.r, profileRgb.g), profileRgb.b) * sceneExposureGain;
+            float tableLinearInput = profileGainTableLinearInput(profileRgb);
+            float tableInput = pow(clamp(tableLinearInput, 0.0, 1.0), uProfileGainGamma);
+            float shoulderLinearInput = clamp(linearStart, 0.0, 1.0);
+            if (linearInput <= shoulderLinearInput) {
                 return profileRgb * profileGainTableGainAtInput(tableInput);
             }
 
-            float inverseGamma = 1.0 / max(uProfileGainGamma, 0.000001);
-            float shoulderLinearInput = pow(shoulderTableInput, inverseGamma);
+            float tableInputScale = tableLinearInput / linearInput;
+            float shoulderTableInput = pow(
+                clamp(shoulderLinearInput * tableInputScale, 0.0, 1.0), uProfileGainGamma);
             float shoulderGain = profileGainTableGainAtInput(shoulderTableInput);
             float shoulderOutput = shoulderLinearInput * shoulderGain;
-            float mappedWhiteGain = profileGainTableGainAtInput(1.0);
-            float whiteGain = max(max(shoulderGain, mappedWhiteGain), 1.0);
+            float whiteTableInput = pow(clamp(tableInputScale, 0.0, 1.0), uProfileGainGamma);
+            float mappedWhiteGain = profileGainTableGainAtInput(whiteTableInput);
+            // PGTM gains are applied before render exposure. Reconstruct the captured long
+            // exposure, not sensor white: undo the pending render gain in this multiplier.
+            float recoveryWhiteGain = sceneExposureGain / exposureGain;
+            float whiteGain = max(max(shoulderGain, mappedWhiteGain), recoveryWhiteGain);
             float recoverySlope = (whiteGain - shoulderOutput) /
                 max(1.0 - shoulderLinearInput, 0.000001);
             float extendedOutput = linearInput <= 1.0

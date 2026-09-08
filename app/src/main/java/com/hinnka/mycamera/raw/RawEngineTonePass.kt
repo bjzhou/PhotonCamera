@@ -53,11 +53,11 @@ internal class RawEngineTonePass(
 
     fun renderHdrReference(
         input: Input,
-        sdrLinearTextureId: Int,
+        sceneExposureGain: Float,
         coordinateInput: HdrCoordinateInput?,
     ): Output? = algorithmFor(input.colorEngine).renderHdrReference(
         input = input,
-        sdrLinearTextureId = sdrLinearTextureId,
+        sceneExposureGain = sceneExposureGain,
         coordinateInput = coordinateInput,
     )
 
@@ -136,18 +136,19 @@ internal class RawEngineTonePass(
 
             ${DngProfileGainTableRenderShader.GLSL}
 
-            uniform sampler2D uHdrSdrLinearTexture;
             uniform sampler2D uHdrBaseCurveTexture;
             uniform sampler2D uHdrCoordinateTexture;
             uniform int uHdrInputIsPreparedEngineRgb;
             uniform mat3 uHdrCoordinateProfileToEngineTransform;
             uniform float uHdrCoordinateExposureGain;
+            uniform float uHdrSceneExposureGain;
             uniform float uHdrCurveJoinInput;
             uniform float uHdrCurveJoinOutput;
             uniform float uHdrCurveJoinSlope;
             uniform float uHdrCurveQuadratic;
             uniform float uHdrCurveWhiteOutput;
             uniform float uHdrCurveWhiteSlope;
+            uniform int uHdrCurveExtendsBase;
 
             const float HDR_SCENE_WHITE = 1.0;
             const float HDR_EPSILON = 0.000001;
@@ -173,6 +174,9 @@ internal class RawEngineTonePass(
                 }
                 if (value <= HDR_SCENE_WHITE) {
                     float distance = value - uHdrCurveJoinInput;
+                    if (uHdrCurveExtendsBase != 0) {
+                        return sampleHdrBaseCurve(value) + uHdrCurveQuadratic * distance * distance;
+                    }
                     return uHdrCurveJoinOutput + uHdrCurveJoinSlope * distance +
                         uHdrCurveQuadratic * distance * distance;
                 }
@@ -192,7 +196,9 @@ internal class RawEngineTonePass(
                     vec3 coordinateProfileColor = texture(uHdrCoordinateTexture, vTexCoord).rgb;
                     coordinateProfileColor = applyProfileGainTableMapWithLinearHighlights(
                         coordinateProfileColor,
-                        HDR_PGTM_LINEAR_START
+                        HDR_PGTM_LINEAR_START,
+                        uHdrCoordinateExposureGain,
+                        uHdrSceneExposureGain
                     );
                     hdrEngineColor = uHdrCoordinateProfileToEngineTransform *
                         (coordinateProfileColor * uHdrCoordinateExposureGain);
@@ -201,11 +207,12 @@ internal class RawEngineTonePass(
                     hdrEngineColor = prepareEngineInput(
                         applyProfileGainTableMapWithLinearHighlights(
                             profileColor,
-                            HDR_PGTM_LINEAR_START
+                            HDR_PGTM_LINEAR_START,
+                            uProfileExposureLinearGain,
+                            uHdrSceneExposureGain
                         )
                     );
                 }
-                vec3 sdrLinear = max(texture(uHdrSdrLinearTexture, vTexCoord).rgb, vec3(0.0));
                 float sdrToneInput = max(
                     max(sdrEngineColor.r, sdrEngineColor.g),
                     sdrEngineColor.b
@@ -215,14 +222,15 @@ internal class RawEngineTonePass(
                     hdrEngineColor.b
                 );
                 float baseCurveOutput = max(sampleHdrBaseCurve(sdrToneInput), HDR_EPSILON);
-                // The exact SDR is still the color base. This scalar only replaces PGTM's
-                // highlight shoulder and the engine shoulder; it can never reduce SDR output.
+                // Replace only the PGTM/engine shoulder here. The output stage applies this
+                // scalar to the finalized SDR after sharpening, so detail processing cannot
+                // accidentally become part of the HDR residual.
                 float extendedCurveOutput = max(
                     applyHdrExtendedCurve(hdrToneInput),
                     baseCurveOutput
                 );
                 float gain = extendedCurveOutput / baseCurveOutput;
-                fragColor = vec4(sdrLinear * gain, 1.0);
+                fragColor = vec4(vec3(gain), 1.0);
             }
             """.trimIndent()
         }
