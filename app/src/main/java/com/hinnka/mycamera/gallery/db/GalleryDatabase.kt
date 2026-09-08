@@ -339,6 +339,14 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_38_39 = object : androidx.room.migration.Migration(38, 39) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Keep nullable embedded recipes null; Room reads null sharpness as 0f for existing recipes.
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN recipe_sharpness REAL")
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN baseline_recipe_sharpness REAL")
+            }
+        }
+
         private fun rebuildGalleryMediaWithoutLegacyGoogleToneMapFlag(
             db: androidx.sqlite.db.SupportSQLiteDatabase
         ) {
@@ -708,7 +716,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_34_35,
                         MIGRATION_35_36,
                         MIGRATION_36_37,
-                        MIGRATION_37_38
+                        MIGRATION_37_38,
+                        MIGRATION_38_39
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)
