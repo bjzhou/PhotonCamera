@@ -30,7 +30,8 @@ internal object CameraControlsLayoutDefaults {
 
 /**
  * Measures the controls in one pass so placement uses their actual heights, including the
- * ruler's expand/collapse animation. The shutter stays anchored to the bottom throughout.
+ * ruler's expand/collapse animation. The parameter row stays in its collapsed position;
+ * the ruler expands above it and moves the zoom bar upward. The shutter stays at the bottom.
  */
 @Composable
 internal fun CameraBottomControlsLayout(
@@ -61,21 +62,23 @@ internal fun CameraBottomControlsLayout(
         val previewBottom = viewfinderBottom.roundToPx().coerceAtMost(height)
         val spaceBelowPreview = controlsBottom - previewBottom
 
+        // Choose the parameter row's anchor from the collapsed controls so the ruler's
+        // animated height cannot switch placement branches or move the parameter row.
         val placeZoomBelowPreview = zoom.height > 0 &&
-            spaceBelowPreview >= parameters.height + ruler.height + zoom.height + barGap
+            spaceBelowPreview >= parameters.height + zoom.height + barGap
 
         // Start outside controls at the preview edge instead of leaving all spare space
         // above them. Any remaining space belongs between the parameters and the shutter.
         val parameterTop = when {
             // XPAN uses a side parameter row; its ruler remains above the shutter.
             parameters.height == 0 -> controlsBottom
-            placeZoomBelowPreview -> previewBottom + zoom.height + barGap + ruler.height
+            placeZoomBelowPreview -> previewBottom + zoom.height + barGap
             spaceBelowPreview >= parameters.height -> previewBottom
             else -> minOf(controlsBottom, previewBottom - clearance) - parameters.height
         }
         val rulerTop = parameterTop - ruler.height
         val zoomTop = if (placeZoomBelowPreview) {
-            previewBottom
+            rulerTop - barGap - zoom.height
         } else {
             minOf(previewBottom - clearance, rulerTop - barGap) - zoom.height
         }
