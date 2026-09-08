@@ -8,6 +8,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.util.Range
 import android.util.Size
+import com.hinnka.mycamera.camera.readMetadataOrNull
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
 
@@ -221,8 +222,9 @@ object VideoCapabilitiesResolver {
         cameraInputSize: Size,
         previewSize: Size
     ): List<VideoFpsPreset> {
-        val outputRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            ?: emptyArray()
+        val outputRanges = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?: return emptyList()
+        if (outputRanges.isEmpty()) return emptyList()
         val minFrameDurationNs = resolveMinFrameDurationNs(characteristics, cameraInputSize, previewSize)
         val maxFpsByDuration = if (minFrameDurationNs > 0) {
             (1_000_000_000.0 / minFrameDurationNs.toDouble()).toInt()

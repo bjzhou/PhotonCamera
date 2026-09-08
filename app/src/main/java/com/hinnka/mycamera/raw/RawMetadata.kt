@@ -8,6 +8,8 @@ import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
+import com.hinnka.mycamera.camera.readMetadataOrNull
+import com.hinnka.mycamera.camera.readMetadataOrThrow
 import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawNoiseProfileSelection
@@ -381,7 +383,7 @@ data class RawMetadata(
             }
 
             // 4. 获取白平衡增益
-            val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            val wbGains = captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceGains = if (wbGains != null) {
                 // Android 顺序为 [R, G_even, G_odd, B]
                 // 无论 CFA 模式如何，G_even 始终定义为与 R 同行的绿像素 (Gr)，G_odd 始终定义为与 B 同行的绿像素 (Gb)
@@ -399,7 +401,7 @@ data class RawMetadata(
 
             // 5. 获取色彩校正矩阵
             // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
-            val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, captureResult, colorSpace)
+            val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, wbGains, colorSpace)
             val camera2ColorCorrectionGains = wbGains
                 ?.let { gains ->
                     floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue)
@@ -418,8 +420,8 @@ data class RawMetadata(
                 }
             val camera2ColorCorrectionMode = captureResult
                 .get(CaptureResult.COLOR_CORRECTION_MODE)
-            val cameraWhite = computeCameraWhiteFromCharacteristics(characteristics, captureResult)
-            val whitePointXy = computeWhiteXyFromCharacteristics(characteristics, captureResult)
+            val cameraWhite = computeCameraWhiteFromCharacteristics(characteristics, wbGains)
+            val whitePointXy = computeWhiteXyFromCharacteristics(characteristics, wbGains)
             val colorTemperature = whitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
 
             // 6. 获取镜头阴影校正
@@ -452,7 +454,7 @@ data class RawMetadata(
             // 10. 获取 ISO 和快门
             val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
             val minimumSensitivityIso = characteristics
-                .get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                .readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
                 ?.lower
                 ?: 0
             val maxAnalogSensitivity = characteristics.get(
@@ -642,10 +644,9 @@ data class RawMetadata(
          */
         private fun computeCCMFromCharacteristics(
             characteristics: CameraCharacteristics,
-            captureResult: CaptureResult,
+            wbGains: RggbChannelVector?,
             colorSpace: ColorSpace = ColorSpace.SRGB
         ): FloatArray {
-            val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceGains = if (wbGains != null) {
                 floatArrayOf(wbGains.red, wbGains.greenEven, wbGains.greenOdd, wbGains.blue)
             } else {
@@ -678,9 +679,8 @@ data class RawMetadata(
 
         private fun computeCameraWhiteFromCharacteristics(
             characteristics: CameraCharacteristics,
-            captureResult: CaptureResult
+            wbGains: RggbChannelVector?
         ): FloatArray {
-            val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceGains = if (wbGains != null) {
                 floatArrayOf(wbGains.red, wbGains.greenEven, wbGains.greenOdd, wbGains.blue)
             } else {
@@ -699,10 +699,9 @@ data class RawMetadata(
 
         private fun computeWhiteXyFromCharacteristics(
             characteristics: CameraCharacteristics,
-            captureResult: CaptureResult
+            wbGains: RggbChannelVector?
         ): FloatArray? {
-            val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
-                ?: return null
+            if (wbGains == null) return null
             return DngSdkColorSpec.computeWhiteXy(
                 colorMatrix1 = characteristics.get(
                     CameraCharacteristics.SENSOR_COLOR_TRANSFORM1

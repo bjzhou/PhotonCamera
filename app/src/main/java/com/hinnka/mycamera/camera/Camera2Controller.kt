@@ -339,7 +339,6 @@ class Camera2Controller(private val context: Context) {
     private var awbColorTemperatureRange: Range<Int>? = null
     private var lastWhiteBalanceResult: WhiteBalanceResultSnapshot? = null
     private var manualWhiteBalanceAnchor: ManualWhiteBalanceAnchor? = null
-    private var malformedColorCorrectionGainsReported = false
     @Volatile
     private var requestedRawCaptureEnabled = false
     private var isRawSupported = false
@@ -557,7 +556,7 @@ class Camera2Controller(private val context: Context) {
         characteristics: CameraCharacteristics?,
     ): SensorSensitivityLimits = SensorSensitivityLimits(
         minimumIso = characteristics
-            ?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            ?.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
             ?.lower
             ?: 0,
         maximumAnalogIso = characteristics
@@ -942,7 +941,7 @@ class Camera2Controller(private val context: Context) {
         } else {
             0f
         }
-        val fpsRange = result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
+        val fpsRange = result.readMetadataOrNull(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
         PLog.i(
             TAG,
             "Video capture stats: requested=${_state.value.videoConfig.fps.fps}, " +
@@ -1670,6 +1669,7 @@ class Camera2Controller(private val context: Context) {
         }
         cameraCharacteristicsCache[cameraId]?.let { return it }
         return cameraManager.getCameraCharacteristics(cameraId).also {
+            it.associateMetadataCameraId(cameraId)
             cameraCharacteristicsCache[cameraId] = it
         }
     }
@@ -1731,7 +1731,6 @@ class Camera2Controller(private val context: Context) {
         awbColorTemperatureRange = null
         lastWhiteBalanceResult = null
         manualWhiteBalanceAnchor = null
-        malformedColorCorrectionGainsReported = false
         isRawSupported = false
         isP010Supported = false
         isStreamUseCaseSupported = false
@@ -2214,7 +2213,9 @@ class Camera2Controller(private val context: Context) {
                     )
                 }
                 isManualSensorSupported =
-                    capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+                    capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) &&
+                        openCharacteristics.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) != null &&
+                        openCharacteristics.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) != null
                 isManualPostProcessingSupported =
                     capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)
                 isFlashSupported = openCharacteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
@@ -3700,7 +3701,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun loadAwbColorTemperatureRange(characteristics: CameraCharacteristics): Range<Int>? {
         return if (Build.VERSION.SDK_INT >= 36) {
-            characteristics.get(CameraCharacteristics.COLOR_CORRECTION_COLOR_TEMPERATURE_RANGE)
+            characteristics.readMetadataOrNull(CameraCharacteristics.COLOR_CORRECTION_COLOR_TEMPERATURE_RANGE)
         } else {
             null
         }
@@ -3765,21 +3766,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun readColorCorrectionGains(result: CaptureResult): RggbChannelVector? {
-        return try {
-            result.get(CaptureResult.COLOR_CORRECTION_GAINS)
-        } catch (error: IllegalArgumentException) {
-            if (!malformedColorCorrectionGainsReported) {
-                malformedColorCorrectionGainsReported = true
-                PLog.w(
-                    TAG,
-                    "Camera ${getActiveOpenCameraId()} returned malformed " +
-                            "${CaptureResult.COLOR_CORRECTION_GAINS.name} at frame ${result.frameNumber}; " +
-                            "white-balance gains are unavailable for this result",
-                    error
-                )
-            }
-            null
-        }
+        return result.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_GAINS, getActiveOpenCameraId())
     }
 
     private fun resolveWhiteBalanceControlPath(
@@ -4055,7 +4042,7 @@ class Camera2Controller(private val context: Context) {
             }
             // 2. 手动曝光或半自动曝光：尝试使用 OFF 模式，如果设备不支持则退而求其次使用 ON
             else -> {
-                if (availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
+                if (isManualSensorSupported && availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
                     CaptureRequest.CONTROL_AE_MODE_OFF
                 } else {
                     resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
@@ -4088,7 +4075,7 @@ class Camera2Controller(private val context: Context) {
                 try {
                     val characteristics = getActiveOpenCameraCharacteristics() ?: return
                     val availableFpsRanges =
-                        characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                        characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                     val lowestFpsRange = availableFpsRanges?.minByOrNull { it.upper }
                     lowestFpsRange?.let {
                         builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
@@ -4162,7 +4149,7 @@ class Camera2Controller(private val context: Context) {
     private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
         val characteristics = getActiveOpenCameraCharacteristics() ?: return
         val availableRanges =
-            characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return
+            characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return
         
         // 寻找完全匹配的固定帧率区间，例如 [60, 60]
         val exactRange = availableRanges.firstOrNull { it.lower == targetFps && it.upper == targetFps }
@@ -4465,7 +4452,7 @@ class Camera2Controller(private val context: Context) {
         try {
             val characteristics = resolveZoomRequestCharacteristics(openCameraId)
             val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-            val zoomRatioRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            val zoomRatioRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             val minZoom = zoomRatioRange?.lower ?: 1f
             val maxSupportedZoom = zoomRatioRange?.upper ?: maxZoom
             val userZoomRatio = state.zoomRatio.coerceIn(minZoom, maxSupportedZoom)
@@ -5712,7 +5699,7 @@ class Camera2Controller(private val context: Context) {
         try {
             val characteristics = resolveZoomRequestCharacteristics(openCameraId)
             val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-            val zoomRatioRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            val zoomRatioRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             val minZoom = zoomRatioRange?.lower ?: 1f
             val maxSupportedZoom = zoomRatioRange?.upper ?: maxZoom
             val clampedRatio = requestedRatio.coerceIn(minZoom, maxSupportedZoom)
@@ -6126,7 +6113,7 @@ class Camera2Controller(private val context: Context) {
                 characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: getSensorOrientation()
             val lensFacing =
                 characteristics.get(CameraCharacteristics.LENS_FACING) ?: getLensFacing()
-            val zoomRatioRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            val zoomRatioRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             val zoomMode = if (shouldUseControlZoomRatio(zoomRatioRange)) {
                 PreviewMeteringZoomMode.POST_ZOOM_ACTIVE_ARRAY
             } else {
@@ -6600,6 +6587,15 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
         ) {
+            return
+        }
+
+        if (_state.value.videoCapabilities.availableFps.isEmpty()) {
+            onCameraError?.invoke(
+                -1,
+                context.getString(com.hinnka.mycamera.R.string.camera_video_fps_unavailable),
+                false,
+            )
             return
         }
 

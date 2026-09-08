@@ -7,6 +7,8 @@ import android.hardware.camera2.DngCreator
 import android.media.ExifInterface
 import android.util.Log
 import android.util.Size
+import com.hinnka.mycamera.camera.readMetadataOrThrow
+import com.hinnka.mycamera.camera.MalformedCaptureMetadataException
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.model.SafeImage
@@ -255,7 +257,7 @@ object RawProcessor {
             )
         }
 
-        val gains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
+        val gains = captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
             ?: return floatArrayOf(1f, 1f, 1f, 1f)
         val green = ((gains.greenEven + gains.greenOdd) * 0.5f)
             .takeIf { it.isFinite() && it > 0f }
@@ -570,15 +572,14 @@ object RawProcessor {
         }
 
         val rawBuffer = copyRawSensorImageToContiguousBuffer(image) ?: return false
-        val rawMetadata = RawMetadata.create(
-            width = image.width,
-            height = image.height,
-            characteristics = characteristics,
-            captureResult = captureResult
-        )
-
-        PLog.i(TAG, "Writing RAW_SENSOR DNG with custom writer")
         return try {
+            val rawMetadata = RawMetadata.create(
+                width = image.width,
+                height = image.height,
+                characteristics = characteristics,
+                captureResult = captureResult
+            )
+            PLog.i(TAG, "Writing RAW_SENSOR DNG with custom writer")
             saveRawBufferToDng(
                 rawBuffer = rawBuffer,
                 width = image.width,
@@ -604,6 +605,9 @@ object RawProcessor {
                 dngProfilePreparationOptions = dngProfilePreparationOptions,
                 defaultCrop = defaultCrop,
             )
+        } catch (error: MalformedCaptureMetadataException) {
+            PLog.w(TAG, "RAW capture rejected because its metadata is malformed", error)
+            false
         } finally {
             LargeDirectBuffer.free(rawBuffer)
         }

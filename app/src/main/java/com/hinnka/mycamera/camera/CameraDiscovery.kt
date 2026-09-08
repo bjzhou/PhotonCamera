@@ -311,6 +311,7 @@ class CameraDiscovery(private val context: Context) {
     private fun getCameraCharacteristics(cameraId: String): CameraCharacteristics {
         cameraCharacteristicsCache[cameraId]?.let { return it }
         return cameraManager.getCameraCharacteristics(cameraId).also {
+            it.associateMetadataCameraId(cameraId)
             cameraCharacteristicsCache[cameraId] = it
         }
     }
@@ -1486,13 +1487,13 @@ class CameraDiscovery(private val context: Context) {
         val focalLength35mm = get35mmEquivalentFocalLength(characteristics)
 
         // ISO 范围
-        val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        val isoRange = characteristics.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
 
         // 曝光时间范围
-        val exposureTimeRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        val exposureTimeRange = characteristics.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
 
         // 曝光补偿范围
-        val exposureCompensationRange = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+        val exposureCompensationRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             ?: Range(0, 0)
 
         // 曝光补偿步长
@@ -1500,7 +1501,7 @@ class CameraDiscovery(private val context: Context) {
             characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
 
         // Camera2 zoom ratio range 可以表达逻辑多摄的 <1x 超广角范围
-        val zoomRatioRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+        val zoomRatioRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
         val maxZoom = zoomRatioRange?.upper
             ?: characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)
             ?: 1f

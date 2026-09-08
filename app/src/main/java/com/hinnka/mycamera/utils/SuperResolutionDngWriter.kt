@@ -8,6 +8,7 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
 import android.os.Build
 import android.os.SystemClock
+import com.hinnka.mycamera.camera.readMetadataOrThrow
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngCameraRawProfileXmp
@@ -1505,7 +1506,7 @@ object SuperResolutionDngWriter {
             PLog.w(TAG, "Ignoring invalid SENSOR_NEUTRAL_COLOR_POINT: ${neutral.joinToString()}")
         }
 
-        val gains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
+        val gains = captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
         if (gains == null) {
             PLog.w(TAG, "Missing SENSOR_NEUTRAL_COLOR_POINT and COLOR_CORRECTION_GAINS; using unity AsShotNeutral")
             return listOf(1.0, 1.0, 1.0)

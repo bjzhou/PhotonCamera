@@ -2,6 +2,7 @@ package com.hinnka.mycamera.raw
 
 import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
+import com.hinnka.mycamera.camera.readMetadataOrNull
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import java.nio.ByteBuffer
 
@@ -32,10 +33,10 @@ data class RawSceneExposureDeviceLimits(
         fun fromCameraCharacteristics(
             characteristics: CameraCharacteristics,
         ): RawSceneExposureDeviceLimits? {
-            val exposureRange = characteristics.get(
+            val exposureRange = characteristics.readMetadataOrNull(
                 CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE,
             ) ?: return null
-            val sensitivityRange = characteristics.get(
+            val sensitivityRange = characteristics.readMetadataOrNull(
                 CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE,
             ) ?: return null
             return fromCamera2Ranges(
