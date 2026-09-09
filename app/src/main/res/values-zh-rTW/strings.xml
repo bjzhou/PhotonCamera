@@ -244,6 +244,12 @@
     <string name="settings_photo_preview_stabilization_description">使用陀螺儀穩定照片取景畫面，不改變最終照片；僅支援後置相機。</string>
     <string name="settings_grid_lines">網格線顯示</string>
     <string name="settings_grid_description">在拍攝時顯示網格線，輔助構圖</string>
+    <string name="settings_grid_style">網格線樣式</string>
+    <string name="grid_style_thirds">三分</string>
+    <string name="grid_style_diagonals">對角線</string>
+    <string name="grid_style_golden_ratio">黃金分割</string>
+    <string name="grid_style_golden_triangle">黃金三角</string>
+    <string name="grid_style_golden_spiral">黃金螺旋</string>
     <string name="settings_use_jpg_max">多幀降噪</string>
     <string name="settings_use_raw_max">HDR+</string>
     <string name="settings_raw_max_spatial_mode">HDR+ 融合模式</string>

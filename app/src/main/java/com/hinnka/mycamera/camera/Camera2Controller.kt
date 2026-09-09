@@ -6883,6 +6883,10 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(showGrid = show)
     }
 
+    fun setGridStyle(style: GridStyle) {
+        _state.value = _state.value.copy(gridStyle = style)
+    }
+
     fun setMultiFrameOutputScale(outputScale: Float?) {
         val currentState = _state.value
         val normalizedScale = outputScale?.let(MultiFrameConfig::normalizeOutputScale)

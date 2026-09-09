@@ -2258,6 +2258,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 // 应用保存的网格线设置
                 cameraController.setShowGrid(prefs.showGrid)
+                cameraController.setGridStyle(prefs.gridStyle)
 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
                 cameraController.setMultiFrameOutputScale(
@@ -4555,6 +4556,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setShowGrid(show)
         viewModelScope.launch {
             userPreferencesRepository.saveShowGrid(show)
+        }
+    }
+
+    fun setGridStyle(style: GridStyle) {
+        cameraController.setGridStyle(style)
+        viewModelScope.launch {
+            userPreferencesRepository.saveGridStyle(style)
         }
     }
 

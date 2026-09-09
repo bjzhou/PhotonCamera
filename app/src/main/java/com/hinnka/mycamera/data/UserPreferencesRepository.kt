@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.GridStyle
 import com.hinnka.mycamera.camera.CustomFocalLengthValue
 import com.hinnka.mycamera.camera.CustomVendorKey
 import com.hinnka.mycamera.camera.CustomVendorKeySettings
@@ -141,6 +142,7 @@ data class UserPreferences(
     val phantomFrameId: String? = null,
     val showHistogram: Boolean = true,
     val showGrid: Boolean = false,  // 网格线显示
+    val gridStyle: GridStyle = GridStyle.THIRDS,
     val showLevelIndicator: Boolean = false,  // 水平仪显示
     val focusPeakingEnabled: Boolean = true,  // 手动对焦峰值显示
     val eyeFocusEnabled: Boolean = false,  // MediaPipe 人眼对焦
@@ -380,6 +382,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_FRAME_ID_KEY = stringPreferencesKey("phantom_frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
+        private val GRID_STYLE = stringPreferencesKey("grid_style")
         private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
         private val FOCUS_PEAKING_ENABLED = booleanPreferencesKey("focus_peaking_enabled")
         private val EYE_FOCUS_ENABLED = booleanPreferencesKey("eye_focus_enabled")
@@ -652,6 +655,7 @@ class UserPreferencesRepository(private val context: Context) {
                 phantomFrameId = preferences[PHANTOM_FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
                 showGrid = preferences[SHOW_GRID] ?: false,
+                gridStyle = GridStyle.fromPersistedName(preferences[GRID_STYLE]),
                 showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
                 focusPeakingEnabled = preferences[FOCUS_PEAKING_ENABLED] ?: true,
                 eyeFocusEnabled = preferences[EYE_FOCUS_ENABLED] ?: false,
@@ -1428,6 +1432,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveShowGrid(show: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[SHOW_GRID] = show
+        }
+    }
+
+    suspend fun saveGridStyle(style: GridStyle) {
+        context.dataStore.edit { preferences ->
+            preferences[GRID_STYLE] = style.name
         }
     }
 

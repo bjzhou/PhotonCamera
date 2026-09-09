@@ -1336,6 +1336,7 @@ fun CameraScreen(
                         if (state.showGrid) {
                             GridOverlay(
                                 aspectRatio = previewAspectRatio,
+                                style = state.gridStyle,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }

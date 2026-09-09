@@ -107,6 +107,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.GridStyle
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.CustomFocalLengthValue
 import com.hinnka.mycamera.camera.CustomVendorKey
@@ -1060,6 +1061,28 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_grid_description),
                             checked = showGrid,
                             onCheckedChange = { viewModel.setShowGrid(it) }
+                        )
+
+                        val gridStyleLabels = GridStyle.entries.associateWith { style ->
+                            stringResource(
+                                when (style) {
+                                    GridStyle.THIRDS -> R.string.grid_style_thirds
+                                    GridStyle.DIAGONALS -> R.string.grid_style_diagonals
+                                    GridStyle.GOLDEN_RATIO -> R.string.grid_style_golden_ratio
+                                    GridStyle.GOLDEN_TRIANGLE -> R.string.grid_style_golden_triangle
+                                    GridStyle.GOLDEN_SPIRAL -> R.string.grid_style_golden_spiral
+                                }
+                            )
+                        }
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_grid_style),
+                            value = gridStyleLabels.getValue(state.gridStyle),
+                            options = gridStyleLabels.values.toList(),
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { label ->
+                                viewModel.setGridStyle(gridStyleLabels.entries.first { it.value == label }.key)
+                            }
                         )
 
                         HorizontalDivider(

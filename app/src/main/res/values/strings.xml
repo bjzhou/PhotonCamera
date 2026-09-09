@@ -255,6 +255,12 @@
     <string name="settings_photo_preview_stabilization_description">Stabilize the photo viewfinder using gyro motion. The saved photo is unchanged; rear cameras only.</string>
     <string name="settings_grid_lines">Grid Lines</string>
     <string name="settings_grid_description">Show grid lines for composition</string>
+    <string name="settings_grid_style">Grid Style</string>
+    <string name="grid_style_thirds">Rule of Thirds</string>
+    <string name="grid_style_diagonals">Diagonals</string>
+    <string name="grid_style_golden_ratio">Golden Ratio</string>
+    <string name="grid_style_golden_triangle">Golden Triangle</string>
+    <string name="grid_style_golden_spiral">Golden Spiral</string>
     <string name="settings_use_jpg_max">Multi-frame denoise</string>
     <string name="settings_use_raw_max">HDR+</string>
     <string name="settings_raw_max_spatial_mode">HDR+ merge mode</string>

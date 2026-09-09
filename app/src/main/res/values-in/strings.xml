@@ -88,6 +88,12 @@
     <string name="settings_level_description">Tampilkan indikator level horizontal saat memotret</string>
     <string name="settings_grid_lines">Garis Kisi</string>
     <string name="settings_grid_description">Tampilkan garis kisi untuk komposisi</string>
+    <string name="settings_grid_style">Gaya Kisi</string>
+    <string name="grid_style_thirds">Aturan Sepertiga</string>
+    <string name="grid_style_diagonals">Diagonal</string>
+    <string name="grid_style_golden_ratio">Rasio Emas</string>
+    <string name="grid_style_golden_triangle">Segitiga Emas</string>
+    <string name="grid_style_golden_spiral">Spiral Emas</string>
     <string name="settings_use_live_photo">Foto Live</string>
     <string name="settings_use_live_photo_description">Tangkap klip video pendek bersama foto Anda untuk efek foto live yang dinamis.</string>
     <string name="settings_section_frame">Tanda Air Bingkai</string>

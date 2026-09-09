@@ -88,6 +88,12 @@
     <string name="settings_level_description">撮影中に水平を表示します</string>
     <string name="settings_grid_lines">グリッド線</string>
     <string name="settings_grid_description">構図用のグリッド線を表示します</string>
+    <string name="settings_grid_style">グリッドの種類</string>
+    <string name="grid_style_thirds">三分割</string>
+    <string name="grid_style_diagonals">対角線</string>
+    <string name="grid_style_golden_ratio">黄金分割</string>
+    <string name="grid_style_golden_triangle">黄金三角</string>
+    <string name="grid_style_golden_spiral">黄金螺旋</string>
     <string name="settings_use_live_photo">ライブフォト</string>
     <string name="settings_use_live_photo_description">写真と一緒に短い動画を撮影し、動きのあるライブフォト効果を作成します。</string>
     <string name="settings_section_frame">フレームと透かし</string>
