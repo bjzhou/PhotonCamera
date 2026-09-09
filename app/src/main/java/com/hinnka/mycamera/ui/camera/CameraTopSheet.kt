@@ -3,7 +3,6 @@ package com.hinnka.mycamera.ui.camera
 import android.media.AudioDeviceInfo
 import android.os.Build
 import androidx.compose.animation.*
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,20 +19,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
@@ -47,6 +43,8 @@ import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
+import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.flow.filterNotNull
 
 private enum class VideoSettingPanel {
     ASPECT_RATIO,
@@ -57,42 +55,6 @@ private enum class VideoSettingPanel {
 }
 
 private val CameraTopSheetContentTopPadding = 32.dp
-
-/**
- * Keeps scroll-boundary drag and fling remainders inside the RAW sheet content.
- *
- * ModalBottomSheet otherwise settles its own anchors with those remainders. When the sheet is
- * already expanded, repeated settling can still produce a visible bounce on some devices. The
- * connection only consumes forward scrolling at the content bottom, so dragging down from the
- * content top and dragging the sheet handle retain their standard collapse/dismiss behavior.
- */
-private class RenderingEngineSheetScrollBoundaryConnection(
-    private val scrollState: ScrollState
-) : NestedScrollConnection {
-    override fun onPostScroll(
-        consumed: Offset,
-        available: Offset,
-        source: NestedScrollSource
-    ): Offset {
-        return if (
-            source == NestedScrollSource.UserInput &&
-            available.y < 0f &&
-            !scrollState.canScrollForward
-        ) {
-            Offset(x = 0f, y = available.y)
-        } else {
-            Offset.Zero
-        }
-    }
-
-    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-        return if (available.y < 0f && !scrollState.canScrollForward) {
-            Velocity(x = 0f, y = available.y)
-        } else {
-            Velocity.Zero
-        }
-    }
-}
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -522,21 +484,44 @@ fun CameraTopSheet(
     }
 
     if (showRenderingEngineSheet) {
+        val renderingEngineSheetState = rememberModalBottomSheetState()
         val renderingEngineScrollState = rememberScrollState()
-        val renderingEngineScrollBoundaryConnection = remember(renderingEngineScrollState) {
-            RenderingEngineSheetScrollBoundaryConnection(renderingEngineScrollState)
+        if (BuildConfig.DEBUG) {
+            LaunchedEffect(renderingEngineSheetState, renderingEngineScrollState) {
+                snapshotFlow {
+                    if (renderingEngineSheetState.hasExpandedState) {
+                        renderingEngineSheetState.currentValue to renderingEngineSheetState.targetValue
+                    } else {
+                        null
+                    }
+                }.filterNotNull().collect { (current, target) ->
+                    PLog.d(
+                        "RenderingEngineSheet",
+                        "state=$current target=$target offset=${renderingEngineSheetState.requireOffset()} " +
+                            "scroll=${renderingEngineScrollState.value}/${renderingEngineScrollState.maxValue}"
+                    )
+                }
+            }
         }
         ModalBottomSheet(
             onDismissRequest = { showRenderingEngineSheet = false },
+            sheetState = renderingEngineSheetState,
+            // Keep the top inset outside the draggable surface. Offset-dependent content insets
+            // can resize a near-full-height sheet and snap its expanded anchor back during a drag.
+            modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
+            contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
             containerColor = Color(0xFF1E1E1E),
             dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .nestedScroll(renderingEngineScrollBoundaryConnection)
+                    .onSizeChanged { size ->
+                        if (BuildConfig.DEBUG) {
+                            PLog.d("RenderingEngineSheet", "viewport=${size.width}x${size.height}")
+                        }
+                    }
                     .verticalScroll(renderingEngineScrollState)
-                    .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
