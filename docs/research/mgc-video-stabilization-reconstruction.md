@@ -9,7 +9,7 @@
 - **源码重建**：接口、数据流、profile 7 与 type 18 共用的顶层状态机和算法组件已经确认，按 V25 逐指令控制流写成可编译 C++。
 - **未知**：原厂机型专属标定 protobuf 的完整数值，以及 profile 专用标志的全部消费者和视觉分支。
 
-生产代码位于 `research/mgc_eis_reconstruction/` 下的 `mgc_type18_engine.*`、`mgc_type18_gyro.*`、`mgc_type18_lookahead.*`、`mgc_type18_projection.*` 和公共数学类型，通过 [`mgc_eis_reconstruction_jni.cpp`](../../app/src/main/cpp/mgc_eis_reconstruction_jni.cpp) 编入 Photon 自己的 `libmy-native-lib.so`。文件名保留最初逆向时的 type 18 名称，但生产 JNI 固定创建已证实的 `blueline` profile 7（12 条带、7 帧前瞻）。App 不打包、不加载原始 `libgcastartup.so`，也不使用 EIS AOT 胶囊。
+生产代码位于 [`app/src/main/cpp/mgc_eis_reconstruction/`](../../app/src/main/cpp/mgc_eis_reconstruction/) 下的 `mgc_type18_engine.*`、`mgc_type18_gyro.*`、`mgc_type18_lookahead.*`、`mgc_type18_projection.*` 和公共数学类型，通过 [`mgc_eis_reconstruction_jni.cpp`](../../app/src/main/cpp/mgc_eis_reconstruction_jni.cpp) 编入 Photon 自己的 `libmy-native-lib.so`。文件名保留最初逆向时的 type 18 名称，但生产 JNI 固定创建已证实的 `blueline` profile 7（12 条带、7 帧前瞻）。App 不打包、不加载原始 `libgcastartup.so`，也不使用 EIS AOT 胶囊。
 
 ## 1. 功能分层
 
@@ -771,43 +771,14 @@ Photon 的生产路径不复原或猜测该私有模型，而使用 Camera2 已�
 
 ## 8. 重建代码验证
 
-核心代码不依赖 Android 或第三方数学库，可单独编译并运行确定性测试：
+核心代码不依赖 Android 或第三方数学库。生产源码已归入 `app/src/main/cpp/mgc_eis_reconstruction/`，通过 App 的 CMake 目标验证编译与链接。在项目根目录执行：
 
 ```bash
-clang++ -std=c++17 -Wall -Wextra -Werror \
-  research/mgc_eis_reconstruction/mgc_eis_reconstruction.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_lookahead.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_lookahead_test.cpp \
-  -o /tmp/mgc_type18_lookahead_test
-/tmp/mgc_type18_lookahead_test
-
-clang++ -std=c++17 -Wall -Wextra -Werror \
-  research/mgc_eis_reconstruction/mgc_eis_reconstruction.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_lookahead.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_projection.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_projection_test.cpp \
-  -o /tmp/mgc_type18_projection_test
-/tmp/mgc_type18_projection_test
-
-clang++ -std=c++17 -Wall -Wextra -Werror \
-  research/mgc_eis_reconstruction/mgc_eis_reconstruction.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_gyro.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_gyro_test.cpp \
-  -o /tmp/mgc_type18_gyro_test
-/tmp/mgc_type18_gyro_test
-
-clang++ -std=c++17 -Wall -Wextra -Werror \
-  research/mgc_eis_reconstruction/mgc_eis_reconstruction.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_gyro.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_lookahead.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_projection.cpp \
-  research/mgc_eis_reconstruction/mgc_type18_engine.cpp \
-  research/mgc_eis_reconstruction/mgc_eis_reconstruction_test.cpp \
-  -o /tmp/mgc_eis_reconstruction_test
-/tmp/mgc_eis_reconstruction_test
+./gradlew buildCMakeDebug
+./gradlew compileDefaultDebugKotlin
 ```
 
-测试覆盖 Gyro 右端点积分和延迟副姿态、100 样本静止门控、horizon pose range 的 lower-bound/最小采样时间差、method-4 baseline/candidate/crop 状态、两个 strength 回退公式、rolling-shutter 端点时间、投影矩阵乘法顺序、最终齐次 crop zoom、scanline 四点单应、最差区间 mask 以及 `0`/二分比例/`1.1` crop correction 返回语义。Android 端由 `buildCMakeDebug`、`compileDefaultDebugKotlin` 验证编译与链接；新构建仍需在设备上完成 JNI、Camera2 时间同步和 GL 延迟帧队列的实时预览/录像验证。
+重建阶段的确定性测试覆盖过 Gyro 右端点积分和延迟副姿态、100 样本静止门控、horizon pose range 的 lower-bound/最小采样时间差、method-4 baseline/candidate/crop 状态、两个 strength 回退公式、rolling-shutter 端点时间、投影矩阵乘法顺序、最终齐次 crop zoom、scanline 四点单应、最差区间 mask 以及 `0`/二分比例/`1.1` crop correction 返回语义。这些独立测试源码当前未保留在仓库中；上述 Gradle 命令仅验证编译与链接。新构建仍需在设备上完成 JNI、Camera2 时间同步和 GL 延迟帧队列的实时预览/录像验证。
 
 ## 9. Photon App 接入
 

@@ -7,7 +7,7 @@ set(ADOBE_XMP_STUB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/XMPStub/include)
 set(ULTRAHDR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr)
 set(
     MGC_EIS_RECONSTRUCTION_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../research/mgc_eis_reconstruction"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_eis_reconstruction"
 )
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
 
