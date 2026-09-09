@@ -35,6 +35,30 @@ internal object DngSdkColorSpec {
         val cameraCalibration: FloatArray
     )
 
+    /**
+     * Resolves source color metadata from the profile and as-shot gains stored in the DNG.
+     * Replacing only the gains leaves Camera2's old white/CCT and lens calibration behind;
+     * equivalent-camera engines then use a different LUT solution after reopening the file.
+     * A selected creative DCP must never be supplied as the source profile here.
+     */
+    fun resolveSourceMetadata(
+        profile: DcpProfile,
+        metadata: RawMetadata,
+        workingColorSpace: ColorSpace,
+    ): RawMetadata? {
+        val whiteXy = whiteXyForProfile(profile, metadata) ?: return null
+        val temperature = colorTemperatureForXy(whiteXy) ?: return null
+        val matrix = computeCameraToWorkingMatrix(profile, metadata, workingColorSpace) ?: return null
+        val white = computeCameraWhite(profile, metadata) ?: return null
+        return metadata.copy(
+            colorCorrectionMatrix = matrix,
+            cameraWhite = white,
+            whitePointXy = whiteXy,
+            colorTemperature = temperature,
+            cameraCalibration = RawCameraCalibration.fromProfile(profile),
+        )
+    }
+
     fun computeCameraToWorkingMatrix(
         profile: DcpProfile,
         metadata: RawMetadata,

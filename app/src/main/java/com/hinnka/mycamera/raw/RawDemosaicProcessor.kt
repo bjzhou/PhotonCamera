@@ -244,7 +244,6 @@ class RawDemosaicProcessor {
         xg: Float, yg: Float,
         xb: Float, yb: Float,
         xw: Float, yw: Float,
-        useRawAutoWhiteBalanceEstimate: Boolean
     ): DngRawData?
 
     private external fun estimateMgcReferenceSignalNative(
@@ -1809,7 +1808,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -1857,7 +1855,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawBlackLevelMode = rawBlackLevelMode,
                 rawCustomBlackLevel = rawCustomBlackLevel,
@@ -1912,7 +1909,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
@@ -1954,7 +1950,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 sharpeningValue = sharpeningValue,
                 denoiseValue = denoiseValue,
@@ -1992,7 +1987,6 @@ class RawDemosaicProcessor {
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
@@ -2017,7 +2011,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = 0f,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawDcpId = null,
                 rawNoiseProfileId = rawNoiseProfileId,
@@ -2054,7 +2047,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -2103,7 +2095,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawBlackLevelMode = rawBlackLevelMode,
                 rawCustomBlackLevel = rawCustomBlackLevel,
@@ -2166,7 +2157,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -2234,12 +2224,13 @@ class RawDemosaicProcessor {
                 "black=${renderMetadata.blackLevel.contentToString()} white=${renderMetadata.whiteLevel} " +
                 "wb=${renderMetadata.whiteBalanceGains.contentToString()} " +
                 "cameraWhite=${renderMetadata.cameraWhite.contentToString()} " +
+                "whiteXY=${renderMetadata.whitePointXy?.contentToString()} " +
+                "cct=${renderMetadata.colorTemperature} " +
                 "ccm=${renderMetadata.colorCorrectionMatrix.contentToString()} " +
                 "noise=${renderMetadata.channelNoiseProfile.contentToString()} " +
                 "pgtm=${renderMetadata.profileGainTableMap?.let {
                     "${it.mapPointsH}x${it.mapPointsV}x${it.mapPointsN}:tag=${it.sourceTag}"
-                } ?: "none"} profile=${embeddedDngRenderPlan.profileName} " +
-                "rawAwbIgnoredForEmbeddedDng=$rawAutoWhiteBalanceEstimate"
+                } ?: "none"} profile=${embeddedDngRenderPlan.profileName}"
         )
 
         try {
@@ -2262,7 +2253,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawBlackLevelMode = rawBlackLevelMode,
                 rawCustomBlackLevel = rawCustomBlackLevel,
@@ -2320,7 +2310,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -2432,7 +2421,6 @@ class RawDemosaicProcessor {
                 profileWorkingColorSpace.xg, profileWorkingColorSpace.yg,
                 profileWorkingColorSpace.xb, profileWorkingColorSpace.yb,
                 profileWorkingColorSpace.xw, profileWorkingColorSpace.yw,
-                rawAutoWhiteBalanceEstimate
             )
             if (dngRawData == null) {
                 return@withContext RawProcessor.processAndToBitmap(
@@ -2973,6 +2961,11 @@ class RawDemosaicProcessor {
                 "HNCS pipeline: branch=X1D_equivalent_CbYCrY_LUT " +
                     "profile=${hncsRenderPlan?.profileId} intent=${hncsRenderPlan?.renderIntent} " +
                     "cct=${hncsRenderPlan?.colorTemperature} " +
+                    "input=${if (dngFile != null) "DNG_FILE" else "MEMORY"} " +
+                    "whiteXY=${actualMetadata.whitePointXy?.contentToString()} " +
+                    "wb=${actualMetadata.whiteBalanceGains.contentToString()} " +
+                    "baselineEv=${actualMetadata.baselineExposure} " +
+                    "filmCurve=${rawHncsFilmCurveMode.persistedValue} " +
                     "source=${hncsRenderPlan?.sourceFile} " +
                     "profileSpace=$profileWorkingColorSpace " +
                     "calibrationLut=${hncsRenderPlan?.calibrationLuts?.key?.take(12)} " +

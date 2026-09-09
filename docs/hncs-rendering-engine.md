@@ -122,6 +122,19 @@ HNCS 与 ProPhoto 数值接近，但两者是不同的处理契约，代码中�
 中间纹理保留公共 RAW 管线的 ProPhoto 契约。逆源矩阵与源 CameraWhite 只负责恢复已白平衡
 的源传感器 RGB；它们不把源相机颜色冒充为哈苏 RGB。源 RAW 的 Tint 由实际白平衡保留。
 
+### 拍摄与 DNG 重处理的一致性
+
+源色彩参数以 DNG 的拍摄白平衡及校准标签为准。首次内存处理使用与 DNG writer 相同的
+ColorMatrix 归一化、ForwardMatrix、CameraCalibration1/2 和 AnalogBalance，并由写入
+AsShotNeutral 的同一组增益计算 CCM、CameraWhite、whitePointXy、CCT 和固定相机校准。
+拍摄曝光分析、CFA 首次渲染与 LinearRaw 首次渲染共用这组参数；不能只替换白平衡增益，
+却保留由 Camera2 COLOR_CORRECTION_GAINS 推导的旧白点或未包含 DNG 校准的镜头标定。
+
+DNG 重处理从文件恢复上述参数，HNCS 两条入口均使用相同的 FilmCurve、色温插值与
+曝光处理。RAW 管线不提供基于像素重新估计自动白平衡的功能，读取文件时也不重新估计。
+`HNCS pipeline` 日志记录输入来源、WB、白点、CCT、BaselineExposure、FilmCurve、
+校准 LUT key 和插值权重，用于在相同编辑参数下核对两条路径。
+
 ### 标定 LUT 的生成与缓存
 
 为源镜头固定 ColorMatrix 标定和目标 DCP，在 A、D65 两个白点分别计算：

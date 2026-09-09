@@ -15,6 +15,7 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngBaselineExposure
+import com.hinnka.mycamera.raw.DngSdkColorSpec
 import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
@@ -227,7 +228,7 @@ object RawProcessor {
         captureExposureCompensationEv: Float = 0f,
     ): RawMetadata {
         val dngWhiteBalance = resolveDngWriterWhiteBalance(captureResult)
-        return RawMetadata.create(
+        val metadata = RawMetadata.create(
             width = width,
             height = height,
             characteristics = characteristics,
@@ -239,34 +240,29 @@ object RawProcessor {
             whiteBalanceGains = dngWhiteBalance,
             preMul = dngWhiteBalance.copyOf(),
         )
+        // Match the serialized AsShotNeutral and exact DNG calibration, including the
+        // writer's ColorMatrix normalization and CameraCalibration1/2. Camera2 gains
+        // may differ from SensorNeutralColorPoint; none of their derived color state
+        // may survive into either the capture-profile pass or the first HNCS render.
+        val sourceProfile = SuperResolutionDngWriter.buildEmbeddedProfile(
+            characteristics = characteristics,
+            imageLayout = SuperResolutionDngWriter.ImageLayout.CFA,
+        )
+        return requireNotNull(
+            DngSdkColorSpec.resolveSourceMetadata(
+                sourceProfile, metadata, RawRenderingEngine.AdobeCurve.workingColorSpace,
+            ),
+        ) { "Unable to resolve the serialized DNG source color calibration" }
     }
 
     private fun resolveDngWriterWhiteBalance(captureResult: CaptureResult): FloatArray {
-        val neutral = captureResult.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
-            ?.takeIf { it.size >= 3 }
-            ?.take(3)
-            ?.map { value -> value.numerator.toDouble() / value.denominator.toDouble() }
-            ?.takeIf { values -> values.all { it.isFinite() && it > 0.0 } }
-        if (neutral != null) {
-            val green = neutral[1]
-            return floatArrayOf(
-                (green / neutral[0]).toFloat(),
-                1f,
-                1f,
-                (green / neutral[2]).toFloat(),
-            )
-        }
-
-        val gains = captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
-            ?: return floatArrayOf(1f, 1f, 1f, 1f)
-        val green = ((gains.greenEven + gains.greenOdd) * 0.5f)
-            .takeIf { it.isFinite() && it > 0f }
-            ?: 1f
+        val neutral = SuperResolutionDngWriter.resolveAsShotNeutral(captureResult)
+        val green = neutral[1]
         return floatArrayOf(
-            gains.red.takeIf { it.isFinite() && it > 0f }?.div(green) ?: 1f,
+            (green / neutral[0]).toFloat(),
             1f,
             1f,
-            gains.blue.takeIf { it.isFinite() && it > 0f }?.div(green) ?: 1f,
+            (green / neutral[2]).toFloat(),
         )
     }
 

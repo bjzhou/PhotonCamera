@@ -1466,9 +1466,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawWhitePointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawWhitePointCorrection }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawAutoWhiteBalanceEstimate: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawAutoWhiteBalanceEstimate }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawLensShadingCorrectionEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
@@ -2008,10 +2005,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (!firstPreferencesLogged) {
                     firstPreferencesLogged = true
 
-                    if (it.rawAutoWhiteBalanceEstimate) {
-                        setRawAutoWhiteBalanceEstimate(false)
-                    }
-
                     StartupTrace.mark(
                         "CameraViewModel.userPreferences first collect",
                         "costMs=${SystemClock.elapsedRealtime() - preferenceCollectStart}"
@@ -2472,9 +2465,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawWhitePointCorrection(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawWhitePointCorrection(value) }
     }
-    fun setRawAutoWhiteBalanceEstimate(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.saveRawAutoWhiteBalanceEstimate(enabled) }
-    }
     fun setRawLensShadingCorrectionEnabled(enabled: Boolean) {
         viewModelScope.launch { userPreferencesRepository.saveRawLensShadingCorrectionEnabled(enabled) }
     }
@@ -2894,7 +2884,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-            rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
             rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -5405,7 +5394,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -5572,7 +5560,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -5842,7 +5829,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -6266,7 +6252,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-            rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
             rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,

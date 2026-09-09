@@ -49,7 +49,6 @@ private fun MediaMetadata.thumbnailTransformCacheKey(): Int {
         rawShadowsAdjustment = null,
         rawBlackPointCorrection = null,
         rawWhitePointCorrection = null,
-        rawAutoWhiteBalanceEstimate = null,
         rawDcpId = null,
         rawHncsProfileId = null,
         rawHncsRenderIntent = HncsRenderIntent.Standard,

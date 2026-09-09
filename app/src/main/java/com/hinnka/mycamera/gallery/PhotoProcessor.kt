@@ -67,11 +67,6 @@ class PhotoProcessor(
         val metadata: MediaMetadata,
     )
 
-    private suspend fun resolveRawAutoWhiteBalanceEstimate(metadata: MediaMetadata): Boolean {
-        return metadata.rawAutoWhiteBalanceEstimate
-            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoWhiteBalanceEstimate ?: false)
-    }
-
     private suspend fun resolveRawLensShadingCorrectionEnabled(metadata: MediaMetadata): Boolean {
         return metadata.rawLensShadingCorrectionEnabled
             ?: if (metadata.isImported) {
@@ -586,7 +581,6 @@ class PhotoProcessor(
             rawShadowsAdjustment = metadata.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
-            rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(metadata),
             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
             rawBlackLevelMode = metadata.rawBlackLevelMode,
             rawCustomBlackLevel = metadata.rawCustomBlackLevel,
@@ -669,7 +663,6 @@ class PhotoProcessor(
             rawShadowsAdjustment = metadata.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
-            rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(metadata),
             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
             rawBlackLevelMode = metadata.rawBlackLevelMode,
             rawCustomBlackLevel = metadata.rawCustomBlackLevel,

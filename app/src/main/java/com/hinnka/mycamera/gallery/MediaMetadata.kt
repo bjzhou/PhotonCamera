@@ -70,7 +70,6 @@ data class MediaMetadata(
     val rawShadowsAdjustment: Float? = null,
     val rawBlackPointCorrection: Float? = null,
     val rawWhitePointCorrection: Float? = null,
-    val rawAutoWhiteBalanceEstimate: Boolean? = null,
     val rawLensShadingCorrectionEnabled: Boolean? = null,
     val rawDcpId: String? = null,
     val rawEmbeddedDngProfileId: String? = null,
@@ -332,7 +331,6 @@ data class MediaMetadata(
                     rawShadowsAdjustment = if (obj.isNull("rawShadowsAdjustment")) null else obj.optDouble("rawShadowsAdjustment").toFloat(),
                     rawBlackPointCorrection = if (obj.isNull("rawBlackPointCorrection")) null else obj.optDouble("rawBlackPointCorrection").toFloat(),
                     rawWhitePointCorrection = if (obj.isNull("rawWhitePointCorrection")) null else obj.optDouble("rawWhitePointCorrection").toFloat(),
-                    rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
                     rawLensShadingCorrectionEnabled = if (obj.isNull("rawLensShadingCorrectionEnabled")) null else obj.optBoolean("rawLensShadingCorrectionEnabled"),
                     rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
                     rawEmbeddedDngProfileId = if (obj.isNull("rawEmbeddedDngProfileId")) {

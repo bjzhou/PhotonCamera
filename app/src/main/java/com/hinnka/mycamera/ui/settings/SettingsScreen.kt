@@ -391,7 +391,6 @@ fun SettingsScreen(
     val droMode by viewModel.droMode.collectAsState()
     val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
     val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
-    val rawAutoWhiteBalanceEstimate by viewModel.rawAutoWhiteBalanceEstimate.collectAsState()
     val rawLensShadingCorrectionEnabled by viewModel.rawLensShadingCorrectionEnabled.collectAsState()
     val rawBlackLevelModes by viewModel.rawBlackLevelModes.collectAsState()
     val rawCustomBlackLevels by viewModel.rawCustomBlackLevels.collectAsState()

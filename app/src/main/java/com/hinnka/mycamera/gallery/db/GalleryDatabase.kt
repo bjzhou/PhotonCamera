@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 40,
+    version = 41,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -350,6 +350,46 @@ abstract class GalleryDatabase : RoomDatabase() {
         private val MIGRATION_39_40 = object : androidx.room.migration.Migration(39, 40) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawLumixPhotoStyle TEXT NOT NULL DEFAULT 'standard'")
+            }
+        }
+
+        private val MIGRATION_40_41 = object : androidx.room.migration.Migration(40, 41) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Android 11's SQLite cannot DROP COLUMN. Preserve the existing column
+                // definitions (including defaults from earlier migrations) when rebuilding.
+                // This table has a single id primary key, no foreign keys, and two indices.
+                val columns = mutableListOf<String>()
+                val definitions = mutableListOf<String>()
+                db.query("PRAGMA table_info(`gallery_media`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndexOrThrow("name")
+                    val typeIndex = cursor.getColumnIndexOrThrow("type")
+                    val notNullIndex = cursor.getColumnIndexOrThrow("notnull")
+                    val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+                    val primaryKeyIndex = cursor.getColumnIndexOrThrow("pk")
+                    while (cursor.moveToNext()) {
+                        val name = cursor.getString(nameIndex)
+                        if (name == "rawAutoWhiteBalanceEstimate") continue
+                        val quotedName = "`${name.replace("`", "``")}`"
+                        columns += quotedName
+                        definitions += buildString {
+                            append(quotedName).append(' ').append(cursor.getString(typeIndex))
+                            if (cursor.getInt(notNullIndex) != 0) append(" NOT NULL")
+                            if (!cursor.isNull(defaultIndex)) {
+                                append(" DEFAULT ").append(cursor.getString(defaultIndex))
+                            }
+                            if (cursor.getInt(primaryKeyIndex) != 0) append(" PRIMARY KEY")
+                        }
+                    }
+                }
+                db.execSQL("CREATE TABLE `gallery_media_new` (${definitions.joinToString(", ")})")
+                val columnList = columns.joinToString(", ")
+                db.execSQL(
+                    "INSERT INTO `gallery_media_new` ($columnList) SELECT $columnList FROM `gallery_media`"
+                )
+                db.execSQL("DROP TABLE `gallery_media`")
+                db.execSQL("ALTER TABLE `gallery_media_new` RENAME TO `gallery_media`")
+                db.execSQL("CREATE INDEX `index_gallery_media_dateAdded` ON `gallery_media` (`dateAdded`)")
+                db.execSQL("CREATE INDEX `index_gallery_media_mediaType` ON `gallery_media` (`mediaType`)")
             }
         }
 
@@ -724,7 +764,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_36_37,
                         MIGRATION_37_38,
                         MIGRATION_38_39,
-                        MIGRATION_39_40
+                        MIGRATION_39_40,
+                        MIGRATION_40_41
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

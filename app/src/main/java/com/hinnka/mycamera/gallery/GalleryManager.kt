@@ -185,15 +185,6 @@ object GalleryManager {
     private val _detailHdrReadyEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val detailHdrReadyEvents: SharedFlow<String> = _detailHdrReadyEvents.asSharedFlow()
 
-    private suspend fun resolveRawAutoWhiteBalanceEstimate(
-        context: Context,
-        metadata: MediaMetadata?
-    ): Boolean {
-        return metadata?.rawAutoWhiteBalanceEstimate
-            ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                ?.rawAutoWhiteBalanceEstimate ?: false)
-    }
-
     private suspend fun resolveRawLensShadingCorrectionEnabled(
         context: Context,
         metadata: MediaMetadata?
@@ -310,7 +301,6 @@ object GalleryManager {
                 rawShadowsAdjustment = preferences?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = preferences?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = preferences?.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = preferences?.rawAutoWhiteBalanceEstimate ?: false,
                 rawLensShadingCorrectionEnabled = preferences?.rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = RawCfaCorrection.MODE_DEFAULT,
                 rawCustomBlackLevel = 0f,
@@ -2331,7 +2321,6 @@ object GalleryManager {
                 rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                 applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, updatedMetadata),
                 rawBlackLevelMode = updatedMetadata.rawBlackLevelMode,
                 rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
@@ -2421,7 +2410,6 @@ object GalleryManager {
                     rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                     rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
-                    rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                     applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, updatedMetadata),
                     rawBlackLevelMode = updatedMetadata.rawBlackLevelMode,
                     rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
@@ -3628,7 +3616,6 @@ object GalleryManager {
                     rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                     rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
-                    rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                     applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, updatedMetadata),
                     rawBlackLevelMode = updatedMetadata.rawBlackLevelMode,
                     rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
@@ -3719,7 +3706,6 @@ object GalleryManager {
                         rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                         rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
                         rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
-                        rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                         applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, updatedMetadata),
                         rawBlackLevelMode = updatedMetadata.rawBlackLevelMode,
                         rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
@@ -3999,7 +3985,6 @@ object GalleryManager {
             rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
-            rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, updatedMetadata),
             rawBlackLevelMode = updatedMetadata.rawBlackLevelMode,
             rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
@@ -4462,10 +4447,6 @@ object GalleryManager {
                     statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
-                    rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(
-                        context,
-                        metadata,
-                    ),
                     applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(
                         context,
                         metadata,
@@ -5434,7 +5415,6 @@ object GalleryManager {
                             rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                             rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
                             rawWhitePointCorrection = updatedMetadata.rawWhitePointCorrection ?: 0f,
-                            rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, updatedMetadata),
                             rawBlackLevelMode = updatedMetadata.rawBlackLevelMode,
                             rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
@@ -5610,7 +5590,6 @@ object GalleryManager {
                     rawShadowsAdjustment = updatedMetadata?.rawShadowsAdjustment ?: 0f,
                     rawBlackPointCorrection = updatedMetadata?.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = updatedMetadata?.rawWhitePointCorrection ?: 0f,
-                    rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(context, updatedMetadata),
                     applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, updatedMetadata),
                     rawBlackLevelMode = updatedMetadata?.rawBlackLevelMode,
                     rawCustomBlackLevel = updatedMetadata?.rawCustomBlackLevel,
