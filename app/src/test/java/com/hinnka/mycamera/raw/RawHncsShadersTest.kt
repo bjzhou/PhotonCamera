@@ -10,6 +10,8 @@ import org.junit.Test
 class RawHncsShadersTest {
     @Test
     fun hncsSelectionsRoundTripPersistedValues() {
+        assertEquals(RawRenderingEngine.Hncs, RawRenderingEngine.fromPersistedName("HncsCcm"))
+        assertEquals(RawRenderingEngine.Hncs, RawRenderingEngine.fromPersistedName("HncsLut"))
         HncsFilmCurveMode.entries.forEach { mode ->
             assertEquals(
                 mode,
@@ -29,7 +31,7 @@ class RawHncsShadersTest {
     @Test
     fun hncsShaderKeepsFilmCurveBeforeGammaAndOmitsHighlightStrength() {
         val shader = RawEngineTonePass.combinedFragmentShaderFor(
-            colorEngine = RawRenderingEngine.HncsCcm,
+            colorEngine = RawRenderingEngine.Hncs,
             includeShadowsHighlights = false,
         )
         val filmCurve = shader.indexOf("color = hncsApplyFilmCurve(color);")
@@ -71,13 +73,16 @@ class RawHncsShadersTest {
 
         val shaders = listOf(
             RawEngineTonePass.combinedFragmentShaderFor(
-                colorEngine = RawRenderingEngine.HncsCcm,
+                colorEngine = RawRenderingEngine.Hncs,
                 includeShadowsHighlights = false,
             ),
             RawEngineTonePass.combinedFragmentShaderFor(
-                colorEngine = RawRenderingEngine.HncsLut,
+                colorEngine = RawRenderingEngine.Hncs,
                 includeShadowsHighlights = true,
             ),
+            RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.Lumix),
+            RawEngineTonePass.hdrReferenceFragmentShaderFor(RawRenderingEngine.Hncs),
+            RawEngineTonePass.hdrBaseCurveFragmentShaderFor(RawRenderingEngine.Hncs),
             RawSrgbPass.FRAGMENT_SHADER,
         )
         shaders.forEachIndexed { index, shader ->

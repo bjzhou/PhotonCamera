@@ -2,7 +2,7 @@
 #include <array>
 #include <vector>
 
-namespace lumix {
+namespace equivalent_camera {
 struct Map {
     int hue = 0, saturation = 0, value = 0, encoding = 0;
     std::vector<float> data;
@@ -18,6 +18,6 @@ using Matrix = std::array<float, 9>;
 Rgb applyMap(const Map& map, const Rgb& rgb);
 bool inverseMap(const Map& map, const Rgb& rgb, Rgb& result);
 std::vector<float> bake(int size, float inputMax, float linearFraction,
-                       const Matrix& sourceToProfile, const Matrix& s9FromProfile,
+                       const Matrix& sourceToProfile, const Matrix& targetFromProfile,
                        Map hueSat, Map lookTable);
 }

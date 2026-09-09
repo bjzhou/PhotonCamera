@@ -36,7 +36,6 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
-import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -117,9 +116,7 @@ fun CameraTopSheet(
     rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     rawDcpLensOptions: List<RawDcpLensOption> = emptyList(),
     availableDcps: List<DcpInfo>,
-    rawHncsProfileId: String?,
     rawHncsFilmCurveMode: HncsFilmCurveMode,
-    availableHncsProfiles: List<HncsProfileInfo>,
     rawRenderingEngine: RawRenderingEngine,
     rawToneMappingParameters: RawToneMappingParameters,
     rawSpectralFilmSelection: SpectralFilmSelection?,
@@ -131,7 +128,6 @@ fun CameraTopSheet(
     onPhotoPreviewStabilizationChange: (Boolean) -> Unit,
     onRawDcpChange: (String?) -> Unit,
     onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
-    onRawHncsProfileChange: (String?) -> Unit,
     onRawHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit,
     onImportRawDcp: () -> Unit,
     onDeleteRawDcp: (DcpInfo) -> Unit,
@@ -577,9 +573,6 @@ fun CameraTopSheet(
                     onRawDcpIdsByLensChange = onRawDcpIdsByLensChange,
                     onImportDcp = onImportRawDcp,
                     onDeleteDcp = onDeleteRawDcp,
-                    selectedHncsProfileId = rawHncsProfileId,
-                    availableHncsProfiles = availableHncsProfiles,
-                    onSelectHncsProfile = onRawHncsProfileChange,
                     hncsFilmCurveMode = rawHncsFilmCurveMode,
                     onHncsFilmCurveModeChange = onRawHncsFilmCurveModeChange,
                     onRawColorEngineChange = onRawColorEngineChange,

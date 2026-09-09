@@ -25,6 +25,7 @@ import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
@@ -113,7 +114,7 @@ data class UserPreferences(
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     val rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
     val rawNoiseProfileIdsByLens: Map<String, String> = emptyMap(),
-    val rawHncsProfileId: String? = null,
+    val rawHncsProfileId: String? = HncsProfileManager.DEFAULT_PROFILE_ID,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
@@ -599,7 +600,7 @@ class UserPreferencesRepository(private val context: Context) {
                         null
                     }
                 }.toMap(),
-                rawHncsProfileId = preferences[RAW_HNCS_PROFILE_ID_KEY],
+                rawHncsProfileId = HncsProfileManager.DEFAULT_PROFILE_ID,
                 rawHncsRenderIntent = HncsRenderIntent.Standard,
                 rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     preferences[RAW_HNCS_FILM_CURVE_MODE_KEY]
@@ -1173,22 +1174,6 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_NOISE_PROFILE_IDS_BY_LENS_KEY] =
                     serializeNullableStringMap(overrides)
             }
-        }
-    }
-
-    suspend fun saveRawHncsProfileId(profileId: String?) {
-        context.dataStore.edit { preferences ->
-            if (profileId.isNullOrBlank()) {
-                preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
-            } else {
-                preferences[RAW_HNCS_PROFILE_ID_KEY] = profileId
-            }
-        }
-    }
-
-    suspend fun saveRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_HNCS_RENDER_INTENT_KEY] = renderIntent.assetValue
         }
     }
 
@@ -2413,14 +2398,10 @@ class UserPreferencesRepository(private val context: Context) {
                 }
             }
             update.rawHncsProfileId?.let {
-                if (it.value.isNullOrBlank()) {
-                    preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
-                } else {
-                    preferences[RAW_HNCS_PROFILE_ID_KEY] = it.value
-                }
+                preferences[RAW_HNCS_PROFILE_ID_KEY] = HncsProfileManager.DEFAULT_PROFILE_ID
             }
             update.rawHncsRenderIntent?.let {
-                preferences[RAW_HNCS_RENDER_INTENT_KEY] = it.value.assetValue
+                preferences[RAW_HNCS_RENDER_INTENT_KEY] = HncsRenderIntent.Standard.assetValue
             }
             update.rawHncsFilmCurveMode?.let {
                 preferences[RAW_HNCS_FILM_CURVE_MODE_KEY] = it.value.persistedValue

@@ -19,13 +19,7 @@ enum class RawRenderingEngine(
         defaultExposureCompensationEv = 0f,
         exposureCompensationDomain = RawExposureCompensationDomain.Curve
     ),
-    HncsCcm(
-        shaderId = 5,
-        workingColorSpace = ColorSpace.HNCS,
-        defaultExposureCompensationEv = 0f,
-        exposureCompensationDomain = RawExposureCompensationDomain.Linear
-    ),
-    HncsLut(
+    Hncs(
         shaderId = 6,
         workingColorSpace = ColorSpace.HNCS,
         defaultExposureCompensationEv = 0f,
@@ -66,19 +60,18 @@ enum class RawRenderingEngine(
     ;
 
     val isHncs: Boolean
-        get() = this == HncsCcm || this == HncsLut
+        get() = this == Hncs
 
     val isLumix: Boolean
         get() = this == Lumix
-
-    val usesHncsColorMap: Boolean
-        get() = this == HncsLut
 
     companion object {
         fun fromPersistedName(
             value: String?,
             fallback: RawRenderingEngine = AdobeCurve
         ): RawRenderingEngine {
+            if (value.equals("HncsCcm", ignoreCase = true) ||
+                value.equals("HncsLut", ignoreCase = true)) return Hncs
             return entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: fallback
         }
     }

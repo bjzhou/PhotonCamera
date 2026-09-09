@@ -594,9 +594,10 @@ def main() -> int:
         parser.error(f"source directory does not exist: {source_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    sources = sorted(source_dir.glob("*.xml"), key=lambda path: path.name.lower())
-    if not sources:
-        parser.error(f"no XML files found in {source_dir}")
+    # Runtime HNCS is paired exclusively with the X1D-50 DCP.
+    sources = [source_dir / "LUTTable51MP5.xml"]
+    if not sources[0].is_file():
+        parser.error(f"required 50c source is missing: {sources[0]}")
 
     for old_asset in output_dir.glob("*.hncs"):
         old_asset.unlink()

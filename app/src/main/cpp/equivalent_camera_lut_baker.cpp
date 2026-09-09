@@ -1,11 +1,11 @@
-#include "lumix_lut_baker.h"
+#include "equivalent_camera_lut_baker.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <stdexcept>
 #include <string>
 
-namespace lumix {
+namespace equivalent_camera {
 namespace {
 double wrap(double h) { return h - 6.0 * std::floor(h / 6.0); }
 double hueError(double h) { return h - 6.0 * std::floor((h + 3.0) / 6.0); }
@@ -88,11 +88,11 @@ void Map::validate() {
     if(empty()) return;
     if(hue<1 || saturation<2 || value<1 || hue>1024 || saturation>1024 || value>1024 ||
        data.size()!=static_cast<size_t>(hue)*saturation*value*3 || (encoding!=0 && encoding!=1))
-        throw std::invalid_argument("Invalid Lumix DCP map dimensions/encoding");
+        throw std::invalid_argument("Invalid Equivalent camera DCP map dimensions/encoding");
     minSat=1; minValue=1; unityValue=true;
     for(size_t i=0;i<data.size();i+=3) {
         if(!std::isfinite(data[i]) || !std::isfinite(data[i+1]) || !std::isfinite(data[i+2]) ||
-           data[i+1]<=0 || data[i+2]<=0) throw std::invalid_argument("Non-invertible Lumix DCP map coefficients");
+           data[i+1]<=0 || data[i+2]<=0) throw std::invalid_argument("Non-invertible Equivalent camera DCP map coefficients");
         minSat=std::min(minSat,static_cast<double>(data[i+1]));
         minValue=std::min(minValue,static_cast<double>(data[i+2]));
         unityValue=unityValue && data[i+2]==1.0f;
@@ -132,10 +132,10 @@ bool inverseMap(const Map& map,const Rgb& rgb,Rgb& result) {
     return true;
 }
 std::vector<float> bake(int size,float inputMax,float linearFraction,const Matrix& sourceToProfile,
-                       const Matrix& s9FromProfile,Map hueSat,Map lookTable) {
-    if(size<2 || size>129 || !std::isfinite(inputMax) || !(inputMax>1) || !(linearFraction>0 && linearFraction<1)) throw std::invalid_argument("Invalid Lumix LUT domain");
+                       const Matrix& targetFromProfile,Map hueSat,Map lookTable) {
+    if(size<2 || size>129 || !std::isfinite(inputMax) || !(inputMax>1) || !(linearFraction>0 && linearFraction<1)) throw std::invalid_argument("Invalid Equivalent camera LUT domain");
     for(float v:sourceToProfile)if(!std::isfinite(v))throw std::invalid_argument("Invalid source matrix");
-    for(float v:s9FromProfile)if(!std::isfinite(v))throw std::invalid_argument("Invalid S9 matrix");
+    for(float v:targetFromProfile)if(!std::isfinite(v))throw std::invalid_argument("Invalid target matrix");
     hueSat.validate();lookTable.validate();
     std::vector<double> axis(size);
     // Reserve most nodes for the PhotoStyle's [0,1] camera domain while
@@ -156,13 +156,13 @@ std::vector<float> bake(int size,float inputMax,float linearFraction,const Matri
         if(!inverseMap(lookTable,common,beforeLook) || !inverseMap(hueSat,beforeLook,beforeHueSat)) {
             ++failures;continue;
         }
-        const auto camera=multiply(s9FromProfile,beforeHueSat);
+        const auto camera=multiply(targetFromProfile,beforeHueSat);
         for(int c=0;c<3;++c) {
             if(!std::isfinite(camera[c]) || std::abs(camera[c])>65504) ++failures;
             out[i*3+c]=static_cast<float>(camera[c]);
         }
     }
-    if(failures.load()!=0)throw std::runtime_error("Lumix calibration LUT inversion failed at "+std::to_string(failures.load())+" components/nodes");
+    if(failures.load()!=0)throw std::runtime_error("Equivalent camera calibration LUT inversion failed at "+std::to_string(failures.load())+" components/nodes");
     return out;
 }
 }

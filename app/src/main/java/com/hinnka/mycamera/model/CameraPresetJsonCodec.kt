@@ -6,6 +6,7 @@ import com.google.gson.JsonParser
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
@@ -53,7 +54,7 @@ internal object CameraPresetJsonCodec {
             frameId = obj.stringOrNull("frameId"),
             rawDcpId = obj.stringOrNull("rawDcpId"),
             rawDcpIdsByLens = parseRawDcpIdsByLens(obj.get("rawDcpIdsByLens")),
-            rawHncsProfileId = obj.stringOrNull("rawHncsProfileId"),
+            rawHncsProfileId = HncsProfileManager.DEFAULT_PROFILE_ID,
             rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
             rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                 obj.stringOrNull("rawHncsFilmCurveMode")

@@ -8,14 +8,15 @@ import java.nio.ByteOrder
 /**
  * Phocus HNCS color-correction and selectable FilmCurve path.
  *
- * The camera matrix is applied by the linear RAW pass. The exact 65,536-entry
- * B, C, and E curves come from the original Phocus CGradationManager.
+ * The source CCM is recovered to WB sensor RGB, then shared inverse-DCP LUTs
+ * produce X1D-50 RGB for the Phocus matrix, 2D colour map and original FilmCurve.
  */
 internal object HncsToneShader {
     val HNCS_COMBINED_UNIFORMS = """
+        ${EquivalentCameraLutShader.UNIFORMS}
+        uniform mat3 uHncsTargetCameraToHncs;
         uniform sampler2D uHncsColorMapTexture;
         uniform sampler2D uHncsCurveTexture;
-        uniform int uHncsColorMapEnabled;
         uniform ivec2 uHncsColorMapSize;
         uniform vec3 uHncsColorMapGrid;
         uniform mat3 uHncsRgbToYcc;
@@ -30,6 +31,7 @@ internal object HncsToneShader {
         uniform int uHncsDiagnosticStage;
     """.trimIndent()
     val HNCS_COMBINED_FUNCTIONS = """
+        ${EquivalentCameraLutShader.FUNCTIONS}
         const float HNCS_EPSILON = 0.000001;
         const float HNCS_CURVE_SAMPLE_COUNT = 65536.0;
         const vec2 HNCS_CURVE_TEXTURE_DIMENSIONS = vec2(256.0, 256.0);
@@ -42,12 +44,12 @@ internal object HncsToneShader {
             vec2 maximum = vec2(uHncsColorMapSize - ivec2(1));
             grid = clamp(grid, vec2(0.0), maximum);
             ivec2 lower = ivec2(floor(grid));
-            vec2 fraction = fract(grid);
             lower = clamp(
                 lower,
                 ivec2(0),
                 uHncsColorMapSize - ivec2(2)
             );
+            vec2 fraction = grid - vec2(lower);
             ivec2 upper = lower + ivec2(1);
             vec2 row0 = mix(
                 hncsFetchColorMap(ivec2(lower.x, lower.y)),
@@ -90,14 +92,8 @@ internal object HncsToneShader {
         }
 
         vec3 hncsApplyCameraColorMap(vec3 color) {
-            if (uHncsColorMapEnabled == 0 ||
-                uHncsColorMapSize.x < 2 ||
-                uHncsColorMapSize.y < 2) {
-                return color;
-            }
-            // ColorCorrectAll clamps camera-domain input before its input matrix.
-            // This pass receives the already transformed HNCS value, so applying
-            // a second [0,1] clamp here would incorrectly destroy matrix overrange.
+            // The input has passed through source headroom, inverse target DCP,
+            // and the Phocus matrix. Preserve signed/overrange working RGB.
             vec3 source = color;
             vec3 ycc = uHncsRgbToYcc * source;
             if (!(ycc.x > HNCS_EPSILON)) {
@@ -151,6 +147,7 @@ internal object HncsToneShader {
         }
 
         vec3 applyEngineTone(vec3 color) {
+            color = uHncsTargetCameraToHncs * equivalentCameraRgb(color);
             if (uHncsDiagnosticStage == 1) {
                 return color;
             }
@@ -181,6 +178,7 @@ internal object HncsToneShader {
 
 internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
     RawRenderingEngineToneAlgorithm(quad, HncsToneShader.DEFINITION) {
+    private val calibration = EquivalentCameraLutGl()
     private var colorMapTextureId = 0
     private var curveTextureId = 0
     private var colorMapTextureKey: String? = null
@@ -192,11 +190,14 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
             "HNCS engine requires a validated render plan"
         }
         ensureTextures(renderPlan)
-        val colorMap = renderPlan.colorMap?.takeIf {
-            input.colorEngine.usesHncsColorMap && it.isValid && colorMapTextureId != 0
-        }
-        require(!input.colorEngine.usesHncsColorMap || colorMap != null) {
-            "HNCS LUT branch requires an uploaded, validated color map"
+        calibration.bind(program, renderPlan.calibrationLuts, renderPlan.calibrationFirstWeight)
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uHncsTargetCameraToHncs"),
+            1, false, transpose3x3(renderPlan.cameraToHncsMatrix), 0,
+        )
+        val colorMap = renderPlan.colorMap
+        require(colorMap.isValid && colorMapTextureId != 0) {
+            "HNCS requires an uploaded, validated color map"
         }
         require(curveTextureId != 0) { "HNCS film curve texture was not uploaded" }
 
@@ -205,24 +206,20 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
         GLES30.glBindTexture(
             GLES30.GL_TEXTURE_2D,
-            if (colorMap != null) colorMapTextureId else curveTextureId,
+            colorMapTextureId,
         )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uHncsColorMapEnabled"),
-            if (colorMap != null) 1 else 0,
-        )
         GLES30.glUniform2i(
             GLES30.glGetUniformLocation(program, "uHncsColorMapSize"),
-            colorMap?.width ?: 1,
-            colorMap?.height ?: 1,
+            colorMap.width,
+            colorMap.height,
         )
         GLES30.glUniform3f(
             GLES30.glGetUniformLocation(program, "uHncsColorMapGrid"),
-            colorMap?.cbStart ?: 0f,
-            colorMap?.crStart ?: 0f,
-            colorMap?.divFactor ?: 1f,
+            colorMap.cbStart,
+            colorMap.crStart,
+            colorMap.divFactor,
         )
         GLES30.glUniformMatrix3fv(
             GLES30.glGetUniformLocation(program, "uHncsRgbToYcc"),
@@ -274,6 +271,7 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
     }
 
     override fun releaseEngineResources() {
+        calibration.release()
         if (colorMapTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(colorMapTextureId), 0)
             colorMapTextureId = 0
@@ -299,7 +297,8 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
             curveTextureKey = filmCurveKey
             uploaded = true
         }
-        renderPlan.colorMap?.takeIf(HncsColorMap::isValid)?.let { colorMap ->
+        renderPlan.colorMap.let { colorMap ->
+            require(colorMap.isValid)
             if (colorMapTextureKey != renderPlan.sourceKey || colorMapTextureId == 0) {
                 val rgba = FloatArray(colorMap.width * colorMap.height * 4)
                 var sourceIndex = 0
@@ -324,7 +323,7 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
             PLog.d(
                 TAG,
                 "HNCS resources uploaded: profile=${renderPlan.profileId} " +
-                    "map=${renderPlan.colorMap?.let { "${it.width}x${it.height}" } ?: "none"} " +
+                    "map=${renderPlan.colorMap.width}x${renderPlan.colorMap.height} " +
                     "curves=${HncsProfileManager.CURVE_SAMPLE_COUNT}",
             )
         }

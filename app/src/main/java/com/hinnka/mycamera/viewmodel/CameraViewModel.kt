@@ -62,6 +62,7 @@ import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -233,10 +234,6 @@ private data class PresetMatchSnapshot(
         return ultraHdrGainMapEnabled == preset.ultraHdrGainMapEnabled &&
             rawDcpId == preset.rawDcpId &&
             rawDcpIdsByLens == preset.rawDcpIdsByLens &&
-            rawHncsProfileId == preset.rawHncsProfileId &&
-            rawHncsRenderIntent == HncsRenderIntent.fromPersistedValue(
-                preset.rawHncsRenderIntent
-            ) &&
             rawHncsFilmCurveMode == HncsFilmCurveMode.fromPersistedValue(
                 preset.rawHncsFilmCurveMode
             ) &&
@@ -283,18 +280,6 @@ private data class PresetMatchSnapshot(
                 if (rawDcpId != preset.rawDcpId) add("rawDcpId current=$rawDcpId preset=${preset.rawDcpId}")
                 if (rawDcpIdsByLens != preset.rawDcpIdsByLens) {
                     add("rawDcpIdsByLens current=$rawDcpIdsByLens preset=${preset.rawDcpIdsByLens}")
-                }
-                if (rawHncsProfileId != preset.rawHncsProfileId) {
-                    add("rawHncsProfileId current=$rawHncsProfileId preset=${preset.rawHncsProfileId}")
-                }
-                val presetHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                    preset.rawHncsRenderIntent
-                )
-                if (rawHncsRenderIntent != presetHncsRenderIntent) {
-                    add(
-                        "rawHncsRenderIntent current=$rawHncsRenderIntent " +
-                            "preset=$presetHncsRenderIntent"
-                    )
                 }
                 val presetHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     preset.rawHncsFilmCurveMode
@@ -803,10 +788,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ultraHdrGainMapEnabled = SettingValue(this?.ultraHdrGainMapEnabled ?: false),
             rawDcpId = SettingValue(this?.rawDcpId),
             rawDcpIdsByLens = SettingValue(this?.rawDcpIdsByLens ?: emptyMap()),
-            rawHncsProfileId = SettingValue(this?.rawHncsProfileId),
-            rawHncsRenderIntent = SettingValue(
-                HncsRenderIntent.fromPersistedValue(this?.rawHncsRenderIntent)
-            ),
+            rawHncsProfileId = SettingValue(HncsProfileManager.DEFAULT_PROFILE_ID),
+            rawHncsRenderIntent = SettingValue(HncsRenderIntent.Standard),
             rawHncsFilmCurveMode = SettingValue(
                 HncsFilmCurveMode.fromPersistedValue(this?.rawHncsFilmCurveMode)
             ),
@@ -1453,7 +1436,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
     val rawHncsProfileId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.rawHncsProfileId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, HncsProfileManager.DEFAULT_PROFILE_ID)
     val rawHncsRenderIntent: StateFlow<HncsRenderIntent> =
         userPreferencesRepository.userPreferences
             .map { it.rawHncsRenderIntent }
@@ -2388,22 +2371,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawNoiseProfileIdsByLens(profileIdsByLens: Map<String, String>) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawNoiseProfileIdsByLens(profileIdsByLens)
-        }
-    }
-
-    fun setRawHncsProfileId(profileId: String?) {
-        viewModelScope.launch {
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(rawHncsProfileId = SettingValue(profileId))
-            )
-        }
-    }
-
-    fun setRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
-        viewModelScope.launch {
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(rawHncsRenderIntent = SettingValue(renderIntent))
-            )
         }
     }
 

@@ -875,15 +875,6 @@
     <string name="settings_raw_color_engine_spectral_film_description">模拟胶卷和相纸介质，并支持密度微调。</string>
     <string name="settings_raw_color_engine_hncs">HNCS</string>
     <string name="settings_raw_color_engine_hncs_description">哈苏自然色彩解决方案：由哈苏独立研发的色彩管理系统</string>
-    <string name="settings_raw_color_engine_hncs_ccm">HNCS（原始色彩矩阵）</string>
-    <string name="settings_raw_color_engine_hncs_lut">HNCS（2D LUT）</string>
-    <string name="settings_raw_hncs_color_branch">色彩还原配置</string>
-    <string name="settings_raw_hncs_color_branch_description">选择 RAW 原始色彩矩阵，或哈苏相机专属 Cb/Y–Cr/Y 色度表。</string>
-    <string name="settings_raw_hncs_color_branch_ccm">原始色彩矩阵</string>
-    <string name="settings_raw_hncs_color_branch_lut">2D LUT</string>
-    <string name="settings_raw_hncs_profile">HNCS 相机配置</string>
-    <string name="settings_raw_hncs_2d_lut">哈苏相机专属 2D LUT</string>
-    <string name="settings_raw_hncs_profile_description">使用哈苏相机专属 Cb/Y-Cr/Y 色度表</string>
     <string name="settings_raw_hncs_film_curve">响应曲线</string>
     <string name="settings_raw_hncs_film_curve_description">选择响应曲线</string>
     <string name="settings_raw_hncs_film_curve_standard">标准</string>

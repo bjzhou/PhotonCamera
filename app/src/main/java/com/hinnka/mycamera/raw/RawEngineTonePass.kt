@@ -84,8 +84,7 @@ internal class RawEngineTonePass(
             RawRenderingEngine.Spektrafilm -> spektrafilmAlgorithm
             RawRenderingEngine.DarktableSigmoid -> darktableSigmoidAlgorithm
             RawRenderingEngine.DarktableFilmic -> darktableFilmicAlgorithm
-            RawRenderingEngine.HncsCcm,
-            RawRenderingEngine.HncsLut -> hncsAlgorithm
+            RawRenderingEngine.Hncs -> hncsAlgorithm
             RawRenderingEngine.Lumix -> lumixAlgorithm
         }
     }
@@ -297,8 +296,7 @@ internal class RawEngineTonePass(
                 RawRenderingEngine.Spektrafilm -> SpektrafilmToneShader.DEFINITION
                 RawRenderingEngine.DarktableSigmoid -> DarktableSigmoidToneShader.DEFINITION
                 RawRenderingEngine.DarktableFilmic -> DarktableFilmicToneShader.DEFINITION
-                RawRenderingEngine.HncsCcm,
-                RawRenderingEngine.HncsLut -> HncsToneShader.DEFINITION
+                RawRenderingEngine.Hncs -> HncsToneShader.DEFINITION
                 RawRenderingEngine.Lumix -> LumixToneShader.DEFINITION
             }
         }

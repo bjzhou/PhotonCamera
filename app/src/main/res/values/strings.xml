@@ -871,15 +871,6 @@
     <string name="settings_raw_color_engine_spectral_film_description">Film stock and print medium simulation with density tuning.</string>
     <string name="settings_raw_color_engine_hncs">HNCS</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: a colour management system independently developed by Hasselblad</string>
-    <string name="settings_raw_color_engine_hncs_ccm">HNCS (Original color matrix)</string>
-    <string name="settings_raw_color_engine_hncs_lut">HNCS (2D LUT)</string>
-    <string name="settings_raw_hncs_color_branch">Color reproduction profile</string>
-    <string name="settings_raw_hncs_color_branch_description">Choose the RAW original color matrix or the Hasselblad-exclusive Cb/Y–Cr/Y color map.</string>
-    <string name="settings_raw_hncs_color_branch_ccm">Original color matrix</string>
-    <string name="settings_raw_hncs_color_branch_lut">2D LUT</string>
-    <string name="settings_raw_hncs_profile">HNCS camera profile</string>
-    <string name="settings_raw_hncs_2d_lut">Hasselblad camera-exclusive 2D LUT</string>
-    <string name="settings_raw_hncs_profile_description">Uses Hasselblad camera-specific Cb/Y-Cr/Y chroma tables.</string>
     <string name="settings_raw_hncs_film_curve">Response Curve</string>
     <string name="settings_raw_hncs_film_curve_description">Choose a response curve.</string>
     <string name="settings_raw_hncs_film_curve_standard">Standard</string>

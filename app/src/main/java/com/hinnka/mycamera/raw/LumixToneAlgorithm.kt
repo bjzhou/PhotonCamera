@@ -13,47 +13,10 @@ internal object LumixToneShader {
             uniform float uLumixHighWeight;
             uniform float uLumixStyleGain;
             uniform float uLumixOutputClip;
-            uniform highp sampler3D uLumixCalibrationLow;
-            uniform highp sampler3D uLumixCalibrationHigh;
-            uniform float uLumixCalibrationFirstWeight;
+            ${EquivalentCameraLutShader.UNIFORMS}
         """.trimIndent(),
         engineFunctions = """
-            vec3 lumixCalibrationCube(highp sampler3D lut, vec3 position) {
-                ivec3 p = min(ivec3(floor(position)), ivec3(${LumixLutNative.SIZE - 2}));
-                vec3 f = position - vec3(p);
-                ivec3 first;
-                ivec3 second;
-                vec3 weights;
-                // Four vertices of the containing tetrahedron. Only calibration uses
-                // this interpolation; the original PSL1 sampler below remains trilinear.
-                if (f.r >= f.g) {
-                    if (f.g >= f.b) { first=ivec3(1,0,0); second=ivec3(1,1,0); weights=f.rgb; }
-                    else if (f.r >= f.b) { first=ivec3(1,0,0); second=ivec3(1,0,1); weights=f.rbg; }
-                    else { first=ivec3(0,0,1); second=ivec3(1,0,1); weights=f.brg; }
-                } else {
-                    if (f.r >= f.b) { first=ivec3(0,1,0); second=ivec3(1,1,0); weights=f.grb; }
-                    else if (f.g >= f.b) { first=ivec3(0,1,0); second=ivec3(0,1,1); weights=f.gbr; }
-                    else { first=ivec3(0,0,1); second=ivec3(0,1,1); weights=f.bgr; }
-                }
-                return texelFetch(lut,p,0).rgb * (1.0-weights.x) +
-                    texelFetch(lut,p+first,0).rgb * (weights.x-weights.y) +
-                    texelFetch(lut,p+second,0).rgb * (weights.y-weights.z) +
-                    texelFetch(lut,p+ivec3(1),0).rgb * weights.z;
-            }
-
-            vec3 lumixEquivalentCamera(vec3 camera) {
-                camera = max(camera, vec3(0.0));
-                // A linear [0,1] section followed by HDR logarithmic nodes. This is a
-                // lookup coordinate, not sRGB encoding. Extend homogeneously above 16.
-                float extension = max(1.0, max(camera.r, max(camera.g,camera.b)) / ${LumixLutNative.INPUT_MAX});
-                camera /= extension;
-                vec3 linear = camera * ${LumixLutNative.LINEAR_FRACTION};
-                vec3 hdr = vec3(${LumixLutNative.LINEAR_FRACTION}) +
-                    (1.0-${LumixLutNative.LINEAR_FRACTION}) * log(max(camera,vec3(1.0))) / log(${LumixLutNative.INPUT_MAX});
-                vec3 position = clamp(mix(linear,hdr,step(vec3(1.0),camera)),0.0,1.0) * ${LumixLutNative.SIZE - 1}.0;
-                return mix(lumixCalibrationCube(uLumixCalibrationHigh, position),
-                           lumixCalibrationCube(uLumixCalibrationLow, position), uLumixCalibrationFirstWeight) * extension;
-            }
+            ${EquivalentCameraLutShader.FUNCTIONS}
 
             float lumixShape(float value) {
                 float position = clamp(value, 0.0, 1.0) * 2047.0;
@@ -81,7 +44,7 @@ internal object LumixToneShader {
             }
 
             vec3 applyEngineTone(vec3 color) {
-                color = lumixEquivalentCamera(color);
+                color = equivalentCameraRgb(color);
                 vec3 camera = clamp(color * uLumixStyleGain, 0.0, 1.0);
                 vec3 shaped = vec3(lumixShape(camera.r), lumixShape(camera.g), lumixShape(camera.b));
                 vec3 encoded = clamp(mix(lumixCube(uLumixLow, shaped),
@@ -101,14 +64,13 @@ internal class LumixToneAlgorithm(quad: RawFullscreenQuad) :
     RawRenderingEngineToneAlgorithm(quad, LumixToneShader.DEFINITION) {
     private val textures = IntArray(3)
     private var uploadedTables: LumixPhotoStyleTables? = null
-    private val calibrationTextures = IntArray(2)
-    private var uploadedCalibrationKey: String? = null
+    private val calibration = EquivalentCameraLutGl()
 
     override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
         super.bindEngineResources(program, input)
         val plan = requireNotNull(input.lumixRenderPlan) { "Lumix requires an S9 render plan" }
         ensureTextures(plan.tables)
-        bindCalibration(program, plan)
+        calibration.bind(program, plan.calibrationLuts, plan.calibrationFirstWeight)
         val units = intArrayOf(2, 3, 6)
         val names = arrayOf("uLumixCurve", "uLumixLow", "uLumixHigh")
         for (index in textures.indices) {
@@ -131,9 +93,7 @@ internal class LumixToneAlgorithm(quad: RawFullscreenQuad) :
     }
 
     override fun releaseEngineResources() {
-        GLES30.glDeleteTextures(calibrationTextures.size, calibrationTextures, 0)
-        calibrationTextures.fill(0)
-        uploadedCalibrationKey = null
+        calibration.release()
         releaseStyleTextures()
     }
 
@@ -141,53 +101,6 @@ internal class LumixToneAlgorithm(quad: RawFullscreenQuad) :
         GLES30.glDeleteTextures(textures.size, textures, 0)
         textures.fill(0)
         uploadedTables = null
-    }
-
-    private fun bindCalibration(program: Int, plan: LumixRenderPlan) {
-        val luts = plan.calibrationLuts
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uLumixCalibrationFirstWeight"), plan.calibrationFirstWeight)
-        val units = intArrayOf(1, 5)
-        val names = arrayOf("uLumixCalibrationLow", "uLumixCalibrationHigh")
-        if (calibrationTextures.any { it == 0 }) {
-            GLES30.glGenTextures(calibrationTextures.size, calibrationTextures, 0)
-            if (calibrationTextures.any { it == 0 }) {
-                GLES30.glDeleteTextures(calibrationTextures.size, calibrationTextures, 0)
-                calibrationTextures.fill(0)
-                error("Unable to allocate Lumix calibration textures")
-            }
-        }
-        val unpack = IntArray(1)
-        GLES30.glGetIntegerv(GLES30.GL_UNPACK_ALIGNMENT, unpack, 0)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-        try {
-            for (index in units.indices) {
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(program, names[index]), units[index])
-                GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + units[index])
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, calibrationTextures[index])
-                if (uploadedCalibrationKey == luts.key) continue
-                val values = if (index == 0) luts.low else luts.high
-                val data = ByteBuffer.allocateDirect(values.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-                data.put(values).position(0)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
-                GLES30.glTexImage3D(GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB32F, luts.size, luts.size, luts.size,
-                    0, GLES30.GL_RGB, GLES30.GL_FLOAT, data)
-                check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "Lumix calibration LUT upload failed" }
-            }
-            uploadedCalibrationKey = luts.key
-        } catch (error: Throwable) {
-            // A partial upload must never be reused as the previous lens's pair.
-            GLES30.glDeleteTextures(calibrationTextures.size, calibrationTextures, 0)
-            calibrationTextures.fill(0)
-            uploadedCalibrationKey = null
-            throw error
-        } finally {
-            GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, unpack[0])
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        }
     }
 
     private fun ensureTextures(tables: LumixPhotoStyleTables) {

@@ -29,7 +29,6 @@ import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
-import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
@@ -139,9 +138,6 @@ fun RawEditPanel(
     onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit = {},
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
-    selectedHncsProfileId: String? = null,
-    availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
-    onSelectHncsProfile: (String?) -> Unit = {},
     hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
     selectedRawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
@@ -197,9 +193,6 @@ fun RawEditPanel(
             onSelectEmbeddedDngProfile = onSelectEmbeddedDngProfile,
             onSpectralFilmSelectionChange = onSpectralFilmSelectionChange,
             onSpectralFilmPrintChange = onSpectralFilmPrintChange,
-            selectedHncsProfileId = selectedHncsProfileId,
-            availableHncsProfiles = availableHncsProfiles,
-            onSelectHncsProfile = onSelectHncsProfile,
             hncsFilmCurveMode = hncsFilmCurveMode,
             onHncsFilmCurveModeChange = onHncsFilmCurveModeChange,
             onAdjustmentStart = onAdjustmentStart,
@@ -328,9 +321,6 @@ fun RawRenderingEngineSettingsPanel(
     onSelectEmbeddedDngProfile: ((RawEmbeddedDngProfileOption) -> Unit)? = null,
     onSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onSpectralFilmPrintChange: (String?) -> Unit,
-    selectedHncsProfileId: String? = null,
-    availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
-    onSelectHncsProfile: (String?) -> Unit = {},
     hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
     onAdjustmentStart: () -> Unit = {},
@@ -348,40 +338,6 @@ fun RawRenderingEngineSettingsPanel(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (rawRenderingEngine.isHncs) {
-            RawChoiceSetting(
-                title = stringResource(R.string.settings_raw_hncs_color_branch),
-                description = stringResource(R.string.settings_raw_hncs_color_branch_description),
-                levels = listOf(
-                    RawRenderingEngine.HncsCcm.name to
-                        stringResource(R.string.settings_raw_hncs_color_branch_ccm),
-                    RawRenderingEngine.HncsLut.name to
-                        stringResource(R.string.settings_raw_hncs_color_branch_lut),
-                ),
-                currentLevel = rawRenderingEngine.name,
-                onLevelSelected = { persistedName ->
-                    onRawColorEngineChange(
-                        RawRenderingEngine.fromPersistedName(
-                            persistedName,
-                            RawRenderingEngine.HncsCcm,
-                        )
-                    )
-                },
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            if (rawRenderingEngine == RawRenderingEngine.HncsLut &&
-                availableHncsProfiles.isNotEmpty()
-            ) {
-                RawChoiceSetting(
-                    title = stringResource(R.string.settings_raw_hncs_2d_lut),
-                    description = stringResource(R.string.settings_raw_hncs_profile_description),
-                    levels = availableHncsProfiles.map { profile ->
-                        profile.id to profile.displayName
-                    },
-                    currentLevel = selectedHncsProfileId.orEmpty(),
-                    onLevelSelected = onSelectHncsProfile,
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
             RawChoiceSetting(
                 title = stringResource(R.string.settings_raw_hncs_film_curve),
                 description = stringResource(R.string.settings_raw_hncs_film_curve_description),
@@ -810,8 +766,7 @@ private fun RawToneMappingControls(
 
     when (rawRenderingEngine) {
         RawRenderingEngine.AdobeCurve,
-        RawRenderingEngine.HncsCcm,
-        RawRenderingEngine.HncsLut,
+        RawRenderingEngine.Hncs,
         RawRenderingEngine.Lumix -> Unit
 
         RawRenderingEngine.AgX -> {
@@ -1101,25 +1056,15 @@ private fun RawRenderingEngineSelector(
     inlineOptions: Boolean = false,
 ) {
     var showSheet by remember { mutableStateOf(false) }
-    val visibleEngines = RawRenderingEngine.entries.filterNot {
-        it == RawRenderingEngine.HncsLut
-    }
-
-    fun resolvedEngine(engine: RawRenderingEngine): RawRenderingEngine {
-        return if (engine == RawRenderingEngine.HncsCcm && selectedEngine.isHncs) {
-            selectedEngine
-        } else {
-            engine
-        }
-    }
+    val visibleEngines = RawRenderingEngine.entries
 
     if (inlineOptions) {
         visibleEngines.forEach { engine ->
             RawColorEngineItem(
                 name = rawRenderingEngineName(engine),
                 description = rawColorEngineDescription(engine),
-                isSelected = resolvedEngine(engine) == selectedEngine,
-                onClick = { onSelectEngine(resolvedEngine(engine)) },
+                isSelected = engine == selectedEngine,
+                onClick = { onSelectEngine(engine) },
             )
         }
         return
@@ -1176,9 +1121,9 @@ private fun RawRenderingEngineSelector(
                     RawColorEngineItem(
                         name = rawRenderingEngineName(engine),
                         description = rawColorEngineDescription(engine),
-                        isSelected = resolvedEngine(engine) == selectedEngine,
+                        isSelected = engine == selectedEngine,
                         onClick = {
-                            onSelectEngine(resolvedEngine(engine))
+                            onSelectEngine(engine)
                             showSheet = false
                         }
                     )
@@ -1197,8 +1142,7 @@ private fun rawRenderingEngineName(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
-        RawRenderingEngine.HncsCcm,
-        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs)
+        RawRenderingEngine.Hncs -> stringResource(R.string.settings_raw_color_engine_hncs)
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
     }
 }
@@ -1211,8 +1155,7 @@ private fun rawColorEngineDescription(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid_description)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic_description)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film_description)
-        RawRenderingEngine.HncsCcm,
-        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs_description)
+        RawRenderingEngine.Hncs -> stringResource(R.string.settings_raw_color_engine_hncs_description)
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix_description)
     }
 }

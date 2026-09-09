@@ -71,7 +71,6 @@ import com.hinnka.mycamera.ml.DepthModelDownloadState
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
-import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.processor.DenoiseStrength
@@ -288,9 +287,6 @@ fun GalleryEditScreen(
     val editRawSpectralFilmMDensityGain by viewModel.editRawSpectralFilmMDensityGain.collectAsState()
     val editRawSpectralFilmYDensityGain by viewModel.editRawSpectralFilmYDensityGain.collectAsState()
     val availableDcps = viewModel.availableDcps
-    val availableHncsProfiles = remember(context) {
-        HncsProfileManager(context.applicationContext).getAvailableProfiles()
-    }
     
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
     val editBokehStyle by viewModel.editBokehStyle.collectAsState()
@@ -1776,16 +1772,6 @@ fun GalleryEditScreen(
                                                 if (success && isDeletingSelectedDcp) {
                                                     requestRawPreviewRefresh()
                                                 }
-                                            }
-                                        },
-                                        selectedHncsProfileId = editRawHncsProfileId,
-                                        availableHncsProfiles = availableHncsProfiles,
-                                        onSelectHncsProfile = { profileId ->
-                                            viewModel.saveRawHncsProfileSelection(
-                                                currentEditSourcePhoto,
-                                                profileId
-                                            ) {
-                                                requestRawPreviewRefresh()
                                             }
                                         },
                                         hncsFilmCurveMode = editRawHncsFilmCurveMode,

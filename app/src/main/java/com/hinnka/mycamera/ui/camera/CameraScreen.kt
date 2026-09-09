@@ -71,7 +71,6 @@ import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.raw.SpectralFilmSelection
-import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -252,13 +251,9 @@ fun CameraScreen(
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
-    val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
-    val availableHncsProfiles = remember(context) {
-        HncsProfileManager(context.applicationContext).getAvailableProfiles()
-    }
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
@@ -1617,9 +1612,7 @@ fun CameraScreen(
             rawDcpIdsByLens = rawDcpIdsByLens,
             rawDcpLensOptions = rawDcpLensOptions(state.availableCameras),
             availableDcps = viewModel.availableDcps,
-            rawHncsProfileId = rawHncsProfileId,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode,
-            availableHncsProfiles = availableHncsProfiles,
             rawRenderingEngine = rawColorEngine,
             rawToneMappingParameters = rawToneMappingParameters,
             rawSpectralFilmSelection = rawSpectralFilmSelection ?: SpectralFilmSelection(rawSpectralFilmStock ?: "kodak_portra_400"),
@@ -1634,7 +1627,6 @@ fun CameraScreen(
                 viewModel::setPhotoPreviewStabilizationEnabled,
             onRawDcpChange = { viewModel.setRawDcpId(it) },
             onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
-            onRawHncsProfileChange = { viewModel.setRawHncsProfileId(it) },
             onRawHncsFilmCurveModeChange = { viewModel.setRawHncsFilmCurveMode(it) },
             onImportRawDcp = { dcpImportLauncher.launch("*/*") },
             onDeleteRawDcp = { dcp ->

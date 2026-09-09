@@ -41,6 +41,7 @@ import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -397,7 +398,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawEmbeddedDngProfileId = MutableStateFlow<String?>(null)
         private set
-    var editRawHncsProfileId = MutableStateFlow<String?>(null)
+    var editRawHncsProfileId = MutableStateFlow<String?>(HncsProfileManager.DEFAULT_PROFILE_ID)
         private set
     var editRawHncsRenderIntent = MutableStateFlow(HncsRenderIntent.Standard)
         private set
@@ -1404,8 +1405,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawCfaCorrectionMode.value = m.rawCfaCorrectionMode ?: RawCfaCorrection.MODE_DEFAULT
             editRawDcpId.value = m.rawDcpId
             editRawEmbeddedDngProfileId.value = m.rawEmbeddedDngProfileId
-            editRawHncsProfileId.value = m.rawHncsProfileId
-            editRawHncsRenderIntent.value = m.rawHncsRenderIntent
+            editRawHncsProfileId.value = HncsProfileManager.DEFAULT_PROFILE_ID
+            editRawHncsRenderIntent.value = HncsRenderIntent.Standard
             editRawHncsFilmCurveMode.value = m.rawHncsFilmCurveMode
             editRawRenderingEngine.value = m.rawRenderingEngine
             editRawToneMappingParameters.value = m.rawToneMappingParameters
@@ -2031,8 +2032,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             if (!targetPhoto.isVideo) {
                 editRawDcpId.value = metadata.rawDcpId
                 editRawEmbeddedDngProfileId.value = metadata.rawEmbeddedDngProfileId
-                editRawHncsProfileId.value = metadata.rawHncsProfileId
-                editRawHncsRenderIntent.value = metadata.rawHncsRenderIntent
+                editRawHncsProfileId.value = HncsProfileManager.DEFAULT_PROFILE_ID
+                editRawHncsRenderIntent.value = HncsRenderIntent.Standard
                 editRawHncsFilmCurveMode.value = metadata.rawHncsFilmCurveMode
                 editRawBaselineLutId.value = metadata.baselineLutId
                 editRawRenderingEngine.value = metadata.rawRenderingEngine
@@ -2103,7 +2104,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawDROMode.value = "OFF"
                 editRawDcpId.value = null
                 editRawEmbeddedDngProfileId.value = null
-                editRawHncsProfileId.value = null
+                editRawHncsProfileId.value = HncsProfileManager.DEFAULT_PROFILE_ID
                 editRawHncsRenderIntent.value = HncsRenderIntent.Standard
                 editRawHncsFilmCurveMode.value = HncsFilmCurveMode.Standard
                 editRawBaselineLutId.value = null
@@ -2227,7 +2228,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawDROMode.value = "OFF"
         editRawDcpId.value = null
         editRawEmbeddedDngProfileId.value = null
-        editRawHncsProfileId.value = null
+        editRawHncsProfileId.value = HncsProfileManager.DEFAULT_PROFILE_ID
         editRawHncsRenderIntent.value = HncsRenderIntent.Standard
         editRawHncsFilmCurveMode.value = HncsFilmCurveMode.Standard
         editRawBaselineLutId.value = null
@@ -2830,24 +2831,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawToneMappingParameters.value = editRawToneMappingParameters.value
                 .withProfileToneMapMode(RawProfileToneMapMode.Profile)
         }
-        persistRawEditMetadata(mediaData, onComplete)
-    }
-
-    fun saveRawHncsProfileSelection(
-        mediaData: MediaData,
-        profileId: String?,
-        onComplete: ((Boolean) -> Unit)? = null
-    ) {
-        editRawHncsProfileId.value = profileId
-        persistRawEditMetadata(mediaData, onComplete)
-    }
-
-    fun saveRawHncsRenderIntent(
-        mediaData: MediaData,
-        renderIntent: HncsRenderIntent,
-        onComplete: ((Boolean) -> Unit)? = null
-    ) {
-        editRawHncsRenderIntent.value = renderIntent
         persistRawEditMetadata(mediaData, onComplete)
     }
 

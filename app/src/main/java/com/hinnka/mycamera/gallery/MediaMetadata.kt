@@ -16,6 +16,7 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -73,7 +74,7 @@ data class MediaMetadata(
     val rawLensShadingCorrectionEnabled: Boolean? = null,
     val rawDcpId: String? = null,
     val rawEmbeddedDngProfileId: String? = null,
-    val rawHncsProfileId: String? = null,
+    val rawHncsProfileId: String? = HncsProfileManager.DEFAULT_PROFILE_ID,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
@@ -339,18 +340,8 @@ data class MediaMetadata(
                     } else {
                         obj.optString("rawEmbeddedDngProfileId")
                     },
-                    rawHncsProfileId = if (obj.isNull("rawHncsProfileId")) {
-                        null
-                    } else {
-                        obj.optString("rawHncsProfileId")
-                    },
-                    rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                        if (obj.isNull("rawHncsRenderIntent")) {
-                            null
-                        } else {
-                            obj.optString("rawHncsRenderIntent")
-                        }
-                    ),
+                    rawHncsProfileId = HncsProfileManager.DEFAULT_PROFILE_ID,
+                    rawHncsRenderIntent = HncsRenderIntent.Standard,
                     rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                         if (obj.isNull("rawHncsFilmCurveMode")) {
                             null

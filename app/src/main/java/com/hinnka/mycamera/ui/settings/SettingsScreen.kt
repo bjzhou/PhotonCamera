@@ -137,7 +137,6 @@ import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
-import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -384,7 +383,6 @@ fun SettingsScreen(
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawNoiseProfileId by viewModel.rawNoiseProfileId.collectAsState()
     val rawNoiseProfileIdsByLens by viewModel.rawNoiseProfileIdsByLens.collectAsState()
-    val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
@@ -560,9 +558,6 @@ fun SettingsScreen(
         }
     }
 
-    val availableHncsProfiles = remember(context) {
-        HncsProfileManager(context.applicationContext).getAvailableProfiles()
-    }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
     val isHeicExportSupported = remember { HeicExportEncoder.isSupported }
@@ -2166,9 +2161,6 @@ fun SettingsScreen(
                         onSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
                         onAdjustmentStart = { isRawSliderAdjusting = true },
                         onAdjustmentEnd = { commitRawSliderValues() },
-                        selectedHncsProfileId = rawHncsProfileId,
-                        availableHncsProfiles = availableHncsProfiles,
-                        onSelectHncsProfile = viewModel::setRawHncsProfileId,
                         hncsFilmCurveMode = rawHncsFilmCurveMode,
                         onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
                         selectedRawNoiseProfileId = rawNoiseProfileId,
