@@ -76,8 +76,6 @@ internal object PreviewColorShader {
             uniform sampler2D uCurveTexture;
             uniform bool uCurveEnabled;
             ${if (variant.includeSpatialRecipeEffects) """
-            uniform sampler2D uRedHalationTexture;
-            uniform float uRedHalation;
             uniform sampler2D uSoftLightTexture;
             uniform float uSoftLight;
             """ else ""}
@@ -328,15 +326,6 @@ internal object PreviewColorShader {
                     color.rgb = sanitizeColor(vec3(r, g, b));
                 }
 
-                ${if (variant.includeSpatialRecipeEffects) """
-                if (uRedHalation > 0.0) {
-                    vec3 halationBlur = texture(uRedHalationTexture, uvCoord).rgb;
-                    float halationMask = smoothstep(0.001, 0.06, dot(halationBlur, W));
-                    vec3 halationStrength = vec3(0.42, 0.14, 0.02) * uRedHalation;
-                    color.rgb += halationBlur * halationStrength * halationMask;
-                    color.rgb = sanitizeColor(color.rgb);
-                }
-                """ else ""}
 
                 ${if (variant.includePreLogFilmGrain) """
                 if (uFilmGrain > 0.001) {

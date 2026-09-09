@@ -33,10 +33,10 @@ data class ColorRecipeParams(
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
     val clarity: Float = 0f,        // -1.0 ~ 1.0 (局部对比度，0为无效果)
     val sharpness: Float = 0f,      // -1.0 ~ 1.0 (sRGB 锐度，负值柔化，正值锐化)
-    val bloom: Float = 0f,          // 0.0 ~ 1.0 (Bevy Bloom 泛光强度，0为无效果)
+    val bloom: Float = 0f,          // 0.0 ~ 1.0 (高光颜色扩散泛光强度，0为无效果)
     val softLight: Float = 0f,      // 0.0 ~ 1.0 (柔光扩散强度，0为无效果)
-    val halation: Float = 0f,       // 0.0 ~ 1.0 (高光扩散强度，0为无效果，模拟 GR3 HDF)
-    val redHalation: Float = 0f,    // 0.0 ~ 1.0 (胶片暖红色边缘光晕强度，0为无效果)
+    val halation: Float = 0f,       // 历史 HDF 字段，配方读写时归零；当前光晕使用 redHalation
+    val redHalation: Float = 0f,    // 0.0 ~ 1.0 (高光遮罩扩散红色光晕强度，0为无效果)
     val chromaticAberration: Float = 0f, // 0.0 ~ 1.0 (色散/边缘溢色强度，0为无效果)
     val noise: Float = 0f,          // 0.0 ~ 1.0 (噪点强度，包含亮度和色彩噪点，0为无效果)
     val lowRes: Float = 0f,         // 0.0 ~ 1.0 (低像素强度，0为无效果)

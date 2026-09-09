@@ -108,6 +108,7 @@ class LutImageProcessor(context: Context? = null) {
     private var lutSharpenWidth = 0
     private var lutSharpenHeight = 0
     private val filmGrainGl = FilmGrainGl(TAG)
+    private val highlightDiffusionGl = HighlightDiffusionGl(TAG)
 
     // HDF (Highlight Diffusion) 光晕效果资源
     private var hdfExtractBlurHProgram = 0
@@ -133,29 +134,6 @@ class LutImageProcessor(context: Context? = null) {
     private var clarityOutputFboId = 0
     private var clarityOutputWidth = 0
     private var clarityOutputHeight = 0
-
-    // Halation (胶片红晕) 效果资源
-    private var halationExtractBlurHProgram = 0
-    private var halationBlurVProgram = 0
-    private var halationTexId = IntArray(2)
-    private var halationFboId = IntArray(2)
-    private var halationWidth = 0
-    private var halationHeight = 0
-    private var bloomDownsampleFirstProgram = 0
-    private var bloomDownsampleProgram = 0
-    private var bloomUpsampleProgram = 0
-    private var bloomCompositeProgram = 0
-    private var bloomTexId = IntArray(0)
-    private var bloomFboId = IntArray(0)
-    private var bloomMipWidths = IntArray(0)
-    private var bloomMipHeights = IntArray(0)
-    private var bloomMipCount = 0
-    private var bloomSourceWidth = 0
-    private var bloomSourceHeight = 0
-    private var bloomOutputTextureId = 0
-    private var bloomOutputFboId = 0
-    private var bloomOutputWidth = 0
-    private var bloomOutputHeight = 0
 
     private var isInitialized = false
 
@@ -362,7 +340,6 @@ class LutImageProcessor(context: Context? = null) {
         val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
         val halation = 0f
         val softLight = effectiveRecipeParams?.softLight ?: 0f
-        val redHalation = effectiveRecipeParams?.redHalation ?: 0f
 
         // 锐度属于色彩配方，在完成 sRGB 调色后统一处理；不读取 RAW/元数据锐化值。
         val sharpening: Float = effectiveRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
@@ -410,10 +387,6 @@ class LutImageProcessor(context: Context? = null) {
         }
         if (softLight > 0f) {
             renderSoftLightBlur(inputTexId, width, height)
-            currentCoroutineContext().ensureActive()
-        }
-        if (redHalation > 0f) {
-            renderHalationBlur(inputTexId, width, height, redHalation)
             currentCoroutineContext().ensureActive()
         }
 
@@ -514,7 +487,6 @@ class LutImageProcessor(context: Context? = null) {
         val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
         val halation = 0f
         val softLight = effectiveRecipeParams?.softLight ?: 0f
-        val redHalation = effectiveRecipeParams?.redHalation ?: 0f
 
         // 锐度属于色彩配方，在完成 sRGB 调色后统一处理；不读取 RAW/元数据锐化值。
         val sharpening: Float = effectiveRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
@@ -566,10 +538,6 @@ class LutImageProcessor(context: Context? = null) {
         }
         if (softLight > 0f) {
             renderSoftLightBlur(inputTexId, width, height)
-            currentCoroutineContext().ensureActive()
-        }
-        if (redHalation > 0f) {
-            renderHalationBlur(inputTexId, width, height, redHalation)
             currentCoroutineContext().ensureActive()
         }
 
@@ -1006,14 +974,6 @@ class LutImageProcessor(context: Context? = null) {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (softLight > 0f) softLightTexId[1] else 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSoftLightTexture"), 5)
 
-        // 设置 Halation 参数
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uRedHalation"), redHalation)
-        if (redHalation > 0f) {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, halationTexId[1])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uRedHalationTexture"), 4)
-        }
-
         // 设置色散参数
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uChromaticAberration"), chromaticAberration)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(program, "uTexelSize"), 1.0f / width, 1.0f / height)
@@ -1060,12 +1020,14 @@ class LutImageProcessor(context: Context? = null) {
         val postSharpenTextureId = if (sharpened) lutSharpenTextureId else postClarityTextureId
         val postSharpenFramebufferId = if (sharpened) lutSharpenFboId else postClarityFramebufferId
 
-        val bloomApplied = bloom > 0.001f && renderLdrBloom(postSharpenTextureId, width, height, bloom)
-        val postBloomTextureId = if (bloomApplied) bloomOutputTextureId else postSharpenTextureId
-        val postBloomFramebufferId = if (bloomApplied) bloomOutputFboId else postSharpenFramebufferId
+        val diffusionOutput = highlightDiffusionGl.renderToTexture(
+            postSharpenTextureId, width, height, bloom, redHalation, ::drawQuad,
+        )
+        val postDiffusionTextureId = diffusionOutput?.textureId ?: postSharpenTextureId
+        val postDiffusionFramebufferId = diffusionOutput?.framebufferId ?: postSharpenFramebufferId
         val filmGrainOutput = if (filmGrain > 0.001f) {
             filmGrainGl.renderToTexture(
-                sourceTextureId = postBloomTextureId,
+                sourceTextureId = postDiffusionTextureId,
                 width = width,
                 height = height,
                 amount = filmGrain,
@@ -1075,7 +1037,7 @@ class LutImageProcessor(context: Context? = null) {
         } else {
             null
         }
-        val readFramebufferId = filmGrainOutput?.framebufferId ?: postBloomFramebufferId
+        val readFramebufferId = filmGrainOutput?.framebufferId ?: postDiffusionFramebufferId
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFramebufferId)
         val pixelSize = width * height * 4
@@ -1466,56 +1428,6 @@ class LutImageProcessor(context: Context? = null) {
                 IMAGE_VERTEX_SHADER,
                 HDF_BLUR_V_SHADER,
                 "HdfBlurV",
-            )
-        }
-    }
-
-    private fun ensureHalationPrograms() {
-        if (halationExtractBlurHProgram == 0) {
-            halationExtractBlurHProgram = createFragmentProgram(
-                IMAGE_VERTEX_SHADER,
-                HALATION_EXTRACT_BLUR_H_SHADER,
-                "HalationExtractBlurH",
-            )
-        }
-        if (halationBlurVProgram == 0) {
-            halationBlurVProgram = createFragmentProgram(
-                IMAGE_VERTEX_SHADER,
-                HDF_BLUR_V_SHADER,
-                "HalationBlurV",
-            )
-        }
-    }
-
-    private fun ensureBloomPrograms() {
-        // Bloom composite copies the source before adding highlights, even when denoise is disabled.
-        ensureBitmapDenoisePassthroughProgram()
-        if (bloomDownsampleFirstProgram == 0) {
-            bloomDownsampleFirstProgram = createFragmentProgram(
-                Shaders.SIMPLE_VERTEX_SHADER,
-                Shaders.BEVY_BLOOM_DOWNSAMPLE_FIRST,
-                "BloomDownsampleFirst",
-            )
-        }
-        if (bloomDownsampleProgram == 0) {
-            bloomDownsampleProgram = createFragmentProgram(
-                Shaders.SIMPLE_VERTEX_SHADER,
-                Shaders.BEVY_BLOOM_DOWNSAMPLE,
-                "BloomDownsample",
-            )
-        }
-        if (bloomUpsampleProgram == 0) {
-            bloomUpsampleProgram = createFragmentProgram(
-                Shaders.SIMPLE_VERTEX_SHADER,
-                Shaders.BEVY_BLOOM_UPSAMPLE,
-                "BloomUpsample",
-            )
-        }
-        if (bloomCompositeProgram == 0) {
-            bloomCompositeProgram = createFragmentProgram(
-                Shaders.SIMPLE_VERTEX_SHADER,
-                Shaders.BEVY_BLOOM_COMPOSITE,
-                "BloomComposite",
             )
         }
     }
@@ -2409,41 +2321,6 @@ class LutImageProcessor(context: Context? = null) {
         return true
     }
 
-    private fun setupHalationFramebuffers(width: Int, height: Int) {
-        val dsW = width / 4
-        val dsH = height / 4
-        if (halationWidth == dsW && halationHeight == dsH && halationTexId[0] != 0) return
-        halationWidth = dsW
-        halationHeight = dsH
-
-        for (i in 0..1) {
-            if (halationTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(halationTexId[i]), 0)
-            if (halationFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(halationFboId[i]), 0)
-            val t = IntArray(1)
-            val f = IntArray(1)
-            GLES30.glGenTextures(1, t, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
-                dsW, dsH, 0,
-                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glGenFramebuffers(1, f, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, t[0], 0
-            )
-            halationTexId[i] = t[0]
-            halationFboId[i] = f[0]
-        }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-    }
-
     private fun renderSoftLightBlur(
         sourceTexId: Int,
         width: Int,
@@ -2487,61 +2364,6 @@ class LutImageProcessor(context: Context? = null) {
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGlError("renderSoftLightBlur")
-    }
-
-    private fun renderHalationBlur(
-        sourceTexId: Int,
-        width: Int,
-        height: Int,
-        halation: Float
-    ) {
-        ensureHalationPrograms()
-        setupHalationFramebuffers(width, height)
-        if (halationExtractBlurHProgram == 0 || halationBlurVProgram == 0) return
-
-        val dsW = width / 4
-        val dsH = height / 4
-        val texelW = 1.0f / dsW
-        val texelH = 1.0f / dsH
-        
-        val threshold = 0.72f - halation.coerceIn(0f, 1f) * 0.22f
-
-        val identityMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-
-        // Pass 1: Extract + Blur H
-        GLES30.glUseProgram(halationExtractBlurHProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[0])
-        GLES30.glViewport(0, 0, dsW, dsH)
-        
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTexId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uThreshold"), threshold)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uStrength"), halation)
-        
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
-        )
-        drawQuad(halationExtractBlurHProgram)
-
-        // Pass 2: Blur V
-        GLES30.glUseProgram(halationBlurVProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[1])
-        GLES30.glViewport(0, 0, dsW, dsH)
-        
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, halationTexId[0])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(halationBlurVProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(halationBlurVProgram, "uTexelSize"), texelW, texelH)
-        
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(halationBlurVProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
-        )
-        drawQuad(halationBlurVProgram)
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     /**
@@ -2598,237 +2420,6 @@ class LutImageProcessor(context: Context? = null) {
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGlError("renderHDFBlur")
-    }
-
-    private fun setupBloomOutputFramebuffer(width: Int, height: Int): Boolean {
-        if (bloomOutputFboId != 0 &&
-            bloomOutputTextureId != 0 &&
-            bloomOutputWidth == width &&
-            bloomOutputHeight == height
-        ) {
-            return true
-        }
-        if (bloomOutputFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bloomOutputFboId), 0)
-        if (bloomOutputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(bloomOutputTextureId), 0)
-        val f = IntArray(1)
-        val t = IntArray(1)
-        GLES30.glGenTextures(1, t, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glGenFramebuffers(1, f, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t[0], 0)
-        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            PLog.e(TAG, "Bloom output framebuffer not complete: $status")
-            if (f[0] != 0) GLES30.glDeleteFramebuffers(1, f, 0)
-            if (t[0] != 0) GLES30.glDeleteTextures(1, t, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            return false
-        }
-        bloomOutputTextureId = t[0]
-        bloomOutputFboId = f[0]
-        bloomOutputWidth = width
-        bloomOutputHeight = height
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        return true
-    }
-
-    private fun setupBloomFramebuffers(width: Int, height: Int): Boolean {
-        val maxMipDimension = BloomLdrSettings.MAX_MIP_DIMENSION
-        val scale = maxMipDimension.toFloat() / maxOf(1, height).toFloat()
-        var mipWidth = (width * scale).toInt().coerceAtLeast(1)
-        var mipHeight = (height * scale).toInt().coerceAtLeast(1)
-        val widths = mutableListOf<Int>()
-        val heights = mutableListOf<Int>()
-        repeat(BloomLdrSettings.MIP_COUNT) {
-            widths += mipWidth
-            heights += mipHeight
-            mipWidth = maxOf(1, mipWidth / 2)
-            mipHeight = maxOf(1, mipHeight / 2)
-        }
-        val nextWidths = widths.toIntArray()
-        val nextHeights = heights.toIntArray()
-        if (bloomSourceWidth == width &&
-            bloomSourceHeight == height &&
-            bloomTexId.isNotEmpty() &&
-            bloomMipWidths.contentEquals(nextWidths) &&
-            bloomMipHeights.contentEquals(nextHeights)
-        ) {
-            return true
-        }
-        releaseBloomFramebuffers()
-        bloomSourceWidth = width
-        bloomSourceHeight = height
-        bloomMipCount = nextWidths.size
-        bloomMipWidths = nextWidths
-        bloomMipHeights = nextHeights
-        bloomTexId = IntArray(bloomMipCount)
-        bloomFboId = IntArray(bloomMipCount)
-        for (i in 0 until bloomMipCount) {
-            val t = IntArray(1)
-            val f = IntArray(1)
-            GLES30.glGenTextures(1, t, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_RGBA16F,
-                bloomMipWidths[i],
-                bloomMipHeights[i],
-                0,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                null
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glGenFramebuffers(1, f, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t[0], 0)
-            bloomTexId[i] = t[0]
-            bloomFboId[i] = f[0]
-            val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-            if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                PLog.e(TAG, "Bloom mip framebuffer[$i] not complete: $status")
-                releaseBloomFramebuffers()
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                return false
-            }
-        }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        return true
-    }
-
-    private fun releaseBloomFramebuffers() {
-        for (textureId in bloomTexId) {
-            if (textureId != 0) GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
-        }
-        for (fboId in bloomFboId) {
-            if (fboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(fboId), 0)
-        }
-        bloomTexId = IntArray(0)
-        bloomFboId = IntArray(0)
-        bloomMipWidths = IntArray(0)
-        bloomMipHeights = IntArray(0)
-        bloomMipCount = 0
-        bloomSourceWidth = 0
-        bloomSourceHeight = 0
-    }
-
-    private fun renderLdrBloom(sourceTextureId: Int, width: Int, height: Int, bloomStrength: Float): Boolean {
-        ensureBloomPrograms()
-        if (bitmapDenoisePassthroughProgram == 0 || bloomDownsampleFirstProgram == 0 ||
-            bloomDownsampleProgram == 0 || bloomUpsampleProgram == 0 || bloomCompositeProgram == 0
-        ) {
-            PLog.e(
-                TAG,
-                "Bloom programs unavailable: passthrough=$bitmapDenoisePassthroughProgram " +
-                    "first=$bloomDownsampleFirstProgram downsample=$bloomDownsampleProgram " +
-                    "upsample=$bloomUpsampleProgram composite=$bloomCompositeProgram"
-            )
-            return false
-        }
-        if (!setupBloomFramebuffers(width, height)) {
-            return false
-        }
-        if (!setupBloomOutputFramebuffer(width, height)) {
-            return false
-        }
-        if (bloomMipCount <= 0) {
-            return false
-        }
-
-        GLES30.glDisable(GLES30.GL_BLEND)
-        GLES30.glUseProgram(bloomDownsampleFirstProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[0])
-        GLES30.glViewport(0, 0, bloomMipWidths[0], bloomMipHeights[0])
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uInputTexelSize"), 1f / width, 1f / height)
-        val thresholdPrecomputations = BloomLdrSettings.thresholdPrecomputations()
-        GLES30.glUniform4f(
-            GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uThreshold"),
-            thresholdPrecomputations[0],
-            thresholdPrecomputations[1],
-            thresholdPrecomputations[2],
-            thresholdPrecomputations[3]
-        )
-        drawQuad(bloomDownsampleFirstProgram)
-
-        for (mip in 1 until bloomMipCount) {
-            GLES30.glUseProgram(bloomDownsampleProgram)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[mip])
-            GLES30.glViewport(0, 0, bloomMipWidths[mip], bloomMipHeights[mip])
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[mip - 1])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomDownsampleProgram, "uInputTexture"), 0)
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(bloomDownsampleProgram, "uInputTexelSize"), 1f / bloomMipWidths[mip - 1], 1f / bloomMipHeights[mip - 1])
-            drawQuad(bloomDownsampleProgram)
-        }
-
-        GLES30.glEnable(GLES30.GL_BLEND)
-        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
-        GLES30.glBlendFunc(GLES30.GL_CONSTANT_COLOR, GLES30.GL_ONE)
-        GLES30.glUseProgram(bloomUpsampleProgram)
-        for (mip in bloomMipCount - 1 downTo 1) {
-            val blend = BloomLdrSettings.mipAddWeight(mip, bloomMipCount, bloomStrength)
-            GLES30.glBlendColor(blend, blend, blend, blend)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[mip - 1])
-            GLES30.glViewport(0, 0, bloomMipWidths[mip - 1], bloomMipHeights[mip - 1])
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[mip])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomUpsampleProgram, "uInputTexture"), 0)
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(bloomUpsampleProgram, "uInputTexelSize"), 1f / bloomMipWidths[mip], 1f / bloomMipHeights[mip])
-            drawQuad(bloomUpsampleProgram)
-        }
-        GLES30.glDisable(GLES30.GL_BLEND)
-
-        val finalBlend = BloomLdrSettings.compositeStrength(bloomStrength)
-        val compositeMipLower = BloomLdrSettings.compositeMipLowerIndex(bloomMipCount, bloomStrength)
-        val compositeMipUpper = BloomLdrSettings.compositeMipUpperIndex(bloomMipCount, bloomStrength)
-        val compositeMipBlend = BloomLdrSettings.compositeMipBlend(bloomMipCount, bloomStrength)
-        renderTexturePassthrough(sourceTextureId, bloomOutputFboId, width, height)
-        GLES30.glEnable(GLES30.GL_BLEND)
-        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
-        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomOutputFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glUseProgram(bloomCompositeProgram)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[compositeMipLower])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexture"), 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[compositeMipUpper])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTextureNext"), 1)
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexelSize"),
-            1f / bloomMipWidths[compositeMipLower],
-            1f / bloomMipHeights[compositeMipLower]
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexelSizeNext"),
-            1f / bloomMipWidths[compositeMipUpper],
-            1f / bloomMipHeights[compositeMipUpper]
-        )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBlend"), finalBlend)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(bloomCompositeProgram, "uMipBlend"), compositeMipBlend)
-        drawQuad(bloomCompositeProgram)
-        GLES30.glDisable(GLES30.GL_BLEND)
-        val error = GLES30.glGetError()
-        if (error != GLES30.GL_NO_ERROR) {
-            PLog.e(TAG, "renderLdrBloom final composite glError $error")
-            return false
-        }
-        return true
     }
 
     private fun checkGlError(op: String) {
@@ -2990,7 +2581,6 @@ class LutImageProcessor(context: Context? = null) {
             .put(Shaders.FULL_QUAD_VERTICES)
         vertexBuffer?.position(0)
 
-
         val flippedTexCoords = floatArrayOf(
             0.0f, 0.0f,
             1.0f, 0.0f,
@@ -3097,6 +2687,7 @@ class LutImageProcessor(context: Context? = null) {
         if (clarityCompositeProgram != 0) GLES30.glDeleteProgram(clarityCompositeProgram)
         releaseClarityFramebuffers()
         filmGrainGl.release()
+        highlightDiffusionGl.release()
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
@@ -3104,19 +2695,6 @@ class LutImageProcessor(context: Context? = null) {
             if (softLightFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(softLightFboId[i]), 0)
         }
         
-        if (halationExtractBlurHProgram != 0) GLES30.glDeleteProgram(halationExtractBlurHProgram)
-        if (halationBlurVProgram != 0) GLES30.glDeleteProgram(halationBlurVProgram)
-        for (i in 0..1) {
-            if (halationTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(halationTexId[i]), 0)
-            if (halationFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(halationFboId[i]), 0)
-        }
-        if (bloomDownsampleFirstProgram != 0) GLES30.glDeleteProgram(bloomDownsampleFirstProgram)
-        if (bloomDownsampleProgram != 0) GLES30.glDeleteProgram(bloomDownsampleProgram)
-        if (bloomUpsampleProgram != 0) GLES30.glDeleteProgram(bloomUpsampleProgram)
-        if (bloomCompositeProgram != 0) GLES30.glDeleteProgram(bloomCompositeProgram)
-        releaseBloomFramebuffers()
-        if (bloomOutputFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bloomOutputFboId), 0)
-        if (bloomOutputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(bloomOutputTextureId), 0)
 
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(eglDisplay, eglSurface)
@@ -3259,8 +2837,6 @@ class LutImageProcessor(context: Context? = null) {
             uniform sampler2D uHdfTexture; // 光晕合成纹理
             uniform float uSoftLight;      // 0.0 ~ 1.0 (柔光扩散强度)
             uniform sampler2D uSoftLightTexture; // 柔光扩散纹理
-            uniform float uRedHalation;      // 0.0 ~ 1.0 (胶片红晕强度)
-            uniform sampler2D uRedHalationTexture; // 胶片红晕合成纹理
             
             // 色散效果
             uniform float uChromaticAberration; // 0.0 ~ 1.0 (色散强度)
@@ -3313,7 +2889,6 @@ class LutImageProcessor(context: Context? = null) {
             }
 
             ${ShadowsHighlightsShader.GLSL}
-
 
             float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
                 float safeLuma = clamp(luma, 0.0, 1.0);
@@ -3588,12 +3163,6 @@ class LutImageProcessor(context: Context? = null) {
                     color.rgb = (color.rgb - 0.5) * (1.0 - uHalation * 0.08) + 0.5;
                 }
                 
-                if (uRedHalation > 0.0) {
-                    vec3 halationBlur = texture(uRedHalationTexture, uvCoord).rgb;
-                    float halationMask = smoothstep(0.001, 0.06, dot(halationBlur, vec3(0.2126, 0.7152, 0.0722)));
-                    vec3 halationStrength = vec3(0.42, 0.14, 0.02) * uRedHalation;
-                    color.rgb += halationBlur * halationStrength * halationMask;
-                }
 
                 // === LUT 处理（在色彩配方之后） ===
                 if (uLutEnabled && uLutIntensity > 0.0) {
@@ -3646,41 +3215,7 @@ class LutImageProcessor(context: Context? = null) {
                 "vec4 sampleImage(vec2 uv) { return texture(uImageTexture, uv); }\n" +
                 SHADER_BODY
 
-        // === HDF (Highlight Diffusion Filter) \u0026 Halation Shaders ===
-
-        private val HALATION_EXTRACT_BLUR_H_SHADER = """
-            #version 300 es
-            precision highp float;
-            
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            
-            uniform sampler2D uInputTexture;
-            uniform vec2 uTexelSize;
-            uniform float uThreshold;
-            uniform float uStrength;
-            
-            void main() {
-                vec3 tint = vec3(1.0, 0.28, 0.04);
-                
-                #define EXTRACT(sampleColor) \
-                    (max(sampleColor - vec3(uThreshold), vec3(0.0)) * tint * (1.5 + uStrength * 3.0) * smoothstep(uThreshold - 0.24, uThreshold + 0.36, max(sampleColor.r, max(sampleColor.g, sampleColor.b))))
-                
-                vec3 color = texture(uInputTexture, vTexCoord).rgb;
-                vec3 sum = EXTRACT(color) * 0.204164;
-                
-                float weights[5] = float[](0.204164, 0.304005, 0.093910, 0.010416, 0.000005);
-                float offsets[5] = float[](0.0, 1.407333, 3.294215, 5.176470, 7.058823);
-                
-                for (int i = 1; i < 5; i++) {
-                    float offset = offsets[i] * uTexelSize.x * 2.0;
-                    sum += EXTRACT(texture(uInputTexture, vTexCoord + vec2(offset, 0.0)).rgb) * weights[i];
-                    sum += EXTRACT(texture(uInputTexture, vTexCoord - vec2(offset, 0.0)).rgb) * weights[i];
-                }
-                
-                fragColor = vec4(sum, 1.0);
-            }
-        """.trimIndent()
+        // === HDF (Highlight Diffusion Filter) Shaders ===
 
         /**
          * Pass 1: 提取高光区域 + 水平高斯模糊

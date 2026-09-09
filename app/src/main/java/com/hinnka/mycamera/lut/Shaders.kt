@@ -170,7 +170,7 @@ object Shaders {
         }
     """.trimIndent()
 
-    /** HDF 合成：原图 + HDF 扩散 + spektrafilm 风格红色 halation */
+    /** HDF 合成：原图 + HDF 扩散 + 柔光 */
     val HDF_PREVIEW_COMPOSITE = """
         #version 300 es
         precision highp float;
@@ -179,8 +179,6 @@ object Shaders {
         uniform sampler2D uOriginalTexture;
         uniform sampler2D uBloomTexture;
         uniform float uHalation;
-        uniform sampler2D uRedHalationTexture;
-        uniform float uRedHalation;
         uniform sampler2D uSoftLightTexture;
         uniform float uSoftLight;
         
@@ -208,249 +206,11 @@ object Shaders {
                 color.rgb = (color.rgb - 0.5) * (1.0 - uHalation * 0.08) + 0.5;
             }
             
-            if (uRedHalation > 0.0) {
-                vec3 halationBlur = texture(uRedHalationTexture, vTexCoord).rgb;
-                float halationMask = smoothstep(0.001, 0.06, dot(halationBlur, vec3(0.2126, 0.7152, 0.0722)));
-                vec3 halationStrength = vec3(0.42, 0.14, 0.02) * uRedHalation;
-                color.rgb += halationBlur * halationStrength * halationMask;
-            }
             
             fragColor = clamp(color, 0.0, 1.0);
         }
     """.trimIndent()
 
-    /** Bevy Bloom: first downsample pass with Karis firefly reduction and soft threshold. */
-    val BEVY_BLOOM_DOWNSAMPLE_FIRST = """
-        #version 300 es
-        precision highp float;
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-        uniform sampler2D uInputTexture;
-        uniform vec2 uInputTexelSize;
-        uniform vec4 uThreshold;
-
-        float tonemappingLuminance(vec3 v) {
-            return dot(v, vec3(0.2126, 0.7152, 0.0722));
-        }
-
-        float karisAverage(vec3 color) {
-            float luma = tonemappingLuminance(pow(max(color, vec3(0.0)), vec3(1.0 / 2.2))) / 4.0;
-            return 1.0 / (1.0 + luma);
-        }
-
-        vec3 thresholdHighlight(vec3 color) {
-            float luma = tonemappingLuminance(color);
-            float mask = 0.0;
-            if (uThreshold.z > 0.0) {
-                mask = smoothstep(uThreshold.y, uThreshold.y + uThreshold.z, luma);
-            } else {
-                mask = step(uThreshold.x, luma);
-            }
-            return color * mask;
-        }
-
-        vec3 sampleInput(vec2 uv) {
-            vec3 color = texture(uInputTexture, uv).rgb;
-            if (uThreshold.x > 0.0 || uThreshold.z > 0.0) {
-                color = thresholdHighlight(color);
-            }
-            return color;
-        }
-
-        vec3 sample13Tap(vec2 uv) {
-            vec2 ps = uInputTexelSize;
-            vec2 pl = 2.0 * ps;
-            vec2 ns = -ps;
-            vec2 nl = -pl;
-            vec3 a = sampleInput(uv + vec2(nl.x, pl.y));
-            vec3 b = sampleInput(uv + vec2(0.0, pl.y));
-            vec3 c = sampleInput(uv + vec2(pl.x, pl.y));
-            vec3 d = sampleInput(uv + vec2(nl.x, 0.0));
-            vec3 e = sampleInput(uv);
-            vec3 f = sampleInput(uv + vec2(pl.x, 0.0));
-            vec3 g = sampleInput(uv + vec2(nl.x, nl.y));
-            vec3 h = sampleInput(uv + vec2(0.0, nl.y));
-            vec3 i = sampleInput(uv + vec2(pl.x, nl.y));
-            vec3 j = sampleInput(uv + vec2(ns.x, ps.y));
-            vec3 k = sampleInput(uv + vec2(ps.x, ps.y));
-            vec3 l = sampleInput(uv + vec2(ns.x, ns.y));
-            vec3 m = sampleInput(uv + vec2(ps.x, ns.y));
-
-            vec3 group0 = (a + b + d + e) * (0.125 / 4.0);
-            vec3 group1 = (b + c + e + f) * (0.125 / 4.0);
-            vec3 group2 = (d + e + g + h) * (0.125 / 4.0);
-            vec3 group3 = (e + f + h + i) * (0.125 / 4.0);
-            vec3 group4 = (j + k + l + m) * (0.5 / 4.0);
-            group0 *= karisAverage(group0);
-            group1 *= karisAverage(group1);
-            group2 *= karisAverage(group2);
-            group3 *= karisAverage(group3);
-            group4 *= karisAverage(group4);
-            return group0 + group1 + group2 + group3 + group4;
-        }
-
-        void main() {
-            vec3 sampleColor = sample13Tap(vTexCoord);
-            fragColor = vec4(clamp(sampleColor, vec3(0.0), vec3(1.0)), 1.0);
-        }
-    """.trimIndent()
-
-    /** Bevy Bloom: subsequent 13-tap downsample passes. */
-    val BEVY_BLOOM_DOWNSAMPLE = """
-        #version 300 es
-        precision highp float;
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-        uniform sampler2D uInputTexture;
-        uniform vec2 uInputTexelSize;
-
-        vec3 sample13Tap(vec2 uv) {
-            vec2 ps = uInputTexelSize;
-            vec2 pl = 2.0 * ps;
-            vec2 ns = -ps;
-            vec2 nl = -pl;
-            vec3 a = texture(uInputTexture, uv + vec2(nl.x, pl.y)).rgb;
-            vec3 b = texture(uInputTexture, uv + vec2(0.0, pl.y)).rgb;
-            vec3 c = texture(uInputTexture, uv + vec2(pl.x, pl.y)).rgb;
-            vec3 d = texture(uInputTexture, uv + vec2(nl.x, 0.0)).rgb;
-            vec3 e = texture(uInputTexture, uv).rgb;
-            vec3 f = texture(uInputTexture, uv + vec2(pl.x, 0.0)).rgb;
-            vec3 g = texture(uInputTexture, uv + vec2(nl.x, nl.y)).rgb;
-            vec3 h = texture(uInputTexture, uv + vec2(0.0, nl.y)).rgb;
-            vec3 i = texture(uInputTexture, uv + vec2(pl.x, nl.y)).rgb;
-            vec3 j = texture(uInputTexture, uv + vec2(ns.x, ps.y)).rgb;
-            vec3 k = texture(uInputTexture, uv + vec2(ps.x, ps.y)).rgb;
-            vec3 l = texture(uInputTexture, uv + vec2(ns.x, ns.y)).rgb;
-            vec3 m = texture(uInputTexture, uv + vec2(ps.x, ns.y)).rgb;
-            vec3 sampleColor = (a + c + g + i) * 0.03125;
-            sampleColor += (b + d + f + h) * 0.0625;
-            sampleColor += (e + j + k + l + m) * 0.125;
-            return sampleColor;
-        }
-
-        void main() {
-            fragColor = vec4(sample13Tap(vTexCoord), 1.0);
-        }
-    """.trimIndent()
-
-    /** Bevy Bloom: 3x3 tent upsample pass. */
-    val BEVY_BLOOM_UPSAMPLE = """
-        #version 300 es
-        precision highp float;
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-        uniform sampler2D uInputTexture;
-        uniform vec2 uInputTexelSize;
-
-        void main() {
-            float x = uInputTexelSize.x;
-            float y = uInputTexelSize.y;
-            vec2 uv = vTexCoord;
-            vec3 a = texture(uInputTexture, vec2(uv.x - x, uv.y + y)).rgb;
-            vec3 b = texture(uInputTexture, vec2(uv.x, uv.y + y)).rgb;
-            vec3 c = texture(uInputTexture, vec2(uv.x + x, uv.y + y)).rgb;
-            vec3 d = texture(uInputTexture, vec2(uv.x - x, uv.y)).rgb;
-            vec3 e = texture(uInputTexture, vec2(uv.x, uv.y)).rgb;
-            vec3 f = texture(uInputTexture, vec2(uv.x + x, uv.y)).rgb;
-            vec3 g = texture(uInputTexture, vec2(uv.x - x, uv.y - y)).rgb;
-            vec3 h = texture(uInputTexture, vec2(uv.x, uv.y - y)).rgb;
-            vec3 i = texture(uInputTexture, vec2(uv.x + x, uv.y - y)).rgb;
-            vec3 sampleColor = e * 0.25;
-            sampleColor += (b + d + f + h) * 0.125;
-            sampleColor += (a + c + g + i) * 0.0625;
-            fragColor = vec4(sampleColor, 1.0);
-        }
-    """.trimIndent()
-
-    /** LDR Bloom: final blurred highlight contribution. */
-    val BEVY_BLOOM_COMPOSITE = """
-        #version 300 es
-        precision highp float;
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-        uniform sampler2D uBloomTexture;
-        uniform sampler2D uBloomTextureNext;
-        uniform vec2 uBloomTexelSize;
-        uniform vec2 uBloomTexelSizeNext;
-        uniform float uBlend;
-        uniform float uMipBlend;
-
-        vec3 sampleTentLower(vec2 uv) {
-            float x = uBloomTexelSize.x;
-            float y = uBloomTexelSize.y;
-            vec3 a = texture(uBloomTexture, vec2(uv.x - x, uv.y + y)).rgb;
-            vec3 b = texture(uBloomTexture, vec2(uv.x, uv.y + y)).rgb;
-            vec3 c = texture(uBloomTexture, vec2(uv.x + x, uv.y + y)).rgb;
-            vec3 d = texture(uBloomTexture, vec2(uv.x - x, uv.y)).rgb;
-            vec3 e = texture(uBloomTexture, vec2(uv.x, uv.y)).rgb;
-            vec3 f = texture(uBloomTexture, vec2(uv.x + x, uv.y)).rgb;
-            vec3 g = texture(uBloomTexture, vec2(uv.x - x, uv.y - y)).rgb;
-            vec3 h = texture(uBloomTexture, vec2(uv.x, uv.y - y)).rgb;
-            vec3 i = texture(uBloomTexture, vec2(uv.x + x, uv.y - y)).rgb;
-            vec3 sampleColor = e * 0.25;
-            sampleColor += (b + d + f + h) * 0.125;
-            sampleColor += (a + c + g + i) * 0.0625;
-            return sampleColor;
-        }
-
-        vec3 sampleTentUpper(vec2 uv) {
-            float x = uBloomTexelSizeNext.x;
-            float y = uBloomTexelSizeNext.y;
-            vec3 a = texture(uBloomTextureNext, vec2(uv.x - x, uv.y + y)).rgb;
-            vec3 b = texture(uBloomTextureNext, vec2(uv.x, uv.y + y)).rgb;
-            vec3 c = texture(uBloomTextureNext, vec2(uv.x + x, uv.y + y)).rgb;
-            vec3 d = texture(uBloomTextureNext, vec2(uv.x - x, uv.y)).rgb;
-            vec3 e = texture(uBloomTextureNext, vec2(uv.x, uv.y)).rgb;
-            vec3 f = texture(uBloomTextureNext, vec2(uv.x + x, uv.y)).rgb;
-            vec3 g = texture(uBloomTextureNext, vec2(uv.x - x, uv.y - y)).rgb;
-            vec3 h = texture(uBloomTextureNext, vec2(uv.x, uv.y - y)).rgb;
-            vec3 i = texture(uBloomTextureNext, vec2(uv.x + x, uv.y - y)).rgb;
-            vec3 sampleColor = e * 0.25;
-            sampleColor += (b + d + f + h) * 0.125;
-            sampleColor += (a + c + g + i) * 0.0625;
-            return sampleColor;
-        }
-
-        void main() {
-            vec3 lowerBloom = sampleTentLower(vTexCoord);
-            vec3 upperBloom = sampleTentUpper(vTexCoord);
-            vec3 bloom = mix(lowerBloom, upperBloom, uMipBlend) * uBlend;
-            fragColor = vec4(clamp(bloom, 0.0, 1.0), 1.0);
-        }
-    """.trimIndent()
-
-    /** Halation Pass 1: 高光重建 + 暖红背反射种子 + 水平高斯模糊 */
-    val HALATION_PREVIEW_EXTRACT_BLUR_H = """
-        #version 300 es
-        precision highp float;
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-        uniform sampler2D uInputTexture;
-        uniform vec2 uTexelSize;
-        uniform float uThreshold;
-        uniform float uStrength;
-        void main() {
-            vec3 tint = vec3(1.0, 0.28, 0.04);
-            
-            #define EXTRACT(sampleColor) \
-                (max(sampleColor - vec3(uThreshold), vec3(0.0)) * tint * (1.5 + uStrength * 3.0) * smoothstep(uThreshold - 0.24, uThreshold + 0.36, max(sampleColor.r, max(sampleColor.g, sampleColor.b))))
-
-            vec3 color = texture(uInputTexture, vTexCoord).rgb;
-            vec3 sum = EXTRACT(color) * 0.204164;
-            
-            float blurOffsets[4] = float[](1.407333, 3.294215, 5.176470, 7.058823);
-            float blurWeights[4] = float[](0.304005, 0.093910, 0.010416, 0.000005);
-            for (int i = 0; i < 4; i++) {
-                float off = blurOffsets[i] * uTexelSize.x * 2.0;
-                sum += EXTRACT(texture(uInputTexture, vTexCoord + vec2(off, 0.0)).rgb) * blurWeights[i];
-                sum += EXTRACT(texture(uInputTexture, vTexCoord - vec2(off, 0.0)).rgb) * blurWeights[i];
-            }
-            fragColor = vec4(sum, 1.0);
-        }
-    """.trimIndent()
-
-    /** Halation Pass 2: 垂直高斯模糊 */
-    val HALATION_PREVIEW_BLUR_V = HDF_PREVIEW_BLUR_V
 
     /**
      * Focus Peaking Shader

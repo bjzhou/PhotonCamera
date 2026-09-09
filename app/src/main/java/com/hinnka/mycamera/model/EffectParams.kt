@@ -12,7 +12,7 @@ data class EffectParams(
     val flash: Float = 0f,                  // 镜头轴向直闪模拟 (0.0 ~ 1.0)
     val filmGrain: Float = 0f,             // 胶片颗粒 (0.0 ~ 1.0)
     val clarity: Float = 0f,               // 清晰度 (-1.0 ~ 1.0)
-    val bloom: Float = 0f,                 // Bevy Bloom 泛光 (0.0 ~ 1.0)
+    val bloom: Float = 0f,                 // 高光颜色扩散泛光 (0.0 ~ 1.0)
     val softLight: Float = 0f,             // 柔光扩散 (0.0 ~ 1.0)
     val hdf: Float = 0f,                   // 高光扩散 HDF (0.0 ~ 1.0)
     val halation: Float = 0f,              // 边缘红晕 Halation (0.0 ~ 1.0)
