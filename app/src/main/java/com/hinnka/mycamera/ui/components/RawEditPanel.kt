@@ -3,6 +3,11 @@ package com.hinnka.mycamera.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -16,11 +21,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.window.Dialog
 import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -514,6 +521,8 @@ fun LumixPhotoStyleSelector(
     selectedStyle: LumixPhotoStyle,
     onSelectStyle: (LumixPhotoStyle) -> Unit,
 ) {
+    var showDialog by remember { mutableStateOf(false) }
+    val title = stringResource(R.string.settings_raw_lumix_photo_style)
     val labels = LumixPhotoStyle.entries.associateWith { style ->
         stringResource(when (style) {
             LumixPhotoStyle.Standard -> R.string.settings_raw_lumix_style_standard
@@ -534,17 +543,103 @@ fun LumixPhotoStyleSelector(
             LumixPhotoStyle.VLog -> R.string.settings_raw_lumix_style_vlog
         })
     }
-    DropdownSettingItem(
-        title = stringResource(R.string.settings_raw_lumix_photo_style),
-        description = stringResource(R.string.settings_raw_lumix_photo_style_description),
-        value = labels.getValue(selectedStyle),
-        options = labels.values.toList(),
-        isLoading = false,
-        onExpanded = {},
-        onOptionSelected = { label ->
-            labels.entries.firstOrNull { it.value == label }?.key?.let(onSelectStyle)
-        },
-    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 16.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                stringResource(R.string.settings_raw_lumix_photo_style_description),
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                labels.getValue(selectedStyle),
+                color = Color(0xFFE5A324),
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(16.dp))
+        Icon(AppIcons.ExpandMore, contentDescription = null, tint = Color.White.copy(alpha = 0.4f))
+    }
+
+    if (showDialog) {
+        // A long, anchor-positioned popup can be constrained and repositioned as the
+        // host panel/window moves. Keep this list in its own bounded dialog viewport.
+        Dialog(onDismissRequest = { showDialog = false }) {
+            Surface(shape = RoundedCornerShape(20.dp), color = Color(0xFF2C2C2E)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 560.dp)
+                        .padding(vertical = 16.dp),
+                ) {
+                    Text(
+                        title,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                    )
+                    val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedStyle.ordinal)
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f, fill = false).fillMaxWidth().selectableGroup(),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                    ) {
+                        items(LumixPhotoStyle.entries, key = { it.assetName }) { style ->
+                            val selected = style == selectedStyle
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .selectable(
+                                        selected = selected,
+                                        role = Role.RadioButton,
+                                        onClick = {
+                                            showDialog = false
+                                            onSelectStyle(style)
+                                        },
+                                    )
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    labels.getValue(style),
+                                    color = if (selected) Color(0xFFE5A324) else Color.White,
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                // Reserve the indicator width for every row, including unselected rows.
+                                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                    if (selected) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFE5A324))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    TextButton(
+                        onClick = { showDialog = false },
+                        modifier = Modifier.align(Alignment.End).padding(horizontal = 12.dp),
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
