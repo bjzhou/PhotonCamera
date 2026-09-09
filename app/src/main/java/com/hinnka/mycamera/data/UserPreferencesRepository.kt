@@ -25,6 +25,7 @@ import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -351,6 +352,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val LEGACY_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_google_pixel_tone_map")
         private val RAW_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_profile_tone_map")
         private val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
+        private val RAW_LUMIX_PHOTO_STYLE_KEY = stringPreferencesKey("raw_lumix_photo_style")
         private val RAW_PHOTON_HDR_KEY = booleanPreferencesKey("raw_photon_hdr")
         private val LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY =
             booleanPreferencesKey("raw_photon_pgtm_tone_map")
@@ -618,6 +620,7 @@ class UserPreferencesRepository(private val context: Context) {
                     useOppoMasterToneMap = preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false,
                     // Capture development has one supported adaptive-exposure path: HDRNet.
                     // Photo-level metadata may still disable it for an imported DNG.
+                    lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(preferences[RAW_LUMIX_PHOTO_STYLE_KEY]),
                     usePhotonHdr = true
                 ).normalized(),
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
@@ -1222,6 +1225,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
             preferences[RAW_PROFILE_TONE_MAP_KEY] = normalized.useProfileToneMap
             preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
+            preferences[RAW_LUMIX_PHOTO_STYLE_KEY] = normalized.lumixPhotoStyle.assetName
             preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
             preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
             preferences[RAW_AUTO_EXPOSURE_KEY] = false
@@ -2434,6 +2438,7 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY] = normalized.filmicWhiteRelativeExposure
                 preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
                 preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
+                preferences[RAW_LUMIX_PHOTO_STYLE_KEY] = normalized.lumixPhotoStyle.assetName
                 preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
                 preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
                 preferences[RAW_AUTO_EXPOSURE_KEY] = false

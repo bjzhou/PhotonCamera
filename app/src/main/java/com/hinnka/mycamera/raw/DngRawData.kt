@@ -64,6 +64,8 @@ data class DngRawData @Keep constructor(
     val warpRectilinear: FloatArray?, // repeated [k0, k1, k2, k3, t0, t1, centerH, centerV]
     val warpRectilinearFlags: IntArray?, // one DNG opcode flags value per warp
     val embeddedPreview: Bitmap? = null,
+    /** Fixed camera calibration from DNG metadata or LibRaw's camera color table. */
+    val cameraCalibration: RawCameraCalibration? = null,
 ) : AutoCloseable {
 
     @Volatile
@@ -141,6 +143,7 @@ data class DngRawData @Keep constructor(
             if (other.embeddedPreview == null) return false
             if (!embeddedPreview.sameAs(other.embeddedPreview)) return false
         } else if (other.embeddedPreview != null) return false
+        if (cameraCalibration != other.cameraCalibration) return false
 
         return true
     }
@@ -172,6 +175,7 @@ data class DngRawData @Keep constructor(
         result = 31 * result + (warpRectilinear?.contentHashCode() ?: 0)
         result = 31 * result + (warpRectilinearFlags?.contentHashCode() ?: 0)
         result = 31 * result + (embeddedPreview?.hashCode() ?: 0)
+        result = 31 * result + (cameraCalibration?.hashCode() ?: 0)
         return result
     }
 

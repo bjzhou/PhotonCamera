@@ -251,6 +251,8 @@ add_library(my-native-lib SHARED
     yuv_utils.cpp
     lut_processor.cpp
     dcp_parser.cpp
+    lumix_lut_baker.cpp
+    lumix_lut_jni.cpp
     mgc_denoise_static/mgc_denoise_static.cpp
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
     mgc_denoise_static/mgc_sabre_resolve_jni.cpp
@@ -315,6 +317,12 @@ set_source_files_properties(
     mgc_denoise_static/mgc_denoise_static.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
+)
+
+# LUT inversion checks require IEEE finite-value semantics.
+set_source_files_properties(
+    lumix_lut_baker.cpp lumix_lut_jni.cpp
+    PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
 
 # 启用优化和 OpenMP

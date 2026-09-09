@@ -30,6 +30,7 @@ internal class RawEngineTonePass(
         val applyDcpHueSatMap: Boolean,
         val spectralFilmLut: SpectralFilmLut?,
         val hncsRenderPlan: HncsRenderPlan?,
+        val lumixRenderPlan: LumixRenderPlan? = null,
         val bindProfileGainTable: (program: Int) -> Unit,
     )
 
@@ -48,8 +49,11 @@ internal class RawEngineTonePass(
     private val darktableSigmoidAlgorithm = DarktableSigmoidToneAlgorithm(quad)
     private val darktableFilmicAlgorithm = DarktableFilmicToneAlgorithm(quad)
     private val hncsAlgorithm = HncsToneAlgorithm(quad)
+    private val lumixAlgorithm = LumixToneAlgorithm(quad)
 
     fun render(input: Input): Output? = algorithmFor(input.colorEngine).render(input)
+
+    fun prewarm(colorEngine: RawRenderingEngine): Boolean = algorithmFor(colorEngine).prewarm()
 
     fun renderHdrReference(
         input: Input,
@@ -68,6 +72,7 @@ internal class RawEngineTonePass(
         darktableSigmoidAlgorithm.release()
         darktableFilmicAlgorithm.release()
         hncsAlgorithm.release()
+        lumixAlgorithm.release()
         dcpTextures.release()
         curveTextures.release()
     }
@@ -81,6 +86,7 @@ internal class RawEngineTonePass(
             RawRenderingEngine.DarktableFilmic -> darktableFilmicAlgorithm
             RawRenderingEngine.HncsCcm,
             RawRenderingEngine.HncsLut -> hncsAlgorithm
+            RawRenderingEngine.Lumix -> lumixAlgorithm
         }
     }
 
@@ -293,6 +299,7 @@ internal class RawEngineTonePass(
                 RawRenderingEngine.DarktableFilmic -> DarktableFilmicToneShader.DEFINITION
                 RawRenderingEngine.HncsCcm,
                 RawRenderingEngine.HncsLut -> HncsToneShader.DEFINITION
+                RawRenderingEngine.Lumix -> LumixToneShader.DEFINITION
             }
         }
 

@@ -62,6 +62,8 @@ data class GalleryMediaEntity(
     val rawHncsRenderIntent: String = "standard",
     val rawHncsFilmCurveMode: String = "standard",
     val rawColorEngine: String,
+    @ColumnInfo(defaultValue = "'standard'")
+    val rawLumixPhotoStyle: String = "standard",
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,
     val rawAgxToe: Float,

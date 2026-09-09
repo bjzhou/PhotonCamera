@@ -31,6 +31,14 @@ enum class RawRenderingEngine(
         defaultExposureCompensationEv = 0f,
         exposureCompensationDomain = RawExposureCompensationDomain.Linear
     ),
+    Lumix(
+        shaderId = 7,
+        // Output/adjustment space only: calibration maps source WB camera RGB
+        // to S9 camera RGB before the PhotoStyle curve/LUT, without sRGB encoding.
+        workingColorSpace = ColorSpace.SRGB,
+        defaultExposureCompensationEv = 0f,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
     AgX(
         shaderId = 1,
         workingColorSpace = ColorSpace.BT2020,
@@ -59,6 +67,9 @@ enum class RawRenderingEngine(
 
     val isHncs: Boolean
         get() = this == HncsCcm || this == HncsLut
+
+    val isLumix: Boolean
+        get() = this == Lumix
 
     val usesHncsColorMap: Boolean
         get() = this == HncsLut

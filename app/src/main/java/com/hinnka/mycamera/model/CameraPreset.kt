@@ -5,6 +5,7 @@ import com.google.gson.Gson
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -38,6 +39,7 @@ data class CameraPreset(
     val rawBlackPointCorrection: Float = 0f,
     val rawWhitePointCorrection: Float = 0f,
     val rawOppoMasterToneMap: Boolean = false,
+    val rawLumixPhotoStyle: String = LumixPhotoStyle.Standard.assetName,
     val rawSpectralFilmStock: String? = null,
     val rawSpectralFilmPrint: String? = null,
     val rawDROMode: String = "OFF",
@@ -142,6 +144,7 @@ data class CameraPreset(
                 rawBlackPointCorrection = rawBlackPointCorrection.coerceIn(-1f, 1f),
                 rawWhitePointCorrection = rawWhitePointCorrection.coerceIn(-1f, 1f),
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
+                rawLumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(rawLumixPhotoStyle).assetName,
             )
     }
 

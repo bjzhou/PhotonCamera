@@ -1224,4 +1224,26 @@
     <string name="eis_plus_unavailable_message">This device cannot disable its built-in camera stabilization. EIS+ has been turned off to avoid unstable video caused by double stabilization.</string>
     <string name="settings_video_nr_level_description">Set hardware noise reduction for video preview and recording independently of photos.</string>
     <string name="settings_video_edge_level_description">Set hardware sharpening for video preview and recording independently of photos.</string>
+
+    <!-- LUMIX S9 RAW rendering -->
+    <string name="settings_raw_color_engine_lumix">Lumix</string>
+    <string name="settings_raw_color_engine_lumix_description">LUMIX S9 rendering with selectable PhotoStyles.</string>
+    <string name="settings_raw_lumix_photo_style">S9 PhotoStyle</string>
+    <string name="settings_raw_lumix_photo_style_description">Choose the LUMIX S9 photo style. Standard is the default.</string>
+    <string name="settings_raw_lumix_style_standard">Standard</string>
+    <string name="settings_raw_lumix_style_vivid">Vivid</string>
+    <string name="settings_raw_lumix_style_natural">Natural</string>
+    <string name="settings_raw_lumix_style_landscape">Landscape</string>
+    <string name="settings_raw_lumix_style_portrait">Portrait</string>
+    <string name="settings_raw_lumix_style_monochrome">Monochrome</string>
+    <string name="settings_raw_lumix_style_l_monochrome">L.Monochrome</string>
+    <string name="settings_raw_lumix_style_l_monochrome_d">L.Monochrome D</string>
+    <string name="settings_raw_lumix_style_l_monochrome_s">L.Monochrome S</string>
+    <string name="settings_raw_lumix_style_leica_monochrome">LEICA Monochrome</string>
+    <string name="settings_raw_lumix_style_l_classicneo">L.ClassicNeo</string>
+    <string name="settings_raw_lumix_style_flat">Flat</string>
+    <string name="settings_raw_lumix_style_cinelike_d2">Cinelike D2</string>
+    <string name="settings_raw_lumix_style_cinelike_v2">Cinelike V2</string>
+    <string name="settings_raw_lumix_style_709like">Like709</string>
+    <string name="settings_raw_lumix_style_vlog">V-Log</string>
 </resources>

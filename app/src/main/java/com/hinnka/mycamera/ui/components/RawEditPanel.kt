@@ -35,6 +35,7 @@ import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
+import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -44,6 +45,7 @@ import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import kotlin.math.roundToInt
+import com.hinnka.mycamera.ui.settings.DropdownSettingItem
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 enum class RawEditPanelContentMode {
@@ -399,6 +401,18 @@ fun RawRenderingEngineSettingsPanel(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        if (rawRenderingEngine.isLumix) {
+            LumixPhotoStyleSelector(
+                selectedStyle = rawToneMappingParameters.lumixPhotoStyle,
+                onSelectStyle = {
+                    onAdjustmentStart()
+                    onRawToneMappingParametersChange(rawToneMappingParameters.copy(lumixPhotoStyle = it))
+                    onAdjustmentEnd()
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
             RawDcpSelector(
                 selectedDcpId = selectedDcpId,
@@ -537,6 +551,44 @@ fun RawDngMetadataCorrectionSettings(
             onLevelSelected = onRawCfaCorrectionModeChange
         )
     }
+}
+
+@Composable
+fun LumixPhotoStyleSelector(
+    selectedStyle: LumixPhotoStyle,
+    onSelectStyle: (LumixPhotoStyle) -> Unit,
+) {
+    val labels = LumixPhotoStyle.entries.associateWith { style ->
+        stringResource(when (style) {
+            LumixPhotoStyle.Standard -> R.string.settings_raw_lumix_style_standard
+            LumixPhotoStyle.Vivid -> R.string.settings_raw_lumix_style_vivid
+            LumixPhotoStyle.Natural -> R.string.settings_raw_lumix_style_natural
+            LumixPhotoStyle.Landscape -> R.string.settings_raw_lumix_style_landscape
+            LumixPhotoStyle.Portrait -> R.string.settings_raw_lumix_style_portrait
+            LumixPhotoStyle.Monochrome -> R.string.settings_raw_lumix_style_monochrome
+            LumixPhotoStyle.LMonochrome -> R.string.settings_raw_lumix_style_l_monochrome
+            LumixPhotoStyle.LMonochromeD -> R.string.settings_raw_lumix_style_l_monochrome_d
+            LumixPhotoStyle.LMonochromeS -> R.string.settings_raw_lumix_style_l_monochrome_s
+            LumixPhotoStyle.LeicaMonochrome -> R.string.settings_raw_lumix_style_leica_monochrome
+            LumixPhotoStyle.LClassicNeo -> R.string.settings_raw_lumix_style_l_classicneo
+            LumixPhotoStyle.Flat -> R.string.settings_raw_lumix_style_flat
+            LumixPhotoStyle.CinelikeD2 -> R.string.settings_raw_lumix_style_cinelike_d2
+            LumixPhotoStyle.CinelikeV2 -> R.string.settings_raw_lumix_style_cinelike_v2
+            LumixPhotoStyle.Like709 -> R.string.settings_raw_lumix_style_709like
+            LumixPhotoStyle.VLog -> R.string.settings_raw_lumix_style_vlog
+        })
+    }
+    DropdownSettingItem(
+        title = stringResource(R.string.settings_raw_lumix_photo_style),
+        description = stringResource(R.string.settings_raw_lumix_photo_style_description),
+        value = labels.getValue(selectedStyle),
+        options = labels.values.toList(),
+        isLoading = false,
+        onExpanded = {},
+        onOptionSelected = { label ->
+            labels.entries.firstOrNull { it.value == label }?.key?.let(onSelectStyle)
+        },
+    )
 }
 
 @Composable
@@ -759,7 +811,8 @@ private fun RawToneMappingControls(
     when (rawRenderingEngine) {
         RawRenderingEngine.AdobeCurve,
         RawRenderingEngine.HncsCcm,
-        RawRenderingEngine.HncsLut -> Unit
+        RawRenderingEngine.HncsLut,
+        RawRenderingEngine.Lumix -> Unit
 
         RawRenderingEngine.AgX -> {
             SliderSettingItem(
@@ -1048,7 +1101,9 @@ private fun RawRenderingEngineSelector(
     inlineOptions: Boolean = false,
 ) {
     var showSheet by remember { mutableStateOf(false) }
-    val visibleEngines = RawRenderingEngine.entries.filterNot { it == RawRenderingEngine.HncsLut }
+    val visibleEngines = RawRenderingEngine.entries.filterNot {
+        it == RawRenderingEngine.HncsLut
+    }
 
     fun resolvedEngine(engine: RawRenderingEngine): RawRenderingEngine {
         return if (engine == RawRenderingEngine.HncsCcm && selectedEngine.isHncs) {
@@ -1063,11 +1118,7 @@ private fun RawRenderingEngineSelector(
             RawColorEngineItem(
                 name = rawRenderingEngineName(engine),
                 description = rawColorEngineDescription(engine),
-                isSelected = if (engine == RawRenderingEngine.HncsCcm) {
-                    selectedEngine.isHncs
-                } else {
-                    selectedEngine == engine
-                },
+                isSelected = resolvedEngine(engine) == selectedEngine,
                 onClick = { onSelectEngine(resolvedEngine(engine)) },
             )
         }
@@ -1125,11 +1176,7 @@ private fun RawRenderingEngineSelector(
                     RawColorEngineItem(
                         name = rawRenderingEngineName(engine),
                         description = rawColorEngineDescription(engine),
-                        isSelected = if (engine == RawRenderingEngine.HncsCcm) {
-                            selectedEngine.isHncs
-                        } else {
-                            selectedEngine == engine
-                        },
+                        isSelected = resolvedEngine(engine) == selectedEngine,
                         onClick = {
                             onSelectEngine(resolvedEngine(engine))
                             showSheet = false
@@ -1152,6 +1199,7 @@ private fun rawRenderingEngineName(engine: RawRenderingEngine): String {
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
         RawRenderingEngine.HncsCcm,
         RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs)
+        RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
     }
 }
 
@@ -1165,6 +1213,7 @@ private fun rawColorEngineDescription(engine: RawRenderingEngine): String {
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film_description)
         RawRenderingEngine.HncsCcm,
         RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs_description)
+        RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix_description)
     }
 }
 

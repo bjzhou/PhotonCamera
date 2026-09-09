@@ -25,6 +25,9 @@ internal abstract class RawRenderingEngineToneAlgorithm(
     private var hdrBaseCurveTextureId = 0
     private var hdrBaseCurveFramebufferId = 0
 
+    /** Compile without drawing when capture-specific calibration is not available yet. */
+    fun prewarm(): Boolean = ensureProgram() != 0
+
     private fun ensureProgram(): Int {
         if (program != 0) return program
         return quad.createProgram(

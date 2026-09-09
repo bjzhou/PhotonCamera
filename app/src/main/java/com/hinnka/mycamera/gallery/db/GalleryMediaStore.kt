@@ -17,6 +17,7 @@ import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
@@ -251,6 +252,7 @@ object GalleryMediaStore {
             legacyPhotonToneMap = false,
             rawProfileToneMap = metadata.rawToneMappingParameters.useProfileToneMap,
             rawOppoMasterToneMap = metadata.rawToneMappingParameters.useOppoMasterToneMap,
+            rawLumixPhotoStyle = metadata.rawToneMappingParameters.lumixPhotoStyle.assetName,
             rawPhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
             rawAppleProRawToneMap = false,
             frameId = metadata.frameId,
@@ -453,6 +455,7 @@ object GalleryMediaStore {
                 filmicWhiteRelativeExposure = rawFilmicWhiteRelativeExposure,
                 useProfileToneMap = rawProfileToneMap,
                 useOppoMasterToneMap = rawOppoMasterToneMap,
+                lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(rawLumixPhotoStyle),
                 usePhotonHdr = rawPhotonHdr || legacyPhotonToneMap
             ).normalized(),
             frameId = frameId,

@@ -33,6 +33,7 @@ import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.CurveChannel
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
+import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -42,6 +43,7 @@ import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.ui.components.FrameSelector
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
+import com.hinnka.mycamera.ui.components.LumixPhotoStyleSelector
 import com.hinnka.mycamera.ui.components.RawDcpSelector
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.rawDcpLensOptions
@@ -147,6 +149,9 @@ fun PresetEditorScreen(
     var rawRenderingEngine by remember {
         mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine))
     }
+    var rawLumixPhotoStyle by remember {
+        mutableStateOf(LumixPhotoStyle.fromPersistedValue(sourcePreset?.rawLumixPhotoStyle))
+    }
     var rawOppoMasterToneMap by remember { mutableStateOf(sourcePreset?.rawOppoMasterToneMap ?: false) }
     var rawSpectralFilmStock by remember { mutableStateOf(sourcePreset?.rawSpectralFilmStock ?: "kodak_portra_400") }
     var rawSpectralFilmPrint by remember { mutableStateOf(sourcePreset?.rawSpectralFilmPrint ?: "kodak_2383") }
@@ -187,6 +192,7 @@ fun PresetEditorScreen(
             rawBlackPointCorrection = rawBlackPointCorrection,
             rawWhitePointCorrection = rawWhitePointCorrection,
             rawOppoMasterToneMap = rawOppoMasterToneMap,
+            rawLumixPhotoStyle = rawLumixPhotoStyle.assetName,
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
             rawDROMode = rawDROMode,
@@ -474,6 +480,7 @@ fun PresetEditorScreen(
                         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid)
                         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic)
                         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
+                        RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
                         RawRenderingEngine.HncsCcm -> stringResource(
                             R.string.settings_raw_color_engine_hncs_ccm
                         )
@@ -498,6 +505,13 @@ fun PresetEditorScreen(
                         }
                     }
                 )
+
+                AnimatedVisibility(visible = rawRenderingEngine.isLumix) {
+                    LumixPhotoStyleSelector(
+                        selectedStyle = rawLumixPhotoStyle,
+                        onSelectStyle = { rawLumixPhotoStyle = it },
+                    )
+                }
 
                 AnimatedVisibility(visible = rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
                     Column(modifier = Modifier.fillMaxWidth()) {

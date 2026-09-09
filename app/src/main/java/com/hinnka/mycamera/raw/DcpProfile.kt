@@ -5,6 +5,7 @@ import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -88,12 +89,17 @@ object DcpProfileParser {
     private const val TAG = "DcpProfileParser"
 
     private data class CacheEntry(
-        val stamp: Long,
+        val contentSha256: String,
         val profile: DcpProfile
     )
 
     private val cache = mutableMapOf<String, CacheEntry>()
     private val renderPlanCache = mutableMapOf<String, DcpRenderPlan>()
+    private data class FileStamp(val modified: Long, val length: Long)
+    private data class FileHash(val stamp: FileStamp, val sha256: String)
+    private val fileHashes = mutableMapOf<String, FileHash>()
+    private val verifiedAssets = mutableMapOf<String, FileStamp>()
+    private fun File.stamp() = FileStamp(lastModified(), length())
 
     fun parse(filePath: String): DcpProfile? {
         val file = File(filePath)
@@ -101,9 +107,12 @@ object DcpProfileParser {
             PLog.e(TAG, "DCP file not readable: $filePath")
             return null
         }
-        val stamp = file.lastModified() xor file.length()
+        val contentSha256 = runCatching { sha256(file) }.getOrElse {
+            PLog.e(TAG, "Failed to hash DCP: $filePath", it)
+            return null
+        }
         val cached = synchronized(cache) { cache[filePath] }
-        if (cached != null && cached.stamp == stamp) {
+        if (cached != null && cached.contentSha256 == contentSha256) {
             return cached.profile
         }
 
@@ -112,12 +121,18 @@ object DcpProfileParser {
             parseJson(json)
         }.onSuccess { profile ->
             synchronized(cache) {
-                cache[filePath] = CacheEntry(stamp, profile)
+                cache[filePath] = CacheEntry(contentSha256, profile)
             }
             PLog.d(TAG, "Parsed DCP: $filePath, profile=${profile.profileName}")
         }.onFailure { error ->
             PLog.e(TAG, "Failed to parse DCP: $filePath", error)
         }.getOrNull()
+    }
+
+    /** Resolves a DCP, materializing built-in assets and parsing its current content. */
+    fun resolveProfile(context: Context, dcpInfo: DcpInfo?): DcpProfile? {
+        if (dcpInfo == null) return null
+        return resolveFilePath(context, dcpInfo)?.let(::parse)
     }
 
     fun resolveRenderPlan(
@@ -129,8 +144,11 @@ object DcpProfileParser {
         if (dcpInfo == null) return null
         val filePath = resolveFilePath(context, dcpInfo) ?: return null
         val file = File(filePath)
-        val stamp = file.lastModified() xor file.length()
-        val renderPlanKey = "${buildRenderPlanKey(filePath, stamp, metadata)}|working=${workingColorSpace.name}"
+        val contentSha256 = runCatching { sha256(file) }.getOrElse {
+            PLog.e(TAG, "Failed to hash DCP: $filePath", it)
+            return null
+        }
+        val renderPlanKey = "${buildRenderPlanKey(filePath, contentSha256, metadata)}|working=${workingColorSpace.name}"
         synchronized(renderPlanCache) {
             renderPlanCache[renderPlanKey]?.let { return it }
         }
@@ -189,11 +207,11 @@ object DcpProfileParser {
         }
     }
 
-    private fun buildRenderPlanKey(filePath: String, stamp: Long, metadata: RawMetadata): String {
+    private fun buildRenderPlanKey(filePath: String, contentSha256: String, metadata: RawMetadata): String {
         val wbKey = metadata.whiteBalanceGains.joinToString(",") { gain ->
             (gain * 1000f).toInt().toString()
         }
-        return "$filePath|$stamp|$wbKey|${metadata.colorCorrectionMatrix.contentHashCode()}"
+        return "$filePath|$contentSha256|$wbKey|${metadata.colorCorrectionMatrix.contentHashCode()}"
     }
 
     private fun resolveFilePath(context: Context, dcpInfo: DcpInfo): String? {
@@ -202,18 +220,68 @@ object DcpProfileParser {
         if (!dcpInfo.isBuiltIn) return null
 
         val outFile = File(context.cacheDir, "built_in_dcp/${dcpInfo.id}.dcp")
-        if (outFile.exists()) return outFile.absolutePath
-
+        val assetKey = "${outFile.absolutePath}|${dcpInfo.filePath}"
+        // APK assets cannot change during a process lifetime. Recheck after an APK
+        // restart or a changed/deleted materialized file, without slider-time asset I/O.
+        if (outFile.isFile && synchronized(verifiedAssets) {
+                verifiedAssets[assetKey] == outFile.stamp()
+            }) return outFile.absolutePath
         return runCatching {
-            outFile.parentFile?.mkdirs()
-            context.assets.open(dcpInfo.filePath).use { input ->
-                outFile.outputStream().use { output -> input.copyTo(output) }
+            val assetBytes = context.assets.open(dcpInfo.filePath).use { it.readBytes() }
+            val assetSha256 = sha256(assetBytes)
+            val existingSha256 = outFile.takeIf { it.isFile }?.let { sha256(it) }
+            if (existingSha256 != assetSha256) {
+                outFile.parentFile?.mkdirs()
+                val temporary = File.createTempFile(".${dcpInfo.id}.", ".tmp", outFile.parentFile)
+                try {
+                    temporary.outputStream().use { it.write(assetBytes) }
+                    check(temporary.renameTo(outFile)) {
+                        "Unable to install built-in DCP materialization: ${outFile.absolutePath}"
+                    }
+                } finally {
+                    temporary.delete()
+                }
+                synchronized(fileHashes) { fileHashes.remove(outFile.absolutePath) }
             }
+            synchronized(verifiedAssets) { verifiedAssets[assetKey] = outFile.stamp() }
             outFile.absolutePath
         }.onFailure {
             PLog.e(TAG, "Failed to materialize built-in DCP asset: ${dcpInfo.filePath}", it)
         }.getOrNull()
     }
+
+    private fun sha256(file: File): String {
+        val stamp = file.stamp()
+        synchronized(fileHashes) { fileHashes[file.absolutePath] }?.let {
+            if (it.stamp == stamp) return it.sha256
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_HASH_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().toHexString().also {
+            synchronized(fileHashes) { fileHashes[file.absolutePath] = FileHash(stamp, it) }
+        }
+    }
+
+    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+        .digest(bytes)
+        .toHexString()
+
+    private fun ByteArray.toHexString(): String = buildString(size * 2) {
+        for (value in this@toHexString) {
+            append(HEX[(value.toInt() ushr 4) and 0x0f])
+            append(HEX[value.toInt() and 0x0f])
+        }
+    }
+
+    private const val DEFAULT_HASH_BUFFER_SIZE = 16 * 1024
+    private const val HEX = "0123456789abcdef"
 
     private fun parseJson(json: String): DcpProfile {
         val root = JSONObject(json)

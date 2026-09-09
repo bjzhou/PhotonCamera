@@ -93,6 +93,13 @@ data class RawMetadata(
      */
     val colorCorrectionMatrix: FloatArray,
 
+    /**
+     * Camera2 static lens calibration. This is kept separate from
+     * [colorCorrectionMatrix], which is resolved for the current frame/WB.
+     * The matrices retain DNG ColorMatrix direction: XYZ -> camera RGB.
+     */
+    val cameraCalibration: RawCameraCalibration? = null,
+
     /** Per-frame Camera2 COLOR_CORRECTION_GAINS in canonical [R, Gr, Gb, B] order. */
     val camera2ColorCorrectionGains: FloatArray? = null,
 
@@ -402,6 +409,22 @@ data class RawMetadata(
             // 5. 获取色彩校正矩阵
             // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
             val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, wbGains, colorSpace)
+            // Preserve the static physical-camera calibration independently of
+            // the per-frame render CCM. ColorMatrix is XYZ -> camera RGB;
+            // ForwardMatrix and the current CaptureResult transform are not
+            // valid substitutes for this fixed lens identity.
+            val cameraCalibration = RawCameraCalibration.fromCameraCharacteristics(
+                colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
+                    ?.let(::extractCCM),
+                colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
+                    ?.let(::extractCCM),
+                calibrationIlluminant1 = characteristics.get(
+                    CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1,
+                ) ?: 0,
+                calibrationIlluminant2 = characteristics.get(
+                    CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2,
+                )?.toInt() ?: 0,
+            )
             val camera2ColorCorrectionGains = wbGains
                 ?.let { gains ->
                     floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue)
@@ -483,6 +506,7 @@ data class RawMetadata(
                 whiteBalanceGains = whiteBalanceGains,
                 preMul = whiteBalanceGains.copyOf(),
                 colorCorrectionMatrix = colorCorrectionMatrix,
+                cameraCalibration = cameraCalibration,
                 camera2ColorCorrectionGains = camera2ColorCorrectionGains,
                 camera2ColorCorrectionTransform = camera2ColorCorrectionTransform,
                 camera2ColorCorrectionMode = camera2ColorCorrectionMode,
@@ -1146,6 +1170,7 @@ data class RawMetadata(
         if (whiteLevel != other.whiteLevel) return false
         if (!whiteBalanceGains.contentEquals(other.whiteBalanceGains)) return false
         if (!colorCorrectionMatrix.contentEquals(other.colorCorrectionMatrix)) return false
+        if (cameraCalibration != other.cameraCalibration) return false
         if (camera2ColorCorrectionGains != null) {
             if (other.camera2ColorCorrectionGains == null) return false
             if (!camera2ColorCorrectionGains.contentEquals(other.camera2ColorCorrectionGains)) {
@@ -1200,6 +1225,7 @@ data class RawMetadata(
         result = 31 * result + whiteLevel.hashCode()
         result = 31 * result + whiteBalanceGains.contentHashCode()
         result = 31 * result + colorCorrectionMatrix.contentHashCode()
+        result = 31 * result + (cameraCalibration?.hashCode() ?: 0)
         result = 31 * result + (camera2ColorCorrectionGains?.contentHashCode() ?: 0)
         result = 31 * result + (camera2ColorCorrectionTransform?.contentHashCode() ?: 0)
         result = 31 * result + cameraWhite.contentHashCode()

@@ -6,6 +6,7 @@ import com.google.gson.JsonParser
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -82,6 +83,7 @@ internal object CameraPresetJsonCodec {
                 .coerceIn(-1f, 1f),
             rawWhitePointCorrection = obj.float("rawWhitePointCorrection", 0f)
                 .coerceIn(-1f, 1f),
+            rawLumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(obj.stringOrNull("rawLumixPhotoStyle")).assetName,
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
             rawSpectralFilmStock = obj.stringOrNull("rawSpectralFilmStock"),
             rawSpectralFilmPrint = obj.stringOrNull("rawSpectralFilmPrint"),

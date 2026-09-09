@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 39,
+    version = 40,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -344,6 +344,12 @@ abstract class GalleryDatabase : RoomDatabase() {
                 // Keep nullable embedded recipes null; Room reads null sharpness as 0f for existing recipes.
                 db.execSQL("ALTER TABLE gallery_media ADD COLUMN recipe_sharpness REAL")
                 db.execSQL("ALTER TABLE gallery_media ADD COLUMN baseline_recipe_sharpness REAL")
+            }
+        }
+
+        private val MIGRATION_39_40 = object : androidx.room.migration.Migration(39, 40) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawLumixPhotoStyle TEXT NOT NULL DEFAULT 'standard'")
             }
         }
 
@@ -717,7 +723,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_35_36,
                         MIGRATION_36_37,
                         MIGRATION_37_38,
-                        MIGRATION_38_39
+                        MIGRATION_38_39,
+                        MIGRATION_39_40
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

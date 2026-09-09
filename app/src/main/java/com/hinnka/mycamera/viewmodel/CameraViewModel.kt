@@ -70,6 +70,7 @@ import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawCaptureExposureCompensationMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
+import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -207,6 +208,7 @@ private data class PresetMatchSnapshot(
     val rawBlackPointCorrection: Float,
     val rawWhitePointCorrection: Float,
     val rawOppoMasterToneMap: Boolean,
+    val rawLumixPhotoStyle: LumixPhotoStyle,
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
     val rawDROMode: String,
@@ -247,6 +249,7 @@ private data class PresetMatchSnapshot(
             rawShadowsAdjustment == preset.rawShadowsAdjustment &&
             rawBlackPointCorrection == preset.rawBlackPointCorrection &&
             rawWhitePointCorrection == preset.rawWhitePointCorrection &&
+            rawLumixPhotoStyle == LumixPhotoStyle.fromPersistedValue(preset.rawLumixPhotoStyle) &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
             rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
@@ -350,6 +353,9 @@ private data class PresetMatchSnapshot(
                             "preset=${preset.rawWhitePointCorrection}"
                     )
                 }
+                if (rawLumixPhotoStyle != LumixPhotoStyle.fromPersistedValue(preset.rawLumixPhotoStyle)) {
+                    add("rawLumixPhotoStyle current=$rawLumixPhotoStyle preset=${preset.rawLumixPhotoStyle}")
+                }
                 if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
                     add(
                         "rawOppoMasterToneMap current=$rawOppoMasterToneMap " +
@@ -440,6 +446,7 @@ private data class CameraFeatureUpdate(
     val rawWhitePointCorrection: SettingValue<Float>? = null,
     val rawProfileToneMapMode: SettingValue<RawProfileToneMapMode>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
+    val rawLumixPhotoStyle: SettingValue<LumixPhotoStyle>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
     val droMode: SettingValue<String>? = null,
@@ -581,6 +588,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawBlackPointCorrection = saved.rawBlackPointCorrection,
                             rawWhitePointCorrection = saved.rawWhitePointCorrection,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
+                            rawLumixPhotoStyle = saved.rawLumixPhotoStyle,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
                             rawDROMode = saved.rawDROMode,
@@ -713,6 +721,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawBlackPointCorrection = userPreferences.value.rawBlackPointCorrection,
             rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
+            rawLumixPhotoStyle = rawToneMappingParameters.value.lumixPhotoStyle.assetName,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
@@ -820,6 +829,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawBlackPointCorrection = SettingValue(this?.rawBlackPointCorrection ?: 0f),
             rawWhitePointCorrection = SettingValue(this?.rawWhitePointCorrection ?: 0f),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
+            rawLumixPhotoStyle = SettingValue(LumixPhotoStyle.fromPersistedValue(this?.rawLumixPhotoStyle)),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
             droMode = SettingValue(
@@ -955,7 +965,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val rawToneMappingUpdate = if (
             update.rawProfileToneMapMode != null ||
-            update.rawOppoMasterToneMap != null
+            update.rawOppoMasterToneMap != null || update.rawLumixPhotoStyle != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
             update.rawProfileToneMapMode?.let {
@@ -963,6 +973,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             update.rawOppoMasterToneMap?.let {
                 toneMappingParameters = toneMappingParameters.withOppoMasterToneMap(it.value)
+            }
+            update.rawLumixPhotoStyle?.let {
+                toneMappingParameters = toneMappingParameters.copy(lumixPhotoStyle = it.value)
             }
             PreferenceUpdateValue(toneMappingParameters)
         } else {
@@ -1236,6 +1249,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawBlackPointCorrection = prefs.rawBlackPointCorrection,
             rawWhitePointCorrection = prefs.rawWhitePointCorrection,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
+            rawLumixPhotoStyle = prefs.rawToneMappingParameters.lumixPhotoStyle,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,
             rawDROMode = prefs.droMode,

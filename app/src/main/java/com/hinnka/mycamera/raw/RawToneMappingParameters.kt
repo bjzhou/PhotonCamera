@@ -9,7 +9,8 @@ data class RawToneMappingParameters(
     val filmicWhiteRelativeExposure: Float = FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
     val useProfileToneMap: Boolean = true,
     val useOppoMasterToneMap: Boolean = false,
-    val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT
+    val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT,
+    val lumixPhotoStyle: LumixPhotoStyle = LumixPhotoStyle.Standard
 ) {
     val profileToneMapMode: RawProfileToneMapMode
         get() = when {

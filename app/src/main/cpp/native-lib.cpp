@@ -1134,6 +1134,62 @@ static bool hasMatrixSignal(const Matrix3x3 &matrix) {
   return sum > 0.01f;
 }
 
+static jfloatArray matrixToJava(JNIEnv *env, const Matrix3x3 &matrix) {
+  jfloatArray result = env->NewFloatArray(9);
+  if (result) {
+    env->SetFloatArrayRegion(result, 0, 9, matrix.m);
+  }
+  return result;
+}
+
+static jobject createRawCameraCalibration(
+    JNIEnv *env, bool hasColor1, const Matrix3x3 &colorMatrix1,
+    bool hasColor2, const Matrix3x3 &colorMatrix2, int illuminant1,
+    int illuminant2, bool hasAnalogBalance,
+    const std::array<float, 3> &analogBalance, bool hasCalibration1,
+    const Matrix3x3 &cameraCalibration1, bool hasCalibration2,
+    const Matrix3x3 &cameraCalibration2) {
+  if (!hasColor1 && !hasColor2) {
+    return nullptr;
+  }
+
+  jclass calibrationClass =
+      env->FindClass("com/hinnka/mycamera/raw/RawCameraCalibration");
+  if (!calibrationClass) {
+    return nullptr;
+  }
+  jmethodID constructor = env->GetMethodID(
+      calibrationClass, "<init>", "([F[FII[F[F[F)V");
+  if (!constructor) {
+    env->DeleteLocalRef(calibrationClass);
+    return nullptr;
+  }
+
+  jfloatArray color1 = hasColor1 ? matrixToJava(env, colorMatrix1) : nullptr;
+  jfloatArray color2 = hasColor2 ? matrixToJava(env, colorMatrix2) : nullptr;
+  jfloatArray analog = nullptr;
+  if (hasAnalogBalance) {
+    analog = env->NewFloatArray(3);
+    if (analog) {
+      env->SetFloatArrayRegion(analog, 0, 3, analogBalance.data());
+    }
+  }
+  jfloatArray calibration1 =
+      hasCalibration1 ? matrixToJava(env, cameraCalibration1) : nullptr;
+  jfloatArray calibration2 =
+      hasCalibration2 ? matrixToJava(env, cameraCalibration2) : nullptr;
+  jobject result = env->NewObject(calibrationClass, constructor, color1, color2,
+                                  illuminant1, illuminant2, analog,
+                                  calibration1, calibration2);
+  if (color1) env->DeleteLocalRef(color1);
+  if (color2) env->DeleteLocalRef(color2);
+  if (analog) env->DeleteLocalRef(analog);
+  if (calibration1) env->DeleteLocalRef(calibration1);
+  if (calibration2) env->DeleteLocalRef(calibration2);
+  env->DeleteLocalRef(calibrationClass);
+  return result;
+}
+
 static bool isOppoCameraMake(const char *make) {
   if (!make) {
     return false;
@@ -1885,6 +1941,10 @@ static bool computeLibRawCameraToXyzD50(const LibRaw &rawProcessor,
                                         Matrix3x3 &cameraToXyzD50,
                                         std::array<float, 2> *outWhiteXy = nullptr) {
   Matrix3x3 cameraToSrgb;
+  // LibRaw stores cam_xyz[4][3] with camera rows and XYZ columns. The
+  // cam_xyz_coeff source path multiplies it by xyz_rgb (RGB -> XYZ) to
+  // derive RGB -> camera, so under this project's column-vector convention
+  // cam_xyz itself is the fixed XYZ -> camera matrix.
   Matrix3x3 xyzToCamera;
   for (int row = 0; row < 3; ++row) {
     for (int col = 0; col < 3; ++col) {
@@ -3372,7 +3432,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[F[ILandroid/graphics/Bitmap;)V");
+                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[F[ILandroid/graphics/Bitmap;Lcom/hinnka/mycamera/raw/RawCameraCalibration;)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
@@ -3419,6 +3479,24 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   Matrix3x3 cameraCalibration1 = Matrix3x3::identity();
   Matrix3x3 cameraCalibration2 = Matrix3x3::identity();
 
+  // Keep the fixed source calibration separate from finalCCM, which is the
+  // current frame's WB/working-space transform. DNG uses its native
+  // XYZ->camera ColorMatrix fields; proprietary RAW uses LibRaw's cam_xyz
+  // table, which the cam_xyz_coeff source path shows is already XYZ->camera
+  // in this matrix convention.
+  Matrix3x3 fixedColorMatrix1 = Matrix3x3::identity();
+  Matrix3x3 fixedColorMatrix2 = Matrix3x3::identity();
+  Matrix3x3 fixedCameraCalibration1 = Matrix3x3::identity();
+  Matrix3x3 fixedCameraCalibration2 = Matrix3x3::identity();
+  bool hasFixedColor1 = false;
+  bool hasFixedColor2 = false;
+  bool hasFixedCalibration1 = false;
+  bool hasFixedCalibration2 = false;
+  bool hasFixedAnalogBalance = false;
+  int fixedIlluminant1 = 0;
+  int fixedIlluminant2 = 0;
+  std::array<float, 3> fixedAnalogBalance = {1.0f, 1.0f, 1.0f};
+
   auto readDngColorMatrix = [&](int index, Matrix3x3 &matrix) {
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
@@ -3441,23 +3519,26 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   auto readDngCameraCalibration = [&](int index, Matrix3x3 &matrix) {
     matrix = Matrix3x3::identity();
+    bool hasValue = false;
     for (int i = 0; i < 3; ++i) {
       for (int j = 0; j < 3; ++j) {
         const float value =
             RawProcessor.imgdata.color.dng_color[index].calibration[i][j];
         if (std::isfinite(value) && std::abs(value) > 1e-6f) {
           matrix.m[i * 3 + j] = value;
+          hasValue = true;
         }
       }
     }
+    return isDngInput && hasValue;
   };
 
   const bool hasColor1 = readDngColorMatrix(0, colorMatrix1);
   const bool hasColor2 = readDngColorMatrix(1, colorMatrix2);
   const bool hasForward1 = readDngForwardMatrix(0, forwardMatrix1);
   const bool hasForward2 = readDngForwardMatrix(1, forwardMatrix2);
-  readDngCameraCalibration(0, cameraCalibration1);
-  readDngCameraCalibration(1, cameraCalibration2);
+  const bool hasCameraCalibration1 = readDngCameraCalibration(0, cameraCalibration1);
+  const bool hasCameraCalibration2 = readDngCameraCalibration(1, cameraCalibration2);
 
   std::array<float, 3> analogBalance = {1.0f, 1.0f, 1.0f};
   for (int i = 0; i < 3; ++i) {
@@ -3465,6 +3546,35 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     if (analog > 0.0f && std::isfinite(analog)) {
       analogBalance[i] = analog;
     }
+  }
+
+  if (isDngInput) {
+    hasFixedColor1 = hasColor1;
+    hasFixedColor2 = hasColor2;
+    fixedColorMatrix1 = colorMatrix1;
+    fixedColorMatrix2 = colorMatrix2;
+    hasFixedCalibration1 = hasCameraCalibration1;
+    hasFixedCalibration2 = hasCameraCalibration2;
+    fixedCameraCalibration1 = cameraCalibration1;
+    fixedCameraCalibration2 = cameraCalibration2;
+    fixedIlluminant1 = RawProcessor.imgdata.color.dng_color[0].illuminant;
+    fixedIlluminant2 = RawProcessor.imgdata.color.dng_color[1].illuminant;
+    if ((RawProcessor.imgdata.color.dng_levels.parsedfields &
+         LIBRAW_DNGFM_ANALOGBALANCE) != 0) {
+      hasFixedAnalogBalance = true;
+      fixedAnalogBalance = analogBalance;
+    }
+  } else {
+    // Extraction is independent of the per-photo rendering branch. LibRaw's
+    // fixed cam_xyz is XYZ -> camera, as used by cam_xyz_coeff; ccm/rgb_cam
+    // are not substituted for it when this calibration is unavailable.
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        fixedColorMatrix1.m[row * 3 + col] =
+            RawProcessor.imgdata.color.cam_xyz[row][col];
+      }
+    }
+    hasFixedColor1 = hasMatrixSignal(fixedColorMatrix1);
   }
 
   LOGI("dng color metadata: color1=%d color2=%d forward1=%d forward2=%d "
@@ -3541,8 +3651,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     bool hasCamXYZ = false;
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
-        // LibRaw 的 cam_xyz[chan][xyz] 是 XYZ-to-Camera 映射，与 ColorMatrix1/2
-        // 结构相同
+        // LibRaw cam_xyz[chan][xyz] is already the fixed XYZ -> camera
+        // calibration under the matrix convention used by this reader.
         xyzToCam.m[i * 3 + j] = RawProcessor.imgdata.color.cam_xyz[i][j];
         if (std::abs(xyzToCam.m[i * 3 + j]) > 0.0001f)
           hasCamXYZ = true;
@@ -3599,6 +3709,11 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   env->SetFloatArrayRegion(whitePointXyArray, 0, 2, sdkWhiteXy.data());
   jstring cameraMake = env->NewStringUTF(RawProcessor.imgdata.idata.make);
   jstring cameraModel = env->NewStringUTF(RawProcessor.imgdata.idata.model);
+  jobject rawCameraCalibration = createRawCameraCalibration(
+      env, hasFixedColor1, fixedColorMatrix1, hasFixedColor2,
+      fixedColorMatrix2, fixedIlluminant1, fixedIlluminant2,
+      hasFixedAnalogBalance, fixedAnalogBalance, hasFixedCalibration1,
+      fixedCameraCalibration1, hasFixedCalibration2, fixedCameraCalibration2);
 
   LOGI("finalCCM: %f, %f, %f, %f, %f, %f, %f, %f, %f", finalCCM.m[0],
        finalCCM.m[1], finalCCM.m[2], finalCCM.m[3], finalCCM.m[4],
@@ -3701,7 +3816,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
       exportedLscGridArray, exposureBias, iso,
       shutterSpeedLong, aperture, activeArray, defaultCropArray, noiseProfileArray,
       warpRectilinearArray, warpRectilinearFlagsArray,
-      embeddedPreviewBitmap);
+      embeddedPreviewBitmap, rawCameraCalibration);
 
   // 释放资源
   env->ReleaseStringUTFChars(filePath, path);

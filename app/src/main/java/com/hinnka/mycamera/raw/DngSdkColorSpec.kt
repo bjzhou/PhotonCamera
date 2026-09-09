@@ -73,6 +73,35 @@ internal object DngSdkColorSpec {
         )
     }
 
+    /**
+     * Colorimetric transform of neutral-normalized, white-balanced camera RGB.
+     * Uses the supplied scene white for both dual-illuminant matrix interpolation and
+     * chromatic adaptation. CameraWhite is factored out of CameraToPCS, so neutral
+     * (1,1,1) maps to the working-space white without baking another camera's WB in.
+     */
+    fun computeWhiteBalancedCameraToWorkingMatrix(
+        profile: DcpProfile,
+        whiteXy: FloatArray,
+        workingColorSpace: ColorSpace,
+    ): FloatArray? {
+        if (whiteXy.size != 2 || whiteXy.any { !it.isFinite() || it <= 0f } ||
+            whiteXy.sum() >= 1f) return null
+        val prepared = prepareProfile(
+            profile.colorMatrix1, profile.colorMatrix2,
+            profile.forwardMatrix1, profile.forwardMatrix2,
+            profile.calibrationIlluminant1, profile.calibrationIlluminant2,
+            profile.analogBalance, profile.cameraCalibration1, profile.cameraCalibration2,
+        ) ?: return null
+        val cameraToPcs = cameraToPcsForWhite(prepared, whiteXy) ?: return null
+        val cameraWhite = cameraWhiteForWhite(prepared, whiteXy) ?: return null
+        val workingFromPcs = computeXyzD50ToGamut(workingColorSpace) ?: return null
+        return multiplyMatrix3x3(workingFromPcs, cameraToPcs).also { matrix ->
+            for (row in 0..2) for (column in 0..2) {
+                matrix[row * 3 + column] *= cameraWhite[column]
+            }
+        }
+    }
+
     fun computeCameraToWorkingMatrix(
         colorMatrix1: FloatArray?,
         colorMatrix2: FloatArray?,

@@ -203,46 +203,6 @@
       "isVip": false
     },
     {
-      "id": "lumix_std",
-      "name": {
-        "en": "Lumix STD",
-        "zh": "Lumix标准"
-      },
-      "path": "lumix_std.plut",
-      "category": "Lumix",
-      "isVip": false
-    },
-    {
-      "id": "lumix_portrait",
-      "name": {
-        "en": "Lumix Portrait",
-        "zh": "Lumix肖像"
-      },
-      "path": "lumix_portrait.plut",
-      "category": "Lumix",
-      "isVip": false
-    },
-    {
-      "id": "lumix_nat",
-      "name": {
-        "en": "Lumix Nature",
-        "zh": "Lumix自然"
-      },
-      "path": "lumix_nat.plut",
-      "category": "Lumix",
-      "isVip": false
-    },
-    {
-      "id": "lumix_vivid",
-      "name": {
-        "en": "Lumix Vivid",
-        "zh": "Lumix生动"
-      },
-      "path": "lumix_vivid.plut",
-      "category": "Lumix",
-      "isVip": false
-    },
-    {
       "id": "film_kodak_ultramax_400",
       "name": {
         "en": "Ultramax 400",
