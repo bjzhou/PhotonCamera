@@ -248,7 +248,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var lutSize: Float = 32f
     private var baselineLutSize: Float = 32f
 
-    // LUT 强度 (0.0 - 1.0)
+    // LUT 强度 (0.0 - 2.0)，超过 1.0 沿 LUT 色差外推。
     @Volatile
     var lutIntensity: Float = 1.0f
 

@@ -87,7 +87,7 @@ data class ColorRecipeParams(
     val gradingHighlightLuminance: Float = 0f, // -1.0 ~ 1.0
     val gradingBalance: Float = 0f,            // -1.0 ~ 1.0
     val gradingBlending: Float = 0.5f,         // 0.0 ~ 1.0
-    val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
+    val lutIntensity: Float = 1f,   // 0.0 ~ 2.0 (LUT强度，1为完全应用，超过1沿LUT色差外推)
     val remarks: String? = "",       // 用户备注
     // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
     val masterCurvePoints: FloatArray? = null,
@@ -374,7 +374,7 @@ enum class RecipeParam(
     PRIMARY_BLUE_HUE(R.string.recipe_param_primary_blue_hue, -1.0f, 1.0f, 0f),
     PRIMARY_BLUE_SATURATION(R.string.recipe_param_primary_blue_saturation, -1.0f, 1.0f, 0f),
     PRIMARY_BLUE_LIGHTNESS(R.string.recipe_param_primary_blue_lightness, -1.0f, 1.0f, 0f),
-    LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 1.0f, 1f);
+    LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 2.0f, 1f);
 
     /**
      * 将参数值限制在合法范围内

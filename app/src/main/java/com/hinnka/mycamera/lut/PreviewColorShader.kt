@@ -365,6 +365,7 @@ internal object PreviewColorShader {
                     float offset = 1.0 / (2.0 * uLutSize);
                     vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
+                    // 保留大于 1.0 的混合权重，沿 LUT 色差外推以支持最高 200% 强度。
                     color.rgb = mix(color.rgb, lutColor.rgb, effectiveLutIntensity);
                     color.rgb = sanitizeColor(color.rgb);
                 }

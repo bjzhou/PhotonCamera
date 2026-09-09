@@ -785,7 +785,8 @@ private fun FlatLutIntensityRow(
     onIntensityChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val displayPercent = (intensity.coerceIn(0f, 1f) * 100f).roundToInt()
+    val param = RecipeParam.LUT_INTENSITY
+    val displayPercent = (param.clamp(intensity) * 100f).roundToInt()
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -802,10 +803,10 @@ private fun FlatLutIntensityRow(
             maxLines = 1
         )
         CustomSlider(
-            value = intensity.coerceIn(0f, 1f),
+            value = param.clamp(intensity),
             onValueChange = onIntensityChange,
-            onDoubleTap = { onIntensityChange(1f) },
-            valueRange = 0f..1f,
+            onDoubleTap = { onIntensityChange(param.defaultValue) },
+            valueRange = param.minValue..param.maxValue,
             activeTrackColor = Color.White,
             inactiveTrackColor = Color.White.copy(alpha = 0.18f),
             thumbColor = Color.White,

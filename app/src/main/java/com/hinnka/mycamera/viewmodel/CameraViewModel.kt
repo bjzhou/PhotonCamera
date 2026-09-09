@@ -44,6 +44,7 @@ import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
+import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
@@ -3907,7 +3908,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val lutId = currentLutId.value
         if (lutId == "none") return
         val current = currentRecipeParams.value
-        val updated = current.copy(lutIntensity = intensity.coerceIn(0f, 1f))
+        val updated = current.copy(lutIntensity = RecipeParam.LUT_INTENSITY.clamp(intensity))
         lutIntensitySaveJob?.cancel()
         lutIntensitySaveJob = viewModelScope.launch {
             delay(200)

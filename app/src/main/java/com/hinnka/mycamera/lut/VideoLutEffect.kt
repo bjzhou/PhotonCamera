@@ -671,6 +671,7 @@ private class VideoLutShaderProgram(
                     vec4 lutColor = texture(uLutTexture, lutCoord);
 
                     vec3 srgbColor = linearToSrgb(linearInput);
+                    // 保留大于 1.0 的混合权重，沿 LUT 色差外推以支持最高 200% 强度。
                     color.rgb = mix(srgbColor, lutColor.rgb, effectiveLutIntensity);
 
                     if (isP3) {

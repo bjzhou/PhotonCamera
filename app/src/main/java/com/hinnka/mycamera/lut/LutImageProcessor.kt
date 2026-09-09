@@ -3184,7 +3184,7 @@ class LutImageProcessor(context: Context? = null) {
                     vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
 
-                    // 在非线性 sRGB 空间进行混合
+                    // 在非线性 sRGB 空间混合；超过 1.0 时沿 LUT 色差外推，支持最高 200% 强度。
                     vec3 srgbColor = linearToSrgb(linearInput);
                     color.rgb = mix(srgbColor, lutColor.rgb, effectiveLutIntensity);
 
