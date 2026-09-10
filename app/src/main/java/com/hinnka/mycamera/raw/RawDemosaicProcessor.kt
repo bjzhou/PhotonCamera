@@ -244,7 +244,6 @@ class RawDemosaicProcessor {
         xg: Float, yg: Float,
         xb: Float, yb: Float,
         xw: Float, yw: Float,
-        useRawAutoWhiteBalanceEstimate: Boolean
     ): DngRawData?
 
     private external fun estimateMgcReferenceSignalNative(
@@ -496,13 +495,7 @@ class RawDemosaicProcessor {
         inputTextureId: Int,
     ): Boolean {
         check(inputTextureId != 0) { "Full-resolution RAW warmup input is unavailable" }
-        val warmupColorEngine = if (colorEngine == RawRenderingEngine.HncsLut) {
-            // Both HNCS branches share one shader source. A camera LUT cannot be
-            // selected before capture metadata/profile selection exists.
-            RawRenderingEngine.HncsCcm
-        } else {
-            colorEngine
-        }
+        val warmupColorEngine = colorEngine
         val programSize = resolveLongEdgePreviewSize(
             captureWidth,
             captureHeight,
@@ -513,20 +506,16 @@ class RawDemosaicProcessor {
             warmupColorEngine.workingColorSpace,
             ColorSpace.SRGB,
         )
-        // Lens calibration is unavailable during synthetic startup warmup. Compile Lumix
+        // Lens calibration is unavailable during synthetic startup warmup. Compile calibrated engines
         // here; only actual photos with calibrated render plans execute its tone shader.
-        val engineToneReady = if (warmupColorEngine.isLumix) {
+        val engineToneReady = if (warmupColorEngine.isLumix || warmupColorEngine.isHncs) {
             engineTonePass.prewarm(warmupColorEngine)
         } else renderEngineTonePass(
             inputTextureId = inputTextureId,
             dcpRenderPlan = null,
             applyDcpHueSatMap = false,
             spectralFilmLut = null,
-            hncsRenderPlan = if (warmupColorEngine.isHncs) {
-                HncsProfileManager(context).createCcmRenderPlan()
-            } else {
-                null
-            },
+            hncsRenderPlan = null,
             lumixRenderPlan = null,
             colorEngine = warmupColorEngine,
             profileToEngineTransform = identityMatrix3x3(),
@@ -1819,7 +1808,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -1867,7 +1855,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawBlackLevelMode = rawBlackLevelMode,
                 rawCustomBlackLevel = rawCustomBlackLevel,
@@ -1922,7 +1909,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
@@ -1964,7 +1950,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 sharpeningValue = sharpeningValue,
                 denoiseValue = denoiseValue,
@@ -2002,7 +1987,6 @@ class RawDemosaicProcessor {
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
@@ -2027,7 +2011,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = 0f,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawDcpId = null,
                 rawNoiseProfileId = rawNoiseProfileId,
@@ -2064,7 +2047,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -2113,7 +2095,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawBlackLevelMode = rawBlackLevelMode,
                 rawCustomBlackLevel = rawCustomBlackLevel,
@@ -2176,7 +2157,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -2244,12 +2224,13 @@ class RawDemosaicProcessor {
                 "black=${renderMetadata.blackLevel.contentToString()} white=${renderMetadata.whiteLevel} " +
                 "wb=${renderMetadata.whiteBalanceGains.contentToString()} " +
                 "cameraWhite=${renderMetadata.cameraWhite.contentToString()} " +
+                "whiteXY=${renderMetadata.whitePointXy?.contentToString()} " +
+                "cct=${renderMetadata.colorTemperature} " +
                 "ccm=${renderMetadata.colorCorrectionMatrix.contentToString()} " +
                 "noise=${renderMetadata.channelNoiseProfile.contentToString()} " +
                 "pgtm=${renderMetadata.profileGainTableMap?.let {
                     "${it.mapPointsH}x${it.mapPointsV}x${it.mapPointsN}:tag=${it.sourceTag}"
-                } ?: "none"} profile=${embeddedDngRenderPlan.profileName} " +
-                "rawAwbIgnoredForEmbeddedDng=$rawAutoWhiteBalanceEstimate"
+                } ?: "none"} profile=${embeddedDngRenderPlan.profileName}"
         )
 
         try {
@@ -2272,7 +2253,6 @@ class RawDemosaicProcessor {
                 rawShadowsAdjustment = rawShadowsAdjustment,
                 rawBlackPointCorrection = rawBlackPointCorrection,
                 rawWhitePointCorrection = rawWhitePointCorrection,
-                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawBlackLevelMode = rawBlackLevelMode,
                 rawCustomBlackLevel = rawCustomBlackLevel,
@@ -2330,7 +2310,6 @@ class RawDemosaicProcessor {
         rawShadowsAdjustment: Float = 0f,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
-        rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackLevelMode: String? = null,
         rawCustomBlackLevel: Float? = null,
@@ -2418,11 +2397,7 @@ class RawDemosaicProcessor {
         var dngWarpRectilinearFlags: IntArray? = null
         val requestedColorEngine = rawRenderingEngine
         val hasDcpSelection = dcpRenderPlan != null || rawDcpId != null
-        val profileWorkingColorSpace = if (requestedColorEngine.isHncs) {
-            ColorSpace.HNCS
-        } else {
-            ColorSpace.ProPhoto
-        }
+        val profileWorkingColorSpace = ColorSpace.ProPhoto
         var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
         var embeddedDngProfiles: List<DngEmbeddedProfileEntry> = emptyList()
         var selectedEmbeddedDngProfile: DngEmbeddedProfileEntry? = null
@@ -2446,7 +2421,6 @@ class RawDemosaicProcessor {
                 profileWorkingColorSpace.xg, profileWorkingColorSpace.yg,
                 profileWorkingColorSpace.xb, profileWorkingColorSpace.yb,
                 profileWorkingColorSpace.xw, profileWorkingColorSpace.yw,
-                rawAutoWhiteBalanceEstimate
             )
             if (dngRawData == null) {
                 return@withContext RawProcessor.processAndToBitmap(
@@ -2574,23 +2548,21 @@ class RawDemosaicProcessor {
         } else {
             null
         }
-        val hncsRenderPlan = when (requestedColorEngine) {
-            RawRenderingEngine.HncsCcm ->
-                HncsProfileManager(context.applicationContext).createCcmRenderPlan(
-                    filmCurveMode = rawHncsFilmCurveMode
-                )
-
-            RawRenderingEngine.HncsLut ->
-                HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
-                    colorTemperature = actualMetadata.colorTemperature,
-                    activeCameraGains = requireNotNull(activeHncsCameraGains),
-                    requestedProfileId = rawHncsProfileId,
-                    renderIntent = hncsRenderIntent,
-                    filmCurveMode = rawHncsFilmCurveMode
-                )
-
-            else -> null
-        }
+        val hncsRenderPlan = if (requestedColorEngine.isHncs) {
+            val calibration = EquivalentCameraTarget.HasselbladX1D50.calibrationCache
+            HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
+                colorTemperature = actualMetadata.colorTemperature,
+                calibrationLuts = calibration.resolve(
+                    context, requireNotNull(actualMetadata.cameraCalibration) {
+                        "HNCS requires fixed source ColorMatrix calibration"
+                    },
+                ),
+                calibrationFirstWeight = calibration.firstWeight(
+                    requireNotNull(actualMetadata.whitePointXy) { "HNCS requires the source white point" },
+                ),
+                filmCurveMode = rawHncsFilmCurveMode,
+            )
+        } else null
         if (requestedColorEngine.isHncs && hncsRenderPlan == null) {
             PLog.e(
                 TAG,
@@ -2941,19 +2913,12 @@ class RawDemosaicProcessor {
             profileWorkingColorSpace,
             ColorSpace.SRGB,
         )
-        val linearColorCorrectionMatrix =
-            if (colorEngine.usesHncsColorMap) {
-                requireNotNull(hncsRenderPlan?.cameraToHncsMatrix) {
-                    "HNCS LUT branch requires its source camera matrix"
-                }
-            } else {
-                resolveLinearColorCorrectionMatrix(
-                    metadata = actualMetadata,
-                    dcpRenderPlan = activeDcpRenderPlan
-                )
-        }
-        val cameraInputTransform = if (colorEngine.isLumix) {
-            LumixCameraCalibration.profileToCameraTransform(
+        val linearColorCorrectionMatrix = resolveLinearColorCorrectionMatrix(
+            metadata = actualMetadata,
+            dcpRenderPlan = activeDcpRenderPlan,
+        )
+        val cameraInputTransform = if (colorEngine.isLumix || colorEngine.isHncs) {
+            EquivalentCameraCalibration.profileToCameraTransform(
                 actualMetadata, linearColorCorrectionMatrix,
             )
         } else {
@@ -2964,12 +2929,12 @@ class RawDemosaicProcessor {
             check(profileWorkingColorSpace == ColorSpace.ProPhoto)
             LumixProfile.createRenderPlan(
                 context, normalizedToneMappingParameters.lumixPhotoStyle, actualMetadata.colorTemperature,
-                calibrationLuts = LumixCalibrationLutCache.resolve(
+                calibrationLuts = EquivalentCameraTarget.LumixS9.calibrationCache.resolve(
                     context, requireNotNull(actualMetadata.cameraCalibration) {
                         "Lumix rendering requires fixed source ColorMatrix calibration"
                     },
                 ),
-                calibrationFirstWeight = LumixCalibrationLutCache.firstWeight(
+                calibrationFirstWeight = EquivalentCameraTarget.LumixS9.calibrationCache.firstWeight(
                     requireNotNull(actualMetadata.whitePointXy),
                 ),
                 iso = actualMetadata.iso,
@@ -2983,15 +2948,9 @@ class RawDemosaicProcessor {
                 "calibrationFirstWeight=${lumixRenderPlan?.calibrationFirstWeight} " +
                 "lutInput=shaped-camera-rgb output=display-code-values decoded-for-linear-output-pass")
         }
-        val hncsCameraDomainGains = when {
-            colorEngine.usesHncsColorMap -> requireNotNull(hncsRenderPlan?.cameraDomainGains) {
-                "HNCS LUT branch requires the active RAW camera gains baked into its matrix"
-            }
-
-            colorEngine.isHncs -> requireNotNull(activeHncsCameraGains)
-
-            else -> null
-        }
+        // Headroom clipping uses the source sensor's actual gains and source CCM.
+        // Target RGB is already white balanced after the calibration LUT.
+        val hncsCameraDomainGains = activeHncsCameraGains
         val linearCameraWhite = resolveLinearCameraWhite(
             metadata = actualMetadata,
             dcpRenderPlan = activeDcpRenderPlan
@@ -2999,12 +2958,18 @@ class RawDemosaicProcessor {
         if (colorEngine.isHncs) {
             PLog.i(
                 TAG,
-                "HNCS pipeline: branch=${if (colorEngine.usesHncsColorMap) "CbYCrY_LUT" else "CCM"} " +
+                "HNCS pipeline: branch=X1D_equivalent_CbYCrY_LUT " +
                     "profile=${hncsRenderPlan?.profileId} intent=${hncsRenderPlan?.renderIntent} " +
                     "cct=${hncsRenderPlan?.colorTemperature} " +
+                    "input=${if (dngFile != null) "DNG_FILE" else "MEMORY"} " +
+                    "whiteXY=${actualMetadata.whitePointXy?.contentToString()} " +
+                    "wb=${actualMetadata.whiteBalanceGains.contentToString()} " +
+                    "baselineEv=${actualMetadata.baselineExposure} " +
+                    "filmCurve=${rawHncsFilmCurveMode.persistedValue} " +
                     "source=${hncsRenderPlan?.sourceFile} " +
                     "profileSpace=$profileWorkingColorSpace " +
-                    "colorMap=${colorEngine.usesHncsColorMap} " +
+                    "calibrationLut=${hncsRenderPlan?.calibrationLuts?.key?.take(12)} " +
+                    "calibrationFirstWeight=${hncsRenderPlan?.calibrationFirstWeight} " +
                     "gammaFilter=${hncsRenderPlan?.gamma?.filterEnabled}"
             )
         }

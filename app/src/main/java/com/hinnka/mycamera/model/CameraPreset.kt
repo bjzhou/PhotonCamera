@@ -5,6 +5,7 @@ import com.google.gson.Gson
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
@@ -26,7 +27,7 @@ data class CameraPreset(
     // 专业模式参数
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
-    val rawHncsProfileId: String? = null,
+    val rawHncsProfileId: String? = HncsProfileManager.DEFAULT_PROFILE_ID,
     val rawHncsRenderIntent: String = HncsRenderIntent.Standard.assetValue,
     val rawHncsFilmCurveMode: String = HncsFilmCurveMode.Standard.persistedValue,
     val rawRenderingEngine: String = RawRenderingEngine.AdobeCurve.name,
@@ -129,7 +130,7 @@ data class CameraPreset(
                 lutId = normalizeLutId(lutId),
                 rawDcpId = rawDcpId?.takeIf { it.isNotBlank() },
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),
-                rawHncsProfileId = rawHncsProfileId?.takeIf(String::isNotBlank),
+                rawHncsProfileId = HncsProfileManager.DEFAULT_PROFILE_ID,
                 rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
                 rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     rawHncsFilmCurveMode
@@ -180,7 +181,7 @@ data class CameraPreset(
                 lutId = "Hasselblad",
                 colorRecipe = ColorRecipeParams.DEFAULT,
                 effects = EffectParams.DEFAULT,
-                rawRenderingEngine = RawRenderingEngine.HncsCcm.name,
+                rawRenderingEngine = RawRenderingEngine.Hncs.name,
                 isBuiltIn = true
             ),
             CameraPreset(

@@ -107,6 +107,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.GridStyle
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.CustomFocalLengthValue
 import com.hinnka.mycamera.camera.CustomVendorKey
@@ -137,7 +138,6 @@ import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
-import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
@@ -384,7 +384,6 @@ fun SettingsScreen(
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawNoiseProfileId by viewModel.rawNoiseProfileId.collectAsState()
     val rawNoiseProfileIdsByLens by viewModel.rawNoiseProfileIdsByLens.collectAsState()
-    val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
@@ -393,7 +392,6 @@ fun SettingsScreen(
     val droMode by viewModel.droMode.collectAsState()
     val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
     val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
-    val rawAutoWhiteBalanceEstimate by viewModel.rawAutoWhiteBalanceEstimate.collectAsState()
     val rawLensShadingCorrectionEnabled by viewModel.rawLensShadingCorrectionEnabled.collectAsState()
     val rawBlackLevelModes by viewModel.rawBlackLevelModes.collectAsState()
     val rawCustomBlackLevels by viewModel.rawCustomBlackLevels.collectAsState()
@@ -560,9 +558,6 @@ fun SettingsScreen(
         }
     }
 
-    val availableHncsProfiles = remember(context) {
-        HncsProfileManager(context.applicationContext).getAvailableProfiles()
-    }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
     val isHeicExportSupported = remember { HeicExportEncoder.isSupported }
@@ -1066,6 +1061,28 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_grid_description),
                             checked = showGrid,
                             onCheckedChange = { viewModel.setShowGrid(it) }
+                        )
+
+                        val gridStyleLabels = GridStyle.entries.associateWith { style ->
+                            stringResource(
+                                when (style) {
+                                    GridStyle.THIRDS -> R.string.grid_style_thirds
+                                    GridStyle.DIAGONALS -> R.string.grid_style_diagonals
+                                    GridStyle.GOLDEN_RATIO -> R.string.grid_style_golden_ratio
+                                    GridStyle.GOLDEN_TRIANGLE -> R.string.grid_style_golden_triangle
+                                    GridStyle.GOLDEN_SPIRAL -> R.string.grid_style_golden_spiral
+                                }
+                            )
+                        }
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_grid_style),
+                            value = gridStyleLabels.getValue(state.gridStyle),
+                            options = gridStyleLabels.values.toList(),
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { label ->
+                                viewModel.setGridStyle(gridStyleLabels.entries.first { it.value == label }.key)
+                            }
                         )
 
                         HorizontalDivider(
@@ -2166,9 +2183,6 @@ fun SettingsScreen(
                         onSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
                         onAdjustmentStart = { isRawSliderAdjusting = true },
                         onAdjustmentEnd = { commitRawSliderValues() },
-                        selectedHncsProfileId = rawHncsProfileId,
-                        availableHncsProfiles = availableHncsProfiles,
-                        onSelectHncsProfile = viewModel::setRawHncsProfileId,
                         hncsFilmCurveMode = rawHncsFilmCurveMode,
                         onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
                         selectedRawNoiseProfileId = rawNoiseProfileId,

@@ -16,6 +16,7 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -69,11 +70,10 @@ data class MediaMetadata(
     val rawShadowsAdjustment: Float? = null,
     val rawBlackPointCorrection: Float? = null,
     val rawWhitePointCorrection: Float? = null,
-    val rawAutoWhiteBalanceEstimate: Boolean? = null,
     val rawLensShadingCorrectionEnabled: Boolean? = null,
     val rawDcpId: String? = null,
     val rawEmbeddedDngProfileId: String? = null,
-    val rawHncsProfileId: String? = null,
+    val rawHncsProfileId: String? = HncsProfileManager.DEFAULT_PROFILE_ID,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
@@ -331,7 +331,6 @@ data class MediaMetadata(
                     rawShadowsAdjustment = if (obj.isNull("rawShadowsAdjustment")) null else obj.optDouble("rawShadowsAdjustment").toFloat(),
                     rawBlackPointCorrection = if (obj.isNull("rawBlackPointCorrection")) null else obj.optDouble("rawBlackPointCorrection").toFloat(),
                     rawWhitePointCorrection = if (obj.isNull("rawWhitePointCorrection")) null else obj.optDouble("rawWhitePointCorrection").toFloat(),
-                    rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
                     rawLensShadingCorrectionEnabled = if (obj.isNull("rawLensShadingCorrectionEnabled")) null else obj.optBoolean("rawLensShadingCorrectionEnabled"),
                     rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
                     rawEmbeddedDngProfileId = if (obj.isNull("rawEmbeddedDngProfileId")) {
@@ -339,18 +338,8 @@ data class MediaMetadata(
                     } else {
                         obj.optString("rawEmbeddedDngProfileId")
                     },
-                    rawHncsProfileId = if (obj.isNull("rawHncsProfileId")) {
-                        null
-                    } else {
-                        obj.optString("rawHncsProfileId")
-                    },
-                    rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                        if (obj.isNull("rawHncsRenderIntent")) {
-                            null
-                        } else {
-                            obj.optString("rawHncsRenderIntent")
-                        }
-                    ),
+                    rawHncsProfileId = HncsProfileManager.DEFAULT_PROFILE_ID,
+                    rawHncsRenderIntent = HncsRenderIntent.Standard,
                     rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                         if (obj.isNull("rawHncsFilmCurveMode")) {
                             null

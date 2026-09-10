@@ -88,6 +88,12 @@
     <string name="settings_level_description">Afficher l\'indicateur de niveau horizontal pendant la prise de vue</string>
     <string name="settings_grid_lines">Grille de composition</string>
     <string name="settings_grid_description">Afficher la grille pour la composition</string>
+    <string name="settings_grid_style">Style de grille</string>
+    <string name="grid_style_thirds">Règle des tiers</string>
+    <string name="grid_style_diagonals">Diagonales</string>
+    <string name="grid_style_golden_ratio">Nombre d’or</string>
+    <string name="grid_style_golden_triangle">Triangle d’or</string>
+    <string name="grid_style_golden_spiral">Spirale d’or</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturez un court clip vidéo avec votre photo pour un effet Live Photo dynamique.</string>
     <string name="settings_section_frame">Cadre et Filigrane</string>

@@ -44,6 +44,7 @@ import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
+import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
@@ -62,6 +63,7 @@ import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -233,10 +235,6 @@ private data class PresetMatchSnapshot(
         return ultraHdrGainMapEnabled == preset.ultraHdrGainMapEnabled &&
             rawDcpId == preset.rawDcpId &&
             rawDcpIdsByLens == preset.rawDcpIdsByLens &&
-            rawHncsProfileId == preset.rawHncsProfileId &&
-            rawHncsRenderIntent == HncsRenderIntent.fromPersistedValue(
-                preset.rawHncsRenderIntent
-            ) &&
             rawHncsFilmCurveMode == HncsFilmCurveMode.fromPersistedValue(
                 preset.rawHncsFilmCurveMode
             ) &&
@@ -283,18 +281,6 @@ private data class PresetMatchSnapshot(
                 if (rawDcpId != preset.rawDcpId) add("rawDcpId current=$rawDcpId preset=${preset.rawDcpId}")
                 if (rawDcpIdsByLens != preset.rawDcpIdsByLens) {
                     add("rawDcpIdsByLens current=$rawDcpIdsByLens preset=${preset.rawDcpIdsByLens}")
-                }
-                if (rawHncsProfileId != preset.rawHncsProfileId) {
-                    add("rawHncsProfileId current=$rawHncsProfileId preset=${preset.rawHncsProfileId}")
-                }
-                val presetHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                    preset.rawHncsRenderIntent
-                )
-                if (rawHncsRenderIntent != presetHncsRenderIntent) {
-                    add(
-                        "rawHncsRenderIntent current=$rawHncsRenderIntent " +
-                            "preset=$presetHncsRenderIntent"
-                    )
                 }
                 val presetHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     preset.rawHncsFilmCurveMode
@@ -803,10 +789,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ultraHdrGainMapEnabled = SettingValue(this?.ultraHdrGainMapEnabled ?: false),
             rawDcpId = SettingValue(this?.rawDcpId),
             rawDcpIdsByLens = SettingValue(this?.rawDcpIdsByLens ?: emptyMap()),
-            rawHncsProfileId = SettingValue(this?.rawHncsProfileId),
-            rawHncsRenderIntent = SettingValue(
-                HncsRenderIntent.fromPersistedValue(this?.rawHncsRenderIntent)
-            ),
+            rawHncsProfileId = SettingValue(HncsProfileManager.DEFAULT_PROFILE_ID),
+            rawHncsRenderIntent = SettingValue(HncsRenderIntent.Standard),
             rawHncsFilmCurveMode = SettingValue(
                 HncsFilmCurveMode.fromPersistedValue(this?.rawHncsFilmCurveMode)
             ),
@@ -1453,7 +1437,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
     val rawHncsProfileId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.rawHncsProfileId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, HncsProfileManager.DEFAULT_PROFILE_ID)
     val rawHncsRenderIntent: StateFlow<HncsRenderIntent> =
         userPreferencesRepository.userPreferences
             .map { it.rawHncsRenderIntent }
@@ -1483,9 +1467,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawWhitePointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawWhitePointCorrection }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawAutoWhiteBalanceEstimate: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawAutoWhiteBalanceEstimate }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawLensShadingCorrectionEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
@@ -2025,10 +2006,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (!firstPreferencesLogged) {
                     firstPreferencesLogged = true
 
-                    if (it.rawAutoWhiteBalanceEstimate) {
-                        setRawAutoWhiteBalanceEstimate(false)
-                    }
-
                     StartupTrace.mark(
                         "CameraViewModel.userPreferences first collect",
                         "costMs=${SystemClock.elapsedRealtime() - preferenceCollectStart}"
@@ -2282,6 +2259,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 // 应用保存的网格线设置
                 cameraController.setShowGrid(prefs.showGrid)
+                cameraController.setGridStyle(prefs.gridStyle)
 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
                 cameraController.setMultiFrameOutputScale(
@@ -2391,22 +2369,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setRawHncsProfileId(profileId: String?) {
-        viewModelScope.launch {
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(rawHncsProfileId = SettingValue(profileId))
-            )
-        }
-    }
-
-    fun setRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
-        viewModelScope.launch {
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(rawHncsRenderIntent = SettingValue(renderIntent))
-            )
-        }
-    }
-
     fun setRawHncsFilmCurveMode(mode: HncsFilmCurveMode) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
@@ -2504,9 +2466,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun setRawWhitePointCorrection(value: Float) {
         viewModelScope.launch { userPreferencesRepository.saveRawWhitePointCorrection(value) }
-    }
-    fun setRawAutoWhiteBalanceEstimate(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.saveRawAutoWhiteBalanceEstimate(enabled) }
     }
     fun setRawLensShadingCorrectionEnabled(enabled: Boolean) {
         viewModelScope.launch { userPreferencesRepository.saveRawLensShadingCorrectionEnabled(enabled) }
@@ -2927,7 +2886,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-            rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
             rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -3950,7 +3908,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val lutId = currentLutId.value
         if (lutId == "none") return
         val current = currentRecipeParams.value
-        val updated = current.copy(lutIntensity = intensity.coerceIn(0f, 1f))
+        val updated = current.copy(lutIntensity = RecipeParam.LUT_INTENSITY.clamp(intensity))
         lutIntensitySaveJob?.cancel()
         lutIntensitySaveJob = viewModelScope.launch {
             delay(200)
@@ -4599,6 +4557,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setShowGrid(show)
         viewModelScope.launch {
             userPreferencesRepository.saveShowGrid(show)
+        }
+    }
+
+    fun setGridStyle(style: GridStyle) {
+        cameraController.setGridStyle(style)
+        viewModelScope.launch {
+            userPreferencesRepository.saveGridStyle(style)
         }
     }
 
@@ -5438,7 +5403,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -5605,7 +5569,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -5875,7 +5838,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
                 rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
@@ -6299,7 +6261,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-            rawAutoWhiteBalanceEstimate = userPrefs?.rawAutoWhiteBalanceEstimate ?: false,
             rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,

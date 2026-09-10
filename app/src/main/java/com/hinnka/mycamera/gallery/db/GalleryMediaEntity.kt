@@ -54,7 +54,6 @@ data class GalleryMediaEntity(
     val rawShadowsAdjustment: Float?,
     val rawBlackPointCorrection: Float?,
     val rawWhitePointCorrection: Float?,
-    val rawAutoWhiteBalanceEstimate: Boolean?,
     val rawLensShadingCorrectionEnabled: Boolean?,
     val rawDcpId: String?,
     val rawEmbeddedDngProfileId: String? = null,

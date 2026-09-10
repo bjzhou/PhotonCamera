@@ -33,10 +33,10 @@ data class ColorRecipeParams(
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
     val clarity: Float = 0f,        // -1.0 ~ 1.0 (局部对比度，0为无效果)
     val sharpness: Float = 0f,      // -1.0 ~ 1.0 (sRGB 锐度，负值柔化，正值锐化)
-    val bloom: Float = 0f,          // 0.0 ~ 1.0 (Bevy Bloom 泛光强度，0为无效果)
+    val bloom: Float = 0f,          // 0.0 ~ 1.0 (高光颜色扩散泛光强度，0为无效果)
     val softLight: Float = 0f,      // 0.0 ~ 1.0 (柔光扩散强度，0为无效果)
-    val halation: Float = 0f,       // 0.0 ~ 1.0 (高光扩散强度，0为无效果，模拟 GR3 HDF)
-    val redHalation: Float = 0f,    // 0.0 ~ 1.0 (胶片暖红色边缘光晕强度，0为无效果)
+    val halation: Float = 0f,       // 历史 HDF 字段，配方读写时归零；当前光晕使用 redHalation
+    val redHalation: Float = 0f,    // 0.0 ~ 1.0 (高光遮罩扩散红色光晕强度，0为无效果)
     val chromaticAberration: Float = 0f, // 0.0 ~ 1.0 (色散/边缘溢色强度，0为无效果)
     val noise: Float = 0f,          // 0.0 ~ 1.0 (噪点强度，包含亮度和色彩噪点，0为无效果)
     val lowRes: Float = 0f,         // 0.0 ~ 1.0 (低像素强度，0为无效果)
@@ -87,7 +87,7 @@ data class ColorRecipeParams(
     val gradingHighlightLuminance: Float = 0f, // -1.0 ~ 1.0
     val gradingBalance: Float = 0f,            // -1.0 ~ 1.0
     val gradingBlending: Float = 0.5f,         // 0.0 ~ 1.0
-    val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
+    val lutIntensity: Float = 1f,   // 0.0 ~ 2.0 (LUT强度，1为完全应用，超过1沿LUT色差外推)
     val remarks: String? = "",       // 用户备注
     // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
     val masterCurvePoints: FloatArray? = null,
@@ -374,7 +374,7 @@ enum class RecipeParam(
     PRIMARY_BLUE_HUE(R.string.recipe_param_primary_blue_hue, -1.0f, 1.0f, 0f),
     PRIMARY_BLUE_SATURATION(R.string.recipe_param_primary_blue_saturation, -1.0f, 1.0f, 0f),
     PRIMARY_BLUE_LIGHTNESS(R.string.recipe_param_primary_blue_lightness, -1.0f, 1.0f, 0f),
-    LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 1.0f, 1f);
+    LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 2.0f, 1f);
 
     /**
      * 将参数值限制在合法范围内

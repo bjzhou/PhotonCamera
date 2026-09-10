@@ -101,7 +101,16 @@
     <string name="settings_photo_preview_stabilization_description">ジャイロで写真ビューファインダー表示を安定化します。保存画像には影響しません。リアカメラのみ。</string>
     <string name="settings_grid_lines">グリッド線</string>
     <string name="settings_grid_description">構図用のグリッド線を表示します</string>
+<<<<<<< HEAD
     <string name="settings_hdr_plus_bracket_exposure_sabre_disabled">Sabreはブラケット露出に対応していません。Spatialを選択してください。</string>
+=======
+    <string name="settings_grid_style">グリッドの種類</string>
+    <string name="grid_style_thirds">三分割</string>
+    <string name="grid_style_diagonals">対角線</string>
+    <string name="grid_style_golden_ratio">黄金分割</string>
+    <string name="grid_style_golden_triangle">黄金三角</string>
+    <string name="grid_style_golden_spiral">黄金螺旋</string>
+>>>>>>> upstream/main
     <string name="settings_use_live_photo">ライブフォト</string>
     <string name="settings_use_live_photo_description">写真と一緒に短い動画を撮影し、動きのあるライブフォト効果を作成します。</string>
     <string name="settings_develop_animation_description">撮影後にフィルム現像風アニメーションを表示</string>

@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.GridStyle
 import com.hinnka.mycamera.camera.CustomFocalLengthValue
 import com.hinnka.mycamera.camera.CustomVendorKey
 import com.hinnka.mycamera.camera.CustomVendorKeySettings
@@ -25,6 +26,7 @@ import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
@@ -113,7 +115,7 @@ data class UserPreferences(
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     val rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
     val rawNoiseProfileIdsByLens: Map<String, String> = emptyMap(),
-    val rawHncsProfileId: String? = null,
+    val rawHncsProfileId: String? = HncsProfileManager.DEFAULT_PROFILE_ID,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
@@ -126,7 +128,6 @@ data class UserPreferences(
     val rawDROEnabled: Boolean = false,
     val rawBlackPointCorrection: Float = 0f,
     val rawWhitePointCorrection: Float = 0f,
-    val rawAutoWhiteBalanceEstimate: Boolean = false,
     val rawLensShadingCorrectionEnabled: Boolean = true,
     val rawBlackLevelModes: Map<String, String> = emptyMap(),
     val rawCustomBlackLevels: Map<String, Float> = emptyMap(),
@@ -141,6 +142,7 @@ data class UserPreferences(
     val phantomFrameId: String? = null,
     val showHistogram: Boolean = true,
     val showGrid: Boolean = false,  // 网格线显示
+    val gridStyle: GridStyle = GridStyle.THIRDS,
     val showLevelIndicator: Boolean = false,  // 水平仪显示
     val focusPeakingEnabled: Boolean = true,  // 手动对焦峰值显示
     val eyeFocusEnabled: Boolean = false,  // MediaPipe 人眼对焦
@@ -365,7 +367,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_DRO_ENABLED_KEY = booleanPreferencesKey("raw_dro_enabled")
         private val RAW_BLACK_POINT_CORRECTION_KEY = floatPreferencesKey("raw_black_point_correction")
         private val RAW_WHITE_POINT_CORRECTION_KEY = floatPreferencesKey("raw_white_point_correction")
-        private val RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY = booleanPreferencesKey("raw_auto_white_balance_estimate")
         private val RAW_SPECTRAL_FILM_TUNINGS_BY_STOCK_KEY = stringPreferencesKey("raw_spectral_film_tunings_by_stock")
         private val RAW_BLACK_LEVEL_MODES_KEY = stringPreferencesKey("raw_black_level_modes")
         private val RAW_CUSTOM_BLACK_LEVELS_KEY = stringPreferencesKey("raw_custom_black_levels")
@@ -381,6 +382,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_FRAME_ID_KEY = stringPreferencesKey("phantom_frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
+        private val GRID_STYLE = stringPreferencesKey("grid_style")
         private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
         private val FOCUS_PEAKING_ENABLED = booleanPreferencesKey("focus_peaking_enabled")
         private val EYE_FOCUS_ENABLED = booleanPreferencesKey("eye_focus_enabled")
@@ -599,7 +601,7 @@ class UserPreferencesRepository(private val context: Context) {
                         null
                     }
                 }.toMap(),
-                rawHncsProfileId = preferences[RAW_HNCS_PROFILE_ID_KEY],
+                rawHncsProfileId = HncsProfileManager.DEFAULT_PROFILE_ID,
                 rawHncsRenderIntent = HncsRenderIntent.Standard,
                 rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     preferences[RAW_HNCS_FILM_CURVE_MODE_KEY]
@@ -631,7 +633,6 @@ class UserPreferencesRepository(private val context: Context) {
                 rawDROEnabled = preferences[RAW_DRO_ENABLED_KEY] ?: false,
                 rawBlackPointCorrection = preferences[RAW_BLACK_POINT_CORRECTION_KEY] ?: 0f,
                 rawWhitePointCorrection = preferences[RAW_WHITE_POINT_CORRECTION_KEY] ?: 0f,
-                rawAutoWhiteBalanceEstimate = preferences[RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY] ?: false,
                 rawLensShadingCorrectionEnabled = preferences[RAW_LENS_SHADING_CORRECTION_ENABLED] ?: true,
                 rawBlackLevelModes = parseMapString(preferences[RAW_BLACK_LEVEL_MODES_KEY]),
                 rawCustomBlackLevels = parseMapFloat(preferences[RAW_CUSTOM_BLACK_LEVELS_KEY]),
@@ -654,6 +655,7 @@ class UserPreferencesRepository(private val context: Context) {
                 phantomFrameId = preferences[PHANTOM_FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
                 showGrid = preferences[SHOW_GRID] ?: false,
+                gridStyle = GridStyle.fromPersistedName(preferences[GRID_STYLE]),
                 showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
                 focusPeakingEnabled = preferences[FOCUS_PEAKING_ENABLED] ?: true,
                 eyeFocusEnabled = preferences[EYE_FOCUS_ENABLED] ?: false,
@@ -1176,22 +1178,6 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveRawHncsProfileId(profileId: String?) {
-        context.dataStore.edit { preferences ->
-            if (profileId.isNullOrBlank()) {
-                preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
-            } else {
-                preferences[RAW_HNCS_PROFILE_ID_KEY] = profileId
-            }
-        }
-    }
-
-    suspend fun saveRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_HNCS_RENDER_INTENT_KEY] = renderIntent.assetValue
-        }
-    }
-
     suspend fun saveRawHncsFilmCurveMode(mode: HncsFilmCurveMode) {
         context.dataStore.edit { preferences ->
             preferences[RAW_HNCS_FILM_CURVE_MODE_KEY] = mode.persistedValue
@@ -1295,12 +1281,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawWhitePointCorrection(value: Float) {
         context.dataStore.edit { preferences ->
             preferences[RAW_WHITE_POINT_CORRECTION_KEY] = value
-        }
-    }
-
-    suspend fun saveRawAutoWhiteBalanceEstimate(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_AUTO_WHITE_BALANCE_ESTIMATE_KEY] = enabled
         }
     }
 
@@ -1452,6 +1432,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveShowGrid(show: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[SHOW_GRID] = show
+        }
+    }
+
+    suspend fun saveGridStyle(style: GridStyle) {
+        context.dataStore.edit { preferences ->
+            preferences[GRID_STYLE] = style.name
         }
     }
 
@@ -2413,14 +2399,10 @@ class UserPreferencesRepository(private val context: Context) {
                 }
             }
             update.rawHncsProfileId?.let {
-                if (it.value.isNullOrBlank()) {
-                    preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
-                } else {
-                    preferences[RAW_HNCS_PROFILE_ID_KEY] = it.value
-                }
+                preferences[RAW_HNCS_PROFILE_ID_KEY] = HncsProfileManager.DEFAULT_PROFILE_ID
             }
             update.rawHncsRenderIntent?.let {
-                preferences[RAW_HNCS_RENDER_INTENT_KEY] = it.value.assetValue
+                preferences[RAW_HNCS_RENDER_INTENT_KEY] = HncsRenderIntent.Standard.assetValue
             }
             update.rawHncsFilmCurveMode?.let {
                 preferences[RAW_HNCS_FILM_CURVE_MODE_KEY] = it.value.persistedValue

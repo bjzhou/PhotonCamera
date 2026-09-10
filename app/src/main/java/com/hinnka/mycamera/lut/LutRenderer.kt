@@ -174,23 +174,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var softLightFboId = IntArray(2)
     private var softLightWidth: Int = 0
     private var softLightHeight: Int = 0
-    private var halationExtractBlurHProgram: Int = 0
-    private var halationBlurVProgram: Int = 0
-    private var halationTexId = IntArray(2)
-    private var halationFboId = IntArray(2)
-    private var halationWidth: Int = 0
-    private var halationHeight: Int = 0
-    private var bloomDownsampleFirstProgram: Int = 0
-    private var bloomDownsampleProgram: Int = 0
-    private var bloomUpsampleProgram: Int = 0
-    private var bloomCompositeProgram: Int = 0
-    private var bloomTexId = IntArray(0)
-    private var bloomFboId = IntArray(0)
-    private var bloomMipWidths = IntArray(0)
-    private var bloomMipHeights = IntArray(0)
-    private var bloomMipCount: Int = 0
-    private var bloomSourceWidth: Int = 0
-    private var bloomSourceHeight: Int = 0
     private var postProcessScratchFboId: Int = 0
     private var postProcessScratchTextureId: Int = 0
     private var postProcessScratchWidth: Int = 0
@@ -208,6 +191,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var clarityOutputWidth: Int = 0
     private var clarityOutputHeight: Int = 0
     private val filmGrainGl = FilmGrainGl(TAG)
+    private val highlightDiffusionGl = HighlightDiffusionGl(TAG)
     private var filmGrainSourceTextureId: Int = 0
     private var filmGrainSourceFboId: Int = 0
     private var filmGrainSourceWidth: Int = 0
@@ -264,7 +248,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var lutSize: Float = 32f
     private var baselineLutSize: Float = 32f
 
-    // LUT 强度 (0.0 - 1.0)
+    // LUT 强度 (0.0 - 2.0)，超过 1.0 沿 LUT 色差外推。
     @Volatile
     var lutIntensity: Float = 1.0f
 
@@ -644,23 +628,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         softLightFboId = IntArray(2)
         softLightWidth = 0
         softLightHeight = 0
-        halationExtractBlurHProgram = 0
-        halationBlurVProgram = 0
-        halationTexId = IntArray(2)
-        halationFboId = IntArray(2)
-        halationWidth = 0
-        halationHeight = 0
-        bloomDownsampleFirstProgram = 0
-        bloomDownsampleProgram = 0
-        bloomUpsampleProgram = 0
-        bloomCompositeProgram = 0
-        bloomTexId = IntArray(0)
-        bloomFboId = IntArray(0)
-        bloomMipWidths = IntArray(0)
-        bloomMipHeights = IntArray(0)
-        bloomMipCount = 0
-        bloomSourceWidth = 0
-        bloomSourceHeight = 0
         postProcessScratchFboId = 0
         postProcessScratchTextureId = 0
         postProcessScratchWidth = 0
@@ -676,6 +643,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         clarityOutputWidth = 0
         clarityOutputHeight = 0
         filmGrainGl.resetAfterContextLoss()
+        highlightDiffusionGl.resetAfterContextLoss()
         filmGrainSourceTextureId = 0
         filmGrainSourceFboId = 0
         filmGrainSourceWidth = 0
@@ -1533,28 +1501,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         return program
     }
 
-    private fun setupHalationFbos(width: Int, height: Int) {
-        val dsW = width / 4; val dsH = height / 4
-        if (halationWidth == dsW && halationHeight == dsH && halationTexId[0] != 0) return
-        halationWidth = dsW; halationHeight = dsH
-        for (i in 0..1) {
-            if (halationTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(halationTexId[i]), 0)
-            if (halationFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(halationFboId[i]), 0)
-            val t = IntArray(1); val f = IntArray(1)
-            GLES30.glGenTextures(1, t, 0); GLES30.glGenFramebuffers(1, f, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, dsW, dsH, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t[0], 0)
-            halationTexId[i] = t[0]; halationFboId[i] = f[0]
-        }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-    }
-
     private fun setupHdfFbos(width: Int, height: Int) {
         val dsW = width / 4
         val dsH = height / 4
@@ -1701,240 +1647,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfBlurVProgram, "uInputTexture"), 0)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(hdfBlurVProgram, "uTexelSize"), texelW, texelH)
         drawSimpleQuad(hdfBlurVProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-    }
-
-    private fun renderHalationPreviewBlur(sourceTexId: Int, width: Int, height: Int) {
-        if (!ensureHalationPrograms()) return
-        setupHalationFbos(width, height)
-        if (halationExtractBlurHProgram == 0 || halationBlurVProgram == 0) return
-        val dsW = width / 4; val dsH = height / 4
-        val spatialScale = getPreviewSpatialEffectScale(width, height)
-        val texelW = spatialScale / dsW; val texelH = spatialScale / dsH
-        val threshold = 0.72f - redHalation.coerceIn(0f, 1f) * 0.22f
-
-        GLES30.glUseProgram(halationExtractBlurHProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[0])
-        GLES30.glViewport(0, 0, dsW, dsH)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTexId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uThreshold"), threshold)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uStrength"), redHalation)
-        drawSimpleQuad(halationExtractBlurHProgram)
-
-        GLES30.glUseProgram(halationBlurVProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[1])
-        GLES30.glViewport(0, 0, dsW, dsH)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, halationTexId[0])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(halationBlurVProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(halationBlurVProgram, "uTexelSize"), texelW, texelH)
-        drawSimpleQuad(halationBlurVProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-    }
-
-    private fun setupBloomFbos(width: Int, height: Int): Boolean {
-        val maxMipDimension = BloomLdrSettings.MAX_MIP_DIMENSION
-        val scale = maxMipDimension.toFloat() / maxOf(1, height).toFloat()
-        var mipWidth = (width * scale).toInt().coerceAtLeast(1)
-        var mipHeight = (height * scale).toInt().coerceAtLeast(1)
-        val widths = mutableListOf<Int>()
-        val heights = mutableListOf<Int>()
-        repeat(BloomLdrSettings.MIP_COUNT) {
-            widths += mipWidth
-            heights += mipHeight
-            mipWidth = maxOf(1, mipWidth / 2)
-            mipHeight = maxOf(1, mipHeight / 2)
-        }
-        val count = widths.size
-        if (bloomSourceWidth == width &&
-            bloomSourceHeight == height &&
-            bloomMipCount == count &&
-            bloomTexId.isNotEmpty() &&
-            bloomMipWidths.contentEquals(widths.toIntArray()) &&
-            bloomMipHeights.contentEquals(heights.toIntArray())
-        ) {
-            return true
-        }
-
-        releaseBloomFbos()
-        bloomSourceWidth = width
-        bloomSourceHeight = height
-        bloomMipCount = count
-        bloomMipWidths = widths.toIntArray()
-        bloomMipHeights = heights.toIntArray()
-        bloomTexId = IntArray(count)
-        bloomFboId = IntArray(count)
-
-        for (i in 0 until count) {
-            val t = IntArray(1)
-            val f = IntArray(1)
-            GLES30.glGenTextures(1, t, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_RGBA16F,
-                bloomMipWidths[i],
-                bloomMipHeights[i],
-                0,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                null
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glGenFramebuffers(1, f, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER,
-                GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D,
-                t[0],
-                0
-            )
-            bloomTexId[i] = t[0]
-            bloomFboId[i] = f[0]
-            val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-            if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                PLog.e(TAG, "Bloom mip framebuffer[$i] not complete: $status")
-                releaseBloomFbos()
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                return false
-            }
-        }
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        return true
-    }
-
-    private fun releaseBloomFbos() {
-        for (textureId in bloomTexId) {
-            if (textureId != 0) GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
-        }
-        for (fboId in bloomFboId) {
-            if (fboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(fboId), 0)
-        }
-        bloomTexId = IntArray(0)
-        bloomFboId = IntArray(0)
-        bloomMipWidths = IntArray(0)
-        bloomMipHeights = IntArray(0)
-        bloomMipCount = 0
-        bloomSourceWidth = 0
-        bloomSourceHeight = 0
-    }
-
-    private fun renderLdrBloom(targetFboId: Int, width: Int, height: Int, sourceTexId: Int) {
-        if (!ensureBloomPrograms()) {
-            drawFboToScreen(targetFboId, width, height, sourceTexId)
-            return
-        }
-        if (bloom <= 0.001f || bloomDownsampleFirstProgram == 0 || bloomDownsampleProgram == 0 ||
-            bloomUpsampleProgram == 0 || bloomCompositeProgram == 0
-        ) {
-            drawFboToScreen(targetFboId, width, height, sourceTexId)
-            return
-        }
-        if (!setupBloomFbos(width, height)) {
-            drawFboToScreen(targetFboId, width, height, sourceTexId)
-            return
-        }
-        if (bloomMipCount <= 0) {
-            drawFboToScreen(targetFboId, width, height, sourceTexId)
-            return
-        }
-
-        val thresholdPrecomputations = BloomLdrSettings.thresholdPrecomputations()
-
-        GLES30.glDisable(GLES30.GL_BLEND)
-        GLES30.glUseProgram(bloomDownsampleFirstProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[0])
-        GLES30.glViewport(0, 0, bloomMipWidths[0], bloomMipHeights[0])
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTexId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uInputTexelSize"), 1f / width, 1f / height)
-        GLES30.glUniform4f(
-            GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uThreshold"),
-            thresholdPrecomputations[0],
-            thresholdPrecomputations[1],
-            thresholdPrecomputations[2],
-            thresholdPrecomputations[3]
-        )
-        drawSimpleQuad(bloomDownsampleFirstProgram)
-
-        for (mip in 1 until bloomMipCount) {
-            GLES30.glUseProgram(bloomDownsampleProgram)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[mip])
-            GLES30.glViewport(0, 0, bloomMipWidths[mip], bloomMipHeights[mip])
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[mip - 1])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomDownsampleProgram, "uInputTexture"), 0)
-            GLES30.glUniform2f(
-                GLES30.glGetUniformLocation(bloomDownsampleProgram, "uInputTexelSize"),
-                1f / bloomMipWidths[mip - 1],
-                1f / bloomMipHeights[mip - 1]
-            )
-            drawSimpleQuad(bloomDownsampleProgram)
-        }
-
-        GLES30.glEnable(GLES30.GL_BLEND)
-        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
-        GLES30.glBlendFunc(GLES30.GL_CONSTANT_COLOR, GLES30.GL_ONE)
-        GLES30.glUseProgram(bloomUpsampleProgram)
-        for (mip in bloomMipCount - 1 downTo 1) {
-            val blend = BloomLdrSettings.mipAddWeight(mip, bloomMipCount, bloom)
-            GLES30.glBlendColor(blend, blend, blend, blend)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[mip - 1])
-            GLES30.glViewport(0, 0, bloomMipWidths[mip - 1], bloomMipHeights[mip - 1])
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[mip])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomUpsampleProgram, "uInputTexture"), 0)
-            GLES30.glUniform2f(
-                GLES30.glGetUniformLocation(bloomUpsampleProgram, "uInputTexelSize"),
-                1f / bloomMipWidths[mip],
-                1f / bloomMipHeights[mip]
-            )
-            drawSimpleQuad(bloomUpsampleProgram)
-        }
-        GLES30.glDisable(GLES30.GL_BLEND)
-
-        val finalBlend = BloomLdrSettings.compositeStrength(bloom)
-        val compositeMipLower = BloomLdrSettings.compositeMipLowerIndex(bloomMipCount, bloom)
-        val compositeMipUpper = BloomLdrSettings.compositeMipUpperIndex(bloomMipCount, bloom)
-        val compositeMipBlend = BloomLdrSettings.compositeMipBlend(bloomMipCount, bloom)
-        drawFboToScreen(targetFboId, width, height, sourceTexId)
-        GLES30.glEnable(GLES30.GL_BLEND)
-        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
-        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glUseProgram(bloomCompositeProgram)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[compositeMipLower])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexture"), 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[compositeMipUpper])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTextureNext"), 1)
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexelSize"),
-            1f / bloomMipWidths[compositeMipLower],
-            1f / bloomMipHeights[compositeMipLower]
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexelSizeNext"),
-            1f / bloomMipWidths[compositeMipUpper],
-            1f / bloomMipHeights[compositeMipUpper]
-        )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBlend"), finalBlend)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(bloomCompositeProgram, "uMipBlend"), compositeMipBlend)
-        drawSimpleQuad(bloomCompositeProgram)
-        GLES30.glDisable(GLES30.GL_BLEND)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
@@ -2288,27 +2000,21 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     private fun drawPostProcessEffects(targetFboId: Int, width: Int, height: Int, sourceTextureId: Int) {
         val hdfEnabled = halation > 0.001f
-        val halationEnabled = redHalation > 0.001f
-        val bloomEnabled = bloom > 0.001f
         val softLightEnabled = softLight > 0.001f
-        val compositeEnabled = hdfEnabled || halationEnabled || softLightEnabled
+        val compositeEnabled = hdfEnabled || softLightEnabled
+        val diffusionEnabled = bloom > 0.001f || redHalation > 0.001f
 
-        if (hdfEnabled) {
-            renderHdfPreviewBlur(sourceTextureId, width, height)
-        }
-        if (softLightEnabled) {
-            renderSoftLightPreviewBlur(sourceTextureId, width, height)
-        }
-        if (halationEnabled) {
-            renderHalationPreviewBlur(sourceTextureId, width, height)
-        }
+        if (hdfEnabled) renderHdfPreviewBlur(sourceTextureId, width, height)
+        if (softLightEnabled) renderSoftLightPreviewBlur(sourceTextureId, width, height)
 
-        if (compositeEnabled && bloomEnabled) {
-            setupPostProcessScratchFbo(width, height)
-            drawPostProcessComposite(postProcessScratchFboId, width, height, sourceTextureId)
-            renderLdrBloom(targetFboId, width, height, postProcessScratchTextureId)
-        } else if (bloomEnabled) {
-            renderLdrBloom(targetFboId, width, height, sourceTextureId)
+        if (diffusionEnabled) {
+            val source = if (compositeEnabled) {
+                setupPostProcessScratchFbo(width, height)
+                drawPostProcessComposite(postProcessScratchFboId, width, height, sourceTextureId)
+                postProcessScratchTextureId
+            } else sourceTextureId
+            val output = highlightDiffusionGl.renderToTexture(source, width, height, bloom, redHalation, ::drawSimpleQuad)
+            drawFboToScreen(targetFboId, width, height, output?.textureId ?: source)
         } else if (compositeEnabled) {
             drawPostProcessComposite(targetFboId, width, height, sourceTextureId)
         } else {
@@ -2327,16 +2033,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uOriginalTexture"), 0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (halation > 0.001f) hdfTexId[1] else sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uBloomTexture"), 1)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uHalation"), halation)
 
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (redHalation > 0f) halationTexId[1] else 0)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uRedHalationTexture"), 2)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uRedHalation"), redHalation)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (softLight > 0f) softLightTexId[1] else 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (softLight > 0.001f) softLightTexId[1] else sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uSoftLightTexture"), 3)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uSoftLight"), softLight)
         drawSimpleQuad(hdfCompositeProgram)
@@ -2363,13 +2065,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
         GLES30.glEnableVertexAttribArray(posLoc)
         GLES30.glVertexAttribPointer(posLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
-        GLES30.glEnableVertexAttribArray(texLoc)
-        GLES30.glVertexAttribPointer(texLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+        if (texLoc >= 0) {
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+            GLES30.glEnableVertexAttribArray(texLoc)
+            GLES30.glVertexAttribPointer(texLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+        }
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
         GLES30.glDisableVertexAttribArray(posLoc)
-        GLES30.glDisableVertexAttribArray(texLoc)
+        if (texLoc >= 0) GLES30.glDisableVertexAttribArray(texLoc)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
     }
@@ -3448,6 +3152,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         clarityCompositeProgram = 0
         releaseClarityPreviewFramebuffers()
         filmGrainGl.release()
+        highlightDiffusionGl.release()
         releaseFilmGrainSourceFramebuffer()
 
         // 释放 HDF 实时预览资源
@@ -3466,15 +3171,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         softLightTexId = IntArray(2); softLightFboId = IntArray(2)
         hdfWidth = 0; hdfHeight = 0
         softLightWidth = 0; softLightHeight = 0
-        if (bloomDownsampleFirstProgram != 0) GLES30.glDeleteProgram(bloomDownsampleFirstProgram)
-        if (bloomDownsampleProgram != 0) GLES30.glDeleteProgram(bloomDownsampleProgram)
-        if (bloomUpsampleProgram != 0) GLES30.glDeleteProgram(bloomUpsampleProgram)
-        if (bloomCompositeProgram != 0) GLES30.glDeleteProgram(bloomCompositeProgram)
-        bloomDownsampleFirstProgram = 0
-        bloomDownsampleProgram = 0
-        bloomUpsampleProgram = 0
-        bloomCompositeProgram = 0
-        releaseBloomFbos()
         if (postProcessScratchFboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(postProcessScratchFboId), 0)
             postProcessScratchFboId = 0
@@ -3775,51 +3471,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             )
         }
         return softLightBlurHProgram != 0 && hdfBlurVProgram != 0
-    }
-
-    private fun ensureHalationPrograms(): Boolean {
-        if (halationExtractBlurHProgram == 0) {
-            halationExtractBlurHProgram = createPostProcessProgram(
-                Shaders.HALATION_PREVIEW_EXTRACT_BLUR_H,
-                "halation extract/blur",
-            )
-        }
-        if (halationBlurVProgram == 0) {
-            halationBlurVProgram = createPostProcessProgram(
-                Shaders.HALATION_PREVIEW_BLUR_V,
-                "halation vertical blur",
-            )
-        }
-        return halationExtractBlurHProgram != 0 && halationBlurVProgram != 0
-    }
-
-    private fun ensureBloomPrograms(): Boolean {
-        if (bloomDownsampleFirstProgram == 0) {
-            bloomDownsampleFirstProgram = createPostProcessProgram(
-                Shaders.BEVY_BLOOM_DOWNSAMPLE_FIRST,
-                "bloom first downsample",
-            )
-        }
-        if (bloomDownsampleProgram == 0) {
-            bloomDownsampleProgram = createPostProcessProgram(
-                Shaders.BEVY_BLOOM_DOWNSAMPLE,
-                "bloom downsample",
-            )
-        }
-        if (bloomUpsampleProgram == 0) {
-            bloomUpsampleProgram = createPostProcessProgram(
-                Shaders.BEVY_BLOOM_UPSAMPLE,
-                "bloom upsample",
-            )
-        }
-        if (bloomCompositeProgram == 0) {
-            bloomCompositeProgram = createPostProcessProgram(
-                Shaders.BEVY_BLOOM_COMPOSITE,
-                "bloom composite",
-            )
-        }
-        return bloomDownsampleFirstProgram != 0 && bloomDownsampleProgram != 0 &&
-            bloomUpsampleProgram != 0 && bloomCompositeProgram != 0
     }
 
     private fun ensurePostProcessCompositeProgram(): Boolean {

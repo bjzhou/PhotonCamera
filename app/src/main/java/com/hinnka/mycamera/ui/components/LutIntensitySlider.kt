@@ -15,6 +15,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.model.RecipeParam
+import kotlin.math.roundToInt
 
 /**
  * 编辑面板中的滤镜强度控制。
@@ -26,7 +28,8 @@ fun LutIntensitySlider(
     enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val displayPercent = (intensity.coerceIn(0f, 1f) * 100f).toInt()
+    val param = RecipeParam.LUT_INTENSITY
+    val displayPercent = (param.clamp(intensity) * 100f).roundToInt()
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -55,13 +58,13 @@ fun LutIntensitySlider(
         }
 
         CustomSlider(
-            value = intensity.coerceIn(0f, 1f),
+            value = param.clamp(intensity),
             onValueChange = onIntensityChange,
             onDoubleTap = {
-                if (enabled) onIntensityChange(1f)
+                if (enabled) onIntensityChange(param.defaultValue)
             },
             enabled = enabled,
-            valueRange = 0f..1f,
+            valueRange = param.minValue..param.maxValue,
             activeTrackColor = Color.White,
             inactiveTrackColor = Color.Gray.copy(alpha = 0.5f),
             thumbColor = Color.White,

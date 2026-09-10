@@ -17,7 +17,7 @@ internal data class LumixRenderPlan(
     val tables: LumixPhotoStyleTables,
     val highWeight: Float,
     val outputClip: Float,
-    val calibrationLuts: LumixCalibrationLuts,
+    val calibrationLuts: EquivalentCameraLuts,
     val calibrationFirstWeight: Float = 1f,
 )
 
@@ -30,7 +30,7 @@ internal object LumixProfile {
         context: Context,
         style: LumixPhotoStyle,
         colorTemperature: Float?,
-        calibrationLuts: LumixCalibrationLuts,
+        calibrationLuts: EquivalentCameraLuts,
         calibrationFirstWeight: Float,
         iso: Int = 100,
     ): LumixRenderPlan {

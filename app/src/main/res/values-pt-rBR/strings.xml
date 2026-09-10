@@ -89,6 +89,12 @@
     <string name="settings_level_description">Mostrar indicador de nível horizontal ao fotografar</string>
     <string name="settings_grid_lines">Linhas de Grade</string>
     <string name="settings_grid_description">Mostrar linhas de grade para composição</string>
+    <string name="settings_grid_style">Estilo de Grade</string>
+    <string name="grid_style_thirds">Regra dos Terços</string>
+    <string name="grid_style_diagonals">Diagonais</string>
+    <string name="grid_style_golden_ratio">Proporção Áurea</string>
+    <string name="grid_style_golden_triangle">Triângulo Áureo</string>
+    <string name="grid_style_golden_spiral">Espiral Áurea</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturar um pequeno clipe de vídeo junto com sua foto para um efeito dinâmico de Live Photo.</string>
     <string name="settings_section_frame">Marca d\'água de Moldura</string>

@@ -7,6 +7,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateOffsetAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,20 +16,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.hinnka.mycamera.utils.PLog
-import kotlin.math.abs
-import kotlin.math.atan2
 
 private const val TAG = "LevelIndicatorOverlay"
-private const val LevelThresholdDegrees = 3.0f
 private const val DefaultLevelAspectRatio = 3f / 4f
 
 /**
- * 修正版水平仪
- * 1. 修复竖屏时线变成垂直的问题 (移除了多余的 +90 偏移)
- * 2. 完美支持横竖屏无缝切换
+ * Upright framing uses the horizon line; face-up/down framing uses a two-axis bubble.
  */
 @Composable
 fun LevelIndicatorOverlay(
@@ -38,7 +36,14 @@ fun LevelIndicatorOverlay(
     val context = LocalContext.current
 
     var targetRotation by remember { mutableFloatStateOf(0f) }
-    var isLevel by remember { mutableStateOf(false) }
+    var sensorReading by remember { mutableStateOf<LevelIndicatorReading?>(null) }
+    val isLevel = sensorReading?.isLevel == true
+
+    val animatedBubbleOffset by animateOffsetAsState(
+        targetValue = sensorReading?.let { Offset(it.bubbleX, it.bubbleY) } ?: Offset.Zero,
+        animationSpec = tween(durationMillis = 150),
+        label = "bubbleOffset"
+    )
 
     // 动画平滑
     val animatedRotation by animateFloatAsState(
@@ -53,25 +58,34 @@ fun LevelIndicatorOverlay(
         label = "color"
     )
 
-    DisposableEffect(Unit) {
+    DisposableEffect(context) {
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
         var invalidSensorReadingLogged = false
+        var previousMode = LevelIndicatorMode.HORIZON
 
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
-                val reading = event?.toLevelSensorReading()
+                val reading = event?.values?.let {
+                    calculateLevelIndicatorReading(it, previousMode)
+                }
                 if (reading == null) {
                     if (!invalidSensorReadingLogged) {
                         invalidSensorReadingLogged = true
                         PLog.w(TAG, "Ignored invalid gravity sensor reading: ${event.describeLevelSensorValues()}")
                     }
-                    isLevel = false
+                    sensorReading = null
                     return
                 }
 
-                isLevel = reading.isLevel
-                targetRotation = reading.angleDegrees
+                if (reading.mode != previousMode) {
+                    PLog.d(TAG, "Level mode: $previousMode -> ${reading.mode}, flatTilt=${reading.flatTiltDegrees}")
+                }
+                previousMode = reading.mode
+                sensorReading = reading
+                if (reading.mode == LevelIndicatorMode.HORIZON) {
+                    targetRotation = reading.angleDegrees
+                }
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -84,21 +98,34 @@ fun LevelIndicatorOverlay(
     }
 
     Canvas(modifier = modifier.fillMaxSize()) {
+        val reading = sensorReading ?: return@Canvas
         val canvasWidth = size.width
         val canvasHeight = size.height
 
         // --- 比例计算区域 ---
-        val containerRatio = DefaultLevelAspectRatio
         val targetRatio = aspectRatio.validLevelAspectRatioOrDefault()
-        val (drawWidth, drawHeight, offsetX, offsetY) = if (targetRatio > containerRatio) {
-            val h = canvasWidth / targetRatio
-            Quadruple(canvasWidth, h, 0f, (canvasHeight - h) / 2f)
-        } else {
-            val w = canvasHeight * targetRatio
-            Quadruple(w, canvasHeight, (canvasWidth - w) / 2f, 0f)
+        val drawWidth = minOf(canvasWidth, canvasHeight * targetRatio)
+        val drawHeight = minOf(canvasHeight, canvasWidth / targetRatio)
+        val centerX = canvasWidth / 2f
+        val centerY = canvasHeight / 2f
+
+        if (reading.mode == LevelIndicatorMode.BUBBLE) {
+            val center = Offset(centerX, centerY)
+            val travelRadius = minOf(48.dp.toPx(), minOf(drawWidth, drawHeight) * 0.2f)
+            // The fixed ring marks level; the filled dot shows tilt on both screen axes.
+            drawCircle(
+                color = lineColor,
+                radius = 7.dp.toPx(),
+                center = center,
+                style = Stroke(width = 1.dp.toPx())
+            )
+            drawCircle(
+                color = lineColor,
+                radius = 4.dp.toPx(),
+                center = center + animatedBubbleOffset * travelRadius
+            )
+            return@Canvas
         }
-        val centerX = offsetX + drawWidth / 2f
-        val centerY = offsetY + drawHeight / 2f
 
         // --- 绘制逻辑 ---
 
@@ -158,35 +185,6 @@ fun LevelIndicatorOverlay(
             )
         }
     }
-}
-
-// 辅助类保持不变
-data class Quadruple<out A, out B, out C, out D>(
-    val first: A, val second: B, val third: C, val fourth: D
-)
-
-private data class LevelSensorReading(
-    val angleDegrees: Float,
-    val isLevel: Boolean
-)
-
-private fun SensorEvent.toLevelSensorReading(): LevelSensorReading? {
-    val x = values.getOrNull(0)?.takeIf { it.isFiniteValue() } ?: return null
-    val y = values.getOrNull(1)?.takeIf { it.isFiniteValue() } ?: return null
-
-    // atan2(x, y) 使得 0 度对应 Y 轴（竖直方向），符合手机传感器的布局
-    val angleDegrees = Math.toDegrees(atan2(x.toDouble(), y.toDouble())).toFloat()
-        .takeIf { it.isFiniteValue() }
-        ?: return null
-
-    // 只关心当前角度离最近的轴（0, 90, 180, 270）差多少。
-    val deviation = abs(angleDegrees % 90f)
-    val realDeviation = if (deviation > 45f) 90f - deviation else deviation
-
-    return LevelSensorReading(
-        angleDegrees = angleDegrees,
-        isLevel = realDeviation < LevelThresholdDegrees
-    )
 }
 
 private fun SensorEvent?.describeLevelSensorValues(): String {

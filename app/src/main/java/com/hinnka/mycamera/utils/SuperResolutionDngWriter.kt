@@ -92,13 +92,29 @@ object SuperResolutionDngWriter {
         profileGainTableMap: DngProfileGainTableMap?,
         profileToneCurve: FloatArray?,
     ): DcpRenderPlan? {
+        return DcpProfileParser.resolveRenderPlan(
+            profile = buildEmbeddedProfile(
+                characteristics, imageLayout, profileGainTableMap, profileToneCurve,
+            ),
+            metadata = metadata,
+            workingColorSpace = ColorSpace.ProPhoto,
+        )
+    }
+
+    /** Source calibration shared by capture metadata, render plans and DNG serialization. */
+    internal fun buildEmbeddedProfile(
+        characteristics: CameraCharacteristics,
+        imageLayout: ImageLayout,
+        profileGainTableMap: DngProfileGainTableMap? = null,
+        profileToneCurve: FloatArray? = null,
+    ): DcpProfile {
         val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
             ?.let(::colorTransformToDngMatrix)
-            ?.map(Double::toFloat)
+            ?.map(::serializedSignedRational)
             ?.toFloatArray()
         val colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
             ?.let(::colorTransformToDngMatrix)
-            ?.map(Double::toFloat)
+            ?.map(::serializedSignedRational)
             ?.toFloatArray()
         val forwardMatrix1 = if (DeviceUtil.isOppo) {
             null
@@ -106,7 +122,7 @@ object SuperResolutionDngWriter {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
                 ?.takeIf(::isUsableColorTransform)
                 ?.let(::colorTransformToExactDngMatrix)
-                ?.map(Double::toFloat)
+                ?.map(::serializedSignedRational)
                 ?.toFloatArray()
         }
         val forwardMatrix2 = if (DeviceUtil.isOppo) {
@@ -115,7 +131,7 @@ object SuperResolutionDngWriter {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
                 ?.takeIf(::isUsableColorTransform)
                 ?.let(::colorTransformToExactDngMatrix)
-                ?.map(Double::toFloat)
+                ?.map(::serializedSignedRational)
                 ?.toFloatArray()
         }
         val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)
@@ -124,15 +140,15 @@ object SuperResolutionDngWriter {
             ?: 0
         val calibration1 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)
             ?.let(::colorTransformToExactDngMatrix)
-            ?.map(Double::toFloat)
+            ?.map(::serializedSignedRational)
             ?.toFloatArray()
         val calibration2 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)
             ?.takeIf { illuminant2 != 0 }
             ?.let(::colorTransformToExactDngMatrix)
-            ?.map(Double::toFloat)
+            ?.map(::serializedSignedRational)
             ?.toFloatArray()
         val toneCurve = normalizeProfileToneCurve(profileToneCurve)?.let(::DcpToneCurve)
-        val profile = DcpProfile(
+        return DcpProfile(
             profileName = "Embedded",
             calibrationIlluminant1 = characteristics.get(
                 CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1
@@ -156,13 +172,10 @@ object SuperResolutionDngWriter {
             lookTable = null,
             toneCurve = toneCurve,
             analogBalance = floatArrayOf(1f, 1f, 1f),
-            cameraCalibration1 = calibration1,
-            cameraCalibration2 = calibration2,
-        )
-        return DcpProfileParser.resolveRenderPlan(
-            profile = profile,
-            metadata = metadata,
-            workingColorSpace = ColorSpace.ProPhoto,
+            // DngEmbeddedProfile expands absent calibration tags to identity. Preserve
+            // that representation too, because the fixed calibration is a LUT cache key.
+            cameraCalibration1 = calibration1 ?: identityMatrix3x3(),
+            cameraCalibration2 = calibration2 ?: identityMatrix3x3(),
         )
     }
 
@@ -724,7 +737,7 @@ object SuperResolutionDngWriter {
                     add(sRationalArray(TAG_FORWARD_MATRIX_2, colorTransformToExactDngMatrix(it)))
                 }
             }
-            add(rationalArray(TAG_AS_SHOT_NEUTRAL, asShotNeutral(captureResult)))
+            add(rationalArray(TAG_AS_SHOT_NEUTRAL, resolveAsShotNeutral(captureResult)))
             if (profileGainTableMap != null) {
                 add(long(TAG_DEFAULT_BLACK_RENDER, 1))
             } else if (!isCfa) {
@@ -1494,7 +1507,14 @@ object SuperResolutionDngWriter {
             write(payload)
         }.toByteArray()
 
-    private fun asShotNeutral(captureResult: CaptureResult): List<Double> {
+    internal fun resolveAsShotNeutral(captureResult: CaptureResult): List<Double> {
+        return readAsShotNeutral(captureResult).map { value ->
+            val (numerator, denominator) = toUnsignedRational(value)
+            numerator.toDouble() / denominator.toDouble()
+        }
+    }
+
+    private fun readAsShotNeutral(captureResult: CaptureResult): List<Double> {
         val neutralColorPoint = captureResult.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
         if (neutralColorPoint != null && neutralColorPoint.size >= 3) {
             val neutral = neutralColorPoint.take(3).map { value ->
@@ -1511,9 +1531,10 @@ object SuperResolutionDngWriter {
             PLog.w(TAG, "Missing SENSOR_NEUTRAL_COLOR_POINT and COLOR_CORRECTION_GAINS; using unity AsShotNeutral")
             return listOf(1.0, 1.0, 1.0)
         }
-        val green = ((gains.greenEven + gains.greenOdd) * 0.5f).takeIf { it > 0f } ?: 1f
-        val r = gains.red.takeIf { it > 0f } ?: green
-        val b = gains.blue.takeIf { it > 0f } ?: green
+        val green = ((gains.greenEven + gains.greenOdd) * 0.5f)
+            .takeIf { it.isFinite() && it > 0f } ?: 1f
+        val r = gains.red.takeIf { it.isFinite() && it > 0f } ?: green
+        val b = gains.blue.takeIf { it.isFinite() && it > 0f } ?: green
         PLog.w(TAG, "Missing SENSOR_NEUTRAL_COLOR_POINT; deriving AsShotNeutral from COLOR_CORRECTION_GAINS")
         return listOf((green / r).toDouble(), 1.0, (green / b).toDouble())
     }
@@ -1746,6 +1767,17 @@ object SuperResolutionDngWriter {
         val numerator = (safe * denominator).roundToInt()
         return numerator to denominator
     }
+
+    private fun serializedSignedRational(value: Double): Float {
+        val (numerator, denominator) = toSignedRational(value)
+        return (numerator.toDouble() / denominator.toDouble()).toFloat()
+    }
+
+    private fun identityMatrix3x3(): FloatArray = floatArrayOf(
+        1f, 0f, 0f,
+        0f, 1f, 0f,
+        0f, 0f, 1f,
+    )
 
     private fun inlineValue(value: ByteArray): ByteArray =
         ByteArray(4).also { value.copyInto(it, endIndex = value.size.coerceAtMost(4)) }

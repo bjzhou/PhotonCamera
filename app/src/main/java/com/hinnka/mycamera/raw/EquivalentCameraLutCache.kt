@@ -17,39 +17,39 @@ import java.security.MessageDigest
 import java.util.LinkedHashMap
 
 /**
- * The two endpoint LUTs are baked once for the fixed source calibration and the S9 DCP.
+ * Endpoint LUTs map fixed source calibration through the inverse target DCP colour transform.
  * Runtime interpolation between these endpoint transforms is an approximation; it differs
  * from evaluating the inverse of a profile interpolated at the current white point.
  */
-internal data class LumixCalibrationLuts(
+internal data class EquivalentCameraLuts(
     val key: String,
     val size: Int,
     val low: FloatArray,
     val high: FloatArray,
 ) {
     init {
-        require(size == LumixLutNative.SIZE) { "Lumix LUT size must match its shader" }
+        require(size == EquivalentCameraLutNative.SIZE) { "Equivalent camera LUT size must match its shader" }
         val expectedLength = size * size * size * 3
-        require(low.size == expectedLength) { "Invalid low Lumix LUT length: ${low.size}" }
-        require(high.size == expectedLength) { "Invalid high Lumix LUT length: ${high.size}" }
+        require(low.size == expectedLength) { "Invalid low Equivalent camera LUT length: ${low.size}" }
+        require(high.size == expectedLength) { "Invalid high Equivalent camera LUT length: ${high.size}" }
         require(low.all(Float::isFinite) && high.all(Float::isFinite)) {
-            "Lumix LUT contains a non-finite sample"
+            "Equivalent camera LUT contains a non-finite sample"
         }
     }
 }
 
-/** Persistent, content-addressed cache for the Lumix S9 calibration endpoint LUTs. */
-internal object LumixCalibrationLutCache {
-    private const val TAG = "LumixCalibrationLutCache"
-    private const val DCP_ASSET_PATH = "dcp/Panasonic DC-S9 Adobe Standard.dcp"
-    private const val CACHE_DIRECTORY = "lumix_calibration_luts"
-    private const val CACHE_EXTENSION = ".bin"
-    private const val SCHEMA_VERSION = 1
-    private const val MAGIC = 0x4c434c54 // LCLT
-    private const val SHA256_BYTES = 32
-    private const val HEADER_BYTES = 6 * Int.SIZE_BYTES + SHA256_BYTES
-    private const val MAX_MEMORY_ENTRIES = 4
-    private const val HASH_BUFFER_BYTES = 16 * 1024
+/** Persistent cache shared by engines, keyed by source calibration and target DCP content. */
+internal class EquivalentCameraLutCache(private val target: EquivalentCameraTarget) {
+    private val TAG = "EquivalentCameraLutCache"
+    private val DCP_ASSET_PATH = target.assetPath
+    private val CACHE_DIRECTORY = "equivalent_camera_calibration_luts"
+    private val CACHE_EXTENSION = ".bin"
+    private val SCHEMA_VERSION = 1
+    private val MAGIC = 0x4c434c54 // LCLT
+    private val SHA256_BYTES = 32
+    private val HEADER_BYTES = 6 * Int.SIZE_BYTES + SHA256_BYTES
+    private val MAX_MEMORY_ENTRIES = 4
+    private val HASH_BUFFER_BYTES = 16 * 1024
     private val LOW_WHITE_XY = floatArrayOf(0.44757f, 0.40745f)
     private val HIGH_WHITE_XY = floatArrayOf(0.3127f, 0.3290f)
     private val LOW_TEMPERATURE = requireNotNull(DngSdkColorSpec.colorTemperatureForXy(LOW_WHITE_XY))
@@ -58,7 +58,7 @@ internal object LumixCalibrationLutCache {
     /** Use the exact baked endpoint whites, so either endpoint selects its LUT exactly. */
     fun firstWeight(whiteXy: FloatArray): Float {
         val temperature = requireNotNull(DngSdkColorSpec.colorTemperatureForXy(whiteXy)) {
-            "Lumix calibration interpolation requires a valid source white point"
+            "Equivalent camera calibration interpolation requires a valid source white point"
         }
         return ((1f / temperature - 1f / HIGH_TEMPERATURE) /
             (1f / LOW_TEMPERATURE - 1f / HIGH_TEMPERATURE)).coerceIn(0f, 1f)
@@ -66,11 +66,11 @@ internal object LumixCalibrationLutCache {
 
     private val lock = Any()
     @Volatile private var bundledProfileSha: String? = null
-    private val memory = object : LinkedHashMap<String, LumixCalibrationLuts>(
+    private val memory = object : LinkedHashMap<String, EquivalentCameraLuts>(
         MAX_MEMORY_ENTRIES, 0.75f, true
     ) {
         override fun removeEldestEntry(
-            eldest: MutableMap.MutableEntry<String, LumixCalibrationLuts>?
+            eldest: MutableMap.MutableEntry<String, EquivalentCameraLuts>?
         ): Boolean = size > MAX_MEMORY_ENTRIES
     }
 
@@ -80,8 +80,8 @@ internal object LumixCalibrationLutCache {
      * The cache identity includes only fixed calibration fields from [source]. Per-photo
      * color correction matrices and white balance are intentionally absent from the key.
      */
-    fun resolve(context: Context, source: RawCameraCalibration): LumixCalibrationLuts {
-        val size = LumixLutNative.SIZE
+    fun resolve(context: Context, source: RawCameraCalibration): EquivalentCameraLuts {
+        val size = EquivalentCameraLutNative.SIZE
         // APK assets are immutable for the process lifetime. Slider edits do no asset I/O.
         val assetSha256 = bundledProfileSha ?: synchronized(lock) {
             bundledProfileSha ?: sha256Asset(context, DCP_ASSET_PATH).also { bundledProfileSha = it }
@@ -89,14 +89,14 @@ internal object LumixCalibrationLutCache {
         val key = buildKey(source, assetSha256, size)
         synchronized(lock) {
             memory[key]?.let {
-                PLog.d(TAG, "LUT cache hit key=${key.take(KEY_LOG_LENGTH)} model=S9 size=$size")
+                PLog.d(TAG, "LUT cache hit key=${key.take(KEY_LOG_LENGTH)} model=${target.name} size=$size")
                 return it
             }
 
             val cacheFile = cacheFile(context, key)
             readCache(cacheFile, key, size)?.let { cached ->
                 memory[key] = cached
-                PLog.d(TAG, "LUT disk cache hit key=${key.take(KEY_LOG_LENGTH)} model=S9 size=$size")
+                PLog.d(TAG, "LUT disk cache hit key=${key.take(KEY_LOG_LENGTH)} model=${target.name} size=$size")
                 return cached
             }
 
@@ -106,7 +106,7 @@ internal object LumixCalibrationLutCache {
             memory[key] = generated
             PLog.d(
                 TAG,
-                "LUT generated key=${key.take(KEY_LOG_LENGTH)} model=S9 size=$size " +
+                "LUT generated key=${key.take(KEY_LOG_LENGTH)} model=${target.name} size=$size " +
                     "took=${(System.nanoTime() - startedAt) / 1_000_000L}ms"
             )
             return generated
@@ -118,17 +118,17 @@ internal object LumixCalibrationLutCache {
         source: RawCameraCalibration,
         key: String,
         size: Int,
-    ): LumixCalibrationLuts {
+    ): EquivalentCameraLuts {
         val sourceProfile = source.toDcpProfile()
-        val s9Info = requireNotNull(DcpManager(context).getAvailableDcps().firstOrNull {
+        val targetInfo = requireNotNull(DcpManager(context).getAvailableDcps().firstOrNull {
             it.isBuiltIn && it.filePath == DCP_ASSET_PATH
-        }) { "Bundled Panasonic DC-S9 Adobe Standard DCP is unavailable" }
-        val s9Profile = requireNotNull(
-            DcpProfileParser.resolveProfile(context, s9Info)
-        ) { "Unable to parse bundled Panasonic DC-S9 Adobe Standard DCP" }
-        require(s9Profile.hueSatDeltas1?.isValid == true &&
-            s9Profile.hueSatDeltas2?.isValid == true && s9Profile.lookTable?.isValid == true) {
-            "Bundled S9 DCP requires both HueSatMaps and its LookTable"
+        }) { "Bundled target DCP ${target.assetPath} is unavailable" }
+        val targetProfile = requireNotNull(
+            DcpProfileParser.resolveProfile(context, targetInfo)
+        ) { "Unable to parse target DCP ${target.assetPath}" }
+        require(targetProfile.hueSatDeltas1?.isValid == true &&
+            targetProfile.hueSatDeltas2?.isValid == true && targetProfile.lookTable?.isValid == true) {
+            "Bundled target camera DCP requires both HueSatMaps and its LookTable"
         }
 
         fun bakeEndpoint(whiteXy: FloatArray): FloatArray {
@@ -137,30 +137,30 @@ internal object LumixCalibrationLutCache {
                     sourceProfile, whiteXy, ColorSpace.ProPhoto
                 )
             ) { "Unable to compute source camera-to-ProPhoto matrix" }
-            val s9ToProfile = requireNotNull(
+            val targetToProfile = requireNotNull(
                 DngSdkColorSpec.computeWhiteBalancedCameraToWorkingMatrix(
-                    s9Profile, whiteXy, ColorSpace.ProPhoto
+                    targetProfile, whiteXy, ColorSpace.ProPhoto
                 )
-            ) { "Unable to compute S9 camera-to-ProPhoto matrix" }
-            val s9FromProfile = requireNotNull(DngSdkColorSpec.invertMatrix3x3(s9ToProfile)) {
-                "Unable to invert S9 camera-to-ProPhoto matrix"
+            ) { "Unable to compute target camera-to-ProPhoto matrix" }
+            val targetFromProfile = requireNotNull(DngSdkColorSpec.invertMatrix3x3(targetToProfile)) {
+                "Unable to invert target camera-to-ProPhoto matrix"
             }
-            return LumixLutNative.bake(
+            return EquivalentCameraLutNative.bake(
                 size = size,
                 sourceToProfile = sourceToProfile,
-                s9FromProfile = s9FromProfile,
-                hueSatMap = endpointHueSatMap(s9Profile, whiteXy),
-                lookTable = s9Profile.lookTable,
+                targetFromProfile = targetFromProfile,
+                hueSatMap = endpointHueSatMap(targetProfile, whiteXy),
+                lookTable = targetProfile.lookTable,
             ).also { lut ->
                 val expected = expectedLutLength(size)
                 require(lut.size == expected) {
-                    "Lumix native LUT length ${lut.size}, expected $expected"
+                    "Equivalent camera native LUT length ${lut.size}, expected $expected"
                 }
-                require(lut.all(Float::isFinite)) { "Lumix native LUT contains non-finite samples" }
+                require(lut.all(Float::isFinite)) { "Equivalent camera native LUT contains non-finite samples" }
             }
         }
 
-        return LumixCalibrationLuts(
+        return EquivalentCameraLuts(
             key = key,
             size = size,
             low = bakeEndpoint(LOW_WHITE_XY),
@@ -177,7 +177,7 @@ internal object LumixCalibrationLutCache {
             first.satDivisions == second.satDivisions &&
             first.valueDivisions == second.valueDivisions &&
             first.encoding == second.encoding
-        ) { "S9 HueSatMap endpoint dimensions or encoding differ" }
+        ) { "target camera HueSatMap endpoint dimensions or encoding differ" }
         val weight = DngSdkColorSpec.hueSatWeightForWhite(
             profile.calibrationIlluminant1,
             profile.calibrationIlluminant2,
@@ -198,12 +198,12 @@ internal object LumixCalibrationLutCache {
         size: Int,
     ): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        digest.update("lumix-calibration-lut-cache".toByteArray(StandardCharsets.UTF_8))
+        digest.update("equivalent-camera-calibration-lut-cache".toByteArray(StandardCharsets.UTF_8))
         digest.putInt(SCHEMA_VERSION)
-        digest.putInt(LumixLutNative.VERSION)
+        digest.putInt(EquivalentCameraLutNative.VERSION)
         digest.putInt(size)
-        digest.putFloat(LumixLutNative.INPUT_MAX)
-        digest.putFloat(LumixLutNative.LINEAR_FRACTION)
+        digest.putFloat(EquivalentCameraLutNative.INPUT_MAX)
+        digest.putFloat(EquivalentCameraLutNative.LINEAR_FRACTION)
         digest.putFloat(LOW_WHITE_XY[0])
         digest.putFloat(LOW_WHITE_XY[1])
         digest.putFloat(HIGH_WHITE_XY[0])
@@ -222,7 +222,7 @@ internal object LumixCalibrationLutCache {
     private fun cacheFile(context: Context, key: String): File =
         File(File(context.filesDir, CACHE_DIRECTORY), "$key$CACHE_EXTENSION")
 
-    private fun readCache(file: File, key: String, size: Int): LumixCalibrationLuts? {
+    private fun readCache(file: File, key: String, size: Int): EquivalentCameraLuts? {
         if (!file.isFile) return null
         return runCatching {
             if (file.length() < HEADER_BYTES) throw CacheCorruptException("truncated header")
@@ -252,15 +252,15 @@ internal object LumixCalibrationLutCache {
                 val high = FloatArray(highLength)
                 floats.get(low)
                 floats.get(high)
-                LumixCalibrationLuts(key, size, low, high)
+                EquivalentCameraLuts(key, size, low, high)
             }
         }.onFailure { error ->
-            PLog.w(TAG, "Corrupt Lumix LUT cache ${file.name}; regenerating", error)
+            PLog.w(TAG, "Corrupt Equivalent camera LUT cache ${file.name}; regenerating", error)
             file.delete()
         }.getOrNull()
     }
 
-    private fun writeCache(file: File, luts: LumixCalibrationLuts) {
+    private fun writeCache(file: File, luts: EquivalentCameraLuts) {
         runCatching {
             file.parentFile?.mkdirs()
             val payloadBuffer = ByteBuffer
@@ -294,7 +294,7 @@ internal object LumixCalibrationLutCache {
         }.onFailure { error ->
             // A cache write must never turn a successfully generated color transform into a
             // fallback path. The generated pair is retained in memory and returned by resolve.
-            PLog.w(TAG, "Unable to persist Lumix LUT cache ${file.name}", error)
+            PLog.w(TAG, "Unable to persist Equivalent camera LUT cache ${file.name}", error)
         }
     }
 
@@ -340,6 +340,13 @@ internal object LumixCalibrationLutCache {
 
     private class CacheCorruptException(message: String) : EOFException(message)
 
-    private const val KEY_LOG_LENGTH = 12
-    private const val HEX = "0123456789abcdef"
+    private val KEY_LOG_LENGTH = 12
+    private val HEX = "0123456789abcdef"
+}
+
+internal enum class EquivalentCameraTarget(val assetPath: String) {
+    LumixS9("dcp/Panasonic DC-S9 Adobe Standard.dcp"),
+    HasselbladX1D50("dcp/Hasselblad X1D-50 Adobe Standard.dcp");
+
+    val calibrationCache by lazy { EquivalentCameraLutCache(this) }
 }

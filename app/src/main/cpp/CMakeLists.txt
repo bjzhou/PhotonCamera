@@ -7,7 +7,7 @@ set(ADOBE_XMP_STUB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dcp/XMPStub/include)
 set(ULTRAHDR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr)
 set(
     MGC_EIS_RECONSTRUCTION_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../research/mgc_eis_reconstruction"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_eis_reconstruction"
 )
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
 
@@ -251,8 +251,8 @@ add_library(my-native-lib SHARED
     yuv_utils.cpp
     lut_processor.cpp
     dcp_parser.cpp
-    lumix_lut_baker.cpp
-    lumix_lut_jni.cpp
+    equivalent_camera_lut_baker.cpp
+    equivalent_camera_lut_jni.cpp
     mgc_denoise_static/mgc_denoise_static.cpp
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
     mgc_denoise_static/mgc_sabre_resolve_jni.cpp
@@ -321,7 +321,7 @@ set_source_files_properties(
 
 # LUT inversion checks require IEEE finite-value semantics.
 set_source_files_properties(
-    lumix_lut_baker.cpp lumix_lut_jni.cpp
+    equivalent_camera_lut_baker.cpp equivalent_camera_lut_jni.cpp
     PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
 

@@ -89,6 +89,12 @@
     <string name="settings_level_description">촬영 중 수평계 표시</string>
     <string name="settings_grid_lines">격자선</string>
     <string name="settings_grid_description">구도를 위한 격자선 표시</string>
+    <string name="settings_grid_style">격자 스타일</string>
+    <string name="grid_style_thirds">삼분할</string>
+    <string name="grid_style_diagonals">대각선</string>
+    <string name="grid_style_golden_ratio">황금비</string>
+    <string name="grid_style_golden_triangle">황금삼각형</string>
+    <string name="grid_style_golden_spiral">황금나선</string>
     <string name="settings_use_live_photo">라이브 포토</string>
     <string name="settings_use_live_photo_description">역동적인 라이브 포토 효과를 위해 사진과 함께 짧은 비디오 클립을 촬영합니다.</string>
     <string name="settings_section_frame">프레임 워터마크</string>

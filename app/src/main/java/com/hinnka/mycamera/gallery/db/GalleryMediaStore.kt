@@ -17,6 +17,7 @@ import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -235,7 +236,6 @@ object GalleryMediaStore {
             rawShadowsAdjustment = metadata.rawShadowsAdjustment,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection,
-            rawAutoWhiteBalanceEstimate = metadata.rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = metadata.rawLensShadingCorrectionEnabled,
             rawDcpId = metadata.rawDcpId,
             rawEmbeddedDngProfileId = metadata.rawEmbeddedDngProfileId,
@@ -433,12 +433,11 @@ object GalleryMediaStore {
             rawShadowsAdjustment = rawShadowsAdjustment,
             rawBlackPointCorrection = rawBlackPointCorrection,
             rawWhitePointCorrection = rawWhitePointCorrection,
-            rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = rawLensShadingCorrectionEnabled,
             rawDcpId = rawDcpId,
             rawEmbeddedDngProfileId = rawEmbeddedDngProfileId,
-            rawHncsProfileId = rawHncsProfileId,
-            rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(rawHncsRenderIntent),
+            rawHncsProfileId = HncsProfileManager.DEFAULT_PROFILE_ID,
+            rawHncsRenderIntent = HncsRenderIntent.Standard,
             rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                 rawHncsFilmCurveMode
             ),

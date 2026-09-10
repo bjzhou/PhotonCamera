@@ -64,7 +64,7 @@ class VideoLutEffect(
 @UnstableApi
 private class VideoLutShaderProgram(
     private val context: Context,
-    useHdr: Boolean,
+    private val useHdr: Boolean,
     private val effect: VideoLutEffect
 ) : BaseGlShaderProgram(useHdr, /* texturePoolCapacity= */ 1) {
 
@@ -671,6 +671,7 @@ private class VideoLutShaderProgram(
                     vec4 lutColor = texture(uLutTexture, lutCoord);
 
                     vec3 srgbColor = linearToSrgb(linearInput);
+                    // 保留大于 1.0 的混合权重，沿 LUT 色差外推以支持最高 200% 强度。
                     color.rgb = mix(srgbColor, lutColor.rgb, effectiveLutIntensity);
 
                     if (isP3) {
@@ -737,6 +738,7 @@ private class VideoLutShaderProgram(
     private var curveTextureId = 0
     private val basicToneTextures = BasicToneGlTextures()
     private val logInput = LogInputGl()
+    private val highlightDiffusion = VideoHighlightDiffusionGl(TAG)
     private var lastLutConfig: LutConfig? = null
     private var lastRecipeParams: ColorRecipeParams? = null
 
@@ -747,6 +749,8 @@ private class VideoLutShaderProgram(
         val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, VERTEX_SHADER)
         val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, FRAGMENT_SHADER)
         programId = GlUtils.linkProgram(vertexShader, fragmentShader)
+        GLES30.glDeleteShader(vertexShader)
+        GLES30.glDeleteShader(fragmentShader)
         positionVbo = GlUtils.createBuffer(positionBuffer)
         texCoordVbo = GlUtils.createBuffer(texCoordBuffer)
 
@@ -775,12 +779,46 @@ private class VideoLutShaderProgram(
     }
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
-//        PLog.v("VideoLutShaderProgram", "drawFrame called, inputTexId: $inputTexId, presentationTimeUs: $presentationTimeUs")
-        if (programId == 0) return
-        
+        if (programId == 0) throw VideoFrameProcessingException("Video color program unavailable", presentationTimeUs)
         val currentLutConfig = effect.lutConfig
         val currentRecipeParams = effect.recipeParams
+        val bloom = currentRecipeParams?.bloom ?: 0f
+        val halation = currentRecipeParams?.redHalation ?: 0f
+        val diffusionEnabled = bloom > 0.001f || halation > 0.001f
+        // Media3 1.10 defaults to display-encoded SDR, but uses linear RGB for HDR output.
+        if (diffusionEnabled && useHdr) {
+            throw VideoFrameProcessingException("Bloom and Halation require an SDR video working space", presentationTimeUs)
+        }
+        val previousVao = IntArray(1)
+        if (isGles3Context) {
+            GLES30.glGetIntegerv(GLES30.GL_VERTEX_ARRAY_BINDING, previousVao, 0)
+            GLES30.glBindVertexArray(0)
+        }
+        try {
+            if (diffusionEnabled) {
+                highlightDiffusion.drawFrame(
+                    inputWidth, inputHeight, bloom, halation,
+                    currentRecipeParams?.filmGrain ?: 0f, presentationTimeUs, ::drawQuad,
+                ) {
+                    drawColorFrame(inputTexId, presentationTimeUs, currentLutConfig, currentRecipeParams, deferFilmGrain = true)
+                }
+            } else {
+                drawColorFrame(inputTexId, presentationTimeUs, currentLutConfig, currentRecipeParams, deferFilmGrain = false)
+            }
+        } catch (failure: IllegalStateException) {
+            throw VideoFrameProcessingException(failure, presentationTimeUs)
+        } finally {
+            if (isGles3Context) GLES30.glBindVertexArray(previousVao[0])
+        }
+    }
 
+    private fun drawColorFrame(
+        inputTexId: Int,
+        presentationTimeUs: Long,
+        currentLutConfig: LutConfig?,
+        currentRecipeParams: ColorRecipeParams?,
+        deferFilmGrain: Boolean,
+    ) {
         // 检查并重新上传 LUT 纹理
         if (currentLutConfig != lastLutConfig || hasPendingUpdate) {
             lastLutConfig = currentLutConfig
@@ -810,30 +848,6 @@ private class VideoLutShaderProgram(
 
         GLES30.glUseProgram(programId)
         logInput.bind(GLES30.glGetUniformLocation(programId, "uInverseAcr3Texture"), textureUnit = 4)
-
-        var previousVao = 0
-        if (isGles3Context) {
-            val params = IntArray(1)
-            GLES30.glGetIntegerv(GLES30.GL_VERTEX_ARRAY_BINDING, params, 0)
-            previousVao = params[0]
-            if (previousVao != 0) {
-                GLES30.glBindVertexArray(0)
-            }
-        }
-
-        // 绑定位置属性 (VBO)
-        val aPositionLoc = GLES30.glGetAttribLocation(programId, "aPosition")
-        GLES30.glEnableVertexAttribArray(aPositionLoc)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, positionVbo)
-        GLES30.glVertexAttribPointer(aPositionLoc, 2, GLES30.GL_FLOAT, false, 0, 0)
-
-        // 绑定纹理坐标属性 (VBO)
-        val aTexCoordLoc = GLES30.glGetAttribLocation(programId, "aTexCoord")
-        GLES30.glEnableVertexAttribArray(aTexCoordLoc)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordVbo)
-        GLES30.glVertexAttribPointer(aTexCoordLoc, 2, GLES30.GL_FLOAT, false, 0, 0)
-
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
 
         // 绑定输入视频纹理 (GL_TEXTURE0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -883,7 +897,7 @@ private class VideoLutShaderProgram(
         GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled"), if (colorRecipeEnabled) 1 else 0)
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(programId, "uFilmGrain"),
-            currentRecipeParams?.filmGrain ?: 0f,
+            if (deferFilmGrain) 0f else currentRecipeParams?.filmGrain ?: 0f,
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(programId, "uFilmGrainSeed"),
@@ -990,11 +1004,29 @@ private class VideoLutShaderProgram(
             currentRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f,
         )
 
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
-        checkGlError("glDrawArrays")
-        if (isGles3Context && previousVao != 0) {
-            GLES30.glBindVertexArray(previousVao)
+        drawQuad(programId)
+        val error = GLES30.glGetError()
+        check(error == GLES30.GL_NO_ERROR) { "Video color draw failed: glError=$error" }
+    }
+
+    private fun drawQuad(program: Int) {
+        val position = GLES30.glGetAttribLocation(program, "aPosition")
+        val texCoord = GLES30.glGetAttribLocation(program, "aTexCoord")
+        if (position >= 0) {
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, positionVbo)
+            GLES30.glEnableVertexAttribArray(position)
+            GLES30.glVertexAttribPointer(position, 2, GLES30.GL_FLOAT, false, 0, 0)
         }
+        // Reduction shaders can optimize away the texture-coordinate attribute.
+        if (texCoord >= 0) {
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordVbo)
+            GLES30.glEnableVertexAttribArray(texCoord)
+            GLES30.glVertexAttribPointer(texCoord, 2, GLES30.GL_FLOAT, false, 0, 0)
+        }
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        if (position >= 0) GLES30.glDisableVertexAttribArray(position)
+        if (texCoord >= 0) GLES30.glDisableVertexAttribArray(texCoord)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
     private fun uploadLutTexture(lutConfig: LutConfig) {
@@ -1007,6 +1039,7 @@ private class VideoLutShaderProgram(
                 PLog.d("VideoLutShaderProgram", "Generated new 3D LUT texture ID: $lutTextureId")
             }
 
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
             checkGlError("glBindTexture 3D")
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
@@ -1068,6 +1101,7 @@ private class VideoLutShaderProgram(
             GLES30.glGenTextures(1, ids, 0)
             curveTextureId = ids[0]
         }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -1089,11 +1123,19 @@ private class VideoLutShaderProgram(
     }
 
     override fun release() {
-        super.release()
+        try {
+            super.release()
+        } finally {
+            releaseOwnedResources()
+        }
+    }
+
+    private fun releaseOwnedResources() {
         deleteLutTexture()
         deleteCurveTexture()
         basicToneTextures.release()
         logInput.release()
+        highlightDiffusion.release()
         if (positionVbo != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(positionVbo), 0)
             positionVbo = 0

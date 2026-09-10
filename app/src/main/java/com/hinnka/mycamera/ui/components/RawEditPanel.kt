@@ -3,6 +3,11 @@ package com.hinnka.mycamera.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -16,11 +21,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.window.Dialog
 import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -29,7 +36,6 @@ import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
-import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
@@ -139,9 +145,6 @@ fun RawEditPanel(
     onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit = {},
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
-    selectedHncsProfileId: String? = null,
-    availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
-    onSelectHncsProfile: (String?) -> Unit = {},
     hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
     selectedRawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
@@ -197,9 +200,6 @@ fun RawEditPanel(
             onSelectEmbeddedDngProfile = onSelectEmbeddedDngProfile,
             onSpectralFilmSelectionChange = onSpectralFilmSelectionChange,
             onSpectralFilmPrintChange = onSpectralFilmPrintChange,
-            selectedHncsProfileId = selectedHncsProfileId,
-            availableHncsProfiles = availableHncsProfiles,
-            onSelectHncsProfile = onSelectHncsProfile,
             hncsFilmCurveMode = hncsFilmCurveMode,
             onHncsFilmCurveModeChange = onHncsFilmCurveModeChange,
             onAdjustmentStart = onAdjustmentStart,
@@ -328,9 +328,6 @@ fun RawRenderingEngineSettingsPanel(
     onSelectEmbeddedDngProfile: ((RawEmbeddedDngProfileOption) -> Unit)? = null,
     onSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onSpectralFilmPrintChange: (String?) -> Unit,
-    selectedHncsProfileId: String? = null,
-    availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
-    onSelectHncsProfile: (String?) -> Unit = {},
     hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
     onAdjustmentStart: () -> Unit = {},
@@ -348,40 +345,6 @@ fun RawRenderingEngineSettingsPanel(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (rawRenderingEngine.isHncs) {
-            RawChoiceSetting(
-                title = stringResource(R.string.settings_raw_hncs_color_branch),
-                description = stringResource(R.string.settings_raw_hncs_color_branch_description),
-                levels = listOf(
-                    RawRenderingEngine.HncsCcm.name to
-                        stringResource(R.string.settings_raw_hncs_color_branch_ccm),
-                    RawRenderingEngine.HncsLut.name to
-                        stringResource(R.string.settings_raw_hncs_color_branch_lut),
-                ),
-                currentLevel = rawRenderingEngine.name,
-                onLevelSelected = { persistedName ->
-                    onRawColorEngineChange(
-                        RawRenderingEngine.fromPersistedName(
-                            persistedName,
-                            RawRenderingEngine.HncsCcm,
-                        )
-                    )
-                },
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            if (rawRenderingEngine == RawRenderingEngine.HncsLut &&
-                availableHncsProfiles.isNotEmpty()
-            ) {
-                RawChoiceSetting(
-                    title = stringResource(R.string.settings_raw_hncs_2d_lut),
-                    description = stringResource(R.string.settings_raw_hncs_profile_description),
-                    levels = availableHncsProfiles.map { profile ->
-                        profile.id to profile.displayName
-                    },
-                    currentLevel = selectedHncsProfileId.orEmpty(),
-                    onLevelSelected = onSelectHncsProfile,
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
             RawChoiceSetting(
                 title = stringResource(R.string.settings_raw_hncs_film_curve),
                 description = stringResource(R.string.settings_raw_hncs_film_curve_description),
@@ -558,6 +521,8 @@ fun LumixPhotoStyleSelector(
     selectedStyle: LumixPhotoStyle,
     onSelectStyle: (LumixPhotoStyle) -> Unit,
 ) {
+    var showDialog by remember { mutableStateOf(false) }
+    val title = stringResource(R.string.settings_raw_lumix_photo_style)
     val labels = LumixPhotoStyle.entries.associateWith { style ->
         stringResource(when (style) {
             LumixPhotoStyle.Standard -> R.string.settings_raw_lumix_style_standard
@@ -578,17 +543,103 @@ fun LumixPhotoStyleSelector(
             LumixPhotoStyle.VLog -> R.string.settings_raw_lumix_style_vlog
         })
     }
-    DropdownSettingItem(
-        title = stringResource(R.string.settings_raw_lumix_photo_style),
-        description = stringResource(R.string.settings_raw_lumix_photo_style_description),
-        value = labels.getValue(selectedStyle),
-        options = labels.values.toList(),
-        isLoading = false,
-        onExpanded = {},
-        onOptionSelected = { label ->
-            labels.entries.firstOrNull { it.value == label }?.key?.let(onSelectStyle)
-        },
-    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 16.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                stringResource(R.string.settings_raw_lumix_photo_style_description),
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                labels.getValue(selectedStyle),
+                color = Color(0xFFE5A324),
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(16.dp))
+        Icon(AppIcons.ExpandMore, contentDescription = null, tint = Color.White.copy(alpha = 0.4f))
+    }
+
+    if (showDialog) {
+        // A long, anchor-positioned popup can be constrained and repositioned as the
+        // host panel/window moves. Keep this list in its own bounded dialog viewport.
+        Dialog(onDismissRequest = { showDialog = false }) {
+            Surface(shape = RoundedCornerShape(20.dp), color = Color(0xFF2C2C2E)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 560.dp)
+                        .padding(vertical = 16.dp),
+                ) {
+                    Text(
+                        title,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                    )
+                    val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedStyle.ordinal)
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f, fill = false).fillMaxWidth().selectableGroup(),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                    ) {
+                        items(LumixPhotoStyle.entries, key = { it.assetName }) { style ->
+                            val selected = style == selectedStyle
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .selectable(
+                                        selected = selected,
+                                        role = Role.RadioButton,
+                                        onClick = {
+                                            showDialog = false
+                                            onSelectStyle(style)
+                                        },
+                                    )
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    labels.getValue(style),
+                                    color = if (selected) Color(0xFFE5A324) else Color.White,
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                // Reserve the indicator width for every row, including unselected rows.
+                                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                    if (selected) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFE5A324))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    TextButton(
+                        onClick = { showDialog = false },
+                        modifier = Modifier.align(Alignment.End).padding(horizontal = 12.dp),
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -810,8 +861,7 @@ private fun RawToneMappingControls(
 
     when (rawRenderingEngine) {
         RawRenderingEngine.AdobeCurve,
-        RawRenderingEngine.HncsCcm,
-        RawRenderingEngine.HncsLut,
+        RawRenderingEngine.Hncs,
         RawRenderingEngine.Lumix -> Unit
 
         RawRenderingEngine.AgX -> {
@@ -1101,25 +1151,15 @@ private fun RawRenderingEngineSelector(
     inlineOptions: Boolean = false,
 ) {
     var showSheet by remember { mutableStateOf(false) }
-    val visibleEngines = RawRenderingEngine.entries.filterNot {
-        it == RawRenderingEngine.HncsLut
-    }
-
-    fun resolvedEngine(engine: RawRenderingEngine): RawRenderingEngine {
-        return if (engine == RawRenderingEngine.HncsCcm && selectedEngine.isHncs) {
-            selectedEngine
-        } else {
-            engine
-        }
-    }
+    val visibleEngines = RawRenderingEngine.entries
 
     if (inlineOptions) {
         visibleEngines.forEach { engine ->
             RawColorEngineItem(
                 name = rawRenderingEngineName(engine),
                 description = rawColorEngineDescription(engine),
-                isSelected = resolvedEngine(engine) == selectedEngine,
-                onClick = { onSelectEngine(resolvedEngine(engine)) },
+                isSelected = engine == selectedEngine,
+                onClick = { onSelectEngine(engine) },
             )
         }
         return
@@ -1176,9 +1216,9 @@ private fun RawRenderingEngineSelector(
                     RawColorEngineItem(
                         name = rawRenderingEngineName(engine),
                         description = rawColorEngineDescription(engine),
-                        isSelected = resolvedEngine(engine) == selectedEngine,
+                        isSelected = engine == selectedEngine,
                         onClick = {
-                            onSelectEngine(resolvedEngine(engine))
+                            onSelectEngine(engine)
                             showSheet = false
                         }
                     )
@@ -1197,8 +1237,7 @@ private fun rawRenderingEngineName(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
-        RawRenderingEngine.HncsCcm,
-        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs)
+        RawRenderingEngine.Hncs -> stringResource(R.string.settings_raw_color_engine_hncs)
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
     }
 }
@@ -1211,8 +1250,7 @@ private fun rawColorEngineDescription(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid_description)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic_description)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film_description)
-        RawRenderingEngine.HncsCcm,
-        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs_description)
+        RawRenderingEngine.Hncs -> stringResource(R.string.settings_raw_color_engine_hncs_description)
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix_description)
     }
 }

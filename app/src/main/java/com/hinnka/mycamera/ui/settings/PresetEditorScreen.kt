@@ -39,7 +39,6 @@ import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.processor.DenoiseStrength
-import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.ui.components.FrameSelector
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
@@ -67,9 +66,6 @@ fun PresetEditorScreen(
     val availableDcps = viewModel.availableDcps
     val availableFrames = viewModel.availableFrameList
     val context = androidx.compose.ui.platform.LocalContext.current
-    val availableHncsProfiles = remember(context) {
-        HncsProfileManager(context.applicationContext).getAvailableProfiles()
-    }
     val defaultNewPresetName = stringResource(R.string.preset_new_preset_default)
 
     // 寻找是否存在编辑目标，如果不存在（新建预设），则尝试从 ViewModel.draftPreset 初始化，或者基于当前状态新建
@@ -112,7 +108,6 @@ fun PresetEditorScreen(
     // 专业模式参数
     var rawDcpId by remember { mutableStateOf(sourcePreset?.rawDcpId) }
     var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset?.rawDcpIdsByLens ?: emptyMap()) }
-    var rawHncsProfileId by remember { mutableStateOf(sourcePreset?.rawHncsProfileId) }
     var rawMaxSharpening by remember {
         mutableStateOf(
             sourcePreset?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
@@ -180,7 +175,6 @@ fun PresetEditorScreen(
             frameId = frameId,
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
-            rawHncsProfileId = rawHncsProfileId,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode,
             rawRenderingEngine = rawRenderingEngine.name,
             rawMaxSharpening = rawMaxSharpening,
@@ -481,11 +475,8 @@ fun PresetEditorScreen(
                         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic)
                         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
                         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
-                        RawRenderingEngine.HncsCcm -> stringResource(
-                            R.string.settings_raw_color_engine_hncs_ccm
-                        )
-                        RawRenderingEngine.HncsLut -> stringResource(
-                            R.string.settings_raw_color_engine_hncs_lut
+                        RawRenderingEngine.Hncs -> stringResource(
+                            R.string.settings_raw_color_engine_hncs
                         )
                     }
                 }
@@ -557,34 +548,6 @@ fun PresetEditorScreen(
                             onSelectDcp = { rawDcpId = it },
                             onRawDcpIdsByLensChange = { rawDcpIdsByLens = it }
                         )
-                    }
-                }
-
-                AnimatedVisibility(visible = rawRenderingEngine == RawRenderingEngine.HncsLut) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.05f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                        val profileNames = availableHncsProfiles.associate { profile ->
-                            profile.id to profile.displayName
-                        }
-                        DropdownSettingItem(
-                            title = stringResource(R.string.settings_raw_hncs_2d_lut),
-                            description = stringResource(
-                                R.string.settings_raw_hncs_profile_description
-                            ),
-                            value = profileNames[rawHncsProfileId].orEmpty(),
-                            options = profileNames.values.toList(),
-                            isLoading = false,
-                            onExpanded = {},
-                            onOptionSelected = { selectedName ->
-                                rawHncsProfileId = profileNames.entries
-                                    .firstOrNull { it.value == selectedName }
-                                    ?.key
-                            }
-                        )
-
                     }
                 }
 

@@ -1,16 +1,19 @@
 # HNCS RAW 渲染引擎
 
-## 结论与数据边界
+## 当前渲染契约
 
-HNCS 二维色度表不是通用 LUT，也不能脱离对应传感器使用。运行时数据只允许来自三类来源：
+HNCS 统一使用 X1D-50 等效相机 RGB、固定 50c Phocus 矩阵与二维色度表，以及原始 FilmCurve。
+界面不再提供色彩还原配置、原始 CCM 或机型选择，只保留影调曲线选择。
 
-1. Phocus `assets/Colormaps/LUTTable*.xml` 中的实测表、矩阵、色温和 neutral vector；
-2. Phocus 程序/GLSL 中可定位的公式与常量；
-3. 当前 RAW 的 Camera2、DNG SDK 或 LibRaw 元数据。
+- 固定目标 DCP：`Hasselblad X1D-50 Adobe Standard.dcp`；
+- 固定 Phocus profile：`LUTTable51MP5`，对应 H5D/H6D/A6D/X1D 50c；
+- 色度表意图固定为 Standard；FilmCurve 的 Standard/Reproduction 是独立影调选择；
+- 旧 `HncsCcm`、`HncsLut` 持久化值均读取为 `Hncs`，旧机型和色彩意图字段不再决定渲染；
+- 缺少源固定 ColorMatrix、实测白点、目标 DCP 或目标表时拒绝渲染，不回退为 CCM。
 
-原先的 `neutral.hncs.json`、3×3 identity 色度表、经验 film curve、R/B gain 比值色温插值、
-灰轴经验阈值、低照度经验阈值以及缺失 profile 时的静默回退均已删除。二维 LUT 分支缺少
-任一必需数据时直接拒绝渲染，不切换为 CCM 或 Adobe Curve。
+等效 RGB 与 Lumix 共用 `EquivalentCameraLutCache`、native OpenMP 求逆器及
+`EquivalentCameraLutGl`。这是基于 DCP 标定的跨传感器显色近似，不宣称恢复真实哈苏
+传感器的光谱响应。Phocus 原表保留原始数据、源文件哈希及 payload 校验。
 
 ## 原始资源审计
 
@@ -20,7 +23,8 @@ HNCS 二维色度表不是通用 LUT，也不能脱离对应传感器使用。�
 C:/Users/Hinnka/Desktop/phocus/app/src/main/assets/Colormaps
 ```
 
-目录包含 26 个 XML。转换器接受 21 个满足全部约束的文件：
+历史源目录包含 26 个 XML，其中 21 个满足以下解析约束。当前转换器只生成
+`LUTTable51MP5.xml` 对应的一个运行时 profile，其他机型不打包：
 
 - 有 `CbS/CbE/CrS/CrE/DivFactor`；
 - 网格固定为 105×89，每个表恰好有 `105×89×2 = 18,690` 个值；
@@ -38,7 +42,7 @@ C:/Users/Hinnka/Desktop/phocus/app/src/main/assets/Colormaps
 | `LUTTableIxpressRepr.xml` | 同上 |
 | `LUTTableleica.xml` | `LUTTableTSStd` 只有 18,689 个值，源数据少 1 个值 |
 
-不会为 `LUTTableleica.xml` 补值，也不保留旧格式解析分支。完整 profile 清单、源文件长度和
+不会为 `LUTTableleica.xml` 补值，也不保留旧格式解析分支。当前保留 profile 的源文件长度和
 SHA-256 位于
 [`app/src/main/assets/hncs/manifest.json`](../app/src/main/assets/hncs/manifest.json)。
 
@@ -104,104 +108,70 @@ SHA-256，之后才允许构建渲染计划。
 HNCS 与 ProPhoto 数值接近，但两者是不同的处理契约，代码中保留独立枚举，避免相机矩阵或
 二维表被误用到其他引擎。
 
-## 两条相机色彩分支
-
-```mermaid
-flowchart LR
-    A["线性 camera RGB + RAW white point"] --> H0["归一化 camera gain"]
-    H0 --> H1["clamp(input / hrTrunc, 0, hrMax) × inputEV"]
-    H1 --> B{"HNCS 分支"}
-    B -- "CCM" --> C["当前 RAW CCM → HNCS（D50）"]
-    B -- "二维 LUT" --> D["当前 RAW as-shot gain × profile 温度矩阵 → XYZ(D50)"]
-    D --> E["XYZ(D50) → HNCS"]
-    E --> F["Cb/Y–Cr/Y 105×89 色度表"]
-    C --> G["真实 filmCurveType=6 / companding=2"]
-    F --> G
-    G --> H["HNCS companding domain"]
-    H --> I["线性输出适配与 sRGB 色彩管理"]
-```
-
-### CCM 分支
-
-`HncsCcm` 始终使用当前 RAW 的 ColorMatrix/ForwardMatrix/CameraNeutral，通过现有 DNG SDK
-色彩规格求解 camera→XYZ(D50)，再变换到 HNCS。它不读取 Phocus 相机 profile，因此可用于
-非 Hasselblad RAW；它得到的是 HNCS tone rendering，并不等同于某台 Hasselblad 的 HNCS
-相机色彩。
-
-### 二维 LUT 分支
-
-`HncsLut` 必须显式选择与传感器对应的 profile。运行时不会按文件名、相机 make/model 或首个
-asset 猜测 profile。Phocus 原生选择键不是机型字符串，而是
-`eCCDTypes + eIRFilterType → uColorProfile → LUTTable*.xml`；因此 UI 中的机型名称只是帮助
-人选择，不能取代 RAW 中的传感器与 IR-filter revision 元数据。相同机型族可能对应多个
-profile，同一个 profile 也可能由多台机型共享。
-
-`libcrosssdk.so` 的 `CRawColorParams::GetCPID`、`CXMLLut::GetFileName`、
-`CBodyAndBack::CameraBackModelString` 和 `CBodyAndBack::WebDeviceType` 可恢复以下对应关系。
-方括号保留 Phocus 内部 profile 名，用于区分同机型族的不同滤镜/传感器标定版本：
-
-| Colormap profile | 原生 color-profile ID / CCD type | UI displayName |
-|---|---|---|
-| `LUTTable100MP` | `0x0511` / `0x11` | Hasselblad H6D/A6D 100c [100MP] |
-| `LUTTable100MP2` | `0x0514`, `0x0614`, `0x0714` / `0x14` | Hasselblad X2D 100C |
-| `LUTTable100MP3` | `0x0615`, `0x0616` / `0x15`, `0x16` | Hasselblad CFV 100C / X2D II 100C |
-| `LUTTable20MP1Inch` | `0x0013` / `0x13` | Hasselblad L1D-20c |
-| `LUTTable22MPC` | `0x0404` / `0x04` | Hasselblad CF/CFH/CFV/503CWD [22MPC] |
-| `LUTTable31MP`, `LUTTable31MPC` | `0x0008`, `0x0408` / `0x08` | Hasselblad H3D/H3DII/H4D-31 [profile revision] |
-| `LUTTable39MP`, `LUTTable39MPC` | `0x0009`, `0x0409` / `0x09` | Hasselblad H2D/H3D/H3DII-39 [profile revision] |
-| `LUTTable40MP5`, `LUTTable40MPC` | `0x050d`, `0x040d` / `0x0d` | Hasselblad H3DII/H4D/H5D-40 [profile revision] |
-| `LUTTable50MP5`, `LUTTable50MPC` | `0x050b`, `0x040b` / `0x0b` | Hasselblad H3DII/H4D/H5D-50 [profile revision] |
-| `LUTTable51MP5` | `0x050f` / `0x0f` | Hasselblad H5D/H6D/A6D/X1D 50c [51MP5] |
-| `LUTTable51MPmk2` | `0x690f` / `0x0f` | Hasselblad CFV II / X1D II 50C |
-| `LUTTable60MP5`, `LUTTable60MPC` | `0x050c`, `0x040c` / `0x0c` | Hasselblad H3DII/H4D/H5D-60 [profile revision] |
-| `LutTable60MP52` | `0x040e`, `0x050e` / `0x0e` | Hasselblad H3DII/H4D/H5D-60 [60MP52] |
-| `LutTable80MP52` | `0x0510` / `0x10` | Phocus 内部传感器 profile；原库没有可证明的公开机型名 |
-| `LUTTableIxpress` | `0x0004` / `0x04` | Hasselblad Ixpress 96/384/72/132C/528C |
-| `LUTTableTZ` | `0x0012` / `0x12` | Hasselblad True Zoom |
-
-manifest 和每个 `.hncs` header 同时保存 `cameraModels`、`colorProfileIds`、`ccdTypes` 与
-`selectionKey`。`LutTable80MP52` 不强行编造机型名；其他共享 profile 的 `cameraModels`
-记录代表性、可由原生型号函数和产品组合确认的机型，而不是宣称穷尽所有硬件修订。
-
-该分支同时使用同一 profile 的：
-
-- 插值后的 `vlt/vt/vf/vh` profile 参考 neutral gain，用于保留/审计 profile 的 CCT 标定白点；
-- 插值后的白平衡 camera RGB→XYZ(D50) 矩阵；
-- 插值后的 Standard 或 Reproduction Cb/Y–Cr/Y 表；
-- 固定 XYZ(D50)→HNCS 矩阵。
-
-XML 中 `mlt/mt/mf/mh` 的行和对应 D50 XYZ 白点，说明它们不是 camera→HNCS 矩阵。
-它们消费的是已白平衡的 camera RGB。`vlt/vt/vf/vh` 不是明文 gain；
-`CXMLLut::DecodeFrom` 对三元素数组执行与矩阵相同的 `encrypted × 0.5 + 1.0`。原始
-`CRawColorParams::GetXYZ2RawRGBNeutralizedMatrix` 随后逐列乘对应 gain，再对结果求逆。
-
-PhotonCamera 的 RCD/VGN 对外输出刻意撤销了仅供插值计算的白平衡，所以进入线性色彩 pass 的是
-未白平衡 camera RGB。`v_profile(CCT)` 只描述 profile 在该 CCT 上的参考白点，不能替换当前
-RAW 的 `AsShotNeutral`：同一个 CCT 可以有不同的绿—洋红 Tint。二维 LUT 分支必须把当前
-RAW 的实际 gain 合并回矩阵：
+## 等效 X1D-50 相机色彩路径
 
 ```text
-g_active             = inverse(AsShotNeutral)
-rawCameraToXyzD50    = M_profile(CCT) × diag(g_active)
-rawCameraToHncs    = inverse(HNCS_RGB_TO_XYZ_D50) × rawCameraToXyzD50
+当前 RAW → 源相机白平衡与 headroom → 源 CCM → 线性 ProPhoto 中间纹理
+→ 撤销源 CCM 并恢复源白平衡 camera RGB
+→ 双光源标定 3D LUT 插值 → 等效 X1D-50 白平衡 camera RGB
+→ Phocus 50c 白平衡 camera→XYZ(D50) 矩阵 → XYZ(D50)→HNCS
+→ Standard Cb/Y–Cr/Y 105×89 二维色度表
+→ 原始 FilmCurve → companding 解码 → 线性 sRGB → 最终单次 sRGB 编码
 ```
 
-这个契约可直接用中性不变量验证。当前 RAW 的中性向量为 `1/g_active`，因此：
+中间纹理保留公共 RAW 管线的 ProPhoto 契约。逆源矩阵与源 CameraWhite 只负责恢复已白平衡
+的源传感器 RGB；它们不把源相机颜色冒充为哈苏 RGB。源 RAW 的 Tint 由实际白平衡保留。
+
+### 拍摄与 DNG 重处理的一致性
+
+源色彩参数以 DNG 的拍摄白平衡及校准标签为准。首次内存处理使用与 DNG writer 相同的
+ColorMatrix 归一化、ForwardMatrix、CameraCalibration1/2 和 AnalogBalance，并由写入
+AsShotNeutral 的同一组增益计算 CCM、CameraWhite、whitePointXy、CCT 和固定相机校准。
+拍摄曝光分析、CFA 首次渲染与 LinearRaw 首次渲染共用这组参数；不能只替换白平衡增益，
+却保留由 Camera2 COLOR_CORRECTION_GAINS 推导的旧白点或未包含 DNG 校准的镜头标定。
+
+DNG 重处理从文件恢复上述参数，HNCS 两条入口均使用相同的 FilmCurve、色温插值与
+曝光处理。RAW 管线不提供基于像素重新估计自动白平衡的功能，读取文件时也不重新估计。
+`HNCS pipeline` 日志记录输入来源、WB、白点、CCT、BaselineExposure、FilmCurve、
+校准 LUT key 和插值权重，用于在相同编辑参数下核对两条路径。
+
+### 标定 LUT 的生成与缓存
+
+为源镜头固定 ColorMatrix 标定和目标 DCP，在 A、D65 两个白点分别计算：
 
 ```text
-rawCameraToHncs × (1/g_active)
-= inverse(HNCS_RGB_TO_XYZ_D50) × M_profile × [1,1,1]
-≈ [1,1,1]
+LUT = inverse(M_X1D_DCP)
+    ∘ inverse(HueSatMap_X1D)
+    ∘ inverse(LookTable_X1D)
+    ∘ M_source
 ```
 
-矩阵与 LUT 仍按 CCT 插值，但 render-plan 缓存键还必须包含 `g_active`。否则两张 Kelvin
-相同、Tint 不同的 RAW 会复用错误的复合矩阵。
+这里两个 M 都是对应端点白点下的白平衡 camera→ProPhoto 变换。源镜头使用固定
+ColorMatrix（及 AnalogBalance/CameraCalibration）；目标 DCP 由 DNG 色彩规格结合
+ColorMatrix、ForwardMatrix 求解，并使用各端点的 HueSatMap 和完整 LookTable。
+不包含 DCP ToneCurve，影调由 Phocus FilmCurve 负责。
 
-此前 schema v1 把加密的 `v*` 原值写入资产（G 通道因此为 0），运行时又未把 gain 合并进矩阵，
-未白平衡 RAW 会以 G 通道占优进入 LUT，表现为整幅绿色。schema v1 资产及解析语义已删除，
-所有 profile 已由原 XML 重生为 schema v2。
+每个端点烘焙为 65³ RGB32F 3D LUT。网格在 [0,1] 使用线性坐标，(1,16] 使用对数坐标，
+GPU 用四面体插值。超出 16 的输入沿用 Lumix 的齐次延伸。缓存键包含源固定标定、目标 DCP
+内容哈希、算法版本和网格参数；照片曝光、Tint 和临时 CCM 不进入持久化键。
 
-矩阵与 LUT 是一份相机标定的两个组成部分，不能把 Phocus 二维表叠加在任意第三方 CCM 上。
+运行时用当前 RAW 白点 CCT 的倒色温权重混合两个标定 LUT。这与逐张照片先插值完整 DCP
+再求逆并不严格等价，是与 Lumix 相同的端点近似。Phocus 矩阵与二维表另外按其原始 Kelvin
+锚点规则插值，不能复用 DCP 的 A/D65 权重。
+
+### Phocus 矩阵与白平衡
+
+`LUTTable51MP5` 的矩阵锚点为 2100/2950/5650 K，二维表为 2950/5650 K。
+XML 中解密后的 `m*` 消费白平衡相机 RGB，行和对应 D50 XYZ 白点；因此等效 RGB 进入时：
+
+```text
+cameraToHncs = inverse(HNCS_RGB_TO_XYZ_D50) × M_Phocus(CCT)
+hncs = cameraToHncs × equivalentX1dWbRgb
+```
+
+不再把源 RAW 的 gain 乘进目标 Phocus 矩阵，否则会对白平衡应用两次。`v*` neutral gain
+仍解密和校验，作为源 profile 标定审计数据，不取代当前照片的 AsShotNeutral/Tint。
+DCP 矩阵和 Phocus 矩阵是不同标定，不能把逆目标 DCP 简化成逆 Phocus CCM。
 
 ## 实测色温
 
@@ -386,17 +356,18 @@ Hasselblad/LStar Gamma 分支，不能仅凭相机品牌或 UI 选项推断。
 
 ## 严格失败条件
 
-以下任一条件都会使 `HncsLut` 返回失败：
+以下任一条件都会使 `Hncs` 返回失败：
 
-- 未显式选择 profile；
-- profile id 不在 manifest；
+- 固定 50c profile 缺失，或 manifest 不只包含这个 profile；
+- 缺少源固定 ColorMatrix、目标 X1D DCP 或非线性标定表；
+- 双光源标定 LUT 生成、校验或上传失败；
 - RAW 白点 xy/CCT 无法由真实元数据求得；
 - manifest/header 源文件或 SHA-256 不一致；
 - payload 长度或 SHA-256 不一致；
 - grid 不是 105×89，表长度不等于 18,690；
 - 所选意图缺少至少两个温度表；
 - 矩阵或 neutral vector 少于两个锚点；
-- 插值后出现非有限数据，或 neutral gain 非正；
+- 插值后出现非有限数据，或参考 neutral gain 非正；
 - LUT 纹理或 film curve 纹理上传失败。
 
 没有 LUT→CCM、HNCS→Adobe Curve、首 profile 或默认 5000 K 回退。
@@ -440,39 +411,38 @@ PhotonCamera 进入该阶段前已经按 `(raw - black) / (white - black)` 完�
 `2^BaselineExposure`，不能再额外乘一次 ISO 或 `PostRawSensitivityBoost`。运行时使用：
 
 ```text
-g = 当前 RAW as-shot RGB gain         // HNCS 2D LUT 与 CCM
+g = 当前 RAW as-shot RGB gain         // 源传感器域
 
 gNormalized = g / max(g)
 inputEV     = 2^BaselineExposure × max(g)
-Mbase       = Mcomposite × diag(1 / g)
+Mbase       = MsourceComposite × diag(1 / g)
 
 camera = clamp(raw × gNormalized, 0, 1) × inputEV
-hncs   = Mbase × camera
+profileRgb = Mbase × camera
+sourceWbRgb = diag(1 / CameraWhite) × inverse(MsourceComposite) × profileRgb
+targetWbRgb = calibrationLut(sourceWbRgb)
+hncs = MtargetToHncs × targetWbRgb
 ```
 
 未触发截断时，上式严格等于既有
-`Mcomposite × raw × 2^BaselineExposure`；触发截断时则与 Phocus 一样在相机 gain 之后、
+源中间纹理的 `MsourceComposite × raw × 2^BaselineExposure`；触发截断时则与 Phocus 一样在相机 gain 之后、
 输入矩阵之前截断。`BaselineExposure` 和测光候选 EV 由 `inputEV` 消费，线性 pass 的通用
-`uExposureGain` 在 HNCS 路径保持 1，因此不会重复曝光。用户编辑 EV 仍可在矩阵后、2D LUT 前
-作为线性标量应用，与在输入矩阵前相乘数值等价。
+`uExposureGain` 在 HNCS 路径保持 1，因此不会重复曝光。用户编辑 EV 在公共曝光准备阶段消费，再进入等效 RGB 标定 LUT。由于目标 DCP 包含
+非线性 LookTable，不把标量穿过该 LUT，也不宣称移动曝光位置后仍等价。
 
 这里的 `[0,1]` 只属于相机域。camera→HNCS 矩阵产生的合法负值和 overrange 不再二次 clamp，
 以免破坏矩阵与后续 Cb/Y–Cr/Y 色度表的输入。
 
-## 非 Hasselblad RAW 的相机专属 LUT
+## 跨相机适配的验证边界
 
-要为第三方相机生成同域 LUT，必须重新测量，而不是复用 Phocus 表：
+当前复用 Phocus 原表的前提是先经过 X1D DCP 逆变换，构造等效目标相机 RGB；它不等同于
+给源传感器重新实测了一份 HNCS 标定。要建立源传感器专属的实测 profile，仍需独立光谱照明、
+灰阶、色卡与高饱和样本测量，并用未参与拟合的数据验证色差与跨光源连续性。
 
-1. 在多个已测光谱照明下拍摄线性 RAW、灰阶、标准色卡与扩展高饱和样本；
-2. 用该相机真实 ColorMatrix/ForwardMatrix 建立 camera→XYZ(D50)→HNCS 的中性色度基准；
-3. 以独立光谱/色度目标求每个样本的目标 HNCS RGB；
-4. 在相同的 `Cb/Y–Cr/Y` 定义和固定网格中拟合输入位置到目标 Cb/Cr 网格值；
-5. 每个光源分别保存真实 CCT、camera matrix、neutral vector、Standard/Reproduction 表；
-6. 用未参与拟合的光源、肤色、曝光与高饱和样本验证 ΔE、中性轴、跨光源连续性和 gamut；
-7. 生成资源时保存测量集版本、仪器、源 RAW 哈希、拟合器版本和验证报告。
-
-只有 CCM 时可以使用 `HncsCcm`；没有上述重新测量数据时，不存在真实可用的“第三方相机
-HNCS 二维 LUT”。
+共享 native 求逆器对 X1D-50 和 S9 的两组 HueSatMap/LookTable，在 [0,16] ProPhoto RGB
+的 65³ 网格上逐点求逆再正向还原。X1D 最大归一化通道误差分别为 5.35×10⁻⁷、5.81×10⁻⁷；
+S9 为 4.83×10⁻⁷、6.44×10⁻⁷。该检查验证非线性表求逆与 float 存储精度，不覆盖真机
+传感器色差、网格间采样误差、端点色温近似或显示效果。
 
 ## GLES 约束
 
@@ -480,7 +450,8 @@ HNCS 二维 LUT”。
 - 105×89 色度表使用 `GL_NEAREST`，shader 显式四点插值；
 - 65,536 点 film curve 固定铺成 256×256，并使用整数 `texelFetch`；
 - LUT 宽高由 CPU uniform 显式传入，不用 `textureSize/imageSize` 决定索引边界；
-- sampler 不作为用户函数参数，纹理不绑定为 image，也不使用 `imageLoad/imageStore`。
+- 2D 色度表不通过 sampler 函数参数传递；共享标定 LUT 沿用 Lumix 的 highp sampler3D
+  四面体查询及 RGB32F 上传路径，不绑定为 image。
 
 相关兼容性记录见
 [`docs/gles-driver-compatibility.md`](gles-driver-compatibility.md)。

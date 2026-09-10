@@ -88,6 +88,12 @@
     <string name="settings_level_description">Horizontale Wasserwaage beim Fotografieren anzeigen</string>
     <string name="settings_grid_lines">Gitternetzlinien</string>
     <string name="settings_grid_description">Gitternetzlinien für die Bildkomposition anzeigen</string>
+    <string name="settings_grid_style">Gitterstil</string>
+    <string name="grid_style_thirds">Drittelregel</string>
+    <string name="grid_style_diagonals">Diagonalen</string>
+    <string name="grid_style_golden_ratio">Goldener Schnitt</string>
+    <string name="grid_style_golden_triangle">Goldenes Dreieck</string>
+    <string name="grid_style_golden_spiral">Goldene Spirale</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Nehmen Sie einen kurzen Videoclip zusammen mit Ihrem Foto auf, um einen dynamischen Live-Foto-Effekt zu erzielen.</string>
     <string name="settings_section_frame">Rahmen-Wasserzeichen</string>
