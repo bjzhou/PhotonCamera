@@ -3,6 +3,8 @@ package com.hinnka.mycamera.processor
 import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.hinnka.mycamera.ml.RelativeDepthMap
+import com.hinnka.mycamera.ml.SubjectMask
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -13,19 +15,22 @@ import org.junit.runner.RunWith
 class OglBokehProcessorShaderTest {
     @Test
     fun productionBokehShadersCompileAndLinkOnDevice() {
-        val processor = OglBokehProcessor()
-        try {
-            assertEquals(1922 to 2560, invokePrivate(processor, "resolveBokehRenderSize", 4098, 5458))
-            invokePrivate(processor, "initEGL", 32, 32)
-            invokePrivate(processor, "initGL")
+        for (style in listOf(BokehStyle.DEFAULT, BokehStyle.NATURAL)) {
+            val processor = OglBokehProcessor()
+            try {
+                assertEquals(1922 to 2560, invokePrivate(processor, "resolveBokehRenderSize", 4098, 5458, 2560))
+                invokePrivate(processor, "initEGL", 32, 32)
+                invokePrivate(processor, "initGL", style, null)
 
-            assertTrue(readPrivateInt(processor, "compactHighlightProgramId") != 0)
-            assertTrue(readPrivateInt(processor, "bokehProgramId") != 0)
-            assertTrue(readPrivateInt(processor, "bokehCompositeProgramId") != 0)
-            assertTrue(readPrivateInt(processor, "jbuUpsampleProgramId") != 0)
-            assertTrue(readPrivateInt(processor, "depthSharpenProgramId") != 0)
-        } finally {
-            invokePrivate(processor, "releaseGL")
+                assertEquals(style == BokehStyle.DEFAULT, readPrivateInt(processor, "compactHighlightProgramId") != 0)
+                assertEquals(style == BokehStyle.DEFAULT, readPrivateInt(processor, "analyticHighlightProgramId") != 0)
+                assertTrue(readPrivateInt(processor, "bokehProgramId") != 0)
+                assertTrue(readPrivateInt(processor, "bokehCompositeProgramId") != 0)
+                assertTrue(readPrivateInt(processor, "jbuUpsampleProgramId") != 0)
+                assertTrue(readPrivateInt(processor, "depthRefineProgramId") != 0)
+            } finally {
+                invokePrivate(processor, "releaseGL")
+            }
         }
     }
 
@@ -40,9 +45,9 @@ class OglBokehProcessorShaderTest {
         val result = try {
             OglBokehProcessor().applyBokeh(
                 originalImage = input,
-                lowResDepthMap = depth,
-                focusX = 0.5f,
-                focusY = 0.5f,
+                lowResDepthMap = RelativeDepthMap.fromBitmap(depth),
+                subjectMask = SubjectMask(1, 1, floatArrayOf(0f)),
+                focusDepth = 128f / 255f,
                 aperture = 1.4f,
             )
         } finally {
@@ -86,9 +91,9 @@ class OglBokehProcessorShaderTest {
         val result = try {
             OglBokehProcessor().applyBokeh(
                 originalImage = input,
-                lowResDepthMap = depth,
-                focusX = 0.5f,
-                focusY = 0.5f,
+                lowResDepthMap = RelativeDepthMap.fromBitmap(depth),
+                subjectMask = SubjectMask(1, 1, floatArrayOf(0f)),
+                focusDepth = 224f / 255f,
                 aperture = 1.2f,
             )
         } finally {
@@ -160,9 +165,9 @@ class OglBokehProcessorShaderTest {
         val result = try {
             OglBokehProcessor().applyBokeh(
                 originalImage = input,
-                lowResDepthMap = depth,
-                focusX = 0.5f,
-                focusY = 0.5f,
+                lowResDepthMap = RelativeDepthMap.fromBitmap(depth),
+                subjectMask = SubjectMask(1, 1, floatArrayOf(0f)),
+                focusDepth = 224f / 255f,
                 aperture = 1.2f,
             )
         } finally {
@@ -223,7 +228,7 @@ class OglBokehProcessorShaderTest {
             ) / 256
     }
 
-    private fun invokePrivate(target: Any, methodName: String, vararg args: Any): Any? {
+    private fun invokePrivate(target: Any, methodName: String, vararg args: Any?): Any? {
         return target.javaClass.declaredMethods.first {
             it.name == methodName && it.parameterCount == args.size
         }.run {

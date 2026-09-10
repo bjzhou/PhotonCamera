@@ -9,10 +9,16 @@ import android.os.SystemClock
 import android.util.Half
 import com.hinnka.mycamera.lut.GlUtils
 import com.hinnka.mycamera.lut.Shaders
+import com.hinnka.mycamera.lut.PhysicalBokehShaders
 import com.hinnka.mycamera.ml.RelativeDepthMap
 import com.hinnka.mycamera.ml.SubjectMask
+import com.hinnka.mycamera.processor.optics.OpticalColorTransfer
+import com.hinnka.mycamera.processor.optics.OpticalLensProfile
+import com.hinnka.mycamera.processor.optics.OpticalPsfTable
+import com.hinnka.mycamera.processor.optics.OpticalEmitterReconstruction
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
+import java.util.concurrent.CancellationException
 import java.nio.ByteOrder
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -22,12 +28,12 @@ class OglBokehProcessor {
     companion object {
         private const val TAG = "OglBokehProcessor"
         private const val MAX_BOKEH_RENDER_EDGE = 2560
+        private const val OPTICAL_BOKEH_RENDER_EDGE = 1280
         // Keep analytic highlights as a restrained supplement to the sampled PSF.
         private const val ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED = true
         private const val HIGHLIGHT_MASK_THRESHOLD = 0.03f
         private const val MIN_ANALYTIC_COC_PIXELS = 20f
-        private const val MIN_BUBBLE_ANALYTIC_COC_PIXELS = 10f
-        private const val FOCUS_DEPTH_DEAD_BAND = 0.015f
+        private const val FOCUS_DEPTH_DEAD_BAND = BokehDefocusModel.FOCUS_DEPTH_DEAD_BAND
         // Synthetic-highlight defocus gate. A depth sample is accepted when
         // its absolute focus gap is >= X. The low-depth branch retains the
         // established far-background allowance for normalized disparity maps.
@@ -37,7 +43,6 @@ class OglBokehProcessor {
         // Tunable highlight-quality gate measured in linear RGB.
         private const val MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE = 0.11f
         private const val HIGHLIGHT_MIN_CENTER_SPACING_SCALE = 0.9f
-        private const val BUBBLE_HIGHLIGHT_MIN_CENTER_SPACING_SCALE = 0.82f
         private const val HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE = 0.5f
         private const val PREEXISTING_BOKEH_RADIUS_SCALE = 0.05f
         private const val MAX_PREEXISTING_BOKEH_RADIUS_SCALE = 1.5f
@@ -95,6 +100,12 @@ class OglBokehProcessor {
     private var depthRefineProgramId = 0
     private var depthReadbackProgramId = 0
     private var layerColorProgramId = 0
+    private var emitterSeparationProgramId = 0
+    private var emitterErosionProgramId = 0
+    private var emitterDilationProgramId = 0
+    private var reconstructedEmitterProgramId = 0
+
+    private data class ReconstructedEmitters(val remainingTexture: Int, val instances: FloatArray)
     private var vertexBufferId = 0
     private var texCoordBufferId = 0
     private var indexBufferId = 0
@@ -112,22 +123,65 @@ class OglBokehProcessor {
         aperture: Float,
         bokehStyle: BokehStyle = BokehStyle.DEFAULT,
         protectSubject: Boolean = true,
+        checkCancellation: () -> Unit = {},
     ): Bitmap? {
+        checkCancellation()
         val startedAtMs = SystemClock.elapsedRealtime()
+        var resultBitmap: Bitmap? = null
         try {
+            checkCancellation()
             val halfFloatOutput = originalImage.config == Bitmap.Config.RGBA_F16
             val linearInput = originalImage.colorSpace?.id ==
                 ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB).id
+            val physicalBubble = bokehStyle == BokehStyle.BUBBLE
             val (bokehWidth, bokehHeight) = resolveBokehRenderSize(
                 originalImage.width,
                 originalImage.height,
+                if (physicalBubble) OPTICAL_BOKEH_RENDER_EDGE else MAX_BOKEH_RENDER_EDGE,
             )
+            val psf = if (physicalBubble) OpticalPsfTable.build(
+                OpticalLensProfile.SOAP_BUBBLE, aperture, focusDepth,
+                maxOf(originalImage.width, originalImage.height), maxOf(bokehWidth, bokehHeight),
+                checkCancellation,
+            ) else null
+            val emitterPsf = if (physicalBubble) OpticalPsfTable.build(
+                OpticalLensProfile.SOAP_BUBBLE_EMITTER, aperture, focusDepth,
+                maxOf(originalImage.width, originalImage.height), maxOf(bokehWidth, bokehHeight),
+                checkCancellation, sceneReferenceProfile = OpticalLensProfile.SOAP_BUBBLE,
+            ) else null
+            val colorTransfer = if (physicalBubble) OpticalColorTransfer(
+                originalImage.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
+            ).shaderFunctions() else null
             PLog.d(
                 TAG,
                 "Bokeh working resolution: ${bokehWidth}x${bokehHeight}, output=${originalImage.width}x${originalImage.height}"
             )
             initEGL(originalImage.width, originalImage.height)
-            initGL(bokehStyle)
+            initGL(bokehStyle, colorTransfer)
+
+            // R32F nearest lookups preserve annular CDF mass; interpolation is
+            // explicitly in squared radius, not ordinary linear texture filtering.
+            val psfCdfTex = psf?.let { createScalarTexture(
+                it.radialBinCount + 1, it.depthCount, it.cumulativeEnergy, "optical PSF CDF", true,
+            ) } ?: 0
+            val psfSupportTex = psf?.let { createScalarTexture(
+                1, it.depthCount, it.supportPixels, "optical PSF support", true,
+            ) } ?: 0
+            val emitterCdfTex = emitterPsf?.let { createScalarTexture(
+                it.radialBinCount + 1, it.depthCount, it.cumulativeEnergy, "emitter PSF CDF", true,
+            ) } ?: 0
+            val emitterSupportTex = emitterPsf?.let { createScalarTexture(
+                1, it.depthCount, it.supportPixels, "emitter PSF support", true,
+            ) } ?: 0
+            if (psf != null) PLog.d(TAG,
+                "Optical PSF: lens=${OpticalLensProfile.SOAP_BUBBLE.id}, f=$aperture, " +
+                    "focus=$focusDepth, support=${psf.tableSupportPixels}, " +
+                    "table=${psf.radialBinCount}x${psf.depthCount}, bin=${psf.binWidthPixels}, " +
+                    "samples=512, calibration=shared-defocus, propagation=geometrical-annular-energy, subjectProtection=$protectSubject")
+            if (emitterPsf != null) PLog.d(TAG,
+                "Optical emitters: lens=${emitterPsf.lens.profile.id}, " +
+                    "support=${emitterPsf.tableSupportPixels}, separation=positive-compact-radiance, " +
+                    "transport=two-path-subtract-and-redistribute, samples=512")
 
             val inputTex = createTexture(originalImage, mipmap = true)
             val lowResDepthTex = createScalarTexture(
@@ -181,6 +235,7 @@ class OglBokehProcessor {
             GLES30.glUniform1i(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uLinearInput"), if (linearInput) 1 else 0)
 
             drawQuad(jbuUpsampleProgramId)
+            checkCancellation()
             requireNoGlError("subject mask / layered upsample RGBA16F")
 
             // Refine the RGB-guided mask and each depth layer independently.
@@ -215,6 +270,7 @@ class OglBokehProcessor {
             GLES30.glUniform1i(GLES30.glGetUniformLocation(depthRefineProgramId, "uProtectSubject"), if (protectSubject) 1 else 0)
 
             drawQuad(depthRefineProgramId)
+            checkCancellation()
             requireNoGlError("RGB mask / layered depth refine RGBA16F")
 
             val finalDepthTex = refinedDepthTex[0]
@@ -227,163 +283,205 @@ class OglBokehProcessor {
                 "depth=${lowResDepthMap.width}x${lowResDepthMap.height}, " +
                 "mask=${subjectMask.width}x${subjectMask.height}, region=${subjectMask.region}, protect=$protectSubject, " +
                 "working=${bokehWidth}x${bokehHeight}, focus=$focusDepth, linear=$linearInput")
-            val maxBlurRadius = originalImage.width.toFloat() / 26.0f
+            val baseCocRadius = BokehDefocusModel.baseRadiusPixels(maxOf(originalImage.width, originalImage.height))
+            val emitterSourceTex = if (physicalBubble) {
+                var environment = layerColorTex
+                for (program in intArrayOf(emitterErosionProgramId, emitterDilationProgramId)) {
+                    checkCancellation()
+                    val target = createOpticalRenderTexture(bokehWidth, bokehHeight)
+                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0])
+                    GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                        GLES30.GL_TEXTURE_2D, target, 0)
+                    requireFramebufferComplete("optical emitter environment")
+                    GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
+                    GLES30.glUseProgram(program)
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, environment)
+                    GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
+                    GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uDepthTexture"), 1)
+                    GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBaseCocRadius"), baseCocRadius)
+                    GLES30.glUniform2f(GLES30.glGetUniformLocation(program, "uTexelSize"),
+                        1f / originalImage.width, 1f / originalImage.height)
+                    drawQuad(program)
+                    requireNoGlError("optical emitter environment RGBA16F")
+                    if (environment != layerColorTex) GLES30.glDeleteTextures(1, intArrayOf(environment), 0)
+                    environment = target
+                }
+                val texture = createOpticalRenderTexture(bokehWidth, bokehHeight, mipmap = true)
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0])
+                GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D, texture, 0)
+                requireFramebufferComplete("optical emitter separation")
+                GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
+                GLES30.glUseProgram(emitterSeparationProgramId)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, layerColorTex)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(emitterSeparationProgramId, "uLayerColorTexture"), 0)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(emitterSeparationProgramId, "uDepthTexture"), 1)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, environment)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(emitterSeparationProgramId, "uEmitterEnvironment"), 2)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(emitterSeparationProgramId, "uBaseCocRadius"), baseCocRadius)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(emitterSeparationProgramId, "uFocusDepth"), focusDepth)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(emitterSeparationProgramId, "uAperture"), aperture)
+                GLES30.glUniform2f(GLES30.glGetUniformLocation(emitterSeparationProgramId, "uTexelSize"),
+                    1f / originalImage.width, 1f / originalImage.height)
+                drawQuad(emitterSeparationProgramId)
+                GLES30.glDeleteTextures(1, intArrayOf(environment), 0)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+                GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+                requireNoGlError("optical emitter radiance RGBA16F / mipmaps")
+                texture
+            } else 0
+            val reconstructedEmitters = if (emitterPsf != null) reconstructOpticalEmitters(
+                emitterSourceTex, finalDepthTex, bokehWidth, bokehHeight,
+                originalImage.width, originalImage.height, emitterPsf, checkCancellation,
+            ) else null
+            val maxBlurRadius = psf?.let { it.tableSupportPixels +
+                0.5f * originalImage.width / bokehWidth }
+                ?: baseCocRadius
             val identity = FloatArray(16)
             android.opengl.Matrix.setIdentityM(identity, 0)
 
             val compactHighlightTex = IntArray(1)
-            val analyticHighlights = if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
-                val depthClassification = if (bokehStyle == BokehStyle.DEFAULT) {
-                    // Only the default style performs CPU highlight topology. Its
-                    // RGBA8 depth/mask copy never feeds the renderer; finalDepthTex
-                    // remains RGBA16F. Avoid this synchronizing readback for the fully
-                    // GPU-integrated natural and bubble styles.
-                    GLES30.glGenTextures(1, depthReadbackTex, 0)
-                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthReadbackTex[0])
-                    GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, bokehWidth, bokehHeight, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
-                    GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-                    GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-                    GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-                    GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-                    GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, depthReadbackTex[0], 0)
-                    requireFramebufferComplete("depth classification resolve")
-                    GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-                    GLES30.glUseProgram(depthReadbackProgramId)
-                    GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, refinedDepthTex[0])
-                    GLES30.glUniform1i(GLES30.glGetUniformLocation(depthReadbackProgramId, "uDepthTexture"), 0)
-                    drawQuad(depthReadbackProgramId)
-                    readDepthClassification(bokehWidth, bokehHeight)
-                } else {
-                    null
-                }
+            val analyticHighlights = if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && bokehStyle == BokehStyle.DEFAULT) {
+                // Only the default style performs CPU highlight topology. Its
+                // RGBA8 depth/mask copy never feeds the renderer; finalDepthTex
+                // remains RGBA16F. Avoid this synchronizing readback for the fully
+                // GPU-integrated natural and bubble styles.
+                GLES30.glGenTextures(1, depthReadbackTex, 0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthReadbackTex[0])
+                GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, bokehWidth, bokehHeight, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, depthReadbackTex[0], 0)
+                requireFramebufferComplete("depth classification resolve")
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                GLES30.glUseProgram(depthReadbackProgramId)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, refinedDepthTex[0])
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(depthReadbackProgramId, "uDepthTexture"), 0)
+                drawQuad(depthReadbackProgramId)
+                val depthClassification = readDepthClassification(bokehWidth, bokehHeight)
                 GLES30.glEnable(GLES30.GL_DITHER)
 
-                // Step 3: Classify only compact, isolated highlights. This prevents
-                // large bright regions from entering the inferred-radiance bokeh path.
-                // Natural bokeh has no analytic overlay and its PSF does not sample
-                // the compact-highlight texture, so skip the complete pass there.
-                if (bokehStyle != BokehStyle.NATURAL) {
-                    GLES30.glGenTextures(1, compactHighlightTex, 0)
-                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
-                    GLES30.glTexImage2D(
-                        GLES30.GL_TEXTURE_2D,
-                        0,
-                        if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
-                        bokehWidth,
-                        bokehHeight,
-                        0,
-                        GLES30.GL_RGBA,
-                        if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
-                        null
-                    )
-                    GLES30.glTexParameteri(
-                        GLES30.GL_TEXTURE_2D,
-                        GLES30.GL_TEXTURE_MIN_FILTER,
-                        GLES30.GL_LINEAR_MIPMAP_LINEAR,
-                    )
-                    GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-                    GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-                    GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+                // Classify compact, isolated highlights only for DEFAULT.
+                GLES30.glGenTextures(1, compactHighlightTex, 0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
+                GLES30.glTexImage2D(
+                    GLES30.GL_TEXTURE_2D,
+                    0,
+                    if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
+                    bokehWidth,
+                    bokehHeight,
+                    0,
+                    GLES30.GL_RGBA,
+                    if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                    null
+                )
+                GLES30.glTexParameteri(
+                    GLES30.GL_TEXTURE_2D,
+                    GLES30.GL_TEXTURE_MIN_FILTER,
+                    GLES30.GL_LINEAR_MIPMAP_LINEAR,
+                )
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
-                    GLES30.glFramebufferTexture2D(
-                        GLES30.GL_FRAMEBUFFER,
-                        GLES30.GL_COLOR_ATTACHMENT0,
-                        GLES30.GL_TEXTURE_2D,
-                        compactHighlightTex[0],
-                        0
-                    )
-                    requireFramebufferComplete("compact bokeh highlight")
-                    GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
-                    GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-                    GLES30.glUseProgram(compactHighlightProgramId)
+                GLES30.glFramebufferTexture2D(
+                    GLES30.GL_FRAMEBUFFER,
+                    GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D,
+                    compactHighlightTex[0],
+                    0
+                )
+                requireFramebufferComplete("compact bokeh highlight")
+                GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                GLES30.glUseProgram(compactHighlightProgramId)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(compactHighlightProgramId, "uBaseCocRadius"), baseCocRadius)
 
-                    GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
-                    GLES30.glUniform1i(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uInputTexture"),
-                        0
-                    )
-                    GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
-                    GLES30.glUniform1i(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthTexture"),
-                        1
-                    )
-                    GLES30.glUniformMatrix4fv(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthMatrix"),
-                        1,
-                        false,
-                        identity,
-                        0
-                    )
-                    GLES30.glUniform1f(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uMaxBlurRadius"),
-                        maxBlurRadius
-                    )
-                    GLES30.glUniform1f(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
-                        HIGHLIGHT_CLASSIFICATION_F_NUMBER
-                    )
-                    GLES30.glUniform1f(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uFocusDepth"),
-                        focusDepth
-                    )
-                    GLES30.glUniform2f(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uTexelSize"),
-                        1.0f / originalImage.width,
-                        1.0f / originalImage.height
-                    )
-                    GLES30.glUniform1f(
-                        GLES30.glGetUniformLocation(
-                            compactHighlightProgramId,
-                            "uMinNeighborhoodLumaDifference",
-                        ),
-                        MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE,
-                    )
-                    GLES30.glUniform1i(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uLinearInput"),
-                        if (linearInput) 1 else 0
-                    )
-                    drawQuad(compactHighlightProgramId)
-                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
-                    GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-                }
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
+                GLES30.glUniform1i(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uInputTexture"),
+                    0
+                )
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
+                GLES30.glUniform1i(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthTexture"),
+                    1
+                )
+                GLES30.glUniformMatrix4fv(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthMatrix"),
+                    1,
+                    false,
+                    identity,
+                    0
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uMaxBlurRadius"),
+                    maxBlurRadius
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
+                    HIGHLIGHT_CLASSIFICATION_F_NUMBER
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uFocusDepth"),
+                    focusDepth
+                )
+                GLES30.glUniform2f(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uTexelSize"),
+                    1.0f / originalImage.width,
+                    1.0f / originalImage.height
+                )
+                GLES30.glUniform1f(
+                    GLES30.glGetUniformLocation(
+                        compactHighlightProgramId,
+                        "uMinNeighborhoodLumaDifference",
+                    ),
+                    MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE,
+                )
+                GLES30.glUniform1i(
+                    GLES30.glGetUniformLocation(compactHighlightProgramId, "uLinearInput"),
+                    if (linearInput) 1 else 0
+                )
+                drawQuad(compactHighlightProgramId)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
+                GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
 
-                if (bokehStyle == BokehStyle.NATURAL) {
-                    PLog.d(TAG, "Natural bokeh uses integrated radial PSF")
-                    emptyList()
-                } else if (bokehStyle == BokehStyle.BUBBLE) {
-                    PLog.d(TAG, "Bubble bokeh uses integrated optical PSF")
-                    emptyList()
-                } else {
-                    extractAnalyticHighlights(
-                        width = bokehWidth,
-                        height = bokehHeight,
-                        halfFloat = halfFloatOutput,
-                        refinedDepthPixels = checkNotNull(depthClassification) {
-                            "Default bokeh requires resolved depth topology"
-                        }.otherDepth,
-                        subjectMaskPixels = depthClassification.subjectMask,
-                        originalWidth = originalImage.width,
-                        originalHeight = originalImage.height,
-                        focusDepth = focusDepth,
-                        aperture = aperture,
-                        maxBlurRadius = maxBlurRadius,
-                        bokehStyle = bokehStyle,
-                    ).also { extraction ->
-                        PLog.d(
-                            TAG,
-                            "Analytic bokeh highlights: style=$bokehStyle, fNumber=$aperture, " +
-                                "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
-                                "candidates=${extraction.eligibleCandidateCount}, " +
-                                "depthGateRejected=${extraction.depthGateRejectedCount}, " +
-                                "preExisting=${extraction.preExistingBokehCount}, " +
-                                "densitySuppressed=${extraction.densitySuppressedCount}, " +
-                                "accepted=${extraction.highlights.size}"
-                        )
-                    }.highlights
-                }
+                extractAnalyticHighlights(
+                    width = bokehWidth,
+                    height = bokehHeight,
+                    halfFloat = halfFloatOutput,
+                    refinedDepthPixels = depthClassification.otherDepth,
+                    subjectMaskPixels = depthClassification.subjectMask,
+                    originalWidth = originalImage.width,
+                    originalHeight = originalImage.height,
+                    focusDepth = focusDepth,
+                    aperture = aperture,
+                    maxBlurRadius = maxBlurRadius,
+                ).also { extraction ->
+                    PLog.d(
+                        TAG,
+                        "Analytic bokeh highlights: style=$bokehStyle, fNumber=$aperture, " +
+                            "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
+                            "candidates=${extraction.eligibleCandidateCount}, " +
+                            "depthGateRejected=${extraction.depthGateRejectedCount}, " +
+                            "preExisting=${extraction.preExistingBokehCount}, " +
+                            "densitySuppressed=${extraction.densitySuppressedCount}, " +
+                            "accepted=${extraction.highlights.size}"
+                    )
+                }.highlights
             } else {
                 GLES30.glEnable(GLES30.GL_DITHER)
                 PLog.d(TAG, "Analytic bokeh highlights disabled")
@@ -417,17 +515,12 @@ class OglBokehProcessor {
             GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             GLES30.glUseProgram(bokehProgramId)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uBaseCocRadius"), baseCocRadius)
 
             GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uDepthTexture"), 1)
 
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
-            GLES30.glUniform1i(
-                GLES30.glGetUniformLocation(bokehProgramId, "uHighlightSourceTexture"),
-                2,
-            )
             GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, layerColorTex)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uLayerColorTexture"), 3)
@@ -438,8 +531,51 @@ class OglBokehProcessor {
             GLES30.glUniform2f(GLES30.glGetUniformLocation(bokehProgramId, "uTexelSize"), 1.0f / originalImage.width, 1.0f / originalImage.height)
             GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(bokehProgramId, "uDepthMatrix"), 1, false, identity, 0)
 
+            if (psf != null) bindPsf(bokehProgramId, psf, psfCdfTex, psfSupportTex)
+            if (physicalBubble) {
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, emitterSourceTex)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uEmitterTexture"), 6)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uSubtractEmitters"), 1)
+            }
+
             drawQuad(bokehProgramId)
             requireNoGlError("PSF linear background / support RGBA16F")
+
+            val emitterBokehTex = if (emitterPsf != null) {
+                checkCancellation()
+                val texture = createOpticalRenderTexture(bokehWidth, bokehHeight)
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0])
+                GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D, texture, 0)
+                requireFramebufferComplete("optical emitter transport")
+                GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
+                GLES30.glUseProgram(bokehProgramId)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uDepthTexture"), 1)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, checkNotNull(reconstructedEmitters).remainingTexture)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uLayerColorTexture"), 3)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, emitterSourceTex)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uEmitterTexture"), 6)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uSubtractEmitters"), 0)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uBaseCocRadius"), baseCocRadius)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uMaxBlurRadius"),
+                    emitterPsf.tableSupportPixels + 0.5f * originalImage.width / bokehWidth)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uAperture"), aperture)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uFocusDepth"), focusDepth)
+                GLES30.glUniform2f(GLES30.glGetUniformLocation(bokehProgramId, "uTexelSize"),
+                    1f / originalImage.width, 1f / originalImage.height)
+                bindPsf(bokehProgramId, emitterPsf, emitterCdfTex, emitterSupportTex)
+                drawQuad(bokehProgramId)
+                requireNoGlError("optical emitter transport RGBA16F")
+                drawReconstructedEmitters(checkNotNull(reconstructedEmitters).instances,
+                    emitterPsf, emitterCdfTex, emitterSupportTex, finalDepthTex,
+                    originalImage.width, originalImage.height, bokehWidth, aperture, focusDepth, baseCocRadius)
+                texture
+            } else 0
 
             // Keep analytic bokeh on its own transparent layer. It is combined
             // with the blurred background only in the final, foreground-aware
@@ -527,6 +663,7 @@ class OglBokehProcessor {
             GLES30.glViewport(0, 0, originalImage.width, originalImage.height)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             GLES30.glUseProgram(bokehCompositeProgramId)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehCompositeProgramId, "uBaseCocRadius"), baseCocRadius)
 
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
@@ -569,18 +706,29 @@ class OglBokehProcessor {
                 if (linearInput) 1 else 0,
             )
 
+            if (psf != null) bindPsf(bokehCompositeProgramId, psf, psfCdfTex, psfSupportTex)
+            if (physicalBubble) {
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, emitterBokehTex)
+                GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehCompositeProgramId, "uEmitterBokehTexture"), 6)
+            }
             drawQuad(bokehCompositeProgramId)
+            checkCancellation()
             GLES30.glFinish()
             val renderFinishedAtMs = SystemClock.elapsedRealtime()
 
             // Read back to Bitmap
-            val resultBitmap = Bitmap.createBitmap(originalImage.width, originalImage.height,
+            resultBitmap = Bitmap.createBitmap(originalImage.width, originalImage.height,
                 if (halfFloatOutput) Bitmap.Config.RGBA_F16 else Bitmap.Config.ARGB_8888,
                 false,
                 originalImage.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB))
             val bytesPerPixel = if (halfFloatOutput) 8L else 4L
             val bufferByteCount = originalImage.width.toLong() * originalImage.height.toLong() * bytesPerPixel
-            val buffer = LargeDirectBuffer.allocate(bufferByteCount, "OGL bokeh readback") ?: return null
+            val buffer = LargeDirectBuffer.allocate(bufferByteCount, "OGL bokeh readback")
+            if (buffer == null) {
+                resultBitmap.recycle()
+                return null
+            }
             try {
                 GLES30.glReadPixels(
                     0,
@@ -601,6 +749,11 @@ class OglBokehProcessor {
             GLES30.glDeleteTextures(1, intArrayOf(inputTex), 0)
             GLES30.glDeleteTextures(1, intArrayOf(lowResDepthTex), 0)
             GLES30.glDeleteTextures(1, intArrayOf(subjectMaskTex), 0)
+            GLES30.glDeleteTextures(2, intArrayOf(psfCdfTex, psfSupportTex), 0)
+            GLES30.glDeleteTextures(4, intArrayOf(emitterCdfTex, emitterSupportTex, emitterSourceTex, emitterBokehTex), 0)
+            if (reconstructedEmitters != null && reconstructedEmitters.remainingTexture != emitterSourceTex) {
+                GLES30.glDeleteTextures(1, intArrayOf(reconstructedEmitters.remainingTexture), 0)
+            }
             GLES30.glDeleteTextures(1, highResDepthTex, 0)
             GLES30.glDeleteTextures(1, refinedDepthTex, 0)
             GLES30.glDeleteTextures(1, intArrayOf(layerColorTex), 0)
@@ -619,8 +772,13 @@ class OglBokehProcessor {
                     "readback=${readbackFinishedAtMs - renderFinishedAtMs}ms, " +
                     "working=${bokehWidth}x${bokehHeight}, output=${originalImage.width}x${originalImage.height}"
             )
+            checkCancellation()
             return resultBitmap
+        } catch (e: CancellationException) {
+            resultBitmap?.takeIf { !it.isRecycled }?.recycle()
+            throw e
         } catch (e: Exception) {
+            resultBitmap?.takeIf { !it.isRecycled }?.recycle()
             PLog.e(TAG, "Error applying OGL Bokeh: ${e.message}")
             return null
         } finally {
@@ -709,7 +867,6 @@ class OglBokehProcessor {
         focusDepth: Float,
         aperture: Float,
         maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
     ): AnalyticHighlightExtraction {
         val pixelCount = width.toLong() * height.toLong()
         check(pixelCount == refinedDepthPixels.size.toLong()) {
@@ -794,7 +951,6 @@ class OglBokehProcessor {
             val originalPixelsPerWorkingY = originalHeight.toFloat() / height.toFloat()
             val minimumSpacing = minimumHighlightCenterSpacing(
                 maxBlurRadius,
-                bokehStyle,
             )
             val discoveryCellSize = maxOf(
                 minimumSpacing * HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE,
@@ -826,43 +982,21 @@ class OglBokehProcessor {
                     interpolate = false,
                 )
 
-                val depthCocPixels = computeCocPixels(
+                val depthCocPixels = BokehDefocusModel.radiusPixels(
                     depth = centerDepth,
-                    focusDepth = focusDepth,
+                    focus = focusDepth,
                     aperture = aperture,
-                    maxBlurRadius = maxBlurRadius,
+                    imageLongEdge = maxOf(originalWidth, originalHeight),
                 )
-                val minimumCocPixels = if (bokehStyle == BokehStyle.BUBBLE) {
-                    MIN_BUBBLE_ANALYTIC_COC_PIXELS
-                } else {
-                    MIN_ANALYTIC_COC_PIXELS
-                }
+                val minimumCocPixels = MIN_ANALYTIC_COC_PIXELS
                 if (depthCocPixels < minimumCocPixels && !isPreExistingBokeh) return
-                if (bokehStyle != BokehStyle.BUBBLE &&
-                    !isSyntheticHighlightDefocusedDepth(centerDepth, focusDepth)
-                ) {
+                if (!isSyntheticHighlightDefocusedDepth(centerDepth, focusDepth)) {
                     depthGateRejectedCount++
                     return
                 }
                 val cocPixels = if (isPreExistingBokeh) {
                     maxOf(depthCocPixels, sourceRadiusPixels * 1.05f)
                         .coerceAtMost(maxBlurRadius * 1.2f)
-                } else if (bokehStyle == BokehStyle.BUBBLE) {
-                    val brightnessScale = (peak.score / 0.32f).coerceIn(0.0f, 1.0f)
-                    val confidenceScale = sqrt(peak.alpha.coerceIn(0.0f, 1.0f))
-                    val sourceExtentScale = sqrt(
-                        (sourceRadiusPixels / maxOf(maxBlurRadius, 1.0f))
-                            .coerceIn(0.0f, 1.0f)
-                    )
-                    val opticalPhase = centerX * 0.7548777f + centerY * 0.5698403f
-                    val stableLensVariation = 0.84f +
-                        (opticalPhase - floor(opticalPhase)) * 0.32f
-                    val opticalSizeScale = (
-                        0.38f + brightnessScale * 0.28f +
-                            confidenceScale * 0.28f + sourceExtentScale * 0.18f
-                        ) * stableLensVariation
-                    (depthCocPixels * opticalSizeScale)
-                        .coerceIn(minimumCocPixels, maxBlurRadius * 1.18f)
                 } else {
                     depthCocPixels
                 }
@@ -878,9 +1012,6 @@ class OglBokehProcessor {
                         centerY = centerY,
                         focusDepth = focusDepth,
                         cocPixels = cocPixels,
-                        aperture = aperture,
-                        maxBlurRadius = maxBlurRadius,
-                        bokehStyle = bokehStyle,
                     )
                 ) {
                     depthGateRejectedCount++
@@ -888,11 +1019,7 @@ class OglBokehProcessor {
                 }
 
                 // Default optical discs are premultiplied by classifier alpha.
-                // Bubble RGB instead carries the wider removal signal while alpha
-                // identifies the compact center, so it must not be divided again.
-                val sourceSignalScale = if (bokehStyle == BokehStyle.BUBBLE) {
-                    1.0f
-                } else if (isPreExistingBokeh) {
+                val sourceSignalScale = if (isPreExistingBokeh) {
                     1.0f / maxOf(
                         peak.alpha,
                         0.001f,
@@ -1041,7 +1168,6 @@ class OglBokehProcessor {
             val selectedCandidates = selectDensityLimitedHighlights(
                 candidates,
                 maxBlurRadius,
-                bokehStyle,
             )
             val highlights = ArrayList<AnalyticHighlight>(candidates.size)
             var preExistingBokehCount = 0
@@ -1071,7 +1197,6 @@ class OglBokehProcessor {
     private fun selectDensityLimitedHighlights(
         candidates: List<AnalyticHighlightCandidate>,
         maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
     ): BooleanArray {
         if (candidates.isEmpty()) return BooleanArray(0)
 
@@ -1080,7 +1205,6 @@ class OglBokehProcessor {
         // their full physical CoC for the requested f-number.
         val minimumSpacing = minimumHighlightCenterSpacing(
             maxBlurRadius,
-            bokehStyle,
         )
         val minimumSpacingSquared = minimumSpacing * minimumSpacing
         val cellSize = minimumSpacing
@@ -1142,14 +1266,9 @@ class OglBokehProcessor {
 
     private fun minimumHighlightCenterSpacing(
         maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
     ): Float =
         maxOf(
-            maxBlurRadius * if (bokehStyle == BokehStyle.BUBBLE) {
-                BUBBLE_HIGHLIGHT_MIN_CENTER_SPACING_SCALE
-            } else {
-                HIGHLIGHT_MIN_CENTER_SPACING_SCALE
-            },
+            maxBlurRadius * HIGHLIGHT_MIN_CENTER_SPACING_SCALE,
             1.0f,
         )
 
@@ -1181,24 +1300,6 @@ class OglBokehProcessor {
         return top * (1.0f - fy) + bottom * fy
     }
 
-    private fun computeCocPixels(
-        depth: Float,
-        focusDepth: Float,
-        aperture: Float,
-        maxBlurRadius: Float,
-    ): Float {
-        val gap = (kotlin.math.abs(focusDepth - depth) - FOCUS_DEPTH_DEAD_BAND)
-            .coerceAtLeast(0.0f)
-        val availableFocusSpan = (
-            maxOf(focusDepth, 1.0f - focusDepth) - FOCUS_DEPTH_DEAD_BAND
-        ).coerceAtLeast(0.15f)
-        val normalizedGap = (gap / availableFocusSpan).coerceIn(0.0f, 1.0f)
-        val defocus = Math.pow(normalizedGap.toDouble(), 1.25).toFloat()
-        val apertureScale = (1.4f / maxOf(aperture, 0.7f)).coerceAtMost(1.25f)
-        return (defocus * maxBlurRadius * apertureScale)
-            .coerceIn(0.0f, maxBlurRadius)
-    }
-
     private fun isSyntheticHighlightDefocusedDepth(
         depth: Float,
         focusDepth: Float,
@@ -1218,9 +1319,6 @@ class OglBokehProcessor {
         centerY: Float,
         focusDepth: Float,
         cocPixels: Float,
-        aperture: Float,
-        maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
     ): Boolean {
         val originalPixelsPerWorkingX = originalWidth.toFloat() / width.toFloat()
         val originalPixelsPerWorkingY = originalHeight.toFloat() / height.toFloat()
@@ -1249,32 +1347,165 @@ class OglBokehProcessor {
                 if ((subjectMaskPixels[sampleY * width + sampleX].toInt() and 0xff) > 2) return false
                 val depthByte = refinedDepthPixels[sampleY * width + sampleX].toInt() and 0xff
                 val depth = depthByte / 255.0f
-                val eligibleDepth = if (bokehStyle == BokehStyle.BUBBLE) {
-                    computeCocPixels(
-                        depth = depth,
-                        focusDepth = focusDepth,
-                        aperture = aperture,
-                        maxBlurRadius = maxBlurRadius,
-                    ) >= MIN_BUBBLE_ANALYTIC_COC_PIXELS * 0.38f
-                } else {
-                    isSyntheticHighlightDefocusedDepth(depth, focusDepth)
-                }
+                val eligibleDepth = isSyntheticHighlightDefocusedDepth(depth, focusDepth)
                 if (!eligibleDepth) return false
             }
         }
         return true
     }
 
-    private fun resolveBokehRenderSize(width: Int, height: Int): Pair<Int, Int> {
+    private fun resolveBokehRenderSize(width: Int, height: Int, limit: Int): Pair<Int, Int> {
         val maxEdge = maxOf(width, height)
-        if (maxEdge <= MAX_BOKEH_RENDER_EDGE) return width to height
+        if (maxEdge <= limit) return width to height
         return if (width >= height) {
-            MAX_BOKEH_RENDER_EDGE to
-                (height.toLong() * MAX_BOKEH_RENDER_EDGE / width).toInt().coerceAtLeast(1)
+            limit to (height.toLong() * limit / width).toInt().coerceAtLeast(1)
         } else {
-            (width.toLong() * MAX_BOKEH_RENDER_EDGE / height).toInt().coerceAtLeast(1) to
-                MAX_BOKEH_RENDER_EDGE
+            (width.toLong() * limit / height).toInt().coerceAtLeast(1) to limit
         }
+    }
+
+    private fun bindPsf(program: Int, psf: OpticalPsfTable, cdf: Int, support: Int) {
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, cdf)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uPsfCdf"), 4)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE5)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, support)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uPsfSupport"), 5)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uPsfBinWidth"), psf.binWidthPixels)
+    }
+
+    private fun reconstructOpticalEmitters(
+        sourceTexture: Int, depthTexture: Int, width: Int, height: Int,
+        imageWidth: Int, imageHeight: Int, psf: OpticalPsfTable, checkCancellation: () -> Unit,
+    ): ReconstructedEmitters {
+        val started = SystemClock.elapsedRealtime()
+        val bytes = LargeDirectBuffer.allocate(width.toLong()*height*8, "optical source reconstruction")
+            ?: error("Unable to read optical light footprints")
+        try {
+            bytes.order(ByteOrder.nativeOrder())
+            fun read(texture: Int) {
+                GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D, texture, 0)
+                requireFramebufferComplete("optical footprint readback")
+                bytes.position(0)
+                GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, bytes)
+                requireNoGlError("optical footprint RGBA16F readback")
+            }
+            read(sourceTexture)
+            var peak=0f
+            val rgba = FloatArray(width*height*4) {
+                val value=Half.toFloat(bytes.getShort(it*2))
+                if (it%4 < 3) peak=maxOf(peak,value)
+                value
+            }
+            if (peak < OpticalEmitterReconstruction.MIN_PEAK) {
+                PLog.d(TAG,"Optical reconstructed sources: count=0, total=${SystemClock.elapsedRealtime()-started}ms")
+                return ReconstructedEmitters(sourceTexture,FloatArray(0))
+            }
+            read(depthTexture)
+            val depth = FloatArray(width*height) { Half.toFloat(bytes.getShort(it*8+4)) }
+            val scale = imageWidth.toFloat()/width
+            fun sourceDepth(source: OpticalEmitterReconstruction.Source): Float =
+                depth[source.y.toInt().coerceIn(0,height-1)*width+source.x.toInt().coerceIn(0,width-1)]
+            val reconstruction = OpticalEmitterReconstruction.reconstruct(width,height,rgba,
+                maxOf(width,height)/65f,checkCancellation,depth) { source ->
+                psf.supportAt(sourceDepth(source)) > source.radius*scale*1.2f
+            }
+            val instances = FloatArray(reconstruction.sources.size*7)
+            for ((i,source) in reconstruction.sources.withIndex()) {
+                val d = sourceDepth(source)
+                val offset=i*7
+                instances[offset]=source.x/width
+                instances[offset+1]=source.y/height
+                instances[offset+2]=d
+                val pixelArea=scale*(imageHeight.toFloat()/height)
+                instances[offset+3]=source.red*pixelArea
+                instances[offset+4]=source.green*pixelArea
+                instances[offset+5]=source.blue*pixelArea
+                instances[offset+6]=psf.supportAt(d)+scale
+            }
+            if (instances.isEmpty()) return ReconstructedEmitters(sourceTexture,instances).also {
+                PLog.d(TAG,"Optical reconstructed sources: count=0, total=${SystemClock.elapsedRealtime()-started}ms")
+            }
+            bytes.position(0)
+            for (i in 0 until width*height) {
+                val remove = reconstruction.ownership[i].toInt() != 0
+                for (channel in 0..3) bytes.putShort(Half.toHalf(
+                    if (remove && channel < 3) 0f else rgba[i*4+channel]))
+            }
+            bytes.position(0)
+            val remaining = createOpticalRenderTexture(width,height,mipmap=true)
+            GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D,0,0,0,width,height,GLES30.GL_RGBA,GLES30.GL_HALF_FLOAT,bytes)
+            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+            requireNoGlError("remaining finite optical sources")
+            PLog.d(TAG,"Optical reconstructed sources: count=${reconstruction.sources.size}, " +
+                "ownedPixels=${reconstruction.ownership.count { it.toInt()!=0 }}, " +
+                "total=${SystemClock.elapsedRealtime()-started}ms, flux=integrated-linear, profile=${psf.lens.profile.id}")
+            return ReconstructedEmitters(remaining,instances)
+        } finally {
+            LargeDirectBuffer.free(bytes)
+        }
+    }
+
+    private fun drawReconstructedEmitters(instances: FloatArray, psf: OpticalPsfTable,
+        cdfTexture: Int, supportTexture: Int, depthTexture: Int,
+        imageWidth: Int, imageHeight: Int, renderWidth: Int,
+        aperture: Float, focusDepth: Float, baseCocRadius: Float) {
+        if (instances.isEmpty()) return
+        val program=reconstructedEmitterProgramId
+        GLES30.glUseProgram(program)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D,depthTexture)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program,"uDepthTexture"),1)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(program,"uTexelSize"),1f/imageWidth,1f/imageHeight)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program,"uPixelFootprint"),imageWidth.toFloat()/renderWidth)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program,"uAperture"),aperture)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program,"uFocusDepth"),focusDepth)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program,"uBaseCocRadius"),baseCocRadius)
+        bindPsf(program,psf,cdfTexture,supportTexture)
+        val buffer=LargeDirectBuffer.allocate(instances.size.toLong()*4,"reconstructed optical instances")
+            ?: error("Unable to allocate optical instances")
+        val attributes=arrayOf("aCenter","aDepth","aFlux","aSupport").map { GLES30.glGetAttribLocation(program,it) }
+        try {
+            buffer.order(ByteOrder.nativeOrder()).asFloatBuffer().put(instances).position(0)
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER,highlightInstanceBufferId)
+            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER,instances.size*4,buffer,GLES30.GL_STREAM_DRAW)
+            val sizes=intArrayOf(2,1,3,1); val offsets=intArrayOf(0,2,3,6)
+            for (i in attributes.indices) {
+                GLES30.glEnableVertexAttribArray(attributes[i])
+                GLES30.glVertexAttribPointer(attributes[i],sizes[i],GLES30.GL_FLOAT,false,28,offsets[i]*4)
+                GLES30.glVertexAttribDivisor(attributes[i],1)
+            }
+            GLES30.glEnable(GLES30.GL_BLEND)
+            GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
+            GLES30.glBlendFunc(GLES30.GL_ONE,GLES30.GL_ONE)
+            GLES30.glDrawArraysInstanced(GLES30.GL_TRIANGLES,0,6,instances.size/7)
+            requireNoGlError("reconstructed pupil PSF instances")
+        } finally {
+            GLES30.glDisable(GLES30.GL_BLEND)
+            GLES30.glBlendFunc(GLES30.GL_ONE,GLES30.GL_ZERO)
+            for (attribute in attributes) {
+                GLES30.glVertexAttribDivisor(attribute,0)
+                GLES30.glDisableVertexAttribArray(attribute)
+            }
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER,0)
+            LargeDirectBuffer.free(buffer)
+        }
+    }
+
+    private fun createOpticalRenderTexture(width: Int, height: Int, mipmap: Boolean = false): Int {
+        val texture = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
+            width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER,
+            if (mipmap) GLES30.GL_LINEAR_MIPMAP_LINEAR else GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        return texture[0]
     }
 
     private fun requireFramebufferComplete(label: String) {
@@ -1289,7 +1520,7 @@ class OglBokehProcessor {
         check(error == GLES30.GL_NO_ERROR) { "$label: GL error 0x${error.toString(16)}" }
     }
 
-    private fun createScalarTexture(width: Int, height: Int, values: FloatArray, label: String): Int {
+    private fun createScalarTexture(width: Int, height: Int, values: FloatArray, label: String, fullPrecision: Boolean = false): Int {
         val byteCount = values.size.toLong() * Float.SIZE_BYTES
         val uploadBuffer = LargeDirectBuffer.allocate(byteCount, "OGL $label upload")
             ?: throw IllegalStateException("Unable to allocate $label upload buffer")
@@ -1303,14 +1534,14 @@ class OglBokehProcessor {
             GLES30.glGenTextures(1, texture, 0)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, if (fullPrecision) GLES30.GL_NEAREST else GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, if (fullPrecision) GLES30.GL_NEAREST else GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexImage2D(
                 GLES30.GL_TEXTURE_2D,
                 0,
-                GLES30.GL_R16F,
+                if (fullPrecision) GLES30.GL_R32F else GLES30.GL_R16F,
                 width,
                 height,
                 0,
@@ -1318,7 +1549,7 @@ class OglBokehProcessor {
                 GLES30.GL_FLOAT,
                 floatBuffer,
             )
-            requireNoGlError("$label R16F upload")
+            requireNoGlError("$label scalar upload (fullPrecision=$fullPrecision)")
             return texture[0]
         } catch (error: Throwable) {
             if (texture[0] != 0) GLES30.glDeleteTextures(1, texture, 0)
@@ -1547,37 +1778,44 @@ class OglBokehProcessor {
         check(maxOf(width, height) <= textureLimit[0]) { "Bokeh image exceeds GL_MAX_TEXTURE_SIZE" }
     }
 
-    private fun initGL(bokehStyle: BokehStyle) {
+    private fun initGL(bokehStyle: BokehStyle, colorTransfer: String?) {
         val naturalPsfStyle = bokehStyle != BokehStyle.DEFAULT
-        val soapBubbleStyle = bokehStyle == BokehStyle.BUBBLE
-        val needsCompactHighlights = bokehStyle != BokehStyle.NATURAL
+        val physicalBubble = bokehStyle == BokehStyle.BUBBLE
+        val needsCompactHighlights = bokehStyle == BokehStyle.DEFAULT
         val needsAnalyticOverlay = bokehStyle == BokehStyle.DEFAULT
         val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
         check(vs != 0) { "Bokeh vertex shader compilation failed" }
         try {
+            if (physicalBubble) emitterSeparationProgramId = createProgram(
+                vs, PhysicalBokehShaders.separateEmitters, "optical emitter separation",
+            )
+            if (physicalBubble) {
+                emitterErosionProgramId = createProgram(vs, PhysicalBokehShaders.emitterEnvironment(true), "emitter environment erosion")
+                emitterDilationProgramId = createProgram(vs, PhysicalBokehShaders.emitterEnvironment(false), "emitter environment dilation")
+            }
             if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && needsCompactHighlights) {
                 compactHighlightProgramId = createProgram(
                     vs,
-                    Shaders.compactBokehHighlightFragmentShader(soapBubbleStyle),
+                    Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
                     "compact bokeh highlight"
                 )
             }
             bokehProgramId = createProgram(
                 vs,
-                Shaders.psfSplatFragmentShader(
+                if (physicalBubble) PhysicalBokehShaders.gather else Shaders.psfSplatFragmentShader(
                     naturalStyle = naturalPsfStyle,
-                    soapBubbleStyle = soapBubbleStyle,
                 ),
                 "PSF bokeh",
             )
             bokehCompositeProgramId = createProgram(
                 vs,
-                Shaders.BOKEH_COMPOSITE_FRAGMENT_SHADER,
+                if (physicalBubble) PhysicalBokehShaders.composite(checkNotNull(colorTransfer))
+                    else Shaders.BOKEH_COMPOSITE_FRAGMENT_SHADER,
                 "bokeh composite",
             )
             jbuUpsampleProgramId = createProgram(vs, Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER, "depth upsample")
             depthRefineProgramId = createProgram(vs, Shaders.DEPTH_REFINE_FRAGMENT_SHADER, "depth refine")
-            layerColorProgramId = createProgram(vs, Shaders.BOKEH_LAYER_COLOR_FRAGMENT_SHADER, "premultiplied bokeh layer")
+            layerColorProgramId = createProgram(vs, Shaders.bokehLayerColorFragmentShader(colorTransfer), "premultiplied bokeh layer")
             if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && needsAnalyticOverlay) {
                 depthReadbackProgramId = createProgram(
                     vs,
@@ -1592,7 +1830,7 @@ class OglBokehProcessor {
         if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && needsAnalyticOverlay) {
             val analyticHighlightVertexShader = GlUtils.compileShader(
                 GLES30.GL_VERTEX_SHADER,
-                Shaders.analyticBokehHighlightVertexShader(soapBubbleStyle),
+                Shaders.ANALYTIC_BOKEH_HIGHLIGHT_VERTEX_SHADER,
             )
             check(analyticHighlightVertexShader != 0) {
                 "Analytic bokeh highlight vertex shader compilation failed"
@@ -1600,12 +1838,20 @@ class OglBokehProcessor {
             try {
                 analyticHighlightProgramId = createProgram(
                     analyticHighlightVertexShader,
-                    Shaders.analyticBokehHighlightFragmentShader(soapBubbleStyle),
+                    Shaders.ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
                     "analytic bokeh highlight",
                 )
             } finally {
                 GLES30.glDeleteShader(analyticHighlightVertexShader)
             }
+        }
+
+        if (physicalBubble) {
+            val emitterVertex = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER,PhysicalBokehShaders.emitterVertex)
+            check(emitterVertex != 0) { "Reconstructed emitter vertex shader compilation failed" }
+            try {
+                reconstructedEmitterProgramId=createProgram(emitterVertex,PhysicalBokehShaders.emitterFragment,"reconstructed optical sources")
+            } finally { GLES30.glDeleteShader(emitterVertex) }
         }
 
         vertexBufferId = GlUtils.createBuffer(Shaders.FULL_QUAD_VERTICES)
@@ -1668,6 +1914,10 @@ class OglBokehProcessor {
         if (depthRefineProgramId != 0) GLES30.glDeleteProgram(depthRefineProgramId)
         if (depthReadbackProgramId != 0) GLES30.glDeleteProgram(depthReadbackProgramId)
         if (layerColorProgramId != 0) GLES30.glDeleteProgram(layerColorProgramId)
+        if (emitterSeparationProgramId != 0) GLES30.glDeleteProgram(emitterSeparationProgramId)
+        if (emitterErosionProgramId != 0) GLES30.glDeleteProgram(emitterErosionProgramId)
+        if (emitterDilationProgramId != 0) GLES30.glDeleteProgram(emitterDilationProgramId)
+        if (reconstructedEmitterProgramId != 0) GLES30.glDeleteProgram(reconstructedEmitterProgramId)
         if (vertexBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(vertexBufferId), 0)
         if (texCoordBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(texCoordBufferId), 0)
         if (indexBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(indexBufferId), 0)
@@ -1692,6 +1942,10 @@ class OglBokehProcessor {
         depthRefineProgramId = 0
         depthReadbackProgramId = 0
         layerColorProgramId = 0
+        emitterSeparationProgramId = 0
+        emitterErosionProgramId = 0
+        emitterDilationProgramId = 0
+        reconstructedEmitterProgramId = 0
         vertexBufferId = 0
         texCoordBufferId = 0
         indexBufferId = 0
