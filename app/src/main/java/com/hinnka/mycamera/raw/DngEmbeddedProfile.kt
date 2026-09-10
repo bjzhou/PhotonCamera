@@ -212,11 +212,8 @@ internal object DngEmbeddedProfile {
         var colorMatrix1 = readMatrix(raf, ifd[TAG_COLOR_MATRIX1], byteOrder)
         val colorMatrix2 = readMatrix(raf, ifd[TAG_COLOR_MATRIX2], byteOrder)
 
-        if (colorMatrix1 == null && colorMatrix2 != null) {
-            colorMatrix1 = colorMatrix2
-            illuminant1 = illuminant2
-            cameraCalibration1 = cameraCalibration2
-        }
+        // Preserve illuminant slots. DngSdkColorSpec promotes a lone second slot
+        // together with its ForwardMatrix and CameraCalibration when needed.
 
         val forwardMatrix1 = readMatrix(raf, ifd[TAG_FORWARD_MATRIX1], byteOrder)
         val forwardMatrix2 = readMatrix(raf, ifd[TAG_FORWARD_MATRIX2], byteOrder)

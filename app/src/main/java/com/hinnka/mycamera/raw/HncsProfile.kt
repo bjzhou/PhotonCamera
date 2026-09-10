@@ -129,7 +129,8 @@ internal data class HncsRenderPlan(
     val sourceKey: String,
     val colorTemperature: Float?,
     val cameraToHncsMatrix: FloatArray,
-    val calibrationLuts: EquivalentCameraLuts,
+    /** Null means direct WB Camera RGB, without equivalent-camera conversion. */
+    val calibrationLuts: EquivalentCameraLuts?,
     val calibrationFirstWeight: Float,
     /**
      * CXMLLut v* calibration values after its value * 0.5 + 1.0 decryption.
@@ -208,7 +209,7 @@ class HncsProfileManager(private val context: Context) {
 
     internal fun resolveLutRenderPlan(
         colorTemperature: Float?,
-        calibrationLuts: EquivalentCameraLuts,
+        calibrationLuts: EquivalentCameraLuts?,
         calibrationFirstWeight: Float,
         filmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard
     ): HncsRenderPlan? {
@@ -231,7 +232,7 @@ class HncsProfileManager(private val context: Context) {
         val profile = parseProfile(info) ?: return null
         val cacheKey =
             "$profileId|${temperature.toInt()}|${filmCurveMode.persistedValue}|" +
-                "${calibrationLuts.key}|${calibrationFirstWeight.toBits()}"
+                "${calibrationLuts?.key ?: "direct-camera-rgb"}|${calibrationFirstWeight.toBits()}"
         synchronized(renderPlanCache) {
             renderPlanCache[cacheKey]?.let { return it }
         }
@@ -313,7 +314,7 @@ class HncsProfileManager(private val context: Context) {
         profile: ParsedHncsProfile,
         colorTemperature: Float?,
         cameraMatrix: FloatArray,
-        calibrationLuts: EquivalentCameraLuts,
+        calibrationLuts: EquivalentCameraLuts?,
         calibrationFirstWeight: Float,
         profileNeutralGains: FloatArray?,
         colorMap: HncsColorMap,

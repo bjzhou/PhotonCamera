@@ -17,7 +17,8 @@ internal data class LumixRenderPlan(
     val tables: LumixPhotoStyleTables,
     val highWeight: Float,
     val outputClip: Float,
-    val calibrationLuts: EquivalentCameraLuts,
+    /** Null means direct WB Camera RGB, without equivalent-camera conversion. */
+    val calibrationLuts: EquivalentCameraLuts?,
     val calibrationFirstWeight: Float = 1f,
 )
 
@@ -30,9 +31,10 @@ internal object LumixProfile {
         context: Context,
         style: LumixPhotoStyle,
         colorTemperature: Float?,
-        calibrationLuts: EquivalentCameraLuts,
+        calibrationLuts: EquivalentCameraLuts?,
         calibrationFirstWeight: Float,
         iso: Int = 100,
+        colorCorrectionCoordinate: Int? = null,
     ): LumixRenderPlan {
         val tables = cache.getOrPut(style) {
             val prefix = "lumix/s9/lut_${style.assetName}"
@@ -43,15 +45,11 @@ internal object LumixProfile {
                 readTable(context, "${prefix}_high.bin", 1, 33),
             )
         }
-        // LumixLab's default CCT coordinate is 256 at 3000 K and 512 at 5000 K.
-        // The cube interpolation clamps to those coordinates, not to 6500 K.
-        val temperature = colorTemperature?.takeIf { it.isFinite() && it > 0f } ?: 5000f
-        // Native stores the CCT coordinate as an integer before interpolating the tables.
-        val coordinate = (256f + (temperature.coerceIn(3000f, 5000f) - 3000f) * 256f / 2000f).toInt()
+        val highWeight = LumixColorTemperature.highWeight(colorTemperature, colorCorrectionCoordinate)
         val clip = if (style == LumixPhotoStyle.VLog) {
             when (iso) { 320 -> 3300; 400 -> 3400; 500 -> 3496; else -> 3596 }
         } else 4095
-        return LumixRenderPlan(tables, (coordinate - 256) / 256f, clip / 4095f, calibrationLuts, calibrationFirstWeight)
+        return LumixRenderPlan(tables, highWeight, clip / 4095f, calibrationLuts, calibrationFirstWeight)
     }
 
     private fun readTable(context: Context, path: String, kind: Int, dimension: Int): FloatArray {

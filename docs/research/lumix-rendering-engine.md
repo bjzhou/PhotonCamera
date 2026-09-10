@@ -4,7 +4,7 @@
 
 固定读取 LumixLab 的 S9 PSL1 资产，支持 16 种 PhotoStyle，默认 Standard。
 这是接入 PhotonCamera RAW 前端的颜色引擎：继续使用现有黑白电平归一、去马赛克、降噪、PGTM、编辑和导出。
-Lumix 只提供等效 Camera RGB 渲染，界面保留 S9 PhotoStyle 选择。内部设置值统一为 `Lumix`，不保留此前两种模式的名称兼容。
+Lumix 按源内嵌标定自动决定是否执行等效 Camera RGB 转换；没有可用源标定时，白平衡后的相机 RGB 直接进入 PhotoStyle。界面保留 S9 PhotoStyle 选择。内部设置值统一为 `Lumix`，不保留此前两种模式的名称兼容。
 
 S9 标定直接读取项目已有的 `app/src/main/assets/dcp/Panasonic DC-S9 Adobe Standard.dcp`，不是松下原厂 CCM。
 使用 ColorMatrix1/2、ForwardMatrix1/2、A/D65 光源、两组 90×30×1 HueSatMap，以及 36×8×16 LookTable。两种表的编码均为 linear；LookTable 的 ValueScale 全为 1，但色相和饱和度修正不可省略。不引入 Adobe ToneCurve；成像曲线来自 Lumix PhotoStyle。
@@ -18,9 +18,9 @@ Lumix 通过 `diag(1 / sourceCameraWhite) × inverse(M_source_photo) × p` 恢�
 
 对每个镜头的固定标定预生成两个端点转换，分别以 A、D65 为参考白点：
 
-`源 WB Camera RGB → 源固定 ColorMatrix 构建的 Camera-to-ProPhoto → 逆 S9 LookTable → 逆 S9 HueSatMap → 逆 S9 WB Camera-to-ProPhoto → S9 WB Camera RGB`。
+`源 WB Camera RGB → 源 CM/FM 构建的 Camera-to-ProPhoto → 逆 S9 LookTable → 逆 S9 HueSatMap → 逆 S9 WB Camera-to-ProPhoto → S9 WB Camera RGB`。
 
-源矩阵取 Camera2 静态 ColorMatrix1/2 和参考光源，或 DNG 原始 ColorMatrix/CameraCalibration/AnalogBalance。RW2 等原生 RAW 使用 LibRaw 固定 cam_xyz（XYZ→camera）；其方向依据 cam_xyz_coeff 的实际矩阵运算核实，不使用每张照片变化的合成 CCM 或 rgb_cam 生成缓存。
+源矩阵取 Camera2 静态 ColorMatrix1/2 和参考光源，或 RAW 内嵌的 ColorMatrix/ForwardMatrix/CameraCalibration/AnalogBalance。不再用 LibRaw 的 cam_xyz/rgb_cam 作为源标定或这条路径的前置颜色变换。仅 FM 且有独立 AsShotWhiteXY 时，在 WB 参考相机 RGB 域烘焙；仅 FM 但缺少独立白点时按用户要求保留旁路。详见 [双光源插值](raw-dual-illuminant-interpolation.md)。
 S9 Camera-to-ProPhoto 使用既有 DNG 颜色模型，结合 ColorMatrix、ForwardMatrix、CameraWhite 和 D50 PCS 白适应。所有矩阵输入输出均是线性值；HueSatMap 与 LookTable 在 ProPhoto HSV 中求逆，必须在逆 S9 矩阵之前、按正向相反的顺序执行。
 
 ## 预生成与持久化
@@ -29,7 +29,7 @@ S9 Camera-to-ProPhoto 使用既有 DNG 颜色模型，结合 ColorMatrix、Forwa
 - 线性相机输入域为 [0,16]；[0,1] 占前 48 个区间，按 `u = 0.75x` 线性分布；[1,16] 占后 16 个区间，按 `u = 0.75 + 0.25 log(x)/log(16)` 分布。这个 shaper 仅分配 LUT 采样精度，不是图像 sRGB 编码。
 - GPU 对两表分别做四面体插值，每张表读取四个顶点，再按照片白点的倒数色温权重混合。权重由烘焙端点的精确 xy 对应色温定义，端点会准确选中自身；与 PhotoStyle 原版 3000–5000 K 的低/高温权重独立。
 - 两端点逆变换的插值是此处采用的渲染模型，与“先插值正向 DCP 再求逆”不严格相等。运行时不再逐照片反解 DCP。
-- 缓存路径为应用 filesDir/lumix_calibration_luts。键包含源固定矩阵/参考光源/校准参数、S9 DCP 全内容 SHA、算法版本和采样域。修改曝光或白平衡不会生成新缓存；标定或算法变化才会生成。
+- 缓存路径为应用 filesDir/equivalent_camera_calibration_luts。键包含源 CM/FM/参考光源/校准参数、S9 DCP 全内容 SHA、算法版本和采样域。修改曝光或白平衡不会生成新缓存；标定或算法变化才会生成。
 - 磁盘格式校验版本、尺寸、精确长度和 payload SHA，原子写入；损坏会记录日志并重建。内存保留最近四组，GPU 纹理按键复用，切换风格不重新上传标定表。
 
 逆映射求解不包含 DCP 的破坏性输出裁剪，不能恢复已经剪掉的信息。表坐标在定义域边界取值，修正因子允许向高动态范围和超色域延伸；超出 Camera RGB=16 的部分使用齐次延伸。局部多解区域选择一个通过正向残差检查的输入，不宣称唯一反演。
@@ -38,11 +38,11 @@ Lumix 枚举的 `workingColorSpace=SRGB` 描述输出调整接口；**不描述 
 
 ## PhotoStyle 和输出
 
-1. shader 接收白平衡后的线性源相机 RGB，必须先采样上述两张标定 LUT，随后沿用宿主的标准曝光尺度。渲染计划要求有效标定；启动预热只编译 Lumix shader，不执行无标定显影。
+1. shader 接收白平衡后的线性源相机 RGB，有可用源标定时采样上述两张标定 LUT；无标定时直接跳过查表，随后沿用宿主的标准曝光尺度。启动预热只编译 Lumix shader。
 2. CineLike D2/V2 使用 S9 Standard→Cine 的 `−7/6 EV`，V-Log 使用 `−8/3 EV`，其他风格为零。
 3. 每通道查询原始 2048 点一维曲线，线性插值。
 4. 曲线输出作为非线性查表坐标；对 33³ RGB 表做八角点三线性插值，红色坐标变化最快。不能把这一层坐标称为统一的 sRGB 编码。
-5. 低/高色温表使用原版默认坐标：3000 K→256，5000 K→512，坐标先截为整数，再将高温权重限制到 `[0,1]`。原版其余两个温度折点已超出表间混合区间，不影响这个默认权重。
+5. 低/高色温表优先使用原始 RW2 的 0x011c 校正坐标，缺失时使用原版默认折线：3000 K→256，5000 K→512，6500 K→618，7500 K→725。double 坐标先夹到 uint16 范围并截为整数，再将高温权重 `(q-256)/256` 限制到 `[0,1]`。普通 TIFF/DNG 的同号 PlanarConfiguration 标签不参与此逻辑。
 6. 普通风格限制为 `[0,1]`；V-Log 依 ISO 使用原版 3300/3400/3496/3596 的 12-bit 上限；输出按 4095 量化。
 7. **不在 PhotoStyle 后直接再做 sRGB OETF**。先解码这些输出代码值，交给现有线性调整接口，最后由 RawSrgbPass 编码一次。中性设置下解码/编码抵消，保留 PhotoStyle 的输出代码值。
 
@@ -50,7 +50,7 @@ V-Log 选择保留平坦的代码值显示；这里的 sRGB 解码/编码是宿�
 
 ## 与原生 RAW 的边界
 
-当前从宿主的归一化、标准曝光相机 RGB 接入。LumixLab 的 packed RAW `pixelMaxVal/defaultGain`、原始拍摄 PhotoStyle 家族、绝对白平衡尺度、EXIF 专用色温校正坐标及 ISO tone correction 没有伪装成已移植参数。其 `colorspace==2` 的分段 RGB 差分校正也没有启用；该分支并不是一个标准的 AdobeRGB↔sRGB 矩阵。
+当前从宿主的归一化、标准曝光相机 RGB 接入。LumixLab 的 packed RAW `pixelMaxVal/defaultGain`、原始拍摄 PhotoStyle 家族、绝对白平衡尺度、IslZWBCalc 的完整 WB2Kelvin 模型及 ISO tone correction 没有伪装成已移植参数。其 `colorspace==2` 的分段 RGB 差分校正也没有启用；该分支并不是一个标准的 AdobeRGB↔sRGB 矩阵。
 需要进行原厂像素对照时，必须先固定这些前端条件以及 PGTM/降噪/锐化，不能用额外的亮度或颜色补偿掩盖差异。
 
 ## 验证

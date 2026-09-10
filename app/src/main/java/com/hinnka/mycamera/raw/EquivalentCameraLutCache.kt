@@ -44,7 +44,7 @@ internal class EquivalentCameraLutCache(private val target: EquivalentCameraTarg
     private val DCP_ASSET_PATH = target.assetPath
     private val CACHE_DIRECTORY = "equivalent_camera_calibration_luts"
     private val CACHE_EXTENSION = ".bin"
-    private val SCHEMA_VERSION = 1
+    private val SCHEMA_VERSION = 2
     private val MAGIC = 0x4c434c54 // LCLT
     private val SHA256_BYTES = 32
     private val HEADER_BYTES = 6 * Int.SIZE_BYTES + SHA256_BYTES
@@ -66,6 +66,25 @@ internal class EquivalentCameraLutCache(private val target: EquivalentCameraTarg
 
     private val lock = Any()
     @Volatile private var bundledProfileSha: String? = null
+    @Volatile private var bundledProfile: DcpProfile? = null
+
+    private fun targetProfile(context: Context): DcpProfile = bundledProfile ?: synchronized(lock) {
+        bundledProfile ?: run {
+            val info = requireNotNull(DcpManager(context).getAvailableDcps().firstOrNull {
+                it.isBuiltIn && it.filePath == DCP_ASSET_PATH
+            }) { "Bundled target DCP ${target.assetPath} is unavailable" }
+            requireNotNull(DcpProfileParser.resolveProfile(context, info)) {
+                "Unable to parse target DCP ${target.assetPath}"
+            }.also { bundledProfile = it }
+        }
+    }
+
+    /** Direct sensor input is interpreted in the target camera domain, including its WB/CCT. */
+    fun directCameraWhiteXy(context: Context, metadata: RawMetadata): FloatArray =
+        requireNotNull(DngSdkColorSpec.whiteXyForProfile(targetProfile(context), metadata)) {
+            "Unable to resolve target camera white from RAW white balance"
+        }
+
     private val memory = object : LinkedHashMap<String, EquivalentCameraLuts>(
         MAX_MEMORY_ENTRIES, 0.75f, true
     ) {
@@ -120,12 +139,7 @@ internal class EquivalentCameraLutCache(private val target: EquivalentCameraTarg
         size: Int,
     ): EquivalentCameraLuts {
         val sourceProfile = source.toDcpProfile()
-        val targetInfo = requireNotNull(DcpManager(context).getAvailableDcps().firstOrNull {
-            it.isBuiltIn && it.filePath == DCP_ASSET_PATH
-        }) { "Bundled target DCP ${target.assetPath} is unavailable" }
-        val targetProfile = requireNotNull(
-            DcpProfileParser.resolveProfile(context, targetInfo)
-        ) { "Unable to parse target DCP ${target.assetPath}" }
+        val targetProfile = targetProfile(context)
         require(targetProfile.hueSatDeltas1?.isValid == true &&
             targetProfile.hueSatDeltas2?.isValid == true && targetProfile.lookTable?.isValid == true) {
             "Bundled target camera DCP requires both HueSatMaps and its LookTable"
@@ -213,6 +227,8 @@ internal class EquivalentCameraLutCache(private val target: EquivalentCameraTarg
         digest.putInt(source.calibrationIlluminant2)
         digest.putFloatArray(source.colorMatrix1)
         digest.putFloatArray(source.colorMatrix2)
+        digest.putFloatArray(source.forwardMatrix1)
+        digest.putFloatArray(source.forwardMatrix2)
         digest.putFloatArray(source.analogBalance)
         digest.putFloatArray(source.cameraCalibration1)
         digest.putFloatArray(source.cameraCalibration2)
