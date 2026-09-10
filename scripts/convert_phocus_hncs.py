@@ -594,10 +594,10 @@ def main() -> int:
         parser.error(f"source directory does not exist: {source_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Runtime HNCS is paired exclusively with the X1D-50 DCP.
-    sources = [source_dir / "LUTTable51MP5.xml"]
+    # Runtime HNCS pairs this profile with the reference X2D II 100C RAW ColorMatrix.
+    sources = [source_dir / "LUTTable100MP3.xml"]
     if not sources[0].is_file():
-        parser.error(f"required 50c source is missing: {sources[0]}")
+        parser.error(f"required HNCS source is missing: {sources[0]}")
 
     for old_asset in output_dir.glob("*.hncs"):
         old_asset.unlink()

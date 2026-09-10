@@ -2400,6 +2400,12 @@ class RawDemosaicProcessor {
         val requestedColorEngine = rawRenderingEngine
         val hasDcpSelection = dcpRenderPlan != null || rawDcpId != null
         val profileWorkingColorSpace = ColorSpace.ProPhoto
+        val cameraColorMatchingEnabled = rawToneMappingParameters.colorMatchingEnabled(requestedColorEngine)
+        val targetCamera = when {
+            requestedColorEngine.isLumix -> EquivalentCameraTarget.LumixS9
+            requestedColorEngine.isHncs -> EquivalentCameraTarget.HasselbladX2DII100C
+            else -> null
+        }
         var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
         var embeddedDngProfiles: List<DngEmbeddedProfileEntry> = emptyList()
         var selectedEmbeddedDngProfile: DngEmbeddedProfileEntry? = null
@@ -2475,7 +2481,7 @@ class RawDemosaicProcessor {
             val importedMetadata = convertDngRawDataToMetadata(dngRawData, exposureBias, actualMetadata)
             // The TIFF reader can expose embedded standard calibration even when LibRaw
             // does not promote that IFD for a proprietary RAW. Keep the prepass and the
-            // equivalent LUT on the same embedded source, never a LibRaw table matrix.
+            // engine on the same embedded source, never a LibRaw table matrix.
             val calibratedMetadata = if (sourceCalibration?.isForwardOnly == true) {
                 // Do not inherit a previous camera/file's white point. FM cannot recover it
                 // from AsShotNeutral; native exports AsShotWhiteXY when it is present.
@@ -2520,27 +2526,6 @@ class RawDemosaicProcessor {
                 coreImagingTuning = processLocalCoreImagingTuning.normalized(),
             )
             actualRotation = if (dngRawData.rotation != 0) dngRawData.rotation else rotation
-            if ((requestedColorEngine.isLumix || requestedColorEngine.isHncs) &&
-                actualMetadata.cameraCalibration == null
-            ) {
-                val target = if (requestedColorEngine.isLumix) {
-                    EquivalentCameraTarget.LumixS9
-                } else {
-                    EquivalentCameraTarget.HasselbladX1D50
-                }
-                // Without source calibration, interpret sensor RGB directly as the target
-                // camera's RGB. Its DCP supplies white/CCT and, below, the reversible linear
-                // working-space bridge for shared metering/PGTM. No source calibration or
-                // inverse-DCP LUT is substituted for the missing embedded source profile.
-                val whiteXy = target.calibrationCache.directCameraWhiteXy(context, actualMetadata)
-                actualMetadata = actualMetadata.copy(
-                    whitePointXy = whiteXy,
-                    colorTemperature = DngSdkColorSpec.colorTemperatureForXy(whiteXy),
-                )
-                PLog.i(TAG, "RAW_CAMERA_CALIBRATION source=none engine=$requestedColorEngine " +
-                    "equivalent=disabled input=wb-camera-rgb cctSource=target-profile " +
-                    "librawMatrixFallback=disabled")
-            }
             embeddedDngRenderPlan = selectedEmbeddedDngProfile?.let { selectedProfile ->
                 // Keep the pre-existing matrix fallback for an unresolved FM-only source.
                 // In particular, a derived/fallback CCT must not silently activate its FM.
@@ -2556,8 +2541,29 @@ class RawDemosaicProcessor {
                     workingColorSpace = profileWorkingColorSpace
                 )
             }
-            onMetadata?.invoke(actualMetadata)
         }
+
+        val engineWhitePointXy = if (targetCamera != null && actualMetadata != null &&
+            (!cameraColorMatchingEnabled || actualMetadata.cameraCalibration == null)
+        ) {
+            // Original processing interprets the sensor as the target camera. The target
+            // calibration supplies its white/CCT and a reversible shared-space bridge.
+            val whiteXy = targetCamera.calibration.directCameraWhiteXy(context, actualMetadata)
+            // Keep calibrated source metadata intact so toggling back to matching never
+            // reuses the original-processing target white as the source illuminant.
+            if (actualMetadata.cameraCalibration == null) {
+                actualMetadata = actualMetadata.copy(
+                    whitePointXy = whiteXy,
+                    colorTemperature = DngSdkColorSpec.colorTemperatureForXy(whiteXy),
+                )
+            }
+            PLog.i(TAG, "RAW_CAMERA_CALIBRATION engine=$requestedColorEngine " +
+                "colorMatching=$cameraColorMatchingEnabled sourceCalibration=${actualMetadata.cameraCalibration != null} " +
+                "input=wb-camera-rgb cctSource=target-color-matrix librawMatrixFallback=disabled")
+            whiteXy
+        } else actualMetadata?.whitePointXy
+        val engineColorTemperature = engineWhitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
+        if (dngFile != null) onMetadata?.invoke(requireNotNull(actualMetadata))
 
         actualMetadata = actualMetadata?.withNoiseProfileSelection(
             ContentRepository.getInstance(context.applicationContext)
@@ -2617,17 +2623,12 @@ class RawDemosaicProcessor {
             null
         }
         val hncsRenderPlan = if (requestedColorEngine.isHncs) {
-            val calibration = EquivalentCameraTarget.HasselbladX1D50.calibrationCache
             val sourceCalibration = actualMetadata.cameraCalibration
-            check(dngFile != null || sourceCalibration != null) {
+            check(dngFile != null || sourceCalibration != null || !cameraColorMatchingEnabled) {
                 "HNCS requires fixed source ColorMatrix calibration for camera capture"
             }
             HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
-                colorTemperature = actualMetadata.colorTemperature,
-                calibrationLuts = sourceCalibration?.let { calibration.resolve(context, it) },
-                calibrationFirstWeight = if (sourceCalibration != null) calibration.firstWeight(
-                    requireNotNull(actualMetadata.whitePointXy) { "HNCS requires the source white point" },
-                ) else 1f,
+                colorTemperature = engineColorTemperature,
                 filmCurveMode = rawHncsFilmCurveMode,
             )
         } else null
@@ -2991,39 +2992,41 @@ class RawDemosaicProcessor {
             profileWorkingColorSpace,
             ColorSpace.SRGB,
         )
-        val sourceColorCorrectionMatrix = resolveLinearColorCorrectionMatrix(
-            metadata = actualMetadata,
-            dcpRenderPlan = activeDcpRenderPlan,
-        )
-        val directCameraInput = dngFile != null && actualMetadata.cameraCalibration == null &&
-            (colorEngine.isLumix || colorEngine.isHncs)
-        val directCameraColorTransform = if (directCameraInput) {
-            val target = if (colorEngine.isLumix) {
-                EquivalentCameraTarget.LumixS9
-            } else {
-                EquivalentCameraTarget.HasselbladX1D50
-            }
-            target.calibrationCache.directCameraColorTransform(
-                context, requireNotNull(actualMetadata.whitePointXy),
+        val directCameraInput = targetCamera != null &&
+            (!cameraColorMatchingEnabled || actualMetadata.cameraCalibration == null)
+        val sourceColorCorrectionMatrix = if (directCameraInput) {
+            EquivalentCameraCalibration.whiteBalanceTransform(actualMetadata)
+        } else if ((colorEngine.isLumix || colorEngine.isHncs) &&
+            actualMetadata.cameraCalibration != null
+        ) {
+            EquivalentCameraCalibration.sourceToProPhoto(actualMetadata)
+        } else {
+            resolveLinearColorCorrectionMatrix(
+                metadata = actualMetadata,
+                dcpRenderPlan = activeDcpRenderPlan,
             )
-        } else null
+        }
+        val targetCameraColorTransform = targetCamera?.calibration?.colorTransform(
+            context, requireNotNull(engineWhitePointXy) {
+                "Equivalent camera rendering requires the source white point"
+            },
+        )
         // Every shared consumer (ML AE, HDRNet, PGTM, tiled and continuous rendering)
         // requires actual linear ProPhoto. Native's WB-only matrix is not that space.
-        val linearColorCorrectionMatrix = directCameraColorTransform
-            ?.sensorToProPhoto(sourceColorCorrectionMatrix) ?: sourceColorCorrectionMatrix
-        val cameraInputTransform = if (directCameraColorTransform != null) {
-            directCameraColorTransform.proPhotoToWhiteBalancedCamera
-        } else if (colorEngine.isLumix || colorEngine.isHncs) {
-            EquivalentCameraCalibration.profileToCameraTransform(
-                actualMetadata, linearColorCorrectionMatrix,
+        val linearColorCorrectionMatrix = if (directCameraInput) {
+            requireNotNull(targetCameraColorTransform).sensorToProPhoto(
+                sourceColorCorrectionMatrix,
             )
-        } else {
-            computeWorkingToOutputTransform(profileWorkingColorSpace, engineWorkingColorSpace)
-        }
+        } else sourceColorCorrectionMatrix
+        // The shared prepass has already applied source calibration and white balance.
+        // Map ProPhoto straight to target WB RGB using its ColorMatrix at the scene white.
+        // This replaces source-matrix recovery and both inverse-DCP LUT lookups.
+        val cameraInputTransform = targetCameraColorTransform?.proPhotoToWhiteBalancedCamera
+            ?: computeWorkingToOutputTransform(profileWorkingColorSpace, engineWorkingColorSpace)
         val profileToEngineTransform = cameraInputTransform
-        if (directCameraColorTransform != null) {
-            PLog.i(TAG, "RAW_CAMERA_WORKING_SPACE engine=$colorEngine sourceCalibration=none " +
-                "bridge=target-dcp-linear sharedSpace=ProPhoto engineInput=wb-camera-rgb " +
+        if (directCameraInput) {
+            PLog.i(TAG, "RAW_CAMERA_WORKING_SPACE engine=$colorEngine input=direct-camera-rgb " +
+                "bridge=target-color-matrix sharedSpace=ProPhoto engineInput=wb-camera-rgb " +
                 "sensorToProfile=${linearColorCorrectionMatrix.contentToString()} " +
                 "profileToCamera=${cameraInputTransform.contentToString()} " +
                 "equivalent=disabled librawMatrixFallback=disabled")
@@ -3031,17 +3034,11 @@ class RawDemosaicProcessor {
         val lumixRenderPlan = if (colorEngine.isLumix) {
             check(profileWorkingColorSpace == ColorSpace.ProPhoto)
             val sourceCalibration = actualMetadata.cameraCalibration
-            check(dngFile != null || sourceCalibration != null) {
+            check(dngFile != null || sourceCalibration != null || !cameraColorMatchingEnabled) {
                 "Lumix requires fixed source ColorMatrix calibration for camera capture"
             }
             LumixProfile.createRenderPlan(
-                context, normalizedToneMappingParameters.lumixPhotoStyle, actualMetadata.colorTemperature,
-                calibrationLuts = sourceCalibration?.let {
-                    EquivalentCameraTarget.LumixS9.calibrationCache.resolve(context, it)
-                },
-                calibrationFirstWeight = if (sourceCalibration != null) EquivalentCameraTarget.LumixS9.calibrationCache.firstWeight(
-                    requireNotNull(actualMetadata.whitePointXy),
-                ) else 1f,
+                context, normalizedToneMappingParameters.lumixPhotoStyle, engineColorTemperature,
                 iso = actualMetadata.iso,
                 colorCorrectionCoordinate = lumixColorCorrectionCoordinate,
             )
@@ -3049,16 +3046,17 @@ class RawDemosaicProcessor {
         if (colorEngine.isLumix) {
             PLog.i(TAG, "Lumix S9 equivalent Camera RGB pipeline: style=${normalizedToneMappingParameters.lumixPhotoStyle} " +
                 "sourceWhite=${actualMetadata.whitePointXy?.contentToString()} " +
+                "engineWhite=${engineWhitePointXy?.contentToString()} " +
                 "profileSpace=$profileWorkingColorSpace profileToCamera=${cameraInputTransform.contentToString()} " +
-                "calibrationLut=${lumixRenderPlan?.calibrationLuts?.key?.take(12)} " +
-                "calibrationFirstWeight=${lumixRenderPlan?.calibrationFirstWeight} " +
+                "calibration=ColorMatrix target=${targetCamera?.assetPath} " +
+                "colorMatching=$cameraColorMatchingEnabled inputMode=${if (directCameraInput) "original" else "matched"} " +
                 "photoStyleCoordinateSource=${if (lumixColorCorrectionCoordinate != null) "rw2-0x011c" else "kelvin-polyline"} " +
                 "photoStyleCoordinate=${lumixRenderPlan?.colorCorrectionCoordinate} " +
                 "photoStyleHighWeight=${lumixRenderPlan?.highWeight} " +
                 "lutInput=shaped-camera-rgb output=display-code-values decoded-for-linear-output-pass")
         }
         // Headroom clipping uses the source sensor's actual gains and source CCM.
-        // Target RGB is already white balanced after the calibration LUT.
+        // Target RGB is already white balanced after the profile-to-camera matrix.
         val hncsCameraDomainGains = activeHncsCameraGains
         val linearCameraWhite = resolveLinearCameraWhite(
             metadata = actualMetadata,
@@ -3067,7 +3065,7 @@ class RawDemosaicProcessor {
         if (colorEngine.isHncs) {
             PLog.i(
                 TAG,
-                "HNCS pipeline: branch=X1D_equivalent_CbYCrY_LUT " +
+                "HNCS pipeline: branch=X2DII100C_equivalent_CbYCrY_LUT " +
                     "profile=${hncsRenderPlan?.profileId} intent=${hncsRenderPlan?.renderIntent} " +
                     "cct=${hncsRenderPlan?.colorTemperature} " +
                     "input=${if (dngFile != null) "DNG_FILE" else "MEMORY"} " +
@@ -3077,8 +3075,8 @@ class RawDemosaicProcessor {
                     "filmCurve=${rawHncsFilmCurveMode.persistedValue} " +
                     "source=${hncsRenderPlan?.sourceFile} " +
                     "profileSpace=$profileWorkingColorSpace " +
-                    "calibrationLut=${hncsRenderPlan?.calibrationLuts?.key?.take(12)} " +
-                    "calibrationFirstWeight=${hncsRenderPlan?.calibrationFirstWeight} " +
+                    "calibration=ColorMatrix target=${targetCamera?.assetPath} " +
+                    "colorMatching=$cameraColorMatchingEnabled inputMode=${if (directCameraInput) "original" else "matched"} " +
                     "gammaFilter=${hncsRenderPlan?.gamma?.filterEnabled}"
             )
         }

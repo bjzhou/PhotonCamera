@@ -345,6 +345,19 @@ fun RawRenderingEngineSettingsPanel(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (rawRenderingEngine.isHncs) {
+            RawSwitchSettingItem(
+                title = stringResource(R.string.settings_raw_camera_color_matching),
+                description = stringResource(R.string.settings_raw_camera_color_matching_description),
+                checked = rawToneMappingParameters.hncsColorMatchingEnabled,
+                onCheckedChange = { enabled ->
+                    onAdjustmentStart()
+                    onRawToneMappingParametersChange(
+                        rawToneMappingParameters.copy(hncsColorMatchingEnabled = enabled)
+                    )
+                    onAdjustmentEnd()
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
             RawChoiceSetting(
                 title = stringResource(R.string.settings_raw_hncs_film_curve),
                 description = stringResource(R.string.settings_raw_hncs_film_curve_description),
@@ -370,6 +383,19 @@ fun RawRenderingEngineSettingsPanel(
                 onSelectStyle = {
                     onAdjustmentStart()
                     onRawToneMappingParametersChange(rawToneMappingParameters.copy(lumixPhotoStyle = it))
+                    onAdjustmentEnd()
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            RawSwitchSettingItem(
+                title = stringResource(R.string.settings_raw_camera_color_matching),
+                description = stringResource(R.string.settings_raw_camera_color_matching_description),
+                checked = rawToneMappingParameters.lumixColorMatchingEnabled,
+                onCheckedChange = { enabled ->
+                    onAdjustmentStart()
+                    onRawToneMappingParametersChange(
+                        rawToneMappingParameters.copy(lumixColorMatchingEnabled = enabled)
+                    )
                     onAdjustmentEnd()
                 },
             )

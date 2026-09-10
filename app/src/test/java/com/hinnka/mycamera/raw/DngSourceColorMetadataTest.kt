@@ -42,8 +42,13 @@ class DngSourceColorMetadataTest {
         val resolved = DngSdkColorSpec.resolveSourceMetadata(source.toDcpProfile(),
             metadata().copy(whitePointXy = floatArrayOf(0.3457f, 0.3585f)), ColorSpace.ProPhoto)!!
         val neutralOutput = multiply(resolved.colorCorrectionMatrix, resolved.cameraWhite)
+        assertArrayEquals(resolved.colorCorrectionMatrix,
+            EquivalentCameraCalibration.sourceToProPhoto(resolved), 0f)
         assertArrayEquals(floatArrayOf(1f, 1f, 1f), neutralOutput, 0.002f)
-        val recovery = EquivalentCameraCalibration.profileToCameraTransform(resolved, resolved.colorCorrectionMatrix)
+        val referenceToWorking = DngSdkColorSpec.computeReferenceCameraToWorkingMatrix(
+            source.toDcpProfile(), resolved.whitePointXy, ColorSpace.ProPhoto,
+        )!!
+        val recovery = DngSdkColorSpec.invertMatrix3x3(referenceToWorking)!!
         val referenceNeutral = multiply(recovery, neutralOutput)
         assertArrayEquals(floatArrayOf(1f, 1f, 1f), referenceNeutral, 0.000002f)
     }

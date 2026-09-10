@@ -1206,4 +1206,6 @@
     <string name="video_log_lut_bake_hint">所選 LUT 和調色效果將寫入錄製影片。</string>
     <string name="video_log_format">Log 格式</string>
     <string name="video_log_color_space_auto">色彩空間已根據 Log 格式自動匹配。</string>
+    <string name="settings_raw_camera_color_matching">配合相機色彩</string>
+    <string name="settings_raw_camera_color_matching_description">開啟時會根據拍攝相機調整色彩，關閉時使用原版處理。</string>
 </resources>

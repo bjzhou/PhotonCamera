@@ -3,40 +3,40 @@
   "profileCount": 1,
   "profiles": [
     {
-      "asset": "LUTTable51MP5.hncs",
+      "asset": "LUTTable100MP3.hncs",
       "cameraModels": [
-        "Hasselblad H5D-50c",
-        "Hasselblad H5D-50c MS",
-        "Hasselblad H5D-200c MS",
-        "Hasselblad H6D-50c",
-        "Hasselblad A6D-50c",
-        "Hasselblad X1D-50c"
+        "Hasselblad CFV 100C",
+        "Hasselblad X2D II 100C"
       ],
       "ccdTypes": [
-        "0x0f"
+        "0x15",
+        "0x16"
       ],
       "colorProfileIds": [
-        "0x050f"
+        "0x0615",
+        "0x0616"
       ],
-      "displayName": "H5D/H6D/A6D/X1D 50c",
-      "id": "LUTTable51MP5",
+      "displayName": "CFV 100C / X2D II 100C",
+      "id": "LUTTable100MP3",
       "intents": [
         "reproduction",
         "standard"
       ],
       "matrixTemperatures": [
-        2100,
-        2950,
-        5650
+        2400.0,
+        3050.0,
+        5550.0,
+        9100.0
       ],
-      "phocusVersion": "1.0",
+      "phocusVersion": "3.0",
       "renderable": true,
-      "sourceFile": "LUTTable51MP5.xml",
-      "sourceLength": 2035161,
-      "sourceSha256": "3dca88b945adc64e2972cae851d6d1a7f44176dc05d22951ee4c5070d4f9105d",
+      "sourceFile": "LUTTable100MP3.xml",
+      "sourceLength": 3115579,
+      "sourceSha256": "ecfb3cdb3b77ad05c8ac322bfda1b0b79658e292cc2546e4298018c702875b7f",
       "tableTemperatures": [
-        2950,
-        5650
+        3050.0,
+        5550.0,
+        9100.0
       ]
     }
   ],

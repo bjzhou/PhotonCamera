@@ -10,8 +10,16 @@ data class RawToneMappingParameters(
     val useProfileToneMap: Boolean = true,
     val useOppoMasterToneMap: Boolean = false,
     val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT,
-    val lumixPhotoStyle: LumixPhotoStyle = LumixPhotoStyle.Standard
+    val lumixPhotoStyle: LumixPhotoStyle = LumixPhotoStyle.Standard,
+    val lumixColorMatchingEnabled: Boolean = true,
+    val hncsColorMatchingEnabled: Boolean = true,
 ) {
+    fun colorMatchingEnabled(engine: RawRenderingEngine): Boolean = when {
+        engine.isLumix -> lumixColorMatchingEnabled
+        engine.isHncs -> hncsColorMatchingEnabled
+        else -> false
+    }
+
     val profileToneMapMode: RawProfileToneMapMode
         get() = when {
             useOppoMasterToneMap -> RawProfileToneMapMode.OppoMaster

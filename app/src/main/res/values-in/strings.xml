@@ -298,4 +298,6 @@
     <string name="video_log_lut_bake_hint">LUT dan penyesuaian warna diterapkan ke video.</string>
     <string name="video_log_format">Format Log</string>
     <string name="video_log_color_space_auto">Ruang warna disesuaikan otomatis dengan format Log.</string>
+    <string name="settings_raw_camera_color_matching">Sesuaikan warna kamera</string>
+    <string name="settings_raw_camera_color_matching_description">Saat aktif, warna disesuaikan dengan kamera yang digunakan; saat nonaktif, pemrosesan asli digunakan.</string>
 </resources>

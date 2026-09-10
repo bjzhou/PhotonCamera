@@ -1251,4 +1251,6 @@
     <string name="video_log_lut_bake_hint">Recording includes the selected LUT and color adjustments.</string>
     <string name="video_log_format">Log format</string>
     <string name="video_log_color_space_auto">Color space is matched automatically to the Log format.</string>
+    <string name="settings_raw_camera_color_matching">Match camera colors</string>
+    <string name="settings_raw_camera_color_matching_description">Adjust colors according to the camera used for the photo when enabled; use the original processing when disabled.</string>
 </resources>

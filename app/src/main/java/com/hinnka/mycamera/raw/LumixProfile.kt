@@ -17,9 +17,6 @@ internal data class LumixRenderPlan(
     val tables: LumixPhotoStyleTables,
     val highWeight: Float,
     val outputClip: Float,
-    /** Null means direct WB Camera RGB, without equivalent-camera conversion. */
-    val calibrationLuts: EquivalentCameraLuts?,
-    val calibrationFirstWeight: Float = 1f,
     val colorCorrectionCoordinate: Int,
 )
 
@@ -32,8 +29,6 @@ internal object LumixProfile {
         context: Context,
         style: LumixPhotoStyle,
         colorTemperature: Float?,
-        calibrationLuts: EquivalentCameraLuts?,
-        calibrationFirstWeight: Float,
         iso: Int = 100,
         colorCorrectionCoordinate: Int? = null,
     ): LumixRenderPlan {
@@ -51,7 +46,7 @@ internal object LumixProfile {
         val clip = if (style == LumixPhotoStyle.VLog) {
             when (iso) { 320 -> 3300; 400 -> 3400; 500 -> 3496; else -> 3596 }
         } else 4095
-        return LumixRenderPlan(tables, highWeight, clip / 4095f, calibrationLuts, calibrationFirstWeight, coordinate)
+        return LumixRenderPlan(tables, highWeight, clip / 4095f, coordinate)
     }
 
     private fun readTable(context: Context, path: String, kind: Int, dimension: Int): FloatArray {

@@ -187,6 +187,8 @@ fun PresetEditorScreen(
             rawWhitePointCorrection = rawWhitePointCorrection,
             rawOppoMasterToneMap = rawOppoMasterToneMap,
             rawLumixPhotoStyle = rawLumixPhotoStyle.assetName,
+            rawLumixColorMatchingEnabled = sourcePreset?.rawLumixColorMatchingEnabled ?: true,
+            rawHncsColorMatchingEnabled = sourcePreset?.rawHncsColorMatchingEnabled ?: true,
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
             rawDROMode = rawDROMode,

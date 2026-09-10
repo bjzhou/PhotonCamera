@@ -917,4 +917,6 @@
     <string name="video_log_lut_bake_hint">ใช้ LUT และการปรับสีกับวิดีโอที่บันทึก</string>
     <string name="video_log_format">รูปแบบ Log</string>
     <string name="video_log_color_space_auto">ตั้งค่าปริภูมิสีให้ตรงกับรูปแบบ Log โดยอัตโนมัติ</string>
+    <string name="settings_raw_camera_color_matching">ปรับสีให้ตรงกับกล้อง</string>
+    <string name="settings_raw_camera_color_matching_description">เมื่อเปิดใช้งาน ระบบจะปรับสีตามกล้องที่ใช้ถ่ายภาพ เมื่อปิดใช้งานจะใช้การประมวลผลเดิม</string>
 </resources>

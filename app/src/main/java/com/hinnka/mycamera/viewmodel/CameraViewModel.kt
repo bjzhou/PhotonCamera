@@ -212,6 +212,8 @@ private data class PresetMatchSnapshot(
     val rawWhitePointCorrection: Float,
     val rawOppoMasterToneMap: Boolean,
     val rawLumixPhotoStyle: LumixPhotoStyle,
+    val rawLumixColorMatchingEnabled: Boolean,
+    val rawHncsColorMatchingEnabled: Boolean,
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
     val rawDROMode: String,
@@ -249,6 +251,8 @@ private data class PresetMatchSnapshot(
             rawBlackPointCorrection == preset.rawBlackPointCorrection &&
             rawWhitePointCorrection == preset.rawWhitePointCorrection &&
             rawLumixPhotoStyle == LumixPhotoStyle.fromPersistedValue(preset.rawLumixPhotoStyle) &&
+            rawLumixColorMatchingEnabled == preset.rawLumixColorMatchingEnabled &&
+            rawHncsColorMatchingEnabled == preset.rawHncsColorMatchingEnabled &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
             rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
@@ -343,6 +347,14 @@ private data class PresetMatchSnapshot(
                 if (rawLumixPhotoStyle != LumixPhotoStyle.fromPersistedValue(preset.rawLumixPhotoStyle)) {
                     add("rawLumixPhotoStyle current=$rawLumixPhotoStyle preset=${preset.rawLumixPhotoStyle}")
                 }
+                if (rawLumixColorMatchingEnabled != preset.rawLumixColorMatchingEnabled ||
+                    rawHncsColorMatchingEnabled != preset.rawHncsColorMatchingEnabled
+                ) {
+                    add(
+                        "rawColorMatching current=$rawLumixColorMatchingEnabled/$rawHncsColorMatchingEnabled " +
+                            "preset=${preset.rawLumixColorMatchingEnabled}/${preset.rawHncsColorMatchingEnabled}"
+                    )
+                }
                 if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
                     add(
                         "rawOppoMasterToneMap current=$rawOppoMasterToneMap " +
@@ -434,6 +446,8 @@ private data class CameraFeatureUpdate(
     val rawProfileToneMapMode: SettingValue<RawProfileToneMapMode>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
     val rawLumixPhotoStyle: SettingValue<LumixPhotoStyle>? = null,
+    val rawLumixColorMatchingEnabled: SettingValue<Boolean>? = null,
+    val rawHncsColorMatchingEnabled: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
     val droMode: SettingValue<String>? = null,
@@ -576,6 +590,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawWhitePointCorrection = saved.rawWhitePointCorrection,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
                             rawLumixPhotoStyle = saved.rawLumixPhotoStyle,
+                            rawLumixColorMatchingEnabled = saved.rawLumixColorMatchingEnabled,
+                            rawHncsColorMatchingEnabled = saved.rawHncsColorMatchingEnabled,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
                             rawDROMode = saved.rawDROMode,
@@ -709,6 +725,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawLumixPhotoStyle = rawToneMappingParameters.value.lumixPhotoStyle.assetName,
+            rawLumixColorMatchingEnabled = rawToneMappingParameters.value.lumixColorMatchingEnabled,
+            rawHncsColorMatchingEnabled = rawToneMappingParameters.value.hncsColorMatchingEnabled,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
@@ -815,6 +833,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawWhitePointCorrection = SettingValue(this?.rawWhitePointCorrection ?: 0f),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
             rawLumixPhotoStyle = SettingValue(LumixPhotoStyle.fromPersistedValue(this?.rawLumixPhotoStyle)),
+            rawLumixColorMatchingEnabled = SettingValue(this?.rawLumixColorMatchingEnabled ?: true),
+            rawHncsColorMatchingEnabled = SettingValue(this?.rawHncsColorMatchingEnabled ?: true),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
             droMode = SettingValue(
@@ -950,7 +970,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val rawToneMappingUpdate = if (
             update.rawProfileToneMapMode != null ||
-            update.rawOppoMasterToneMap != null || update.rawLumixPhotoStyle != null
+            update.rawOppoMasterToneMap != null || update.rawLumixPhotoStyle != null ||
+            update.rawLumixColorMatchingEnabled != null || update.rawHncsColorMatchingEnabled != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
             update.rawProfileToneMapMode?.let {
@@ -961,6 +982,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             update.rawLumixPhotoStyle?.let {
                 toneMappingParameters = toneMappingParameters.copy(lumixPhotoStyle = it.value)
+            }
+            update.rawLumixColorMatchingEnabled?.let {
+                toneMappingParameters = toneMappingParameters.copy(lumixColorMatchingEnabled = it.value)
+            }
+            update.rawHncsColorMatchingEnabled?.let {
+                toneMappingParameters = toneMappingParameters.copy(hncsColorMatchingEnabled = it.value)
             }
             PreferenceUpdateValue(toneMappingParameters)
         } else {
@@ -1235,6 +1262,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawWhitePointCorrection = prefs.rawWhitePointCorrection,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
             rawLumixPhotoStyle = prefs.rawToneMappingParameters.lumixPhotoStyle,
+            rawLumixColorMatchingEnabled = prefs.rawToneMappingParameters.lumixColorMatchingEnabled,
+            rawHncsColorMatchingEnabled = prefs.rawToneMappingParameters.hncsColorMatchingEnabled,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,
             rawDROMode = prefs.droMode,

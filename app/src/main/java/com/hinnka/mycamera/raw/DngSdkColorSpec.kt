@@ -38,7 +38,7 @@ internal object DngSdkColorSpec {
     /**
      * Resolves source color metadata from the profile and as-shot gains stored in the DNG.
      * Replacing only the gains leaves Camera2's old white/CCT and lens calibration behind;
-     * equivalent-camera engines then use a different LUT solution after reopening the file.
+     * equivalent-camera engines then use a different color transform after reopening the file.
      * A selected creative DCP must never be supplied as the source profile here.
      */
     fun resolveSourceMetadata(
@@ -298,7 +298,7 @@ internal object DngSdkColorSpec {
         colorMatrix1 == null && colorMatrix2 == null &&
             (forwardMatrix1 != null || forwardMatrix2 != null)
 
-    /** Matrix for WB reference-camera RGB, the domain baked for ForwardMatrix-only sources. */
+    /** Matrix from WB reference-camera RGB for ForwardMatrix-only sources. */
     fun computeReferenceCameraToWorkingMatrix(
         profile: DcpProfile, whiteXy: FloatArray?, workingColorSpace: ColorSpace,
     ): FloatArray? {

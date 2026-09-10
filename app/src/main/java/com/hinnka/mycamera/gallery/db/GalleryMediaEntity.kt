@@ -63,6 +63,10 @@ data class GalleryMediaEntity(
     val rawColorEngine: String,
     @ColumnInfo(defaultValue = "'standard'")
     val rawLumixPhotoStyle: String = "standard",
+    @ColumnInfo(defaultValue = "1")
+    val rawLumixColorMatchingEnabled: Boolean = true,
+    @ColumnInfo(defaultValue = "1")
+    val rawHncsColorMatchingEnabled: Boolean = true,
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,
     val rawAgxToe: Float,

@@ -298,4 +298,6 @@
     <string name="video_log_lut_bake_hint">La LUT et les réglages de couleur sont appliqués à la vidéo.</string>
     <string name="video_log_format">Format Log</string>
     <string name="video_log_color_space_auto">L’espace colorimétrique est défini automatiquement selon le format Log.</string>
+    <string name="settings_raw_camera_color_matching">Adapter les couleurs de l’appareil</string>
+    <string name="settings_raw_camera_color_matching_description">Quand l’option est activée, les couleurs sont adaptées à l’appareil utilisé ; sinon, le traitement d’origine est conservé.</string>
 </resources>

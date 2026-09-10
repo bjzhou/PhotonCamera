@@ -1,12 +1,12 @@
 package com.hinnka.mycamera.raw
 
 /**
- * Linear working-space bridge for RAWs without usable embedded source calibration.
+ * Linear transform between white-balanced target-camera RGB and shared ProPhoto.
  *
- * Such RAWs are interpreted directly in the selected engine's target-camera RGB domain.
- * The target DCP defines a linear ProPhoto representation for shared metering and PGTM;
- * its inverse restores WB camera RGB before the engine's native colour transform. This
- * is a change of coordinates, not an equivalent-camera LUT or an Adobe profile render.
+ * Calibrated sources use the inverse after their own camera-to-ProPhoto prepass.
+ * RAWs without source calibration use both directions as a reversible bridge for
+ * shared metering and PGTM. The target uses only ColorMatrix, with scene-white
+ * interpolation and D50 adaptation; no ForwardMatrix or DCP rendering tables.
  */
 internal class DirectCameraColorTransform private constructor(
     val whiteBalancedCameraToProPhoto: FloatArray,
@@ -22,7 +22,7 @@ internal class DirectCameraColorTransform private constructor(
         fun fromProfile(profile: DcpProfile, whiteXy: FloatArray): DirectCameraColorTransform {
             val cameraToProPhoto = requireNotNull(
                 DngSdkColorSpec.computeWhiteBalancedCameraToWorkingMatrix(
-                    profile, whiteXy, ColorSpace.ProPhoto,
+                    EquivalentCameraCalibration.colorMatrixProfile(profile), whiteXy, ColorSpace.ProPhoto,
                 ),
             ) { "Direct camera rendering requires a valid target-camera working-space transform" }
             val proPhotoToCamera = requireNotNull(DngSdkColorSpec.invertMatrix3x3(cameraToProPhoto)) {

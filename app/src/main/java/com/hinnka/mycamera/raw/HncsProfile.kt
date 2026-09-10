@@ -129,9 +129,6 @@ internal data class HncsRenderPlan(
     val sourceKey: String,
     val colorTemperature: Float?,
     val cameraToHncsMatrix: FloatArray,
-    /** Null means direct WB Camera RGB, without equivalent-camera conversion. */
-    val calibrationLuts: EquivalentCameraLuts?,
-    val calibrationFirstWeight: Float,
     /**
      * CXMLLut v* calibration values after its value * 0.5 + 1.0 decryption.
      * They describe the profile's reference neutral at the selected CCT. They
@@ -195,7 +192,7 @@ private data class ParsedHncsProfile(
  * Loads only deterministic assets generated from Phocus Colormap XML.
  *
  * LUT and matrix interpolation are driven by the measured RAW white-point CCT.
- * The fixed 50c profile is paired with the X1D-50 inverse-DCP calibration.
+ * The fixed 100MP3 profile receives WB X2D II 100C RGB from the shared ColorMatrix transform.
  */
 class HncsProfileManager(private val context: Context) {
     private val standardFilmCurve: HncsFilmCurve by lazy {
@@ -209,8 +206,6 @@ class HncsProfileManager(private val context: Context) {
 
     internal fun resolveLutRenderPlan(
         colorTemperature: Float?,
-        calibrationLuts: EquivalentCameraLuts?,
-        calibrationFirstWeight: Float,
         filmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard
     ): HncsRenderPlan? {
         val profileId = DEFAULT_PROFILE_ID
@@ -231,8 +226,7 @@ class HncsProfileManager(private val context: Context) {
         }
         val profile = parseProfile(info) ?: return null
         val cacheKey =
-            "$profileId|${temperature.toInt()}|${filmCurveMode.persistedValue}|" +
-                "${calibrationLuts?.key ?: "direct-camera-rgb"}|${calibrationFirstWeight.toBits()}"
+            "$profileId|${temperature.toInt()}|${filmCurveMode.persistedValue}"
         synchronized(renderPlanCache) {
             renderPlanCache[cacheKey]?.let { return it }
         }
@@ -296,8 +290,6 @@ class HncsProfileManager(private val context: Context) {
             profile = profile,
             colorTemperature = temperature,
             cameraMatrix = cameraMatrix,
-            calibrationLuts = calibrationLuts,
-            calibrationFirstWeight = calibrationFirstWeight,
             profileNeutralGains = profileNeutralGains,
             colorMap = colorMap,
             renderIntent = renderIntent,
@@ -314,8 +306,6 @@ class HncsProfileManager(private val context: Context) {
         profile: ParsedHncsProfile,
         colorTemperature: Float?,
         cameraMatrix: FloatArray,
-        calibrationLuts: EquivalentCameraLuts?,
-        calibrationFirstWeight: Float,
         profileNeutralGains: FloatArray?,
         colorMap: HncsColorMap,
         renderIntent: HncsRenderIntent,
@@ -331,8 +321,6 @@ class HncsProfileManager(private val context: Context) {
             sourceKey = sourceKey,
             colorTemperature = colorTemperature,
             cameraToHncsMatrix = cameraMatrix,
-            calibrationLuts = calibrationLuts,
-            calibrationFirstWeight = calibrationFirstWeight,
             profileNeutralGains = profileNeutralGains,
             colorMap = colorMap,
             rgbToYccMatrix = HNCS_RGB_TO_YCC.copyOf(),
@@ -633,7 +621,7 @@ class HncsProfileManager(private val context: Context) {
             }
 
     companion object {
-        const val DEFAULT_PROFILE_ID = "LUTTable51MP5"
+        const val DEFAULT_PROFILE_ID = "LUTTable100MP3"
         private const val TAG = "HncsProfileManager"
         private const val ASSET_DIRECTORY = "hncs"
         private const val MANIFEST_ASSET = "$ASSET_DIRECTORY/manifest.json"

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.raw
 
 import kotlin.math.abs
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,10 +30,21 @@ class DirectCameraColorTransformTest {
         floatArrayOf(0.3127f, 0.3290f),
     )
     private val wb = floatArrayOf(2.1054688f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1.7070312f)
+    // IFD0 ColorMatrix1 in 4777366646.3fr (X2D II 100C), with no illuminant tags.
+    private val hncsProfile = RawCameraCalibration(
+        colorMatrix1 = floatArrayOf(
+            0.5950573751f, -0.146674752f, -0.03412952103f,
+            -0.5159296309f, 1.26306183f, 0.2826110949f,
+            -0.103825823f, 0.1675577691f, 0.6152086f,
+        ),
+        colorMatrix2 = null,
+        calibrationIlluminant1 = 0,
+        calibrationIlluminant2 = 0,
+    ).toDcpProfile()
 
     @Test
     fun sharedSpaceIsColorimetricAndPhotoStyleReceivesCameraRgbWithOneWhiteBalance() {
-        for (white in whites) {
+        for (profile in listOf(profile, hncsProfile)) for (white in whites) {
             val transform = DirectCameraColorTransform.fromProfile(profile, white)
             val sensorToProfile = transform.sensorToProPhoto(wb)
             val recovered = DngSdkColorSpec.multiplyMatrix3x3(
@@ -54,7 +66,7 @@ class DirectCameraColorTransformTest {
             floatArrayOf(-0.01f, 0.3f, 2f),
             floatArrayOf(8f, 16f, 4f),
         )
-        for (white in whites) {
+        for (profile in listOf(profile, hncsProfile)) for (white in whites) {
             val transform = DirectCameraColorTransform.fromProfile(profile, white)
             for (sample in samples) for (gain in listOf(1f, 0.25f, 3.5f)) {
                 val working = multiply(transform.sensorToProPhoto(wb), sample)
@@ -62,6 +74,67 @@ class DirectCameraColorTransformTest {
                     working.map { it * gain }.toFloatArray())
                 assertArrayEquals(multiply(wb, sample).map { it * gain }.toFloatArray(), camera, 0.00004f)
             }
+        }
+    }
+
+    @Test
+    fun targetColorMatrixIgnoresForwardAndCreativeDcpTables() {
+        val creativeProfile = profile.copy(
+            hueSatDeltas1 = DcpHueSatMap(1, 1, 1, floatArrayOf(45f, 0.5f, 2f)),
+            lookTable = DcpHueSatMap(1, 1, 1, floatArrayOf(-30f, 2f, 0.5f)),
+            baselineExposureOffset = 2f,
+        )
+        val matrixProfile = EquivalentCameraCalibration.colorMatrixProfile(creativeProfile)
+        assertNull(matrixProfile.forwardMatrix1)
+        assertNull(matrixProfile.forwardMatrix2)
+        assertNull(matrixProfile.hueSatDeltas1)
+        assertNull(matrixProfile.lookTable)
+        for (white in whites) {
+            val expected = DngSdkColorSpec.computeWhiteBalancedCameraToWorkingMatrix(
+                matrixProfile, white, ColorSpace.ProPhoto,
+            )!!
+            val transform = DirectCameraColorTransform.fromProfile(creativeProfile, white)
+            assertArrayEquals(expected, transform.whiteBalancedCameraToProPhoto, 0f)
+            val forwardBased = DngSdkColorSpec.computeWhiteBalancedCameraToWorkingMatrix(
+                profile, white, ColorSpace.ProPhoto,
+            )!!
+            assertTrue(expected.indices.any { abs(expected[it] - forwardBased[it]) > 0.01f })
+        }
+    }
+
+    @Test
+    fun matchingSourceAndTargetRecoverWhiteBalancedSensorRgbWithoutDcpLook() {
+        for (profile in listOf(profile, hncsProfile)) {
+            val metadata = RawMetadata(
+                width = 16,
+                height = 16,
+                cfaPattern = RawMetadata.CFA_RGGB,
+                blackLevel = FloatArray(4),
+                whiteLevel = 4095f,
+                whiteBalanceGains = floatArrayOf(wb[0], 1f, 1f, wb[8]),
+                colorCorrectionMatrix = FloatArray(9),
+                cameraCalibration = RawCameraCalibration.fromProfile(profile),
+            )
+            val white = DngSdkColorSpec.whiteXyForProfile(profile, metadata)!!
+            val cameraWhite = DngSdkColorSpec.computeCameraWhite(profile, metadata)!!
+            val sourceToProPhoto = EquivalentCameraCalibration.sourceToProPhoto(metadata)
+            val target = DirectCameraColorTransform.fromProfile(profile, white)
+            val combined = DngSdkColorSpec.multiplyMatrix3x3(
+                target.proPhotoToWhiteBalancedCamera, sourceToProPhoto,
+            )
+            val expected = FloatArray(9) { index ->
+                if (index / 3 == index % 3) 1f / cameraWhite[index / 3] else 0f
+            }
+            assertArrayEquals(expected, combined, 0.000003f)
+            // Original processing uses only neutral-normalized WB through the shared
+            // target-space bridge, even when this source also has a valid calibration.
+            val originalInput = EquivalentCameraCalibration.whiteBalanceTransform(
+                metadata.copy(cameraWhite = cameraWhite),
+            )
+            val original = DngSdkColorSpec.multiplyMatrix3x3(
+                target.proPhotoToWhiteBalancedCamera, target.sensorToProPhoto(originalInput),
+            )
+            assertArrayEquals(expected, original, 0.000003f)
         }
     }
 
