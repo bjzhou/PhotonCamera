@@ -471,7 +471,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private var bokehJob: Job? = null
 
     fun setComputationalAperture(value: Float?) {
-        if (editComputationalAperture.value == value) return
         editComputationalAperture.value = value
         updateBokehPhoto()
     }
@@ -535,76 +534,46 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return updated
     }
 
-    private val bokehUpdateMutex = Mutex()
-
     private fun updateBokehPhoto() {
-        val previousJob = bokehJob
-        previousJob?.cancel()
-        val photoData = getCurrentPhoto() ?: return
-        val aperture = editComputationalAperture.value
-        val focusPointX = editFocusPointX.value
-        val focusPointY = editFocusPointY.value
-        val bokehStyle = editBokehStyle.value
+        bokehJob?.cancel()
         bokehJob = viewModelScope.launch(Dispatchers.IO) {
-            // Finish ownership of the previous image/file write before this
-            // request can replace or delete it. Rendering checks cancellation.
-            bokehUpdateMutex.lock()
-            try {
-                ensureActive()
-                val context = getApplication<Application>()
-                val metadata = GalleryManager.loadMetadata(context, photoData.id) ?: photoData.metadata ?: MediaMetadata()
-                if (aperture == null || aperture <= 0) {
-                    GalleryManager.getBokehFile(context, photoData.id).takeIf { it.exists() }?.delete()
-                    GalleryManager.deleteDetailHdrFile(context, photoData.id)
-                    GalleryManager.updateThumbnail(context, photoData.id, contentRepository.photoProcessor, metadata = metadata)
-                    ensureActive()
-                    photoRefreshKeys[photoData.id] = System.currentTimeMillis()
-                    return@launch
-                }
-                var bitmap: Bitmap? = null
-                var bokeh: Bitmap? = null
-                try {
-                    val source = if (metadata.hasAiDenoisedBase) {
-                        GalleryManager.loadBitmap(context, Uri.fromFile(GalleryManager.getAiDenoiseFile(context, photoData.id)))
-                    } else {
-                        GalleryManager.loadOriginalBitmap(context, photoData.id)
-                    }
-                        ?: GalleryManager.loadBitmap(context, photoData.uri) ?: return@launch
-                    bitmap = source
-                    ensureActive()
-                    val rendered = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
-                        context,
-                        photoData.id,
-                        source,
-                        focusPointX,
-                        focusPointY,
-                        aperture,
-                        bokehStyle,
-                    )
-                    bokeh = rendered
-                    ensureActive()
-                    GalleryManager.saveBokehPhoto(context, photoData.id, rendered)
-                    GalleryManager.deleteDetailHdrFile(context, photoData.id)
-                    GalleryManager.updateThumbnail(
-                        context = context,
-                        photoId = photoData.id,
-                        photoProcessor = contentRepository.photoProcessor,
-                        metadata = metadata,
-                        inputBitmap = rendered,
-                    )
-                    ensureActive()
-                    photoRefreshKeys[photoData.id] = System.currentTimeMillis()
-                } finally {
-                    bokeh?.let { rendered ->
-                        if (rendered !== bitmap && !rendered.isRecycled) rendered.recycle()
-                    }
-                    bitmap?.let { sourceBitmap ->
-                        if (!sourceBitmap.isRecycled) sourceBitmap.recycle()
-                    }
-                }
-            } finally {
-                bokehUpdateMutex.unlock()
+            val context = getApplication<Application>()
+            val photoData = getCurrentPhoto() ?: return@launch
+            val aperture = editComputationalAperture.value
+            if (aperture == null || aperture <= 0) {
+                GalleryManager.getBokehFile(context, photoData.id).takeIf { it.exists() }?.delete()
+                GalleryManager.deleteDetailHdrFile(context, photoData.id)
+                return@launch
             }
+            val focusPointX = editFocusPointX.value
+            val focusPointY = editFocusPointY.value
+            val metadata = GalleryManager.loadMetadata(context, photoData.id) ?: photoData.metadata ?: MediaMetadata()
+            val bitmap = if (metadata.hasAiDenoisedBase) {
+                GalleryManager.loadBitmap(context, Uri.fromFile(GalleryManager.getAiDenoiseFile(context, photoData.id)))
+            } else {
+                GalleryManager.loadOriginalBitmap(context, photoData.id)
+            }
+                ?: GalleryManager.loadBitmap(context, photoData.uri) ?: return@launch
+            if (!isActive) return@launch
+            val bokeh = contentRepository.depthBokehProcessor.applyHighQualityBokeh(
+                context,
+                photoData.id,
+                bitmap,
+                focusPointX,
+                focusPointY,
+                aperture,
+                editBokehStyle.value,
+            )
+            if (!isActive) return@launch
+            GalleryManager.saveBokehPhoto(context, photoData.id, bokeh)
+            GalleryManager.deleteDetailHdrFile(context, photoData.id)
+            GalleryManager.updateThumbnail(
+                context = context,
+                photoId = photoData.id,
+                photoProcessor = contentRepository.photoProcessor,
+                metadata = metadata
+            )
+            photoRefreshKeys[photoData.id] = System.currentTimeMillis()
         }
     }
 

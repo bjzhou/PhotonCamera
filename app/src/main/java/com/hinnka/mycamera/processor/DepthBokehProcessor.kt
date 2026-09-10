@@ -9,11 +9,8 @@ import com.hinnka.mycamera.ml.RelativeDepthMapFile
 import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.ml.SharedSubjectMaskEstimator
 import com.hinnka.mycamera.utils.PLog
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.concurrent.CancellationException
 
 /**
  * Handles the post-processing of the Depth Map for high-quality optical bokeh.
@@ -47,9 +44,6 @@ class DepthBokehProcessor(context: Context) {
         aperture: Float,
         bokehStyle: BokehStyle = BokehStyle.DEFAULT,
     ): Bitmap = mutex.withLock {
-        val coroutineContext = currentCoroutineContext()
-        val checkCancellation = { coroutineContext.ensureActive() }
-        checkCancellation()
         if (aperture > 16.0f || aperture <= 0f) {
             return originalImage
         }
@@ -66,7 +60,6 @@ class DepthBokehProcessor(context: Context) {
                     null
                 }
             }
-            checkCancellation()
 
             // Existing photos may only have the former 8-bit PNG cache. Read it
             // once and migrate it without changing its already-quantized values.
@@ -87,7 +80,6 @@ class DepthBokehProcessor(context: Context) {
 
         if (depthMap == null) {
             depthMap = SharedDepthEstimator.estimateDepth(appContext, originalImage)
-            checkCancellation()
 
             if (depthMap != null && floatDepthFile != null) {
                 try {
@@ -108,7 +100,6 @@ class DepthBokehProcessor(context: Context) {
         var result: Bitmap? = null
         if (depthMap != null) {
             val subjectMask = SharedSubjectMaskEstimator.estimateMask(appContext, originalImage, depthMap)
-            checkCancellation()
             if (subjectMask == null) {
                 PLog.e(TAG, "U2NetP subject mask unavailable; bokeh was not applied")
                 return@withLock originalImage
@@ -134,17 +125,8 @@ class DepthBokehProcessor(context: Context) {
                 aperture,
                 bokehStyle,
                 protectSubject = focusMask >= 0.5f,
-                checkCancellation = checkCancellation,
             )
             result = bokehResult
-            try {
-                checkCancellation()
-            } catch (error: CancellationException) {
-                if (bokehResult != null && bokehResult !== originalImage && !bokehResult.isRecycled) {
-                    bokehResult.recycle()
-                }
-                throw error
-            }
         }
 
         return result ?: originalImage
