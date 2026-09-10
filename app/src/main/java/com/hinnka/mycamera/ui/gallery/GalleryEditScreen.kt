@@ -597,10 +597,7 @@ fun GalleryEditScreen(
     }
     val currentEditSourcePhoto = editSourcePhoto ?: currentPhoto
     val currentEditMetadata = currentEditSourcePhoto.metadata ?: viewModel.currentMediaMetadata
-    val currentEditMimeType = currentEditMetadata?.mimeType ?: currentEditSourcePhoto.mimeType
-    val isImportedDng = currentEditMetadata?.isImported == true &&
-        (currentEditMimeType?.contains("dng", ignoreCase = true) == true ||
-            currentEditSourcePhoto.displayName.endsWith(".dng", ignoreCase = true))
+    val isImportedRaw = currentEditMetadata?.isImported == true && isRaw
 
     val previewSourceWidth = previewBitmap?.width?.takeIf { it > 0 }
         ?: currentPhoto.width.takeIf { it > 0 }
@@ -1877,7 +1874,7 @@ fun GalleryEditScreen(
                                         onOpenBaselineLutSheet = {
                                             showRawBaselineLutSelectorSheet = true
                                         },
-                                        showAdaptiveExposureControl = isImportedDng,
+                                        showAdaptiveExposureControl = isImportedRaw,
                                         showDngMetadataControls = true,
                                         contentMode = RawEditPanelContentMode.FULL,
                                         modifier = Modifier.fillMaxWidth()

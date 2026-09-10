@@ -2529,8 +2529,9 @@ class RawDemosaicProcessor {
                     EquivalentCameraTarget.HasselbladX1D50
                 }
                 // Without source calibration, interpret sensor RGB directly as the target
-                // camera's RGB. Its DCP is used only to infer the style's CCT from as-shot WB;
-                // no source matrix or inverse-DCP LUT is applied to the pixels.
+                // camera's RGB. Its DCP supplies white/CCT and, below, the reversible linear
+                // working-space bridge for shared metering/PGTM. No source calibration or
+                // inverse-DCP LUT is substituted for the missing embedded source profile.
                 val whiteXy = target.calibrationCache.directCameraWhiteXy(context, actualMetadata)
                 actualMetadata = actualMetadata.copy(
                     whitePointXy = whiteXy,
@@ -2660,6 +2661,7 @@ class RawDemosaicProcessor {
         val regeneratePhotonPgtm = photonHdrRequested &&
             (forceRegeneratePhotonPgtm || !hasReusablePhotonPgtm)
         val photonPgtmRegenerationTrigger = when {
+            !photonHdrRequested -> "disabled"
             !regeneratePhotonPgtm -> "reuse-embedded"
             forceRegeneratePhotonPgtm -> "explicit-force"
             else -> "missing-photon-pgtm"
@@ -2906,6 +2908,15 @@ class RawDemosaicProcessor {
             selectedEmbeddedProfileIsActive -> selectedProfileGainTableMap
             else -> null
         }
+        PLog.i(TAG, "RAW_PHOTON_HDR requested=$photonHdrRequested " +
+            "regenerate=$regeneratePhotonPgtm trigger=$photonPgtmRegenerationTrigger " +
+            "reusablePhotonPgtm=$hasReusablePhotonPgtm " +
+            "activeMap=${when {
+                regeneratePhotonPgtm -> "generate-photon"
+                embeddedProfileGainTableMap == null -> "none"
+                photonHdrRequested -> "photon"
+                else -> "selected-native-profile"
+            }}")
         if (embeddedDngProfiles.isNotEmpty() || sourceProfileGainTableMap != null) {
             PLog.i(
                 TAG,
@@ -2980,15 +2991,28 @@ class RawDemosaicProcessor {
             profileWorkingColorSpace,
             ColorSpace.SRGB,
         )
-        val linearColorCorrectionMatrix = resolveLinearColorCorrectionMatrix(
+        val sourceColorCorrectionMatrix = resolveLinearColorCorrectionMatrix(
             metadata = actualMetadata,
             dcpRenderPlan = activeDcpRenderPlan,
         )
         val directCameraInput = dngFile != null && actualMetadata.cameraCalibration == null &&
             (colorEngine.isLumix || colorEngine.isHncs)
-        val cameraInputTransform = if (directCameraInput) {
-            // Native exported a WB-only prepass matrix; these values are already camera RGB.
-            floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        val directCameraColorTransform = if (directCameraInput) {
+            val target = if (colorEngine.isLumix) {
+                EquivalentCameraTarget.LumixS9
+            } else {
+                EquivalentCameraTarget.HasselbladX1D50
+            }
+            target.calibrationCache.directCameraColorTransform(
+                context, requireNotNull(actualMetadata.whitePointXy),
+            )
+        } else null
+        // Every shared consumer (ML AE, HDRNet, PGTM, tiled and continuous rendering)
+        // requires actual linear ProPhoto. Native's WB-only matrix is not that space.
+        val linearColorCorrectionMatrix = directCameraColorTransform
+            ?.sensorToProPhoto(sourceColorCorrectionMatrix) ?: sourceColorCorrectionMatrix
+        val cameraInputTransform = if (directCameraColorTransform != null) {
+            directCameraColorTransform.proPhotoToWhiteBalancedCamera
         } else if (colorEngine.isLumix || colorEngine.isHncs) {
             EquivalentCameraCalibration.profileToCameraTransform(
                 actualMetadata, linearColorCorrectionMatrix,
@@ -2997,6 +3021,13 @@ class RawDemosaicProcessor {
             computeWorkingToOutputTransform(profileWorkingColorSpace, engineWorkingColorSpace)
         }
         val profileToEngineTransform = cameraInputTransform
+        if (directCameraColorTransform != null) {
+            PLog.i(TAG, "RAW_CAMERA_WORKING_SPACE engine=$colorEngine sourceCalibration=none " +
+                "bridge=target-dcp-linear sharedSpace=ProPhoto engineInput=wb-camera-rgb " +
+                "sensorToProfile=${linearColorCorrectionMatrix.contentToString()} " +
+                "profileToCamera=${cameraInputTransform.contentToString()} " +
+                "equivalent=disabled librawMatrixFallback=disabled")
+        }
         val lumixRenderPlan = if (colorEngine.isLumix) {
             check(profileWorkingColorSpace == ColorSpace.ProPhoto)
             val sourceCalibration = actualMetadata.cameraCalibration
@@ -3021,6 +3052,9 @@ class RawDemosaicProcessor {
                 "profileSpace=$profileWorkingColorSpace profileToCamera=${cameraInputTransform.contentToString()} " +
                 "calibrationLut=${lumixRenderPlan?.calibrationLuts?.key?.take(12)} " +
                 "calibrationFirstWeight=${lumixRenderPlan?.calibrationFirstWeight} " +
+                "photoStyleCoordinateSource=${if (lumixColorCorrectionCoordinate != null) "rw2-0x011c" else "kelvin-polyline"} " +
+                "photoStyleCoordinate=${lumixRenderPlan?.colorCorrectionCoordinate} " +
+                "photoStyleHighWeight=${lumixRenderPlan?.highWeight} " +
                 "lutInput=shaped-camera-rgb output=display-code-values decoded-for-linear-output-pass")
         }
         // Headroom clipping uses the source sensor's actual gains and source CCM.

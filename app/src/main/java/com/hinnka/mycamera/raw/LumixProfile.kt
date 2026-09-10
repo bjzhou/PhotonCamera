@@ -20,6 +20,7 @@ internal data class LumixRenderPlan(
     /** Null means direct WB Camera RGB, without equivalent-camera conversion. */
     val calibrationLuts: EquivalentCameraLuts?,
     val calibrationFirstWeight: Float = 1f,
+    val colorCorrectionCoordinate: Int,
 )
 
 /** S9 is the fixed asset/calibration model, independently of the source RAW camera. */
@@ -45,11 +46,12 @@ internal object LumixProfile {
                 readTable(context, "${prefix}_high.bin", 1, 33),
             )
         }
-        val highWeight = LumixColorTemperature.highWeight(colorTemperature, colorCorrectionCoordinate)
+        val coordinate = colorCorrectionCoordinate ?: LumixColorTemperature.coordinateForKelvin(colorTemperature)
+        val highWeight = LumixColorTemperature.highWeight(colorTemperature, coordinate)
         val clip = if (style == LumixPhotoStyle.VLog) {
             when (iso) { 320 -> 3300; 400 -> 3400; 500 -> 3496; else -> 3596 }
         } else 4095
-        return LumixRenderPlan(tables, highWeight, clip / 4095f, calibrationLuts, calibrationFirstWeight)
+        return LumixRenderPlan(tables, highWeight, clip / 4095f, calibrationLuts, calibrationFirstWeight, coordinate)
     }
 
     private fun readTable(context: Context, path: String, kind: Int, dimension: Int): FloatArray {

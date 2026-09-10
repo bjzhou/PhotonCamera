@@ -16,11 +16,23 @@ S9 标定直接读取项目已有的 `app/src/main/assets/dcp/Panasonic DC-S9 Ad
 共享线性 pass 输出 `p = M_source_photo × r`，其中 `r` 是归一化线性源相机 RGB，`M_source_photo` 含当前白平衡与工作空间变换，可选 PGTM 在 ProPhoto 中计算。
 Lumix 通过 `diag(1 / sourceCameraWhite) × inverse(M_source_photo) × p` 恢复白平衡后的源相机 RGB。
 
+没有可用内嵌源标定的导入 RAW，native 只导出 `W = diag(WB)`，它的输出不能直接标成 ProPhoto。
+这条旁路沿用“源 RGB 直接解释为 S9 RGB”的约定，以项目现有 S9 DCP 的 CM/FM 和当前白点定义
+`B = S9 WB Camera RGB → linear ProPhoto`。共享前置矩阵为 `B × W`，PhotoStyle 入口矩阵为 `inverse(B)`：
+
+`归一化 sensor RGB → W → S9 WB Camera RGB → B → linear ProPhoto → 可选 PGTM → inverse(B) → S9 WB Camera RGB → PhotoStyle`。
+
+ML AE 的 `ProPhoto → linear sRGB`、HDRNet 输入及 PGTM 的生成/采样现在使用真正的工作空间值。
+关闭 PGTM 时，`inverse(B) × B × W = W`；开启 PGTM 时，其标量增益作用于工作空间，再返回相机域。
+该空间往返不夹掉负值或超范围值，白平衡只施加一次。它不改变 `cameraCalibration=null`，不生成等效 LUT，
+不使用 LibRaw 内置矩阵，也不施加 S9 DCP 的 HueSatMap、LookTable 或 ToneCurve；这是线性坐标变换，
+不是一次 Adobe DCP 渲染。最终颜色仍由原版 PhotoStyle 产生。HNCS 的同类旁路使用其既有目标 DCP 遵守相同契约。
+
 对每个镜头的固定标定预生成两个端点转换，分别以 A、D65 为参考白点：
 
 `源 WB Camera RGB → 源 CM/FM 构建的 Camera-to-ProPhoto → 逆 S9 LookTable → 逆 S9 HueSatMap → 逆 S9 WB Camera-to-ProPhoto → S9 WB Camera RGB`。
 
-源矩阵取 Camera2 静态 ColorMatrix1/2 和参考光源，或 RAW 内嵌的 ColorMatrix/ForwardMatrix/CameraCalibration/AnalogBalance。不再用 LibRaw 的 cam_xyz/rgb_cam 作为源标定或这条路径的前置颜色变换。仅 FM 且有独立 AsShotWhiteXY 时，在 WB 参考相机 RGB 域烘焙；仅 FM 但缺少独立白点时按用户要求保留旁路。详见 [双光源插值](raw-dual-illuminant-interpolation.md)。
+源矩阵取 Camera2 静态 ColorMatrix1/2 和参考光源，或 RAW 内嵌的 ColorMatrix/ForwardMatrix/CameraCalibration/AnalogBalance。不再用 LibRaw 的 cam_xyz/rgb_cam 作为源标定或这条路径的前置颜色变换。仅 FM 且有独立 AsShotWhiteXY 时，在 WB 参考相机 RGB 域烘焙；仅 FM 但缺少独立白点时按用户要求保留旁路。
 S9 Camera-to-ProPhoto 使用既有 DNG 颜色模型，结合 ColorMatrix、ForwardMatrix、CameraWhite 和 D50 PCS 白适应。所有矩阵输入输出均是线性值；HueSatMap 与 LookTable 在 ProPhoto HSV 中求逆，必须在逆 S9 矩阵之前、按正向相反的顺序执行。
 
 ## 预生成与持久化
@@ -47,6 +59,24 @@ Lumix 枚举的 `workingColorSpace=SRGB` 描述输出调整接口；**不描述 
 7. **不在 PhotoStyle 后直接再做 sRGB OETF**。先解码这些输出代码值，交给现有线性调整接口，最后由 RawSrgbPass 编码一次。中性设置下解码/编码抵消，保留 PhotoStyle 的输出代码值。
 
 V-Log 选择保留平坦的代码值显示；这里的 sRGB 解码/编码是宿主接口的运输约定，不意味着 V-Log 是 sRGB 传递函数，也没有把其原色转换为 sRGB。
+
+## 导入 RAW 的 HDRNet 与日志
+
+所有新导入 RAW（包括 RW2、DNG 及其他 LibRaw 格式）的 HDRNet PGTM 默认关闭，不继承拍摄全局的开启状态。
+RAW 编辑面板的“动态范围优化”开关显式开启后才生成或复用 Photon PGTM，关闭后不再使用它；开关按照片持久化。
+用户选择的非 Photon 原生 DNG profile 所含 PGTM 仍遵守其 profile 选择策略，不冒充 HDRNet。
+
+- `RAW_CAMERA_WORKING_SPACE`：打印共享空间、实际前置矩阵和返回 Camera RGB 的矩阵，以及旁路状态。
+- `RAW_PHOTON_HDR`：打印 requested、regenerate 与 activeMap。关闭且没有选择原生 PGTM 时应为 `false/false/none`。
+- Lumix 日志的 `photoStyleCoordinateSource`、`photoStyleCoordinate`、`photoStyleHighWeight` 专指 PhotoStyle 原版双表混合；
+  `calibrationFirstWeight` 则专指等效转换的端点 LUT，旁路时无效。
+
+重新核对原版 `libtechorfilter.so` 的 `GetCTempInfoForColorCorrection`（0x49f9e0）与
+`GetPhotStyleCorrectLUT`（0x2d8558）：RAW 坐标来自 IFD0 的 0x011c、SHORT、count=1，
+表内混合为 `(low × (512-q) + high × (q-256)) / 256`，两侧使用端点。
+生产读取代码对提供的 `5174318624.rw2` 得到 q=502，即 low=0.0390625、high=0.9609375。
+原版预混 LUT 节点、当前 shader 混合两次三线性采样，在数学上等价；不宣称 GPU 浮点舍入逐位一致。
+文件内部命名为 `original.dng` 不影响按 RW2 header magic=85 读取坐标。
 
 ## 与原生 RAW 的边界
 

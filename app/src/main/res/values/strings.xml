@@ -889,7 +889,7 @@
     <string name="settings_raw_profile_tone_map_embedded">Embedded</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
     <string name="settings_raw_photon_hdr">Dynamic Range Optimization</string>
-    <string name="settings_raw_photon_hdr_edit_description">Apply HDRNet dynamic range optimization to this imported DNG.</string>
+    <string name="settings_raw_photon_hdr_edit_description">Apply HDRNet dynamic range optimization to this imported RAW. Off by default.</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX Black Relative Exposure</string>
     <string name="settings_raw_agx_shoulder">AgX Shoulder</string>

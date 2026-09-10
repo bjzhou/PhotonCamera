@@ -24,7 +24,8 @@ class LumixColorTemperatureTest {
     @Test
     fun rw2CorrectionCoordinateOverridesKelvinButOrdinaryTiffTagDoesNot() {
         for (order in listOf(ByteOrder.LITTLE_ENDIAN, ByteOrder.BIG_ENDIAN)) {
-            val file = File.createTempFile("lumix-temperature", ".rw2")
+            // Imported RW2 bytes are stored as original.dng: dispatch must use the header.
+            val file = File.createTempFile("lumix-temperature", ".dng")
             try {
                 val bytes = ByteBuffer.allocate(26).order(order)
                 bytes.putShort(if (order == ByteOrder.LITTLE_ENDIAN) 0x4949 else 0x4d4d)
@@ -37,6 +38,28 @@ class LumixColorTemperatureTest {
                 file.writeBytes(bytes.array())
                 assertNull(LumixColorTemperature.readAsShotCoordinate(file))
             } finally { file.delete() }
+        }
+    }
+
+    @Test
+    fun s9AsShotWeightMatchesOriginalIntegerCoordinateMixAcrossTheWholeInterval() {
+        assertEquals(246f / 256f, LumixColorTemperature.highWeight(3000f, 502), 0f)
+        // Original native pre-mixes LUT nodes. Runtime trilinear interpolation is linear,
+        // so mixing the two interpolated values must have the same weights and direction.
+        val low = floatArrayOf(0.04f, 0.12f, 0.83f)
+        val high = floatArrayOf(0.71f, 0.31f, 0.26f)
+        for (coordinate in 0..768) {
+            val weight = LumixColorTemperature.highWeight(6500f, coordinate)
+            for (channel in low.indices) {
+                val expected = when {
+                    coordinate <= 256 -> low[channel]
+                    coordinate >= 512 -> high[channel]
+                    else -> (low[channel] * (512 - coordinate) +
+                        high[channel] * (coordinate - 256)) / 256f
+                }
+                val actual = low[channel] * (1f - weight) + high[channel] * weight
+                assertEquals(expected, actual, 0.00000012f)
+            }
         }
     }
 }

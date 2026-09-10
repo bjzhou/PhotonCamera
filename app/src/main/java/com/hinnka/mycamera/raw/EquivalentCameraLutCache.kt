@@ -85,6 +85,10 @@ internal class EquivalentCameraLutCache(private val target: EquivalentCameraTarg
             "Unable to resolve target camera white from RAW white balance"
         }
 
+    /** Uses the existing target DCP; does not bake or enable equivalent-camera LUTs. */
+    fun directCameraColorTransform(context: Context, whiteXy: FloatArray): DirectCameraColorTransform =
+        DirectCameraColorTransform.fromProfile(targetProfile(context), whiteXy)
+
     private val memory = object : LinkedHashMap<String, EquivalentCameraLuts>(
         MAX_MEMORY_ENTRIES, 0.75f, true
     ) {
