@@ -145,7 +145,13 @@ data class VideoConfig(
     val lensLockEnabled: Boolean = false,
     val whiteBalanceLockEnabled: Boolean = false
 ) {
-    fun resolveOutputSize(openGatePortraitAspectRatio: Float): Size {
+    fun resolveOutputSize(openGatePortraitAspectRatio: Float, cameraInputSize: Size): Size {
+        if (aspectRatio == VideoAspectRatio.OPEN_GATE) {
+            return Size(
+                minOf(cameraInputSize.width, cameraInputSize.height).align16(),
+                maxOf(cameraInputSize.width, cameraInputSize.height).align16()
+            )
+        }
         return resolution.resolveOutputSize(
             aspectRatio.getPortraitAspectRatio(openGatePortraitAspectRatio)
         )

@@ -50,6 +50,8 @@
     <string name="video_aspect_16_9">16:9</string>
     <string name="video_aspect_21_9">21:9</string>
     <string name="video_aspect_open_gate">片门全开</string>
+    <string name="video_resolution_max">最大</string>
+    <string name="video_open_gate_resolution_description">片门全开固定使用最大尺寸，无法选择分辨率。</string>
     <string name="video_log_off">关闭</string>
     <string name="video_codec_chip">编码格式</string>
     <string name="video_microphone_title">麦克风</string>

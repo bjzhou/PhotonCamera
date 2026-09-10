@@ -284,12 +284,15 @@ private fun VideoParameterCluster(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            val resLabel = when (videoConfig.resolution) {
+            val isOpenGate = videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
+            val resLabel = if (isOpenGate) {
+                stringResource(R.string.video_resolution_max)
+            } else when (videoConfig.resolution) {
                 VideoResolutionPreset.UHD_2160P -> "4K"
                 VideoResolutionPreset.FHD_1080P -> "1080p"
                 VideoResolutionPreset.HD_720P -> "720p"
             }
-            ParameterText(resLabel, onResolutionClick)
+            ParameterText(resLabel, onResolutionClick, enabled = !isOpenGate)
 
             ParameterDivider()
 
@@ -302,11 +305,12 @@ private fun VideoParameterCluster(
 private fun ParameterText(
     text: String,
     onClick: () -> Unit,
-    tint: Color = Color.White
+    tint: Color = Color.White,
+    enabled: Boolean = true
 ) {
     Text(
         text = text,
-        color = tint,
+        color = if (enabled) tint else tint.copy(alpha = 0.4f),
         style = MaterialTheme.typography.labelLarge.copy(
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
@@ -314,7 +318,7 @@ private fun ParameterText(
         ),
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 4.dp, vertical = 2.dp)
     )
 }
@@ -421,7 +425,11 @@ private fun RecordingHud(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = videoConfig.resolution.displayName,
+                text = if (videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
+                    stringResource(R.string.video_resolution_max)
+                } else {
+                    videoConfig.resolution.displayName
+                },
                 color = Color.White.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold

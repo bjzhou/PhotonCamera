@@ -45,6 +45,8 @@
     <string name="video_aspect_16_9">16:9</string>
     <string name="video_aspect_21_9">21:9</string>
     <string name="video_aspect_open_gate">เปิดกว้าง</string>
+    <string name="video_resolution_max">สูงสุด</string>
+    <string name="video_open_gate_resolution_description">โหมด Open Gate ใช้ความละเอียดสูงสุดและไม่สามารถเลือกความละเอียดได้</string>
     <string name="video_log_off">ปิด</string>
     <string name="video_codec_chip">รูปแบบการเข้ารหัส</string>
     <string name="video_microphone_title">ไมโครโฟน</string>

@@ -285,6 +285,15 @@ fun CameraTopSheet(
                         }
                     }
 
+                    if (videoAspectRatio == VideoAspectRatio.OPEN_GATE) {
+                        Text(
+                            text = stringResource(R.string.video_open_gate_resolution_description),
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(16.dp))
 
                     QuickSettingGrid(columns = 2, itemHeight = 40.dp) { itemModifier ->

@@ -6624,9 +6624,6 @@ class Camera2Controller(private val context: Context) {
         videoCaptureStatsWindowStartMs = 0L
         videoCaptureStatsFrames = 0
         videoCaptureStatsFirstTimestampNs = 0L
-        val outputSize = _state.value.videoConfig.resolveOutputSize(
-            _state.value.videoCapabilities.openGatePortraitAspectRatio
-        )
         val isFrontCamera = isCurrentCameraFrontFacing()
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val cameraInputSize = if (useEnhancedStabilization) {
@@ -6638,6 +6635,10 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.resolution
             ]
         } ?: _state.value.currentPreviewSize
+        val outputSize = _state.value.videoConfig.resolveOutputSize(
+            _state.value.videoCapabilities.openGatePortraitAspectRatio,
+            cameraInputSize
+        )
         val shouldFlipEncodedFrame = isFrontCamera && mirrorFrontCameraEnabled
         val logProfile = _state.value.videoConfig.logProfile
         val monitorOnly = logProfile.isEnabled &&

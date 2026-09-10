@@ -56,6 +56,8 @@
     <string name="video_aspect_16_9">16:9</string>
     <string name="video_aspect_21_9">21:9</string>
     <string name="video_aspect_open_gate">Open Gate</string>
+    <string name="video_resolution_max">MAX</string>
+    <string name="video_open_gate_resolution_description">Open Gate uses the maximum resolution. Resolution selection is disabled.</string>
     <string name="video_log_off">OFF</string>
     <string name="video_codec_chip">Encoding</string>
     <string name="video_microphone_title">Microphone</string>
