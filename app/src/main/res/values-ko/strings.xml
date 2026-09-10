@@ -293,4 +293,10 @@
     <string name="settings_language_system">시스템 설정 따르기</string>
     <string name="settings_video_nr_level_description">동영상 미리보기와 녹화의 하드웨어 노이즈 감소를 사진과 별도로 설정합니다.</string>
     <string name="settings_video_edge_level_description">동영상 미리보기와 녹화의 하드웨어 선명도를 사진과 별도로 설정합니다.</string>
+    <string name="video_log_lut_monitor_only">모니터링만</string>
+    <string name="video_log_lut_bake_in">영상에 적용</string>
+    <string name="video_log_lut_monitor_hint">미리보기에 LUT를 적용하고 영상은 Log로 기록합니다.</string>
+    <string name="video_log_lut_bake_hint">선택한 LUT와 색상 조정을 영상에 적용합니다.</string>
+    <string name="video_log_format">Log 형식</string>
+    <string name="video_log_color_space_auto">Log 형식에 맞는 색 공간이 자동으로 설정됩니다.</string>
 </resources>

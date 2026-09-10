@@ -67,6 +67,7 @@ fun CameraTopSheet(
     videoAspectRatio: VideoAspectRatio,
     onVideoAspectRatioChange: (VideoAspectRatio) -> Unit,
     videoLogProfile: VideoLogProfile,
+    availableVideoLogProfiles: List<VideoLogProfile>,
     onVideoLogProfileChange: (VideoLogProfile) -> Unit,
     videoBitrate: VideoBitratePreset,
     onVideoBitrateChange: (VideoBitratePreset) -> Unit,
@@ -343,7 +344,7 @@ fun CameraTopSheet(
                                             verticalArrangement = Arrangement.spacedBy(8.dp),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            VideoLogProfile.entries.forEach { profile ->
+                                            availableVideoLogProfiles.forEach { profile ->
                                                 val isSelected = videoLogProfile == profile
                                                 VideoOptionChip(
                                                     title = videoLogProfileLabel(profile),

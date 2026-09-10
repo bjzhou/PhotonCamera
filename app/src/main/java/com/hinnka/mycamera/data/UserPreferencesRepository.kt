@@ -52,6 +52,7 @@ import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoStabilizationMode
@@ -202,6 +203,7 @@ data class UserPreferences(
     val videoFps: VideoFpsPreset = VideoFpsPreset.FPS_30,
     val videoAspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
     val videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
+    val videoLogLutMode: VideoLogLutMode = VideoLogLutMode.MONITOR_ONLY,
     val videoBitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val videoAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
     val videoRecordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
@@ -452,6 +454,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_FPS = stringPreferencesKey("video_fps")
         private val VIDEO_ASPECT_RATIO = stringPreferencesKey("video_aspect_ratio")
         private val VIDEO_LOG_PROFILE = stringPreferencesKey("video_log_profile")
+        private val VIDEO_LOG_LUT_MODE = stringPreferencesKey("video_log_lut_mode")
         private val VIDEO_BITRATE = stringPreferencesKey("video_bitrate")
         private val VIDEO_AUDIO_INPUT_ID = stringPreferencesKey("video_audio_input_id")
         private val VIDEO_RECORDING_PATH = stringPreferencesKey("video_recording_path")
@@ -751,9 +754,10 @@ class UserPreferencesRepository(private val context: Context) {
                 videoAspectRatio = VideoAspectRatio.valueOf(
                     preferences[VIDEO_ASPECT_RATIO] ?: VideoAspectRatio.RATIO_16_9.name
                 ),
-                videoLogProfile = VideoLogProfile.valueOf(
-                    preferences[VIDEO_LOG_PROFILE] ?: VideoLogProfile.OFF.name
-                ),
+                videoLogProfile = VideoLogProfile.fromPersistedName(preferences[VIDEO_LOG_PROFILE]),
+                videoLogLutMode = VideoLogLutMode.entries.firstOrNull {
+                    it.name == preferences[VIDEO_LOG_LUT_MODE]
+                } ?: VideoLogLutMode.MONITOR_ONLY,
                 videoBitrate = VideoBitratePreset.valueOf(
                     preferences[VIDEO_BITRATE] ?: VideoBitratePreset.P1.name
                 ),
@@ -2114,6 +2118,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveVideoLogProfile(logProfile: VideoLogProfile) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_LOG_PROFILE] = logProfile.name
+        }
+    }
+
+    suspend fun saveVideoLogLutMode(mode: VideoLogLutMode) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_LOG_LUT_MODE] = mode.name
         }
     }
 

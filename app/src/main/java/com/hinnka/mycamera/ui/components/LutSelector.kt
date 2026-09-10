@@ -198,6 +198,7 @@ fun LutSelector(
     onEditClick: (() -> Unit)? = null,
     onManageClick: ((String) -> Unit)? = null,
     categoryOrder: List<String> = emptyList(),
+    headerContent: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberLazyListState()
@@ -307,6 +308,7 @@ fun LutSelector(
             modifier = modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            headerContent?.invoke()
             // 顶栏第 1 行：当前项名称（居左）+ 操作按钮（编辑 / 新建）与设置图标（居右）
             Row(
                 modifier = Modifier

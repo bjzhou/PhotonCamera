@@ -1243,4 +1243,10 @@
     <string name="settings_raw_lumix_style_cinelike_v2">Cinelike V2</string>
     <string name="settings_raw_lumix_style_709like">Like709</string>
     <string name="settings_raw_lumix_style_vlog">V-Log</string>
+    <string name="video_log_lut_monitor_only">Monitor only</string>
+    <string name="video_log_lut_bake_in">Bake into video</string>
+    <string name="video_log_lut_monitor_hint">Preview uses the LUT; recording preserves Log.</string>
+    <string name="video_log_lut_bake_hint">Recording includes the selected LUT and color adjustments.</string>
+    <string name="video_log_format">Log format</string>
+    <string name="video_log_color_space_auto">Color space is matched automatically to the Log format.</string>
 </resources>

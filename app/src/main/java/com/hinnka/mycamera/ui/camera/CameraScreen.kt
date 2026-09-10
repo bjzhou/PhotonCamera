@@ -1599,6 +1599,7 @@ fun CameraScreen(
             videoAspectRatio = state.videoConfig.aspectRatio,
             onVideoAspectRatioChange = { runPreviewTransition { viewModel.setVideoAspectRatio(it) } },
             videoLogProfile = state.videoConfig.logProfile,
+            availableVideoLogProfiles = state.videoCapabilities.availableLogProfiles,
             onVideoLogProfileChange = { viewModel.setVideoLogProfile(it) },
             videoBitrate = state.videoConfig.bitrate,
             onVideoBitrateChange = { viewModel.setVideoBitrate(it) },
@@ -1704,22 +1705,23 @@ fun CameraScreen(
             ) {
                 val allPresets by viewModel.allPresets.collectAsState()
                 val defaultPresetName = stringResource(R.string.preset_new_preset_default)
+                val isVideoLog = isVideoMode && state.videoConfig.logProfile.isEnabled
 
                 // LUT 选择器 (内嵌 Presets 列表与统一控制，无多余背景遮挡)
                 LutSelector(
-                    availableLuts = viewModel.availableLutList,
+                    availableLuts = viewModel.selectableLutList,
                     currentLutId = currentLutId,
                     thumbnail = viewModel.previewThumbnail,
                     onLutSelected = { viewModel.setLut(it) },
                     allPresets = allPresets,
-                    presetModeEnabled = true,
+                    presetModeEnabled = !isVideoLog,
                     activePresetId = activePresetId,
                     activePresetModified = activePresetModified,
-                    selectedMode = lutSelectorMode,
+                    selectedMode = if (isVideoLog) LutSelectorMode.Style else lutSelectorMode,
                     onModeSelected = { viewModel.setLutSelectorMode(it) },
                     availableFrames = viewModel.availableFrameList,
                     currentFrameId = viewModel.currentFrameId,
-                    onFrameSelected = { viewModel.setFrame(it) },
+                    onFrameSelected = if (isVideoLog) null else viewModel::setFrame,
                     onFrameManagementClick = {
                         activePanel = ActivePanel.NONE
                         onFrameManagementClick()
@@ -1755,6 +1757,16 @@ fun CameraScreen(
                         onFilterManagementClick(lutId)
                     },
                     categoryOrder = categoryOrder,
+                    headerContent = if (isVideoLog) {
+                        {
+                            VideoLogLutModeSelector(
+                                mode = state.videoConfig.logLutMode,
+                                enabled = !state.videoRecordingState.isRecording &&
+                                    !state.videoRecordingState.isProcessing,
+                                onModeSelected = viewModel::setVideoLogLutMode
+                            )
+                        }
+                    } else null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 6.dp, top = 10.dp, end = 6.dp)

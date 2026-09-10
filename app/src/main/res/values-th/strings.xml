@@ -909,4 +909,10 @@
     <string name="settings_language_system">ตามระบบ</string>
     <string name="settings_video_nr_level_description">ตั้งค่าการลดสัญญาณรบกวนด้วยฮาร์ดแวร์สำหรับการแสดงตัวอย่างและการบันทึกวิดีโอแยกจากภาพถ่าย</string>
     <string name="settings_video_edge_level_description">ตั้งค่าความคมชัดด้วยฮาร์ดแวร์สำหรับการแสดงตัวอย่างและการบันทึกวิดีโอแยกจากภาพถ่าย</string>
+    <string name="video_log_lut_monitor_only">ดูตัวอย่างเท่านั้น</string>
+    <string name="video_log_lut_bake_in">ใช้กับวิดีโอ</string>
+    <string name="video_log_lut_monitor_hint">ตัวอย่างใช้ LUT แต่บันทึกวิดีโอเป็น Log</string>
+    <string name="video_log_lut_bake_hint">ใช้ LUT และการปรับสีกับวิดีโอที่บันทึก</string>
+    <string name="video_log_format">รูปแบบ Log</string>
+    <string name="video_log_color_space_auto">ตั้งค่าปริภูมิสีให้ตรงกับรูปแบบ Log โดยอัตโนมัติ</string>
 </resources>

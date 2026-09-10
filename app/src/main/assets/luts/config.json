@@ -21,6 +21,66 @@
       "isVip": false
     },
     {
+      "id": "log_restore_apple_log2",
+      "name": {
+        "en": "Apple Log 2 Restore",
+        "zh": "Apple Log 2 还原"
+      },
+      "path": "log/log_restore_apple_log2.plut",
+      "category": "Log",
+      "isVip": false
+    },
+    {
+      "id": "log_restore_flog2",
+      "name": {
+        "en": "F-Log2 PROVIA Restore",
+        "zh": "F-Log2 PROVIA 还原"
+      },
+      "path": "log/log_restore_flog2.plut",
+      "category": "Log",
+      "isVip": false
+    },
+    {
+      "id": "log_restore_vlog",
+      "name": {
+        "en": "V-Log V-709 Restore",
+        "zh": "V-Log V-709 还原"
+      },
+      "path": "log/log_restore_vlog.plut",
+      "category": "Log",
+      "isVip": false
+    },
+    {
+      "id": "log_restore_logc4",
+      "name": {
+        "en": "LogC4 Restore",
+        "zh": "LogC4 还原"
+      },
+      "path": "log/log_restore_logc4.plut",
+      "category": "Log",
+      "isVip": false
+    },
+    {
+      "id": "log_restore_log3g10",
+      "name": {
+        "en": "Log3G10 Restore",
+        "zh": "Log3G10 还原"
+      },
+      "path": "log/log_restore_log3g10.plut",
+      "category": "Log",
+      "isVip": false
+    },
+    {
+      "id": "log_restore_llog",
+      "name": {
+        "en": "L-Log Restore",
+        "zh": "L-Log 还原"
+      },
+      "path": "log/log_restore_llog.plut",
+      "category": "Log",
+      "isVip": false
+    },
+    {
       "id": "leica_m9",
       "name": {
         "en": "M9 CCD",

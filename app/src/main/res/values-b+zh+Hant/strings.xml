@@ -1202,4 +1202,10 @@
     <string name="settings_raw_lumix_style_cinelike_v2">Cinelike V2</string>
     <string name="settings_raw_lumix_style_709like">Like709</string>
     <string name="settings_raw_lumix_style_vlog">V-Log</string>
+    <string name="video_log_lut_monitor_only">僅監看</string>
+    <string name="video_log_lut_bake_in">效果直出</string>
+    <string name="video_log_lut_monitor_hint">預覽套用 LUT，錄影保留 Log。</string>
+    <string name="video_log_lut_bake_hint">所選 LUT 和調色效果將寫入錄製影片。</string>
+    <string name="video_log_format">Log 格式</string>
+    <string name="video_log_color_space_auto">色彩空間已根據 Log 格式自動匹配。</string>
 </resources>

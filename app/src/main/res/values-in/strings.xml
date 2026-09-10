@@ -292,4 +292,10 @@
     <string name="settings_language_system">Ikuti sistem</string>
     <string name="settings_video_nr_level_description">Atur pengurangan noise perangkat keras untuk pratinjau dan perekaman video secara terpisah dari foto.</string>
     <string name="settings_video_edge_level_description">Atur penajaman perangkat keras untuk pratinjau dan perekaman video secara terpisah dari foto.</string>
+    <string name="video_log_lut_monitor_only">Pratinjau saja</string>
+    <string name="video_log_lut_bake_in">Terapkan ke video</string>
+    <string name="video_log_lut_monitor_hint">Pratinjau memakai LUT; rekaman tetap dalam Log.</string>
+    <string name="video_log_lut_bake_hint">LUT dan penyesuaian warna diterapkan ke video.</string>
+    <string name="video_log_format">Format Log</string>
+    <string name="video_log_color_space_auto">Ruang warna disesuaikan otomatis dengan format Log.</string>
 </resources>

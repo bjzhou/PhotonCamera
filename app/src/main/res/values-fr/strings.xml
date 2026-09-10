@@ -292,4 +292,10 @@
     <string name="settings_language_system">Langue du système</string>
     <string name="settings_video_nr_level_description">Régler la réduction du bruit matérielle pour l’aperçu et l’enregistrement vidéo indépendamment des photos.</string>
     <string name="settings_video_edge_level_description">Régler la netteté matérielle pour l’aperçu et l’enregistrement vidéo indépendamment des photos.</string>
+    <string name="video_log_lut_monitor_only">Aperçu uniquement</string>
+    <string name="video_log_lut_bake_in">Appliquer à la vidéo</string>
+    <string name="video_log_lut_monitor_hint">L’aperçu utilise la LUT ; la vidéo conserve le Log.</string>
+    <string name="video_log_lut_bake_hint">La LUT et les réglages de couleur sont appliqués à la vidéo.</string>
+    <string name="video_log_format">Format Log</string>
+    <string name="video_log_color_space_auto">L’espace colorimétrique est défini automatiquement selon le format Log.</string>
 </resources>

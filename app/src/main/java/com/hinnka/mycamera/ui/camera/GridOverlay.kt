@@ -52,7 +52,7 @@ fun GridOverlay(
                             rotate(90f, pivot = Offset.Zero)
                         }
                     }) {
-                        drawPath(path, Color.White.copy(alpha = 0.5f), style = Stroke(1.5f))
+                        drawPath(path, Color.White.copy(alpha = 0.5f), style = Stroke(3f))
                     }
                 }
             }
