@@ -11,6 +11,7 @@ import androidx.media3.effect.GlShaderProgram
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.video.VideoLogProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.nio.ByteBuffer
@@ -23,6 +24,7 @@ import java.nio.ByteOrder
 class VideoLutEffect(
     @Volatile var lutConfig: LutConfig?,
     recipeParams: ColorRecipeParams?,
+    val sourceLogProfile: VideoLogProfile = VideoLogProfile.OFF,
 ) : GlEffect {
     @Volatile
     var recipeParams: ColorRecipeParams? = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
@@ -41,7 +43,7 @@ class VideoLutEffect(
     }
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        PLog.d("VideoLutEffect", "toGlShaderProgram called, useHdr: $useHdr, initialLut: ${lutConfig?.title}, recipeEnabled: ${recipeParams != null}")
+        PLog.d("VideoLutEffect", "toGlShaderProgram called, useHdr: $useHdr, sourceLog: $sourceLogProfile, initialLut: ${lutConfig?.title}, recipeEnabled: ${recipeParams != null}")
         return VideoLutShaderProgram(context, useHdr, this).also {
             shaderProgram = it
         }
@@ -100,6 +102,7 @@ private class VideoLutShaderProgram(
             uniform int uLutCurve;
             uniform int uLutColorSpace;
             uniform int uInputColorSpace;
+            uniform int uSourceLogEnabled;
 
             // 色彩配方控制
             uniform int uColorRecipeEnabled;
@@ -536,6 +539,15 @@ private class VideoLutShaderProgram(
                     color = texture(uImageTexture, uvCoord);
                 }
 
+                if (uSourceLogEnabled != 0 && uLutEnabled != 0 && uLutIntensity > 0.0) {
+                    // Recorded Log is already in the matching LUT's input curve and gamut.
+                    // Resolve it to display RGB before applying display-referred adjustments.
+                    float scale = (uLutSize - 1.0) / uLutSize;
+                    float offset = 1.0 / (2.0 * uLutSize);
+                    vec3 lutColor = texture(uLutTexture, color.rgb * scale + offset).rgb;
+                    color.rgb = mix(color.rgb, lutColor, uLutIntensity);
+                }
+
                 if (uColorRecipeEnabled != 0) {
                     if (abs(uExposure) > 0.001) {
                         color.rgb = applyExposureInLinearSpace(color.rgb, uExposure);
@@ -653,7 +665,7 @@ private class VideoLutShaderProgram(
                     color.rgb = sanitizeColor(vec3(r, g, b));
                 }
 
-                if (uLutEnabled != 0 && uLutIntensity > 0.0) {
+                if (uSourceLogEnabled == 0 && uLutEnabled != 0 && uLutIntensity > 0.0) {
                     bool isP3 = (uInputColorSpace == 1);
                     vec3 linearInput = srgbToLinear(color.rgb);
                     vec3 lutLinearInput = prepareLutLinearInput(linearInput, uLutCurve);
@@ -781,6 +793,11 @@ private class VideoLutShaderProgram(
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         if (programId == 0) throw VideoFrameProcessingException("Video color program unavailable", presentationTimeUs)
         val currentLutConfig = effect.lutConfig
+        if (currentLutConfig != null &&
+            !effect.sourceLogProfile.matchesLut(currentLutConfig.curve, currentLutConfig.colorSpace)
+        ) {
+            throw VideoFrameProcessingException("LUT input does not match source Log profile ${effect.sourceLogProfile}", presentationTimeUs)
+        }
         val currentRecipeParams = effect.recipeParams
         val bloom = currentRecipeParams?.bloom ?: 0f
         val halation = currentRecipeParams?.redHalation ?: 0f
@@ -847,6 +864,10 @@ private class VideoLutShaderProgram(
         }
 
         GLES30.glUseProgram(programId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(programId, "uSourceLogEnabled"),
+            if (effect.sourceLogProfile.isEnabled) 1 else 0,
+        )
         logInput.bind(GLES30.glGetUniformLocation(programId, "uInverseAcr3Texture"), textureUnit = 4)
 
         // 绑定输入视频纹理 (GL_TEXTURE0)

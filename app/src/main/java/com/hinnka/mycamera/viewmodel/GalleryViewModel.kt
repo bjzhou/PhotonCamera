@@ -32,6 +32,8 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.lut.VideoExportOption
 import com.hinnka.mycamera.lut.exportVideoWithEffects
+import com.hinnka.mycamera.video.VideoColorMetadata
+import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.lut.getVideoExportOptions as resolveVideoExportOptions
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
@@ -294,6 +296,32 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
+    var editVideoSourceProfile: VideoLogProfile? by mutableStateOf(null)
+        private set
+    var editVideoProfileDetected by mutableStateOf(false)
+        private set
+    private var editVideoProfileOverride: VideoLogProfile? = null
+
+    val selectableEditLuts: List<LutInfo>
+        get() = availableLuts.filter {
+            (editVideoSourceProfile ?: VideoLogProfile.OFF).matchesLut(it.inputCurve, it.inputColorSpace)
+        }
+
+    fun selectEditVideoSourceProfile(profile: VideoLogProfile) {
+        if (editVideoProfileDetected || getCurrentPhoto()?.isVideo != true) return
+        editVideoProfileOverride = profile
+        editVideoSourceProfile = profile
+        clearIncompatibleVideoLut()
+    }
+
+    private fun clearIncompatibleVideoLut() {
+        val profile = editVideoSourceProfile ?: return
+        val selected = availableLuts.firstOrNull { it.id == editLutId.value } ?: return
+        if (!profile.matchesLut(selected.inputCurve, selected.inputColorSpace)) {
+            PLog.d(TAG, "Clearing LUT ${selected.id}: input does not match source $profile")
+            setEditLut(null)
+        }
+    }
 
     // 系统相册删除
     var systemDeletePendingIntent by mutableStateOf<android.app.PendingIntent?>(null)
@@ -2002,6 +2030,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun enterEditMode() {
         val targetPhoto = getCurrentPhoto() ?: return
+        editVideoSourceProfile = null
+        editVideoProfileDetected = false
+        editVideoProfileOverride = null
+        editLutConfig = null
 
         if (currentMediaMetadata == null || currentPhotoMetadataId != targetPhoto.id) {
             val context = getApplication<Application>()
@@ -2126,11 +2158,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        // 加载当前编辑的 LUT 配置
-        editLutId.value?.let { id ->
-            viewModelScope.launch {
-                editLutConfig = withContext(Dispatchers.IO) {
-                    contentRepository.lutManager.loadLut(id)
+        // Resolve the source from the file before exposing the video effect to the player.
+        val manualProfile = VideoColorMetadata.manualProfile(currentMediaMetadata?.customProperties)
+        viewModelScope.launch {
+            if (targetPhoto.isVideo) {
+                val detectedProfile = withContext(Dispatchers.IO) {
+                    VideoColorMetadata.readProfile(getApplication(), targetPhoto.sourceUri ?: targetPhoto.uri)
+                }
+                if (!isEditing || getCurrentPhoto()?.id != targetPhoto.id) return@launch
+                editVideoProfileDetected = detectedProfile != null
+                editVideoProfileOverride = manualProfile.takeIf { detectedProfile == null }
+                editVideoSourceProfile = detectedProfile ?: manualProfile ?: VideoLogProfile.OFF
+                clearIncompatibleVideoLut()
+            }
+            editLutId.value?.let { id ->
+                val config = withContext(Dispatchers.IO) { contentRepository.lutManager.loadLut(id) }
+                if (isEditing && getCurrentPhoto()?.id == targetPhoto.id && editLutId.value == id) {
+                    editLutConfig = config
                 }
             }
         }
@@ -2201,6 +2245,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             flushPendingEditLutRecipeSync()
         }
         isEditing = false
+        editVideoSourceProfile = null
+        editVideoProfileDetected = false
+        editVideoProfileOverride = null
         editSyncAdjustmentsToLut = false
         editLutId.value = null
         editLutConfig = null
@@ -2305,6 +2352,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置 LUT
      */
     fun setEditLut(lutId: String?) {
+        if (lutId != null && getCurrentPhoto()?.isVideo == true &&
+            (editVideoSourceProfile == null || selectableEditLuts.none { it.id == lutId })
+        ) return
         if (lutId == null) {
             editSyncAdjustmentsToLut = false
         }
@@ -2340,6 +2390,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun switchToNextLut(): LutInfo? {
+        val availableLuts = selectableEditLuts
         if (availableLuts.isEmpty()) return null
         val currentLut = editLutId.value
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
@@ -2350,6 +2401,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun switchToPreviousLut(): LutInfo? {
+        val availableLuts = selectableEditLuts
         if (availableLuts.isEmpty()) return null
         val currentLut = editLutId.value
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
@@ -2408,7 +2460,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 chromaNoiseReduction =
                     editChromaNoiseReduction.value.takeUnless { sourceIsRaw },
                 frameId = editFrameId.value,
-                customProperties = customProperties.toMap(),
+                customProperties = customProperties - VideoColorMetadata.OVERRIDE_KEY,
                 computationalAperture = editComputationalAperture.value,
                 computationalBokehStyle = editBokehStyle.value.persistedName,
                 focusPointX = editFocusPointX.value,
@@ -2482,7 +2534,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         chromaNoiseReduction =
                             metadata.chromaNoiseReduction.takeUnless { sourceIsRaw },
                         frameId = metadata.frameId,
-                        customProperties = metadata.customProperties.toMap(),
+                        customProperties = metadata.customProperties - VideoColorMetadata.OVERRIDE_KEY,
                         computationalAperture = metadata.computationalAperture,
                         computationalBokehStyle = metadata.computationalBokehStyle,
                         focusPointX = metadata.focusPointX,
@@ -2552,11 +2604,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             customProperties = settings.customProperties.toMap()
         )
 
-        settings.lutId?.let { lutId ->
+        clearIncompatibleVideoLut()
+        editLutId.value?.let { lutId ->
             viewModelScope.launch {
-                editLutConfig = withContext(Dispatchers.IO) {
+                val config = withContext(Dispatchers.IO) {
                     contentRepository.lutManager.loadLut(lutId)
                 }
+                if (editLutId.value == lutId) editLutConfig = config
             }
         } ?: run {
             editLutConfig = null
@@ -3635,8 +3689,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     current.copy(
                         lutId = editLutId.value,
                         frameId = editFrameId.value,
-                        customProperties = currentMediaMetadata?.customProperties
-                            ?: targetMetadata?.customProperties.orEmpty(),
+                        customProperties = (currentMediaMetadata?.customProperties
+                            ?: targetMetadata?.customProperties.orEmpty()).toMutableMap().apply {
+                            if (photo.isVideo) {
+                                remove(VideoColorMetadata.OVERRIDE_KEY)
+                                editVideoProfileOverride?.let { put(VideoColorMetadata.OVERRIDE_KEY, it.name) }
+                            }
+                        },
                         colorRecipeParams = editPhotoRecipeParams.value,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
@@ -3893,6 +3952,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     recipeParams = recipeParams,
                     exportOption = exportOption,
                     outputDisplayName = outputName,
+                    sourceLogProfileOverride = VideoColorMetadata.manualProfile(metadata?.customProperties),
                     onProgress = { progress ->
                         videoExportProgress = progress
                     }
@@ -3972,7 +4032,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return current.copy(
             lutId = settings.lutId,
             frameId = settings.frameId,
-            customProperties = settings.customProperties.toMap(),
+            customProperties = (settings.customProperties - VideoColorMetadata.OVERRIDE_KEY) +
+                current.customProperties.filterKeys { it == VideoColorMetadata.OVERRIDE_KEY },
             colorRecipeParams = settings.colorRecipeParams?.deepCopy(),
             sharpening = if (copyDetailProcessing && settings.sharpening != null) {
                 settings.sharpening

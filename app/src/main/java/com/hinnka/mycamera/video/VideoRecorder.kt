@@ -143,6 +143,7 @@ class VideoRecorder(
     private var muxer: MediaMuxer? = null
     private var videoTrackIndex = -1
     private var audioTrackIndex = -1
+    private var colorMetadataTrackIndex = -1
     private var muxerStarted = false
     private var audioEnabled = true
     private var pendingVideoSamples = mutableListOf<EncodedSample>()
@@ -603,6 +604,7 @@ class VideoRecorder(
         pendingVideoOutput = output
         muxer = MediaMuxer(output.descriptor.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4).apply {
             setOrientationHint(requestedOrientationHintDegrees)
+            colorMetadataTrackIndex = VideoColorMetadata.addTrack(this)
         }
     }
 
@@ -1232,6 +1234,15 @@ class VideoRecorder(
         pendingAudioSamples.clear()
     }
 
+    private fun writeColorMetadata(localMuxer: MediaMuxer) {
+        val profile = if (preparedEncoderColorConfig?.pipeline == VideoEncodedColorPipeline.CUSTOM_LOG) {
+            requestedColorConfig.logProfile
+        } else {
+            VideoLogProfile.OFF
+        }
+        VideoColorMetadata.writeSample(localMuxer, colorMetadataTrackIndex, profile)
+    }
+
     private fun maybeStartMuxerLocked() {
         if (muxerStarted) return
         val localMuxer = muxer ?: return
@@ -1244,6 +1255,7 @@ class VideoRecorder(
             audioTrackIndex = localMuxer.addTrack(audioFormat!!)
         }
         localMuxer.start()
+        writeColorMetadata(localMuxer)
         muxerStarted = true
         flushPendingSamplesLocked()
     }
@@ -1256,7 +1268,10 @@ class VideoRecorder(
                 maybeStartMuxerLocked()
                 if (!muxerStarted) {
                     videoTrackIndex = muxer?.addTrack(videoFormat!!) ?: -1
-                    muxer?.start()
+                    muxer?.let {
+                        it.start()
+                        writeColorMetadata(it)
+                    }
                     muxerStarted = true
                     flushPendingSamplesLocked()
                 }
@@ -1376,6 +1391,7 @@ class VideoRecorder(
             pendingAudioSamples = mutableListOf()
             videoTrackIndex = -1
             audioTrackIndex = -1
+            colorMetadataTrackIndex = -1
             muxerStarted = false
             videoFormat = null
             audioFormat = null

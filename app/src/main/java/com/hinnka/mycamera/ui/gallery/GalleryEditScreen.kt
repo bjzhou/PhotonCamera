@@ -106,6 +106,7 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.hinnka.mycamera.lut.VideoLutEffect
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
@@ -222,7 +223,8 @@ fun GalleryEditScreen(
     val editLutRecipeParams by viewModel.editLutRecipeParams.collectAsState()
     val editPhotoRecipeParams by viewModel.editPhotoRecipeParams.collectAsState()
     val editLutConfig = viewModel.editLutConfig
-    val availableLuts = viewModel.availableLuts
+    val availableLuts = viewModel.selectableEditLuts
+    val videoSourceProfile = viewModel.editVideoSourceProfile
     val lutNameOverlayState = rememberLutNameOverlayState()
     val showPaymentDialog = viewModel.showPaymentDialog
     val isPurchased by viewModel.isPurchased.collectAsState()
@@ -970,12 +972,17 @@ fun GalleryEditScreen(
 
                 // 显示预览
                 if (currentPhoto.isVideo) {
-                    VideoEditPlayer(
-                        photo = currentPhoto,
-                        lutConfig = editLutConfig,
-                        recipeParams = if (showOrigin) null else (editPhotoRecipeParams ?: editLutRecipeParams),
-                        modifier = previewMediaModifier
-                    )
+                    if (videoSourceProfile != null) {
+                        VideoEditPlayer(
+                            photo = currentPhoto,
+                            lutConfig = if (showOrigin) null else editLutConfig,
+                            recipeParams = if (showOrigin) null else (editPhotoRecipeParams ?: editLutRecipeParams),
+                            sourceLogProfile = videoSourceProfile,
+                            modifier = previewMediaModifier
+                        )
+                    } else {
+                        CircularProgressIndicator(color = Color.White)
+                    }
                 } else if (editTab == EDIT_TAB_CROP && cropPreviewBitmap != null) {
                     val geometryBaseWidth = currentEditSourcePhoto.metadata?.width?.takeIf { it > 0 }
                         ?: currentEditSourcePhoto.width.coerceAtLeast(1)
@@ -1387,12 +1394,19 @@ fun GalleryEditScreen(
                                     when (editTab) {
                                         EDIT_TAB_LUT -> {
                                             Spacer(modifier = Modifier.height(16.dp))
+                                            if (currentPhoto.isVideo && videoSourceProfile != null) {
+                                                VideoSourceLogSelector(
+                                                    profile = videoSourceProfile,
+                                                    detectedFromFile = viewModel.editVideoProfileDetected,
+                                                    onProfileSelected = viewModel::selectEditVideoSourceProfile,
+                                                )
+                                            }
                                             val effectiveRecipe =
                                                 editPhotoRecipeParams ?: editLutRecipeParams
                                             LutSelector(
-                                                availableLuts = viewModel.availableLuts,
+                                                availableLuts = availableLuts,
                                                 currentLutId = editLutId,
-                                                thumbnail = thumbnailBitmap,
+                                                thumbnail = thumbnailBitmap.takeUnless { videoSourceProfile?.isEnabled == true },
                                                 onLutSelected = { viewModel.setEditLut(it) },
                                                 onManageClick = { onFilterManagementClick(it) },
                                                 categoryOrder = categoryOrder,
@@ -2401,6 +2415,7 @@ private fun VideoEditPlayer(
     photo: MediaData,
     lutConfig: LutConfig?,
     recipeParams: ColorRecipeParams?,
+    sourceLogProfile: VideoLogProfile,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -2416,15 +2431,15 @@ private fun VideoEditPlayer(
         isPlayerActive = true
     }
 
-    val videoLutEffect = remember {
+    val videoLutEffect = remember(photo.id, mediaUri, sourceLogProfile) {
         PLog.d("VideoEditPlayer", "Instantiating new VideoLutEffect.")
-        VideoLutEffect(lutConfig, recipeParams)
+        VideoLutEffect(lutConfig, recipeParams, sourceLogProfile)
     }
     
-    val exoPlayer = remember(photo.id, mediaUri, isPlayerActive) {
+    val exoPlayer = remember(photo.id, mediaUri, isPlayerActive, videoLutEffect) {
         if (!isPlayerActive) return@remember null
         PLog.d("VideoEditPlayer", "Re-creating loopable ExoPlayer instance for video preview.")
-        ExoPlayer.Builder(context, VideoEditRenderersFactory(context)).build().apply {
+        ExoPlayer.Builder(context, VideoEditRenderersFactory(context, sourceLogProfile.isEnabled)).build().apply {
             setMediaItem(MediaItem.fromUri(mediaUri))
             repeatMode = Player.REPEAT_MODE_ONE
             setVideoEffects(listOf(videoLutEffect))

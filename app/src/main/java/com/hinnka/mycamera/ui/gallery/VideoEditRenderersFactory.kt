@@ -10,6 +10,8 @@ import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
 import androidx.media3.exoplayer.video.PlaybackVideoGraphWrapper
 import androidx.media3.exoplayer.video.VideoFrameReleaseControl
 import androidx.media3.exoplayer.video.VideoRendererEventListener
+import androidx.media3.effect.SingleInputVideoGraph
+import com.hinnka.mycamera.lut.LogVideoFrameProcessorFactory
 
 /**
  * Media3 renderer configuration used only by the video editor.
@@ -20,6 +22,7 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
 @UnstableApi
 internal class VideoEditRenderersFactory(
     context: Context,
+    private val sourceIsLog: Boolean = false,
 ) : DefaultRenderersFactory(context.applicationContext) {
 
     override fun buildVideoRenderers(
@@ -39,6 +42,7 @@ internal class VideoEditRenderersFactory(
             eventHandler = eventHandler,
             eventListener = eventListener,
             allowedVideoJoiningTimeMs = allowedVideoJoiningTimeMs,
+            sourceIsLog = sourceIsLog,
         )
     }
 }
@@ -51,6 +55,7 @@ private class ReplayableMediaCodecVideoRenderer(
     eventHandler: Handler,
     eventListener: VideoRendererEventListener,
     allowedVideoJoiningTimeMs: Long,
+    private val sourceIsLog: Boolean,
 ) : MediaCodecVideoRenderer(
     Builder(context.applicationContext)
         .setMediaCodecSelector(mediaCodecSelector)
@@ -67,6 +72,11 @@ private class ReplayableMediaCodecVideoRenderer(
         videoFrameReleaseControl: VideoFrameReleaseControl,
     ): PlaybackVideoGraphWrapper {
         return PlaybackVideoGraphWrapper.Builder(context, videoFrameReleaseControl)
+            .apply {
+                if (sourceIsLog) {
+                    setVideoGraphFactory(SingleInputVideoGraph.Factory(LogVideoFrameProcessorFactory(replayable = true)))
+                }
+            }
             .setEnablePlaylistMode(true)
             .setEnableReplayableCache(true)
             .build()

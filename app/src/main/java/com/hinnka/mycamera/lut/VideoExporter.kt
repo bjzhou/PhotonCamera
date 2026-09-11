@@ -7,6 +7,8 @@ import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
+import com.hinnka.mycamera.video.VideoColorMetadata
+import com.hinnka.mycamera.video.VideoLogProfile
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -169,6 +171,7 @@ suspend fun exportVideoWithEffects(
     exportOption: VideoExportOption,
     outputDisplayName: String? = null,
     onProgress: ((Int) -> Unit)? = null,
+    sourceLogProfileOverride: VideoLogProfile? = null,
 ): Uri? = withContext(Dispatchers.Main) {
     if (!canUseVideoTransformer("exportVideoWithEffects")) {
         return@withContext null
@@ -181,7 +184,12 @@ suspend fun exportVideoWithEffects(
     try {
         // Downscale before the LUT pass so high-resolution exports do not keep an 8K intermediate
         // texture alive when the user selected a smaller output.
-        val effect = VideoLutEffect(lutConfig, recipeParams)
+        val sourceLogProfile = withContext(Dispatchers.IO) {
+            VideoColorMetadata.resolveProfile(context, inputUri, sourceLogProfileOverride)
+        }
+        val effect = VideoLutEffect(lutConfig, recipeParams, sourceLogProfile)
+        val convertsLogToDisplay = sourceLogProfile.isEnabled && lutConfig != null &&
+            (recipeParams?.lutIntensity ?: 1f) > 0f
         val videoEffects = if (exportOption.resolution == VideoExportResolution.ORIGINAL) {
             listOf(effect)
         } else {
@@ -221,6 +229,11 @@ suspend fun exportVideoWithEffects(
             }
             .build()
         val transformer = Transformer.Builder(context)
+            .apply {
+                if (convertsLogToDisplay) {
+                    setVideoFrameProcessorFactory(LogVideoFrameProcessorFactory())
+                }
+            }
             .setVideoMimeType(exportOption.targetVideoMime)
             // The selected resolution is a contract with the user. Do not silently fall back to a
             // smaller encoder size after they explicitly chose 8K or 4K.
@@ -229,6 +242,11 @@ suspend fun exportVideoWithEffects(
                     .setEnableFallback(false)
                     .setRequestedVideoEncoderSettings(encoderSettings)
                     .build()
+                    .let { encoderFactory ->
+                        if (convertsLogToDisplay) {
+                            LogVideoEncoderFactory(encoderFactory)
+                        } else encoderFactory
+                    }
             )
             .build()
 
@@ -314,7 +332,12 @@ suspend fun applyEffectsToVideoFile(
     outputFile.parentFile?.mkdirs()
 
     try {
-        val effect = VideoLutEffect(lutConfig, recipeParams)
+        val sourceLogProfile = withContext(Dispatchers.IO) {
+            VideoColorMetadata.resolveProfile(context, inputUri)
+        }
+        val effect = VideoLutEffect(lutConfig, recipeParams, sourceLogProfile)
+        val convertsLogToDisplay = sourceLogProfile.isEnabled && lutConfig != null &&
+            (recipeParams?.lutIntensity ?: 1f) > 0f
 
         val mediaItem = MediaItem.fromUri(inputUri)
         val editedMediaItem = EditedMediaItem.Builder(mediaItem)
@@ -334,6 +357,10 @@ suspend fun applyEffectsToVideoFile(
                 }
                 PLog.d(TAG, "applyEffectsToVideoFile: Target video MIME: $targetMime")
                 builder.setVideoMimeType(targetMime)
+                if (convertsLogToDisplay) {
+                    builder.setVideoFrameProcessorFactory(LogVideoFrameProcessorFactory())
+                    builder.setEncoderFactory(LogVideoEncoderFactory(DefaultEncoderFactory.Builder(context).build()))
+                }
             }
             .build()
 
