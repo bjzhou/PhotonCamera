@@ -202,7 +202,11 @@
     <string name="settings_use_live_photo">ภาพเคลื่อนไหว (Live Photo)</string>
     <string name="settings_use_live_photo_description">บันทึกวิดีโอคลิปสั้นๆ พร้อมกับรูปภาพของคุณเพื่อให้ได้เอฟเฟกต์ภาพเคลื่อนไหวที่สมจริง</string>
     <string name="settings_develop_animation">พัฒนาแอนิเมชั่น</string>
-    <string name="settings_develop_animation_description">หลังจากถ่ายภาพ เอฟเฟกต์แอนิเมชั่นการพัฒนาภาพยนตร์จะปรากฏขึ้น</string>
+    <string name="settings_develop_animation_description">แสดงแอนิเมชั่นภาพถ่ายหลังจากถ่ายภาพ</string>
+    <string name="settings_develop_animation_style">รูปแบบแอนิเมชั่น</string>
+    <string name="settings_develop_animation_style_description">เลือกเอฟเฟกต์ล้างฟิล์มหรือพิมพ์ภาพพร้อมกรอบที่เลือก</string>
+    <string name="settings_develop_animation_style_film">การล้างฟิล์ม</string>
+    <string name="settings_develop_animation_style_instant_print">พิมพ์ภาพทันที</string>
     <string name="settings_section_frame">ลายน้ำกรอบ</string>
     <string name="settings_frame_style">สไตล์กรอบ</string>
     <string name="settings_frame_description">เพิ่มกรอบตกแต่งและลายน้ำให้กับรูปภาพ</string>

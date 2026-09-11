@@ -24,6 +24,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.hinnka.mycamera.data.DevelopAnimationStyle
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -35,6 +36,7 @@ data class CaptureAnimationSnapshot(
     val bitmap: ImageBitmap,
     val sourceBounds: Rect,
     val targetBounds: Rect,
+    val style: DevelopAnimationStyle = DevelopAnimationStyle.FILM,
     val id: Long = System.nanoTime()
 )
 
@@ -50,6 +52,10 @@ fun CaptureAnimationOverlay(
     modifier: Modifier = Modifier,
     onFinished: () -> Unit
 ) {
+    if (snapshot.style == DevelopAnimationStyle.INSTANT_PRINT) {
+        InstantPrintAnimationOverlay(snapshot, modifier, onFinished)
+        return
+    }
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
         val rootWidth = constraints.maxWidth.toFloat()
@@ -221,7 +227,7 @@ fun CaptureAnimationOverlay(
     }
 }
 
-private suspend fun animateToWithSkip(
+internal suspend fun animateToWithSkip(
     animatable: Animatable<Float, *>,
     targetValue: Float,
     animationSpec: androidx.compose.animation.core.AnimationSpec<Float>,
@@ -276,7 +282,7 @@ private fun calculateCenterBounds(
     )
 }
 
-private fun lerpRect(start: Rect, stop: Rect, fraction: Float): Rect {
+internal fun lerpRect(start: Rect, stop: Rect, fraction: Float): Rect {
     val t = fraction.coerceIn(0f, 1f)
     return Rect(
         left = lerp(start.left, stop.left, t),

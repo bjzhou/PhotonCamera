@@ -280,7 +280,11 @@
     <string name="settings_use_live_photo">動態相片 (Live Photo)</string>
     <string name="settings_use_live_photo_description">在拍照時同時錄制一段短影片，讓相片動起來。</string>
     <string name="settings_develop_animation">顯影動畫</string>
-    <string name="settings_develop_animation_description">拍攝后顯示膠片顯影動畫效果。</string>
+    <string name="settings_develop_animation_description">拍攝後顯示照片動畫。</string>
+    <string name="settings_develop_animation_style">動畫樣式</string>
+    <string name="settings_develop_animation_style_description">選擇膠片顯影，或帶有所選邊框的相紙打印效果。</string>
+    <string name="settings_develop_animation_style_film">膠片顯影</string>
+    <string name="settings_develop_animation_style_instant_print">相紙打印</string>
     <string name="settings_section_frame">邊框水印</string>
     <string name="settings_frame_style">邊框樣式</string>
     <string name="settings_frame_description">為拍攝的相片添加裝飾性邊框和水印</string>

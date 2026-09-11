@@ -97,6 +97,11 @@
     <string name="grid_style_golden_spiral">Espiral Áurea</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturar um pequeno clipe de vídeo junto com sua foto para um efeito dinâmico de Live Photo.</string>
+    <string name="settings_develop_animation_description">Mostrar uma animação de foto após a captura.</string>
+    <string name="settings_develop_animation_style">Estilo da animação</string>
+    <string name="settings_develop_animation_style_description">Escolha um efeito de revelação de filme ou impressão de foto com a moldura selecionada.</string>
+    <string name="settings_develop_animation_style_film">Revelação de filme</string>
+    <string name="settings_develop_animation_style_instant_print">Impressão instantânea</string>
     <string name="settings_section_frame">Marca d\'água de Moldura</string>
     <string name="settings_frame_style">Estilo de Moldura</string>
     <string name="settings_frame_description">Adicionar moldura decorativa e marca d\'água às fotos</string>

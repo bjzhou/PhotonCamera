@@ -87,6 +87,11 @@ enum class WidgetTheme {
     DARK
 }
 
+enum class DevelopAnimationStyle {
+    FILM,
+    INSTANT_PRINT
+}
+
 enum class CaptureButtonStyle {
     DEFAULT,
     COLOR,
@@ -189,6 +194,7 @@ data class UserPreferences(
     val useJpeg444Export: Boolean = false, // 是否使用 JPEG 4:4:4 色度采样导出
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val enableDevelopAnimation: Boolean = false, // 是否启用拍摄后的显影动画
+    val developAnimationStyle: DevelopAnimationStyle = DevelopAnimationStyle.FILM,
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
     val captureButtonStyle: CaptureButtonStyle = CaptureButtonStyle.DEFAULT,
     val captureButtonColor: Int = 0xFFFFFFFF.toInt(),
@@ -445,6 +451,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_JPEG_444_EXPORT = booleanPreferencesKey("use_jpeg_444_export")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
         private val ENABLE_DEVELOP_ANIMATION = booleanPreferencesKey("enable_develop_animation")
+        private val DEVELOP_ANIMATION_STYLE = stringPreferencesKey("develop_animation_style")
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
         private val CAPTURE_BUTTON_STYLE = stringPreferencesKey("capture_button_style")
         private val CAPTURE_BUTTON_COLOR = intPreferencesKey("capture_button_color")
@@ -750,6 +757,9 @@ class UserPreferencesRepository(private val context: Context) {
                 useJpeg444Export = useJpeg444Export,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: false,
+                developAnimationStyle = DevelopAnimationStyle.entries.firstOrNull {
+                    it.name == preferences[DEVELOP_ANIMATION_STYLE]
+                } ?: DevelopAnimationStyle.FILM,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
                 captureButtonStyle = CaptureButtonStyle.fromPersistedName(
                     preferences[CAPTURE_BUTTON_STYLE]
@@ -2020,6 +2030,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveEnableDevelopAnimation(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[ENABLE_DEVELOP_ANIMATION] = enabled
+        }
+    }
+
+    suspend fun saveDevelopAnimationStyle(style: DevelopAnimationStyle) {
+        context.dataStore.edit { preferences ->
+            preferences[DEVELOP_ANIMATION_STYLE] = style.name
         }
     }
 

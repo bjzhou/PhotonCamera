@@ -24,6 +24,8 @@ import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
 import com.hinnka.mycamera.data.CaptureButtonStyle
+import com.hinnka.mycamera.data.DevelopAnimationStyle
+import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.data.PreferenceUpdateValue
 import com.hinnka.mycamera.data.PresetPackageManager
 import com.hinnka.mycamera.data.UserPreferences
@@ -522,8 +524,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         get() = cameraController.realtimeStabilizationCoordinator.isGyroscopeAvailable
 
     // 照片保存完成事件
-    private val _imageSavedEvent = MutableSharedFlow<Unit>()
-    val imageSavedEvent: SharedFlow<Unit> = _imageSavedEvent.asSharedFlow()
+    private val _imageSavedEvent = MutableSharedFlow<String?>()
+    val imageSavedEvent: SharedFlow<String?> = _imageSavedEvent.asSharedFlow()
 
     private val _isInitialized = MutableStateFlow(false)
     val isInitialized = _isInitialized.asStateFlow()
@@ -1632,6 +1634,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val enableDevelopAnimation: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.enableDevelopAnimation }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val developAnimationStyle: StateFlow<DevelopAnimationStyle> = userPreferencesRepository.userPreferences
+        .map { it.developAnimationStyle }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DevelopAnimationStyle.FILM)
     val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.backgroundImage }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
@@ -2016,7 +2021,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 viewModelScope.launch {
                     val mediaId = GalleryManager.recordVideoCapture(getApplication(), uri)
                     if (mediaId != null) {
-                        _imageSavedEvent.emit(Unit)
+                        _imageSavedEvent.emit(mediaId)
                     }
                 }
             }
@@ -3129,7 +3134,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 composedBitmap.recycle()
                 cancelMultipleExposureSession()
-                _imageSavedEvent.emit(Unit)
+                _imageSavedEvent.emit(photoId)
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to finish multiple exposure session", e)
                 multipleExposureState = multipleExposureState.copy(isProcessing = false)
@@ -3353,7 +3358,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.stopBurstCapture()
         shutterSoundPlayer.stopBurst()
         viewModelScope.launch {
-            _imageSavedEvent.emit(Unit)
+            _imageSavedEvent.emit(burstPhotoId)
         }
     }
 
@@ -4314,6 +4319,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } ?: bitmap
     }
 
+    /** The display preview already includes its look; only composite the captured photo's frame. */
+    suspend fun renderCaptureAnimationFrame(bitmap: Bitmap, photoId: String?): Bitmap =
+        withContext(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val metadata = photoId?.let { GalleryManager.loadMetadata(context, it) }
+                ?: return@withContext bitmap
+            val frameId = metadata.frameId ?: return@withContext bitmap
+            val manager = contentRepository.frameManager
+            val template = manager.loadTemplate(frameId) ?: return@withContext bitmap
+            val frameMetadata = manager.resolveFrameLocation(
+                template,
+                metadata.copy(
+                    customProperties = metadata.customProperties.ifEmpty {
+                        manager.loadCustomProperties(frameId)
+                    }
+                )
+            )
+            // FrameRenderer holds mutable Canvas/Paint state; do not share it with photo export.
+            FrameRenderer(context, contentRepository.lutManager).render(bitmap, template, frameMetadata)
+        }
+
     fun handleHistogramUpdate(histogram: IntArray) {
         cameraController.updateHistogram(histogram)
     }
@@ -4622,6 +4648,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setEnableDevelopAnimation(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveEnableDevelopAnimation(enabled)
+        }
+    }
+
+    fun setDevelopAnimationStyle(style: DevelopAnimationStyle) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveDevelopAnimationStyle(style)
         }
     }
 
@@ -5596,7 +5628,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             PLog.d(TAG, "Image save scheduled: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
-            _imageSavedEvent.emit(Unit)
+            _imageSavedEvent.emit(photoId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
         } finally {
@@ -5735,7 +5767,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             PLog.d(TAG, "Preview bitmap capture saved: $photoId, mode=$metadataCaptureMode")
-            _imageSavedEvent.emit(Unit)
+            _imageSavedEvent.emit(photoId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save preview bitmap capture: $metadataCaptureMode", e)
         }
@@ -6041,7 +6073,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             PLog.d(TAG, "Image save scheduled: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
-            _imageSavedEvent.emit(Unit)
+            _imageSavedEvent.emit(photoId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
         }
@@ -6188,7 +6220,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             PLog.d(TAG, "Image saved: $photoId, HDR mode: $captureMode")
-            _imageSavedEvent.emit(Unit)
+            _imageSavedEvent.emit(photoId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process HDR bracket", e)
         } finally {

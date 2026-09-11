@@ -96,6 +96,11 @@
     <string name="grid_style_golden_spiral">Spiral Emas</string>
     <string name="settings_use_live_photo">Foto Live</string>
     <string name="settings_use_live_photo_description">Tangkap klip video pendek bersama foto Anda untuk efek foto live yang dinamis.</string>
+    <string name="settings_develop_animation_description">Tampilkan animasi foto setelah mengambil gambar.</string>
+    <string name="settings_develop_animation_style">Gaya animasi</string>
+    <string name="settings_develop_animation_style_description">Pilih efek pengembangan film atau cetak foto dengan bingkai yang dipilih.</string>
+    <string name="settings_develop_animation_style_film">Pengembangan film</string>
+    <string name="settings_develop_animation_style_instant_print">Cetak instan</string>
     <string name="settings_section_frame">Tanda Air Bingkai</string>
     <string name="settings_frame_style">Gaya Bingkai</string>
     <string name="settings_frame_description">Tambahkan bingkai dekoratif dan tanda air ke foto</string>

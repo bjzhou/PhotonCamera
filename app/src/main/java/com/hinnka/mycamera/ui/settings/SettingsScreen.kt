@@ -349,6 +349,7 @@ fun SettingsScreen(
         hdrPlusBracketExposureEnabled
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
+    val developAnimationStyle by viewModel.developAnimationStyle.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useHeicExport by viewModel.useHeicExport.collectAsState(initial = false)
     val useJpeg444Export by viewModel.useJpeg444Export.collectAsState(initial = false)
@@ -2445,6 +2446,21 @@ fun SettingsScreen(
                             checked = enableDevelopAnimation,
                             onCheckedChange = { viewModel.setEnableDevelopAnimation(it) }
                         )
+                        if (enableDevelopAnimation) {
+                            QualityLevelSetting(
+                                title = null,
+                                description = null,
+                                levels = listOf(
+                                    com.hinnka.mycamera.data.DevelopAnimationStyle.FILM to
+                                        stringResource(R.string.settings_develop_animation_style_film),
+                                    com.hinnka.mycamera.data.DevelopAnimationStyle.INSTANT_PRINT to
+                                        stringResource(R.string.settings_develop_animation_style_instant_print)
+                                ),
+                                currentLevel = developAnimationStyle,
+                                onLevelSelected = { viewModel.setDevelopAnimationStyle(it) },
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            )
+                        }
                     }
                 }
 
@@ -5304,8 +5320,8 @@ private fun VendorCaptureKey.displayName(): String {
 
 @Composable
 fun <T> QualityLevelSetting(
-    title: String,
-    description: String,
+    title: String?,
+    description: String?,
     levels: List<Pair<T, String>>,
     currentLevel: T,
     onLevelSelected: (T) -> Unit,
@@ -5313,20 +5329,24 @@ fun <T> QualityLevelSetting(
 ) {
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Normal,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        Text(
-            text = description,
-            color = Color.White.copy(alpha = 0.6f),
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
+        if (title != null) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+        if (description != null) {
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
 
         FlowRow(
             modifier = Modifier.fillMaxWidth(),

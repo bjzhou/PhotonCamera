@@ -96,6 +96,11 @@
     <string name="grid_style_golden_spiral">Spirale d’or</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturez un court clip vidéo avec votre photo pour un effet Live Photo dynamique.</string>
+    <string name="settings_develop_animation_description">Afficher une animation photo après la prise de vue.</string>
+    <string name="settings_develop_animation_style">Style d’animation</string>
+    <string name="settings_develop_animation_style_description">Choisissez un effet de développement de film ou d’impression photo avec le cadre sélectionné.</string>
+    <string name="settings_develop_animation_style_film">Développement du film</string>
+    <string name="settings_develop_animation_style_instant_print">Impression instantanée</string>
     <string name="settings_section_frame">Cadre et Filigrane</string>
     <string name="settings_frame_style">Style de cadre</string>
     <string name="settings_frame_description">Ajouter un cadre décoratif et un filigrane aux photos</string>

@@ -67,6 +67,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.data.CaptureButtonStyle
+import com.hinnka.mycamera.data.DevelopAnimationStyle
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
@@ -82,6 +83,8 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoStabilizationMode
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -244,6 +247,7 @@ fun CameraScreen(
     val ultraHdrEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
+    val developAnimationStyle by viewModel.developAnimationStyle.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
     val videoCodec by viewModel.videoCodec.collectAsState()
@@ -264,6 +268,7 @@ fun CameraScreen(
         mutableStateOf<ColorRecipeParams?>(null)
     }
     var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var captureAnimationJob by remember { mutableStateOf<Job?>(null) }
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
@@ -385,36 +390,70 @@ fun CameraScreen(
         viewModel.updateLut()
     }
 
+    DisposableEffect(Unit) {
+        onDispose {
+            pendingCaptureAnimationBitmap?.recycleIfAlive()
+            pendingCaptureAnimationBitmap = null
+            captureAnimationJob?.cancel()
+        }
+    }
+
+    LaunchedEffect(enableDevelopAnimation, state.captureMode) {
+        if (!enableDevelopAnimation || state.captureMode != CaptureMode.PHOTO) {
+            pendingCaptureAnimationBitmap?.recycleIfAlive()
+            pendingCaptureAnimationBitmap = null
+            captureAnimationJob?.cancel()
+            captureAnimationSnapshot = null
+        }
+    }
+
     // 监听照片保存完成事件，立即刷新缩略图
     LaunchedEffect(Unit) {
-        viewModel.imageSavedEvent.collect {
+        viewModel.imageSavedEvent.collect { photoId ->
             galleryViewModel.refreshLatestPhoto()
             if (!enableDevelopAnimation || currentCaptureModeForEffects != CaptureMode.PHOTO) {
+                pendingCaptureAnimationBitmap?.recycleIfAlive()
                 pendingCaptureAnimationBitmap = null
                 captureAnimationSnapshot = null
                 MyCameraApplication.updateWidgets(context)
                 return@collect
             }
-            val sourceBounds = previewBounds
-            val targetBounds = galleryThumbnailBounds
+            val rootOffset = cameraScreenBounds?.topLeft ?: androidx.compose.ui.geometry.Offset.Zero
+            val sourceBounds = previewBounds?.translate(-rootOffset)
+            val targetBounds = galleryThumbnailBounds?.translate(-rootOffset)
+            val animationStyle = developAnimationStyle
 
             fun startCaptureAnimation(bitmap: Bitmap) {
-                if (sourceBounds == null || targetBounds == null) {
+                if (sourceBounds == null || targetBounds == null || !scope.isActive ||
+                    !enableDevelopAnimation || currentCaptureModeForEffects != CaptureMode.PHOTO
+                ) {
                     bitmap.recycleIfAlive()
                     return
                 }
-                scope.launch {
-                    val processedBitmap = viewModel.applyLut(bitmap)
-                    val animationBitmap = processedBitmap.copyForCaptureAnimation()
-                    if (processedBitmap !== animationBitmap) {
-                        processedBitmap.recycleIfAlive()
-                    }
-                    animationBitmap?.let {
-                        captureAnimationSnapshot = CaptureAnimationSnapshot(
-                            bitmap = it.asImageBitmap(),
-                            sourceBounds = sourceBounds,
-                            targetBounds = targetBounds
-                        )
+                captureAnimationJob?.cancel()
+                captureAnimationJob = scope.launch {
+                    var processedBitmap: Bitmap? = null
+                    try {
+                        processedBitmap = if (animationStyle == DevelopAnimationStyle.INSTANT_PRINT) {
+                            viewModel.renderCaptureAnimationFrame(bitmap, photoId)
+                        } else {
+                            viewModel.applyLut(bitmap)
+                        }
+                        processedBitmap.copyForCaptureAnimation()?.let {
+                            captureAnimationSnapshot = CaptureAnimationSnapshot(
+                                bitmap = it.asImageBitmap(),
+                                sourceBounds = sourceBounds,
+                                targetBounds = targetBounds,
+                                style = animationStyle
+                            )
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        com.hinnka.mycamera.utils.PLog.e("CaptureAnimation", "Failed to prepare capture animation", e)
+                    } finally {
+                        processedBitmap?.recycleIfAlive()
+                        if (processedBitmap !== bitmap) bitmap.recycleIfAlive()
                     }
                 }
             }
@@ -1486,9 +1525,15 @@ fun CameraScreen(
                     }
 
                     if (enableDevelopAnimation && state.captureMode == CaptureMode.PHOTO) {
-                        viewModel.glSurfaceView?.capturePreviewFrame { bitmap ->
-                            pendingCaptureAnimationBitmap?.recycleIfAlive()
-                            pendingCaptureAnimationBitmap = bitmap
+                        viewModel.glSurfaceView?.capturePreviewFrame(maxLongEdge = 1440) { bitmap ->
+                            if (scope.isActive && enableDevelopAnimation &&
+                                currentCaptureModeForEffects == CaptureMode.PHOTO
+                            ) {
+                                pendingCaptureAnimationBitmap?.recycleIfAlive()
+                                pendingCaptureAnimationBitmap = bitmap
+                            } else {
+                                bitmap.recycleIfAlive()
+                            }
                         }
                     }
                     viewModel.capture()

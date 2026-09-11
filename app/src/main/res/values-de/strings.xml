@@ -96,6 +96,11 @@
     <string name="grid_style_golden_spiral">Goldene Spirale</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Nehmen Sie einen kurzen Videoclip zusammen mit Ihrem Foto auf, um einen dynamischen Live-Foto-Effekt zu erzielen.</string>
+    <string name="settings_develop_animation_description">Nach der Aufnahme eine Fotoanimation anzeigen.</string>
+    <string name="settings_develop_animation_style">Animationsstil</string>
+    <string name="settings_develop_animation_style_description">Wählen Sie Filmentwicklung oder einen Sofortdruckeffekt mit dem ausgewählten Rahmen.</string>
+    <string name="settings_develop_animation_style_film">Filmentwicklung</string>
+    <string name="settings_develop_animation_style_instant_print">Sofortdruck</string>
     <string name="settings_section_frame">Rahmen-Wasserzeichen</string>
     <string name="settings_frame_style">Rahmenstil</string>
     <string name="settings_frame_description">Dekorativen Rahmen und Wasserzeichen zu Fotos hinzufügen</string>

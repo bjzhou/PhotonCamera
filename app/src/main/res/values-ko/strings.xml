@@ -97,6 +97,11 @@
     <string name="grid_style_golden_spiral">황금나선</string>
     <string name="settings_use_live_photo">라이브 포토</string>
     <string name="settings_use_live_photo_description">역동적인 라이브 포토 효과를 위해 사진과 함께 짧은 비디오 클립을 촬영합니다.</string>
+    <string name="settings_develop_animation_description">촬영 후 사진 애니메이션을 표시합니다.</string>
+    <string name="settings_develop_animation_style">애니메이션 스타일</string>
+    <string name="settings_develop_animation_style_description">선택한 프레임과 함께 필름 현상 또는 사진 인화 효과를 선택합니다.</string>
+    <string name="settings_develop_animation_style_film">필름 현상</string>
+    <string name="settings_develop_animation_style_instant_print">즉석 인화</string>
     <string name="settings_section_frame">프레임 워터마크</string>
     <string name="settings_frame_style">프레임 스타일</string>
     <string name="settings_frame_description">사진에 장식용 프레임과 워터마크 추가</string>
