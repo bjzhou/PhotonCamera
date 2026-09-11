@@ -52,7 +52,7 @@ internal object PreviewColorShader {
             uniform float uToneToe;
             uniform float uToneShoulder;
             uniform float uTonePivot;
-            uniform float uSharpening;
+            ${if (variant.includeSharpening) "uniform float uSharpening;" else ""}
             ${if (variant.includePreLogFilmGrain) """
             uniform float uFilmGrain;
             uniform float uFilmGrainSeed;
@@ -179,7 +179,9 @@ internal object PreviewColorShader {
 
             void main() {
                 vec2 rcCoord = vRawCoord;
-                vec2 uvCoord = (uSTMatrix * vec4(rcCoord, 0.0, 1.0)).xy;
+                // The vertex stage already applies crop and the SurfaceTexture transform.
+                // Only effects that change raw coordinates need a fragment-stage transform.
+                vec2 uvCoord = vTexCoord;
                 if (uLowRes > 0.005) {
                     float blocksX = mix(512.0, 32.0, uLowRes);
                     vec2 gridSize = vec2(1.0 / blocksX, 1.0 / (blocksX / uAspectRatio));
@@ -383,6 +385,7 @@ internal object PreviewColorShader {
                 }
                 """ else ""}
 
+                ${if (variant.includeSharpening) """
                 // 锐度是色彩配方的最终 sRGB 空间操作。邻域只用于提取亮度细节，
                 // 调整量直接叠加到完成曲线、LUT 与空间效果后的 sRGB 结果。
                 if (uColorRecipeEnabled && abs(uSharpening) > 0.0001) {
@@ -413,6 +416,7 @@ internal object PreviewColorShader {
                         : uSharpening;
                     color.rgb = sanitizeColor(color.rgb + vec3(detail * sharpeningStrength));
                 }
+                """ else ""}
 
                 fragColor = vec4(clamp(sanitizeColor(color.rgb), 0.0, 1.0), color.a);
             }

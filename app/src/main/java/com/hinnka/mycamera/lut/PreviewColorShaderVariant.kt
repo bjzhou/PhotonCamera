@@ -19,6 +19,7 @@ internal data class PreviewColorShaderVariant(
     val includeJpegInputToneCurve: Boolean = false,
     val includeSpatialRecipeEffects: Boolean = false,
     val includeVideoLog: Boolean = false,
+    val includeSharpening: Boolean = false,
 ) {
     companion object {
         fun forPass(
@@ -40,6 +41,8 @@ internal data class PreviewColorShaderVariant(
                     !lutEnabled &&
                     params.filmGrain > EPSILON,
                 includeVideoLog = videoLogEnabled,
+                // Match the shader's activation threshold, including negative (softening) values.
+                includeSharpening = abs(params.sharpness) > 0.0001f,
             )
         }
 
