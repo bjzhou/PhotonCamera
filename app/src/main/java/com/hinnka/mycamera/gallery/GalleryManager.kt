@@ -3093,7 +3093,7 @@ object GalleryManager {
                 images = images,
                 rotation = rotation,
                 aspectRatio = aspectRatio,
-                enableSuperResolution = useSuperResolution,
+                outputScale = if (useSuperResolution) superResolutionScale else 1f,
                 colorSpace = ColorSpace.get(metadata.colorSpace),
             )
 

@@ -919,4 +919,7 @@
     <string name="video_log_color_space_auto">ตั้งค่าปริภูมิสีให้ตรงกับรูปแบบ Log โดยอัตโนมัติ</string>
     <string name="settings_raw_camera_color_matching">ปรับสีให้ตรงกับกล้อง</string>
     <string name="settings_raw_camera_color_matching_description">เมื่อเปิดใช้งาน ระบบจะปรับสีตามกล้องที่ใช้ถ่ายภาพ เมื่อปิดใช้งานจะใช้การประมวลผลเดิม</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">สเกลเอาต์พุตลดนอยส์หลายเฟรม</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x คือขนาดต้นฉบับ ปรับความกว้างและความสูงได้สูงสุด 2x มีผลเฉพาะการลดนอยส์หลายเฟรม</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
 </resources>

@@ -394,12 +394,13 @@ internal fun resolveMultiFrameOutputScale(
     useJpgMax: Boolean,
     useRawMax: Boolean,
     rawMaxOutputScale: Float,
+    jpgMultiFrameDenoiseOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
 ): Float? = when {
     useRawMax -> MultiFrameConfig.normalizeOutputScale(
         outputScale = rawMaxOutputScale,
         fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
     )
-    useJpgMax -> 1f
+    useJpgMax -> MultiFrameConfig.normalizeOutputScale(jpgMultiFrameDenoiseOutputScale)
     else -> null
 }
 
@@ -892,6 +893,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             useJpgMax = activeUseJpgMax,
             useRawMax = desiredUseRawMax,
             rawMaxOutputScale = prefs.rawMaxOutputScale,
+            jpgMultiFrameDenoiseOutputScale = prefs.jpgMultiFrameDenoiseOutputScale,
         )
         val currentState = state.value
         val targetCaptureMode = update.captureMode?.value ?: currentState.captureMode
@@ -1584,6 +1586,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 SharingStarted.Eagerly,
                 MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
             )
+    val jpgMultiFrameDenoiseOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { MultiFrameConfig.normalizeOutputScale(it.jpgMultiFrameDenoiseOutputScale) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+        )
     val hdrPlusFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.hdrPlusFrameCount }
         .stateIn(
@@ -2078,6 +2087,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     useJpgMax = effectiveUseJpgMax,
                     useRawMax = effectiveUseRawMax,
                     rawMaxOutputScale = it.rawMaxOutputScale,
+                    jpgMultiFrameDenoiseOutputScale = it.jpgMultiFrameDenoiseOutputScale,
                 )
                 val effectiveRawRenderingEngine = resolveCaptureRawRenderingEngine(it)
                 if (effectiveRawRenderingEngine != it.rawRenderingEngine) {
@@ -2311,6 +2321,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         useRawMax = prefs.useRawMax && prefs.useRaw &&
                             !prefs.useMultipleExposure,
                         rawMaxOutputScale = prefs.rawMaxOutputScale,
+                        jpgMultiFrameDenoiseOutputScale = prefs.jpgMultiFrameDenoiseOutputScale,
                     )
                 )
                 cameraController.setJpgMultiFrameDenoiseFrameCount(
@@ -4517,6 +4528,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setJpgMultiFrameDenoiseOutputScale(scale: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveJpgMultiFrameDenoiseOutputScale(
+                MultiFrameConfig.normalizeOutputScale(scale)
+            )
+        }
+    }
+
     fun setHdrPlusMergeMode(mode: MgcRawMaxMode) {
         cameraController.setHdrPlusMergeMode(mode)
         viewModelScope.launch {
@@ -4565,6 +4584,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     useRawMax = prefs.useRawMax && prefs.useRaw &&
                         !prefs.useMultipleExposure,
                     rawMaxOutputScale = normalizedScale,
+                    jpgMultiFrameDenoiseOutputScale = prefs.jpgMultiFrameDenoiseOutputScale,
                 )
             )
         }
@@ -5843,15 +5863,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 MgcMergeMethod.SPATIAL_BAYER
             }
-            val useSuperRes = useRawMax.value &&
-                (!isRawStack || rawSpatialOutputMode == MgcSpatialOutputMode.RGB)
             val superResScale = when {
-                !useSuperRes -> 1f
-                isRawStack -> state.value.multiFrameOutputScale
+                isRawStack && useRawMax.value && rawSpatialOutputMode == MgcSpatialOutputMode.RGB ->
+                    state.value.multiFrameOutputScale
                     ?.let(MultiFrameConfig::normalizeOutputScale)
                     ?: MultiFrameConfig.MIN_OUTPUT_SCALE
-                else -> 2f
+                isRawStack -> 1f
+                else -> MultiFrameConfig.normalizeOutputScale(
+                    userPrefs?.jpgMultiFrameDenoiseOutputScale
+                        ?: MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE
+                )
             }
+            val useSuperRes = superResScale > MultiFrameConfig.MIN_OUTPUT_SCALE
             if (isRawStack) {
                 PLog.i(
                     TAG,

@@ -190,7 +190,7 @@ object MultiFrameStacker {
         images: List<SafeImage>,
         rotation: Int,
         aspectRatio: AspectRatio?,
-        enableSuperResolution: Boolean = false,
+        outputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
         colorSpace: ColorSpace,
     ): Bitmap? {
         if (images.isEmpty()) return null
@@ -198,10 +198,17 @@ object MultiFrameStacker {
         val width = images[0].width
         val height = images[0].height
 
-        val scale = if (enableSuperResolution) 2 else 1
+        val scale = MultiFrameConfig.normalizeOutputScale(outputScale)
         val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
-        val targetW = dimensions.width() * scale
-        val targetH = dimensions.height() * scale
+        // Match preparePhoto: scale the input bounds, then apply the aspect crop and rotation.
+        // Keep the native crop separately so rounding never changes the sampled field of view.
+        val outputDimensions = BitmapUtils.calculateProcessedRect(
+            MultiFrameConfig.scaledRawOutputDimension(width, scale),
+            MultiFrameConfig.scaledRawOutputDimension(height, scale),
+            aspectRatio,
+            null,
+            rotation,
+        )
 
         val inputFormat = images[0].format
         if (!GlesYuvStacker.supportsImageFormat(inputFormat)) {
@@ -210,18 +217,20 @@ object MultiFrameStacker {
             return null
         }
         RawStackRuntimeDebug.i(TAG) {
-            "Starting GLES streaming stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution"
+            "Starting GLES streaming stacking process for ${images.size} frames ($width x $height). outputScale=$scale"
         }
         return try {
             GlesYuvStacker(
                 width = width,
                 height = height,
-                outputWidth = targetW,
-                outputHeight = targetH,
+                outputWidth = outputDimensions.width(),
+                outputHeight = outputDimensions.height(),
                 rotation = rotation,
                 colorSpace = colorSpace,
                 inputFormat = inputFormat,
-                enableSuperResolution = enableSuperResolution,
+                outputScale = scale,
+                referenceOutputWidth = dimensions.width(),
+                referenceOutputHeight = dimensions.height(),
             ).process(images).also { result ->
                 if (result == null) {
                     PLog.w(TAG, "GLES streaming stacker failed")

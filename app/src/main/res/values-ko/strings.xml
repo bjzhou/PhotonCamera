@@ -301,4 +301,7 @@
     <string name="video_log_color_space_auto">Log 형식에 맞는 색 공간이 자동으로 설정됩니다.</string>
     <string name="settings_raw_camera_color_matching">카메라 색상에 맞추기</string>
     <string name="settings_raw_camera_color_matching_description">켜면 촬영에 사용한 카메라에 맞게 색상을 조정하고, 끄면 원래 처리를 사용합니다.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">멀티 프레임 노이즈 감소 출력 배율</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x는 원본 크기입니다. 너비와 높이를 최대 2x까지 설정할 수 있습니다. 멀티 프레임 노이즈 감소에만 적용됩니다.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
 </resources>

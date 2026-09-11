@@ -175,6 +175,7 @@ data class UserPreferences(
     val useJpgMax: Boolean = false, // YUV 多帧降噪
     val useJpgMaxHdrComposition: Boolean = false, // 多帧降噪固定不启用包围曝光
     val jpgMultiFrameDenoiseFrameCount: Int = MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
+    val jpgMultiFrameDenoiseOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
     val useRawMax: Boolean = false, // HDR+：RAW 多帧融合
@@ -428,6 +429,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
         private val JPG_MULTI_FRAME_DENOISE_FRAME_COUNT =
             intPreferencesKey("jpg_multi_frame_denoise_frame_count")
+        private val JPG_MULTI_FRAME_DENOISE_OUTPUT_SCALE =
+            floatPreferencesKey("jpg_multi_frame_denoise_output_scale")
         private val HDR_PLUS_FRAME_COUNT = intPreferencesKey("hdr_plus_frame_count")
         private val HDR_PLUS_MERGE_MODE = stringPreferencesKey("hdr_plus_merge_mode")
         private val HDR_PLUS_BRACKET_EXPOSURE_ENABLED =
@@ -714,6 +717,14 @@ class UserPreferencesRepository(private val context: Context) {
                 jpgMultiFrameDenoiseFrameCount = preferences[JPG_MULTI_FRAME_DENOISE_FRAME_COUNT]
                     ?.let(MultiFrameConfig::normalizeDenoiseFrameCount)
                     ?: MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
+                jpgMultiFrameDenoiseOutputScale = preferences[JPG_MULTI_FRAME_DENOISE_OUTPUT_SCALE]
+                    ?.let {
+                        MultiFrameConfig.normalizeOutputScale(
+                            outputScale = it,
+                            fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                        )
+                    }
+                    ?: MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
                 useRawMax = useRawMax,
@@ -1891,6 +1902,15 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[JPG_MULTI_FRAME_DENOISE_FRAME_COUNT] =
                 MultiFrameConfig.normalizeDenoiseFrameCount(count)
+        }
+    }
+
+    suspend fun saveJpgMultiFrameDenoiseOutputScale(scale: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[JPG_MULTI_FRAME_DENOISE_OUTPUT_SCALE] = MultiFrameConfig.normalizeOutputScale(
+                outputScale = scale,
+                fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+            )
         }
     }
 

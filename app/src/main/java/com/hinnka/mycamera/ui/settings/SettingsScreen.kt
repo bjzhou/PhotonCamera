@@ -341,6 +341,7 @@ fun SettingsScreen(
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
+    val jpgMultiFrameDenoiseOutputScale by viewModel.jpgMultiFrameDenoiseOutputScale.collectAsState()
     val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsState()
     val hdrPlusMergeMode by viewModel.hdrPlusMergeMode.collectAsState()
     val hdrPlusBracketExposureEnabled by viewModel.hdrPlusBracketExposureEnabled.collectAsState()
@@ -766,6 +767,9 @@ fun SettingsScreen(
     var showRawBaselineRecipeEditor by remember { mutableStateOf(false) }
     var jpgMultiFrameDenoiseCountSliderValue by remember(jpgMultiFrameDenoiseFrameCount) {
         mutableStateOf(jpgMultiFrameDenoiseFrameCount.toFloat())
+    }
+    var jpgMultiFrameDenoiseOutputScaleUi by remember(jpgMultiFrameDenoiseOutputScale) {
+        mutableStateOf(MultiFrameConfig.normalizeOutputScale(jpgMultiFrameDenoiseOutputScale))
     }
     var hdrPlusFrameCountSliderValue by remember(hdrPlusFrameCount) {
         mutableStateOf(hdrPlusFrameCount.toFloat())
@@ -1888,6 +1892,28 @@ fun SettingsScreen(
                             valueTextFormatter = { it.roundToInt().toString() }
                         )
 
+                        val jpgOutputScaleValueFormat = stringResource(R.string.settings_jpg_multi_frame_denoise_output_scale_value)
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_jpg_multi_frame_denoise_output_scale),
+                            description = stringResource(
+                                R.string.settings_jpg_multi_frame_denoise_output_scale_description
+                            ),
+                            value = jpgMultiFrameDenoiseOutputScaleUi,
+                            valueRange = MultiFrameConfig.MIN_OUTPUT_SCALE..MultiFrameConfig.MAX_OUTPUT_SCALE,
+                            resetValue = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                            onResetValue = { scale ->
+                                jpgMultiFrameDenoiseOutputScaleUi = scale
+                                viewModel.setJpgMultiFrameDenoiseOutputScale(scale)
+                            },
+                            onValueChange = {
+                                jpgMultiFrameDenoiseOutputScaleUi = MultiFrameConfig.normalizeOutputScale(it)
+                            },
+                            onValueChangeFinished = {
+                                viewModel.setJpgMultiFrameDenoiseOutputScale(jpgMultiFrameDenoiseOutputScaleUi)
+                            },
+                            valueTextFormatter = { scale -> String.format(jpgOutputScaleValueFormat, scale) }
+                        )
+
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
                             modifier = Modifier.padding(vertical = 12.dp)
@@ -2994,6 +3020,7 @@ private fun SettingsCategoryOverview(
             title = stringResource(R.string.settings_section_photo_mode),
             description = listOf(
                 stringResource(R.string.settings_multi_frame_denoise_frame_count),
+                stringResource(R.string.settings_jpg_multi_frame_denoise_output_scale),
                 stringResource(R.string.settings_nr_level),
                 stringResource(R.string.settings_edge_level)
             ).joinToString(" · "),

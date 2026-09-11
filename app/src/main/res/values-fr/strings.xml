@@ -300,4 +300,7 @@
     <string name="video_log_color_space_auto">L’espace colorimétrique est défini automatiquement selon le format Log.</string>
     <string name="settings_raw_camera_color_matching">Adapter les couleurs de l’appareil</string>
     <string name="settings_raw_camera_color_matching_description">Quand l’option est activée, les couleurs sont adaptées à l’appareil utilisé ; sinon, le traitement d’origine est conservé.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">Échelle de sortie de la réduction du bruit multi-image</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x conserve les dimensions d’origine. Jusqu’à 2x en largeur et en hauteur. S’applique uniquement à la réduction du bruit multi-image.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
 </resources>

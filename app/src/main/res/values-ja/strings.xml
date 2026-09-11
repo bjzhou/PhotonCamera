@@ -467,6 +467,9 @@
     <string name="settings_raw_max_output_scale_description">HDR+写真の出力サイズを調整します。倍率を上げるほど画像とファイルが大きくなり、処理時間も長くなる場合があります。</string>
     <string name="settings_multi_frame_denoise_frame_count">マルチフレームNR枚数</string>
     <string name="settings_multi_frame_denoise_frame_count_description">写真モードのマルチフレームNRに使うフレーム数。増やすほどノイズは減りますが、処理時間は長くなります。</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">マルチフレームNR出力スケール</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1xは元のサイズです。幅と高さは最大2xまで拡大できます。マルチフレームNRにのみ適用されます。</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
     <string name="settings_hdr_plus_frame_count">HDR+フレーム数</string>
     <string name="settings_hdr_plus_frame_count_description">HDR+で撮影するフレーム数。ブラケット露出有効時、2枚では可能な場合に標準露出＋長秒露出、3枚以上では完全なブラケットプランを使用します。</string>
     <string name="settings_hdr_plus_bracket_exposure">HDR+ブラケット露出</string>

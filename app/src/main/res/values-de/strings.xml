@@ -300,4 +300,7 @@
     <string name="video_log_color_space_auto">Der Farbraum wird automatisch an das Log-Format angepasst.</string>
     <string name="settings_raw_camera_color_matching">Kamerafarben anpassen</string>
     <string name="settings_raw_camera_color_matching_description">Passt die Farben bei aktivierter Option an die verwendete Kamera an; deaktiviert wird die ursprüngliche Verarbeitung verwendet.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">Ausgabeskalierung der Mehrbild-Rauschreduzierung</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x entspricht der Originalgröße. Breite und Höhe bis zu 2x. Gilt nur für die Mehrbild-Rauschreduzierung.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
 </resources>

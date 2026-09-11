@@ -343,8 +343,10 @@ internal object GlesYuvSpatialShaders {
         void main() {
             ivec2 outputPixel = ivec2(gl_FragCoord.xy);
             vec2 reference = referencePixel(outputPixel);
-            if (any(lessThan(reference, vec2(0.0))) ||
-                any(greaterThan(reference, vec2(uInputSize - ivec2(1))))) {
+            // Upsampled pixel centers cover the outer half of the edge texels too.
+            // Keep their subpixel phase; yccAt supplies mirrored boundary samples.
+            if (any(lessThan(reference, vec2(-0.5))) ||
+                any(greaterThan(reference, vec2(uInputSize) - vec2(0.5)))) {
                 oYccAndWeight = vec4(0.0);
                 return;
             }

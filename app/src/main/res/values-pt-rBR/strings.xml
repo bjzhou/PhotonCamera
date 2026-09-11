@@ -301,4 +301,7 @@
     <string name="video_log_color_space_auto">O espaço de cor é definido automaticamente conforme o formato Log.</string>
     <string name="settings_raw_camera_color_matching">Combinar cores da câmera</string>
     <string name="settings_raw_camera_color_matching_description">Quando ativado, ajusta as cores de acordo com a câmera usada; quando desativado, usa o processamento original.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">Escala de saída da redução de ruído multiframes</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x mantém as dimensões originais. Até 2x na largura e na altura. Aplica-se somente à redução de ruído multiframes.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
 </resources>

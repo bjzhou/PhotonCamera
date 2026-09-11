@@ -269,6 +269,9 @@
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
     <string name="settings_multi_frame_denoise_frame_count">多幀降噪幀數</string>
     <string name="settings_multi_frame_denoise_frame_count_description">照片模式下多幀降噪使用的幀數。幀數越多降噪越明顯，但處理時間也越長。</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">多幀降噪輸出倍率</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x 為原尺寸，寬高最高可達 2x。僅對多幀降噪生效。</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
     <string name="settings_hdr_plus_frame_count">HDR+ 幀數</string>
     <string name="settings_hdr_plus_frame_count_description">HDR+ 拍攝使用的幀數。開啟包圍曝光後，最低為 2 幀，使用一般曝光與可用的長曝光；3 幀及以上使用完整包圍曝光方案。</string>
     <string name="settings_hdr_plus_bracket_exposure">HDR+ 包圍曝光</string>

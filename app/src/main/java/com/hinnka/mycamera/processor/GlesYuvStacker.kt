@@ -13,6 +13,7 @@ import android.opengl.GLES30
 import android.opengl.GLES11Ext
 import android.opengl.GLES31
 import androidx.core.graphics.createBitmap
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -39,7 +40,9 @@ class GlesYuvStacker(
     private val rotation: Int,
     private val colorSpace: ColorSpace,
     private val inputFormat: Int,
-    private val enableSuperResolution: Boolean = false,
+    outputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+    private val referenceOutputWidth: Int = outputWidth,
+    private val referenceOutputHeight: Int = outputHeight,
 ) {
     data class HdrInputFrame(
         val image: SafeImage,
@@ -252,8 +255,8 @@ class GlesYuvStacker(
     private val gpuOutputWidth = if (cpuRotateReadback) renderOutputHeight else renderOutputWidth
     private val gpuOutputHeight = if (cpuRotateReadback) renderOutputWidth else renderOutputHeight
     private val highPrecisionInput = inputFormat == ImageFormat.YCBCR_P010
-    private val superResolutionEnabled = enableSuperResolution
-    private val superResolutionScale = if (superResolutionEnabled) SUPER_RESOLUTION_SCALE else 1.0f
+    private val superResolutionScale = MultiFrameConfig.normalizeOutputScale(outputScale)
+    private val superResolutionEnabled = superResolutionScale > MultiFrameConfig.MIN_OUTPUT_SCALE
     private val lumaInternalFormat = if (highPrecisionInput) GLES30.GL_R16F else GLES30.GL_R8
     private val chromaInternalFormat = if (highPrecisionInput) GLES30.GL_RG16F else GLES30.GL_RG8
     private val chromaWidth = (width + 1) / 2
@@ -2120,7 +2123,7 @@ class GlesYuvStacker(
             GLES31.glGetUniformLocation(superResolutionAccumulateProgram, "uUseFrameWeight"),
             if (isReference) 0 else 1,
         )
-        val transform = computeRenderTransform(superResolutionScale)
+        val transform = computeSuperResolutionTransform()
         GLES31.glUniform3f(
             GLES31.glGetUniformLocation(superResolutionAccumulateProgram, "uTransformX"),
             transform[0],
@@ -2157,7 +2160,7 @@ class GlesYuvStacker(
         bindTexture(superResolutionNormalizeProgram, "uBaseAccumulator", 1, currentAccumulatorTexture)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(superResolutionNormalizeProgram, "uInputSize"), width, height)
         GLES31.glUniform1i(GLES31.glGetUniformLocation(superResolutionNormalizeProgram, "uIsP010"), if (highPrecisionInput) 1 else 0)
-        val transform = computeRenderTransform(superResolutionScale)
+        val transform = computeSuperResolutionTransform()
         GLES31.glUniform3f(
             GLES31.glGetUniformLocation(superResolutionNormalizeProgram, "uTransformX"),
             transform[0],
@@ -2796,14 +2799,14 @@ class GlesYuvStacker(
         }
     }
 
-    private fun computeNormalizeTransform(outputScale: Float = 1.0f): FloatArray {
+    private fun computeNormalizeTransform(): FloatArray {
         val sensorWidth = width.toFloat()
         val sensorHeight = height.toFloat()
-        val coordinateScale = 1.0f / outputScale.coerceAtLeast(1.0f)
+        val coordinateScale = 1.0f
         val rotatedWidth = if (normalizedRotation == 90 || normalizedRotation == 270) height else width
         val rotatedHeight = if (normalizedRotation == 90 || normalizedRotation == 270) width else height
-        val refOutputWidth = referenceOutputWidth(outputScale)
-        val refOutputHeight = referenceOutputHeight(outputScale)
+        val refOutputWidth = referenceOutputWidth
+        val refOutputHeight = referenceOutputHeight
         val cropX = (((rotatedWidth - refOutputWidth).coerceAtLeast(0)) / 4 * 2).toFloat()
         val cropY = (((rotatedHeight - refOutputHeight).coerceAtLeast(0)) / 4 * 2).toFloat()
         return when (normalizedRotation) {
@@ -2826,14 +2829,14 @@ class GlesYuvStacker(
         }
     }
 
-    private fun computeRenderTransform(outputScale: Float = 1.0f): FloatArray {
+    private fun computeRenderTransform(): FloatArray {
         return if (!cpuRotateReadback) {
-            computeNormalizeTransform(outputScale)
+            computeNormalizeTransform()
         } else {
-            val offset = computeDirectSourceOffset(outputScale)
+            val offset = computeDirectSourceOffset()
             val offsetX = offset[0].toFloat()
             val offsetY = offset[1].toFloat()
-            val coordinateScale = 1.0f / outputScale.coerceAtLeast(1.0f)
+            val coordinateScale = 1.0f
             floatArrayOf(
                 coordinateScale, 0.0f, offsetX,
                 0.0f, coordinateScale, offsetY,
@@ -2841,12 +2844,12 @@ class GlesYuvStacker(
         }
     }
 
-    private fun computeDirectSourceOffset(outputScale: Float = 1.0f): IntArray {
+    private fun computeDirectSourceOffset(): IntArray {
         if (!cpuRotateReadback) {
             return intArrayOf(0, 0)
         }
-        val referenceRenderOutputWidth = referenceOutputWidth(outputScale)
-        val referenceRenderOutputHeight = referenceOutputHeight(outputScale)
+        val referenceRenderOutputWidth = referenceOutputWidth
+        val referenceRenderOutputHeight = referenceOutputHeight
         val referenceGpuOutputWidth = if (cpuRotateReadback) referenceRenderOutputHeight else referenceRenderOutputWidth
         val referenceGpuOutputHeight = if (cpuRotateReadback) referenceRenderOutputWidth else referenceRenderOutputHeight
         val rotatedWidth = if (normalizedRotation == 90 || normalizedRotation == 270) height else width
@@ -2866,12 +2869,21 @@ class GlesYuvStacker(
         }
     }
 
-    private fun referenceOutputWidth(outputScale: Float): Int {
-        return max(1, (renderOutputWidth.toFloat() / outputScale.coerceAtLeast(1.0f)).roundToInt())
-    }
-
-    private fun referenceOutputHeight(outputScale: Float): Int {
-        return max(1, (renderOutputHeight.toFloat() / outputScale.coerceAtLeast(1.0f)).roundToInt())
+    private fun computeSuperResolutionTransform(): FloatArray {
+        val referenceGpuWidth = if (cpuRotateReadback) referenceOutputHeight else referenceOutputWidth
+        val referenceGpuHeight = if (cpuRotateReadback) referenceOutputWidth else referenceOutputHeight
+        val scaleX = referenceGpuWidth.toFloat() / gpuOutputWidth
+        val scaleY = referenceGpuHeight.toFloat() / gpuOutputHeight
+        // Map output pixel centers into the native crop before applying sensor rotation.
+        // Per-axis ratios preserve the exact crop after even output-size rounding.
+        return computeRenderTransform().apply {
+            this[2] += this[0] * (scaleX - 1f) * 0.5f + this[1] * (scaleY - 1f) * 0.5f
+            this[5] += this[3] * (scaleX - 1f) * 0.5f + this[4] * (scaleY - 1f) * 0.5f
+            this[0] *= scaleX
+            this[1] *= scaleY
+            this[3] *= scaleX
+            this[4] *= scaleY
+        }
     }
 
     private fun Float.formatScale(): String {
@@ -2951,7 +2963,6 @@ class GlesYuvStacker(
         private const val DEFAULT_MERTENS_CONTRAST_WEIGHT = 1.0f
         private const val DEFAULT_MERTENS_SATURATION_WEIGHT = 1.0f
         private const val DEFAULT_MERTENS_EXPOSURE_WEIGHT = 1.0f
-        private const val SUPER_RESOLUTION_SCALE = 2.0f
 
         fun supportsImageFormat(format: Int): Boolean {
             return format == ImageFormat.YUV_420_888 || format == ImageFormat.YCBCR_P010

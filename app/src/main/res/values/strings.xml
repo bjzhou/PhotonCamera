@@ -280,6 +280,9 @@
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
     <string name="settings_multi_frame_denoise_frame_count">Multi-frame denoise frames</string>
     <string name="settings_multi_frame_denoise_frame_count_description">Number of frames used for multi-frame denoising in Photo mode. More frames reduce noise further but take longer to process.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale">Multi-frame denoise output scale</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x keeps the original dimensions. Up to 2x width and height. Applies only to multi-frame denoising.</string>
+    <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
     <string name="settings_hdr_plus_frame_count">HDR+ frames</string>
     <string name="settings_hdr_plus_frame_count_description">Number of frames captured by HDR+. With bracket exposure enabled, 2 frames use normal plus long exposure when available, and 3 or more use the complete bracket plan.</string>
     <string name="settings_hdr_plus_bracket_exposure">HDR+ bracket exposure</string>
