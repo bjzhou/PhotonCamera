@@ -5,6 +5,7 @@ import android.graphics.*
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.util.TypedValue
+import androidx.annotation.RequiresApi
 import androidx.core.graphics.withSave
 import androidx.core.graphics.drawable.toBitmap
 import com.hinnka.mycamera.R
@@ -14,6 +15,8 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.utils.PLog
+import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 
@@ -40,7 +43,10 @@ class FrameRenderer(
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val photoShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val photoClipPath = Path()
-    private val gainmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    // ALPHA_8 stores gain samples in alpha; they are data, not coverage to blend over the fill.
+    private val gainmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        blendMode = BlendMode.SRC
+    }
 
     private data class FrameGeometry(
         val outputWidth: Int,
@@ -262,131 +268,45 @@ class FrameRenderer(
         return output
     }
 
+    /** Auxiliary passes reuse the SDR layout at gainmap resolution, including overlay alpha. */
+    @RequiresApi(34)
     fun renderGainmapContents(
         originalBitmap: Bitmap,
-        gainmapContents: Bitmap,
+        framedBitmap: Bitmap,
+        gainmap: Gainmap,
         template: FrameTemplate,
+        metadata: MediaMetadata,
+        strength: Float,
     ): Bitmap {
-        if (gainmapContents.isRecycled || originalBitmap.width <= 0 || originalBitmap.height <= 0) {
-            return gainmapContents
-        }
-
-        if (template.layout.position == FramePosition.IMAGE) {
-            return renderImageFrameGainmapContents(originalBitmap, gainmapContents, template.layout)
-        }
-
-        val geometry = calculateFrameGeometry(originalBitmap, template.layout) ?: return gainmapContents
-        if (
-            geometry.outputWidth == originalBitmap.width &&
-            geometry.outputHeight == originalBitmap.height &&
-            geometry.photoRect.left == 0f &&
-            geometry.photoRect.top == 0f
-        ) {
-            return gainmapContents
-        }
-
-        return renderGainmapIntoPhotoRect(
-            originalBitmap = originalBitmap,
-            gainmapContents = gainmapContents,
-            outputWidth = geometry.outputWidth,
-            outputHeight = geometry.outputHeight,
-            photoRect = geometry.photoRect
+        val contents = gainmap.gainmapContents
+        val size = android.util.Size(
+            (framedBitmap.width * contents.width.toFloat() / originalBitmap.width).roundToInt().coerceAtLeast(1),
+            (framedBitmap.height * contents.height.toFloat() / originalBitmap.height).roundToInt().coerceAtLeast(1),
         )
-    }
-
-    private fun calculateFrameGeometry(
-        originalBitmap: Bitmap,
-        layout: FrameLayout,
-    ): FrameGeometry? {
-        val expectedHeight = originalBitmap.height * 0.08f
-        val scale = expectedHeight / dpToPx(80)
-        val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
-        val borderWidth = (dpToPx(layout.borderWidthDp) * scale).toInt()
-
-        val outputWidth: Int
-        val outputHeight: Int
-        val photoLeft: Float
-        val photoTop: Float
-
-        when (layout.position) {
-            FramePosition.BOTTOM -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height + frameHeight
-                photoLeft = 0f
-                photoTop = 0f
+        val mapped = renderInternal(originalBitmap, template, metadata, RenderPass.GAINMAP, size, contents)
+        try {
+            val decorations = renderInternal(originalBitmap, template, metadata, RenderPass.DECORATIONS, size)
+            try {
+                val photo = renderInternal(originalBitmap, template, metadata, RenderPass.PHOTO, size)
+                try {
+                    check(mapped.width == size.width && mapped.height == size.height &&
+                        decorations.width == size.width && decorations.height == size.height &&
+                        photo.width == size.width && photo.height == size.height) {
+                        "Frame assets changed while composing the HDR output"
+                    }
+                    FrameGainmapComposer.apply(mapped, photo, decorations, framedBitmap, gainmap, strength)
+                } finally {
+                    if (photo !== originalBitmap) photo.recycle()
+                }
+            } finally {
+                if (decorations !== originalBitmap) decorations.recycle()
             }
-
-            FramePosition.TOP -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height + frameHeight
-                photoLeft = 0f
-                photoTop = frameHeight.toFloat()
-            }
-
-            FramePosition.BOTH -> {
-                outputWidth = originalBitmap.width + borderWidth * 2
-                outputHeight = originalBitmap.height + frameHeight * 2
-                photoLeft = borderWidth.toFloat()
-                photoTop = frameHeight.toFloat()
-            }
-
-            FramePosition.OVERLAY -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height
-                photoLeft = 0f
-                photoTop = 0f
-            }
-
-            FramePosition.BORDER -> {
-                outputWidth = originalBitmap.width + borderWidth * 2
-                outputHeight = originalBitmap.height + frameHeight + borderWidth
-                photoLeft = borderWidth.toFloat()
-                photoTop = borderWidth.toFloat()
-            }
-
-            FramePosition.IMAGE -> return null
+            PLog.d(TAG, "Framed HDR gainmap: position=${template.layout.position} size=$size strength=$strength")
+            return mapped
+        } catch (failure: Throwable) {
+            if (mapped !== originalBitmap && mapped !== contents) mapped.recycle()
+            throw failure
         }
-
-        if (outputWidth <= 0 || outputHeight <= 0) return null
-        return FrameGeometry(
-            outputWidth = outputWidth,
-            outputHeight = outputHeight,
-            photoRect = RectF(
-                photoLeft,
-                photoTop,
-                photoLeft + originalBitmap.width,
-                photoTop + originalBitmap.height
-            )
-        )
-    }
-
-    private fun renderGainmapIntoPhotoRect(
-        originalBitmap: Bitmap,
-        gainmapContents: Bitmap,
-        outputWidth: Int,
-        outputHeight: Int,
-        photoRect: RectF,
-    ): Bitmap {
-        val gainmapWidthScale = gainmapContents.width.toFloat() / originalBitmap.width.toFloat()
-        val gainmapHeightScale = gainmapContents.height.toFloat() / originalBitmap.height.toFloat()
-        val outputGainmapWidth = (outputWidth * gainmapWidthScale).roundToInt().coerceAtLeast(1)
-        val outputGainmapHeight = (outputHeight * gainmapHeightScale).roundToInt().coerceAtLeast(1)
-        val output = createNeutralGainmapBitmap(
-            width = outputGainmapWidth,
-            height = outputGainmapHeight,
-            source = gainmapContents
-        )
-        val canvas = Canvas(output)
-        val outputScaleX = outputGainmapWidth.toFloat() / outputWidth.toFloat()
-        val outputScaleY = outputGainmapHeight.toFloat() / outputHeight.toFloat()
-        val destination = RectF(
-            photoRect.left * outputScaleX,
-            photoRect.top * outputScaleY,
-            photoRect.right * outputScaleX,
-            photoRect.bottom * outputScaleY
-        )
-        canvas.drawBitmap(gainmapContents, null, destination, gainmapPaint)
-        return output
     }
 
     private fun drawPhotoBitmap(
@@ -1092,47 +1012,6 @@ class FrameRenderer(
         return output
     }
 
-    private fun renderImageFrameGainmapContents(
-        originalBitmap: Bitmap,
-        gainmapContents: Bitmap,
-        layout: FrameLayout
-    ): Bitmap {
-        val frameBitmap = loadImageFrameBitmap(originalBitmap, layout) ?: return gainmapContents
-        try {
-            val transparentBounds = detectTransparentBounds(frameBitmap)
-            if (transparentBounds.width() <= 0 || transparentBounds.height() <= 0) {
-                PLog.e(TAG, "No transparent area detected in frame image gainmap")
-                return gainmapContents
-            }
-
-            val output = createNeutralGainmapBitmap(
-                width = (frameBitmap.width * gainmapContents.width.toFloat() / originalBitmap.width.toFloat())
-                    .roundToInt()
-                    .coerceAtLeast(1),
-                height = (frameBitmap.height * gainmapContents.height.toFloat() / originalBitmap.height.toFloat())
-                    .roundToInt()
-                    .coerceAtLeast(1),
-                source = gainmapContents
-            )
-            val canvas = Canvas(output)
-            val outputScaleX = output.width.toFloat() / frameBitmap.width.toFloat()
-            val outputScaleY = output.height.toFloat() / frameBitmap.height.toFloat()
-            drawBitmapCenterCrop(
-                canvas = canvas,
-                bitmap = gainmapContents,
-                destination = RectF(
-                    transparentBounds.left * outputScaleX,
-                    transparentBounds.top * outputScaleY,
-                    transparentBounds.right * outputScaleX,
-                    transparentBounds.bottom * outputScaleY
-                )
-            )
-            return output
-        } finally {
-            frameBitmap.recycle()
-        }
-    }
-
     private fun loadImageFrameBitmap(originalBitmap: Bitmap, layout: FrameLayout): Bitmap? {
         var frameBitmap = try {
             val options = BitmapFactory.Options().apply {
@@ -1201,17 +1080,11 @@ class FrameRenderer(
         return frameBitmap
     }
 
-    private fun createNeutralGainmapBitmap(width: Int, height: Int, source: Bitmap): Bitmap {
-        val config = source.config?.takeUnless { it == Bitmap.Config.HARDWARE } ?: Bitmap.Config.ALPHA_8
-        return Bitmap.createBitmap(width, height, config).also {
-            it.eraseColor(Color.TRANSPARENT)
-        }
-    }
-
     private fun drawBitmapCenterCrop(
         canvas: Canvas,
         bitmap: Bitmap,
-        destination: RectF
+        destination: RectF,
+        paint: Paint? = null,
     ) {
         if (destination.width() <= 0f || destination.height() <= 0f) return
 
@@ -1228,7 +1101,10 @@ class FrameRenderer(
         val top = destination.top - (scaledHeight - dstHeight) / 2f
         val targetRect = RectF(left, top, left + scaledWidth, top + scaledHeight)
 
-        canvas.drawBitmap(bitmap, null, targetRect, null)
+        canvas.withSave {
+            clipRect(destination)
+            drawBitmap(bitmap, null, targetRect, paint)
+        }
     }
 
     /**

@@ -953,7 +953,7 @@ class PhotoProcessor(
 
         val sourceGainmap = gainmapResult.gainmap
         val sourceContents = sourceGainmap.getGainmapContents()
-        val framedContents = frameRenderer.renderGainmapContents(input, sourceContents, template)
+        val framedContents = frameRenderer.renderGainmapContents(input, sourceGainmap, template)
         if (framedContents === sourceContents) {
             return gainmapResult
         }
