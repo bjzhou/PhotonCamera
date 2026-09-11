@@ -4,10 +4,13 @@ import android.opengl.GLES30
 import com.hinnka.mycamera.utils.PLog
 
 /**
- * GPU-only adaptive unsharp mask for the final encoded RAW texture.
+ * GPU-only, scale-supported unsharp mask for the final encoded RAW texture.
  *
  * The blur follows Phocus' separable 9-tap luminance USM structure. Adjacent Gaussian taps are
  * combined through bilinear sampling, reducing each direction from nine texture reads to five.
+ * A 3x3 binomial reference removes pixel-scale oscillations from the enhancement signal. The
+ * increment is limited by local luminance extrema and RGB gamut headroom, so sharpening cannot
+ * introduce new overshoot or channel clipping. Both stages operate in the same encoded domain.
  */
 internal class RawSharpenPass(
     private val quad: RawFullscreenQuad,
@@ -67,7 +70,7 @@ internal class RawSharpenPass(
         )
         PLog.d(
             TAG,
-            "RAW sharpen submitted path=GLES_SEPARABLE_ADAPTIVE_USM " +
+            "RAW sharpen submitted path=GLES_SCALE_SUPPORTED_USM " +
                 "size=${input.width}x${input.height} strength=$strength cpuReadback=false",
         )
         return Output(input.targetTextureId, input.width, input.height)
@@ -354,6 +357,32 @@ internal class RawSharpenPass(
                 return clamp((absoluteDetail - transitionStart) / noiseRange, 0.0, 1.0);
             }
 
+            void localLumaStatistics(
+                float centerLuma,
+                out float filteredLuma,
+                out float minimumLuma,
+                out float maximumLuma
+            ) {
+                // Separable [1, 2, 1] / 4: zero response at the pixel-alternating frequency
+                // on either axis. This is only an enhancement reference, not an output blur.
+                filteredLuma = 0.25 * centerLuma;
+                minimumLuma = centerLuma;
+                maximumLuma = centerLuma;
+                for (int y = -1; y <= 1; ++y) {
+                    for (int x = -1; x <= 1; ++x) {
+                        if (x == 0 && y == 0) continue;
+                        float luma = dot(texture(
+                            uInputTexture,
+                            vTexCoord + vec2(float(x), float(y)) * uTexelSize
+                        ).rgb, YCC_LUMA);
+                        float weight = (x == 0 || y == 0) ? 0.125 : 0.0625;
+                        filteredLuma += weight * luma;
+                        minimumLuma = min(minimumLuma, luma);
+                        maximumLuma = max(maximumLuma, luma);
+                    }
+                }
+            }
+
             void main() {
                 vec4 center = texture(uInputTexture, vTexCoord);
                 if (uSharpening <= 0.0) {
@@ -362,10 +391,37 @@ internal class RawSharpenPass(
                 }
 
                 float centerLuma = dot(center.rgb, YCC_LUMA);
-                float detail = centerLuma - horizontalBlur(vTexCoord);
+                float localLuma;
+                float minimumLuma;
+                float maximumLuma;
+                localLumaStatistics(centerLuma, localLuma, minimumLuma, maximumLuma);
+                float broadLuma = horizontalBlur(vTexCoord);
+                float detail = centerLuma - broadLuma;
+                // Enhance only the component that survives the small reference filter and
+                // agrees with the center's detail. A neighboring edge must not reverse the
+                // correction, and a one-pixel spike must not supply its own sharpening signal.
+                float direction = sign(detail);
+                float supportedDetail = direction * min(
+                    abs(detail),
+                    max(direction * (localLuma - broadLuma), 0.0)
+                );
                 float darkGate = smoothstep(0.0, max(uDarkLimit, 1e-5), centerLuma);
-                float factor = uSharpening * noiseGate(abs(detail)) * darkGate;
-                vec3 result = center.rgb + vec3(detail * factor);
+                float requestedDelta = supportedDetail * uSharpening *
+                    noiseGate(abs(supportedDetail)) * darkGate;
+                float lumaHeadroom = requestedDelta >= 0.0
+                    ? maximumLuma - centerLuma
+                    : centerLuma - minimumLuma;
+                // One common RGB increment preserves encoded chroma. Limit that increment
+                // before applying it, instead of letting independent channel clipping shift it.
+                float gamutHeadroom = requestedDelta >= 0.0
+                    ? 1.0 - max(center.r, max(center.g, center.b))
+                    : min(center.r, min(center.g, center.b));
+                float headroom = max(min(lumaHeadroom, gamutHeadroom), 0.0);
+                // Smoothly approach the available contrast without crossing local extrema,
+                // including at maximum slider strength. Flat areas remain exactly unchanged.
+                float delta = requestedDelta * headroom /
+                    max(headroom + abs(requestedDelta), 1e-6);
+                vec3 result = center.rgb + vec3(delta);
                 fragColor = vec4(clamp(result, 0.0, 1.0), center.a);
             }
         """.trimIndent()

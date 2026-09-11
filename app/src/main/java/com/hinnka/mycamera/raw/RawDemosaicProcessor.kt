@@ -7617,7 +7617,7 @@ class RawDemosaicProcessor {
         if (metadata.mgcSharpenAttenuationScale != null) {
             PLog.i(
                 TAG,
-                "MGC final sharpen uses GLES adaptive USM size=${metadata.width}x${metadata.height} " +
+                "MGC final sharpen uses GLES scale-supported USM size=${metadata.width}x${metadata.height} " +
                     "runtimeAttenuation=$runtimeAttenuation slider=$sliderValue " +
                     "algorithmStrength=$algorithmStrength effectiveStrength=$effectiveStrength " +
                     "cpuReadback=false",
