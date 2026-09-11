@@ -16,6 +16,7 @@
     <!-- Focus -->
     
     <!-- Aspect Ratio -->
+    <string name="camera_hyperfocal_distance_centimeters">%dcm</string>
     <string name="aspect_ratio">アスペクト比</string>
     
     <!-- Permissions -->
@@ -129,7 +130,7 @@
     <string name="settings_volume_key_action_none">音量調節</string>
     <string name="settings_volume_key_action_capture">シャッター</string>
     <string name="settings_volume_key_action_exposure">露出補正</string>
-    <string name="settings_volume_key_action_zoom">フォーカス切り替え</string>
+    <string name="settings_volume_key_action_zoom">焦点距離切り替え</string>
     <string name="settings_storage_path_permission_failed">フォルダ権限の保存に失敗しました</string>
     <string name="settings_auto_save">自動保存</string>
     <string name="settings_auto_save_description">撮影後に写真を自動的に保存します</string>
@@ -159,9 +160,10 @@
     <string name="settings_custom_background">カスタム...</string>
     
     <!-- LUT -->
+    <string name="settings_capture_button_color_picker">シャッターボタンの色</string>
     <string name="filter_intensity">LUT強度</string>
     <string name="filters_panel">LUT一覧</string>
-    <string name="mgc_filter_selection_failed">最大限の色ディテールを保持するため4:4:4クロマサンプリングでJPEGを書き出します。ファイルは大きくなり、HEIC書き出しは無効化され、利用可能な場合はUltra HDRゲインマップを保持します。</string>
+    <string name="mgc_filter_selection_failed">LUTを適用できませんでした</string>
     <string name="toggle_display_mode">表示モード切り替え</string>
     
     <!-- Billing & Premium -->
@@ -288,6 +290,7 @@
     <!-- Frame Import Help -->
     
     <!-- Camera Calibration -->
+    <string name="frame_editor_summary_spacer">行=%1$d • %2$ddp</string>
     <string name="settings_section_calibration">カメラキャリブレーション</string>
     <string name="settings_camera_orientation">写真の向き</string>
     <string name="settings_camera_orientation_description">レンズごとに写真の回転補正を個別に設定します。</string>
@@ -303,6 +306,7 @@
     <!-- About & Donation -->
     <string name="settings_donation">寄付</string>
     <string name="settings_donation_description">Photon Cameraの開発を支援する</string>
+    <string name="update_install_permission_hint">このアプリに「不明なアプリのインストール」を許可してから、もう一度「インストール」をタップしてください。</string>
     <string name="settings_default_focal_length">デフォルトの焦点距離</string>
     <string name="settings_default_focal_length_description">アプリ起動時に自動的に切り替える焦点距離を設定します。</string>
     <string name="settings_use_p010">P010 (10ビット YUV)</string>
@@ -310,6 +314,7 @@
     <string name="refresh">更新</string>
     <string name="refresh_success">プレビューを更新しました</string>
     <string name="refresh_failed">プレビューの更新に失敗しました</string>
+    <string name="settings_custom_focal_length_hint">例：35, 50, 85, 2x, 4x</string>
     <string name="settings_dro_mode">RAWダイナミックレンジ最適化 (DRO)</string>
     <string name="settings_dro_off">オフ</string>
     <string name="settings_dro_dr100">DR100</string>
@@ -330,14 +335,15 @@
     <string name="settings_language">言語</string>
     <string name="settings_language_description">アプリで使用する言語を選択します</string>
     <string name="settings_language_system">システム設定に従う</string>
+    <string name="eis_plus_unavailable_message">この端末では内蔵の手ブレ補正を無効にできません。二重補正による映像の不安定化を避けるため、EIS+を無効にしました。</string>
     <string name="settings_video_nr_level_description">動画のプレビューと録画のハードウェアノイズ低減を、写真とは個別に設定します。</string>
     <string name="settings_video_edge_level_description">動画のプレビューと録画のハードウェアシャープネスを、写真とは個別に設定します。</string>
     <string name="toolbox_title">ツールボックス</string>
     <string name="toolbox_description">撮影・クリエイティブツール</string>
     <string name="film_library_title">フィルムライブラリ</string>
     <string name="film_library_desc">さまざまなフィルム銘柄と、その写りの特徴をチェックできます。</string>
-    <string name="color_walk_title">カメラウォーク</string>
-    <string name="color_walk_desc">ラーウォークは、特定の「色」に意識を向けながら歩くマインドフルネスのひとつです。ひとつの色に注目することで、歩調をゆるめ、いつもの景色の中に隠れた美しさを見つけていきます。今日の気分に合う色をひとつ選び、その色を手がかりに景色を切り取ってみましょう。</string>
+    <string name="color_walk_title">カラーウォーク</string>
+    <string name="color_walk_desc">カラーウォークは、特定の「色」に意識を向けながら歩くマインドフルネスのひとつです。ひとつの色に注目することで、歩調をゆるめ、いつもの景色の中に隠れた美しさを見つけていきます。今日の気分に合う色をひとつ選び、その色を手がかりに景色を切り取ってみましょう。</string>
     <string name="color_walk_short_desc">色をたどるフォトウォークで、日常の景色を見つめ直してみましょう。</string>
     <string name="color_walk_recommendations">おすすめフィルター</string>
     <string name="color_walk_random">おまかせ</string>
@@ -349,6 +355,7 @@
     <string name="capture_mode_photo">写真</string>
     <string name="capture_mode_video">動画</string>
     <string name="camera_focus_auto">オート</string>
+    <string name="settings_top_sheet_aspect_ratios_summary">表示中： %1$s</string>
     <string name="settings_custom_aspect_ratio">カスタムアスペクト比</string>
     <string name="settings_custom_aspect_ratio_width">横幅</string>
     <string name="settings_custom_aspect_ratio_height">高さ</string>
@@ -357,6 +364,7 @@
     <string name="video_torch_chip">トーチ</string>
     <string name="video_aspect_chip">アスペクト</string>
 
+    <string name="video_log_chip">ログ</string>
     <string name="video_option_off">オフ</string>
     <string name="video_aspect_open_gate">オープンゲート</string>
     <string name="video_log_off">オフ</string>
@@ -380,7 +388,7 @@
     <string name="export_video_confirm">エフェクトを動画に焼き込んでギャラリーへ保存しますか？ 動画の長さによって処理に時間がかかる場合があります。元動画は変更されません。</string>
     <string name="export_video_success">動画を書き出しました</string>
     <string name="export_video_failed">動画の書き出しに失敗しました</string>
-    <string name="crop_free">無料</string>
+    <string name="crop_free">フリー</string>
     <string name="crop_original">オリジナル</string>
     <string name="crop_reset">リセット</string>
     <string name="rotate">回転</string>
@@ -404,10 +412,11 @@
     <string name="settings_eye_focus_description">顔を検出し、安定して検出できている瞳を優先してAFします</string>
     <string name="settings_focus_lens_group_virtual_lens_depth">仮想レンズ &amp; 深度</string>
     <string name="settings_focus_lens_group_lens_discovery">レンズ検出</string>
+    <string name="settings_focus_lens_group_camera2_extensions">Camera2拡張機能</string>
     <string name="settings_section_capture_storage">撮影 &amp; 保存</string>
     <string name="settings_section_video">動画</string>
     <string name="settings_separate_video_lut">写真用LUTと動画用LUTを分離</string>
-    <string name="settings_separate_video_lut_description">"  動画モードでは独立したLUT選択を使用し、その選択を記憶します。"</string>
+    <string name="settings_separate_video_lut_description">動画モードでは独立したLUT選択を使用し、その選択を記憶します。</string>
     <string name="settings_video_lut">動画LUT</string>
     <string name="settings_video_lut_description">選択中のLUT： %1$s</string>
     <string name="settings_video_lock_lens">レンズ固定</string>
@@ -479,7 +488,7 @@
     <string name="raw_dcp_import">DCPを読み込み</string>
     <string name="raw_dcp_import_success">DCPを読み込みました： %1$s</string>
     <string name="raw_dcp_import_success_count">DCPプロファイルを %1$d 件読み込みました</string>
-    <string name="raw_dcp_import_partial">CPプロファイルを %1$d 件読み込み、 %2$d 件失敗しました</string>
+    <string name="raw_dcp_import_partial">DCPプロファイルを %1$d 件読み込み、 %2$d 件失敗しました</string>
     <string name="raw_dcp_import_failed">DCPの読み込みに失敗しました</string>
     <string name="raw_dcp_delete_success">DCPを削除しました</string>
     <string name="raw_dcp_delete_failed">DCPの削除に失敗しました</string>
@@ -487,7 +496,7 @@
     <string name="raw_dcp_scope_current_lens">現在のレンズ</string>
     <string name="raw_dcp_scope_current_lens_named">現在のレンズ： %1$s</string>
     <string name="raw_dcp_unified_title">統合DCP</string>
-    <string name="raw_dcp_summary_with_overrides">統合DCP＋レンズ個別上書き  %1$d 件</string>
+    <string name="raw_dcp_summary_with_overrides">統合＋レンズ個別上書き %1$d 件</string>
     <string name="raw_dcp_lens_uses_unified">統合設定を使用： %1$s</string>
     <string name="raw_dcp_lens_override_value">上書き： %1$s</string>
     <string name="raw_dcp_use_unified">統合DCP（ %1$s ）を使用</string>
@@ -548,6 +557,7 @@
     <string name="settings_isz_lens_kind_macro">マクロ</string>
     <string name="settings_isz_add_lens_confirm">レンズを追加</string>
     <string name="settings_isz_lens_unknown_focal_length">焦点距離不明</string>
+    <string name="settings_vendor_capture_title">ISZ / DCG ベンダーキー</string>
     <string name="settings_vendor_capture_description">レンズ： %1$s 。この実験的な端末固有キーはこのレンズにのみ適用されます。対応保証はありません。撮影失敗やアプリクラッシュが起きる場合は無効にしてください。</string>
     <string name="settings_vendor_capture_qcom_sensor_mode">Qualcommセンサーモード</string>
     <string name="settings_vendor_capture_vivo_sensor_mode">vivoセンサーモード強制</string>
@@ -825,6 +835,7 @@
     <string name="ghost_mode_overlay_permission">• オーバーレイ権限：継続監視のため、アプリをバックグラウンドで安定動作させます。</string>
     <string name="screen_capture_test_status_idle">画面キャプチャプレビューを開始できます。</string>
     <string name="screen_capture_status_running">画面キャプチャ中です。ピクチャー・イン・ピクチャーで表示しています。</string>
+    <string name="screen_capture_return_to_pip">ピクチャーインピクチャー</string>
     <string name="screen_capture_test_status_stopped">画面キャプチャを停止しました。</string>
     <string name="screen_capture_test_status_permission_denied">画面キャプチャ権限が拒否されました。</string>
     <string name="screen_capture_test_status_failed">画面キャプチャの開始に失敗しました。</string>
@@ -971,6 +982,7 @@
     <string name="lut_synthesis_mask_skin">肌色</string>
     <string name="lut_synthesis_mask_sky">空</string>
     <string name="toolbox_puzzle_title">コラージュ</string>
+    <string name="toolbox_puzzle_desc">写真を自動で段違いに配置し、ワンタップでコラージュを作成</string>
     <string name="puzzle_select_photos">写真を選択</string>
     <string name="puzzle_columns">列数</string>
     <string name="puzzle_corner_radius">角丸</string>
@@ -989,6 +1001,7 @@
     <string name="preset_new">新規プリセット</string>
     <string name="preset_delete_confirm">このプリセットを削除しますか？</string>
     <string name="preset_name_hint">プリセット名</string>
+
     <string name="preset_builtin_portrait">ポートレートスタイル</string>
     <string name="preset_builtin_classic_film">クラシックフィルム</string>
     <string name="preset_builtin_monochrome">モノクローム</string>
@@ -1004,6 +1017,7 @@
     <string name="preset_restore_defaults_confirm">デフォルトプリセットを復元すると、すべてのカスタム変更が消去されます。続行しますか？</string>
     <string name="preset_custom_badge">カスタム</string>
     <string name="preset_builtin_badge">内蔵</string>
+    <string name="settings_raw_group_development">現像・カラー</string>
     <string name="settings_raw_group_capture_output">出力</string>
     <string name="settings_raw_group_sensor_correction">センサー補正</string>
     <string name="settings_raw_max_default_luma_denoise">HDR+ベイク済み輝度NR</string>
@@ -1019,4 +1033,84 @@
     <string name="video_log_color_space_auto">色空間は Log 形式に合わせて自動設定されます。</string>
     <string name="settings_raw_camera_color_matching">カメラの色に合わせる</string>
     <string name="settings_raw_camera_color_matching_description">オンにすると撮影に使ったカメラに合わせて色を調整し、オフにすると元の処理を使用します。</string>
+    <string name="camera_hyperfocal_label">HYP</string>
+    <string name="camera_hyperfocal_distance_meters">%.1fm</string>
+    <string name="settings_macro_camera_id_description">マクロレンズとして強制使用する背面カメラIDを選択します。「自動」では現在のカメラ検出方式を使用します。</string>
+    <string name="settings_macro_camera_id_auto">自動</string>
+    <string name="settings_capture_button_default">デフォルト</string>
+    <string name="settings_capture_button_color">カラー</string>
+    <string name="settings_capture_button_image">画像</string>
+    <string name="frame_editor_element_text">テキスト</string>
+    <string name="frame_editor_element_logo">ロゴ</string>
+    <string name="frame_editor_element_divider">区切り線</string>
+    <string name="frame_editor_element_spacer">スペーサー</string>
+    <string name="frame_editor_position_top">上</string>
+    <string name="frame_editor_position_bottom">下</string>
+    <string name="frame_editor_position_both">上下</string>
+    <string name="frame_editor_position_overlay">オーバーレイ</string>
+    <string name="frame_editor_position_border">枠</string>
+    <string name="frame_editor_position_image">画像</string>
+    <string name="frame_editor_text_type_device_model">デバイスモデル</string>
+    <string name="frame_editor_text_type_brand">ブランド</string>
+    <string name="frame_editor_text_type_date">日付</string>
+    <string name="frame_editor_text_type_time">時刻</string>
+    <string name="frame_editor_text_type_datetime">日時</string>
+    <string name="frame_editor_text_type_location">位置情報</string>
+    <string name="frame_editor_text_type_shutter_speed">シャッタースピード</string>
+    <string name="frame_editor_text_type_focal_length">焦点距離</string>
+    <string name="frame_editor_text_type_focal_length_35mm">35mm判換算</string>
+    <string name="frame_editor_text_type_aperture">絞り</string>
+    <string name="frame_editor_text_type_resolution">解像度</string>
+    <string name="frame_editor_text_type_custom">カスタムテキスト</string>
+    <string name="frame_editor_text_type_app_name">アプリ名</string>
+    <string name="frame_editor_logo_type_brand">ブランドロゴ</string>
+    <string name="frame_editor_logo_type_app">アプリロゴ</string>
+    <string name="frame_editor_alignment_start">左揃え</string>
+    <string name="frame_editor_alignment_center">中央揃え</string>
+    <string name="frame_editor_alignment_end">右揃え</string>
+    <string name="frame_editor_font_weight_normal">標準</string>
+    <string name="frame_editor_font_weight_medium">中</string>
+    <string name="frame_editor_font_weight_bold">太字</string>
+    <string name="frame_editor_divider_orientation_horizontal">水平</string>
+    <string name="frame_editor_divider_orientation_vertical">垂直</string>
+    <string name="frame_editor_summary_text">%1$s • %2$s • 行=%3$d</string>
+    <string name="settings_community_group">コミュニティ</string>
+    <string name="settings_check_update">アップデートを確認</string>
+    <string name="settings_check_update_description">現在のバージョン： %1$s</string>
+    <string name="settings_check_update_running">アップデートを確認・ダウンロード中…</string>
+    <string name="update_checking">アップデートを確認中…</string>
+    <string name="update_no_update">最新バージョンです</string>
+    <string name="update_downloading">アップデートが見つかりました。APKをダウンロード中…</string>
+    <string name="update_failed">アップデートに失敗しました。しばらくしてからもう一度お試しください。</string>
+    <string name="update_ready_title">アップデートの準備完了</string>
+    <string name="update_ready_message">アップデートAPKをダウンロードしました。今すぐインストールしますか？</string>
+    <string name="update_install_now">インストール</string>
+    <string name="settings_capture_button">シャッターボタン</string>
+    <string name="settings_capture_button_description">シャッターボタンをデフォルトデザイン、カラー、または画像でカスタマイズします。動画の操作ボタンは標準の赤色表示を使用します。</string>
+    <string name="settings_main_camera_id">メインカメラID</string>
+    <string name="settings_main_camera_id_description">1×として使用する背面カメラIDを選択します。</string>
+    <string name="settings_main_camera_id_option">カメラID %1$s</string>
+    <string name="settings_macro_camera_id">マクロカメラID</string>
+    <string name="settings_logical_multi_camera_discovery">論理マルチカメラ検出</string>
+    <string name="settings_logical_multi_camera_discovery_description">論理マルチカメラIDから公開されている物理カメラを検出します。互換性のためデフォルトはオフです。</string>
+    <string name="settings_logical_camera_binding_whitelist">論理／物理カメラ ホワイトリスト</string>
+    <string name="settings_logical_camera_binding_whitelist_description">0/2、0/3 のような論理／物理カメラの組み合わせを強制指定します。自動検出がオフでも、この設定は適用されます。</string>
+    <string name="settings_custom_lens_ids">カスタムレンズID</string>
+    <string name="settings_custom_lens_ids_description">カメラIDをカンマ区切りで手動追加します。利用可能なIDは、専用マーカー付きでレンズ一覧に表示されます。</string>
+    <string name="settings_lens_id_blacklist">レンズIDブラックリスト</string>
+    <string name="settings_lens_id_blacklist_description">複数のカメラIDをカンマで区切って指定します。一致するレンズは検出方法にかかわらず無効化されます。</string>
+    <string name="settings_custom_focal_length_add">カスタム焦点距離を追加</string>
+    <string name="settings_use_p3_color_space">Display P3色空間</string>
+    <string name="settings_use_p3_color_space_description">対応端末でDisplay P3出力を有効にします。デフォルトはオフです。</string>
+    <string name="settings_ultra_hdr_gain_map_description">プロモードで撮影した写真をUltra HDRで出力します。</string>
+    <string name="settings_screen_hdr">HDR表示</string>
+    <string name="settings_screen_hdr_description">画面表示でハイダイナミックレンジ（HDR）を有効にします。画面が黄ばんだり暗くなったりする場合はオフにしてください。</string>
+    <string name="hdr_strength_label">HDR強度</string>
+    <string name="hdr_toggle_failed">HDRの切り替えに失敗しました</string>
+    <string name="hdr_strength_update_failed">HDR強度の更新に失敗しました</string>
+    <string name="eis_plus_unavailable_title">EIS+は利用できません</string>
+    <string name="settings_raw_color_engine_lumix">LUMIX</string>
+    <string name="settings_raw_color_engine_lumix_description">LUMIX S9の色再現を使用し、フォトスタイルを選択できます。</string>
+    <string name="settings_raw_lumix_photo_style">S9 フォトスタイル</string>
+    <string name="settings_raw_lumix_photo_style_description">LUMIX S9のフォトスタイルを選択します。デフォルトはスタンダードです。</string>
 </resources>
