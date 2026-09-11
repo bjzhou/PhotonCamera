@@ -795,7 +795,7 @@ class Camera2Controller(private val context: Context) {
             if (afStateChanged) {
                 lastAfState = afState
             }
-            if (_state.value.isFocusing) {
+            if (_state.value.isAutoFocus && _state.value.isFocusing) {
                 when (afState) {
                     CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> {
                         logFocusTerminalResult(result, afState)
@@ -817,7 +817,7 @@ class Camera2Controller(private val context: Context) {
             }
 
             // 场景变化检测：对焦锁定后持续监测曝光变化和焦距跳变
-            if (isFocusLockedWaitingForSceneChange) {
+            if (_state.value.isAutoFocus && isFocusLockedWaitingForSceneChange) {
                 // 对焦锁定后前几帧镜头还在微调，跳过不检测
                 if (focusLockSettleFrames > 0) {
                     focusLockSettleFrames--
@@ -910,7 +910,8 @@ class Camera2Controller(private val context: Context) {
                 awbTemperatureMin = awbRange.lower,
                 awbTemperatureMax = awbRange.upper,
                 physicalAperture = aperture ?: _state.value.physicalAperture,
-                focusDistance = focusDistance
+                // 手动对焦保留用户目标值，避免镜头移动中的回报值改变后续拍摄和预览请求。
+                focusDistance = if (_state.value.isAutoFocus) focusDistance else _state.value.focusDistance
             )
         }
     }
@@ -2095,7 +2096,7 @@ class Camera2Controller(private val context: Context) {
     private fun openCameraNow(request: CameraOpenRequest) {
         val surfaceTexture = request.surfaceTexture
         val preserveVideoRecording = request.preserveVideoRecording
-        resetFocusForCameraOpen()
+        clearPointFocusState()
         val openGeneration = ++cameraOpenGeneration
 
         // 确保在权限已授予后才发现相机（延迟初始化）
@@ -5773,7 +5774,13 @@ class Camera2Controller(private val context: Context) {
      * 设置自动对焦开关
      */
     fun setAutoFocus(auto: Boolean) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setAutoFocus(auto) }
+            return
+        }
         clearHyperfocalFocusMemory()
+        clearPointFocusState()
         _state.value = _state.value.copy(
             isAutoFocus = auto,
             isHyperfocalFocusEnabled = false,
@@ -5782,7 +5789,9 @@ class Camera2Controller(private val context: Context) {
         )
         if (!isCaptureFocusFrozen) {
             previewRequestBuilder?.apply {
+                clearCustomAfRegions(this)
                 applyFocusSettings(this, _state.value)
+                applyMeteringRegions()
                 updatePreview()
             }
         } else {
@@ -5794,6 +5803,11 @@ class Camera2Controller(private val context: Context) {
      * 设置对焦距离 (0.0 ~ minimumFocusDistance)
      */
     fun setFocusDistance(distance: Float) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setFocusDistance(distance) }
+            return
+        }
         val minFocusDistance = _state.value.minimumFocusDistance
         if (minFocusDistance <= 0) return
 
@@ -5817,6 +5831,11 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setHyperfocalFocusEnabled(enabled: Boolean) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setHyperfocalFocusEnabled(enabled) }
+            return
+        }
         if (enabled) {
             applyHyperfocalFocus(storePreviousFocus = true, updatePreview = true)
         } else {
@@ -5859,6 +5878,7 @@ class Camera2Controller(private val context: Context) {
         }
 
         val clampedFocusDistance = result.focusDistanceDiopters.coerceIn(0f, minFocusDistance)
+        clearPointFocusState()
         _state.value = _state.value.copy(
             isAutoFocus = false,
             focusDistance = clampedFocusDistance,
@@ -5869,7 +5889,9 @@ class Camera2Controller(private val context: Context) {
 
         if (updatePreview && !isCaptureFocusFrozen) {
             previewRequestBuilder?.apply {
+                clearCustomAfRegions(this)
                 applyFocusSettings(this, _state.value)
+                applyMeteringRegions()
                 updatePreview()
             }
         }
@@ -5891,6 +5913,7 @@ class Camera2Controller(private val context: Context) {
             ?: _state.value.focusDistance
 
         clearHyperfocalFocusMemory()
+        clearPointFocusState()
         _state.value = _state.value.copy(
             isAutoFocus = restoreAutoFocus,
             focusDistance = restoreFocusDistance,
@@ -5901,7 +5924,9 @@ class Camera2Controller(private val context: Context) {
 
         if (updatePreview && !isCaptureFocusFrozen) {
             previewRequestBuilder?.apply {
+                clearCustomAfRegions(this)
                 applyFocusSettings(this, _state.value)
+                applyMeteringRegions()
                 updatePreview()
             }
         }
@@ -5987,38 +6012,27 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Continuous AF restore deferred while multi-frame focus is frozen")
             return
         }
-        isFocusLockedWaitingForSceneChange = false
-        sceneChangeFrameCount = 0
-        focusLockedReferenceIso = 0
-        focusLockedReferenceExposureNs = 0L
-        focusLockedReferenceDistance = 0f
-        focusLockSettleFrames = 0
-        eyeTargetLastSeenElapsedMs = 0L
-
+        clearPointFocusState()
         previewRequestBuilder?.apply {
-            set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-            val afMode = resolveAutoFocusMode(_state.value.captureMode)
-            set(CaptureRequest.CONTROL_AF_MODE, afMode)
-            _state.value = _state.value.copy(currentAfMode = afMode)
+            // 解锁触屏 AF 不能改变用户选择的手动对焦模式。
+            applyFocusSettings(this, _state.value)
             clearCustomAfRegions(this)
             applyMeteringRegions()
             updatePreview()
         }
-        _state.value = _state.value.copy(
-            focusPoint = null,
-            focusPointSource = FocusPointSource.MANUAL,
-            isFocusLocked = false,
-            isFocusing = false,
-            focusSuccess = null
-        )
     }
 
     fun unlockFocus() {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { unlockFocus() }
+            return
+        }
         PLog.d(TAG, "Unlock focus")
         restoreContinuousAf()
     }
 
-    private fun resetFocusForCameraOpen() {
+    private fun clearPointFocusState() {
         isFocusLockedWaitingForSceneChange = false
         sceneChangeFrameCount = 0
         focusLockedReferenceIso = 0
@@ -6082,6 +6096,10 @@ class Camera2Controller(private val context: Context) {
         }
         if (isCaptureFocusFrozen || _state.value.isCapturing) {
             PLog.d(TAG, "Ignoring focus update while capture focus is frozen")
+            return
+        }
+        if (!_state.value.isAutoFocus) {
+            PLog.d(TAG, "Ignoring point-focus AF trigger while manual focus is active: source=$source")
             return
         }
         if (
@@ -6244,6 +6262,7 @@ class Camera2Controller(private val context: Context) {
         }
         if (!normX.isFinite() || !normY.isFinite()) return
         val currentState = _state.value
+        if (!currentState.isAutoFocus) return
         if (currentState.focusPoint != null && currentState.focusPointSource == FocusPointSource.MANUAL) {
             return
         }
@@ -6264,7 +6283,7 @@ class Camera2Controller(private val context: Context) {
         if (_state.value.focusPointSource != FocusPointSource.EYE) return
         PLog.d(TAG, "Cancel eye focus: $reason")
         if (isCaptureFocusFrozen || !_state.value.supportsPointAutoFocus) {
-            clearEyeFocusState()
+            clearPointFocusState()
             return
         }
         if (_state.value.isAutoFocus) {
@@ -6276,7 +6295,7 @@ class Camera2Controller(private val context: Context) {
                 applyMeteringRegions()
                 updatePreview()
             }
-            clearEyeFocusState()
+            clearPointFocusState()
         }
     }
 
@@ -6284,23 +6303,6 @@ class Camera2Controller(private val context: Context) {
         return _state.value.focusPointSource == FocusPointSource.EYE &&
             eyeTargetLastSeenElapsedMs > 0L &&
             SystemClock.elapsedRealtime() - eyeTargetLastSeenElapsedMs <= EYE_TARGET_RECENT_MS
-    }
-
-    private fun clearEyeFocusState() {
-        isFocusLockedWaitingForSceneChange = false
-        sceneChangeFrameCount = 0
-        focusLockedReferenceIso = 0
-        focusLockedReferenceExposureNs = 0L
-        focusLockedReferenceDistance = 0f
-        focusLockSettleFrames = 0
-        eyeTargetLastSeenElapsedMs = 0L
-        _state.value = _state.value.copy(
-            focusPoint = null,
-            focusPointSource = FocusPointSource.MANUAL,
-            isFocusLocked = false,
-            isFocusing = false,
-            focusSuccess = null,
-        )
     }
 
 // ==================== 其他设置 ====================

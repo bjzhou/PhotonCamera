@@ -310,7 +310,7 @@ data class CameraState(
     val virtualAperture: Float = 2.0f,  // 虚拟光圈值 (f-number)
     // 对焦
     val isAutoFocus: Boolean = true,
-    val focusDistance: Float = 0f, // 当前对焦距离 (0.0 - minimumFocusDistance)
+    val focusDistance: Float = 0f, // 自动对焦时为镜头回报值，手动对焦时为用户目标值（屈光度）
     val isHyperfocalFocusEnabled: Boolean = false,
     val hyperfocalDistanceMeters: Float = 0f,
     val minimumFocusDistance: Float = 0f, // 最小对焦距离
