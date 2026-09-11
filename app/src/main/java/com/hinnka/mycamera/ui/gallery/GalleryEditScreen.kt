@@ -110,6 +110,7 @@ import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
 import com.hinnka.mycamera.ui.icons.AppIcons
+import kotlin.math.max
 
 private const val EDIT_TAB_LUT = 0
 private const val EDIT_TAB_FRAME = 1
@@ -2313,8 +2314,9 @@ private fun ZoomableEditImage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val maxZoom = previewBitmap?.let { max(it.width, it.height) / 500f } ?: 1f
     val zoomableState = rememberZoomableImageState(
-        zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = 10f))
+        zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
     )
 
     LaunchedEffect(zoomableState.zoomableState.zoomFraction) {

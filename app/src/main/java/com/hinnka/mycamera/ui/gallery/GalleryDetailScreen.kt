@@ -93,6 +93,7 @@ import java.io.File
 import kotlin.math.min
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
+import kotlin.math.max
 
 private val GalleryToolbarSurface = Color(0xFF0E0E0E)
 private val GalleryToolbarButton = Color(0xFF242424)
@@ -2256,7 +2257,7 @@ private fun ZoomableImage(
     val context = LocalContext.current
 
     var isLoading by remember { mutableStateOf(true) }
-    val maxZoom = min(photo.width, photo.height) / 100f
+    val maxZoom = max(photo.width, photo.height) / 500f
     val zoomableState = rememberZoomableImageState(
         zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
     )
