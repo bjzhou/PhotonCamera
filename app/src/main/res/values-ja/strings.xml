@@ -767,13 +767,6 @@
     <string name="settings_raw_color_engine_darktable_sigmoid_description">darktable標準のシーンリファードSigmoidレンダリング</string>
     <string name="settings_raw_color_engine_darktable_filmic_description">フィルムライクな階調レンダリング</string>
     <string name="settings_raw_color_engine_spectral_film_description">濃度調整を備えたフィルムストック／プリント媒体シミュレーション</string>
-    <string name="settings_raw_color_engine_hncs_ccm">HNCS（オリジナルカラーマトリクス）</string>
-    <string name="settings_raw_hncs_color_branch">色再現プロファイル</string>
-    <string name="settings_raw_hncs_color_branch_description">RAWのオリジナルカラーマトリクス、またはHasselblad専用Cb/Y–Cr/Yカラーマップを選択</string>
-    <string name="settings_raw_hncs_color_branch_ccm">オリジナルカラーマトリクス</string>
-    <string name="settings_raw_hncs_profile">HNCSカメラプロファイル</string>
-    <string name="settings_raw_hncs_2d_lut">Hasselbladカメラ専用2D LUT</string>
-    <string name="settings_raw_hncs_profile_description">Hasselbladカメラ固有のCb/Y-Cr/Yクロマテーブルを使用</string>
     <string name="settings_raw_hncs_film_curve">レスポンスカーブ</string>
     <string name="settings_raw_hncs_film_curve_description">レスポンスカーブを選択</string>
     <string name="settings_raw_hncs_film_curve_standard">スタンダード</string>
