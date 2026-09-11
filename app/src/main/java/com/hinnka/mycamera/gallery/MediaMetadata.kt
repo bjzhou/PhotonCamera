@@ -388,6 +388,8 @@ data class MediaMetadata(
                             true
                         },
                         lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(obj.optString("rawLumixPhotoStyle")),
+                        lumixColorMatchingEnabled = obj.optBoolean("rawLumixColorMatchingEnabled", true),
+                        hncsColorMatchingEnabled = obj.optBoolean("rawHncsColorMatchingEnabled", true),
                         useOppoMasterToneMap = obj.optBoolean("rawOppoMasterToneMap", false),
                         usePhotonHdr =
                             obj.optBoolean("rawPhotonHdr", false) ||

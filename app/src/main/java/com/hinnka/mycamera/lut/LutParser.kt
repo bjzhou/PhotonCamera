@@ -17,6 +17,25 @@ object LutParser {
     private const val TAG = "LutParser"
     private const val MAGIC_PLUT = 0x54554C50 // 'PLUT' in Little Endian
 
+    /** Read only the binary header when building filter lists; do not load 3D textures. */
+    fun readInputEncoding(inputStream: InputStream): Pair<TransferCurve, ColorSpace> {
+        val input = java.io.DataInputStream(inputStream)
+        fun readInt() = Integer.reverseBytes(input.readInt())
+        require(readInt() == MAGIC_PLUT) { "Expected a PLUT header" }
+        val version = readInt()
+        require(version in 1..4) { "Unsupported PLUT version: $version" }
+        require(readInt() > 1) { "Invalid LUT size" }
+        require(readInt() in 0..1) { "Unsupported LUT data type" }
+        val curve = if (version >= 2) {
+            val id = readInt()
+            requireNotNull(TransferCurve.entries.firstOrNull { it.storageId == id })
+        } else TransferCurve.SRGB
+        val gamut = if (version >= 3) {
+            requireNotNull(ColorSpace.entries.getOrNull(readInt()))
+        } else ColorSpace.SRGB
+        return curve to gamut
+    }
+
     /**
      * 解析 LUT 文件（自动识别格式）
      */

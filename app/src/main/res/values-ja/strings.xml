@@ -941,7 +941,7 @@
     <string name="ai_service">AIサービス</string>
     <string name="ai_denoise_title">AIディープノイズ除去</string>
     <string name="ai_denoise_description">ニューラルネットワークで画像ディテールを再構成</string>
-    <string name="ai_denoise_processing">"処理中… "</string>
+    <string name="ai_denoise_processing">処理中… %1$.1f%%</string>
     <string name="ai_denoise_failed">AIノイズ除去に失敗しました</string>
     <string name="metering_mode">測光</string>
     <string name="metering_spot">スポット</string>
@@ -1015,4 +1015,12 @@
     <string name="settings_raw_max_default_chroma_denoise">HDR+ベイク済みクロマNR</string>
 
 
+    <string name="video_log_lut_monitor_only">モニターのみ</string>
+    <string name="video_log_lut_bake_in">動画に適用</string>
+    <string name="video_log_lut_monitor_hint">プレビューに LUT を適用し、動画は Log で記録します。</string>
+    <string name="video_log_lut_bake_hint">選択した LUT と色調整を動画に適用します。</string>
+    <string name="video_log_format">Log 形式</string>
+    <string name="video_log_color_space_auto">色空間は Log 形式に合わせて自動設定されます。</string>
+    <string name="settings_raw_camera_color_matching">カメラの色に合わせる</string>
+    <string name="settings_raw_camera_color_matching_description">オンにすると撮影に使ったカメラに合わせて色を調整し、オフにすると元の処理を使用します。</string>
 </resources>

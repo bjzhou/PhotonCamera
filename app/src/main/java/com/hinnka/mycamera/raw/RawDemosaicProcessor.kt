@@ -244,6 +244,7 @@ class RawDemosaicProcessor {
         xg: Float, yg: Float,
         xb: Float, yb: Float,
         xw: Float, yw: Float,
+        embeddedCalibrationOnly: Boolean,
     ): DngRawData?
 
     private external fun estimateMgcReferenceSignalNative(
@@ -2395,15 +2396,25 @@ class RawDemosaicProcessor {
         var embeddedDngJpegPreview: Bitmap? = null
         var dngWarpRectilinear: FloatArray? = null
         var dngWarpRectilinearFlags: IntArray? = null
+        var lumixColorCorrectionCoordinate: Int? = null
         val requestedColorEngine = rawRenderingEngine
         val hasDcpSelection = dcpRenderPlan != null || rawDcpId != null
         val profileWorkingColorSpace = ColorSpace.ProPhoto
+        val cameraColorMatchingEnabled = rawToneMappingParameters.colorMatchingEnabled(requestedColorEngine)
+        val targetCamera = when {
+            requestedColorEngine.isLumix -> EquivalentCameraTarget.LumixS9
+            requestedColorEngine.isHncs -> EquivalentCameraTarget.HasselbladX2DII100C
+            else -> null
+        }
         var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
         var embeddedDngProfiles: List<DngEmbeddedProfileEntry> = emptyList()
         var selectedEmbeddedDngProfile: DngEmbeddedProfileEntry? = null
         val sourceProfileGainTableMap = metadata?.profileGainTableMap?.takeIf { it.isValid }
 
         if (dngFile != null) {
+            if (requestedColorEngine.isLumix) {
+                lumixColorCorrectionCoordinate = LumixColorTemperature.readAsShotCoordinate(dngFile)
+            }
             val hasClassicTiffHeader = DngProfileGainTableMap.hasClassicTiffHeader(dngFile)
             embeddedDngProfiles = if (hasClassicTiffHeader) {
                 DngEmbeddedProfile.readAllFrom(dngFile)
@@ -2421,8 +2432,13 @@ class RawDemosaicProcessor {
                 profileWorkingColorSpace.xg, profileWorkingColorSpace.yg,
                 profileWorkingColorSpace.xb, profileWorkingColorSpace.yb,
                 profileWorkingColorSpace.xw, profileWorkingColorSpace.yw,
+                embeddedCalibrationOnly = requestedColorEngine.isLumix || requestedColorEngine.isHncs,
             )
             if (dngRawData == null) {
+                if (requestedColorEngine.isLumix || requestedColorEngine.isHncs) {
+                    PLog.e(TAG, "Camera RGB engine RAW decode failed; color-converted fallback is disabled")
+                    return@withContext null
+                }
                 return@withContext RawProcessor.processAndToBitmap(
                     dngFile,
                     aspectRatio,
@@ -2453,12 +2469,41 @@ class RawDemosaicProcessor {
             actualHeight = dngRawData.height
             actualRowStride = dngRawData.rowStride
             actualSamplesPerPixel = dngRawData.samplesPerPixel.coerceAtLeast(1)
+            val primarySourceProfile = embeddedDngProfiles
+                .firstOrNull { it.id == DngEmbeddedProfile.PRIMARY_PROFILE_ID }?.profile
+            val embeddedCalibration = primarySourceProfile?.let(RawCameraCalibration::fromProfile)
+                ?: dngRawData.cameraCalibration
+            // Keep the existing handling for FM-only files without an independent scene
+            // white. In camera-domain engines that means bypass, not guessed interpolation.
+            val sourceCalibration = embeddedCalibration?.takeUnless {
+                it.isForwardOnly && !dngRawData.hasAsShotWhiteXy
+            }
+            val importedMetadata = convertDngRawDataToMetadata(dngRawData, exposureBias, actualMetadata)
+            // The TIFF reader can expose embedded standard calibration even when LibRaw
+            // does not promote that IFD for a proprietary RAW. Keep the prepass and the
+            // engine on the same embedded source, never a LibRaw table matrix.
+            val calibratedMetadata = if (sourceCalibration?.isForwardOnly == true) {
+                // Do not inherit a previous camera/file's white point. FM cannot recover it
+                // from AsShotNeutral; native exports AsShotWhiteXY when it is present.
+                val whiteXy = dngRawData.whitePointXy.takeIf {
+                    it.size == 2 && it.all { value -> value.isFinite() && value > 0f } && it.sum() < 1f
+                }
+                val source = primarySourceProfile ?: sourceCalibration.toDcpProfile()
+                requireNotNull(DngSdkColorSpec.resolveSourceMetadata(source,
+                    importedMetadata.copy(whitePointXy = whiteXy, colorTemperature = whiteXy?.let(DngSdkColorSpec::colorTemperatureForXy)),
+                    profileWorkingColorSpace)) {
+                    "ForwardMatrix calibration requires an independent scene white for dual-illuminant interpolation"
+                }
+            } else if ((requestedColorEngine.isLumix || requestedColorEngine.isHncs) &&
+                dngRawData.cameraCalibration == null
+            ) {
+                primarySourceProfile?.let {
+                    DngSdkColorSpec.resolveSourceMetadata(it, importedMetadata, profileWorkingColorSpace)
+                } ?: importedMetadata
+            } else importedMetadata
             actualMetadata = applyDngMetadataOverrides(
-                metadata = convertDngRawDataToMetadata(dngRawData, exposureBias, actualMetadata).copy(
-                    cameraCalibration = embeddedDngProfiles
-                        .firstOrNull { it.id == DngEmbeddedProfile.PRIMARY_PROFILE_ID }
-                        ?.profile?.let(RawCameraCalibration::fromProfile)
-                        ?: dngRawData.cameraCalibration,
+                metadata = calibratedMetadata.copy(
+                    cameraCalibration = sourceCalibration,
                 ),
                 rawBlackLevelMode = rawBlackLevelMode,
                 rawCustomBlackLevel = rawCustomBlackLevel,
@@ -2482,14 +2527,43 @@ class RawDemosaicProcessor {
             )
             actualRotation = if (dngRawData.rotation != 0) dngRawData.rotation else rotation
             embeddedDngRenderPlan = selectedEmbeddedDngProfile?.let { selectedProfile ->
+                // Keep the pre-existing matrix fallback for an unresolved FM-only source.
+                // In particular, a derived/fallback CCT must not silently activate its FM.
+                val renderProfile = if (embeddedCalibration?.isForwardOnly == true &&
+                    sourceCalibration == null && selectedProfile.profile?.colorMatrix1 == null &&
+                    selectedProfile.profile?.colorMatrix2 == null
+                ) selectedProfile.copy(profile = selectedProfile.profile?.copy(
+                    forwardMatrix1 = null, forwardMatrix2 = null,
+                )) else selectedProfile
                 DngEmbeddedProfile.resolveRenderPlan(
-                    entry = selectedProfile,
+                    entry = renderProfile,
                     metadata = actualMetadata,
                     workingColorSpace = profileWorkingColorSpace
                 )
             }
-            onMetadata?.invoke(actualMetadata)
         }
+
+        val engineWhitePointXy = if (targetCamera != null && actualMetadata != null &&
+            (!cameraColorMatchingEnabled || actualMetadata.cameraCalibration == null)
+        ) {
+            // Original processing interprets the sensor as the target camera. The target
+            // calibration supplies its white/CCT and a reversible shared-space bridge.
+            val whiteXy = targetCamera.calibration.directCameraWhiteXy(context, actualMetadata)
+            // Keep calibrated source metadata intact so toggling back to matching never
+            // reuses the original-processing target white as the source illuminant.
+            if (actualMetadata.cameraCalibration == null) {
+                actualMetadata = actualMetadata.copy(
+                    whitePointXy = whiteXy,
+                    colorTemperature = DngSdkColorSpec.colorTemperatureForXy(whiteXy),
+                )
+            }
+            PLog.i(TAG, "RAW_CAMERA_CALIBRATION engine=$requestedColorEngine " +
+                "colorMatching=$cameraColorMatchingEnabled sourceCalibration=${actualMetadata.cameraCalibration != null} " +
+                "input=wb-camera-rgb cctSource=target-color-matrix librawMatrixFallback=disabled")
+            whiteXy
+        } else actualMetadata?.whitePointXy
+        val engineColorTemperature = engineWhitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
+        if (dngFile != null) onMetadata?.invoke(requireNotNull(actualMetadata))
 
         actualMetadata = actualMetadata?.withNoiseProfileSelection(
             ContentRepository.getInstance(context.applicationContext)
@@ -2549,17 +2623,12 @@ class RawDemosaicProcessor {
             null
         }
         val hncsRenderPlan = if (requestedColorEngine.isHncs) {
-            val calibration = EquivalentCameraTarget.HasselbladX1D50.calibrationCache
+            val sourceCalibration = actualMetadata.cameraCalibration
+            check(dngFile != null || sourceCalibration != null || !cameraColorMatchingEnabled) {
+                "HNCS requires fixed source ColorMatrix calibration for camera capture"
+            }
             HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
-                colorTemperature = actualMetadata.colorTemperature,
-                calibrationLuts = calibration.resolve(
-                    context, requireNotNull(actualMetadata.cameraCalibration) {
-                        "HNCS requires fixed source ColorMatrix calibration"
-                    },
-                ),
-                calibrationFirstWeight = calibration.firstWeight(
-                    requireNotNull(actualMetadata.whitePointXy) { "HNCS requires the source white point" },
-                ),
+                colorTemperature = engineColorTemperature,
                 filmCurveMode = rawHncsFilmCurveMode,
             )
         } else null
@@ -2593,6 +2662,7 @@ class RawDemosaicProcessor {
         val regeneratePhotonPgtm = photonHdrRequested &&
             (forceRegeneratePhotonPgtm || !hasReusablePhotonPgtm)
         val photonPgtmRegenerationTrigger = when {
+            !photonHdrRequested -> "disabled"
             !regeneratePhotonPgtm -> "reuse-embedded"
             forceRegeneratePhotonPgtm -> "explicit-force"
             else -> "missing-photon-pgtm"
@@ -2839,6 +2909,15 @@ class RawDemosaicProcessor {
             selectedEmbeddedProfileIsActive -> selectedProfileGainTableMap
             else -> null
         }
+        PLog.i(TAG, "RAW_PHOTON_HDR requested=$photonHdrRequested " +
+            "regenerate=$regeneratePhotonPgtm trigger=$photonPgtmRegenerationTrigger " +
+            "reusablePhotonPgtm=$hasReusablePhotonPgtm " +
+            "activeMap=${when {
+                regeneratePhotonPgtm -> "generate-photon"
+                embeddedProfileGainTableMap == null -> "none"
+                photonHdrRequested -> "photon"
+                else -> "selected-native-profile"
+            }}")
         if (embeddedDngProfiles.isNotEmpty() || sourceProfileGainTableMap != null) {
             PLog.i(
                 TAG,
@@ -2913,43 +2992,71 @@ class RawDemosaicProcessor {
             profileWorkingColorSpace,
             ColorSpace.SRGB,
         )
-        val linearColorCorrectionMatrix = resolveLinearColorCorrectionMatrix(
-            metadata = actualMetadata,
-            dcpRenderPlan = activeDcpRenderPlan,
-        )
-        val cameraInputTransform = if (colorEngine.isLumix || colorEngine.isHncs) {
-            EquivalentCameraCalibration.profileToCameraTransform(
-                actualMetadata, linearColorCorrectionMatrix,
-            )
+        val directCameraInput = targetCamera != null &&
+            (!cameraColorMatchingEnabled || actualMetadata.cameraCalibration == null)
+        val sourceColorCorrectionMatrix = if (directCameraInput) {
+            EquivalentCameraCalibration.whiteBalanceTransform(actualMetadata)
+        } else if ((colorEngine.isLumix || colorEngine.isHncs) &&
+            actualMetadata.cameraCalibration != null
+        ) {
+            EquivalentCameraCalibration.sourceToProPhoto(actualMetadata)
         } else {
-            computeWorkingToOutputTransform(profileWorkingColorSpace, engineWorkingColorSpace)
+            resolveLinearColorCorrectionMatrix(
+                metadata = actualMetadata,
+                dcpRenderPlan = activeDcpRenderPlan,
+            )
         }
+        val targetCameraColorTransform = targetCamera?.calibration?.colorTransform(
+            context, requireNotNull(engineWhitePointXy) {
+                "Equivalent camera rendering requires the source white point"
+            },
+        )
+        // Every shared consumer (ML AE, HDRNet, PGTM, tiled and continuous rendering)
+        // requires actual linear ProPhoto. Native's WB-only matrix is not that space.
+        val linearColorCorrectionMatrix = if (directCameraInput) {
+            requireNotNull(targetCameraColorTransform).sensorToProPhoto(
+                sourceColorCorrectionMatrix,
+            )
+        } else sourceColorCorrectionMatrix
+        // The shared prepass has already applied source calibration and white balance.
+        // Map ProPhoto straight to target WB RGB using its ColorMatrix at the scene white.
+        // This replaces source-matrix recovery and both inverse-DCP LUT lookups.
+        val cameraInputTransform = targetCameraColorTransform?.proPhotoToWhiteBalancedCamera
+            ?: computeWorkingToOutputTransform(profileWorkingColorSpace, engineWorkingColorSpace)
         val profileToEngineTransform = cameraInputTransform
+        if (directCameraInput) {
+            PLog.i(TAG, "RAW_CAMERA_WORKING_SPACE engine=$colorEngine input=direct-camera-rgb " +
+                "bridge=target-color-matrix sharedSpace=ProPhoto engineInput=wb-camera-rgb " +
+                "sensorToProfile=${linearColorCorrectionMatrix.contentToString()} " +
+                "profileToCamera=${cameraInputTransform.contentToString()} " +
+                "equivalent=disabled librawMatrixFallback=disabled")
+        }
         val lumixRenderPlan = if (colorEngine.isLumix) {
             check(profileWorkingColorSpace == ColorSpace.ProPhoto)
+            val sourceCalibration = actualMetadata.cameraCalibration
+            check(dngFile != null || sourceCalibration != null || !cameraColorMatchingEnabled) {
+                "Lumix requires fixed source ColorMatrix calibration for camera capture"
+            }
             LumixProfile.createRenderPlan(
-                context, normalizedToneMappingParameters.lumixPhotoStyle, actualMetadata.colorTemperature,
-                calibrationLuts = EquivalentCameraTarget.LumixS9.calibrationCache.resolve(
-                    context, requireNotNull(actualMetadata.cameraCalibration) {
-                        "Lumix rendering requires fixed source ColorMatrix calibration"
-                    },
-                ),
-                calibrationFirstWeight = EquivalentCameraTarget.LumixS9.calibrationCache.firstWeight(
-                    requireNotNull(actualMetadata.whitePointXy),
-                ),
+                context, normalizedToneMappingParameters.lumixPhotoStyle, engineColorTemperature,
                 iso = actualMetadata.iso,
+                colorCorrectionCoordinate = lumixColorCorrectionCoordinate,
             )
         } else null
         if (colorEngine.isLumix) {
             PLog.i(TAG, "Lumix S9 equivalent Camera RGB pipeline: style=${normalizedToneMappingParameters.lumixPhotoStyle} " +
                 "sourceWhite=${actualMetadata.whitePointXy?.contentToString()} " +
+                "engineWhite=${engineWhitePointXy?.contentToString()} " +
                 "profileSpace=$profileWorkingColorSpace profileToCamera=${cameraInputTransform.contentToString()} " +
-                "calibrationLut=${lumixRenderPlan?.calibrationLuts?.key?.take(12)} " +
-                "calibrationFirstWeight=${lumixRenderPlan?.calibrationFirstWeight} " +
+                "calibration=ColorMatrix target=${targetCamera?.assetPath} " +
+                "colorMatching=$cameraColorMatchingEnabled inputMode=${if (directCameraInput) "original" else "matched"} " +
+                "photoStyleCoordinateSource=${if (lumixColorCorrectionCoordinate != null) "rw2-0x011c" else "kelvin-polyline"} " +
+                "photoStyleCoordinate=${lumixRenderPlan?.colorCorrectionCoordinate} " +
+                "photoStyleHighWeight=${lumixRenderPlan?.highWeight} " +
                 "lutInput=shaped-camera-rgb output=display-code-values decoded-for-linear-output-pass")
         }
         // Headroom clipping uses the source sensor's actual gains and source CCM.
-        // Target RGB is already white balanced after the calibration LUT.
+        // Target RGB is already white balanced after the profile-to-camera matrix.
         val hncsCameraDomainGains = activeHncsCameraGains
         val linearCameraWhite = resolveLinearCameraWhite(
             metadata = actualMetadata,
@@ -2958,7 +3065,7 @@ class RawDemosaicProcessor {
         if (colorEngine.isHncs) {
             PLog.i(
                 TAG,
-                "HNCS pipeline: branch=X1D_equivalent_CbYCrY_LUT " +
+                "HNCS pipeline: branch=X2DII100C_equivalent_CbYCrY_LUT " +
                     "profile=${hncsRenderPlan?.profileId} intent=${hncsRenderPlan?.renderIntent} " +
                     "cct=${hncsRenderPlan?.colorTemperature} " +
                     "input=${if (dngFile != null) "DNG_FILE" else "MEMORY"} " +
@@ -2968,8 +3075,8 @@ class RawDemosaicProcessor {
                     "filmCurve=${rawHncsFilmCurveMode.persistedValue} " +
                     "source=${hncsRenderPlan?.sourceFile} " +
                     "profileSpace=$profileWorkingColorSpace " +
-                    "calibrationLut=${hncsRenderPlan?.calibrationLuts?.key?.take(12)} " +
-                    "calibrationFirstWeight=${hncsRenderPlan?.calibrationFirstWeight} " +
+                    "calibration=ColorMatrix target=${targetCamera?.assetPath} " +
+                    "colorMatching=$cameraColorMatchingEnabled inputMode=${if (directCameraInput) "original" else "matched"} " +
                     "gammaFilter=${hncsRenderPlan?.gamma?.filterEnabled}"
             )
         }
@@ -7510,7 +7617,7 @@ class RawDemosaicProcessor {
         if (metadata.mgcSharpenAttenuationScale != null) {
             PLog.i(
                 TAG,
-                "MGC final sharpen uses GLES adaptive USM size=${metadata.width}x${metadata.height} " +
+                "MGC final sharpen uses GLES scale-supported USM size=${metadata.width}x${metadata.height} " +
                     "runtimeAttenuation=$runtimeAttenuation slider=$sliderValue " +
                     "algorithmStrength=$algorithmStrength effectiveStrength=$effectiveStrength " +
                     "cpuReadback=false",

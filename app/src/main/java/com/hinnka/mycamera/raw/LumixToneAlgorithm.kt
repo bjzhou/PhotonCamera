@@ -13,11 +13,8 @@ internal object LumixToneShader {
             uniform float uLumixHighWeight;
             uniform float uLumixStyleGain;
             uniform float uLumixOutputClip;
-            ${EquivalentCameraLutShader.UNIFORMS}
         """.trimIndent(),
         engineFunctions = """
-            ${EquivalentCameraLutShader.FUNCTIONS}
-
             float lumixShape(float value) {
                 float position = clamp(value, 0.0, 1.0) * 2047.0;
                 int lower = min(int(floor(position)), 2046);
@@ -44,7 +41,6 @@ internal object LumixToneShader {
             }
 
             vec3 applyEngineTone(vec3 color) {
-                color = equivalentCameraRgb(color);
                 vec3 camera = clamp(color * uLumixStyleGain, 0.0, 1.0);
                 vec3 shaped = vec3(lumixShape(camera.r), lumixShape(camera.g), lumixShape(camera.b));
                 vec3 encoded = clamp(mix(lumixCube(uLumixLow, shaped),
@@ -64,13 +60,11 @@ internal class LumixToneAlgorithm(quad: RawFullscreenQuad) :
     RawRenderingEngineToneAlgorithm(quad, LumixToneShader.DEFINITION) {
     private val textures = IntArray(3)
     private var uploadedTables: LumixPhotoStyleTables? = null
-    private val calibration = EquivalentCameraLutGl()
 
     override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
         super.bindEngineResources(program, input)
         val plan = requireNotNull(input.lumixRenderPlan) { "Lumix requires an S9 render plan" }
         ensureTextures(plan.tables)
-        calibration.bind(program, plan.calibrationLuts, plan.calibrationFirstWeight)
         val units = intArrayOf(2, 3, 6)
         val names = arrayOf("uLumixCurve", "uLumixLow", "uLumixHigh")
         for (index in textures.indices) {
@@ -93,7 +87,6 @@ internal class LumixToneAlgorithm(quad: RawFullscreenQuad) :
     }
 
     override fun releaseEngineResources() {
-        calibration.release()
         releaseStyleTextures()
     }
 

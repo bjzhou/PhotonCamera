@@ -54,6 +54,7 @@ import com.hinnka.mycamera.video.VideoCapabilitiesResolver
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoEncoderColorRequest
 import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
@@ -6392,6 +6393,11 @@ class Camera2Controller(private val context: Context) {
         refreshVideoCapabilities()
     }
 
+    fun setVideoLogLutMode(mode: VideoLogLutMode) {
+        if (_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isProcessing) return
+        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(logLutMode = mode))
+    }
+
     fun setVideoLogProfile(logProfile: VideoLogProfile) {
         val previousProfile = _state.value.videoConfig.logProfile
         val resolvedProfile = if (_state.value.captureMode == CaptureMode.VIDEO) {
@@ -6618,9 +6624,6 @@ class Camera2Controller(private val context: Context) {
         videoCaptureStatsWindowStartMs = 0L
         videoCaptureStatsFrames = 0
         videoCaptureStatsFirstTimestampNs = 0L
-        val outputSize = _state.value.videoConfig.resolveOutputSize(
-            _state.value.videoCapabilities.openGatePortraitAspectRatio
-        )
         val isFrontCamera = isCurrentCameraFrontFacing()
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val cameraInputSize = if (useEnhancedStabilization) {
@@ -6632,12 +6635,28 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.resolution
             ]
         } ?: _state.value.currentPreviewSize
+        val outputSize = _state.value.videoConfig.resolveOutputSize(
+            _state.value.videoCapabilities.openGatePortraitAspectRatio,
+            cameraInputSize
+        )
         val shouldFlipEncodedFrame = isFrontCamera && mirrorFrontCameraEnabled
+        val logProfile = _state.value.videoConfig.logProfile
+        val monitorOnly = logProfile.isEnabled &&
+            _state.value.videoConfig.logLutMode == VideoLogLutMode.MONITOR_ONLY
+        val recordingLut = creativeLutConfig?.takeIf {
+            !monitorOnly && logProfile.matchesLut(it.curve, it.colorSpace)
+        }
+        val recordingRecipe = creativeRecipeParams.takeUnless { monitorOnly }
         val colorLayers = buildList {
-            if (creativeLutConfig != null || creativeRecipeParams?.isDefault() == false) {
-                add(VideoColorEffectLayer(creativeLutConfig, creativeRecipeParams))
+            if (recordingLut != null || recordingRecipe?.isDefault() == false) {
+                add(VideoColorEffectLayer(recordingLut, recordingRecipe))
             }
         }
+        PLog.d(
+            TAG,
+            "Video color output: log=${logProfile.name}, mode=${_state.value.videoConfig.logLutMode}, " +
+                "monitorLut=${creativeLutConfig?.title}, recordingLut=${recordingLut?.title}"
+        )
         val started = videoRecorder.startRecording(
             size = outputSize,
             cameraInputSize = cameraInputSize,
@@ -6645,8 +6664,8 @@ class Camera2Controller(private val context: Context) {
             bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
             codecMime = _state.value.videoConfig.codec.mimeType,
             colorConfig = VideoEncoderColorRequest(
-                logProfile = _state.value.videoConfig.logProfile,
-                hasActiveLut = _state.value.lutEnabled && _state.value.currentLutName != null
+                logProfile = logProfile,
+                hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
             ),
             colorLayers = colorLayers,
             cameraTimestampSource = getActiveOpenCameraCharacteristics()

@@ -292,4 +292,12 @@
     <string name="settings_language_system">Systemsprache verwenden</string>
     <string name="settings_video_nr_level_description">Hardware-Rauschunterdrückung für Videovorschau und Aufnahme unabhängig von Fotos einstellen.</string>
     <string name="settings_video_edge_level_description">Hardware-Schärfung für Videovorschau und Aufnahme unabhängig von Fotos einstellen.</string>
+    <string name="video_log_lut_monitor_only">Nur Vorschau</string>
+    <string name="video_log_lut_bake_in">Im Video anwenden</string>
+    <string name="video_log_lut_monitor_hint">Die Vorschau nutzt die LUT; die Aufnahme bleibt in Log.</string>
+    <string name="video_log_lut_bake_hint">Die gewählte LUT und Farbanpassungen werden im Video angewendet.</string>
+    <string name="video_log_format">Log-Format</string>
+    <string name="video_log_color_space_auto">Der Farbraum wird automatisch an das Log-Format angepasst.</string>
+    <string name="settings_raw_camera_color_matching">Kamerafarben anpassen</string>
+    <string name="settings_raw_camera_color_matching_description">Passt die Farben bei aktivierter Option an die verwendete Kamera an; deaktiviert wird die ursprüngliche Verarbeitung verwendet.</string>
 </resources>

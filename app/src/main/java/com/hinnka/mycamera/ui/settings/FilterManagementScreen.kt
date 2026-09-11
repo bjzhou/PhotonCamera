@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.data.ZipCubeImportManager
@@ -1194,9 +1195,10 @@ fun FilterManagementScreen(
 
         // 导入时分类选择对话框
         if (showImportCategoryDialog && pendingImportUris.isNotEmpty()) {
-            var selectedColorSpace by remember { mutableStateOf(ColorSpace.SRGB) }
-            var selectedCurve by remember { mutableStateOf(TransferCurve.SRGB) }
+            var selectedLogProfile by remember { mutableStateOf(VideoLogProfile.APPLE_LOG2) }
             var selectedLutType by remember { mutableIntStateOf(0) } // 0: Photo, 1: Video
+            val selectedCurve = if (selectedLutType == 1) selectedLogProfile.logCurve else TransferCurve.SRGB
+            val selectedColorSpace = if (selectedLutType == 1) selectedLogProfile.colorSpace else ColorSpace.SRGB
             AlertDialog(
                 onDismissRequest = {
                     //showImportCategoryDialog = false
@@ -1246,24 +1248,16 @@ fun FilterManagementScreen(
                             var expanded by remember { mutableStateOf(false) }
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            Text(
-                                text = stringResource(R.string.video_lut_photo_conversion_hint),
-                                fontSize = 12.sp,
-                                color = Color.White.copy(alpha = 0.7f),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-
                             ExposedDropdownMenuBox(
                                 expanded = expanded,
                                 onExpandedChange = { expanded = !expanded },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 OutlinedTextField(
-                                    value = selectedCurve.name,
+                                    value = selectedLogProfile.displayName,
                                     onValueChange = {},
                                     readOnly = true,
-                                    label = { Text(stringResource(R.string.input_curve)) },
+                                    label = { Text(stringResource(R.string.video_log_format)) },
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                                     colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
                                         focusedBorderColor = Color(0xFFFF6B35),
@@ -1277,15 +1271,15 @@ fun FilterManagementScreen(
                                     onDismissRequest = { expanded = false },
                                     modifier = Modifier.background(Color(0xFF2C2C2C))
                                 ) {
-                                    TransferCurve.entries.filter { it != TransferCurve.HLG }.forEach { curve ->
+                                    VideoLogProfile.entries.filter { it.isEnabled }.forEach { profile ->
                                         DropdownMenuItem(
-                                            text = { Text(curve.name) },
+                                            text = { Text(profile.displayName) },
                                             onClick = {
-                                                selectedCurve = curve
+                                                selectedLogProfile = profile
                                                 expanded = false
                                             },
                                             colors = MenuDefaults.itemColors(
-                                                textColor = if (selectedCurve == curve) Color(
+                                                textColor = if (selectedLogProfile == profile) Color(
                                                     0xFFFF6B35
                                                 ) else Color.White
                                             )
@@ -1294,52 +1288,15 @@ fun FilterManagementScreen(
                                 }
                             }
 
-                            var colorSpaceExpanded by remember { mutableStateOf(false) }
                             Spacer(modifier = Modifier.height(12.dp))
-
-                            ExposedDropdownMenuBox(
-                                expanded = colorSpaceExpanded,
-                                onExpandedChange = { colorSpaceExpanded = !colorSpaceExpanded },
+                            OutlinedTextField(
+                                value = selectedColorSpace.name,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.color_space)) },
+                                supportingText = { Text(stringResource(R.string.video_log_color_space_auto)) },
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedColorSpace.name,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text(stringResource(R.string.color_space)) },
-                                    trailingIcon = {
-                                        ExposedDropdownMenuDefaults.TrailingIcon(
-                                            expanded = colorSpaceExpanded
-                                        )
-                                    },
-                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                                        focusedBorderColor = Color(0xFFFF6B35),
-                                        focusedLabelColor = Color(0xFFFF6B35),
-                                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
-                                    ),
-                                    modifier = Modifier.fillMaxWidth().menuAnchor()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = colorSpaceExpanded,
-                                    onDismissRequest = { colorSpaceExpanded = false },
-                                    modifier = Modifier.background(Color(0xFF2C2C2C))
-                                ) {
-                                    ColorSpace.entries.forEach { colorSpace ->
-                                        DropdownMenuItem(
-                                            text = { Text(colorSpace.name) },
-                                            onClick = {
-                                                selectedColorSpace = colorSpace
-                                                colorSpaceExpanded = false
-                                            },
-                                            colors = MenuDefaults.itemColors(
-                                                textColor = if (selectedColorSpace == colorSpace) Color(
-                                                    0xFFFF6B35
-                                                ) else Color.White
-                                            )
-                                        )
-                                    }
-                                }
-                            }
+                            )
                             Spacer(modifier = Modifier.height(16.dp))
                         }
 

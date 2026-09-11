@@ -205,9 +205,18 @@ class LutManager(private val context: Context) {
         availableLuts = allLuts.map { lut ->
             val overriddenCategory = categoryOverrides[lut.id]
             val overriddenFavorite = favoriteOverrides[lut.id]
+            val encoding = if (lut.fileName.isBlank()) null else runCatching {
+                val input = if (lut.isBuiltIn) context.assets.open(lut.fileName)
+                    else java.io.File(lut.fileName).inputStream()
+                input.use(LutParser::readInputEncoding)
+            }.onFailure {
+                PLog.w(TAG, "Cannot read LUT input encoding: ${lut.id}", it)
+            }.getOrNull()
             lut.copy(
                 category = overriddenCategory ?: lut.category,
-                isFavorite = overriddenFavorite ?: lut.isFavorite
+                isFavorite = overriddenFavorite ?: lut.isFavorite,
+                inputCurve = encoding?.first,
+                inputColorSpace = encoding?.second
             )
         }
 

@@ -94,6 +94,7 @@ import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import kotlinx.coroutines.*
@@ -211,6 +212,8 @@ private data class PresetMatchSnapshot(
     val rawWhitePointCorrection: Float,
     val rawOppoMasterToneMap: Boolean,
     val rawLumixPhotoStyle: LumixPhotoStyle,
+    val rawLumixColorMatchingEnabled: Boolean,
+    val rawHncsColorMatchingEnabled: Boolean,
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
     val rawDROMode: String,
@@ -248,6 +251,8 @@ private data class PresetMatchSnapshot(
             rawBlackPointCorrection == preset.rawBlackPointCorrection &&
             rawWhitePointCorrection == preset.rawWhitePointCorrection &&
             rawLumixPhotoStyle == LumixPhotoStyle.fromPersistedValue(preset.rawLumixPhotoStyle) &&
+            rawLumixColorMatchingEnabled == preset.rawLumixColorMatchingEnabled &&
+            rawHncsColorMatchingEnabled == preset.rawHncsColorMatchingEnabled &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
             rawSpectralFilmPrint == preset.rawSpectralFilmPrint &&
@@ -342,6 +347,14 @@ private data class PresetMatchSnapshot(
                 if (rawLumixPhotoStyle != LumixPhotoStyle.fromPersistedValue(preset.rawLumixPhotoStyle)) {
                     add("rawLumixPhotoStyle current=$rawLumixPhotoStyle preset=${preset.rawLumixPhotoStyle}")
                 }
+                if (rawLumixColorMatchingEnabled != preset.rawLumixColorMatchingEnabled ||
+                    rawHncsColorMatchingEnabled != preset.rawHncsColorMatchingEnabled
+                ) {
+                    add(
+                        "rawColorMatching current=$rawLumixColorMatchingEnabled/$rawHncsColorMatchingEnabled " +
+                            "preset=${preset.rawLumixColorMatchingEnabled}/${preset.rawHncsColorMatchingEnabled}"
+                    )
+                }
                 if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
                     add(
                         "rawOppoMasterToneMap current=$rawOppoMasterToneMap " +
@@ -433,6 +446,8 @@ private data class CameraFeatureUpdate(
     val rawProfileToneMapMode: SettingValue<RawProfileToneMapMode>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
     val rawLumixPhotoStyle: SettingValue<LumixPhotoStyle>? = null,
+    val rawLumixColorMatchingEnabled: SettingValue<Boolean>? = null,
+    val rawHncsColorMatchingEnabled: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
     val droMode: SettingValue<String>? = null,
@@ -575,6 +590,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawWhitePointCorrection = saved.rawWhitePointCorrection,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
                             rawLumixPhotoStyle = saved.rawLumixPhotoStyle,
+                            rawLumixColorMatchingEnabled = saved.rawLumixColorMatchingEnabled,
+                            rawHncsColorMatchingEnabled = saved.rawHncsColorMatchingEnabled,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
                             rawDROMode = saved.rawDROMode,
@@ -708,6 +725,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawLumixPhotoStyle = rawToneMappingParameters.value.lumixPhotoStyle.assetName,
+            rawLumixColorMatchingEnabled = rawToneMappingParameters.value.lumixColorMatchingEnabled,
+            rawHncsColorMatchingEnabled = rawToneMappingParameters.value.hncsColorMatchingEnabled,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
             rawDROMode = droMode.value,
@@ -814,6 +833,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawWhitePointCorrection = SettingValue(this?.rawWhitePointCorrection ?: 0f),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
             rawLumixPhotoStyle = SettingValue(LumixPhotoStyle.fromPersistedValue(this?.rawLumixPhotoStyle)),
+            rawLumixColorMatchingEnabled = SettingValue(this?.rawLumixColorMatchingEnabled ?: true),
+            rawHncsColorMatchingEnabled = SettingValue(this?.rawHncsColorMatchingEnabled ?: true),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
             droMode = SettingValue(
@@ -949,7 +970,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val rawToneMappingUpdate = if (
             update.rawProfileToneMapMode != null ||
-            update.rawOppoMasterToneMap != null || update.rawLumixPhotoStyle != null
+            update.rawOppoMasterToneMap != null || update.rawLumixPhotoStyle != null ||
+            update.rawLumixColorMatchingEnabled != null || update.rawHncsColorMatchingEnabled != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
             update.rawProfileToneMapMode?.let {
@@ -960,6 +982,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             update.rawLumixPhotoStyle?.let {
                 toneMappingParameters = toneMappingParameters.copy(lumixPhotoStyle = it.value)
+            }
+            update.rawLumixColorMatchingEnabled?.let {
+                toneMappingParameters = toneMappingParameters.copy(lumixColorMatchingEnabled = it.value)
+            }
+            update.rawHncsColorMatchingEnabled?.let {
+                toneMappingParameters = toneMappingParameters.copy(hncsColorMatchingEnabled = it.value)
             }
             PreferenceUpdateValue(toneMappingParameters)
         } else {
@@ -1234,6 +1262,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawWhitePointCorrection = prefs.rawWhitePointCorrection,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
             rawLumixPhotoStyle = prefs.rawToneMappingParameters.lumixPhotoStyle,
+            rawLumixColorMatchingEnabled = prefs.rawToneMappingParameters.lumixColorMatchingEnabled,
+            rawHncsColorMatchingEnabled = prefs.rawToneMappingParameters.hncsColorMatchingEnabled,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,
             rawDROMode = prefs.droMode,
@@ -1259,6 +1289,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     var availableLutList: List<LutInfo> by mutableStateOf(emptyList())
         private set
+
+    val selectableLutList: List<LutInfo>
+        get() {
+            val profile = state.value.videoConfig.logProfile
+            return if (state.value.captureMode == CaptureMode.VIDEO && profile.isEnabled) {
+                availableLutList.filter {
+                    it.id == "none" || profile.matchesLut(it.inputCurve, it.inputColorSpace)
+                }
+            } else availableLutList
+        }
 
     // LUT 预览图缓存（lutId -> 预览Bitmap）
     var previewThumbnail by mutableStateOf<Bitmap?>(null)
@@ -2106,6 +2146,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoFps(it.videoFps)
                 cameraController.setVideoAspectRatio(it.videoAspectRatio)
                 cameraController.setVideoLogProfile(it.videoLogProfile)
+                cameraController.setVideoLogLutMode(it.videoLogLutMode)
                 cameraController.setVideoBitrate(it.videoBitrate)
                 cameraController.setVideoAudioInputId(it.videoAudioInputId)
                 cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
@@ -2226,6 +2267,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoFps(prefs.videoFps)
                 cameraController.setVideoAspectRatio(prefs.videoAspectRatio)
                 cameraController.setVideoLogProfile(prefs.videoLogProfile)
+                cameraController.setVideoLogLutMode(prefs.videoLogLutMode)
                 cameraController.setVideoBitrate(prefs.videoBitrate)
                 cameraController.setVideoAudioInputId(prefs.videoAudioInputId)
                 cameraController.setVideoRecordingPath(prefs.videoRecordingPath, prefs.videoRecordingTreeUri)
@@ -2296,6 +2338,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 监听相机状态，用于同步预览渲染参数
         viewModelScope.launch {
             state.collect { currentState ->
+                if (currentState.captureMode == CaptureMode.VIDEO) {
+                    validateAndCancelNonMatchingVideoLut(currentState.videoConfig.logProfile, currentLutConfig)
+                }
                 glSurfaceView?.let { view ->
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
                     currentState.focusPoint?.let { fp ->
@@ -2791,14 +2836,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun restorePreviewLutAfterResume() {
         val lutId = currentLutId.value
+        val loadGeneration = lutLoadGeneration
         PLog.d(TAG, "restorePreviewLutAfterResume: lutId=$lutId")
         viewModelScope.launch {
-            val loadedLut = withContext(Dispatchers.IO) {
+            val candidateLut = withContext(Dispatchers.IO) {
                 contentRepository.lutManager.loadLut(lutId)
             }
-            if (currentLutId.value != lutId) {
+            if (currentLutId.value != lutId || lutLoadGeneration != loadGeneration) {
                 return@launch
             }
+            val profile = state.value.videoConfig.logProfile
+            val loadedLut = candidateLut?.takeIf {
+                state.value.captureMode != CaptureMode.VIDEO || profile.matchesLut(it.curve, it.colorSpace)
+            }
+            if (candidateLut != null && loadedLut == null) applyLut("none")
             currentLutConfig = loadedLut
             cameraController.setLutEnabled(loadedLut != null)
             cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
@@ -3611,15 +3662,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         validateAndCancelNonMatchingVideoLut(logProfile, currentLutConfig)
     }
 
+    fun setVideoLogLutMode(mode: VideoLogLutMode) {
+        if (state.value.videoRecordingState.isRecording || state.value.videoRecordingState.isProcessing) return
+        cameraController.setVideoLogLutMode(mode)
+        viewModelScope.launch { userPreferencesRepository.saveVideoLogLutMode(mode) }
+    }
+
     /**
      * 验证并取消选择非匹配的视频 LUT
      * 如果当前处于视频模式且启用了 Log，若当前选中的 LUT 与 Log 格式不匹配，则取消该 LUT
      */
     private fun validateAndCancelNonMatchingVideoLut(logProfile: VideoLogProfile, lutConfig: LutConfig?) {
         if (logProfile != VideoLogProfile.OFF && lutConfig != null) {
-            if (lutConfig.curve != logProfile.logCurve || lutConfig.colorSpace != logProfile.colorSpace) {
+            if (!logProfile.matchesLut(lutConfig.curve, lutConfig.colorSpace)) {
                 PLog.d(TAG, "Cancelling selected LUT [${lutConfig.title}] because it does not match video log profile [${logProfile.name}] colorSpace/curve")
-                setLut(null)
+                setLut(null, persist = false)
             }
         }
     }
@@ -3887,6 +3944,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setLut(lutId: String?, persist: Boolean = true) {
         val normalizedLutId = lutId ?: "none"
+        val profile = state.value.videoConfig.logProfile
+        if (state.value.captureMode == CaptureMode.VIDEO && profile.isEnabled && normalizedLutId != "none") {
+            val info = availableLutList.firstOrNull { it.id == normalizedLutId }
+            if (info != null && !profile.matchesLut(info.inputCurve, info.inputColorSpace)) {
+                if (!persist) applyLut("none")
+                return
+            }
+        }
         applyLut(normalizedLutId)
 
         if (persist) {
@@ -3973,6 +4038,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun applyLut(normalizedLutId: String) {
         val loadGeneration = ++lutLoadGeneration
         lutLoadJob?.cancel()
+        val profile = state.value.videoConfig.logProfile
+        if (state.value.captureMode == CaptureMode.VIDEO && profile.isEnabled &&
+            !profile.matchesLut(currentLutConfig?.curve, currentLutConfig?.colorSpace)) {
+            currentLutConfig = null
+            cameraController.setLogLutActive(false)
+        }
         currentLutId.value = normalizedLutId
         if (normalizedLutId == "none") {
             currentLutConfig = null
@@ -3995,9 +4066,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (state.value.captureMode == CaptureMode.VIDEO) {
                     val logProfile = state.value.videoConfig.logProfile
                     if (logProfile != VideoLogProfile.OFF && loadedLut != null) {
-                        if (loadedLut.curve != logProfile.logCurve || loadedLut.colorSpace != logProfile.colorSpace) {
+                        if (!logProfile.matchesLut(loadedLut.curve, loadedLut.colorSpace)) {
                             PLog.d(TAG, "Deselecting newly selected LUT [${loadedLut.title}] because it does not match video log profile [${logProfile.name}] colorSpace/curve")
-                            setLut(null)
+                            setLut(null, persist = false)
                             return@launch
                         }
                     }
@@ -4019,10 +4090,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 切换到下一个滤镜
      */
     fun switchToNextLut(): LutInfo? {
-        if (availableLutList.isEmpty()) return null
-        val currentIndex = availableLutList.indexOfFirst { it.id == currentLutId.value }
-        val nextIndex = if (currentIndex == -1 || currentIndex == availableLutList.size - 1) 0 else currentIndex + 1
-        val nextLut = availableLutList[nextIndex]
+        val luts = selectableLutList
+        if (luts.isEmpty()) return null
+        val currentIndex = luts.indexOfFirst { it.id == currentLutId.value }
+        val nextIndex = if (currentIndex == -1 || currentIndex == luts.size - 1) 0 else currentIndex + 1
+        val nextLut = luts[nextIndex]
         setLut(nextLut.id)
         vibrationHelper.vibrate()
         return nextLut
@@ -4032,10 +4104,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 切换到上一个滤镜
      */
     fun switchToPreviousLut(): LutInfo? {
-        if (availableLutList.isEmpty()) return null
-        val currentIndex = availableLutList.indexOfFirst { it.id == currentLutId.value }
-        val prevIndex = if (currentIndex <= 0) availableLutList.size - 1 else currentIndex - 1
-        val previousLut = availableLutList[prevIndex]
+        val luts = selectableLutList
+        if (luts.isEmpty()) return null
+        val currentIndex = luts.indexOfFirst { it.id == currentLutId.value }
+        val prevIndex = if (currentIndex <= 0) luts.size - 1 else currentIndex - 1
+        val previousLut = luts[prevIndex]
         setLut(previousLut.id)
         vibrationHelper.vibrate()
         return previousLut

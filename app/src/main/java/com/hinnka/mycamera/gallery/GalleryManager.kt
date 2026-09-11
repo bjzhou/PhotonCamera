@@ -5255,12 +5255,14 @@ object GalleryManager {
         } else {
             null
         }
-        val importedToneMappingParameters = when {
-            embeddedProfile != null -> globalToneMappingParameters
-                .withPhotonHdr(false)
-                .withProfileToneMapMode(RawProfileToneMapMode.Profile)
-            isDng -> globalToneMappingParameters.withPhotonHdr(false)
-            else -> globalToneMappingParameters
+        // Capture defaults must not opt imported sensor data into HDRNet. The per-photo editor
+        // is the only place that enables it, regardless of the source RAW container format.
+        val importedToneMappingParameters = globalToneMappingParameters.withPhotonHdr(false).let {
+            if (embeddedProfile != null) {
+                it.withProfileToneMapMode(RawProfileToneMapMode.Profile)
+            } else {
+                it
+            }
         }
         PLog.d(
             TAG,
@@ -5270,12 +5272,12 @@ object GalleryManager {
                 "photonHdr=${importedToneMappingParameters.usePhotonHdr} " +
                 "dng=$isDng activation=${when {
                     embeddedProfile != null -> "embedded-profile"
-                    isDng -> "manual-only"
-                    else -> "global-default"
+                    else -> "manual-only"
                 }}"
         )
         return copy(
             rawEmbeddedDngProfileId = embeddedProfile?.id,
+            rawAutoExposure = false,
             rawToneMappingParameters = importedToneMappingParameters,
         )
     }

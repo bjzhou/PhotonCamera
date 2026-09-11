@@ -108,11 +108,23 @@ enum class VideoLogProfile(
     V_LOG("V-Log", TransferCurve.VLOG, ColorSpace.VGamut),
     LOGC4_ARRI4("LogC4", TransferCurve.LOGC4, ColorSpace.ARRI4),
     LOG3G10_RED("Log3G10", TransferCurve.LOG3G10, ColorSpace.RED),
-    LLOG_BT2020("L-Log", TransferCurve.LLOG, ColorSpace.BT2020),
-    ACESCCT_AP1("ACEScct", TransferCurve.ACES_CCT, ColorSpace.ACES_AP1);
+    LLOG_BT2020("L-Log", TransferCurve.LLOG, ColorSpace.BT2020);
 
     val isEnabled: Boolean
         get() = this != OFF
+
+    fun matchesLut(curve: TransferCurve?, gamut: ColorSpace?): Boolean =
+        !isEnabled || (curve == logCurve && gamut == colorSpace)
+
+    companion object {
+        fun fromPersistedName(name: String?): VideoLogProfile =
+            entries.firstOrNull { it.name == name } ?: OFF
+    }
+}
+
+enum class VideoLogLutMode {
+    MONITOR_ONLY,
+    BAKE_IN
 }
 
 data class VideoConfig(
@@ -120,6 +132,7 @@ data class VideoConfig(
     val fps: VideoFpsPreset = VideoFpsPreset.FPS_30,
     val aspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
     val logProfile: VideoLogProfile = VideoLogProfile.OFF,
+    val logLutMode: VideoLogLutMode = VideoLogLutMode.MONITOR_ONLY,
     val bitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val codec: VideoCodec = VideoCodec.H264,
     val audioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
@@ -132,7 +145,13 @@ data class VideoConfig(
     val lensLockEnabled: Boolean = false,
     val whiteBalanceLockEnabled: Boolean = false
 ) {
-    fun resolveOutputSize(openGatePortraitAspectRatio: Float): Size {
+    fun resolveOutputSize(openGatePortraitAspectRatio: Float, cameraInputSize: Size): Size {
+        if (aspectRatio == VideoAspectRatio.OPEN_GATE) {
+            return Size(
+                minOf(cameraInputSize.width, cameraInputSize.height).align16(),
+                maxOf(cameraInputSize.width, cameraInputSize.height).align16()
+            )
+        }
         return resolution.resolveOutputSize(
             aspectRatio.getPortraitAspectRatio(openGatePortraitAspectRatio)
         )

@@ -41,6 +41,8 @@ data class CameraPreset(
     val rawWhitePointCorrection: Float = 0f,
     val rawOppoMasterToneMap: Boolean = false,
     val rawLumixPhotoStyle: String = LumixPhotoStyle.Standard.assetName,
+    val rawLumixColorMatchingEnabled: Boolean = true,
+    val rawHncsColorMatchingEnabled: Boolean = true,
     val rawSpectralFilmStock: String? = null,
     val rawSpectralFilmPrint: String? = null,
     val rawDROMode: String = "OFF",

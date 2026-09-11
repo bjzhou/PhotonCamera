@@ -52,6 +52,7 @@ import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoStabilizationMode
@@ -202,6 +203,7 @@ data class UserPreferences(
     val videoFps: VideoFpsPreset = VideoFpsPreset.FPS_30,
     val videoAspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
     val videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
+    val videoLogLutMode: VideoLogLutMode = VideoLogLutMode.MONITOR_ONLY,
     val videoBitrate: VideoBitratePreset = VideoBitratePreset.P1,
     val videoAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO,
     val videoRecordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
@@ -355,6 +357,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_profile_tone_map")
         private val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
         private val RAW_LUMIX_PHOTO_STYLE_KEY = stringPreferencesKey("raw_lumix_photo_style")
+        private val RAW_LUMIX_COLOR_MATCHING_KEY = booleanPreferencesKey("raw_lumix_color_matching_enabled")
+        private val RAW_HNCS_COLOR_MATCHING_KEY = booleanPreferencesKey("raw_hncs_color_matching_enabled")
         private val RAW_PHOTON_HDR_KEY = booleanPreferencesKey("raw_photon_hdr")
         private val LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY =
             booleanPreferencesKey("raw_photon_pgtm_tone_map")
@@ -452,6 +456,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_FPS = stringPreferencesKey("video_fps")
         private val VIDEO_ASPECT_RATIO = stringPreferencesKey("video_aspect_ratio")
         private val VIDEO_LOG_PROFILE = stringPreferencesKey("video_log_profile")
+        private val VIDEO_LOG_LUT_MODE = stringPreferencesKey("video_log_lut_mode")
         private val VIDEO_BITRATE = stringPreferencesKey("video_bitrate")
         private val VIDEO_AUDIO_INPUT_ID = stringPreferencesKey("video_audio_input_id")
         private val VIDEO_RECORDING_PATH = stringPreferencesKey("video_recording_path")
@@ -623,6 +628,8 @@ class UserPreferencesRepository(private val context: Context) {
                     // Capture development has one supported adaptive-exposure path: HDRNet.
                     // Photo-level metadata may still disable it for an imported DNG.
                     lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(preferences[RAW_LUMIX_PHOTO_STYLE_KEY]),
+                    lumixColorMatchingEnabled = preferences[RAW_LUMIX_COLOR_MATCHING_KEY] ?: true,
+                    hncsColorMatchingEnabled = preferences[RAW_HNCS_COLOR_MATCHING_KEY] ?: true,
                     usePhotonHdr = true
                 ).normalized(),
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
@@ -751,9 +758,10 @@ class UserPreferencesRepository(private val context: Context) {
                 videoAspectRatio = VideoAspectRatio.valueOf(
                     preferences[VIDEO_ASPECT_RATIO] ?: VideoAspectRatio.RATIO_16_9.name
                 ),
-                videoLogProfile = VideoLogProfile.valueOf(
-                    preferences[VIDEO_LOG_PROFILE] ?: VideoLogProfile.OFF.name
-                ),
+                videoLogProfile = VideoLogProfile.fromPersistedName(preferences[VIDEO_LOG_PROFILE]),
+                videoLogLutMode = VideoLogLutMode.entries.firstOrNull {
+                    it.name == preferences[VIDEO_LOG_LUT_MODE]
+                } ?: VideoLogLutMode.MONITOR_ONLY,
                 videoBitrate = VideoBitratePreset.valueOf(
                     preferences[VIDEO_BITRATE] ?: VideoBitratePreset.P1.name
                 ),
@@ -1212,6 +1220,8 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_PROFILE_TONE_MAP_KEY] = normalized.useProfileToneMap
             preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
             preferences[RAW_LUMIX_PHOTO_STYLE_KEY] = normalized.lumixPhotoStyle.assetName
+            preferences[RAW_LUMIX_COLOR_MATCHING_KEY] = normalized.lumixColorMatchingEnabled
+            preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled
             preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
             preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
             preferences[RAW_AUTO_EXPOSURE_KEY] = false
@@ -2117,6 +2127,12 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveVideoLogLutMode(mode: VideoLogLutMode) {
+        context.dataStore.edit { preferences ->
+            preferences[VIDEO_LOG_LUT_MODE] = mode.name
+        }
+    }
+
     suspend fun saveVideoBitrate(bitrate: VideoBitratePreset) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_BITRATE] = bitrate.name
@@ -2421,6 +2437,8 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[LEGACY_PROFILE_TONE_MAP_KEY] = false
                 preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
                 preferences[RAW_LUMIX_PHOTO_STYLE_KEY] = normalized.lumixPhotoStyle.assetName
+                preferences[RAW_LUMIX_COLOR_MATCHING_KEY] = normalized.lumixColorMatchingEnabled
+                preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled
                 preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
                 preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
                 preferences[RAW_AUTO_EXPOSURE_KEY] = false

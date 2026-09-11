@@ -45,6 +45,8 @@
     <string name="video_aspect_16_9">16:9</string>
     <string name="video_aspect_21_9">21:9</string>
     <string name="video_aspect_open_gate">เปิดกว้าง</string>
+    <string name="video_resolution_max">สูงสุด</string>
+    <string name="video_open_gate_resolution_description">โหมด Open Gate ใช้ความละเอียดสูงสุดและไม่สามารถเลือกความละเอียดได้</string>
     <string name="video_log_off">ปิด</string>
     <string name="video_codec_chip">รูปแบบการเข้ารหัส</string>
     <string name="video_microphone_title">ไมโครโฟน</string>
@@ -909,4 +911,12 @@
     <string name="settings_language_system">ตามระบบ</string>
     <string name="settings_video_nr_level_description">ตั้งค่าการลดสัญญาณรบกวนด้วยฮาร์ดแวร์สำหรับการแสดงตัวอย่างและการบันทึกวิดีโอแยกจากภาพถ่าย</string>
     <string name="settings_video_edge_level_description">ตั้งค่าความคมชัดด้วยฮาร์ดแวร์สำหรับการแสดงตัวอย่างและการบันทึกวิดีโอแยกจากภาพถ่าย</string>
+    <string name="video_log_lut_monitor_only">ดูตัวอย่างเท่านั้น</string>
+    <string name="video_log_lut_bake_in">ใช้กับวิดีโอ</string>
+    <string name="video_log_lut_monitor_hint">ตัวอย่างใช้ LUT แต่บันทึกวิดีโอเป็น Log</string>
+    <string name="video_log_lut_bake_hint">ใช้ LUT และการปรับสีกับวิดีโอที่บันทึก</string>
+    <string name="video_log_format">รูปแบบ Log</string>
+    <string name="video_log_color_space_auto">ตั้งค่าปริภูมิสีให้ตรงกับรูปแบบ Log โดยอัตโนมัติ</string>
+    <string name="settings_raw_camera_color_matching">ปรับสีให้ตรงกับกล้อง</string>
+    <string name="settings_raw_camera_color_matching_description">เมื่อเปิดใช้งาน ระบบจะปรับสีตามกล้องที่ใช้ถ่ายภาพ เมื่อปิดใช้งานจะใช้การประมวลผลเดิม</string>
 </resources>

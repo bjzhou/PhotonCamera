@@ -38,7 +38,7 @@ internal object DngSdkColorSpec {
     /**
      * Resolves source color metadata from the profile and as-shot gains stored in the DNG.
      * Replacing only the gains leaves Camera2's old white/CCT and lens calibration behind;
-     * equivalent-camera engines then use a different LUT solution after reopening the file.
+     * equivalent-camera engines then use a different color transform after reopening the file.
      * A selected creative DCP must never be supplied as the source profile here.
      */
     fun resolveSourceMetadata(
@@ -46,8 +46,9 @@ internal object DngSdkColorSpec {
         metadata: RawMetadata,
         workingColorSpace: ColorSpace,
     ): RawMetadata? {
-        val whiteXy = whiteXyForProfile(profile, metadata) ?: return null
-        val temperature = colorTemperatureForXy(whiteXy) ?: return null
+        val whiteXy = whiteXyForProfile(profile, metadata)
+        if (!profile.isForwardOnly() && whiteXy == null) return null
+        val temperature = whiteXy?.let(::colorTemperatureForXy)
         val matrix = computeCameraToWorkingMatrix(profile, metadata, workingColorSpace) ?: return null
         val white = computeCameraWhite(profile, metadata) ?: return null
         return metadata.copy(
@@ -64,6 +65,21 @@ internal object DngSdkColorSpec {
         metadata: RawMetadata,
         workingColorSpace: ColorSpace
     ): FloatArray? {
+        if (profile.isForwardOnly()) {
+            val matrices = forwardOnlyMatrices(profile, whiteXyForProfile(profile, metadata)) ?: return null
+            val cameraWhite = computeCameraWhite(profile, metadata) ?: return null
+            val individualToReference = invertMatrix3x3(multiplyMatrix3x3(
+                diagonalMatrix(profile.analogBalance.validVectorOrDefault()), matrices.second,
+            )) ?: return null
+            val referenceWhite = multiplyMatrixVector(individualToReference, cameraWhite)
+            if (referenceWhite.any { !it.isFinite() || it <= EPSILON }) return null
+            // dng_color_spec::SetWhiteXY, with AsShotNeutral supplying camera white
+            // directly when CM is absent. FM is never treated as XYZ-to-camera.
+            val cameraToPcs = multiplyMatrix3x3(multiplyMatrix3x3(
+                matrices.first, diagonalMatrix(referenceWhite.map { 1f / it }.toFloatArray()),
+            ), individualToReference)
+            return multiplyMatrix3x3(computeXyzD50ToGamut(workingColorSpace) ?: return null, cameraToPcs)
+        }
         return computeCameraToWorkingMatrix(
             colorMatrix1 = profile.colorMatrix1,
             colorMatrix2 = profile.colorMatrix2,
@@ -83,6 +99,11 @@ internal object DngSdkColorSpec {
         profile: DcpProfile,
         metadata: RawMetadata
     ): FloatArray? {
+        if (profile.isForwardOnly()) {
+            val neutral = cameraNeutralFromWb(metadata.whiteBalanceGains)
+            val scale = neutral.maxOrNullValue()
+            return neutral.map { (it / scale).coerceIn(0.001f, 1f) }.toFloatArray()
+        }
         return computeCameraWhite(
             colorMatrix1 = profile.colorMatrix1,
             colorMatrix2 = profile.colorMatrix2,
@@ -110,6 +131,9 @@ internal object DngSdkColorSpec {
     ): FloatArray? {
         if (whiteXy.size != 2 || whiteXy.any { !it.isFinite() || it <= 0f } ||
             whiteXy.sum() >= 1f) return null
+        if (profile.isForwardOnly()) {
+            return computeReferenceCameraToWorkingMatrix(profile, whiteXy, workingColorSpace)
+        }
         val prepared = prepareProfile(
             profile.colorMatrix1, profile.colorMatrix2,
             profile.forwardMatrix1, profile.forwardMatrix2,
@@ -250,6 +274,12 @@ internal object DngSdkColorSpec {
     }
 
     fun whiteXyForProfile(profile: DcpProfile, metadata: RawMetadata): FloatArray? {
+        if (profile.isForwardOnly()) {
+            // FM maps neutral to D50 after WB: it cannot recover the scene illuminant.
+            return metadata.whitePointXy?.takeIf {
+                it.size == 2 && it.all { value -> value.isFinite() && value > 0f } && it.sum() < 1f
+            }?.copyOf()
+        }
         val prepared = prepareProfile(
             colorMatrix1 = profile.colorMatrix1,
             colorMatrix2 = profile.colorMatrix2,
@@ -262,6 +292,42 @@ internal object DngSdkColorSpec {
             cameraCalibration2 = profile.cameraCalibration2
         ) ?: return null
         return neutralToXy(prepared, cameraNeutralFromWb(metadata.whiteBalanceGains))
+    }
+
+    private fun DcpProfile.isForwardOnly(): Boolean =
+        colorMatrix1 == null && colorMatrix2 == null &&
+            (forwardMatrix1 != null || forwardMatrix2 != null)
+
+    /** Matrix from WB reference-camera RGB for ForwardMatrix-only sources. */
+    fun computeReferenceCameraToWorkingMatrix(
+        profile: DcpProfile, whiteXy: FloatArray?, workingColorSpace: ColorSpace,
+    ): FloatArray? {
+        val forward = forwardOnlyMatrices(profile, whiteXy)?.first ?: return null
+        return multiplyMatrix3x3(computeXyzD50ToGamut(workingColorSpace) ?: return null, forward)
+    }
+
+    /**
+     * The FM/CameraCalibration part of dng_color_spec::FindXYZtoCamera_SingleOrDual.
+     * Adobe's full profile validator requires CM; this extension accepts FM-only data
+     * with an independently supplied scene white, without inventing a ColorMatrix.
+     */
+    private fun forwardOnlyMatrices(profile: DcpProfile, whiteXy: FloatArray?): Pair<FloatArray, FloatArray>? {
+        val first = profile.forwardMatrix1.validMatrixOrNull()?.let(::normalizeForwardMatrix)
+        val second = profile.forwardMatrix2.validMatrixOrNull()?.let(::normalizeForwardMatrix)
+        if (first == null && second == null) return null
+        val temp1 = illuminantToTemperature(profile.calibrationIlluminant1)
+        val temp2 = illuminantToTemperature(profile.calibrationIlluminant2)
+        val dual = temp1 > 0f && temp2 > 0f && abs(temp1 - temp2) >= EPSILON &&
+            ((first != null && second != null) ||
+                (profile.cameraCalibration1 != null && profile.cameraCalibration2 != null))
+        val weight = if (dual) {
+            hueSatWeightForWhite(profile.calibrationIlluminant1, profile.calibrationIlluminant2,
+                whiteXy ?: return null)
+        } else if (first == null) 0f else 1f
+        val forward = interpolateOptionalMatrix(first, second, weight) ?: return null
+        val calibration = interpolateMatrix(profile.cameraCalibration1.validMatrixOrIdentity(),
+            profile.cameraCalibration2.validMatrixOrIdentity(), weight)
+        return forward to calibration
     }
 
     fun hueSatWeightForWhite(illuminant1: Int, illuminant2: Int, whiteXy: FloatArray): Float {
@@ -377,6 +443,7 @@ internal object DngSdkColorSpec {
     ): PreparedProfile? {
         var matrix1 = colorMatrix1.validMatrixOrNull()
         var matrix2 = colorMatrix2.validMatrixOrNull()
+        val promoteSecond = matrix1 == null && matrix2 != null
         var illuminant1 = calibrationIlluminant1
         var illuminant2 = calibrationIlluminant2
         if (matrix1 == null && matrix2 != null) {
@@ -387,14 +454,15 @@ internal object DngSdkColorSpec {
         matrix1 ?: return null
 
         val analog = analogBalance.validVectorOrDefault()
-        val calibration1 = cameraCalibration1.validMatrixOrIdentity()
+        val calibration1 = (if (promoteSecond) cameraCalibration2 else cameraCalibration1).validMatrixOrIdentity()
         val calibration2 = cameraCalibration2.validMatrixOrIdentity()
         val analogMatrix = diagonalMatrix(analog)
 
         var temperature1 = illuminantToTemperature(illuminant1)
         var temperature2 = illuminantToTemperature(illuminant2)
         var preparedColor1 = applyCameraCalibration(normalizeColorMatrix(matrix1), calibration1, analogMatrix)
-        var preparedForward1 = forwardMatrix1.validMatrixOrNull()?.let(::normalizeForwardMatrix)
+        var preparedForward1 = (if (promoteSecond) forwardMatrix2 else forwardMatrix1)
+            .validMatrixOrNull()?.let(::normalizeForwardMatrix)
         var preparedCalibration1 = calibration1
 
         var preparedColor2 = matrix2?.let {

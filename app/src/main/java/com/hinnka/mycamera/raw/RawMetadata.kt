@@ -94,9 +94,10 @@ data class RawMetadata(
     val colorCorrectionMatrix: FloatArray,
 
     /**
-     * Camera2 static lens calibration. This is kept separate from
+     * Camera2 static lens calibration or calibration embedded in an imported RAW.
+     * LibRaw's built-in camera matrices are never used for this field. Kept separate from
      * [colorCorrectionMatrix], which is resolved for the current frame/WB.
-     * The matrices retain DNG ColorMatrix direction: XYZ -> camera RGB.
+     * CM retains XYZ -> camera direction; FM retains WB reference camera -> XYZ D50.
      */
     val cameraCalibration: RawCameraCalibration? = null,
 

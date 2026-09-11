@@ -85,6 +85,8 @@ internal object CameraPresetJsonCodec {
             rawWhitePointCorrection = obj.float("rawWhitePointCorrection", 0f)
                 .coerceIn(-1f, 1f),
             rawLumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(obj.stringOrNull("rawLumixPhotoStyle")).assetName,
+            rawLumixColorMatchingEnabled = obj.boolean("rawLumixColorMatchingEnabled", true),
+            rawHncsColorMatchingEnabled = obj.boolean("rawHncsColorMatchingEnabled", true),
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
             rawSpectralFilmStock = obj.stringOrNull("rawSpectralFilmStock"),
             rawSpectralFilmPrint = obj.stringOrNull("rawSpectralFilmPrint"),

@@ -253,6 +253,8 @@ object GalleryMediaStore {
             rawProfileToneMap = metadata.rawToneMappingParameters.useProfileToneMap,
             rawOppoMasterToneMap = metadata.rawToneMappingParameters.useOppoMasterToneMap,
             rawLumixPhotoStyle = metadata.rawToneMappingParameters.lumixPhotoStyle.assetName,
+            rawLumixColorMatchingEnabled = metadata.rawToneMappingParameters.lumixColorMatchingEnabled,
+            rawHncsColorMatchingEnabled = metadata.rawToneMappingParameters.hncsColorMatchingEnabled,
             rawPhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
             rawAppleProRawToneMap = false,
             frameId = metadata.frameId,
@@ -455,6 +457,8 @@ object GalleryMediaStore {
                 useProfileToneMap = rawProfileToneMap,
                 useOppoMasterToneMap = rawOppoMasterToneMap,
                 lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(rawLumixPhotoStyle),
+                lumixColorMatchingEnabled = rawLumixColorMatchingEnabled,
+                hncsColorMatchingEnabled = rawHncsColorMatchingEnabled,
                 usePhotonHdr = rawPhotonHdr || legacyPhotonToneMap
             ).normalized(),
             frameId = frameId,

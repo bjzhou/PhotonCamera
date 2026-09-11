@@ -58,17 +58,18 @@ class RawHncsShadersTest {
     @Test
     fun hncsFragmentShadersPassAvailableNdkValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
-        val validator = sdkRoot?.let(::File)
+        val ndkRoots = sdkRoot?.let(::File)
             ?.resolve("ndk")
             ?.listFiles()
             ?.sortedByDescending { it.name }
-            ?.asSequence()
-            ?.mapNotNull { ndk ->
+            .orEmpty() + listOfNotNull(System.getenv("ANDROID_NDK_HOME")?.let(::File))
+        val validator = ndkRoots.asSequence()
+            .mapNotNull { ndk ->
                 ndk.resolve("shader-tools")
                     .walkTopDown()
-                    .firstOrNull { it.name == "glslc" && it.canExecute() }
+                    .firstOrNull { it.name in setOf("glslc", "glslc.exe") && it.canExecute() }
             }
-            ?.firstOrNull()
+            .firstOrNull()
         assumeTrue("Android NDK glslc is unavailable", validator != null)
 
         val shaders = listOf(

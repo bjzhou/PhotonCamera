@@ -11,6 +11,22 @@ import org.junit.Test
 
 class CameraPresetJsonCodecTest {
     @Test
+    fun colorMatchingPreservesIndependentSwitchesAndDefaultsForOldPresets() {
+        val legacy = requireNotNull(CameraPreset.fromJson("""{"id":"legacy","name":"Legacy"}"""))
+        assertTrue(legacy.rawLumixColorMatchingEnabled)
+        assertTrue(legacy.rawHncsColorMatchingEnabled)
+        for ((lumix, hncs) in listOf(false to true, true to false, false to false)) {
+            val source = legacy.copy(
+                rawLumixColorMatchingEnabled = lumix,
+                rawHncsColorMatchingEnabled = hncs,
+            )
+            val restored = requireNotNull(CameraPreset.fromJson(source.toJson()))
+            assertEquals(lumix, restored.rawLumixColorMatchingEnabled)
+            assertEquals(hncs, restored.rawHncsColorMatchingEnabled)
+        }
+    }
+
+    @Test
     fun legacyPaletteSaturation_isMergedWhenReadingAndSavingPresets() {
         val legacyJson = """
             {

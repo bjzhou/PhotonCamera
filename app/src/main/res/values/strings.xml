@@ -56,6 +56,8 @@
     <string name="video_aspect_16_9">16:9</string>
     <string name="video_aspect_21_9">21:9</string>
     <string name="video_aspect_open_gate">Open Gate</string>
+    <string name="video_resolution_max">MAX</string>
+    <string name="video_open_gate_resolution_description">Open Gate uses the maximum resolution. Resolution selection is disabled.</string>
     <string name="video_log_off">OFF</string>
     <string name="video_codec_chip">Encoding</string>
     <string name="video_microphone_title">Microphone</string>
@@ -889,7 +891,7 @@
     <string name="settings_raw_profile_tone_map_embedded">Embedded</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
     <string name="settings_raw_photon_hdr">Dynamic Range Optimization</string>
-    <string name="settings_raw_photon_hdr_edit_description">Apply HDRNet dynamic range optimization to this imported DNG.</string>
+    <string name="settings_raw_photon_hdr_edit_description">Apply HDRNet dynamic range optimization to this imported RAW. Off by default.</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX Black Relative Exposure</string>
     <string name="settings_raw_agx_shoulder">AgX Shoulder</string>
@@ -1243,4 +1245,12 @@
     <string name="settings_raw_lumix_style_cinelike_v2">Cinelike V2</string>
     <string name="settings_raw_lumix_style_709like">Like709</string>
     <string name="settings_raw_lumix_style_vlog">V-Log</string>
+    <string name="video_log_lut_monitor_only">Monitor only</string>
+    <string name="video_log_lut_bake_in">Bake into video</string>
+    <string name="video_log_lut_monitor_hint">Preview uses the LUT; recording preserves Log.</string>
+    <string name="video_log_lut_bake_hint">Recording includes the selected LUT and color adjustments.</string>
+    <string name="video_log_format">Log format</string>
+    <string name="video_log_color_space_auto">Color space is matched automatically to the Log format.</string>
+    <string name="settings_raw_camera_color_matching">Match camera colors</string>
+    <string name="settings_raw_camera_color_matching_description">Adjust colors according to the camera used for the photo when enabled; use the original processing when disabled.</string>
 </resources>

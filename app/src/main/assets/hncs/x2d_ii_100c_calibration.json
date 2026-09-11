@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "cameraModel": "Hasselblad X2D II 100C",
+  "sourceFile": "4777366646.3fr",
+  "sourceSha256": "90a8cd2d4cbf8227a016bf3b44d172518791a823dbe6de74f96b182a527ff72e",
+  "sourceTag": "IFD0:ColorMatrix1 (0xc621)",
+  "colorMatrix1": [
+    0.5950573751, -0.146674752, -0.03412952103,
+    -0.5159296309, 1.26306183, 0.2826110949,
+    -0.103825823, 0.1675577691, 0.6152086
+  ],
+  "colorMatrix2": null,
+  "calibrationIlluminant1": null,
+  "calibrationIlluminant2": null,
+  "forwardMatrix1": null,
+  "forwardMatrix2": null
+}

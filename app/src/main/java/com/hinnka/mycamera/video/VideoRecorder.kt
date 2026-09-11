@@ -207,7 +207,7 @@ class VideoRecorder(
         requestedOutputSize = Size(size.width.align16(), size.height.align16())
         requestedCameraInputSize = cameraInputSize
         // SurfaceTexture 变换后的 OES 内容已经处于自然显示方向，编码画布必须继续使用
-        // VideoResolutionPreset 的显示尺寸。设备横竖屏差异只通过容器 rotation metadata 表达。
+        // 已解析的显示尺寸（片门全开使用最大相机输入尺寸）。设备横竖屏差异只通过容器 rotation metadata 表达。
         requestedSize = requestedOutputSize
         requestedFps = fps
         requestedBitrateMbps = bitrateMbps

@@ -8,12 +8,11 @@ import java.nio.ByteOrder
 /**
  * Phocus HNCS color-correction and selectable FilmCurve path.
  *
- * The source CCM is recovered to WB sensor RGB, then shared inverse-DCP LUTs
- * produce X1D-50 RGB for the Phocus matrix, 2D colour map and original FilmCurve.
+ * The shared ColorMatrix transform supplies WB X2D II 100C RGB for the Phocus
+ * matrix, 2D colour map and original FilmCurve.
  */
 internal object HncsToneShader {
     val HNCS_COMBINED_UNIFORMS = """
-        ${EquivalentCameraLutShader.UNIFORMS}
         uniform mat3 uHncsTargetCameraToHncs;
         uniform sampler2D uHncsColorMapTexture;
         uniform sampler2D uHncsCurveTexture;
@@ -31,7 +30,6 @@ internal object HncsToneShader {
         uniform int uHncsDiagnosticStage;
     """.trimIndent()
     val HNCS_COMBINED_FUNCTIONS = """
-        ${EquivalentCameraLutShader.FUNCTIONS}
         const float HNCS_EPSILON = 0.000001;
         const float HNCS_CURVE_SAMPLE_COUNT = 65536.0;
         const vec2 HNCS_CURVE_TEXTURE_DIMENSIONS = vec2(256.0, 256.0);
@@ -147,7 +145,7 @@ internal object HncsToneShader {
         }
 
         vec3 applyEngineTone(vec3 color) {
-            color = uHncsTargetCameraToHncs * equivalentCameraRgb(color);
+            color = uHncsTargetCameraToHncs * color;
             if (uHncsDiagnosticStage == 1) {
                 return color;
             }
@@ -178,7 +176,6 @@ internal object HncsToneShader {
 
 internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
     RawRenderingEngineToneAlgorithm(quad, HncsToneShader.DEFINITION) {
-    private val calibration = EquivalentCameraLutGl()
     private var colorMapTextureId = 0
     private var curveTextureId = 0
     private var colorMapTextureKey: String? = null
@@ -190,7 +187,6 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
             "HNCS engine requires a validated render plan"
         }
         ensureTextures(renderPlan)
-        calibration.bind(program, renderPlan.calibrationLuts, renderPlan.calibrationFirstWeight)
         GLES30.glUniformMatrix3fv(
             GLES30.glGetUniformLocation(program, "uHncsTargetCameraToHncs"),
             1, false, transpose3x3(renderPlan.cameraToHncsMatrix), 0,
@@ -271,7 +267,6 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
     }
 
     override fun releaseEngineResources() {
-        calibration.release()
         if (colorMapTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(colorMapTextureId), 0)
             colorMapTextureId = 0
