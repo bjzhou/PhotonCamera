@@ -34,7 +34,11 @@ internal object SpektrafilmToneShader {
             }
             vec3 normalizedColor = color / 2.88;
             vec3 encodedColor = linearToProPhoto(normalizedColor);
-            vec3 lutCoord = clamp(encodedColor, 0.0, 1.0);
+            // .cube samples span lattice indices 0..N-1; GL samples texel centers.
+            // Direct normalized coordinates clamp the first/last half texel,
+            // flattening shadows independently in each color channel.
+            float lutSize = float(uSpectralFilmSize);
+            vec3 lutCoord = (clamp(encodedColor, 0.0, 1.0) * (lutSize - 1.0) + 0.5) / lutSize;
             vec3 lutResult = texture(uSpectralFilmTexture, lutCoord).rgb;
             return proPhotoToLinear(lutResult);
         }
