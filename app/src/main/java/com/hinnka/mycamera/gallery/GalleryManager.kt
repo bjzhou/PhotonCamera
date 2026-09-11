@@ -2673,7 +2673,7 @@ object GalleryManager {
             }
             tempFile.renameTo(photoFile)
 //            generateBokehPhoto(context, photoId, metadata, bitmap)
-            queueDetailHdrCacheBuild(
+            buildDetailHdrCache(
                 context = context,
                 photoId = photoId,
                 metadata = metadata,
@@ -2681,7 +2681,7 @@ object GalleryManager {
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue
             )
-//            updateThumbnail(context, photoId, photoProcessor, metadata)
+            updateThumbnail(context, photoId, photoProcessor, metadata, bitmap)
 
             if (shouldAutoSave) {
                 exportPhoto(
@@ -4526,10 +4526,11 @@ object GalleryManager {
                 return
             }
             if (!mainPhotoFile.exists() || mainPhotoFile.length() == 0L) {
-                processingScope.launch {
+                withContext(Dispatchers.IO) {
                     try {
                         if (photoFile.exists()) {
                             photoFile.copyTo(mainPhotoFile, overwrite = true)
+                            updateThumbnail(context, photoId, photoProcessor, metadata)
                             if (shouldAutoSave) {
                                 exportPhoto(
                                     context,
@@ -4547,7 +4548,7 @@ object GalleryManager {
                             PLog.e(TAG, "Burst photo file does not exist during copy: ${photoFile.absolutePath}")
                         }
                     } catch (e: Exception) {
-                        PLog.e(TAG, "Failed to copy burst photo asynchronously", e)
+                        PLog.e(TAG, "Failed to copy burst photo", e)
                     }
                 }
             }

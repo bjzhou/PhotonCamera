@@ -97,10 +97,9 @@ class Camera2Controller(private val context: Context) {
         const val ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE = 1002
         const val ERROR_CAMERA_SESSION_CONFIG_FAILED = 1003
 
-        private const val SINGLE_CAPTURE_READER_MAX_IMAGES = 2
+        private const val CAPTURE_READER_MAX_IMAGES = 50
+        private const val CAPTURE_IMAGE_DELIVERY_TIMEOUT_MS = 10_000L
         private const val BURST_CAPTURE_BATCH_SIZE = 8
-        private const val HDR_BRACKET_BASE_CAPTURE_COUNT = 3
-        private const val HDR_BRACKET_SIDE_FRAME_COUNT = 2
 
         // 拍照状态机常量
         private const val STATE_PREVIEW = 0 // Showing camera preview.
@@ -410,7 +409,44 @@ class Camera2Controller(private val context: Context) {
     private val pendingCaptureStartedTimestamps = ConcurrentHashMap<Long, Long>()
     private val pendingCloseReaders = mutableListOf<ImageReader>()
     private val openImagesCount = AtomicInteger(0)
-    private var imageReaderMaxImages = SINGLE_CAPTURE_READER_MAX_IMAGES
+    private var imageReaderMaxImages = CAPTURE_READER_MAX_IMAGES
+
+    // Owned by cameraHandler. Acquired images are counted atomically until their
+    // processing owner closes them; reservations cover buffers still in the HAL.
+    private class PhotoCaptureContext(
+        val id: Long,
+        var state: CameraState,
+        val reader: ImageReader,
+        val expectedFrames: Int,
+        val characteristics: CameraCharacteristics?,
+        val physicalCameraId: String?,
+        val continuousBurst: Boolean = false,
+        val captureTime: Long = System.currentTimeMillis(),
+        val exposureCompensationStep: Float,
+    ) {
+        var reservedFrames = expectedFrames
+        var submitted = false
+        var sequenceCompleted = false
+        var failed = false
+        var delivered = false
+        var livePhotoStartTimestampUs: Long? = null
+        var animationCaptureResult: TotalCaptureResult? = null
+        var timeout: Runnable? = null
+        val timestamps = mutableSetOf<Long>()
+        val startedFrameNumbers = mutableSetOf<Long>()
+        val expectedImageTimestamps = mutableSetOf<Long>()
+        val timestampByFrameNumber = mutableMapOf<Long, Long>()
+        val lostImageFrameNumbers = mutableSetOf<Long>()
+        val acquiredTimestamps = mutableSetOf<Long>()
+        val frames = sortedMapOf<Long, CapturedPhotoFrame>()
+    }
+
+    private var nextPhotoCaptureId = 0L
+    private var activePhotoCapture: PhotoCaptureContext? = null
+    private var pendingContinuousBurstCapture: PhotoCaptureContext? = null
+    private val photoCaptures = mutableMapOf<Long, PhotoCaptureContext>()
+    private val photoCaptureByTimestamp = mutableMapOf<Long, PhotoCaptureContext>()
+    private val discardedCaptureTimestamps = linkedSetOf<Long>()
 
     private var burstCapturing = false
     // 保留最近的一个结果作为后备
@@ -441,7 +477,328 @@ class Camera2Controller(private val context: Context) {
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
     var onImageCaptured: ((SafeImage, CaptureInfo, CameraCharacteristics?, CaptureResult?, CapturedFrameMetadata?) -> Unit)? = null
+    var onPhotoCaptureReady: ((CapturedPhoto) -> Unit)? = null
+    var onPhotoCaptureCompleted: ((Long, CaptureInfo) -> Unit)? = null
+    var onPhotoCaptureFailed: ((Long) -> Unit)? = null
     var onHdrBracketCaptureFailed: (() -> Unit)? = null
+
+    private fun reservedImageCount(): Int = photoCaptures.values.sumOf { it.reservedFrames }
+
+    private fun reservePhotoCapture(
+        state: CameraState,
+        reader: ImageReader,
+        continuousBurst: Boolean = false,
+    ): PhotoCaptureContext? {
+        val frameCount = if (continuousBurst) BURST_CAPTURE_BATCH_SIZE else captureImageRequestCount(state, reader)
+        val occupied = openImagesCount.get() + reservedImageCount()
+        if (occupied + frameCount > CAPTURE_READER_MAX_IMAGES) {
+            PLog.w(TAG, "Capture rejected: occupied=$occupied requested=$frameCount capacity=$CAPTURE_READER_MAX_IMAGES")
+            return null
+        }
+        val shot = PhotoCaptureContext(
+            id = ++nextPhotoCaptureId,
+            state = state,
+            reader = reader,
+            expectedFrames = frameCount,
+            characteristics = activeOutputPhysicalCameraId
+                ?.let { getCameraCharacteristicsOrNull(it, "capture snapshot") }
+                ?: getActiveOpenCameraCharacteristics(),
+            physicalCameraId = activeOutputPhysicalCameraId,
+            continuousBurst = continuousBurst,
+            exposureCompensationStep = state.getExposureCompensationStep(),
+        )
+        photoCaptures[shot.id] = shot
+        PLog.d(TAG, "Capture reserved: id=${shot.id} frames=$frameCount occupied=$occupied")
+        return shot
+    }
+
+    private fun registerPhotoTimestamp(shot: PhotoCaptureContext, timestamp: Long) {
+        if (shot.delivered) {
+            discardCaptureTimestamp(timestamp)
+            return
+        }
+        shot.timestamps.add(timestamp)
+        photoCaptureByTimestamp[timestamp] = shot
+        if (pendingImages.containsKey(timestamp)) {
+            accountAcquiredPhotoImage(shot, timestamp)
+            if (shot.failed) pendingImages.remove(timestamp)?.close()
+        }
+    }
+
+    private fun accountAcquiredPhotoImage(shot: PhotoCaptureContext, timestamp: Long) {
+        if (shot.acquiredTimestamps.add(timestamp)) {
+            check(shot.reservedFrames > 0) { "Capture ${shot.id} received more images than requested" }
+            shot.reservedFrames--
+        }
+    }
+
+    private fun discardCaptureTimestamp(timestamp: Long) {
+        discardedCaptureTimestamps.add(timestamp)
+        while (discardedCaptureTimestamps.size > CAPTURE_READER_MAX_IMAGES * 4) {
+            discardedCaptureTimestamps.remove(discardedCaptureTimestamps.first())
+        }
+        photoCaptureByTimestamp.remove(timestamp)
+        pendingImages.remove(timestamp)?.close()
+        pendingResults.remove(timestamp)
+        pendingFrameMetadata.remove(timestamp)
+    }
+
+    private fun failPhotoCapture(shot: PhotoCaptureContext, reason: String, drainQueue: Boolean = true) {
+        if (shot.failed || shot.delivered) return
+        shot.failed = true
+        shot.timeout?.let { cameraHandler?.removeCallbacks(it) }
+        shot.timeout = null
+        shot.timestamps.forEach { timestamp ->
+            pendingImages.remove(timestamp)?.close()
+            pendingResults.remove(timestamp)
+            pendingFrameMetadata.remove(timestamp)
+        }
+        shot.frames.values.forEach { it.image.close() }
+        shot.frames.clear()
+        PLog.e(TAG, "Capture failed: id=${shot.id} reason=$reason")
+        if (!shot.continuousBurst) onPhotoCaptureFailed?.invoke(shot.id)
+        settleFailedPhotoCapture(shot)
+        if (drainQueue) deliverNextPhotoCaptureIfReady()
+    }
+
+    private fun disposeFailedPhotoCapture(shot: PhotoCaptureContext) {
+        shot.reservedFrames = 0
+        shot.delivered = true
+        shot.timeout?.let { cameraHandler?.removeCallbacks(it) }
+        shot.timeout = null
+        photoCaptures.remove(shot.id)
+        shot.startedFrameNumbers.forEach { pendingCaptureStartedTimestamps.remove(it) }
+        shot.startedFrameNumbers.clear()
+        shot.timestamps.forEach(::discardCaptureTimestamp)
+    }
+
+    private fun settleFailedPhotoCapture(shot: PhotoCaptureContext) {
+        if (!shot.failed || shot.delivered) return
+        // A failed frame does not cancel its sibling requests. Hold their slots
+        // until the sequence tells us which requests actually produced images.
+        if (shot.submitted && !shot.sequenceCompleted) return
+        shot.reservedFrames = if (shot.submitted) {
+            shot.expectedImageTimestamps.count { it !in shot.acquiredTimestamps }
+        } else {
+            0
+        }
+        if (shot.reservedFrames == 0) {
+            disposeFailedPhotoCapture(shot)
+        } else if (shot.timeout == null) {
+            val timeout = Runnable {
+                PLog.e(TAG, "Failed capture image drain timed out: id=${shot.id} remaining=${shot.reservedFrames}")
+                disposeFailedPhotoCapture(shot)
+            }
+            shot.timeout = timeout
+            cameraHandler?.postDelayed(timeout, CAPTURE_IMAGE_DELIVERY_TIMEOUT_MS)
+        }
+    }
+
+    private fun finishPhotoCaptureSequence(shot: PhotoCaptureContext, successful: Boolean) {
+        shot.sequenceCompleted = true
+        if (!successful) failPhotoCapture(shot, "capture sequence aborted")
+        if (shot.failed) settleFailedPhotoCapture(shot)
+        if (activePhotoCapture === shot) {
+            activePhotoCapture = null
+            burstGyroRecorder.stop()
+            _state.update {
+                it.copy(isCapturing = false, hdrBracketCapturing = false, hdrBracketFrameCount = 0)
+            }
+            resetPreviewAfterCapture(keepLivePhotoTorch = successful && !shot.failed)
+        }
+        if (!shot.failed) {
+            if (!shot.continuousBurst) {
+                val captureInfo = rebuildCaptureInfo(
+                    result = shot.animationCaptureResult,
+                    imageWidth = shot.reader.width,
+                    imageHeight = shot.reader.height,
+                    latitude = shot.state.latitude,
+                    longitude = shot.state.longitude,
+                    effectiveCharacteristics = shot.characteristics,
+                    captureState = shot.state,
+                    captureTime = shot.captureTime,
+                    exposureCompensationStep = shot.exposureCompensationStep,
+                )
+                try {
+                    onPhotoCaptureCompleted?.invoke(shot.id, captureInfo)
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Capture completion notification failed: id=${shot.id}", e)
+                }
+            }
+            deliverPhotoCaptureIfReady(shot)
+            if (!shot.delivered && !hasAllPhotoFrames(shot)) {
+                val timeout = Runnable {
+                    failPhotoCapture(shot, "image delivery timed out after sequence completion")
+                    disposeFailedPhotoCapture(shot)
+                }
+                shot.timeout = timeout
+                cameraHandler?.postDelayed(timeout, CAPTURE_IMAGE_DELIVERY_TIMEOUT_MS)
+            }
+        }
+        if (shot.continuousBurst) {
+            if (successful && !shot.failed) {
+                checkBurstCaptureContinue()
+            } else if (_state.value.burstCapturing) {
+                burstCapturing = false
+                _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+                resetPreviewAfterCapture()
+            }
+        }
+    }
+
+    private fun hasAllPhotoFrames(shot: PhotoCaptureContext): Boolean =
+        shot.acquiredTimestamps.size == shot.expectedFrames &&
+            if (shot.continuousBurst) {
+                shot.timestamps.none { pendingResults.containsKey(it) || pendingImages.containsKey(it) }
+            } else {
+                shot.frames.size == shot.expectedFrames
+            }
+
+    private fun deliverNextPhotoCaptureIfReady() {
+        photoCaptures.values.filter { !it.continuousBurst && !it.failed }.minByOrNull { it.id }
+            ?.let(::deliverPhotoCaptureIfReady)
+    }
+
+    private fun deliverPhotoCaptureIfReady(shot: PhotoCaptureContext) {
+        if (shot.failed || shot.delivered || !shot.sequenceCompleted ||
+            !hasAllPhotoFrames(shot)
+        ) return
+        shot.timeout?.let { cameraHandler?.removeCallbacks(it) }
+        shot.timeout = null
+        // Delivery preserves shutter order even when a preceding reader buffer is late.
+        if (!shot.continuousBurst && photoCaptures.values.any { !it.continuousBurst && !it.failed && it.id < shot.id }) return
+        shot.delivered = true
+        shot.timeout?.let { cameraHandler?.removeCallbacks(it) }
+        shot.timeout = null
+        photoCaptures.remove(shot.id)
+        shot.timestamps.forEach { photoCaptureByTimestamp.remove(it) }
+        if (shot.continuousBurst) return
+        val photo = CapturedPhoto(shot.id, shot.state, shot.frames.values.toList())
+        shot.frames.clear()
+        val callback = onPhotoCaptureReady
+        if (callback == null) {
+            photo.frames.forEach { it.image.close() }
+            onPhotoCaptureFailed?.invoke(shot.id)
+            deliverNextPhotoCaptureIfReady()
+            return
+        }
+        try {
+            callback(photo)
+        } catch (e: Exception) {
+            photo.frames.forEach { it.image.close() }
+            onPhotoCaptureFailed?.invoke(shot.id)
+            PLog.e(TAG, "Photo capture callback failed: id=${shot.id}", e)
+        }
+        deliverNextPhotoCaptureIfReady()
+    }
+
+    private fun submitPhotoCapture(
+        shot: PhotoCaptureContext,
+        session: CameraCaptureSession,
+        requests: List<CaptureRequest>,
+    ) {
+        check(requests.size == shot.expectedFrames) {
+            "Capture ${shot.id} reserved ${shot.expectedFrames} frames but built ${requests.size} requests"
+        }
+        shot.livePhotoStartTimestampUs = livePhotoVideoStartTimestampUs
+        val captureSurface = shot.reader.surface
+        val callback = object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureStarted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                timestamp: Long,
+                frameNumber: Long,
+            ) {
+                if (shot.delivered) {
+                    discardCaptureTimestamp(timestamp)
+                    return
+                }
+                shot.startedFrameNumbers.add(frameNumber)
+                shot.timestampByFrameNumber[frameNumber] = timestamp
+                pendingCaptureStartedTimestamps[frameNumber] = timestamp
+                registerPhotoTimestamp(shot, timestamp)
+            }
+
+            override fun onCaptureCompleted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                result: TotalCaptureResult,
+            ) {
+                val timestamp = getCaptureTimestamp(result)
+                shot.startedFrameNumbers.remove(result.frameNumber)
+                if (timestamp == null) {
+                    failPhotoCapture(shot, "capture result has no timestamp")
+                    return
+                }
+                shot.timestampByFrameNumber[result.frameNumber] = timestamp
+                if (result.frameNumber !in shot.lostImageFrameNumbers) {
+                    shot.expectedImageTimestamps.add(timestamp)
+                }
+                registerPhotoTimestamp(shot, timestamp)
+                if (shot.failed || shot.delivered) {
+                    settleFailedPhotoCapture(shot)
+                    return
+                }
+                captureFrameMetadata(result, timestamp)?.let { pendingFrameMetadata[timestamp] = it }
+                if (shot.animationCaptureResult == null) {
+                    shot.animationCaptureResult = result
+                }
+                val image = pendingImages.remove(timestamp)
+                if (image != null) {
+                    processAndTriggerCapture(image, result, shot)
+                } else {
+                    pendingResults[timestamp] = result
+                }
+                if (request.tag !is MultiFrameCaptureRole || request.tag == MultiFrameCaptureRole.BASE) {
+                    lastCaptureResult = result
+                }
+                if (shot.state.hdrBracketCapturing) logHdrBracketActualExposure(request, result)
+            }
+
+            override fun onCaptureSequenceCompleted(
+                session: CameraCaptureSession,
+                sequenceId: Int,
+                frameNumber: Long,
+            ) {
+                finishPhotoCaptureSequence(shot, successful = true)
+            }
+
+            override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
+                finishPhotoCaptureSequence(shot, successful = false)
+            }
+
+            override fun onCaptureFailed(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                failure: CaptureFailure,
+            ) {
+                val timestamp = pendingCaptureStartedTimestamps.remove(failure.frameNumber)
+                shot.startedFrameNumbers.remove(failure.frameNumber)
+                if (failure.wasImageCaptured() && timestamp != null) {
+                    shot.expectedImageTimestamps.add(timestamp)
+                } else if (!failure.wasImageCaptured()) {
+                    shot.lostImageFrameNumbers.add(failure.frameNumber)
+                    timestamp?.let { shot.expectedImageTimestamps.remove(it) }
+                }
+                failPhotoCapture(shot, "frame ${failure.frameNumber} failed: ${failure.reason}")
+            }
+
+            override fun onCaptureBufferLost(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                target: Surface,
+                frameNumber: Long,
+            ) {
+                if (target == captureSurface) {
+                    shot.lostImageFrameNumbers.add(frameNumber)
+                    shot.timestampByFrameNumber[frameNumber]?.let { shot.expectedImageTimestamps.remove(it) }
+                    failPhotoCapture(shot, "image buffer lost for frame $frameNumber")
+                }
+            }
+        }
+        session.captureBurst(requests, callback, cameraHandler)
+        shot.submitted = true
+    }
 
     private fun trackImage(image: Image?): SafeImage? {
         if (image != null) {
@@ -456,53 +813,43 @@ class Camera2Controller(private val context: Context) {
         return result.get(CaptureResult.SENSOR_TIMESTAMP) ?: startedTimestamp
     }
 
-    private fun shouldPairImageWithCaptureResult(image: SafeImage): Boolean {
-        return image.format == ImageFormat.RAW_SENSOR || _state.value.hdrBracketCapturing
-    }
-
     private fun processOrBufferImageForCaptureResult(image: SafeImage) {
         val timestamp = image.timestamp
-        val pendingResult = pendingResults.remove(timestamp)
-        if (pendingResult != null) {
-            processAndTriggerCapture(image, pendingResult)
-        } else {
-            pendingImages.put(timestamp, image)?.close()
-            trimPendingImages()
-        }
-    }
-
-    private fun processOrBufferCaptureResult(result: TotalCaptureResult) {
-        val timestamp = getCaptureTimestamp(result)
-        if (timestamp == null) {
-            PLog.w(TAG, "Capture result missing timestamp, frame=${result.frameNumber}")
+        if (timestamp in discardedCaptureTimestamps) {
+            image.close()
             return
         }
-        captureFrameMetadata(result, timestamp)?.let { pendingFrameMetadata[timestamp] = it }
-
-        val pendingImage = pendingImages.remove(timestamp)
-        if (pendingImage != null) {
-            processAndTriggerCapture(pendingImage, result)
-        } else {
-            pendingResults[timestamp] = result
-            trimPendingResults()
+        val shot = photoCaptureByTimestamp[timestamp]
+        if (shot != null) {
+            if (shot.delivered) {
+                image.close()
+                return
+            }
+            accountAcquiredPhotoImage(shot, timestamp)
+            if (shot.failed) {
+                image.close()
+                settleFailedPhotoCapture(shot)
+                return
+            }
         }
-    }
-
-    private fun trimPendingImages(
-        maxSize: Int = MultiFrameConfig.MAX_FRAME_COUNT,
-    ) {
-        if (pendingImages.size <= maxSize) return
-        val oldestKey = pendingImages.keys.minOrNull() ?: return
-        pendingImages.remove(oldestKey)?.close()
-    }
-
-    private fun trimPendingResults(
-        maxSize: Int = MultiFrameConfig.MAX_FRAME_COUNT,
-    ) {
-        if (pendingResults.size <= maxSize) return
-        val oldestKey = pendingResults.keys.minOrNull() ?: return
-        pendingResults.remove(oldestKey)
-        pendingFrameMetadata.remove(oldestKey)
+        val pendingResult = pendingResults.remove(timestamp)
+        if (pendingResult != null && shot != null) {
+            processAndTriggerCapture(image, pendingResult, shot)
+        } else {
+            pendingImages.put(timestamp, image)?.close()
+            // An Image callback can precede onCaptureStarted. Keep it until its
+            // request timestamp arrives; never assign it using current UI state.
+            if (shot == null) {
+                cameraHandler?.postDelayed({
+                    if (photoCaptureByTimestamp[timestamp] == null &&
+                        pendingImages.remove(timestamp, image)
+                    ) {
+                        PLog.w(TAG, "Discarding image without a capture request: timestamp=$timestamp")
+                        image.close()
+                    }
+                }, CAPTURE_IMAGE_DELIVERY_TIMEOUT_MS)
+            }
+        }
     }
 
     private fun captureFrameMetadata(
@@ -646,47 +993,18 @@ class Camera2Controller(private val context: Context) {
     var onCameraError: ((errorCode: Int, message: String, canRetry: Boolean) -> Unit)? = null
 
     fun onImageRelease() {
-        val count = openImagesCount.decrementAndGet()
-        if (imageReaderMaxImages - count >= activeCaptureImageRequestCount()) {
-            _state.value = _state.value.copy(isCapturing = false)
-        }
-        if (count == 0) {
-            _state.value = _state.value.copy(
-                isCapturing = false,
-                hdrBracketCapturing = false,
-                hdrBracketFrameCount = 0
-            )
+        if (openImagesCount.decrementAndGet() == 0) {
             checkAndClosePendingReaders()
         }
     }
 
-    private fun resolveImageReaderMaxImages(): Int {
-        val currentState = _state.value
-        val multiFrameCount = currentState.activeMultiFrameCount
-        val usesJpgMaxHdr = currentState.isJpgMaxHdrEnabled
-        val requestedImages = when {
-            usesJpgMaxHdr ->
-                multiFrameCount + HDR_BRACKET_SIDE_FRAME_COUNT
+    private fun resolveImageReaderMaxImages(): Int = CAPTURE_READER_MAX_IMAGES
 
-            currentState.isMultiFrameEnabled ->
-                multiFrameCount
-
-            else -> BURST_CAPTURE_BATCH_SIZE
-        }
-        return maxOf(SINGLE_CAPTURE_READER_MAX_IMAGES, requestedImages)
-    }
-
-    private fun activeCaptureImageRequestCount(): Int {
-        val currentState = _state.value
-        return when {
-            currentState.burstCapturing -> BURST_CAPTURE_BATCH_SIZE
-            currentState.hdrBracketCapturing -> currentState.hdrBracketFrameCount
-                .coerceAtLeast(HDR_BRACKET_BASE_CAPTURE_COUNT)
-            currentState.isMultiFrameEnabled ->
-                currentState.activeMultiFrameCount
-
-            else -> 1
-        }
+    private fun captureImageRequestCount(state: CameraState, reader: ImageReader): Int = when {
+        shouldUseJpgMaxHdrCapture(state, isRawCaptureReader(reader)) && !shouldUseTorchForCapture(state) ->
+            buildHdrBracketEvOffsets(resolveHdrBracketZeroEvFrameCount(state)).size
+        state.requiresMultiFrameCaptureSequence -> state.activeMultiFrameCount
+        else -> 1
     }
 
     private fun canAcquireImage(logPrefix: String): Boolean {
@@ -753,22 +1071,6 @@ class Camera2Controller(private val context: Context) {
                 outputPhysicalCameraId = activeOutputPhysicalCameraId,
             )
 
-            val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-            if (timestamp != null && isRawCaptureReader(imageReader)) {
-                val pendingImage = pendingImages.remove(timestamp)
-                if (pendingImage != null) {
-                    // 找到了匹配的图像，触发回调
-                    processAndTriggerCapture(pendingImage, result)
-                } else {
-                    // 还没找到图像，存入缓存
-                    pendingResults[timestamp] = result
-                    // 限制缓存大小
-                    if (pendingResults.size > 20) {
-                        val oldest = pendingResults.keys.minOrNull()
-                        if (oldest != null) pendingResults.remove(oldest)
-                    }
-                }
-            }
             lastCaptureResult = result
             processPendingMultiFrameFocusResult(result)
             logVideoCaptureStats(result)
@@ -1309,6 +1611,10 @@ class Camera2Controller(private val context: Context) {
         pendingCaptureReader = null
         pendingCaptureBaseExposureResult = null
         burstCapturing = false
+        pendingContinuousBurstCapture?.let {
+            failPhotoCapture(it, "continuous burst preparation cancelled")
+        }
+        pendingContinuousBurstCapture = null
         isMultiFrameTorchCaptureActive = false
         isContinuousBurstTorchActive = false
         _state.value = _state.value.copy(isCapturing = false, burstCapturing = false)
@@ -1743,6 +2049,19 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun clearCameraSessionState(reason: String, closeImageReader: Boolean = true) {
+        photoCaptures.values.toList().forEach {
+            failPhotoCapture(it, "session cleared: $reason", drainQueue = false)
+            disposeFailedPhotoCapture(it)
+        }
+        activePhotoCapture = null
+        pendingContinuousBurstCapture = null
+        pendingImages.values.toList().forEach(SafeImage::close)
+        pendingImages.clear()
+        pendingResults.clear()
+        pendingFrameMetadata.clear()
+        pendingCaptureStartedTimestamps.clear()
+        photoCaptureByTimestamp.clear()
+        _state.update { it.copy(isCapturing = false, hdrBracketCapturing = false, hdrBracketFrameCount = 0) }
         previewSessionGeneration++
         previewUpdateScheduled.set(false)
         clearLivePhotoTorchCapture()
@@ -2459,39 +2778,14 @@ class Camera2Controller(private val context: Context) {
                 ).apply {
                     setOnImageAvailableListener({ reader ->
                         try {
-                            if (!canAcquireImage("Too many open images")) {
-                                return@setOnImageAvailableListener
-                            }
-                            val rawImage = when {
-                                state.value.burstCapturing -> reader.acquireNextImage()
-                                state.value.hdrBracketCapturing -> reader.acquireNextImage()
-                                state.value.isMultiFrameEnabled -> reader.acquireNextImage()
-                                else -> reader.acquireLatestImage()
-                            }
-                            val image = trackImage(rawImage)
-                            if (image != null) {
-                                if (shouldPairImageWithCaptureResult(image)) {
-                                    processOrBufferImageForCaptureResult(image)
-                                } else {
-                                    processAndTriggerCapture(image, null)
-                                }
-                            } else {
-                                PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
-                                _state.value = _state.value.copy(
-                                    isCapturing = false,
-                                    hdrBracketCapturing = false,
-                                    hdrBracketFrameCount = 0
-                                )
-                                resetPreviewAfterCapture()
+                            while (canAcquireImage("Too many open images")) {
+                                val image = trackImage(reader.acquireNextImage()) ?: break
+                                processOrBufferImageForCaptureResult(image)
                             }
                         } catch (e: Exception) {
                             PLog.e(TAG, "Error in onImageAvailable", e)
-                            _state.value = _state.value.copy(
-                                isCapturing = false,
-                                hdrBracketCapturing = false,
-                                hdrBracketFrameCount = 0
-                            )
-                            resetPreviewAfterCapture()
+                            photoCaptures.values.filter { it.reader === reader }.toList()
+                                .forEach { failPhotoCapture(it, "image acquisition failed") }
                         }
                     }, cameraHandler)
                 }
@@ -7341,11 +7635,11 @@ class Camera2Controller(private val context: Context) {
     /**
      * 拍照
      */
-    fun capture() {
+    fun capture(onAccepted: ((Long) -> Unit)? = null) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
             handler.post {
-                capture()
+                capture(onAccepted)
             }
             return
         }
@@ -7356,32 +7650,44 @@ class Camera2Controller(private val context: Context) {
         }
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
-
-        // A previous Live Photo's post-roll must not switch off a new capture's torch.
-        livePhotoTorchOffRunnable?.let { handler?.removeCallbacks(it) }
-        livePhotoTorchOffRunnable = null
-        livePhotoVideoStartTimestampUs = null
-        if (_state.value.useLivePhoto && !usesTorchForLivePhotoCapture()) {
-            snapshotLivePhoto()
+        if (captureSession == null) return
+        val shot = reservePhotoCapture(_state.value, reader) ?: return
+        activePhotoCapture = shot
+        _state.update { it.copy(isCapturing = true) }
+        try {
+            onAccepted?.invoke(shot.id)
+        } catch (e: Exception) {
+            failPhotoCapture(shot, "capture acceptance callback failed")
+            finishPhotoCaptureSequence(shot, successful = false)
+            PLog.e(TAG, "Capture acceptance callback failed", e)
+            return
         }
-
-        val baseExposureResult = lastCaptureResult
-        // 关键修复：每次拍照前重置拍摄结果
-        lastCaptureResult = null
-
-        PLog.i(
-            TAG,
-            "开始拍照 - 闪光模式: ${_state.value.flashMode}, ISO模式: ${if (_state.value.isIsoAuto) "自动" else "手动(${_state.value.iso})"}"
-        )
-
-        if (!_state.value.useLivePhoto) {
-            // 播放快门音效
-            onPlayShutterSound?.invoke()
-        }
-
-        _state.value = _state.value.copy(isCapturing = true)
 
         try {
+            // A previous Live Photo's post-roll must not switch off a new capture's torch.
+            livePhotoTorchOffRunnable?.let { handler?.removeCallbacks(it) }
+            livePhotoTorchOffRunnable = null
+            livePhotoVideoStartTimestampUs = null
+            if (_state.value.useLivePhoto && !usesTorchForLivePhotoCapture()) {
+                snapshotLivePhoto()
+            }
+
+            val baseExposureResult = lastCaptureResult
+            // 关键修复：每次拍照前重置拍摄结果
+            lastCaptureResult = null
+
+            PLog.i(
+                TAG,
+                "开始拍照 - 闪光模式: ${_state.value.flashMode}, ISO模式: ${if (_state.value.isIsoAuto) "自动" else "手动(${_state.value.iso})"}"
+            )
+
+            if (!_state.value.useLivePhoto) {
+                // 播放快门音效
+                onPlayShutterSound?.invoke()
+            }
+
+            _state.value = _state.value.copy(isCapturing = true)
+
             // 只有在【自动曝光 + 单次闪光】时才使用预闪流程
             // 手动曝光模式下，AE_PRECAPTURE_TRIGGER 不生效（因为 AE_MODE=OFF），直接拍照
             val currentState = _state.value
@@ -7459,68 +7765,9 @@ class Camera2Controller(private val context: Context) {
                 }.build()
             }
 
-            var hdrFrameCaptureFailed = false
-            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureStarted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    timestamp: Long,
-                    frameNumber: Long
-                ) {
-                    pendingCaptureStartedTimestamps[frameNumber] = timestamp
-                    PLog.d(TAG, "HDR bracket capture started: frame=$frameNumber")
-                }
-
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    processOrBufferCaptureResult(result)
-                    lastCaptureResult = result
-                    logHdrBracketActualExposure(request, result)
-                }
-
-                override fun onCaptureSequenceCompleted(
-                    session: CameraCaptureSession,
-                    sequenceId: Int,
-                    frameNumber: Long
-                ) {
-                    super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
-                    PLog.d(TAG, "HDR bracket sequence completed")
-                    burstGyroRecorder.stop()
-                    if (hdrFrameCaptureFailed) {
-                        _state.value = _state.value.copy(
-                            isCapturing = false,
-                            hdrBracketCapturing = false,
-                            hdrBracketFrameCount = 0,
-                        )
-                        onHdrBracketCaptureFailed?.invoke()
-                    }
-                    resetPreviewAfterCapture()
-                }
-
-                override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
-                    burstGyroRecorder.stop()
-                    PLog.w(TAG, "HDR bracket sequence aborted")
-                    _state.value = _state.value.copy(
-                        isCapturing = false,
-                        hdrBracketCapturing = false,
-                        hdrBracketFrameCount = 0,
-                    )
-                    onHdrBracketCaptureFailed?.invoke()
-                    resetPreviewAfterCapture()
-                }
-
-                override fun onCaptureFailed(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    failure: CaptureFailure
-                ) {
-                    PLog.e(TAG, "HDR bracket capture failed: ${failure.reason}")
-                    hdrFrameCaptureFailed = true
-                }
-            }, cameraHandler)
+            val shot = activePhotoCapture ?: error("Missing HDR capture reservation")
+            shot.state = shot.state.copy(hdrBracketCapturing = true, hdrBracketFrameCount = hdrFrameCount)
+            submitPhotoCapture(shot, session, requests)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to capture HDR bracket", e)
             _state.value = _state.value.copy(
@@ -8019,6 +8266,7 @@ class Camera2Controller(private val context: Context) {
                     PLog.e(TAG, "Failed to capture JPGmax bracket: capture session unavailable")
                     _state.value = _state.value.copy(isCapturing = false)
                     onHdrBracketCaptureFailed?.invoke()
+                    resetPreviewAfterCapture()
                     return
                 }
                 PLog.d(TAG, "JPGmax YUV bracket capture")
@@ -8209,145 +8457,12 @@ class Camera2Controller(private val context: Context) {
                     )
                 }
 
-                var completedCaptureCount = 0
-                session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureStarted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        timestamp: Long,
-                        frameNumber: Long
-                    ) {
-                        if (isRawCapture) {
-                            pendingCaptureStartedTimestamps[frameNumber] = timestamp
-                        }
-                        PLog.d(TAG, "Burst capture started at frame $frameNumber")
-                    }
-
-                    override fun onCaptureCompleted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        result: TotalCaptureResult
-                    ) {
-                        completedCaptureCount++
-                        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-                            ?: pendingCaptureStartedTimestamps[result.frameNumber]
-                        if (isRawCapture) processOrBufferCaptureResult(result)
-                        val role = request.tag as? MultiFrameCaptureRole ?: MultiFrameCaptureRole.BASE
-                        if (role == MultiFrameCaptureRole.BASE) {
-                            lastCaptureResult = result
-                        }
-                        val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
-                        val actualShutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-                        val actualAeMode = result.get(CaptureResult.CONTROL_AE_MODE)
-                        val actualAeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                        val actualFlashState = result.get(CaptureResult.FLASH_STATE)
-                        val actualAfMode = result.get(CaptureResult.CONTROL_AF_MODE)
-                        val actualAfState = result.get(CaptureResult.CONTROL_AF_STATE)
-                        val actualFocusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
-                        val actualLensState = result.get(CaptureResult.LENS_STATE)
-                        PLog.d(
-                            TAG,
-                            "Capture completed role=$role aeMode=$actualAeMode " +
-                                "aeState=$actualAeState flashState=$actualFlashState " +
-                                "ISO=$actualIso shutter=$actualShutter, " +
-                                "afMode=$actualAfMode afState=$actualAfState " +
-                                "focus=$actualFocusDistance lensState=$actualLensState, " +
-                                "result buffered (timestamp: $timestamp). " +
-                                "Pending images: ${pendingImages.size}, Pending results: ${pendingResults.size}"
-                        )
-                    }
-
-                    override fun onCaptureSequenceCompleted(
-                        session: CameraCaptureSession,
-                        sequenceId: Int,
-                        frameNumber: Long
-                    ) {
-                        super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
-                        PLog.d(TAG, "Burst sequence completed")
-                        burstGyroRecorder.stop()
-                        if (completedCaptureCount == 0) {
-                            _state.value = _state.value.copy(isCapturing = false)
-                        }
-                        resetPreviewAfterCapture(keepLivePhotoTorch = completedCaptureCount > 0)
-                    }
-
-                    override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
-                        burstGyroRecorder.stop()
-                        PLog.w(TAG, "Burst capture sequence aborted")
-                        _state.value = _state.value.copy(isCapturing = false)
-                        resetPreviewAfterCapture()
-                    }
-
-                    override fun onCaptureFailed(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        failure: CaptureFailure
-                    ) {
-                        PLog.e(TAG, "Burst Capture failed: ${failure.reason}")
-                    }
-                }, cameraHandler)
-
+                val shot = activePhotoCapture ?: error("Missing multi-frame capture reservation")
+                submitPhotoCapture(shot, session, requests)
             } else {
-                // Single Capture Mode
-                session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureStarted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        timestamp: Long,
-                        frameNumber: Long
-                    ) {
-                        if (isRawCapture) {
-                            pendingCaptureStartedTimestamps[frameNumber] = timestamp
-                        }
-                        PLog.d(TAG, "Capture started at frame $frameNumber")
-                    }
-
-                    override fun onCaptureCompleted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        result: TotalCaptureResult
-                    ) {
-                        val timestamp = getCaptureTimestamp(result)
-                        if (timestamp != null && isRawCapture) {
-                            val pendingImage = pendingImages.remove(timestamp)
-                            if (pendingImage != null) {
-                                processAndTriggerCapture(pendingImage, result)
-                            } else {
-                                pendingResults[timestamp] = result
-                            }
-                        }
-                        lastCaptureResult = result
-                        PLog.d(
-                            TAG,
-                            "Capture completed: aeMode=${result.get(CaptureResult.CONTROL_AE_MODE)}, " +
-                                "aeState=${result.get(CaptureResult.CONTROL_AE_STATE)}, " +
-                                "flashState=${result.get(CaptureResult.FLASH_STATE)}, " +
-                                "iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)}, " +
-                                "shutter=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}, " +
-                                "timestamp=$timestamp. Pending images: ${pendingImages.size}, " +
-                                "Pending results: ${pendingResults.size}"
-                        )
-                        resetPreviewAfterCapture(keepLivePhotoTorch = true)
-                    }
-
-                    override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
-                        PLog.w(TAG, "Single capture sequence aborted")
-                        _state.value = _state.value.copy(isCapturing = false)
-                        resetPreviewAfterCapture()
-                    }
-
-                    override fun onCaptureFailed(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        failure: CaptureFailure
-                    ) {
-                        PLog.e(TAG, "Capture failed: ${failure.reason}")
-                        _state.value = _state.value.copy(isCapturing = false)
-                        resetPreviewAfterCapture()
-                    }
-                }, cameraHandler)
+                val shot = activePhotoCapture ?: error("Missing single capture reservation")
+                submitPhotoCapture(shot, session, listOf(captureBuilder.build()))
             }
-
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to perform capture", e)
             _state.value = _state.value.copy(isCapturing = false)
@@ -8391,6 +8506,15 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun resetPreviewAfterCapture(keepLivePhotoTorch: Boolean = false) {
+        pendingContinuousBurstCapture?.let {
+            failPhotoCapture(it, "continuous burst preparation cancelled")
+        }
+        pendingContinuousBurstCapture = null
+        activePhotoCapture?.takeIf { !it.submitted }?.let { shot ->
+            failPhotoCapture(shot, "capture preparation cancelled")
+            activePhotoCapture = null
+            _state.update { it.copy(isCapturing = false, hdrBracketCapturing = false, hdrBracketFrameCount = 0) }
+        }
         if (!keepLivePhotoTorch) {
             if (!isLivePhotoTorchCaptureActive) {
                 livePhotoVideoStartTimestampUs?.let(livePhotoRecorder::cancelCapture)
@@ -8483,10 +8607,13 @@ class Camera2Controller(private val context: Context) {
         imageHeight: Int,
         latitude: Double? = null,
         longitude: Double? = null,
-        effectiveCharacteristics: CameraCharacteristics? = null
+        effectiveCharacteristics: CameraCharacteristics? = null,
+        captureState: CameraState = _state.value,
+        captureTime: Long = System.currentTimeMillis(),
+        exposureCompensationStep: Float = captureState.getExposureCompensationStep(),
     ): CaptureInfo {
         val openCameraId = getCurrentOpenCameraId()
-        val zoomRatio = _state.value.zoomRatio
+        val zoomRatio = captureState.zoomRatio
 
         // 从 CameraCharacteristics 获取镜头固定信息
         var aperture: Float? = null
@@ -8505,18 +8632,19 @@ class Camera2Controller(private val context: Context) {
         }
 
         // 从 CaptureResult 获取曝光信息
-        val exposureTime = result?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: _state.value.shutterSpeed
-        val iso = result?.get(CaptureResult.SENSOR_SENSITIVITY) ?: _state.value.iso
-        val awbModeForExif = result?.get(CaptureResult.CONTROL_AWB_MODE) ?: _state.value.awbMode
+        val exposureTime = result?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: captureState.shutterSpeed
+        val iso = result?.get(CaptureResult.SENSOR_SENSITIVITY) ?: captureState.iso
+        val awbModeForExif = result?.get(CaptureResult.CONTROL_AWB_MODE) ?: captureState.awbMode
         val whiteBalance = if (awbModeForExif == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
-        val flashState = result?.get(CaptureResult.FLASH_STATE) ?: _state.value.flashMode
+        val flashState = result?.get(CaptureResult.FLASH_STATE) ?: captureState.flashMode
 
         // 如果有实时的光圈/焦距，使用实时值
         result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }
         val resolvedFocalLength = resolveCaptureFocalLength(
             characteristics = characteristicsForMetadata,
             captureResultFocalLength = result?.get(CaptureResult.LENS_FOCAL_LENGTH),
-            zoomRatio = zoomRatio
+            zoomRatio = zoomRatio,
+            captureState = captureState,
         )
 
         return CaptureInfo(
@@ -8525,9 +8653,9 @@ class Camera2Controller(private val context: Context) {
             aperture = aperture,
             focalLength = resolvedFocalLength.focalLength,
             focalLength35mm = resolvedFocalLength.focalLength35mm,
-            exposureBias = _state.value.exposureBias,
-            exposureCompensation = _state.value.run {
-                exposureCompensation * getExposureCompensationStep()
+            exposureBias = captureState.exposureBias,
+            exposureCompensation = captureState.run {
+                exposureCompensation * exposureCompensationStep
             },
             whiteBalance = whiteBalance,
             flashState = flashState,
@@ -8535,11 +8663,11 @@ class Camera2Controller(private val context: Context) {
             orientation = ExifInterface.ORIENTATION_NORMAL,
             imageWidth = imageWidth,
             imageHeight = imageHeight,
-            captureTime = System.currentTimeMillis(),
+            captureTime = captureTime,
             latitude = latitude,
             longitude = longitude,
             colorSpace = when {
-                shouldUseP3ColorSpace() -> ColorSpace.Named.DISPLAY_P3
+                captureState.isP3Supported && captureState.useP3ColorSpace -> ColorSpace.Named.DISPLAY_P3
                 else -> ColorSpace.Named.SRGB
             }
         )
@@ -8553,9 +8681,10 @@ class Camera2Controller(private val context: Context) {
     private fun resolveCaptureFocalLength(
         characteristics: CameraCharacteristics?,
         captureResultFocalLength: Float?,
-        zoomRatio: Float
+        zoomRatio: Float,
+        captureState: CameraState = _state.value,
     ): ResolvedCaptureFocalLength {
-        val selectedCamera = _state.value.getCurrentCameraInfo()
+        val selectedCamera = captureState.getCurrentCameraInfo()
         val selectedCameraFocalLength = selectedCamera?.focalLength?.takeIf { it > 0f }
         val selectedCameraFocalLength35mm = selectedCamera?.focalLength35mmEquivalent?.takeIf { it > 0f }
         val characteristicsFocalLength = characteristics
@@ -8759,19 +8888,23 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun processAndTriggerCapture(image: SafeImage, result: TotalCaptureResult?) {
+    private fun processAndTriggerCapture(
+        image: SafeImage,
+        result: TotalCaptureResult?,
+        shot: PhotoCaptureContext,
+    ) {
         try {
             val width = image.width
             val height = image.height
             val reportedPhysicalCameraId = result
                 ?.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
-            val effectivePhysicalCameraId = activeOutputPhysicalCameraId
+            val effectivePhysicalCameraId = shot.physicalCameraId
                 ?: reportedPhysicalCameraId
             var effectiveCharacteristics = effectivePhysicalCameraId
                 ?.let { cameraId ->
                     getCameraCharacteristicsOrNull(cameraId, "captured RAW physical camera")
                 }
-                ?: getActiveOpenCameraCharacteristics()
+                ?: shot.characteristics
             var effectiveResult: CaptureResult? = effectivePhysicalCameraId
                 ?.let { physicalId -> result?.physicalCameraResults?.get(physicalId) }
                 ?: result
@@ -8822,10 +8955,13 @@ class Camera2Controller(private val context: Context) {
                 result = effectiveResult ?: result,
                 imageWidth = width,
                 imageHeight = height,
-                latitude = _state.value.latitude,
-                longitude = _state.value.longitude,
-                effectiveCharacteristics = effectiveCharacteristics
-            ).copy(livePhotoVideoStartTimestampUs = livePhotoVideoStartTimestampUs)
+                latitude = shot.state.latitude,
+                longitude = shot.state.longitude,
+                effectiveCharacteristics = effectiveCharacteristics,
+                captureState = shot.state,
+                captureTime = shot.captureTime,
+                exposureCompensationStep = shot.exposureCompensationStep,
+            ).copy(livePhotoVideoStartTimestampUs = shot.livePhotoStartTimestampUs)
             val frameResult = effectiveResult ?: result
             val sensorTimestampNs = frameResult?.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
             val exposureTimeNs = frameResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
@@ -8875,16 +9011,24 @@ class Camera2Controller(private val context: Context) {
                 null
             }
 
-            // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
-            val callback = onImageCaptured
-            if (callback != null) {
-                callback.invoke(image, captureInfo, effectiveCharacteristics, frameResult, frameMetadata)
+            if (shot.continuousBurst) {
+                val callback = onImageCaptured
+                if (callback != null) {
+                    callback(image, captureInfo, effectiveCharacteristics, frameResult, frameMetadata)
+                } else {
+                    image.close()
+                }
             } else {
-                image.close()
+                shot.frames.put(
+                    image.timestamp,
+                    CapturedPhotoFrame(image, captureInfo, effectiveCharacteristics, frameResult, frameMetadata),
+                )?.image?.close()
             }
+            deliverPhotoCaptureIfReady(shot)
         } catch (e: Exception) {
             PLog.e(TAG, "Error processing joined capture data", e)
             image.close()
+            failPhotoCapture(shot, "failed to construct captured frame")
         }
     }
 
@@ -8970,26 +9114,51 @@ class Camera2Controller(private val context: Context) {
     /**
      * 启动连拍
      */
-    fun startBurstCapture() {
+    fun startBurstCapture(onAccepted: (() -> Unit)? = null) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
-            handler.post {
-                startBurstCapture()
-            }
+            handler.post { startBurstCapture(onAccepted) }
             return
         }
         val device = cameraDevice ?: return
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
-
+        val reader = imageReader ?: return
         val isStartingNewBurst = !_state.value.burstCapturing
+        if (isStartingNewBurst && (_state.value.isCapturing || photoCaptures.values.any { it.continuousBurst })) return
+        if (!isStartingNewBurst && onAccepted != null) return
+        val shot = pendingContinuousBurstCapture ?: reservePhotoCapture(
+            _state.value.copy(burstCapturing = true, isCapturing = true),
+            reader,
+            continuousBurst = true,
+        )
+        pendingContinuousBurstCapture = null
+        if (shot == null) {
+            if (!isStartingNewBurst) {
+                burstCapturing = false
+                _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+                resetPreviewAfterCapture()
+            }
+            return
+        }
         if (isStartingNewBurst) {
             livePhotoVideoStartTimestampUs = null
             PLog.d(TAG, "Start Burst Capture")
-            _state.value = _state.value.copy(burstCapturing = true, isCapturing = true)
+            _state.update { it.copy(burstCapturing = true, isCapturing = true) }
             burstCapturing = true
+            try {
+                onAccepted?.invoke()
+            } catch (e: Exception) {
+                failPhotoCapture(shot, "continuous burst acceptance callback failed")
+                burstCapturing = false
+                _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+                resetPreviewAfterCapture()
+                PLog.e(TAG, "Continuous burst acceptance callback failed", e)
+                return
+            }
         }
         if (isStartingNewBurst && shouldUseContinuousBurstTorch(_state.value)) {
+            pendingContinuousBurstCapture = shot
             PLog.d(TAG, "Starting continuous burst torch warm-up")
             runMultiFrameTorchWarmupSequence {
                 if (!_state.value.burstCapturing) return@runMultiFrameTorchWarmupSequence
@@ -9043,30 +9212,9 @@ class Camera2Controller(private val context: Context) {
             for (i in 0 until BURST_CAPTURE_BATCH_SIZE) {
                 requests.add(request)
             }
-            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureSequenceCompleted(
-                    session: CameraCaptureSession,
-                    sequenceId: Int,
-                    frameNumber: Long
-                ) {
-                    checkBurstCaptureContinue()
-                }
-
-                override fun onCaptureSequenceAborted(
-                    session: CameraCaptureSession,
-                    sequenceId: Int,
-                ) {
-                    if (!_state.value.burstCapturing) return
-                    PLog.w(TAG, "Continuous burst capture sequence aborted")
-                    burstCapturing = false
-                    _state.value = _state.value.copy(
-                        burstCapturing = false,
-                        isCapturing = false
-                    )
-                    resetPreviewAfterCapture()
-                }
-            }, cameraHandler)
+            submitPhotoCapture(shot, session, requests)
         } catch (e: Exception) {
+            failPhotoCapture(shot, "continuous burst submission failed")
             PLog.e(TAG, "Failed to start hardware burst capture", e)
             burstCapturing = false
             _state.value = _state.value.copy(burstCapturing = false, isCapturing = false)
@@ -9088,10 +9236,10 @@ class Camera2Controller(private val context: Context) {
 
     private fun checkBurstCaptureContinue() {
         if (!state.value.burstCapturing) return
-        if (imageReaderMaxImages - openImagesCount.get() < BURST_CAPTURE_BATCH_SIZE) {
-            cameraHandler?.postDelayed({
-                checkBurstCaptureContinue()
-            }, 100)
+        if (CAPTURE_READER_MAX_IMAGES - openImagesCount.get() - reservedImageCount() < BURST_CAPTURE_BATCH_SIZE) {
+            burstCapturing = false
+            _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+            resetPreviewAfterCapture()
             return
         }
         startBurstCapture()

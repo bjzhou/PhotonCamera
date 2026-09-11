@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
@@ -409,13 +410,19 @@ fun CameraScreen(
 
     // 监听照片保存完成事件，立即刷新缩略图
     LaunchedEffect(Unit) {
-        viewModel.imageSavedEvent.collect { photoId ->
+        viewModel.imageSavedEvent.collect {
             galleryViewModel.refreshLatestPhoto()
+            MyCameraApplication.updateWidgets(context)
+        }
+    }
+
+    // 显影在拍摄请求完成时开始，不等待图像处理或保存。
+    LaunchedEffect(Unit) {
+        viewModel.captureCompletedEvent.collect { metadata ->
             if (!enableDevelopAnimation || currentCaptureModeForEffects != CaptureMode.PHOTO) {
                 pendingCaptureAnimationBitmap?.recycleIfAlive()
                 pendingCaptureAnimationBitmap = null
                 captureAnimationSnapshot = null
-                MyCameraApplication.updateWidgets(context)
                 return@collect
             }
             val rootOffset = cameraScreenBounds?.topLeft ?: androidx.compose.ui.geometry.Offset.Zero
@@ -435,7 +442,7 @@ fun CameraScreen(
                     var processedBitmap: Bitmap? = null
                     try {
                         processedBitmap = if (animationStyle == DevelopAnimationStyle.INSTANT_PRINT) {
-                            viewModel.renderCaptureAnimationFrame(bitmap, photoId)
+                            viewModel.renderCaptureAnimationFrame(bitmap, metadata)
                         } else {
                             viewModel.applyLut(bitmap)
                         }
@@ -461,7 +468,6 @@ fun CameraScreen(
             pendingCaptureAnimationBitmap?.let(::startCaptureAnimation)
                 ?: viewModel.glSurfaceView?.capturePreviewFrame(::startCaptureAnimation)
             pendingCaptureAnimationBitmap = null
-            MyCameraApplication.updateWidgets(context)
         }
     }
 
@@ -1960,6 +1966,7 @@ private fun Controls(
     val captureButtonStyle by viewModel.captureButtonStyle.collectAsState()
     val captureButtonColor by viewModel.captureButtonColor.collectAsState()
     val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
+    val captureProcessingState by viewModel.captureProcessingState.collectAsState()
 
     Box(
         modifier = modifier,
@@ -1988,6 +1995,11 @@ private fun Controls(
                         latestPhoto = latestPhoto,
                         viewModel = galleryViewModel,
                         onClick = onGalleryClick
+                    )
+                    GalleryProcessingOverlay(
+                        pendingCount = captureProcessingState.pendingCount,
+                        completedCount = captureProcessingState.completedCount,
+                        modifier = Modifier.matchParentSize()
                     )
                 }
 
@@ -2091,6 +2103,86 @@ private fun Controls(
                     !state.videoRecordingState.isRecording &&
                     !state.videoRecordingState.isProcessing,
                 onModeSelected = onCaptureModeSelected
+            )
+        }
+    }
+}
+
+/** Keeps render progress independent of the shutter and the optional photo fly-in animation. */
+@Composable
+private fun GalleryProcessingOverlay(
+    pendingCount: Int,
+    completedCount: Long,
+    modifier: Modifier = Modifier
+) {
+    val completionAlpha = remember { Animatable(0f) }
+    var lastAcknowledgedCompletion by remember { mutableLongStateOf(completedCount) }
+    val thumbnailShape = RoundedCornerShape(10.dp)
+
+    LaunchedEffect(pendingCount, completedCount) {
+        if (pendingCount > 0) {
+            completionAlpha.snapTo(0f)
+        } else if (completedCount != lastAcknowledgedCompletion) {
+            lastAcknowledgedCompletion = completedCount
+            // A neutral highlight acknowledges completion without implying success on failure.
+            completionAlpha.snapTo(0f)
+            completionAlpha.animateTo(0.75f, tween(durationMillis = 120))
+            completionAlpha.animateTo(0f, tween(durationMillis = 700))
+        }
+    }
+
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        AnimatedVisibility(
+            visible = pendingCount > 0,
+            enter = fadeIn(tween(durationMillis = 180)),
+            exit = fadeOut(tween(durationMillis = 220)),
+            modifier = Modifier.matchParentSize()
+        ) {
+            // Keep the photo visible beneath a soft diagonal reflection. The transition is
+            // disposed after fade-out, so an idle thumbnail does not keep requesting frames.
+            val transition = rememberInfiniteTransition(label = "thumbnailProcessing")
+            val sweep = transition.animateFloat(
+                initialValue = -1f,
+                targetValue = 2f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 1800, delayMillis = 200, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "thumbnailLightSweep"
+            )
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(thumbnailShape)
+                    .border(1.dp, Color.White.copy(alpha = 0.14f), thumbnailShape)
+            ) {
+                drawRect(Color.Black.copy(alpha = 0.08f))
+                val centerX = size.width * sweep.value
+                val bandWidth = size.width * 0.65f
+                drawRect(
+                    brush = Brush.linearGradient(
+                        0f to Color.Transparent,
+                        0.3f to Color.White.copy(alpha = 0.03f),
+                        0.5f to Color.White.copy(alpha = 0.24f),
+                        0.7f to Color.White.copy(alpha = 0.03f),
+                        1f to Color.Transparent,
+                        start = Offset(centerX - bandWidth, 0f),
+                        end = Offset(centerX + bandWidth, size.height * 0.7f)
+                    )
+                )
+            }
+        }
+        if (completionAlpha.value > 0f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(thumbnailShape)
+                    .background(Color.White.copy(alpha = completionAlpha.value * 0.08f))
+                    .border(
+                        width = 1.dp,
+                        color = Color.White.copy(alpha = completionAlpha.value),
+                        shape = thumbnailShape
+                    )
             )
         }
     }

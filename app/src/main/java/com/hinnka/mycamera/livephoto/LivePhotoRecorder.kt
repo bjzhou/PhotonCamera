@@ -563,7 +563,7 @@ class LivePhotoRecorder(
                     "Selected range: [$finalVideoStartTs, $finalVideoEndTs], duration: ${(finalVideoEndTs - finalVideoStartTs) / 1000}ms"
                 )
 
-                val videoFile = File(context.cacheDir, "livephoto_${System.currentTimeMillis()}.mp4")
+                val videoFile = File(context.cacheDir, "livephoto_${java.util.UUID.randomUUID()}.mp4")
 
                 // 封装 MP4
                 muxVideo(videoFile, muxVideoSamples, muxAudioSamples)
