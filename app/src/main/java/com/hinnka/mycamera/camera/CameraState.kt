@@ -4,6 +4,8 @@ import android.graphics.Rect
 import android.util.Range
 import android.util.Size
 import com.hinnka.mycamera.processor.MgcRawMaxMode
+import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoCapabilities
 import com.hinnka.mycamera.video.VideoConfig
@@ -364,6 +366,7 @@ data class CameraState(
     val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
 
     val isRawSupported: Boolean = false,
+    val rawCfaCorrectionModes: Map<String, String> = emptyMap(),
     val multiFrameOutputScale: Float? = null,
     val jpgMultiFrameDenoiseFrameCount: Int = MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
     val hdrPlusFrameCount: Int = MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
@@ -405,7 +408,14 @@ data class CameraState(
         get() = isIsoAuto && isShutterSpeedAuto
 
     val isMultiFrameEnabled: Boolean
-        get() = multiFrameOutputScale != null && (!useRaw || isRawSupported)
+        get() = multiFrameOutputScale != null &&
+            (!useRaw || (isRawSupported && isRawMultiFrameSupported))
+
+    // The RAW stacker only supports the standard 2x2 Bayer lattice. Resolve this
+    // from the current lens so lens switches retain the user's multi-frame settings.
+    val isRawMultiFrameSupported: Boolean
+        get() = RawCfaCorrection.patternFromMode(rawCfaCorrectionModes[currentCameraId])
+            ?.let { !RawMetadata.isQuadBayer(it) } ?: true
 
     /** Whether capture itself needs a Camera2 multi-request sequence. */
     val requiresMultiFrameCaptureSequence: Boolean

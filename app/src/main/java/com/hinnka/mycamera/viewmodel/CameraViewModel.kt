@@ -2077,6 +2077,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     cameraController.setCustomVendorKeySettings(it.customVendorKeySettings)
                 }
                 // 同步 RAW 设置到相机控制器
+                if (currentCameraState.rawCfaCorrectionModes != it.rawCfaCorrectionModes) {
+                    cameraController.setRawCfaCorrectionModes(it.rawCfaCorrectionModes)
+                }
                 val multipleExposureEnabled = it.useMultipleExposure
                 val effectiveUseRaw = it.useRaw && !multipleExposureEnabled
                 val effectiveUseJpgMax =
@@ -2314,6 +2317,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setGridStyle(prefs.gridStyle)
 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
+                cameraController.setRawCfaCorrectionModes(prefs.rawCfaCorrectionModes)
                 cameraController.setMultiFrameOutputScale(
                     resolveMultiFrameOutputScale(
                         useJpgMax = prefs.useJpgMax && !prefs.useRaw &&

@@ -6908,6 +6908,10 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(gridStyle = style)
     }
 
+    fun setRawCfaCorrectionModes(modes: Map<String, String>) {
+        _state.value = _state.value.copy(rawCfaCorrectionModes = modes.toMap())
+    }
+
     fun setMultiFrameOutputScale(outputScale: Float?) {
         val currentState = _state.value
         val normalizedScale = outputScale?.let(MultiFrameConfig::normalizeOutputScale)
