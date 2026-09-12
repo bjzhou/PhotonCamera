@@ -137,9 +137,20 @@ internal class RawEngineTonePass(
                 .takeIf { it >= 0 }
                 ?: source.indexOf("void main()").takeIf { it >= 0 }
                 ?: error("Unable to find combined shader adjustment section")
+            val prepareHdrEngineInput = if (shaderDefinition.includeAdobeProfilePipeline) {
+                // Keep SDR profile rendering intact. Only the HDR coordinate bypasses the
+                // DCP value/ramp ceiling; supportOverrange remains the profile's encoding mode.
+                "uProfileToEngineTransform * applyAdobeProfilePipeline(color, true)"
+            } else {
+                "prepareEngineInput(color)"
+            }
             return source.substring(0, cutoff) + """
 
             ${DngProfileGainTableRenderShader.GLSL}
+
+            vec3 prepareHdrEngineInput(vec3 color) {
+                return $prepareHdrEngineInput;
+            }
 
             uniform sampler2D uHdrBaseCurveTexture;
             uniform sampler2D uHdrCoordinateTexture;
@@ -209,7 +220,7 @@ internal class RawEngineTonePass(
                         (coordinateProfileColor * uHdrCoordinateExposureGain);
                 } else {
                     sdrEngineColor = prepareEngineInput(applyProfileGainTableMap(profileColor));
-                    hdrEngineColor = prepareEngineInput(
+                    hdrEngineColor = prepareHdrEngineInput(
                         applyProfileGainTableMapWithLinearHighlights(
                             profileColor,
                             HDR_PGTM_LINEAR_START,

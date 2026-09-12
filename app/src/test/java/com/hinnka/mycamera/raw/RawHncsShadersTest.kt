@@ -56,7 +56,7 @@ class RawHncsShadersTest {
     }
 
     @Test
-    fun hncsFragmentShadersPassAvailableNdkValidator() {
+    fun engineFragmentShadersPassAvailableNdkValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val ndkRoots = sdkRoot?.let(::File)
             ?.resolve("ndk")
@@ -73,6 +73,10 @@ class RawHncsShadersTest {
         assumeTrue("Android NDK glslc is unavailable", validator != null)
 
         val shaders = listOf(
+            RawEngineTonePass.fragmentShaderFor(RawRenderingEngine.AdobeCurve),
+            RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.AdobeCurve),
+            RawEngineTonePass.hdrReferenceFragmentShaderFor(RawRenderingEngine.AdobeCurve),
+            RawEngineTonePass.hdrBaseCurveFragmentShaderFor(RawRenderingEngine.AdobeCurve),
             RawEngineTonePass.combinedFragmentShaderFor(
                 colorEngine = RawRenderingEngine.Hncs,
                 includeShadowsHighlights = false,
@@ -87,8 +91,8 @@ class RawHncsShadersTest {
             RawSrgbPass.FRAGMENT_SHADER,
         )
         shaders.forEachIndexed { index, shader ->
-            val sourceFile = File.createTempFile("raw-hncs-$index-", ".frag")
-            val outputFile = File.createTempFile("raw-hncs-$index-", ".spv")
+            val sourceFile = File.createTempFile("raw-engine-$index-", ".frag")
+            val outputFile = File.createTempFile("raw-engine-$index-", ".spv")
             try {
                 sourceFile.writeText(shader.replaceFirst("#version 300 es", "#version 310 es"))
                 val process = ProcessBuilder(

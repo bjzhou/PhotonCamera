@@ -264,7 +264,10 @@ internal object AdobeCurveToneShader {
             return edge0 * sFract0 + edge1 * sFract1;
         }
 
-        vec3 applyDcpHsvMap(vec3 color, sampler3D tableTexture, ivec3 divisions, int encoding) {
+        vec3 applyDcpHsvMap(
+            vec3 color, sampler3D tableTexture, ivec3 divisions, int encoding,
+            bool preserveHighlights
+        ) {
             bool encodeOverrange = uProfileExposureSupportOverrange && divisions.z > 1;
             vec3 mapColor = max(color, vec3(0.0));
             if (encodeOverrange) {
@@ -286,7 +289,13 @@ internal object AdobeCurveToneShader {
             vec3 modify = sampleDcpMap(tableTexture, divisions, lookupHsv);
             hsv.x = mod(hsv.x + (modify.x * 6.0 / 360.0), 6.0);
             hsv.y = clampDcpTableCoordinate(hsv.y * modify.y);
-            vEncoded = clamp(vEncoded * modify.z, 0.0, 1.0);
+            // The lookup coordinate is bounded, but the HDR reference must retain the
+            // mapped value above white. Clipping it here destroys the recovered PGTM
+            // coordinate before the HDR shoulder extension can consume it.
+            vEncoded = max(vEncoded * modify.z, 0.0);
+            if (!preserveHighlights) {
+                vEncoded = min(vEncoded, 1.0);
+            }
             if (encoding == 1) {
                 hsv.z = decodeScaledValue(vEncoded, encoding);
             } else {
@@ -304,7 +313,7 @@ internal object AdobeCurveToneShader {
             return mapped;
         }
 
-        float applyProfileExposureRampValue(float value) {
+        float applyProfileExposureRampValue(float value, bool preserveHighlights) {
             float black = uProfileExposureRampBlack;
             float radius = uProfileExposureRampRadius;
             if (value <= black - radius) {
@@ -312,20 +321,21 @@ internal object AdobeCurveToneShader {
             }
             if (value >= black + radius) {
                 float ramped = max((value - black) * uProfileExposureRampSlope, 0.0);
-                return uProfileExposureSupportOverrange ? ramped : min(ramped, 1.0);
+                return (preserveHighlights || uProfileExposureSupportOverrange)
+                    ? ramped : min(ramped, 1.0);
             }
             float y = value - (black - radius);
             return uProfileExposureRampQScale * y * y;
         }
 
-        vec3 applyProfileExposureRamp(vec3 color) {
+        vec3 applyProfileExposureRamp(vec3 color, bool preserveHighlights) {
             if (!uProfileExposureRampEnabled) {
                 return color * uProfileExposureLinearGain;
             }
             vec3 ramped = vec3(
-                applyProfileExposureRampValue(color.r),
-                applyProfileExposureRampValue(color.g),
-                applyProfileExposureRampValue(color.b)
+                applyProfileExposureRampValue(color.r, preserveHighlights),
+                applyProfileExposureRampValue(color.g, preserveHighlights),
+                applyProfileExposureRampValue(color.b, preserveHighlights)
             );
             return ramped;
         }
@@ -341,30 +351,40 @@ internal object AdobeCurveToneShader {
                 uProfileExposureToneC;
         }
 
-        vec3 applyDcpHueSatMap(vec3 color) {
+        vec3 applyDcpHueSatMap(vec3 color, bool preserveHighlights) {
             if (uDcpHueSatEnabled) {
-                color = applyDcpHsvMap(color, uDcpHueSatTexture, uDcpHueSatDivisions, uDcpHueSatEncoding);
+                color = applyDcpHsvMap(
+                    color, uDcpHueSatTexture, uDcpHueSatDivisions, uDcpHueSatEncoding,
+                    preserveHighlights
+                );
             }
             return color;
         }
 
-        vec3 applyDcpLookTable(vec3 color) {
+        vec3 applyDcpLookTable(vec3 color, bool preserveHighlights) {
             if (uDcpLookTableEnabled) {
-                color = applyDcpHsvMap(color, uDcpLookTableTexture, uDcpLookTableDivisions, uDcpLookTableEncoding);
+                color = applyDcpHsvMap(
+                    color, uDcpLookTableTexture, uDcpLookTableDivisions, uDcpLookTableEncoding,
+                    preserveHighlights
+                );
+            }
+            return color;
+        }
+
+        vec3 applyAdobeProfilePipeline(vec3 color, bool preserveHighlights) {
+            color = applyDcpHueSatMap(color, preserveHighlights);
+            if (uProfileExposureRampEnabled) {
+                color = applyProfileExposureRamp(color, preserveHighlights);
+                color = applyDcpLookTable(color, preserveHighlights);
+            } else {
+                color = applyDcpLookTable(color, preserveHighlights);
+                color = applyProfileExposureRamp(color, preserveHighlights);
             }
             return color;
         }
 
         vec3 applyAdobeProfilePipeline(vec3 color) {
-            color = applyDcpHueSatMap(color);
-            if (uProfileExposureRampEnabled) {
-                color = applyProfileExposureRamp(color);
-                color = applyDcpLookTable(color);
-            } else {
-                color = applyDcpLookTable(color);
-                color = applyProfileExposureRamp(color);
-            }
-            return color;
+            return applyAdobeProfilePipeline(color, false);
         }
     """.trimIndent()
     val ADOBE_COMBINED_FUNCTIONS = """

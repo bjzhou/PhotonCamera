@@ -272,6 +272,7 @@ internal abstract class RawRenderingEngineToneAlgorithm(
                 PLog.d(
                     TAG,
                     "RAW HDR curve engine=${input.colorEngine} " +
+                        "profileHighlights=${if (shaderDefinition.includeAdobeProfilePipeline) "unclipped" else "engine"} " +
                         "join=${curve.joinInput}/${curve.joinOutput} " +
                         "joinSlope=${curve.joinSlope} white=${curve.whiteOutput} " +
                         "whiteSlope=${curve.whiteSlope} extendsBase=${curve.extendsBaseCurve}",
