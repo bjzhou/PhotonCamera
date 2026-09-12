@@ -142,43 +142,32 @@ object ShadowsHighlightsShader {
             return sum / max(weightSum, 0.0001);
         }
 
-        float shOverlayBlendAmount(float opacity, float transform) {
-            float opacity2 = min(opacity * opacity, 4.0);
-            float safeTransform = clamp(transform, 0.0, 1.0);
-            return opacity2 * safeTransform;
-        }
-
         vec3 shOverlay(vec3 a, vec3 b, float opacity, float transform, float ccorrect) {
-            float optrans = shOverlayBlendAmount(opacity, transform);
-            if (optrans <= 0.0) {
-                return a;
+            float remainingOpacity = min(opacity * opacity, 4.0);
+            float tonalWeight = clamp(transform, 0.0, 1.0);
+            // Split strong adjustments into convex blends instead of extrapolating past
+            // the overlay result. The local base is a mask, not a luminance bound:
+            // clipping to it creates a jump whenever the base crosses the source L.
+            for (int i = 0; i < 4; i++) {
+                float optrans = min(remainingOpacity, 1.0) * tonalWeight;
+                if (optrans <= 0.0) break;
+                remainingOpacity = max(remainingOpacity - 1.0, 0.0);
+
+                float la = a.x;
+                float lb = (b.x - 0.5) * shSign(opacity) * shSign(1.0 - la) + 0.5;
+                lb = clamp(lb, 0.0, 1.0);
+                float lref = shSignedInv(la, la);
+                float href = shSignedInv(1.0 - la, 1.0 - la);
+
+                float overL = la > 0.5
+                    ? 1.0 - (1.0 - 2.0 * (la - 0.5)) * (1.0 - lb)
+                    : 2.0 * la * lb;
+                a.x = mix(la, overL, optrans);
+
+                float chromaFactor = a.x * lref * ccorrect + (1.0 - a.x) * href * (1.0 - ccorrect);
+                a.y = mix(a.y, (a.y + b.y) * chromaFactor, optrans);
+                a.z = mix(a.z, (a.z + b.z) * chromaFactor, optrans);
             }
-
-            float la = a.x;
-            float lb = (b.x - 0.5) * shSign(opacity) * shSign(1.0 - la) + 0.5;
-            lb = clamp(lb, 0.0, 1.0);
-            float lref = shSignedInv(la, la);
-            float href = shSignedInv(1.0 - la, 1.0 - la);
-
-            float overL = la > 0.5
-                ? 1.0 - (1.0 - 2.0 * (la - 0.5)) * (1.0 - lb)
-                : 2.0 * la * lb;
-            float deltaL = overL - la;
-            float nextL = la + deltaL * optrans;
-            float anchorDelta = lb - la;
-            if (deltaL * anchorDelta > 0.0) {
-                nextL = deltaL < 0.0
-                    ? max(nextL, min(la, lb))
-                    : min(nextL, max(la, lb));
-            }
-            a.x = clamp(nextL, 0.0, 1.0);
-
-            float chromaFactor = a.x * lref * ccorrect + (1.0 - a.x) * href * (1.0 - ccorrect);
-            float chromaTrans = abs(deltaL) > SH_LOW_APPROX
-                ? clamp((a.x - la) / deltaL, 0.0, 1.0)
-                : clamp(optrans, 0.0, 1.0);
-            a.y = a.y * (1.0 - chromaTrans) + (a.y + b.y) * chromaFactor * chromaTrans;
-            a.z = a.z * (1.0 - chromaTrans) + (a.z + b.z) * chromaFactor * chromaTrans;
             return a;
         }
 

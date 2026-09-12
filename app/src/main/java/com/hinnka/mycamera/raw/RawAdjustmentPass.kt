@@ -37,6 +37,13 @@ internal class RawAdjustmentPass(
             return null
         }
 
+        PLog.d(
+            TAG,
+            "RAW adjustments: highlights=${input.highlights} shadows=${input.shadows} " +
+                "blacks=${input.blacks} whites=${input.whites} " +
+                "source=${input.textureId} target=${input.targetTextureId} " +
+                "size=${input.width}x${input.height}",
+        )
         GLES30.glUseProgram(activeProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, input.targetFramebufferId)
         GLES30.glViewport(0, 0, input.width, input.height)
