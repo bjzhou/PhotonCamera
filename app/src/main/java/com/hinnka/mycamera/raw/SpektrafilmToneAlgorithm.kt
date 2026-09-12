@@ -115,7 +115,9 @@ internal class SpektrafilmToneAlgorithm(quad: RawFullscreenQuad) :
         PLog.d(
             TAG,
             "Uploaded spectral film LUT: ${lut.name}, type=${lut.type}, " +
-                "refLight=${lut.referenceIlluminant}, viewLight=${lut.viewingIlluminant}",
+                "refLight=${lut.referenceIlluminant}, viewLight=${lut.viewingIlluminant}, " +
+                "size=${lut.size}, format=RGBA16F, sampling=texel-center/highp, " +
+                "linearPipeline=highp-sampler2D, source=${lut.sourceKey}",
         )
         return textureId
     }

@@ -391,6 +391,9 @@ internal class RawEngineTonePass(
         #version 300 es
         precision highp float;
         precision highp int;
+        // Sampler precision controls texture() results independently of float precision.
+        // Preserve linear shadows and profile gains before applying the engine curve.
+        precision highp sampler2D;
         $sampler3DPrecision
 
         in vec2 vTexCoord;

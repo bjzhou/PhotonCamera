@@ -19,6 +19,7 @@
 | MRT attachment 残留 | 已确认，Adreno | render-target 数减少时显式 detach 尾部 attachment |
 | `uint16 -> float` | 已确认，Mali | 首次转换走 compute image load/store，不走 fragment sampler 直接转换 |
 | 纹理/sampler 状态 | 跨驱动约束 | 每次 draw 显式绑定 program、framebuffer、texture unit 和所有 sampler |
+| 浮点纹理 sampler 精度 | 规范约束 | 线性 RGB 与浮点曲线/增益纹理显式声明 `highp` sampler；`highp float` 不覆盖 sampler |
 | `imageStore` 可见性 | 跨驱动约束 | barrier 必须覆盖下一位 consumer，而非只覆盖 producer |
 | CPU/GPU Float 除法 | 已确认，Adreno；跨驱动精度约束 | CPU 算法迁到 GPU 时不能假定 `/` 与 JVM Float 逐位一致 |
 | 后台 compute 调度 | 已确认，Mali | 以资源 RAW/WAR/WAW 冲突和 fence 管理并发，不以队列长度代替所有权 |
@@ -148,6 +149,22 @@ shader storage block binding gets value 12, out of range [0 - 7]
 - 不依赖 helper 调用顺序或上一帧遗留的 active unit、framebuffer、program、texture binding。
 
 ## SSBO 与 image format
+
+### 线性浮点纹理的 sampler 精度
+
+**规范约束，尚未在反馈的 SHARP SHG03 上复现验证**：
+[GLSL ES 3.00 §4.5.3 / §8.8](https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf)
+规定 `sampler2D` 默认精度为 `lowp`，纹理查询返回值的精度取自 sampler。
+`precision highp float`、`RGBA16F` 存储，以及将采样结果赋给 `highp vec3`，
+均不能提高已经发生的低精度采样。不同驱动可以提供高于最低要求的精度，因此
+不能用另一台设备的正常结果排除这个问题。
+
+- RAW 线性 RGB 从颜色转换、可选畸变校正、引擎曲线、明暗调整到 sRGB 编码前，
+  每个 fragment pass 均显式声明 `precision highp sampler2D` 或逐个使用 `uniform highp sampler2D`。
+- 同一 shader 的浮点增益表、曲线与 HDR 辅助纹理遵循相同契约；不要只修改最终 LUT sampler。
+- sRGB 编码前损失的暗部层次无法靠后续 gamma、颗粒或抬黑恢复。
+- 验证需使用同一浮点暗部渐变分别运行 `lowp` / `highp` shader，并读取采样后及
+  sRGB 编码后的输出。CPU 模拟、shader 编译或精度能力查询均不证明目标驱动的实际采样行为。
 
 ### `R16UI` 采样不代表可用于 image store
 

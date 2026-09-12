@@ -152,6 +152,7 @@ internal class RawLinearRcdPass(
         val FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
+            precision highp sampler2D;
             precision highp sampler3D;
 
             in vec2 vTexCoord;

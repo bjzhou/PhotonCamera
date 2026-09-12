@@ -56,6 +56,7 @@ internal class RawSrgbPass(
         val FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
+            precision highp sampler2D;
 
             in vec2 vTexCoord;
             out vec4 fragColor;
