@@ -135,6 +135,8 @@ private data class CaptureSettingsSnapshot(
     val blackBorderCrop: RawBlackBorderCrop,
     val portraitMask: PortraitMaskSnapshot?,
     val multipleExposure: Boolean,
+    val photoId: String = UUID.randomUUID().toString(),
+    val galleryRegistration: CompletableDeferred<Unit> = CompletableDeferred(),
     @Volatile var thumbnail: Bitmap? = null,
     var livePhotoVideo: CompletableDeferred<Pair<File, Long>?>? = null,
     var captureId: Long = 0L,
@@ -146,6 +148,7 @@ private data class CaptureSettingsSnapshot(
 /** The shutter preview remains visible until the matching final thumbnail has loaded. */
 data class CapturedThumbnail(
     val captureId: Long,
+    val photoId: String,
     val bitmap: Bitmap?,
     val savedPhotoId: String?,
     val processingFinished: Boolean,
@@ -1953,17 +1956,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         cameraController.onPhotoCaptureCompleted = { id, captureInfo ->
             pendingCaptureSettings[id]?.let { settings ->
-                settings.captureCompleted = true
-                publishCapturedThumbnail(settings)
                 viewModelScope.launch {
-                    _captureCompletedEvent.emit(
-                        buildPhotoMetadata(
+                    try {
+                        val metadata = buildPhotoMetadata(
                             width = captureInfo.imageWidth,
                             height = captureInfo.imageHeight,
                             captureInfo = captureInfo,
                             settings = settings,
                         )
-                    )
+                        if (!settings.multipleExposure && !settings.processingFinished) {
+                            GalleryManager.registerProcessingPhoto(
+                                getApplication(), settings.photoId, metadata, settings.thumbnail
+                            )
+                        }
+                        settings.captureCompleted = true
+                        publishCapturedThumbnail(settings)
+                        settings.galleryRegistration.complete(Unit)
+                        _captureCompletedEvent.emit(metadata)
+                    } catch (e: Exception) {
+                        settings.galleryRegistration.completeExceptionally(e)
+                        PLog.e(TAG, "Failed to register captured photo ${settings.photoId}", e)
+                    }
+                }.invokeOnCompletion { error ->
+                    // A queued capture must also finish if the camera owner is cleared before registration starts.
+                    if (error != null) settings.galleryRegistration.completeExceptionally(error)
                 }
             }
         }
@@ -1987,8 +2003,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 CaptureProcessingQueue.enqueue(photo.frames.map { it.image }) {
                     try {
+                        shotSettings.galleryRegistration.await()
                         processCapturedPhoto(photo, shotSettings)
                     } finally {
+                        GalleryManager.finishProcessingPhoto(
+                            getApplication(), shotSettings.photoId, shotSettings.savedPhotoId != null
+                        )
                         // A failed photo preparation must not orphan its already-recorded video.
                         withContext(Dispatchers.IO) {
                             shotSettings.livePhotoVideo?.await()?.first?.delete()
@@ -2003,6 +2023,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             pendingCaptureSettings.remove(id)?.let { settings ->
                 settings.processingFinished = true
                 publishCapturedThumbnail(settings)
+                viewModelScope.launch {
+                    GalleryManager.finishProcessingPhoto(getApplication(), settings.photoId, false)
+                }
             }
         }
         cameraController.onVideoSaved = { uri ->
@@ -3303,6 +3326,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             pendingCaptureSettings[id] = settings
             generateThumbnail {
                 settings.thumbnail = it
+                GalleryManager.updateProcessingThumbnail(settings.photoId, it)
                 publishCapturedThumbnail(settings)
             }
             if (settings.state.useLivePhoto && !cameraController.usesTorchForLivePhotoCapture()) {
@@ -3326,6 +3350,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 CapturedThumbnail(
                     captureId = settings.captureId,
+                    photoId = settings.photoId,
                     bitmap = settings.thumbnail.takeUnless {
                         settings.processingFinished && settings.savedPhotoId == null && !settings.multipleExposure
                     },
@@ -5694,7 +5719,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     settings.thumbnail,
                     settings.state.useLivePhoto,
                     1.0f,
-                    includeCropRegionInOutputSize = shouldIncludeCropRegionInOutputSize(image.format)
+                    includeCropRegionInOutputSize = shouldIncludeCropRegionInOutputSize(image.format),
+                    photoId = settings.photoId,
                 )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save image")
@@ -6120,7 +6146,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 superResScale,
                 includeCropRegionInOutputSize = images.firstOrNull()?.let {
                     shouldIncludeCropRegionInOutputSize(it.format)
-                } ?: false
+                } ?: false,
+                photoId = settings.photoId,
             )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save burst image")
@@ -6211,7 +6238,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 settings.thumbnail,
                 false,
                 superResScale,
-                includeCropRegionInOutputSize = false
+                includeCropRegionInOutputSize = false,
+                photoId = settings.photoId,
             ) ?: return
 
             val aspectRatio = metadata.ratio ?: settings.state.aspectRatio

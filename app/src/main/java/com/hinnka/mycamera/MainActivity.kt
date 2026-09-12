@@ -666,12 +666,20 @@ fun NavigationHost(
                             viewModel = cameraViewModel,
                             galleryViewModel = galleryViewModel,
                             onGalleryClick = {
-                                navController.navigate(Routes.GALLERY)
-                                val latestPhoto = galleryViewModel.latestPhoto.value
-                                /*if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
-                                    galleryViewModel.setCurrentPhotoById(latestPhoto.id)
-                                    navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
-                                }*/
+                                val pendingId = cameraViewModel.capturedThumbnail.value
+                                    ?.takeUnless { it.finalThumbnailLoaded }
+                                    ?.let { captured ->
+                                        captured.savedPhotoId ?: captured.photoId.takeIf {
+                                            it in GalleryManager.processingPhotos.value ||
+                                                it in galleryViewModel.processingPhotos.value
+                                        }
+                                    }
+                                if (pendingId != null) {
+                                    galleryViewModel.setCurrentPhotoById(pendingId)
+                                    navController.navigate(Routes.photoDetail(photoId = pendingId))
+                                } else {
+                                    navController.navigate(Routes.GALLERY)
+                                }
                             },
                             onSettingsClick = {
                                 navController.navigate(Routes.SETTINGS)
@@ -717,8 +725,19 @@ fun NavigationHost(
                         viewModel = cameraViewModel,
                         galleryViewModel = galleryViewModel,
                         onGalleryClick = {
+                            val pendingId = cameraViewModel.capturedThumbnail.value
+                                ?.takeUnless { it.finalThumbnailLoaded }
+                                ?.let { captured ->
+                                    captured.savedPhotoId ?: captured.photoId.takeIf {
+                                        it in GalleryManager.processingPhotos.value ||
+                                            it in galleryViewModel.processingPhotos.value
+                                    }
+                                }
                             val latestPhoto = galleryViewModel.latestPhoto.value
-                            if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                            if (pendingId != null) {
+                                galleryViewModel.setCurrentPhotoById(pendingId)
+                                navController.navigate(Routes.photoDetail(photoId = pendingId))
+                            } else if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
                                 galleryViewModel.setCurrentPhotoById(latestPhoto.id)
                                 navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
                             } else {

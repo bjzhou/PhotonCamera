@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import com.hinnka.mycamera.R
 import androidx.compose.ui.res.painterResource
 import com.hinnka.mycamera.gallery.MediaData
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
@@ -79,6 +80,7 @@ import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.PhysicalButton
+import com.hinnka.mycamera.ui.components.ProcessingPhotoPreview
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.GalleryTab
@@ -162,6 +164,12 @@ fun GalleryDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val photos by viewModel.currentPhotos.collectAsState()
+    val processingPhotos by viewModel.processingPhotos.collectAsState()
+    var previousProcessingIds by remember { mutableStateOf(processingPhotos.keys.toSet()) }
+    LaunchedEffect(processingPhotos.keys) {
+        (previousProcessingIds - processingPhotos.keys).forEach(viewModel::invalidatePreviewCache)
+        previousProcessingIds = processingPhotos.keys.toSet()
+    }
     val context = LocalContext.current
 
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -270,7 +278,8 @@ fun GalleryDetailScreen(
     var lastPhotosCount by rememberSaveable { mutableIntStateOf(photos.size) }
 
     // 同步当前索引
-    LaunchedEffect(pagerState.currentPage) {
+    LaunchedEffect(pagerState.currentPage, photos.getOrNull(pagerState.currentPage)?.id,
+        photos.getOrNull(pagerState.currentPage)?.id in processingPhotos) {
         viewModel.setCurrentPhoto(pagerState.currentPage)
         currentColorSpace.value = null
     }
@@ -310,9 +319,23 @@ fun GalleryDetailScreen(
     }
 
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
+    val isCurrentPhotoProcessing = currentPhoto?.id?.let(processingPhotos::containsKey) == true
+
+    LaunchedEffect(currentPhoto?.id, isCurrentPhotoProcessing) {
+        if (isCurrentPhotoProcessing) {
+            isZoomed = false
+            showDeleteDialog = false
+            showInfoDialog = false
+            showExportDialog = false
+            showVideoExportConfirmDialog = false
+            showMoreSheet = false
+            showAiScoreSheet = false
+            showHdrStrengthPanel = false
+        }
+    }
 
     LaunchedEffect(showVideoExportConfirmDialog, currentPhoto?.id) {
-        if (!showVideoExportConfirmDialog || currentPhoto?.isVideo != true) return@LaunchedEffect
+        if (!showVideoExportConfirmDialog || isCurrentPhotoProcessing || currentPhoto?.isVideo != true) return@LaunchedEffect
         selectedVideoExportOption = null
         videoExportOptions = emptyList()
         isLoadingVideoExportOptions = true
@@ -335,12 +358,13 @@ fun GalleryDetailScreen(
     LaunchedEffect(currentPhoto?.id) {
         showHdrStrengthPanel = false
     }
-    val isCurrentRawPhoto = currentPhoto?.let {
+    val isCurrentRawPhoto = !isCurrentPhotoProcessing && currentPhoto?.let {
         it.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || it.relatedPhoto != null) && viewModel.isRaw(it.id)
     } == true
     var displayPhotoSize by remember(currentPhoto?.id) { mutableLongStateOf(currentPhoto?.size ?: 0L) }
 
-    LaunchedEffect(currentPhoto?.id, currentPhoto?.size, currentPhoto?.uri, currentPhoto?.sourceUri) {
+    LaunchedEffect(currentPhoto?.id, currentPhoto?.size, currentPhoto?.uri, currentPhoto?.sourceUri, isCurrentPhotoProcessing) {
+        if (isCurrentPhotoProcessing) return@LaunchedEffect
         val photo = currentPhoto ?: return@LaunchedEffect
         displayPhotoSize = photo.size
         if (displayPhotoSize > 0L) return@LaunchedEffect
@@ -416,7 +440,7 @@ fun GalleryDetailScreen(
                 },
                 actions = {
                     // LIVE 标记
-                    if (currentPhoto?.isMotionPhoto == true) {
+                    if (!isCurrentPhotoProcessing && currentPhoto?.isMotionPhoto == true) {
                         Box(
                             modifier = Modifier.padding(8.dp)
                         ) {
@@ -430,7 +454,7 @@ fun GalleryDetailScreen(
                             }
                         }
                     }
-                    if (currentPhoto != null && currentPhoto.isImage && viewModel.isRaw(currentPhoto.id)) {
+                    if (!isCurrentPhotoProcessing && currentPhoto != null && currentPhoto.isImage && viewModel.isRaw(currentPhoto.id)) {
                         val isRefreshing = viewModel.refreshingPhotos.contains(currentPhoto.id)
                         val infiniteTransition = rememberInfiniteTransition(label = "refresh")
                         val rotation by infiniteTransition.animateFloat(
@@ -468,7 +492,7 @@ fun GalleryDetailScreen(
                             )
                         }
                     }
-                    if (currentPhoto != null && currentPhoto.isImage && currentPhoto.isBurstPhoto) {
+                    if (!isCurrentPhotoProcessing && currentPhoto != null && currentPhoto.isImage && currentPhoto.isBurstPhoto) {
                         IconButton(onClick = { onViewBurst?.invoke(currentPhoto.id) }, modifier = Modifier.autoRotate()) {
                             Icon(
                                 imageVector = AppIcons.BurstMode,
@@ -478,6 +502,7 @@ fun GalleryDetailScreen(
                         }
                     }
                     if (
+                        !isCurrentPhotoProcessing &&
                         currentPhoto != null &&
                         currentPhoto.isImage &&
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
@@ -497,7 +522,7 @@ fun GalleryDetailScreen(
                             )
                         }
                     }
-                    IconButton(onClick = { showInfoDialog = true }, modifier = Modifier.autoRotate()) {
+                    IconButton(onClick = { showInfoDialog = true }, enabled = !isCurrentPhotoProcessing, modifier = Modifier.autoRotate()) {
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = stringResource(if (currentPhoto?.isVideo == true) R.string.video_info else R.string.photo_info),
@@ -517,7 +542,7 @@ fun GalleryDetailScreen(
                         icon = Icons.Default.Share,
                         contentDescription = stringResource(R.string.share),
                         isLoading = isSharing,
-                        enabled = currentPhoto != null && !isSharing,
+                        enabled = currentPhoto != null && !isSharing && !isCurrentPhotoProcessing,
                         onClick = {
                             currentPhoto?.let(viewModel::sharePhoto)
                         }
@@ -528,6 +553,7 @@ fun GalleryDetailScreen(
                         GalleryGroupedActionButton(
                             icon = AppIcons.AutoAwesome,
                             contentDescription = stringResource(R.string.gallery_ai_analysis),
+                            enabled = !isCurrentPhotoProcessing,
                             onClick = { showAiScoreSheet = true }
                         )
                     }
@@ -536,6 +562,7 @@ fun GalleryDetailScreen(
                         GalleryGroupedActionButton(
                             icon = Icons.Default.Edit,
                             contentDescription = stringResource(R.string.edit),
+                            enabled = !isCurrentPhotoProcessing,
                             isLoading = preparingEditPhotoId == currentPhoto.id,
                             onClick = {
                                 viewModel.prepareCurrentPhotoForEdit(
@@ -556,7 +583,7 @@ fun GalleryDetailScreen(
                     GalleryGroupedActionButton(
                         icon = Icons.Default.Delete,
                         contentDescription = stringResource(R.string.delete),
-                        enabled = currentPhoto != null,
+                        enabled = currentPhoto != null && !isCurrentPhotoProcessing,
                         onClick = { showDeleteDialog = true }
                     )
                 },
@@ -564,7 +591,7 @@ fun GalleryDetailScreen(
                     GalleryCircleActionButton(
                         icon = AppIcons.MoreHoriz,
                         contentDescription = stringResource(R.string.more_options),
-                        enabled = currentPhoto != null,
+                        enabled = currentPhoto != null && !isCurrentPhotoProcessing,
                         onClick = { showMoreSheet = true }
                     )
                 }
@@ -596,101 +623,106 @@ fun GalleryDetailScreen(
                 ) { page ->
                     val photo = photos.getOrNull(page)
                     if (photo != null) {
-                        key(photo.id) {
+                        val processingPhoto = processingPhotos[photo.id]
+                        key(photo.id, processingPhoto != null) {
+                            if (processingPhoto != null) {
+                                ProcessingPhotoPreview(processingPhoto, Modifier.fillMaxSize())
+                            } else {
 
-                            var showOrigin by remember { mutableStateOf(false) }
-                            var isPlaying by remember { mutableStateOf(false) }
+                                var showOrigin by remember { mutableStateOf(false) }
+                                var isPlaying by remember { mutableStateOf(false) }
 
-                            Box(
-                                modifier = Modifier.fillMaxSize().pointerInput(photo.id, photo.isImage, photo.isMotionPhoto) {
-                                    if (!photo.isImage) return@pointerInput
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            val downEvent = awaitPointerEvent(PointerEventPass.Initial)
-                                            if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
-                                                val touchSlop = viewConfiguration.touchSlop
-                                                val initialPosition = downEvent.changes[0].position
-                                                val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-                                                var upEvent: PointerEvent? = null
-                                                var isMultiTouch = false
-                                                var isMoved = false
+                                Box(
+                                    modifier = Modifier.fillMaxSize().pointerInput(photo.id, photo.isImage, photo.isMotionPhoto) {
+                                        if (!photo.isImage) return@pointerInput
+                                        awaitPointerEventScope {
+                                            while (true) {
+                                                val downEvent = awaitPointerEvent(PointerEventPass.Initial)
+                                                if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
+                                                    val touchSlop = viewConfiguration.touchSlop
+                                                    val initialPosition = downEvent.changes[0].position
+                                                    val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                                                    var upEvent: PointerEvent? = null
+                                                    var isMultiTouch = false
+                                                    var isMoved = false
 
-                                                withTimeoutOrNull(longPressTimeout) {
-                                                    while (true) {
-                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                        if (event.changes.size > 1) {
-                                                            isMultiTouch = true
-                                                            break
-                                                        }
+                                                    withTimeoutOrNull(longPressTimeout) {
+                                                        while (true) {
+                                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                            if (event.changes.size > 1) {
+                                                                isMultiTouch = true
+                                                                break
+                                                            }
 
-                                                        val currentPosition = event.changes[0].position
-                                                        if ((currentPosition - initialPosition).getDistance() > touchSlop) {
-                                                            isMoved = true
-                                                            break
-                                                        }
+                                                            val currentPosition = event.changes[0].position
+                                                            if ((currentPosition - initialPosition).getDistance() > touchSlop) {
+                                                                isMoved = true
+                                                                break
+                                                            }
 
-                                                        if (event.type == PointerEventType.Release) {
-                                                            upEvent = event
-                                                            break
-                                                        }
-                                                    }
-                                                }
-
-                                                if (!isMultiTouch && !isMoved && upEvent == null) {
-                                                    if (photo.isMotionPhoto) {
-                                                        isPlaying = true
-                                                    } else {
-                                                        showOrigin = true
-                                                    }
-                                                    while (true) {
-                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                        if (event.type == PointerEventType.Release || event.changes.size > 1) {
-                                                            break
+                                                            if (event.type == PointerEventType.Release) {
+                                                                upEvent = event
+                                                                break
+                                                            }
                                                         }
                                                     }
-                                                    showOrigin = false
-                                                    isPlaying = false
+
+                                                    if (!isMultiTouch && !isMoved && upEvent == null) {
+                                                        if (photo.isMotionPhoto) {
+                                                            isPlaying = true
+                                                        } else {
+                                                            showOrigin = true
+                                                        }
+                                                        while (true) {
+                                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                            if (event.type == PointerEventType.Release || event.changes.size > 1) {
+                                                                break
+                                                            }
+                                                        }
+                                                        showOrigin = false
+                                                        isPlaying = false
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                }
-                            ) {
-                                if (photo.isVideo) {
-                                    VideoDetailPlayer(
-                                        photo = photo,
-                                        isActive = page == pagerState.currentPage &&
-                                            !viewModel.isEditing &&
-                                            !showVideoExportConfirmDialog &&
-                                            !isVideoExporting,
-                                        viewModel = viewModel,
-                                        previewHandle = videoPreviewHandle,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    val forceSystemOrigin = viewModel.selectedTab == GalleryTab.SYSTEM &&
-                                        photo.relatedPhoto == null
-                                    ZoomableImage(
-                                        photo = photo,
-                                        colorSpace = currentColorSpace,
-                                        showOrigin = showOrigin || forceSystemOrigin,
-                                        isActive = page == pagerState.currentPage,
-                                        isScrollInProgress = pagerState.isScrollInProgress,
-                                        viewModel = viewModel,
-                                        showRawBadge = photo.isImage && viewModel.isRawMedia(photo),
-                                        onZoomChange = { zoomed ->
-                                            if (page == pagerState.currentPage) {
-                                                isZoomed = zoomed
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                    MotionPhotoPlayer(
-                                        photo = photo,
-                                        isPlaying = isPlaying,
-                                        viewModel = viewModel,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                ) {
+                                    if (photo.isVideo) {
+                                        VideoDetailPlayer(
+                                            photo = photo,
+                                            isActive = page == pagerState.currentPage &&
+                                                !viewModel.isEditing &&
+                                                !showVideoExportConfirmDialog &&
+                                                !isVideoExporting,
+                                            viewModel = viewModel,
+                                            previewHandle = videoPreviewHandle,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        val forceSystemOrigin = viewModel.selectedTab == GalleryTab.SYSTEM &&
+                                            photo.relatedPhoto == null
+                                        ZoomableImage(
+                                            photo = photo,
+                                            colorSpace = currentColorSpace,
+                                            showOrigin = showOrigin || forceSystemOrigin,
+                                            isActive = page == pagerState.currentPage,
+                                            isScrollInProgress = pagerState.isScrollInProgress,
+                                            viewModel = viewModel,
+                                            showRawBadge = photo.isImage && viewModel.isRawMedia(photo),
+                                            onZoomChange = { zoomed ->
+                                                if (page == pagerState.currentPage) {
+                                                    isZoomed = zoomed
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                        MotionPhotoPlayer(
+                                            photo = photo,
+                                            isPlaying = isPlaying,
+                                            viewModel = viewModel,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -698,6 +730,7 @@ fun GalleryDetailScreen(
                 }
             }
             if (
+                !isCurrentPhotoProcessing &&
                 showHdrStrengthPanel &&
                 currentPhoto != null &&
                 currentPhoto.isImage &&
@@ -734,7 +767,7 @@ fun GalleryDetailScreen(
     val deleteExportedPref by viewModel.deleteExported.collectAsState()
 
     // 删除确认对话框
-    if (showDeleteDialog) {
+    if (showDeleteDialog && !isCurrentPhotoProcessing) {
         val exportedPhotosCount = remember(currentPhoto, currentPhoto?.metadata, currentPhoto?.metadata?.exportedUris) {
             val baseCount = currentPhoto?.metadata?.exportedUris?.size ?: 0
             val sourceUri = currentPhoto?.metadata?.sourceUri
@@ -812,7 +845,7 @@ fun GalleryDetailScreen(
     }
 
     // 导出确认对话框
-    if (showExportDialog) {
+    if (showExportDialog && !isCurrentPhotoProcessing) {
         AlertDialog(
             onDismissRequest = { showExportDialog = false },
             title = { Text(stringResource(R.string.export)) },
@@ -851,7 +884,7 @@ fun GalleryDetailScreen(
     }
 
     // 视频导出确认对话框
-    if (showVideoExportConfirmDialog) {
+    if (showVideoExportConfirmDialog && !isCurrentPhotoProcessing) {
         AlertDialog(
             onDismissRequest = {
                 showVideoExportConfirmDialog = false
@@ -972,7 +1005,7 @@ fun GalleryDetailScreen(
     }
 
     // 照片信息对话框
-    if (showInfoDialog && currentPhoto != null) {
+    if (showInfoDialog && currentPhoto != null && !isCurrentPhotoProcessing) {
         val infoPhoto = currentPhoto.relatedPhoto ?: currentPhoto
         val infoMetadata = infoPhoto.metadata ?: currentPhoto.metadata
         AlertDialog(
@@ -1022,7 +1055,7 @@ fun GalleryDetailScreen(
     }
 
     // AI 评分 BottomSheet
-    if (showAiScoreSheet && currentPhoto != null && currentPhoto.isImage) {
+    if (showAiScoreSheet && currentPhoto != null && currentPhoto.isImage && !isCurrentPhotoProcessing) {
         AiScoreBottomSheet(
             photo = currentPhoto,
             viewModel = viewModel,
@@ -1046,7 +1079,7 @@ fun GalleryDetailScreen(
     }
 
     // 更多 BottomSheet
-    if (showMoreSheet && currentPhoto != null) {
+    if (showMoreSheet && currentPhoto != null && !isCurrentPhotoProcessing) {
         val moreSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val moreActions = buildList {
             if (currentPhoto.isImage && (viewModel.selectedTab == GalleryTab.PHOTON || currentPhoto.relatedPhoto != null)) {

@@ -19,6 +19,7 @@ import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.ProcessingPhoto
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
@@ -156,6 +157,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 照片列表
     private val _photos = MutableStateFlow<List<MediaData>>(emptyList())
     val photos = _photos.asStateFlow()
+    private val _processingPhotos = MutableStateFlow<Map<String, ProcessingPhoto>>(
+        GalleryManager.processingPhotos.value
+    )
+    val processingPhotos = _processingPhotos.asStateFlow()
     private val _systemPhotos = MutableStateFlow<List<MediaData>>(emptyList())
     val systemPhotos = _systemPhotos.asStateFlow()
     val currentPhotos = combine(photos, systemPhotos, snapshotFlow { selectedTab }) { p, s, tab ->
@@ -811,6 +816,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         refreshLatestPhoto()
         viewModelScope.launch {
+            GalleryManager.processingPhotos.collect { pending ->
+                val finishedIds = _processingPhotos.value.keys - pending.keys
+                finishedIds.forEach { id ->
+                    invalidatePreviewCache(id)
+                    photoRefreshKeys[id] = System.currentTimeMillis()
+                    if (currentPhotoMetadataId == id) currentPhotoMetadataId = null
+                }
+                mergeProcessingPhotos()
+                if (finishedIds.isNotEmpty()) {
+                    loadPhotos()
+                    currentPhotos.first { selectedTab != GalleryTab.PHOTON || it == _photos.value }
+                }
+                // Keep the preview visible until the same ID has its final file and metadata.
+                _processingPhotos.update { (it - finishedIds) + GalleryManager.processingPhotos.value }
+                if (finishedIds.isNotEmpty()) loadCurrentPhotoMetadata()
+            }
+        }
+        viewModelScope.launch {
             loadPhotos()
         }
 
@@ -1002,8 +1025,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 } ?: fresh
             }
+            val currentId = getCurrentPhoto()?.id
             _photos.value = mergedList
-            updateRawPhotoStates(mergedList)
+            mergeProcessingPhotos(currentId)
+            updateRawPhotoStates(_photos.value)
             photonOffset = mergedList.size
             hasMorePhotonPhotos = false
             _latestPhoto.value = _photos.value.firstOrNull()
@@ -1013,6 +1038,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } finally {
             _isLoading.value = false
             _isPhotonLoadingMore.value = false
+        }
+    }
+
+    private fun mergeProcessingPhotos(currentId: String? = getCurrentPhoto()?.id) {
+        _processingPhotos.update { it + GalleryManager.processingPhotos.value }
+        _photos.value = (_photos.value.associateBy { it.id } +
+            GalleryManager.processingPhotos.value.mapValues { it.value.photo })
+            .values.sortedByDescending { it.dateAdded }
+        _latestPhoto.value = _photos.value.firstOrNull()
+        if (selectedTab == GalleryTab.PHOTON && currentId != null) {
+            _photos.value.indexOfFirst { it.id == currentId }.takeIf { it >= 0 }?.let {
+                currentPhotoIndex = it
+            }
         }
     }
 
@@ -1296,6 +1334,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun loadCurrentPhotoMetadata() {
         val photo = getCurrentPhoto() ?: return
+        processingPhotos.value[photo.id]?.let { pending ->
+            applyMetadataToEditState(pending.photo.metadata)
+            // The complete metadata will be loaded after processing finishes.
+            currentPhotoMetadataId = null
+            return
+        }
 
         // Photon 列表只携带轻量 metadata；只有 currentMediaMetadata 才代表详情所需完整 metadata 已加载。
         if (!isEditing && currentPhotoMetadataId == photo.id && currentMediaMetadata != null) {
@@ -1536,11 +1580,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 全选/取消全选
      */
     fun toggleSelectAll() {
-        if (selectedPhotos.size == _photos.value.size) {
+        val selectable = _photos.value.filterNot { it.id in processingPhotos.value }
+        if (selectedPhotos.size == selectable.size) {
             selectedPhotos.clear()
         } else {
             selectedPhotos.clear()
-            selectedPhotos.addAll(_photos.value)
+            selectedPhotos.addAll(selectable)
         }
     }
 
@@ -1548,7 +1593,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置当前查看的照片索引
      */
     fun setCurrentPhoto(index: Int) {
-        currentPhotoIndex = index.coerceIn(0, (currentPhotos.value.size - 1).coerceAtLeast(0))
+        val count = if (selectedTab == GalleryTab.PHOTON) _photos.value.size else currentPhotos.value.size
+        currentPhotoIndex = index.coerceIn(0, (count - 1).coerceAtLeast(0))
         loadCurrentPhotoMetadata()
     }
 
@@ -1556,6 +1602,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 根据 ID 设置当前查看的照片
      */
     fun setCurrentPhotoById(id: String) {
+        if (id in GalleryManager.processingPhotos.value) {
+            selectedTab = GalleryTab.PHOTON
+            _processingPhotos.value = _processingPhotos.value + GalleryManager.processingPhotos.value
+            mergeProcessingPhotos()
+            currentPhotoIndex = _photos.value.indexOfFirst { it.id == id }
+            return
+        }
         val index = currentPhotos.value.indexOfFirst { it.id == id }
         if (index != -1) {
             setCurrentPhoto(index)
@@ -1572,7 +1625,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 获取当前照片
      */
     fun getCurrentPhoto(): MediaData? {
-        return currentPhotos.value.getOrNull(currentPhotoIndex)
+        return (if (selectedTab == GalleryTab.PHOTON) _photos.value else currentPhotos.value)
+            .getOrNull(currentPhotoIndex)
     }
 
     /**
@@ -2188,7 +2242,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             setCurrentPhoto(index)
             val requestedPhoto = getCurrentPhoto()
-            if (requestedPhoto == null) {
+            if (requestedPhoto == null || requestedPhoto.id in processingPhotos.value) {
                 onFailure()
                 return@launch
             }

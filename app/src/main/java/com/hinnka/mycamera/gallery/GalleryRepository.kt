@@ -51,7 +51,7 @@ class GalleryRepository(private val context: Context) {
      * 获取最新的一张照片
      */
     suspend fun getLatestPhoto(): MediaData? = withContext(Dispatchers.IO) {
-        GalleryMediaStore.queryLatestPhoto(context)
+        queryPhotos(limit = 1).firstOrNull()
     }
 
     /**
@@ -208,7 +208,12 @@ class GalleryRepository(private val context: Context) {
      * 查询私有存储中的照片
      */
     private suspend fun queryPhotos(offset: Int = 0, limit: Int = Int.MAX_VALUE): List<MediaData> {
-        return GalleryMediaStore.queryPhotos(context, offset, limit)
+        val stored = GalleryMediaStore.queryPhotos(
+            context, 0, (offset.toLong() + limit).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        )
+        return (stored.associateBy { it.id } +
+            GalleryManager.processingPhotos.value.mapValues { it.value.photo })
+            .values.sortedByDescending { it.dateAdded }.drop(offset).take(limit)
     }
 
     private suspend fun querySystemImages(offset: Int = 0, limit: Int? = null): List<MediaData> {

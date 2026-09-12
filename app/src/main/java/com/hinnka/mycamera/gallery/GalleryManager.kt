@@ -81,6 +81,9 @@ import com.hinnka.mycamera.utils.SuperResolutionDngWriter
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.firstOrNull
@@ -376,6 +379,45 @@ object GalleryManager {
     val photoThumbnailUpdatedEvents: SharedFlow<String> = _photoThumbnailUpdatedEvents.asSharedFlow()
     private val _preparedPhotoThumbnailEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val preparedPhotoThumbnailEvents: SharedFlow<String> = _preparedPhotoThumbnailEvents.asSharedFlow()
+    private val _processingPhotos = MutableStateFlow<Map<String, ProcessingPhoto>>(emptyMap())
+    val processingPhotos = _processingPhotos.asStateFlow()
+
+    fun registerProcessingPhoto(context: Context, photoId: String, metadata: MediaMetadata, thumbnail: Bitmap?) {
+        val photo = MediaData(
+            id = photoId,
+            uri = Uri.fromFile(getPhotoFile(context, photoId)),
+            thumbnailUri = Uri.fromFile(getThumbnailFile(context, photoId)),
+            displayName = photoId,
+            dateAdded = requireNotNull(metadata.dateTaken),
+            size = 0L,
+            width = metadata.width,
+            height = metadata.height,
+            metadata = metadata,
+        )
+        _processingPhotos.update { it + (photoId to ProcessingPhoto(photo, thumbnail)) }
+        PLog.d(TAG, "Registered processing photo: $photoId")
+    }
+
+    fun updateProcessingThumbnail(photoId: String, thumbnail: Bitmap?) {
+        _processingPhotos.update { current ->
+            val pending = current[photoId] ?: return@update current
+            current + (photoId to pending.copy(thumbnail = thumbnail))
+        }
+    }
+
+    suspend fun finishProcessingPhoto(context: Context, photoId: String, saved: Boolean) {
+        if (photoId !in _processingPhotos.value) return
+        withContext(Dispatchers.IO) {
+            // Remove only an unsuccessful capture's empty draft; never discard saved image/RAW data.
+            if (!saved && getOriginalImageFile(context, photoId) == null && getDngFile(context, photoId).length() == 0L) {
+                GalleryMediaStore.deleteMedia(context, photoId)
+                getPhotoDir(context, photoId).deleteRecursively()
+            }
+        }
+        _processingPhotos.update { it - photoId }
+        PLog.d(TAG, "Finished processing photo: $photoId, saved=$saved")
+        notifyPhotoLibraryChanged()
+    }
     private val hdrWorkLock = Any()
     private val hdrWorkCounts = ConcurrentHashMap<String, Int>()
 

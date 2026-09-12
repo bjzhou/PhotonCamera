@@ -64,6 +64,11 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.StaggeredGridLayoutManager
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.MediaData
+import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.ProcessingPhoto
+import com.hinnka.mycamera.ui.components.ProcessingPhotoShimmerView
+import coil.load
+import coil.dispose
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.GalleryBatchOperation
@@ -131,6 +136,13 @@ fun GalleryScreen(
     modifier: Modifier = Modifier
 ) {
     val photos by viewModel.currentPhotos.collectAsState()
+    val processingPhotos by viewModel.processingPhotos.collectAsState()
+    var previousProcessingIds by remember { mutableStateOf(processingPhotos.keys.toSet()) }
+    LaunchedEffect(processingPhotos.keys) {
+        (previousProcessingIds - processingPhotos.keys).forEach(viewModel::invalidatePreviewCache)
+        previousProcessingIds = processingPhotos.keys.toSet()
+        viewModel.selectedPhotos.filter { it.id in processingPhotos }.forEach(viewModel::togglePhotoSelection)
+    }
     val context = LocalContext.current
     val isLoading by viewModel.isLoading.collectAsState()
     val isSystemLoadingMore by viewModel.isSystemLoadingMore.collectAsState()
@@ -332,7 +344,16 @@ fun GalleryScreen(
                     actions = {
                         if (isSelectionMode) {
                             IconButton(
-                                onClick = { viewModel.toggleSelectAll() },
+                                onClick = {
+                                    val selectable = photos.filterNot { it.id in processingPhotos }
+                                    val allSelected = selectable.all { photo -> selectedPhotos.any { it.id == photo.id } }
+                                    if (allSelected) {
+                                        selectedPhotos.toList().forEach(viewModel::togglePhotoSelection)
+                                    } else {
+                                        selectable.filter { photo -> selectedPhotos.none { it.id == photo.id } }
+                                            .forEach(viewModel::togglePhotoSelection)
+                                    }
+                                },
                                 enabled = !isBatchOperationRunning
                             ) {
                                 Icon(
@@ -663,6 +684,7 @@ fun GalleryScreen(
                     selectedTab = selectedTab,
                     viewModel = viewModel,
                     selectedPhotos = selectedPhotos,
+                    processingPhotos = processingPhotos,
                     isSelectionMode = isSelectionMode,
                     isLoadingMore = (selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) ||
                             (selectedTab == GalleryTab.PHOTON && isPhotonLoadingMore),
@@ -796,6 +818,7 @@ private fun GalleryRecyclerGrid(
     selectedTab: GalleryTab,
     viewModel: GalleryViewModel,
     selectedPhotos: List<MediaData>,
+    processingPhotos: Map<String, ProcessingPhoto>,
     isSelectionMode: Boolean,
     isLoadingMore: Boolean,
     onPhotoClick: (GalleryTab, Int) -> Unit,
@@ -901,6 +924,7 @@ private fun GalleryRecyclerGrid(
                     selectedTab = selectedTab,
                     viewModel = viewModel,
                     selectedPhotoIds = selectedPhotoIds,
+                    processingPhotos = processingPhotos,
                     isSelectionMode = isSelectionMode,
                     isLoadingMore = isLoadingMore,
                     isLandscape = OrientationObserver.isLandscape,
@@ -1121,6 +1145,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
     private var selectedTab: GalleryTab = GalleryTab.PHOTON
     private var viewModel: GalleryViewModel? = null
     private var selectedPhotoIds: Set<String> = emptySet()
+    private var processingPhotos: Map<String, ProcessingPhoto> = emptyMap()
     private var isSelectionMode: Boolean = false
     private var isLoadingMore: Boolean = false
     private var isLandscape: Boolean = false
@@ -1137,6 +1162,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         selectedTab: GalleryTab,
         viewModel: GalleryViewModel,
         selectedPhotoIds: Set<String>,
+        processingPhotos: Map<String, ProcessingPhoto>,
         isSelectionMode: Boolean,
         isLoadingMore: Boolean,
         isLandscape: Boolean,
@@ -1147,6 +1173,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         val oldEntries = this.entries
         val oldLoadingMore = this.isLoadingMore
         val oldSelectedPhotoIds = this.selectedPhotoIds
+        val oldProcessingPhotos = this.processingPhotos
         val oldIsSelectionMode = this.isSelectionMode
         val oldIsLandscape = this.isLandscape
         val oldRotationDegrees = this.rotationDegrees
@@ -1155,6 +1182,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         this.selectedTab = selectedTab
         this.viewModel = viewModel
         this.selectedPhotoIds = selectedPhotoIds
+        this.processingPhotos = processingPhotos
         this.isSelectionMode = isSelectionMode
         this.isLoadingMore = isLoadingMore
         this.isLandscape = isLandscape
@@ -1196,7 +1224,8 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                         val id = oldEntry.photo.id
                         val wasSelected = id in oldSelectedPhotoIds
                         val isSelected = id in selectedPhotoIds
-                        wasSelected == isSelected && oldEntry.photo.dateAdded == newEntry.photo.dateAdded
+                        wasSelected == isSelected && oldEntry.photo == newEntry.photo &&
+                            oldProcessingPhotos[id] == processingPhotos[id]
                     }
 
                     else -> false
@@ -1264,6 +1293,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                 }
                 (holder as PhotoHolder).bind(
                     photo = photo,
+                    processingPhoto = processingPhotos[photo.id],
                     viewModel = model,
                     isSelected = photo.id in selectedPhotoIds,
                     isSelectionMode = isSelectionMode,
@@ -1272,17 +1302,19 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                     scope = scope,
                     onClick = {
                         if (isSelectionMode) {
-                            model.togglePhotoSelection(photo)
+                            if (photo.id !in processingPhotos) model.togglePhotoSelection(photo)
                         } else {
                             model.setCurrentPhoto(entry.index)
                             onPhotoClick(selectedTab, entry.index)
                         }
                     },
                     onLongClick = {
-                        if (!isSelectionMode) {
-                            model.enterSelectionMode()
+                        if (photo.id !in processingPhotos) {
+                            if (!isSelectionMode) {
+                                model.enterSelectionMode()
+                            }
+                            model.togglePhotoSelection(photo)
                         }
-                        model.togglePhotoSelection(photo)
                     }
                 )
             }
@@ -1306,9 +1338,11 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         private val view: GalleryPhotoItemView
     ) : RecyclerView.ViewHolder(view) {
         private var job: Job? = null
+        private var processingPhotoId: String? = null
 
         fun bind(
             photo: MediaData,
+            processingPhoto: ProcessingPhoto?,
             viewModel: GalleryViewModel,
             isSelected: Boolean,
             isSelectionMode: Boolean,
@@ -1319,25 +1353,34 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
             onLongClick: () -> Unit
         ) {
             job?.cancel()
+            if (processingPhoto == null && processingPhotoId == photo.id) {
+                viewModel.invalidatePreviewCache(photo.id)
+            }
+            processingPhotoId = processingPhoto?.photo?.id
             view.bindStatic(
                 photo = photo,
                 viewModel = viewModel,
                 isSelected = isSelected,
-                isSelectionMode = isSelectionMode,
+                isSelectionMode = isSelectionMode && processingPhoto == null,
                 isLandscape = isLandscape,
                 rotationDegrees = rotationDegrees,
+                isProcessing = processingPhoto != null,
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            job = scope.launch {
-                val bitmap = viewModel.getGridThumbnailBitmap(photo)
-                view.bindThumbnail(photo.id, bitmap)
+            view.bindProcessingPreview(processingPhoto)
+            if (processingPhoto == null) {
+                job = scope.launch {
+                    val bitmap = viewModel.getGridThumbnailBitmap(photo)
+                    view.bindThumbnail(photo.id, bitmap)
+                }
             }
         }
 
         fun recycle() {
             job?.cancel()
             job = null
+            processingPhotoId = null
             view.clearThumbnail()
         }
     }
@@ -1370,6 +1413,7 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
     private val relatedBadge: View
     private var aspectRatio: Float = 1f
     private var boundPhotoId: String? = null
+    private val processingShimmer = ProcessingPhotoShimmerView(context)
 
     init {
         LayoutInflater.from(context).inflate(R.layout.item_gallery_photo, this, true)
@@ -1390,6 +1434,10 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         rawBadge = findViewById(R.id.gallery_photo_raw_badge)
         importedBadge = findViewById(R.id.gallery_photo_imported_badge)
         relatedBadge = findViewById(R.id.gallery_photo_related_badge)
+        contentLayer.addView(processingShimmer, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+        processingShimmer.visibility = GONE
         clipChildren = false
         clipToPadding = false
     }
@@ -1401,11 +1449,13 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         isSelectionMode: Boolean,
         isLandscape: Boolean,
         rotationDegrees: Float,
+        isProcessing: Boolean,
         onClick: () -> Unit,
         onLongClick: () -> Unit
     ) {
         boundPhotoId = photo.id
         aspectRatio = photo.galleryAspectRatio(isLandscape)
+        imageView.dispose()
         imageView.setImageDrawable(null)
         selectionOverlay.visibility = if (isSelectionMode && isSelected) VISIBLE else GONE
         selectionIcon.visibility = if (isSelectionMode) VISIBLE else GONE
@@ -1417,7 +1467,7 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         videoDuration.text = photo.getFormattedDuration()
         motionIcon.visibility = if (photo.isMotionPhoto) VISIBLE else GONE
         burstIcon.visibility = if (photo.isBurstPhoto) VISIBLE else GONE
-        val isRawPhoto = when (viewModel.selectedTab) {
+        val isRawPhoto = !isProcessing && when (viewModel.selectedTab) {
             GalleryTab.PHOTON -> viewModel.isRawInGallery(photo.id)
             GalleryTab.SYSTEM -> photo.isSystemRawImage()
         }
@@ -1455,8 +1505,24 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         imageView.setImageBitmap(bitmap)
     }
 
+    fun bindProcessingPreview(processingPhoto: ProcessingPhoto?) {
+        processingShimmer.visibility = if (processingPhoto == null) GONE else VISIBLE
+        processingShimmer.contentDescription = if (processingPhoto == null) null
+            else context.getString(R.string.gallery_photo_processing)
+        if (processingPhoto == null) return
+        val thumbnail = processingPhoto.thumbnail?.takeUnless { it.isRecycled }
+        if (thumbnail != null) {
+            bindThumbnail(processingPhoto.photo.id, thumbnail)
+        } else {
+            imageView.load(processingPhoto.photo.thumbnailUri)
+        }
+        processingShimmer.invalidate()
+    }
+
     fun clearThumbnail() {
         boundPhotoId = null
+        processingShimmer.visibility = GONE
+        imageView.dispose()
         imageView.setImageDrawable(null)
     }
 
