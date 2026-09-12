@@ -137,6 +137,19 @@ private data class CaptureSettingsSnapshot(
     val multipleExposure: Boolean,
     @Volatile var thumbnail: Bitmap? = null,
     var livePhotoVideo: CompletableDeferred<Pair<File, Long>?>? = null,
+    var captureId: Long = 0L,
+    @Volatile var captureCompleted: Boolean = false,
+    @Volatile var processingFinished: Boolean = false,
+    @Volatile var savedPhotoId: String? = null,
+)
+
+/** The shutter preview remains visible until the matching final thumbnail has loaded. */
+data class CapturedThumbnail(
+    val captureId: Long,
+    val bitmap: Bitmap?,
+    val savedPhotoId: String?,
+    val processingFinished: Boolean,
+    val finalThumbnailLoaded: Boolean = false,
 )
 
 data class MultipleExposureSessionState(
@@ -1804,6 +1817,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var hasAppliedDefaultFocalLength = false
 
     val captureProcessingState = CaptureProcessingQueue.state
+    private val _capturedThumbnail = MutableStateFlow<CapturedThumbnail?>(null)
+    val capturedThumbnail = _capturedThumbnail.asStateFlow()
     private val pendingCaptureSettings = java.util.concurrent.ConcurrentHashMap<Long, CaptureSettingsSnapshot>()
     private var multipleExposureMetadata: MediaMetadata? = null
     var multipleExposureState by mutableStateOf(MultipleExposureSessionState())
@@ -1938,6 +1953,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         cameraController.onPhotoCaptureCompleted = { id, captureInfo ->
             pendingCaptureSettings[id]?.let { settings ->
+                settings.captureCompleted = true
+                publishCapturedThumbnail(settings)
                 viewModelScope.launch {
                     _captureCompletedEvent.emit(
                         buildPhotoMetadata(
@@ -1976,11 +1993,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         withContext(Dispatchers.IO) {
                             shotSettings.livePhotoVideo?.await()?.first?.delete()
                         }
+                        shotSettings.processingFinished = true
+                        publishCapturedThumbnail(shotSettings)
                     }
                 }
             }
         }
-        cameraController.onPhotoCaptureFailed = { id -> pendingCaptureSettings.remove(id); Unit }
+        cameraController.onPhotoCaptureFailed = { id ->
+            pendingCaptureSettings.remove(id)?.let { settings ->
+                settings.processingFinished = true
+                publishCapturedThumbnail(settings)
+            }
+        }
         cameraController.onVideoSaved = { uri ->
             if (uri != null) {
                 viewModelScope.launch {
@@ -3043,13 +3067,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun finishMultipleExposureSession() {
         if (!multipleExposureState.canFinish) return
+        val captureId = _capturedThumbnail.value?.captureId
         multipleExposureState = multipleExposureState.copy(isProcessing = true)
         CaptureProcessingQueue.enqueue(emptyList()) {
-            finishMultipleExposureSessionNow()
+            finishMultipleExposureSessionNow { photoId ->
+                _capturedThumbnail.update { current ->
+                    if (current?.captureId == captureId) {
+                        current?.copy(savedPhotoId = photoId, processingFinished = true)
+                    } else current
+                }
+            }
         }
     }
 
-    private suspend fun finishMultipleExposureSessionNow() {
+    private suspend fun finishMultipleExposureSessionNow(onSaved: (String) -> Unit) {
         val sessionId = multipleExposureState.sessionId ?: return
         val baseMetadata = multipleExposureMetadata ?: return
         withContext(Dispatchers.IO) {
@@ -3097,6 +3128,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 composedBitmap.recycle()
                 cancelMultipleExposureSession()
+                onSaved(photoId)
                 _imageSavedEvent.emit(photoId)
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to finish multiple exposure session", e)
@@ -3182,7 +3214,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 capturedCount = frameIndex
             )
             if (frameIndex >= multipleExposureState.targetCount) {
-                finishMultipleExposureSessionNow()
+                finishMultipleExposureSessionNow { markCapturedThumbnailSaved(settings, it) }
             } else {
                 refreshMultipleExposurePreview(sessionId).join()
             }
@@ -3267,8 +3299,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun submitPhotoCapture() {
         val settings = snapshotCaptureSettings()
         cameraController.capture { id ->
+            settings.captureId = id
             pendingCaptureSettings[id] = settings
-            generateThumbnail { settings.thumbnail = it }
+            generateThumbnail {
+                settings.thumbnail = it
+                publishCapturedThumbnail(settings)
+            }
             if (settings.state.useLivePhoto && !cameraController.usesTorchForLivePhotoCapture()) {
                 cameraController.setCapturingLivePhoto(true)
                 livePhotoIndicatorJob?.cancel()
@@ -3277,6 +3313,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     cameraController.setCapturingLivePhoto(false)
                 }
             }
+        }
+    }
+
+    private fun publishCapturedThumbnail(settings: CaptureSettingsSnapshot) {
+        if (!settings.captureCompleted) return
+        _capturedThumbnail.update { current ->
+            if (current != null && (current.captureId > settings.captureId ||
+                    (current.captureId == settings.captureId && current.finalThumbnailLoaded))
+            ) {
+                current
+            } else {
+                CapturedThumbnail(
+                    captureId = settings.captureId,
+                    bitmap = settings.thumbnail.takeUnless {
+                        settings.processingFinished && settings.savedPhotoId == null && !settings.multipleExposure
+                    },
+                    savedPhotoId = settings.savedPhotoId,
+                    processingFinished = settings.processingFinished,
+                )
+            }
+        }
+    }
+
+    private fun markCapturedThumbnailSaved(settings: CaptureSettingsSnapshot, photoId: String) {
+        settings.savedPhotoId = photoId
+        publishCapturedThumbnail(settings)
+    }
+
+    fun acknowledgeCapturedThumbnail(captureId: Long) {
+        _capturedThumbnail.update { current ->
+            if (current?.captureId == captureId) {
+                current.copy(bitmap = null, finalThumbnailLoaded = true)
+            } else current
         }
     }
 
@@ -4327,12 +4396,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 从相机捕获预览帧并生成所有 LUT 的预览图
      */
     fun generateThumbnail(onGenerated: ((Bitmap?) -> Unit)? = null) {
-        if (isGeneratingPreviews) {
+        val isGeneralPreviewRequest = onGenerated == null
+        if (isGeneralPreviewRequest && isGeneratingPreviews) {
             PLog.d(TAG, "Already generating previews, skipping")
             return
         }
 
-        isGeneratingPreviews = true
+        if (isGeneralPreviewRequest) isGeneratingPreviews = true
 
         val glView = glSurfaceView
         if (glView != null) {
@@ -4343,12 +4413,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 previewThumbnail = thumbnail
                 onGenerated?.invoke(thumbnail)
-                isGeneratingPreviews = false
+                if (isGeneralPreviewRequest) isGeneratingPreviews = false
             }
         } else {
             previewThumbnail = null
             onGenerated?.invoke(null)
-            isGeneratingPreviews = false
+            if (isGeneralPreviewRequest) isGeneratingPreviews = false
         }
     }
 
@@ -5656,6 +5726,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+            markCapturedThumbnailSaved(settings, photoId)
             _imageSavedEvent.emit(photoId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
@@ -6087,6 +6158,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+            markCapturedThumbnailSaved(settings, photoId)
             _imageSavedEvent.emit(photoId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
@@ -6179,6 +6251,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             PLog.d(TAG, "Image saved: $photoId, HDR mode: $captureMode")
+            markCapturedThumbnailSaved(settings, photoId)
             _imageSavedEvent.emit(photoId)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process HDR bracket", e)

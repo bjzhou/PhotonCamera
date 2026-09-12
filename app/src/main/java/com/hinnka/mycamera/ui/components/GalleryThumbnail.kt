@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -9,9 +10,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -19,6 +25,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import com.hinnka.mycamera.viewmodel.CapturedThumbnail
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
@@ -30,12 +37,19 @@ fun GalleryThumbnail(
     latestPhoto: MediaData?,
     viewModel: GalleryViewModel,
     onClick: () -> Unit,
+    capturedThumbnail: CapturedThumbnail? = null,
+    onCapturedThumbnailLoaded: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val refreshKey = latestPhoto?.id?.let { viewModel.getPreparedPhotoThumbnailRefreshKey(it) } ?: 0L
     val buttonShape = RoundedCornerShape(10.dp)
     val thumbnailShape = RoundedCornerShape(7.dp)
+    var finalThumbnailLoaded by remember(capturedThumbnail?.captureId) { mutableStateOf(false) }
+    val finalCaptureId = capturedThumbnail?.takeIf {
+        it.processingFinished && it.savedPhotoId == latestPhoto?.id
+    }?.captureId
+    val capturePreview = capturedThumbnail?.bitmap?.takeUnless { finalThumbnailLoaded || it.isRecycled }
 
     PhysicalButton(
         modifier = modifier
@@ -49,10 +63,16 @@ fun GalleryThumbnail(
                 model = ImageRequest.Builder(context)
                     .data(latestPhoto.thumbnailUri)
                     .memoryCacheKey(
-                        "gallery_thumbnail_${latestPhoto.id}_${latestPhoto.thumbnailUri}_${refreshKey}"
+                        "gallery_thumbnail_${latestPhoto.id}_${latestPhoto.thumbnailUri}_${refreshKey}_${finalCaptureId}"
                     )
-                    .crossfade(true)
+                    .crossfade(capturePreview == null)
                     .build(),
+                onSuccess = {
+                    if (finalCaptureId != null) {
+                        finalThumbnailLoaded = true
+                        onCapturedThumbnailLoaded(finalCaptureId)
+                    }
+                },
                 contentDescription = "Gallery",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -85,6 +105,16 @@ fun GalleryThumbnail(
                 contentDescription = "Gallery",
                 tint = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.size(24.dp)
+            )
+        }
+        // Keep the shutter preview above the file-backed image until this same capture's
+        // final file has decoded. Older saves and loading placeholders cannot replace it.
+        if (capturePreview != null) {
+            Image(
+                bitmap = capturePreview.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
             )
         }
     }

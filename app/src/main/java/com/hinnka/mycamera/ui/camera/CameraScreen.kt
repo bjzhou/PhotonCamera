@@ -1967,6 +1967,7 @@ private fun Controls(
     val captureButtonColor by viewModel.captureButtonColor.collectAsState()
     val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
     val captureProcessingState by viewModel.captureProcessingState.collectAsState()
+    val capturedThumbnail by viewModel.capturedThumbnail.collectAsState()
 
     Box(
         modifier = modifier,
@@ -1994,13 +1995,23 @@ private fun Controls(
                     GalleryThumbnail(
                         latestPhoto = latestPhoto,
                         viewModel = galleryViewModel,
+                        capturedThumbnail = capturedThumbnail,
+                        onCapturedThumbnailLoaded = viewModel::acknowledgeCapturedThumbnail,
                         onClick = onGalleryClick
                     )
-                    GalleryProcessingOverlay(
-                        pendingCount = captureProcessingState.pendingCount,
-                        completedCount = captureProcessingState.completedCount,
-                        modifier = Modifier.matchParentSize()
-                    )
+                    key(capturedThumbnail?.captureId) {
+                        GalleryProcessingOverlay(
+                            pendingCount = if (capturedThumbnail == null || capturedThumbnail?.bitmap != null ||
+                                capturedThumbnail?.finalThumbnailLoaded == true
+                            ) {
+                                captureProcessingState.pendingCount
+                            } else {
+                                0
+                            },
+                            completedCount = captureProcessingState.completedCount,
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
                 }
 
                 CaptureButton(
