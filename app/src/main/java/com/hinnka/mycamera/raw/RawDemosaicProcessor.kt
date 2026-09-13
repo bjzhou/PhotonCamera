@@ -34,6 +34,7 @@ import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackResult
+import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -956,6 +957,8 @@ class RawDemosaicProcessor {
             PLog.e(TAG, "MGC $mode denoise kernels are unavailable")
             return@withContext null
         }
+
+        DngCaptureDiagnostics.recordCurrentGl()
 
         val hasLensShading = hasValidLensShadingMap(metadata)
         val isBayerInput = samplesPerPixel == 1
@@ -2812,6 +2815,7 @@ class RawDemosaicProcessor {
                 PLog.e(TAG, "Failed to initialize processor")
                 return@withContext null
             }
+            DngCaptureDiagnostics.recordCurrentGl()
             if (rawRenderTiles.isNotEmpty()) {
                 // A singleton renderer may still own size-cached intermediates from the previous
                 // image. They are not part of this tile pool and must not overlap the bounded RAW

@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.utils
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -80,6 +81,42 @@ class SuperResolutionDngWriterIfdTest {
         assertTrue(ifd0.getValue(TAG_PROFILE_GAIN_TABLE_MAP_2).valueOrOffset > 8)
     }
 
+    @Test
+    fun `large odd length MakerNote survives Exif serialization without shifting image data`() {
+        val payload = ByteArray(131_073) { (it * 37).toByte() }
+        val lensModel = "Photon camera\u0000".toByteArray(Charsets.US_ASCII)
+        val primaryEntries = listOf(
+            tiffEntry(TAG_STRIP_OFFSETS, TYPE_LONG, 1, uintBytes(0)),
+            tiffEntry(TAG_EXIF_IFD_POINTER, TYPE_LONG, 1, uintBytes(0)),
+            tiffEntry(TAG_MAKER_NOTE_SAFETY, TYPE_SHORT, 1, byteArrayOf(1, 0)),
+        ).sortedBy(::entryTag)
+        val exifEntries = listOf(
+            tiffEntry(TAG_MAKER_NOTE, TYPE_UNDEFINED, payload.size.toLong(), payload),
+            tiffEntry(TAG_LENS_MODEL, TYPE_ASCII, lensModel.size.toLong(), lensModel),
+        ).sortedBy(::entryTag)
+
+        val header = buildHeader(primaryEntries, exifEntries)
+        val primaryIfd = readIfd(header, 8)
+        val exifIfd = readIfd(header, primaryIfd.getValue(TAG_EXIF_IFD_POINTER).valueOrOffset)
+        val note = exifIfd.getValue(TAG_MAKER_NOTE)
+        val safety = primaryIfd.getValue(TAG_MAKER_NOTE_SAFETY)
+        val lens = exifIfd.getValue(TAG_LENS_MODEL)
+
+        assertFalse(primaryIfd.containsKey(TAG_MAKER_NOTE))
+        assertFalse(exifIfd.containsKey(TAG_MAKER_NOTE_SAFETY))
+        assertEquals(TYPE_UNDEFINED, note.type)
+        assertEquals(payload.size.toLong(), note.count)
+        assertArrayEquals(payload, header.copyOfRange(note.valueOrOffset, note.valueOrOffset + payload.size))
+        assertEquals(TYPE_SHORT, safety.type)
+        assertEquals(1L, safety.count)
+        assertEquals(1, safety.valueOrOffset)
+        assertEquals(0, lens.valueOrOffset % 2)
+        assertTrue(lens.valueOrOffset >= note.valueOrOffset + payload.size)
+        assertArrayEquals(lensModel, header.copyOfRange(lens.valueOrOffset, lens.valueOrOffset + lensModel.size))
+        assertEquals(header.size, primaryIfd.getValue(TAG_STRIP_OFFSETS).valueOrOffset)
+        assertEquals(0, header.size % 2)
+    }
+
     private fun buildHeader(primaryEntries: List<Any>, exifEntries: List<Any>): ByteArray {
         val method = SuperResolutionDngWriter::class.java.declaredMethods.single {
             it.name == "buildHeader" && it.parameterTypes.size == 2
@@ -137,6 +174,7 @@ class SuperResolutionDngWriterIfdTest {
     private companion object {
         const val TYPE_ASCII = 2
         const val TYPE_BYTE = 1
+        const val TYPE_SHORT = 3
         const val TYPE_LONG = 4
         const val TYPE_RATIONAL = 5
         const val TYPE_UNDEFINED = 7
@@ -148,6 +186,8 @@ class SuperResolutionDngWriterIfdTest {
         const val TAG_EXIF_IFD_POINTER = 34665
         const val TAG_DATETIME_ORIGINAL = 36867
         const val TAG_FOCAL_LENGTH = 37386
+        const val TAG_MAKER_NOTE = 0x927C
+        const val TAG_MAKER_NOTE_SAFETY = 0xC635
         const val TAG_USER_COMMENT = 37510
         const val TAG_LENS_MODEL = 42036
         const val TAG_PROFILE_GAIN_TABLE_MAP_2 = 52544

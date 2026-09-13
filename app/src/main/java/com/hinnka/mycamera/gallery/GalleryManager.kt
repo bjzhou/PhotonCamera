@@ -71,6 +71,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.utils.BitmapUtils
+import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DngBlackLevelPatcher
 import com.hinnka.mycamera.utils.DngCfaPatternPatcher
 import com.hinnka.mycamera.utils.DngWhiteLevelPatcher
@@ -2161,9 +2162,13 @@ object GalleryManager {
         captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
         capturePortraitMask: PortraitMaskSnapshot? = null,
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO + DngCaptureDiagnostics.context(photoId)) {
         var rawBufferToRelease: ByteBuffer? = null
         var preparedDemosaicSourceToRelease: GpuDemosaicedRawSource? = null
+        DngCaptureDiagnostics.put("pipeline", "SINGLE_FRAME_RAW")
+        DngCaptureDiagnostics.put("capture.sourceSize", "${image.width}x${image.height}")
+        DngCaptureDiagnostics.put("capture.rotation", rotation)
+        DngCaptureDiagnostics.put("capture.frameCount", 1)
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -2181,6 +2186,7 @@ object GalleryManager {
             }
 
             val resolvedCaptureResult = captureResult
+            DngCaptureDiagnostics.put("capture.cameraId", metadata.cameraId)
             if (resolvedCaptureResult == null) {
                 PLog.e(TAG, "saveRawPhoto aborted: captureResult unavailable for $photoId")
                 image.close()
@@ -2313,7 +2319,6 @@ object GalleryManager {
                             blackLevel = sourceRawMetadata.blackLevel,
                             whiteLevel = sourceRawMetadata.whiteLevel.toInt(),
                             valueDomain = RawProcessor.RawBufferValueDomain.SENSOR,
-                            customWriter = true,
                             blackLevelMode = metadata.rawBlackLevelMode,
                             customBlackLevel = metadata.rawCustomBlackLevel,
                             whiteLevelMode = metadata.rawWhiteLevelMode,
@@ -3204,12 +3209,17 @@ object GalleryManager {
         rawMaxHdrFusionEnabled: Boolean = true,
         rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
         rawMaxMergeMethod: MgcMergeMethod = MgcMergeMethod.SPATIAL_BAYER,
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO + DngCaptureDiagnostics.context(photoId)) {
         var stackProcessor: RawDemosaicProcessor? = null
         var gpuSourceToRelease: GpuLinearRgbSource? = null
         var gpuBayerSourceToRelease: GpuBayerSource? = null
         var pendingDngWrite: Deferred<Boolean>? = null
         var releaseStackCpuBuffer: (() -> Unit)? = null
+        DngCaptureDiagnostics.put("pipeline", rawMaxMergeMethod.name)
+        DngCaptureDiagnostics.put("capture.frameCount", images.size)
+        DngCaptureDiagnostics.put("capture.rotation", rotation)
+        DngCaptureDiagnostics.put("capture.hdrFusionEnabled", rawMaxHdrFusionEnabled)
+        DngCaptureDiagnostics.put("capture.requestedOutputScale", superResolutionScale)
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -3225,6 +3235,8 @@ object GalleryManager {
 
             val firstImageWidth = images[0].width
             val firstImageHeight = images[0].height
+            DngCaptureDiagnostics.put("capture.cameraId", metadata.cameraId)
+            DngCaptureDiagnostics.put("capture.sourceSize", "${firstImageWidth}x$firstImageHeight")
 
             val physicalRawCrop = RawProcessor.resolveCameraRawPhysicalCrop(
                 width = firstImageWidth,
@@ -3338,6 +3350,30 @@ object GalleryManager {
             }
             val processor = RawDemosaicProcessor.getInstance()
             stackProcessor = processor
+            DngCaptureDiagnostics.put("merge.outputMode", rawMaxSpatialOutputMode.name)
+            DngCaptureDiagnostics.put("merge.outputScale", rawStackOutputScale)
+            DngCaptureDiagnostics.put("merge.blackLevel", stackBlackLevel.contentToString())
+            DngCaptureDiagnostics.put("merge.whiteLevel", stackWhiteLevel)
+            DngCaptureDiagnostics.put("merge.cfaPattern", stackCfaPattern)
+            DngCaptureDiagnostics.put("merge.noiseProfileId", resolveRawNoiseProfileId(context, metadata))
+            DngCaptureDiagnostics.put("merge.whiteBalance", rawMetadata.whiteBalanceGains.contentToString())
+            effectiveRawStackFrames.forEachIndexed { index, frame ->
+                val key = "frame.$index"
+                DngCaptureDiagnostics.put("$key.sensorTimestampNs", frame.sensorTimestampNs)
+                DngCaptureDiagnostics.put("$key.frameNumber", frame.frameNumber)
+                DngCaptureDiagnostics.put("$key.role", frame.role.name)
+                DngCaptureDiagnostics.put("$key.exposureTimeNs", frame.exposureTimeNs)
+                DngCaptureDiagnostics.put("$key.iso", frame.sensitivityIso)
+                DngCaptureDiagnostics.put("$key.exposureProduct", frame.exposureProduct)
+                DngCaptureDiagnostics.put("$key.desiredExposureProduct", frame.desiredExposureProduct)
+                DngCaptureDiagnostics.put("$key.focusDistanceDiopters", frame.focusDistanceDiopters)
+                DngCaptureDiagnostics.put("$key.rollingShutterSkewNs", frame.rollingShutterSkewNs)
+                DngCaptureDiagnostics.put("$key.format", frame.image.format)
+                DngCaptureDiagnostics.put("$key.rowStride", frame.image.planes.firstOrNull()?.rowStride)
+                DngCaptureDiagnostics.put("$key.pixelStride", frame.image.planes.firstOrNull()?.pixelStride)
+                DngCaptureDiagnostics.put("$key.blackLevel", frame.dynamicBlackLevelByCfaPosition?.contentToString())
+                DngCaptureDiagnostics.put("$key.noiseProfile", frame.channelNoiseProfile?.contentToString())
+            }
             val rawStackResult = processor.runStackingOnGlContext {
                 MultiFrameStacker.processBurstRaw(
                     frames = effectiveRawStackFrames,
@@ -3365,6 +3401,11 @@ object GalleryManager {
             }
 
             val finalStackResult = rawStackResult ?: return@withContext
+            DngCaptureDiagnostics.put("merge.mergedFrameCount", finalStackResult.mergedFrameCount)
+            DngCaptureDiagnostics.put("merge.outputSize", "${finalStackResult.width}x${finalStackResult.height}")
+            DngCaptureDiagnostics.put("merge.tuningSnr", finalStackResult.mgcDenoiseTuningSnr)
+            DngCaptureDiagnostics.put("merge.readNoise", finalStackResult.mgcDenoiseReadNoise?.contentToString())
+            DngCaptureDiagnostics.put("merge.shotNoise", finalStackResult.mgcDenoiseShotNoise?.contentToString())
             gpuSourceToRelease = finalStackResult.gpuLinearRgbSource
             gpuBayerSourceToRelease = finalStackResult.gpuBayerSource
             fun releaseInitialFusedBuffer() {
@@ -3443,6 +3484,10 @@ object GalleryManager {
                 )
                 return@withContext
             }
+            DngCaptureDiagnostics.put("denoise.mode", defaultDenoiseMode.name)
+            DngCaptureDiagnostics.put("denoise.requested", defaultDenoiseRequested)
+            DngCaptureDiagnostics.put("denoise.lumaStrength", configuredRawMaxLumaStrength)
+            DngCaptureDiagnostics.put("denoise.chromaStrength", configuredRawMaxChromaStrength)
             val defaultDenoised = processor.processMgcSpatialGpuLinearRgb(
                 context = context,
                 rawData = finalStackResult.fusedBayerBuffer,
@@ -4235,7 +4280,6 @@ object GalleryManager {
                     } else {
                         RawProcessor.RawBufferValueDomain.SENSOR
                     },
-                    customWriter = true,
                     blackLevelMode = null,
                     customBlackLevel = null,
                     cfaCorrectionMode = metadata.rawCfaCorrectionMode,

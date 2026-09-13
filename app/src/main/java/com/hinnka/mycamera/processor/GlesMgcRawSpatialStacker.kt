@@ -14,6 +14,7 @@ import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
 import com.hinnka.mycamera.raw.RawSceneAERawStats
+import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -9610,6 +9611,7 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     private fun ensureGles3() {
+        DngCaptureDiagnostics.recordCurrentGl()
         val version = GLES30.glGetString(GLES30.GL_VERSION).orEmpty()
         check(version.contains("OpenGL ES 3.")) {
             "MGC Spatial merge requires GLES3, got: $version"

@@ -3,10 +3,8 @@ package com.hinnka.mycamera.utils
 import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
-import android.hardware.camera2.DngCreator
 import android.media.ExifInterface
 import android.util.Log
-import android.util.Size
 import com.hinnka.mycamera.camera.readMetadataOrThrow
 import com.hinnka.mycamera.camera.MalformedCaptureMetadataException
 import com.hinnka.mycamera.camera.AspectRatio
@@ -589,7 +587,6 @@ object RawProcessor {
                 blackLevel = rawMetadata.blackLevel,
                 whiteLevel = rawMetadata.whiteLevel.toInt(),
                 valueDomain = RawBufferValueDomain.SENSOR,
-                customWriter = true,
                 blackLevelMode = blackLevelMode,
                 customBlackLevel = customBlackLevel,
                 whiteLevelMode = whiteLevelMode,
@@ -875,7 +872,6 @@ object RawProcessor {
         blackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 65535,
         valueDomain: RawBufferValueDomain = RawBufferValueDomain.SENSOR,
-        customWriter: Boolean = false,
         blackLevelMode: String? = null,
         customBlackLevel: Float? = null,
         whiteLevelMode: String? = null,
@@ -899,13 +895,8 @@ object RawProcessor {
         val resolvedBlackLevel = resolveBlackLevelForMode(blackLevel, blackLevelMode, customBlackLevel)
         val resolvedWhiteLevel = resolveWhiteLevelForMode(whiteLevel.toFloat(), whiteLevelMode, customWhiteLevel).toInt()
         val hasCfaOverride = RawCfaCorrection.isOverrideMode(cfaCorrectionMode)
-        val hasWhiteLevelOverride = RawWhiteLevelCorrection.isOverrideMode(whiteLevelMode)
-        val requiresCustomWriter = imageLayout != SuperResolutionDngWriter.ImageLayout.CFA ||
-                compression != SuperResolutionDngWriter.Compression.UNCOMPRESSED ||
-                dngProfilePreparationOptions != null ||
-                profileGainTableMap != null ||
-                profileToneCurve != null ||
-                pixelsIncludeLensShadingCorrection
+        // All Photon-created DNGs carry a self-contained capture MakerNote. DngCreator has no
+        // API for it, so the custom writer is required even for an uncompressed CFA image.
         if (hasCfaOverride && resolvedCfaPattern != cfaPattern) {
             PLog.d(TAG, "RAW DNG CFA override mode=$cfaCorrectionMode cfa=$cfaPattern->$resolvedCfaPattern")
         }
@@ -970,71 +961,60 @@ object RawProcessor {
             270 -> ExifInterface.ORIENTATION_ROTATE_270
             else -> ExifInterface.ORIENTATION_NORMAL
         }
-        if (customWriter || requiresCustomWriter || hasCfaOverride || hasWhiteLevelOverride || !canDngCreatorWriteBuffer(width, height, characteristics)) {
-            PLog.i(TAG, "Writing stacked RAW DNG with custom writer: ${width}x${height} layout=$imageLayout compression=$compression")
-            return SuperResolutionDngWriter.write(
-                outputStream = outputStream,
-                rawBuffer = rawBuffer,
-                width = width,
-                height = height,
-                characteristics = characteristics,
-                captureResult = captureResult,
-                captureMetadataResult = captureMetadataResult ?: captureResult,
-                effectiveFocalLengthMm = effectiveFocalLengthMm,
-                effectiveFocalLength35mm = effectiveFocalLength35mm,
-                captureInfo = captureInfo,
-                orientation = orientation,
-                cfaPattern = resolvedCfaPattern,
-                blackLevel = blackLevel,
-                whiteLevel = resolvedWhiteLevel,
-                valueDomain = valueDomain,
-                blackLevelMode = blackLevelMode,
-                customBlackLevel = customBlackLevel,
-                whiteLevelMode = whiteLevelMode,
-                customWhiteLevel = customWhiteLevel,
-                baselineExposureEv = writtenBaselineExposureEv,
-                profileGainTableMap = writtenProfileGainTableMap,
-                profileName = writtenProfileName,
-                profileToneCurve = writtenProfileToneCurve,
-                rawSceneExposureSummaryText = preparedProfile?.rawSceneExposureSummaryText,
-                imageLayout = imageLayout,
-                compression = compression,
-                inputRowStepSamples = inputRowStepSamples,
-                inputColStepSamples = inputColStepSamples,
-                pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
-                defaultCrop = defaultCrop,
-                physicalRawCrop = physicalRawCrop,
-            )
-        }
-
-        val dngCreator = DngCreator(characteristics, captureResult)
-        return try {
-            dngCreator.setOrientation(orientation)
-//            buildDngThumbnail(thumbnail)?.let {
-//                dngCreator.setThumbnail(it)
-//                PLog.d(TAG, "Embedded stacked DNG thumbnail written: ${it.width}x${it.height}")
-//            }
-
-            val dngInputBuffer = rawBuffer.duplicate().order(ByteOrder.nativeOrder())
-            if (valueDomain == RawBufferValueDomain.NORMALIZED_SENSOR_RANGE) {
-                denormalizeNormalizedRawBufferInPlace(
-                    rawBuffer = dngInputBuffer,
-                    width = width,
-                    height = height,
-                    cfaPattern = resolvedCfaPattern,
-                    blackLevel = blackLevel,
-                    whiteLevel = resolvedWhiteLevel
-                )
-            }
-            dngInputBuffer.rewind()
-            dngCreator.writeByteBuffer(outputStream, Size(width, height), dngInputBuffer, 0)
-            true
-        } catch (e: Exception) {
-            PLog.w(TAG, "Failed to save stacked RAW buffer as DNG, ignoring", e)
-            false
-        } finally {
-            dngCreator.close()
-        }
+        PLog.i(TAG, "Writing stacked RAW DNG with custom writer: ${width}x${height} layout=$imageLayout compression=$compression")
+        return SuperResolutionDngWriter.write(
+            outputStream = outputStream,
+            rawBuffer = rawBuffer,
+            width = width,
+            height = height,
+            characteristics = characteristics,
+            captureResult = captureResult,
+            captureMetadataResult = captureMetadataResult ?: captureResult,
+            effectiveFocalLengthMm = effectiveFocalLengthMm,
+            effectiveFocalLength35mm = effectiveFocalLength35mm,
+            captureInfo = captureInfo,
+            orientation = orientation,
+            cfaPattern = resolvedCfaPattern,
+            blackLevel = blackLevel,
+            whiteLevel = resolvedWhiteLevel,
+            valueDomain = valueDomain,
+            blackLevelMode = blackLevelMode,
+            customBlackLevel = customBlackLevel,
+            whiteLevelMode = whiteLevelMode,
+            customWhiteLevel = customWhiteLevel,
+            baselineExposureEv = writtenBaselineExposureEv,
+            profileGainTableMap = writtenProfileGainTableMap,
+            profileName = writtenProfileName,
+            profileToneCurve = writtenProfileToneCurve,
+            rawSceneExposureSummaryText = preparedProfile?.rawSceneExposureSummaryText,
+            imageLayout = imageLayout,
+            compression = compression,
+            inputRowStepSamples = inputRowStepSamples,
+            inputColStepSamples = inputColStepSamples,
+            pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
+            defaultCrop = defaultCrop,
+            physicalRawCrop = physicalRawCrop,
+            makerNote = DngCaptureDiagnostics.makerNote(linkedMapOf(
+                "dng.width" to width.toString(),
+                "dng.height" to height.toString(),
+                "dng.layout" to imageLayout.name,
+                "dng.compression" to compression.name,
+                "dng.orientation" to orientation.toString(),
+                "dng.cfaPattern" to resolvedCfaPattern.toString(),
+                "input.resolvedBlackLevel" to resolvedBlackLevel.contentToString(),
+                "input.resolvedWhiteLevel" to resolvedWhiteLevel.toString(),
+                "dng.valueDomain" to valueDomain.name,
+                "dng.defaultCrop" to defaultCrop.toString(),
+                "dng.inputRowStepSamplesOverride" to inputRowStepSamples.toString(),
+                "dng.inputColStepSamplesOverride" to inputColStepSamples.toString(),
+                "dng.lensShadingApplied" to pixelsIncludeLensShadingCorrection.toString(),
+                "capture.sensorTimestampNs" to captureResult.get(CaptureResult.SENSOR_TIMESTAMP).toString(),
+                "capture.frameNumber" to captureResult.frameNumber.toString(),
+                "capture.exposureTimeNs" to captureResult.get(CaptureResult.SENSOR_EXPOSURE_TIME).toString(),
+                "capture.iso" to captureResult.get(CaptureResult.SENSOR_SENSITIVITY).toString(),
+                "capture.aeSummary" to preparedProfile?.rawSceneExposureSummaryText.orEmpty(),
+            )),
+        )
     }
 
     internal fun denormalizeNormalizedRawBufferInPlace(
@@ -1061,23 +1041,6 @@ object RawProcessor {
             }
         }
     }
-
-    private fun canDngCreatorWriteBuffer(
-        width: Int,
-        height: Int,
-        characteristics: CameraCharacteristics,
-    ): Boolean {
-        val pixelArraySize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
-        if (pixelArraySize?.width == width && pixelArraySize.height == height) {
-            return true
-        }
-        val preCorrectionSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
-        if (preCorrectionSize?.width() == width && preCorrectionSize.height() == height) {
-            return true
-        }
-        return false
-    }
-
     private fun buildDngThumbnail(source: Bitmap?): Bitmap? {
         if (source == null || source.isRecycled) {
             return null

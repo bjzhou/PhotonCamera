@@ -1396,6 +1396,7 @@ internal object GlesMgcRawSpatialShaders {
         #version 300 es
         precision highp float;
         precision highp int;
+        precision highp sampler2D;
         uniform sampler2D uChannelPlane;
         uniform ivec2 uSourceSize;
         uniform int uOutputWidth;
@@ -1443,6 +1444,7 @@ internal object GlesMgcRawSpatialShaders {
         #version 300 es
         precision highp float;
         precision highp int;
+        precision highp sampler2D;
         uniform sampler2D uChannelPlane;
         uniform sampler2D uLensShading;
         uniform ivec2 uSourceSize;

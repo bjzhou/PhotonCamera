@@ -111,6 +111,12 @@ object PLog {
         )
 
         logQueue.offer(entry)
+        DngCaptureDiagnostics.record(
+            entry.timestamp,
+            level.name,
+            tag,
+            if (throwable == null) message else "$message\n${Log.getStackTraceString(throwable)}",
+        )
 
         // 如果超过最大数量，移除最早的日志
         while (logQueue.size > MAX_LOG_SIZE) {

@@ -227,6 +227,7 @@ object SuperResolutionDngWriter {
     private const val TAG_MAX_APERTURE_VALUE = 37381
     private const val TAG_FLASH = 37385
     private const val TAG_FOCAL_LENGTH = 37386
+    private const val TAG_MAKER_NOTE = 0x927C
     private const val TAG_USER_COMMENT = 37510
     private const val TAG_SUBSEC_TIME = 37520
     private const val TAG_SUBSEC_TIME_ORIGINAL = 37521
@@ -257,6 +258,7 @@ object SuperResolutionDngWriter {
     private const val TAG_FORWARD_MATRIX_2 = 50965
     private const val TAG_AS_SHOT_NEUTRAL = 50728
     private const val TAG_BASELINE_EXPOSURE = 50730
+    private const val TAG_MAKER_NOTE_SAFETY = 0xC635
     private const val TAG_CALIBRATION_ILLUMINANT_1 = 50778
     private const val TAG_CALIBRATION_ILLUMINANT_2 = 50779
     private const val TAG_ACTIVE_AREA = 50829
@@ -314,6 +316,7 @@ object SuperResolutionDngWriter {
         pixelsIncludeLensShadingCorrection: Boolean = false,
         defaultCrop: Rect,
         physicalRawCrop: RawPhysicalCrop? = null,
+        makerNote: ByteArray? = null,
     ): Boolean {
         if (width <= 0 || height <= 0) return false
 
@@ -427,6 +430,7 @@ object SuperResolutionDngWriter {
                 pixelsIncludeLensShadingCorrection = pixelsIncludeLensShadingCorrection,
                 defaultCrop = defaultCrop,
                 physicalRawCrop = physicalRawCrop,
+                makerNote = makerNote,
             )
             val header = buildHeader(
                 primaryEntries = directories.primaryEntries,
@@ -493,6 +497,7 @@ object SuperResolutionDngWriter {
         pixelsIncludeLensShadingCorrection: Boolean,
         defaultCrop: Rect,
         physicalRawCrop: RawPhysicalCrop?,
+        makerNote: ByteArray?,
     ): TiffDirectories {
         // The custom writer is used when the fused RAW dimensions no longer
         // match the camera sensor. The fused buffer already lives in its final
@@ -638,6 +643,7 @@ object SuperResolutionDngWriter {
         }
 
         val exifEntries = buildList {
+            makerNote?.takeIf { it.isNotEmpty() }?.let { add(undefined(TAG_MAKER_NOTE, it)) }
             exposureTimeSeconds?.let { add(rationalArray(TAG_EXPOSURE_TIME, listOf(it))) }
             add(rationalArray(TAG_F_NUMBER, listOf(aperture.toDouble())))
             add(rationalArray(TAG_APERTURE_VALUE, listOf(apexAperture(aperture).toDouble())))
@@ -674,6 +680,10 @@ object SuperResolutionDngWriter {
         }.sortedBy { it.tag }
 
         val primaryEntries = buildList {
+            if (makerNote != null && makerNote.isNotEmpty()) {
+                // Photon notes are self-contained and remain valid after TIFF data is relocated.
+                add(short(TAG_MAKER_NOTE_SAFETY, 1))
+            }
             add(long(TAG_NEW_SUBFILE_TYPE, 0))
             add(long(TAG_IMAGE_WIDTH, width.toLong()))
             add(long(TAG_IMAGE_LENGTH, height.toLong()))
