@@ -65,6 +65,9 @@ import androidx.media3.ui.PlayerView
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.request.ImageRequest
 import coil.compose.AsyncImage
@@ -2114,6 +2117,47 @@ private fun Context.findActivity(): Activity? {
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
+private fun rememberVideoPlayerView(player: ExoPlayer?): PlayerView {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val playerView = remember(context) {
+        LayoutInflater.from(context).inflate(R.layout.view_motion_photo_player, null) as PlayerView
+    }
+
+    DisposableEffect(player, playerView, lifecycle) {
+        fun updatePlayback() {
+            val isForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            if (!isForeground && player?.playWhenReady == true) {
+                PLog.d("GalleryVideoPlayback", "Pausing playback while the screen is not resumed.")
+                player.pause()
+            }
+            playerView.keepScreenOn = isForeground && player?.isPlaying == true
+        }
+
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                updatePlayback()
+            }
+        }
+        val observer = LifecycleEventObserver { _, _ -> updatePlayback() }
+        playerView.player = player
+        player?.addListener(listener)
+        lifecycle.addObserver(observer)
+        updatePlayback()
+
+        onDispose {
+            lifecycle.removeObserver(observer)
+            player?.removeListener(listener)
+            playerView.keepScreenOn = false
+            playerView.player = null
+        }
+    }
+
+    return playerView
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
 private fun VideoDetailPlayer(
     photo: MediaData,
     isActive: Boolean,
@@ -2122,6 +2166,7 @@ private fun VideoDetailPlayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val mediaUri = remember(photo.id, photo.uri, photo.sourceUri) {
         photo.sourceUri ?: photo.uri
     }
@@ -2193,6 +2238,8 @@ private fun VideoDetailPlayer(
         }
     }
 
+    val playerView = rememberVideoPlayerView(exoPlayer)
+
     DisposableEffect(exoPlayer, previewHandle) {
         val previewLease = exoPlayer?.let(previewHandle::attach)
         onDispose {
@@ -2203,14 +2250,14 @@ private fun VideoDetailPlayer(
         }
     }
 
-    LaunchedEffect(exoPlayer, isActive) {
+    LaunchedEffect(exoPlayer, isActive, lifecycle) {
         PLog.d("VideoDetailPlayer", "VideoDetailPlayer isActive changed: $isActive, player: $exoPlayer")
         if (exoPlayer != null && isActive) {
             delay(150) // Wait for transitions to complete and EGL surface to be fully ready
             PLog.d("VideoDetailPlayer", "Preparing and starting ExoPlayer.")
             exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
             exoPlayer.prepare()
-            exoPlayer.playWhenReady = true
+            exoPlayer.playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         }
     }
 
@@ -2218,11 +2265,10 @@ private fun VideoDetailPlayer(
         AndroidView(
             factory = {
                 PLog.d("VideoDetailPlayer", "Creating PlayerView factory.")
-                LayoutInflater.from(context).inflate(R.layout.view_motion_photo_player, null) as PlayerView
+                playerView
             },
             update = {
                 PLog.d("VideoDetailPlayer", "Updating PlayerView with player.")
-                it.player = exoPlayer
                 it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 // With effects, Player.videoSize may remain UNKNOWN. Fit the Surface itself
                 // to the effect output so a paused/ended buffer has no baked-in letterboxing
@@ -2430,6 +2476,7 @@ fun MotionPhotoPlayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val videoFile = remember(photo.id) {
         viewModel.getMotionPhotoVideo(photo)
     }
@@ -2521,10 +2568,13 @@ fun MotionPhotoPlayer(
         }
     }
 
-    LaunchedEffect(exoPlayer, isPlaying, shouldApplyVideoEffects) {
+    val playerView = rememberVideoPlayerView(exoPlayer)
+
+    LaunchedEffect(exoPlayer, isPlaying, shouldApplyVideoEffects, lifecycle) {
         if (isPlaying) {
             isReadyToShow = false
             delay(150)
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
             if (exoPlayer.mediaItemCount == 0) {
                 PLog.d("MotionPhotoPlayer", "Preparing Motion Photo player after PlayerView attach: ${photo.id}")
                 exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(videoFile)))
@@ -2548,10 +2598,9 @@ fun MotionPhotoPlayer(
 
     AndroidView(
         factory = {
-            LayoutInflater.from(context).inflate(R.layout.view_motion_photo_player, null) as PlayerView
+            playerView
         },
         update = {
-            it.player = exoPlayer
             it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             it.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
             it.isVisible = true
