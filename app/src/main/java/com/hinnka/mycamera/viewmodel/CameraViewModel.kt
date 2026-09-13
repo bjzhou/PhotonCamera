@@ -1382,6 +1382,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.eyeFocusEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
+    val colorPaletteEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.colorPaletteEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
     val keepScreenOn: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.keepScreenOn }
     val windowScreenBrightness: StateFlow<Float?> = userPreferencesRepository.userPreferences
@@ -4950,6 +4953,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置是否启用拍摄震动
      */
+    fun setColorPaletteEnabled(enabled: Boolean) {
+        viewModelScope.launch { userPreferencesRepository.saveColorPaletteEnabled(enabled) }
+    }
+
     fun setVibrationEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveVibrationEnabled(enabled)

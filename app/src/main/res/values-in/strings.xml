@@ -308,4 +308,7 @@
     <string name="settings_jpg_multi_frame_denoise_output_scale">Skala keluaran denoise multi-frame</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x mempertahankan dimensi asli. Lebar dan tinggi hingga 2x. Hanya berlaku untuk denoise multi-frame.</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
+    <string name="settings_color_palette">Palet warna</string>
+    <string name="settings_color_palette_description">Tampilkan palet warna di editor untuk menyesuaikan tonalitas dan saturasi secara bersamaan.</string>
+    <string name="recipe_palette_tone">Tonalitas</string>
 </resources>

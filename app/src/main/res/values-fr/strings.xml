@@ -308,4 +308,7 @@
     <string name="settings_jpg_multi_frame_denoise_output_scale">Échelle de sortie de la réduction du bruit multi-image</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x conserve les dimensions d’origine. Jusqu’à 2x en largeur et en hauteur. S’applique uniquement à la réduction du bruit multi-image.</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
+    <string name="settings_color_palette">Palette de couleurs</string>
+    <string name="settings_color_palette_description">Afficher la palette sur la page de retouche pour ajuster ensemble le rendu tonal et la saturation.</string>
+    <string name="recipe_palette_tone">Rendu tonal</string>
 </resources>

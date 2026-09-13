@@ -308,4 +308,7 @@
     <string name="settings_jpg_multi_frame_denoise_output_scale">Ausgabeskalierung der Mehrbild-Rauschreduzierung</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x entspricht der Originalgröße. Breite und Höhe bis zu 2x. Gilt nur für die Mehrbild-Rauschreduzierung.</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
+    <string name="settings_color_palette">Farbpalette</string>
+    <string name="settings_color_palette_description">Farbpalette im Editor anzeigen, um Tonwerte und Sättigung gleichzeitig anzupassen.</string>
+    <string name="recipe_palette_tone">Tonwerte</string>
 </resources>

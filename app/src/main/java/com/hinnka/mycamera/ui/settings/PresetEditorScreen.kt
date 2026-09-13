@@ -25,7 +25,6 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.CameraPreset
-import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
@@ -88,15 +87,6 @@ fun PresetEditorScreen(
     var colorRecipe by remember { mutableStateOf(sourcePreset?.colorRecipe ?: ColorRecipeParams.DEFAULT) }
     var effects by remember { mutableStateOf(sourcePreset?.effects ?: EffectParams.DEFAULT) }
 
-    var paletteState by remember(colorRecipe) {
-        mutableStateOf(
-            ColorPaletteState(
-                x = colorRecipe.paletteX,
-                y = colorRecipe.paletteY,
-                density = colorRecipe.paletteDensity
-            )
-        )
-    }
 
     // 相机参数
     var aspectRatio by remember { mutableStateOf(sourcePreset?.aspectRatio ?: AspectRatio.RATIO_4_3.name) }
@@ -286,25 +276,11 @@ fun PresetEditorScreen(
                 )
                 ColorRecipePanel(
                     currentParams = colorRecipe,
-                    paletteState = paletteState,
-                    onPaletteStateChange = { newState ->
-                        paletteState = newState
-                        colorRecipe = colorRecipe.copy(
-                            paletteX = newState.x,
-                            paletteY = newState.y,
-                            paletteDensity = newState.density
-                        )
-                    },
                     onParamChange = { param, value ->
                         colorRecipe = param.setValue(colorRecipe, value)
                     },
                     onParamsChange = { newParams ->
                         colorRecipe = newParams
-                        paletteState = ColorPaletteState(
-                            x = newParams.paletteX,
-                            y = newParams.paletteY,
-                            density = newParams.paletteDensity
-                        )
                     },
                     onRemarksChange = { remarks ->
                         colorRecipe = colorRecipe.copy(remarks = remarks)

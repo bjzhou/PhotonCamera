@@ -13,7 +13,6 @@ import android.opengl.GLES30
 import android.opengl.Matrix
 import android.util.Size
 import android.view.Surface
-import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
@@ -70,9 +69,7 @@ class RealtimeVideoRenderer(
         .map { layer ->
             LayerResources(
                 lutConfig = layer.lutConfig,
-                params = layer.recipeParams
-                    ?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
-                    ?: ColorRecipeParams.DEFAULT,
+                params = layer.recipeParams ?: ColorRecipeParams.DEFAULT,
             )
         }
         .ifEmpty {
@@ -468,7 +465,7 @@ class RealtimeVideoRenderer(
             textureUnit = 3,
             samplerLocation = locations.uBasicToneLutLocation,
             intensityLocation = locations.uBasicToneIntensityLocation,
-            amount = ColorPaletteMapper.basicToneAmount(layer.params),
+            amount = layer.params.tonality,
         )
 
         GLES30.glUniform2f(
@@ -534,9 +531,6 @@ class RealtimeVideoRenderer(
             highlights = params.highlights,
             shadows = params.shadows,
         )
-        GLES30.glUniform1f(locations.uToneToeLocation, params.toneToe)
-        GLES30.glUniform1f(locations.uToneShoulderLocation, params.toneShoulder)
-        GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
         GLES30.glUniform1f(locations.uSharpeningLocation, params.sharpness.coerceIn(-1f, 1f))
         GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
         GLES30.glUniform1f(

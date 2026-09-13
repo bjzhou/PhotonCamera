@@ -1219,4 +1219,6 @@
     <string name="video_log_color_space_auto">色彩空間已根據 Log 格式自動匹配。</string>
     <string name="settings_raw_camera_color_matching">匹配相機色彩</string>
     <string name="settings_raw_camera_color_matching_description">開啟時會根據拍攝相機調整色彩，關閉時使用原版處理。</string>
+    <string name="settings_color_palette">調色盤</string>
+    <string name="settings_color_palette_description">在編輯頁顯示調色盤，可同時調整影調和飽和度。</string>
 </resources>

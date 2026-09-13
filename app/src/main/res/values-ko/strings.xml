@@ -309,4 +309,7 @@
     <string name="settings_jpg_multi_frame_denoise_output_scale">멀티 프레임 노이즈 감소 출력 배율</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x는 원본 크기입니다. 너비와 높이를 최대 2x까지 설정할 수 있습니다. 멀티 프레임 노이즈 감소에만 적용됩니다.</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
+    <string name="settings_color_palette">색상 팔레트</string>
+    <string name="settings_color_palette_description">편집 화면에 색상 팔레트를 표시하여 명암과 채도를 함께 조정합니다.</string>
+    <string name="recipe_palette_tone">명암</string>
 </resources>

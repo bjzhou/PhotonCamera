@@ -44,8 +44,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.model.ColorPaletteMapper
-import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.CurveChannel
 import com.hinnka.mycamera.ui.components.LutSelector
@@ -563,13 +561,6 @@ fun LutSynthesisScreen(
             scrimColor = Color.Transparent,
             dragHandle = null,
         ) {
-            val paletteState = remember(recipe) {
-                ColorPaletteState(
-                    x = recipe.paletteX,
-                    y = recipe.paletteY,
-                    density = recipe.paletteDensity
-                ).normalized()
-            }
 
             Column(
                 modifier = Modifier
@@ -606,13 +597,6 @@ fun LutSynthesisScreen(
                 ) {
                     ColorRecipePanel(
                         currentParams = recipe,
-                        paletteState = paletteState,
-                        onPaletteStateChange = { newState ->
-                            val normalized = newState.normalized()
-                            viewModel.updateColorRecipe(
-                                ColorPaletteMapper.updatePaletteState(recipe, normalized)
-                            )
-                        },
                         onParamChange = { param, value ->
                             viewModel.updateColorRecipe(param.setValue(recipe, value))
                         },

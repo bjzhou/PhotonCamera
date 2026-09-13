@@ -46,7 +46,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.model.ColorPaletteState
+import com.hinnka.mycamera.data.UserPreferencesRepository
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.RecipeParam
@@ -54,6 +57,12 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.round
 import kotlin.math.roundToInt
+
+private enum class RecipePanelMode(val titleRes: Int) {
+    PALETTE(R.string.recipe_tab_palette),
+    BASIC(R.string.recipe_color_basic),
+    ADVANCED(R.string.recipe_panel_advanced),
+}
 
 private enum class RecipePanelTab {
     CURVE,
@@ -79,7 +88,7 @@ private enum class BasicRecipeControl(
     val recipeParam: RecipeParam? = null,
     val effectType: EffectType? = null,
 ) {
-    TONE(R.string.recipe_palette_tone),
+    TONE(R.string.recipe_palette_tone, recipeParam = RecipeParam.TONALITY),
     SATURATION(R.string.recipe_param_saturation, recipeParam = RecipeParam.SATURATION),
     CONTRAST(R.string.recipe_param_contrast, recipeParam = RecipeParam.CONTRAST),
     EXPOSURE(R.string.recipe_param_exposure, recipeParam = RecipeParam.EXPOSURE),
@@ -111,8 +120,6 @@ private val exposureSteps = listOf(
 @Composable
 fun ColorRecipePanel(
     currentParams: ColorRecipeParams,
-    paletteState: ColorPaletteState,
-    onPaletteStateChange: (ColorPaletteState) -> Unit,
     onParamChange: (RecipeParam, Float) -> Unit,
     onParamsChange: (ColorRecipeParams) -> Unit,
     onRemarksChange: (String) -> Unit,
@@ -141,7 +148,14 @@ fun ColorRecipePanel(
         param != RecipeParam.LOW_RES
     }
 
-    var showAdvanced by remember { mutableStateOf(false) }
+    val context = LocalContext.current.applicationContext
+    val preferencesRepository = remember(context) { UserPreferencesRepository(context) }
+    val paletteEnabled by remember(preferencesRepository) {
+        preferencesRepository.userPreferences.map { it.colorPaletteEnabled }.distinctUntilChanged()
+    }.collectAsState(initial = false)
+    var activeMode by remember(paletteEnabled) {
+        mutableStateOf(if (paletteEnabled) RecipePanelMode.PALETTE else RecipePanelMode.BASIC)
+    }
     var selectedTab by remember { mutableStateOf(RecipePanelTab.CURVE) }
     var selectedBasicControl by remember { mutableStateOf(BasicRecipeControl.EXPOSURE) }
     var selectedColorSection by remember { mutableStateOf(ColorPanelSection.CALIBRATION) }
@@ -280,15 +294,14 @@ fun ColorRecipePanel(
     }
 
     fun resetAllParams() {
-        onPaletteStateChange(ColorPaletteState.DEFAULT)
         if (!hideNonBakeable) {
             onParamsChange(ColorRecipeParams.DEFAULT)
             onEffectsChange?.invoke(EffectParams.DEFAULT)
             return
         }
 
-        val defaultPaletteState = ColorPaletteState.DEFAULT
         val basicRecipeParams = listOf(
+            RecipeParam.TONALITY,
             RecipeParam.SATURATION,
             RecipeParam.CONTRAST,
             RecipeParam.EXPOSURE,
@@ -307,9 +320,6 @@ fun ColorRecipePanel(
         onParamsChange(
             resetParams(
                 currentParams.copy(
-                    paletteX = defaultPaletteState.x,
-                    paletteY = defaultPaletteState.y,
-                    paletteDensity = defaultPaletteState.density,
                     masterCurvePoints = null,
                     redCurvePoints = null,
                     greenCurvePoints = null,
@@ -322,9 +332,6 @@ fun ColorRecipePanel(
     }
 
     fun basicRawValue(control: BasicRecipeControl): Float {
-        if (control == BasicRecipeControl.TONE) {
-            return paletteState.toneValue / ColorPaletteState.AXIS_MAX
-        }
         control.effectType?.let { effect ->
             return currentEffects?.let(effect::getValue)
                 ?: effect.recipeParam.getValue(currentParams)
@@ -333,19 +340,6 @@ fun ColorRecipePanel(
     }
 
     fun setBasicRawValue(control: BasicRecipeControl, value: Float) {
-        if (control == BasicRecipeControl.SATURATION) {
-            // 同时更新配方和调色盘状态，避免随后调节影调时重新带回旧横轴。
-            onParamsChange(RecipeParam.SATURATION.setValue(currentParams, value))
-            return
-        }
-        if (control == BasicRecipeControl.TONE) {
-            onPaletteStateChange(
-                paletteState.withValues(
-                    tone = value.coerceIn(-1f, 1f) * ColorPaletteState.AXIS_MAX,
-                ).normalized()
-            )
-            return
-        }
         control.effectType?.let { effect ->
             if (currentEffects != null && onEffectsChange != null) {
                 onEffectsChange(effect.setValue(currentEffects, value))
@@ -415,8 +409,10 @@ fun ColorRecipePanel(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 RecipeFlatModeToggle(
-                    isAdvanced = showAdvanced,
-                    onModeChange = { showAdvanced = it },
+                    selectedMode = activeMode,
+                    paletteEnabled = paletteEnabled,
+                    onModeChange = { activeMode = it },
+                    modifier = Modifier.weight(1f, fill = false),
                 )
 
                 headerControls?.let { controls ->
@@ -458,7 +454,13 @@ fun ColorRecipePanel(
                 }
             }
 
-            if (!showAdvanced) {
+            if (activeMode == RecipePanelMode.PALETTE) {
+                ColorRecipePalettePanel(
+                    currentParams = currentParams,
+                    onParamsChange = onParamsChange,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else if (activeMode == RecipePanelMode.BASIC) {
                 // 基础模式：4 x 3 无边框参数矩阵，数值为主、名称为辅
                 BasicRecipeGrid(
                     controls = basicRecipeControls,
@@ -625,10 +627,8 @@ fun ColorRecipePanel(
     }
 }
 
-private fun basicDefaultRawValue(control: BasicRecipeControl): Float = when (control) {
-    BasicRecipeControl.TONE -> 0f
-    else -> control.effectType?.defaultValue ?: checkNotNull(control.recipeParam).defaultValue
-}
+private fun basicDefaultRawValue(control: BasicRecipeControl): Float =
+    control.effectType?.defaultValue ?: checkNotNull(control.recipeParam).defaultValue
 
 private fun basicDisplayRange(
     control: BasicRecipeControl,
@@ -639,7 +639,6 @@ private fun basicDisplayRange(
 }
 
 private fun basicDisplayValue(control: BasicRecipeControl, rawValue: Float): Float = when (control) {
-    BasicRecipeControl.TONE -> (rawValue.coerceIn(-1f, 1f) * 10f).roundToInt().toFloat()
     BasicRecipeControl.EXPOSURE -> RecipeParam.EXPOSURE.clamp(rawValue)
     else -> {
         val param = control.effectType?.recipeParam ?: checkNotNull(control.recipeParam)
@@ -648,7 +647,6 @@ private fun basicDisplayValue(control: BasicRecipeControl, rawValue: Float): Flo
 }
 
 private fun basicRawValue(control: BasicRecipeControl, displayValue: Float): Float = when (control) {
-    BasicRecipeControl.TONE -> (displayValue / 10f).coerceIn(-1f, 1f)
     BasicRecipeControl.EXPOSURE -> RecipeParam.EXPOSURE.clamp(displayValue)
     else -> {
         val param = control.effectType?.recipeParam ?: checkNotNull(control.recipeParam)
@@ -730,8 +728,9 @@ private fun getBasicControlColor(control: BasicRecipeControl): Color = when (con
 
 @Composable
 private fun RecipeFlatModeToggle(
-    isAdvanced: Boolean,
-    onModeChange: (Boolean) -> Unit,
+    selectedMode: RecipePanelMode,
+    paletteEnabled: Boolean,
+    onModeChange: (RecipePanelMode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -739,46 +738,32 @@ private fun RecipeFlatModeToggle(
             .height(30.dp)
             .clip(CircleShape)
             .background(Color.White.copy(alpha = 0.08f))
+            .horizontalScroll(rememberScrollState())
             .padding(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .clip(CircleShape)
-                .background(if (!isAdvanced) Color.White.copy(alpha = 0.2f) else Color.Transparent)
-                .clickable { onModeChange(false) }
-                .padding(horizontal = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = stringResource(R.string.recipe_color_basic),
-                color = if (!isAdvanced) Color.White else Color.White.copy(alpha = 0.5f),
-                fontSize = 11.sp,
-                fontWeight = if (!isAdvanced) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-            )
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .clip(CircleShape)
-                .background(if (isAdvanced) Color.White.copy(alpha = 0.2f) else Color.Transparent)
-                .clickable { onModeChange(true) }
-                .padding(horizontal = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = stringResource(R.string.recipe_panel_advanced),
-                color = if (isAdvanced) Color.White else Color.White.copy(alpha = 0.5f),
-                fontSize = 11.sp,
-                fontWeight = if (isAdvanced) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-            )
+        RecipePanelMode.entries.filter { paletteEnabled || it != RecipePanelMode.PALETTE }.forEach { mode ->
+            val selected = mode == selectedMode
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .clip(CircleShape)
+                    .background(if (selected) Color.White.copy(alpha = 0.2f) else Color.Transparent)
+                    .clickable { onModeChange(mode) }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(mode.titleRes),
+                    color = if (selected) Color.White else Color.White.copy(alpha = 0.5f),
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
-
 @Composable
 private fun FlatLutIntensityRow(
     intensity: Float,
@@ -1590,6 +1575,7 @@ fun ColorRecipeSlider(
 private fun getParamColor(param: RecipeParam): Color {
     return when (param) {
         RecipeParam.EXPOSURE -> Color(0xFFFFEB3B)
+        RecipeParam.TONALITY -> Color(0xFFFFC46B)
         RecipeParam.CONTRAST -> Color(0xFFC18CFF)
         RecipeParam.SATURATION -> Color(0xFFFF668D)
         RecipeParam.TEMPERATURE -> Color(0xFFFF9800)

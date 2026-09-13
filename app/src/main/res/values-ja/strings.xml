@@ -195,7 +195,7 @@
     <string name="recipe_param_exposure">露出</string>
     <string name="recipe_param_contrast">コントラスト</string>
     <string name="recipe_param_saturation">彩度</string>
-    <string name="recipe_palette_tone">ハイキー／ローキー</string>
+    <string name="recipe_palette_tone">階調</string>
     <string name="recipe_param_temperature">色温度</string>
     <string name="recipe_param_tint">色被り</string>
     <string name="recipe_param_fade">フェード</string>
@@ -1117,4 +1117,6 @@
     <string name="settings_raw_color_engine_lumix_description">LUMIX S9の色再現を使用し、フォトスタイルを選択できます。</string>
     <string name="settings_raw_lumix_photo_style">S9 フォトスタイル</string>
     <string name="settings_raw_lumix_photo_style_description">LUMIX S9のフォトスタイルを選択します。デフォルトはスタンダードです。</string>
+    <string name="settings_color_palette">カラーパレット</string>
+    <string name="settings_color_palette_description">編集画面にカラーパレットを表示し、階調と彩度を同時に調整できます。</string>
 </resources>

@@ -15,7 +15,6 @@ import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
@@ -291,15 +290,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * 设置参数
      */
     fun setParams(params: ColorRecipeParams) {
-        val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
-
-        renderer.setRecipeParams(effectiveParams)
+        renderer.setRecipeParams(params)
         requestRender()
     }
 
     fun setBaselineParams(params: ColorRecipeParams) {
-        val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
-        renderer.updateBaselineRecipeParams(effectiveParams)
+        renderer.updateBaselineRecipeParams(params)
         requestRender()
     }
 

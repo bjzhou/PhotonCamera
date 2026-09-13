@@ -49,9 +49,6 @@ internal object PreviewColorShader {
             uniform float uVibrance;
             uniform float uHighlights;
             uniform float uShadows;
-            uniform float uToneToe;
-            uniform float uToneShoulder;
-            uniform float uTonePivot;
             ${if (variant.includeSharpening) "uniform float uSharpening;" else ""}
             ${if (variant.includePreLogFilmGrain) """
             uniform float uFilmGrain;
@@ -139,42 +136,6 @@ internal object PreviewColorShader {
             ${if (variant.includeExtendedLutCurves) PreviewColorShaderModules.EXTENDED_LUT_CURVES else PreviewColorShaderModules.SIMPLE_LUT_CURVES}
             ${if (variant.includePreLogFilmGrain) FilmGrainShaders.FUNCTIONS else ""}
 
-            float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
-                float safeLuma = clamp(luma, 0.0, 1.0);
-                float pivotPoint = clamp(0.5 + pivot * 0.12, 0.2, 0.8);
-                float toeAmount = clamp(abs(toe), 0.0, 1.0);
-                float shoulderAmount = clamp(abs(shoulder), 0.0, 1.0);
-                float toeGamma = (toe >= 0.0)
-                    ? mix(1.0, 0.68, toeAmount)
-                    : mix(1.0, 1.85, toeAmount);
-                float shoulderGamma = (shoulder >= 0.0)
-                    ? mix(1.0, 0.72, shoulderAmount)
-                    : mix(1.0, 1.85, shoulderAmount);
-
-                if (safeLuma <= pivotPoint) {
-                    float segment = clamp(safeLuma / max(pivotPoint, 0.0001), 0.0, 1.0);
-                    return clamp(pow(segment, toeGamma) * pivotPoint, 0.0, 1.0);
-                }
-
-                float segment = clamp((safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001), 0.0, 1.0);
-                float result = 1.0 - pow(max(0.0, 1.0 - segment), shoulderGamma) * (1.0 - pivotPoint);
-                return clamp(result, 0.0, 1.0);
-            }
-
-            vec3 applyToneCurve(vec3 color, float toe, float shoulder, float pivot) {
-                if (abs(toe) < 0.001 && abs(shoulder) < 0.001 && abs(pivot) < 0.001) {
-                    return color;
-                }
-                vec3 safeColor = clamp(color, 0.0, 1.0);
-                float luma = dot(safeColor, W);
-                float curvedLuma = applyToneCurveToLuma(luma, toe, shoulder, pivot);
-                if (luma < 0.0001) {
-                    return safeColor;
-                }
-                vec3 scaled = safeColor * (curvedLuma / luma);
-                return mix(vec3(curvedLuma), scaled, 0.92);
-            }
-
             ${PreviewColorShaderModules.PRIMARY_CALIBRATION}
             ${PreviewColorShaderModules.LUT_COLOR_SPACE}
 
@@ -226,9 +187,6 @@ internal object PreviewColorShader {
                     float luma = getLuma(color.rgb);
 
                     color.rgb = applyContrastSCurve(color.rgb, uContrast);
-                    color.rgb = sanitizeColor(color.rgb);
-
-                    color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
                     color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyBasicToneLut(color.rgb);

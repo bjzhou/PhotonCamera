@@ -8,7 +8,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
-import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -27,7 +26,7 @@ class VideoLutEffect(
     val sourceLogProfile: VideoLogProfile = VideoLogProfile.OFF,
 ) : GlEffect {
     @Volatile
-    var recipeParams: ColorRecipeParams? = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
+    var recipeParams: ColorRecipeParams? = recipeParams
         private set
 
     private var shaderProgram: VideoLutShaderProgram? = null
@@ -55,7 +54,7 @@ class VideoLutEffect(
     fun update(lutConfig: LutConfig?, recipeParams: ColorRecipeParams?) {
         PLog.d("VideoLutEffect", "update called, lutConfig: ${lutConfig?.title}, recipeParams: ${recipeParams != null}")
         this.lutConfig = lutConfig
-        this.recipeParams = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
+        this.recipeParams = recipeParams
         shaderProgram?.triggerUpdate()
     }
 }
@@ -117,9 +116,6 @@ private class VideoLutShaderProgram(
             uniform float uVibrance;      // 0.0 ~ 2.0
             uniform float uHighlights;    // -1.0 ~ +1.0
             uniform float uShadows;       // -1.0 ~ +1.0
-            uniform float uToneToe;       // -1.0 ~ +1.0
-            uniform float uToneShoulder;  // -1.0 ~ +1.0
-            uniform float uTonePivot;     // -1.0 ~ +1.0
             uniform float uFilmGrain;     // 0.0 ~ 1.0
             uniform float uFilmGrainSeed;
             uniform float uFilmGrainPixelScale;
@@ -199,42 +195,6 @@ private class VideoLutShaderProgram(
 
             ${BasicToneLutShader.GLSL}
             ${ContrastShader.GLSL}
-
-            float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
-                float safeLuma = clamp(luma, 0.0, 1.0);
-                float pivotPoint = clamp(0.5 + pivot * 0.12, 0.2, 0.8);
-                float toeAmount = clamp(abs(toe), 0.0, 1.0);
-                float shoulderAmount = clamp(abs(shoulder), 0.0, 1.0);
-                float toeGamma = (toe >= 0.0) ? mix(1.0, 0.68, toeAmount) : mix(1.0, 1.85, toeAmount);
-                float shoulderGamma = (shoulder >= 0.0) ? mix(1.0, 0.72, shoulderAmount) : mix(1.0, 1.85, shoulderAmount);
-
-                if (safeLuma <= pivotPoint) {
-                    float segment = clamp(safeLuma / max(pivotPoint, 0.0001), 0.0, 1.0);
-                    return clamp(pow(segment, toeGamma) * pivotPoint, 0.0, 1.0);
-                }
-
-                float segment = clamp((safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001), 0.0, 1.0);
-                float result = 1.0 - pow(max(0.0, 1.0 - segment), shoulderGamma) * (1.0 - pivotPoint);
-                return clamp(result, 0.0, 1.0);
-            }
-
-            vec3 applyToneCurve(vec3 color, float toe, float shoulder, float pivot) {
-                if (abs(toe) < 0.001 && abs(shoulder) < 0.001 && abs(pivot) < 0.001) {
-                    return color;
-                }
-                vec3 nonNegativeColor = max(color, vec3(0.0));
-                vec3 curveSampleColor = clamp(nonNegativeColor, 0.0, 1.0);
-                float luma = getLuma(curveSampleColor);
-                float peak = max(curveSampleColor.r, max(curveSampleColor.g, curveSampleColor.b));
-                float toneSignal = mix(luma, peak, 0.65);
-                float curvedSignal = applyToneCurveToLuma(toneSignal, toe, shoulder, pivot);
-                if (toneSignal < 0.0001) {
-                    return curveSampleColor;
-                }
-                float safeRatio = clamp(curvedSignal / max(toneSignal, 0.0001), 0.0, 16.0);
-                vec3 scaled = nonNegativeColor * safeRatio;
-                return sanitizeColor(mix(vec3(curvedSignal), scaled, 0.96));
-            }
 
             vec3 linearRgbToOklab(vec3 c) {
                 vec3 lms = mat3(
@@ -566,9 +526,6 @@ private class VideoLutShaderProgram(
                     color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyContrastSCurve(color.rgb, uContrast);
-                    color.rgb = sanitizeColor(color.rgb);
-
-                    color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
                     color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyBasicToneLut(color.rgb);
@@ -911,7 +868,7 @@ private class VideoLutShaderProgram(
             textureUnit = 2,
             samplerLocation = GLES30.glGetUniformLocation(programId, "uBasicToneLut"),
             intensityLocation = GLES30.glGetUniformLocation(programId, "uBasicToneIntensity"),
-            amount = currentRecipeParams?.let(ColorPaletteMapper::basicToneAmount) ?: 0f,
+            amount = currentRecipeParams?.tonality ?: 0f,
         )
 
         // 设置色彩配方 uniforms
@@ -943,9 +900,6 @@ private class VideoLutShaderProgram(
                 currentRecipeParams.highlights,
                 currentRecipeParams.shadows
             )
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uToneToe"), currentRecipeParams.toneToe)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uToneShoulder"), currentRecipeParams.toneShoulder)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uTonePivot"), currentRecipeParams.tonePivot)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uVignette"), currentRecipeParams.vignette)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uFlash"), currentRecipeParams.flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uBleachBypass"), currentRecipeParams.bleachBypass)

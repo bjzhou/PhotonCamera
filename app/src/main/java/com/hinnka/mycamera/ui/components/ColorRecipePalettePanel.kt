@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.ColorPaletteState
+import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.model.ColorRecipeParams
 import kotlin.math.roundToInt
 
 private val PaletteHorizontalInset = 18.dp
@@ -44,11 +46,14 @@ private const val PaletteReferenceStepCount = 9
 
 @Composable
 fun ColorRecipePalettePanel(
-    paletteState: ColorPaletteState,
-    onPaletteStateChange: (ColorPaletteState) -> Unit,
+    currentParams: ColorRecipeParams,
+    onParamsChange: (ColorRecipeParams) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val currentOnPaletteStateChange = rememberUpdatedState(onPaletteStateChange)
+    val paletteState = ColorPaletteMapper.deriveFromParams(currentParams)
+    val currentOnPaletteStateChange = rememberUpdatedState<(ColorPaletteState) -> Unit> { state ->
+        onParamsChange(ColorPaletteMapper.updatePaletteState(currentParams, state))
+    }
     val currentPaletteState = rememberUpdatedState(paletteState)
     val normalizedState = paletteState.normalized()
     val toneLabel = stringResource(R.string.recipe_palette_tone)
@@ -174,9 +179,9 @@ fun ColorRecipePalettePanel(
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.Start
             ) {
-                AxisMarker("+100")
-                AxisMarker("0")
-                AxisMarker("-100")
+                AxisMarker(formatAxisValue(ColorPaletteState.AXIS_MAX))
+                AxisMarker(formatAxisValue(0f))
+                AxisMarker(formatAxisValue(ColorPaletteState.AXIS_MIN))
             }
         }
 
@@ -186,9 +191,9 @@ fun ColorRecipePalettePanel(
                 .padding(start = 48.dp, end = 18.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            AxisMarker("-100")
-            AxisMarker("0")
-            AxisMarker("+100")
+            AxisMarker(formatAxisValue(ColorPaletteState.AXIS_MIN))
+            AxisMarker(formatAxisValue(0f))
+            AxisMarker(formatAxisValue(ColorPaletteState.AXIS_MAX))
         }
     }
 }

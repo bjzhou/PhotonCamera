@@ -309,4 +309,7 @@
     <string name="settings_jpg_multi_frame_denoise_output_scale">Escala de saída da redução de ruído multiframes</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x mantém as dimensões originais. Até 2x na largura e na altura. Aplica-se somente à redução de ruído multiframes.</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
+    <string name="settings_color_palette">Paleta de cores</string>
+    <string name="settings_color_palette_description">Mostrar a paleta no editor para ajustar o equilíbrio tonal e a saturação ao mesmo tempo.</string>
+    <string name="recipe_palette_tone">Equilíbrio tonal</string>
 </resources>

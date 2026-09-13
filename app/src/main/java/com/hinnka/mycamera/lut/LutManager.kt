@@ -10,7 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.mgc.PhotonLookContract
-import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.model.LegacyColorRecipeMigration
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.Flow
@@ -47,7 +47,7 @@ class LutManager(private val context: Context) {
         // 旧版逐字段 Key（仅用于迁移读取，新数据不再写入）
         private val legacyFieldNames = listOf(
             "exposure", "contrast", "saturation", "temperature", "tint", "fade", "color",
-            "highlights", "shadows", "toneToe", "toneShoulder", "tonePivot",
+            "highlights", "shadows", "tonality", "toneToe", "toneShoulder", "tonePivot",
             "paletteX", "paletteY", "paletteDensity",
             "filmGrain", "vignette", "flash", "bleachBypass", "clarity", "sharpness", "bloom", "softLight", "halation", "redHalation", "chromaticAberration",
             "noise", "lowRes",
@@ -82,12 +82,7 @@ class LutManager(private val context: Context) {
                 color = f("color"),
                 highlights = f("highlights"),
                 shadows = f("shadows"),
-                toneToe = f("toneToe"),
-                toneShoulder = f("toneShoulder"),
-                tonePivot = f("tonePivot"),
-                paletteX = f("paletteX", 0.5f),
-                paletteY = f("paletteY", 0.5f),
-                paletteDensity = f("paletteDensity", 1f),
+                tonality = f("tonality"),
                 filmGrain = f("filmGrain"),
                 vignette = f("vignette"),
                 flash = f("flash"),
@@ -141,7 +136,15 @@ class LutManager(private val context: Context) {
                 gradingBlending = f("gradingBlending", 0.5f),
                 lutIntensity = f("lutIntensity", 1f),
                 remarks = s("remarks"),
-            ).let(ColorPaletteMapper::mergeIntoEffectiveParams)
+            ).let {
+                LegacyColorRecipeMigration.migrate(
+                    params = it,
+                    paletteX = f("paletteX", 0.5f),
+                    paletteY = f("paletteY", 0.5f),
+                    paletteDensity = f("paletteDensity", 1f),
+                    hasTonality = preferences[floatPreferencesKey("${lutId}_tonality")] != null,
+                )
+            }
         }
 
         private fun androidx.datastore.preferences.core.MutablePreferences.removeLegacyKeys(lutId: String) {

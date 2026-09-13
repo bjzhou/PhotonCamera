@@ -136,12 +136,7 @@ internal object CameraPresetJsonCodec {
             color = obj.float("color", default.color),
             highlights = obj.float("highlights", default.highlights),
             shadows = obj.float("shadows", default.shadows),
-            toneToe = obj.float("toneToe", default.toneToe),
-            toneShoulder = obj.float("toneShoulder", default.toneShoulder),
-            tonePivot = obj.float("tonePivot", default.tonePivot),
-            paletteX = obj.float("paletteX", default.paletteX),
-            paletteY = obj.float("paletteY", default.paletteY),
-            paletteDensity = obj.float("paletteDensity", default.paletteDensity),
+            tonality = obj.float("tonality", default.tonality),
             filmGrain = obj.float("filmGrain", default.filmGrain),
             vignette = obj.float("vignette", default.vignette),
             flash = obj.float("flash", default.flash),
@@ -217,7 +212,7 @@ internal object CameraPresetJsonCodec {
             redCurvePoints = obj.floatArrayOrNull("redCurvePoints") ?: default.redCurvePoints,
             greenCurvePoints = obj.floatArrayOrNull("greenCurvePoints") ?: default.greenCurvePoints,
             blueCurvePoints = obj.floatArrayOrNull("blueCurvePoints") ?: default.blueCurvePoints
-        )
+        ).let { LegacyColorRecipeMigration.migrate(it, obj) }
     }
 
     private fun parseEffects(element: JsonElement?): EffectParams {

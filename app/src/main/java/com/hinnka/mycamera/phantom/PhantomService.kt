@@ -98,8 +98,6 @@ import com.hinnka.mycamera.gallery.GalleryManager.saveMetadata
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
-import com.hinnka.mycamera.model.ColorPaletteMapper
-import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
@@ -1215,9 +1213,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     var editingParams by remember(editingLutId) {
                         mutableStateOf(ColorRecipeParams.DEFAULT)
                     }
-                    var paletteState by remember(editingLutId) {
-                        mutableStateOf(ColorPaletteState.DEFAULT)
-                    }
 
                     fun updateRecipeParams(params: ColorRecipeParams) {
                         editingParams = params
@@ -1260,11 +1255,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 .lutManager
                                 .loadColorRecipeParams(editingLutId)
                         editingParams = params
-                        paletteState = ColorPaletteState(
-                            x = params.paletteX,
-                            y = params.paletteY,
-                            density = params.paletteDensity
-                        ).normalized()
                     }
 
                     Column(
@@ -1279,26 +1269,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         )
                         ColorRecipePanel(
                             currentParams = editingParams,
-                            paletteState = paletteState,
-                            onPaletteStateChange = { newState ->
-                                val normalizedState = newState.normalized()
-                                paletteState = normalizedState
-                                updateRecipeParams(
-                                    ColorPaletteMapper.updatePaletteState(
-                                        editingParams,
-                                        normalizedState
-                                    )
-                                )
-                            },
                             onParamChange = { param, value ->
                                 updateRecipeParams(param.setValue(editingParams, value))
                             },
                             onParamsChange = { newParams ->
-                                paletteState = ColorPaletteState(
-                                    x = newParams.paletteX,
-                                    y = newParams.paletteY,
-                                    density = newParams.paletteDensity
-                                ).normalized()
                                 updateRecipeParams(newParams)
                             },
                             onRemarksChange = {

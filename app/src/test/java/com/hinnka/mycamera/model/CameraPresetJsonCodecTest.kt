@@ -27,7 +27,7 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
-    fun legacyPaletteSaturation_isMergedWhenReadingAndSavingPresets() {
+    fun legacyPalette_isMigratedOnceToCanonicalParameters() {
         val legacyJson = """
             {
                 "id": "legacy_palette",
@@ -36,29 +36,49 @@ class CameraPresetJsonCodecTest {
                     "saturation": 0.8,
                     "paletteX": 1.0,
                     "paletteY": 0.25,
-                    "paletteDensity": 0.5
+                    "paletteDensity": 0.5,
+                    "toneToe": 0.8,
+                    "toneShoulder": -0.5,
+                    "tonePivot": 0.25
                 }
             }
         """.trimIndent()
         val parsed = requireNotNull(CameraPreset.fromJson(legacyJson))
-        val inMemory = parsed.copy(
-            colorRecipe = ColorRecipeParams(
-                saturation = 0.8f,
-                paletteX = 1f,
-                paletteY = 0.25f,
-                paletteDensity = 0.5f,
-            )
-        )
-        val roundTripped = requireNotNull(CameraPreset.fromJson(inMemory.toJson()))
-        for (preset in listOf(parsed, roundTripped)) {
+        val saved = parsed.toJson()
+        val roundTripped = requireNotNull(CameraPreset.fromJson(saved))
+        val parsedList = CameraPreset.listFromJson("[$legacyJson]").single()
+        for (preset in listOf(parsed, roundTripped, parsedList)) {
             assertEquals(1.1f, preset.colorRecipe.saturation, 0.0001f)
-            assertEquals(0.5f, preset.colorRecipe.paletteX, 0f)
-            assertEquals(0.25f, ColorPaletteMapper.basicToneAmount(preset.colorRecipe), 0.0001f)
-            assertEquals(
-                1.1f,
-                ColorPaletteMapper.mergeIntoEffectiveParams(preset.colorRecipe).saturation,
-                0.0001f,
-            )
+            assertEquals(0.25f, preset.colorRecipe.tonality, 0.0001f)
+        }
+        for (field in listOf("paletteX", "paletteY", "paletteDensity", "toneToe", "toneShoulder", "tonePivot")) {
+            assertFalse(saved.contains("\"$field\""))
+        }
+    }
+
+    @Test
+    fun canonicalTonality_preventsLegacyPaletteFromBeingAppliedAgain() {
+        val preset = requireNotNull(CameraPreset.fromJson("""
+            {"id":"canonical","colorRecipe":{
+                "saturation":0.8,"tonality":-0.3,
+                "paletteX":1.0,"paletteY":0.0,"paletteDensity":1.0
+            }}
+        """.trimIndent()))
+        assertEquals(0.8f, preset.colorRecipe.saturation, 0f)
+        assertEquals(-0.3f, preset.colorRecipe.tonality, 0f)
+    }
+
+    @Test
+    fun legacyPaletteMigration_clampsCoordinatesDensityAndResult() {
+        for ((recipe, saturation, tonality) in listOf(
+            Triple("""{"saturation":1.8,"paletteX":2,"paletteY":-1,"paletteDensity":2}""", 2f, 1f),
+            Triple("""{"saturation":0.2,"paletteX":-1,"paletteY":2,"paletteDensity":1}""", 0f, -1f),
+            Triple("""{"saturation":1.2,"paletteX":0,"paletteY":0,"paletteDensity":0}""", 1.2f, 0f),
+            Triple("""{"saturation":0.9}""", 0.9f, 0f),
+        )) {
+            val preset = requireNotNull(CameraPreset.fromJson("""{"id":"legacy","colorRecipe":$recipe}"""))
+            assertEquals(saturation, preset.colorRecipe.saturation, 0.0001f)
+            assertEquals(tonality, preset.colorRecipe.tonality, 0.0001f)
         }
     }
 
@@ -284,7 +304,7 @@ class CameraPresetJsonCodecTest {
         assertEquals(0.25f, preset.colorRecipe.exposure, 0.0001f)
         assertEquals(1f, preset.colorRecipe.contrast, 0.0001f)
         assertEquals(1f, preset.colorRecipe.saturation, 0.0001f)
-        assertEquals(0.5f, preset.colorRecipe.paletteX, 0.0001f)
+        assertEquals(0f, preset.colorRecipe.tonality, 0.0001f)
         assertEquals(1f, preset.colorRecipe.lutIntensity, 0.0001f)
         assertEquals(0.15f, preset.colorRecipe.flash, 0.0001f)
         assertEquals(0.08f, preset.colorRecipe.gradingShadowHue, 0.0001f)

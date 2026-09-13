@@ -8,7 +8,6 @@ import android.opengl.*
 import android.os.SystemClock
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.livephoto.resolveLivePhotoRotationDegrees
-import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
@@ -388,28 +387,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var vibrance: Float = 1f // 0.0 ~ 2.0
 
     @Volatile
+    var tonality: Float = 0f // -1.0 ~ +1.0
+
+    @Volatile
     var highlights: Float = 0f // -1.0 ~ +1.0
 
     @Volatile
     var shadows: Float = 0f // -1.0 ~ +1.0
-
-    @Volatile
-    var toneToe: Float = 0f // -1.0 ~ +1.0
-
-    @Volatile
-    var toneShoulder: Float = 0f // -1.0 ~ +1.0
-
-    @Volatile
-    var tonePivot: Float = 0f // -1.0 ~ +1.0
-
-    @Volatile
-    var paletteX: Float = 0.5f
-
-    @Volatile
-    var paletteY: Float = 0.5f
-
-    @Volatile
-    var paletteDensity: Float = 1f
 
     @Volatile
     var filmGrain: Float = 0f // 0.0 ~ 1.0
@@ -872,9 +856,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 highlights = params.highlights,
                 shadows = params.shadows
             )
-            GLES30.glUniform1f(locations.uToneToeLocation, params.toneToe)
-            GLES30.glUniform1f(locations.uToneShoulderLocation, params.toneShoulder)
-            GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
             GLES30.glUniform1f(locations.uSharpeningLocation, params.sharpness.coerceIn(-1f, 1f))
             GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
             GLES30.glUniform1f(
@@ -933,7 +914,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             textureUnit = 3,
             samplerLocation = locations.uBasicToneLutLocation,
             intensityLocation = locations.uBasicToneIntensityLocation,
-            amount = ColorPaletteMapper.basicToneAmount(params),
+            amount = params.tonality,
         )
 
         GLES30.glUniform2f(
@@ -3272,12 +3253,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             color = vibrance,
             highlights = highlights,
             shadows = shadows,
-            toneToe = toneToe,
-            toneShoulder = toneShoulder,
-            tonePivot = tonePivot,
-            paletteX = paletteX,
-            paletteY = paletteY,
-            paletteDensity = paletteDensity,
+            tonality = tonality,
             fade = fade,
             filmGrain = filmGrain,
             vignette = vignette,
@@ -3368,12 +3344,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         vibrance = params.color
         highlights = params.highlights
         shadows = params.shadows
-        toneToe = params.toneToe
-        toneShoulder = params.toneShoulder
-        tonePivot = params.tonePivot
-        paletteX = params.paletteX
-        paletteY = params.paletteY
-        paletteDensity = params.paletteDensity
+        tonality = params.tonality
         filmGrain = params.filmGrain
         vignette = params.vignette
         flash = params.flash

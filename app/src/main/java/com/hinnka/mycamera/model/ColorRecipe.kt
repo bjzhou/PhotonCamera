@@ -14,6 +14,7 @@ import com.hinnka.mycamera.R
 data class ColorRecipeParams(
     val exposure: Float = 0f,       // -2.0 ~ +2.0 (EV值，曝光调整)
     val contrast: Float = 1f,       // 0.5 ~ 1.5 (对比度，1为无调整)
+    val tonality: Float = 0f,       // -1.0 ~ +1.0 (BasicTone 影调强度，0为无调整)
     val saturation: Float = 1f,     // 0.0 ~ 2.0 (饱和度，1为无调整)
     val temperature: Float = 0f,    // -1.0 ~ +1.0 (色温，负值偏冷，正值偏暖)
     val tint: Float = 0f,           // -1.0 ~ +1.0 (色调，负值偏绿，正值偏品红)
@@ -21,12 +22,6 @@ data class ColorRecipeParams(
     val color: Float = 0f,       // -1.0 ~ 1.0 (色彩密度，0为无调整)
     val highlights: Float = 0f,     // -1.0 ~ +1.0 (高光调整，0为无调整)
     val shadows: Float = 0f,        // -1.0 ~ +1.0 (阴影调整，0为无调整)
-    val toneToe: Float = 0f,        // -1.0 ~ +1.0 (影调曲线暗部塑形)
-    val toneShoulder: Float = 0f,   // -1.0 ~ +1.0 (影调曲线亮部塑形)
-    val tonePivot: Float = 0f,      // -1.0 ~ +1.0 (影调曲线中点偏移)
-    val paletteX: Float = 0.5f,     // 旧调色盘横向落点，读取和保存时合并入 saturation
-    val paletteY: Float = 0.5f,     // 调色盘纵向落点
-    val paletteDensity: Float = 1f, // 调色盘浓度
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     val flash: Float = 0f,          // 0.0 ~ 1.0 (镜头轴向直闪模拟强度，0为无效果)
@@ -101,6 +96,7 @@ data class ColorRecipeParams(
     fun isDefault(): Boolean {
         return exposure == 0f &&
                 contrast == 1f &&
+                tonality == 0f &&
                 saturation == 1f &&
                 temperature == 0f &&
                 tint == 0f &&
@@ -108,12 +104,6 @@ data class ColorRecipeParams(
                 color == 0f &&
                 highlights == 0f &&
                 shadows == 0f &&
-                toneToe == 0f &&
-                toneShoulder == 0f &&
-                tonePivot == 0f &&
-                paletteX == 0.5f &&
-                paletteY == 0.5f &&
-                paletteDensity == 1f &&
                 filmGrain == 0f &&
                 vignette == 0f &&
                 flash == 0f &&
@@ -186,6 +176,7 @@ data class ColorRecipeParams(
     fun isSameAs(other: ColorRecipeParams): Boolean {
         return exposure == other.exposure &&
                 contrast == other.contrast &&
+                tonality == other.tonality &&
                 saturation == other.saturation &&
                 temperature == other.temperature &&
                 tint == other.tint &&
@@ -193,12 +184,6 @@ data class ColorRecipeParams(
                 color == other.color &&
                 highlights == other.highlights &&
                 shadows == other.shadows &&
-                toneToe == other.toneToe &&
-                toneShoulder == other.toneShoulder &&
-                tonePivot == other.tonePivot &&
-                paletteX == other.paletteX &&
-                paletteY == other.paletteY &&
-                paletteDensity == other.paletteDensity &&
                 filmGrain == other.filmGrain &&
                 vignette == other.vignette &&
                 flash == other.flash &&
@@ -270,7 +255,7 @@ data class ColorRecipeParams(
      * 序列化为 JSON 字符串
      */
     fun toJson(): String = gson.toJson(
-        ColorPaletteMapper.mergeIntoEffectiveParams(this).copy(halation = 0f)
+        copy(halation = 0f)
     )
 
     companion object {
@@ -292,7 +277,7 @@ data class ColorRecipeParams(
                     } else {
                         DEFAULT.gradingBlending
                     }
-                ).let(ColorPaletteMapper::mergeIntoEffectiveParams)
+                ).let { LegacyColorRecipeMigration.migrate(it, root.asJsonObject) }
             } catch (_: Exception) {
                 DEFAULT
             }
@@ -318,6 +303,7 @@ enum class RecipeParam(
 ) {
     EXPOSURE(R.string.recipe_param_exposure, -2.0f, 2.0f, 0f),
     CONTRAST(R.string.recipe_param_contrast, 0.5f, 1.5f, 1f),
+    TONALITY(R.string.recipe_palette_tone, -1.0f, 1.0f, 0f),
     SATURATION(R.string.recipe_param_saturation, 0.0f, 2.0f, 1f),
     TEMPERATURE(R.string.recipe_param_temperature, -1.0f, 1.0f, 0f),
     TINT(R.string.recipe_param_tint, -1.0f, 1.0f, 0f),
@@ -390,7 +376,8 @@ enum class RecipeParam(
         return when (this) {
             EXPOSURE -> params.exposure
             CONTRAST -> params.contrast
-            SATURATION -> ColorPaletteMapper.effectiveSaturation(params)
+            TONALITY -> params.tonality
+            SATURATION -> params.saturation
             TEMPERATURE -> params.temperature
             TINT -> params.tint
             FADE -> params.fade
@@ -458,7 +445,8 @@ enum class RecipeParam(
         return when (this) {
             EXPOSURE -> params.copy(exposure = clampedValue)
             CONTRAST -> params.copy(contrast = clampedValue)
-            SATURATION -> params.copy(saturation = clampedValue, paletteX = ColorPaletteState.DEFAULT.x)
+            TONALITY -> params.copy(tonality = clampedValue)
+            SATURATION -> params.copy(saturation = clampedValue)
             TEMPERATURE -> params.copy(temperature = clampedValue)
             TINT -> params.copy(tint = clampedValue)
             FADE -> params.copy(fade = clampedValue)

@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 42,
+    version = 43,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -400,6 +400,73 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_42_43 = object : androidx.room.migration.Migration(42, 43) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Android 11 SQLite requires rebuilding the table to remove columns.
+                // Keep every other column definition and index, including historical defaults.
+                val prefixes = listOf("recipe_", "baseline_recipe_")
+                val legacyFields = setOf("toneToe", "toneShoulder", "tonePivot", "paletteX", "paletteY", "paletteDensity")
+                val removedColumns = prefixes.flatMap { prefix -> legacyFields.map { prefix + it } }.toSet()
+                val oldColumns = mutableListOf<String>()
+                val columns = mutableListOf<String>()
+                val definitions = mutableListOf<String>()
+                fun quote(name: String) = "`${name.replace("`", "``")}`"
+                db.query("PRAGMA table_info(`gallery_media`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndexOrThrow("name")
+                    val typeIndex = cursor.getColumnIndexOrThrow("type")
+                    val notNullIndex = cursor.getColumnIndexOrThrow("notnull")
+                    val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+                    val primaryKeyIndex = cursor.getColumnIndexOrThrow("pk")
+                    while (cursor.moveToNext()) {
+                        val name = cursor.getString(nameIndex)
+                        oldColumns += name
+                        if (name in removedColumns) continue
+                        columns += name
+                        definitions += buildString {
+                            append(quote(name)).append(' ').append(cursor.getString(typeIndex))
+                            if (cursor.getInt(notNullIndex) != 0) append(" NOT NULL")
+                            if (!cursor.isNull(defaultIndex)) append(" DEFAULT ").append(cursor.getString(defaultIndex))
+                            if (cursor.getInt(primaryKeyIndex) != 0) append(" PRIMARY KEY")
+                        }
+                    }
+                }
+                val indices = mutableListOf<String>()
+                db.query("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'gallery_media' AND sql IS NOT NULL").use { cursor ->
+                    while (cursor.moveToNext()) indices += cursor.getString(0)
+                }
+                fun clampedPalette(prefix: String, field: String, default: String) =
+                    "MIN(1.0, MAX(0.0, COALESCE(${quote(prefix + field)}, $default)))"
+                fun presentRecipe(prefix: String) = oldColumns.filter { it.startsWith(prefix) }
+                    .joinToString(" OR ") { "${quote(it)} IS NOT NULL" }
+                val expressions = columns.map { name ->
+                    val prefix = prefixes.firstOrNull { name == it + "saturation" }
+                    if (prefix == null) {
+                        quote(name)
+                    } else {
+                        val x = clampedPalette(prefix, "paletteX", "0.5")
+                        val density = clampedPalette(prefix, "paletteDensity", "1.0")
+                        "CASE WHEN ${presentRecipe(prefix)} THEN " +
+                            "MIN(2.0, MAX(0.0, COALESCE(${quote(name)}, 1.0) + (2.0 * $x - 1.0) * 0.6 * $density)) ELSE NULL END"
+                    }
+                }.toMutableList()
+                prefixes.forEach { prefix ->
+                    columns += prefix + "tonality"
+                    definitions += "${quote(prefix + "tonality")} REAL"
+                    val y = clampedPalette(prefix, "paletteY", "0.5")
+                    val density = clampedPalette(prefix, "paletteDensity", "1.0")
+                    expressions += "CASE WHEN ${presentRecipe(prefix)} THEN (1.0 - 2.0 * $y) * $density ELSE NULL END"
+                }
+                db.execSQL("CREATE TABLE `gallery_media_new` (${definitions.joinToString(", ")})")
+                db.execSQL(
+                    "INSERT INTO `gallery_media_new` (${columns.joinToString(", ") { quote(it) }}) " +
+                        "SELECT ${expressions.joinToString(", ")} FROM `gallery_media`"
+                )
+                db.execSQL("DROP TABLE `gallery_media`")
+                db.execSQL("ALTER TABLE `gallery_media_new` RENAME TO `gallery_media`")
+                indices.forEach(db::execSQL)
+            }
+        }
+
         private fun rebuildGalleryMediaWithoutLegacyGoogleToneMapFlag(
             db: androidx.sqlite.db.SupportSQLiteDatabase
         ) {
@@ -773,7 +840,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_38_39,
                         MIGRATION_39_40,
                         MIGRATION_40_41,
-                        MIGRATION_41_42
+                        MIGRATION_41_42,
+                        MIGRATION_42_43
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

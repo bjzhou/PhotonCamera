@@ -349,6 +349,7 @@ fun SettingsScreen(
         hdrPlusBracketExposureEnabled
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
+    val colorPaletteEnabled by viewModel.colorPaletteEnabled.collectAsState()
     val developAnimationStyle by viewModel.developAnimationStyle.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useHeicExport by viewModel.useHeicExport.collectAsState(initial = false)
@@ -2433,6 +2434,18 @@ fun SettingsScreen(
                             ),
                             currentLevel = widgetTheme,
                             onLevelSelected = { viewModel.setWidgetTheme(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_color_palette),
+                            description = stringResource(R.string.settings_color_palette_description),
+                            checked = colorPaletteEnabled,
+                            onCheckedChange = viewModel::setColorPaletteEnabled
                         )
 
                         HorizontalDivider(

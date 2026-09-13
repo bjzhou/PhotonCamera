@@ -10,8 +10,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
-import com.hinnka.mycamera.model.ColorPaletteMapper
-import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
@@ -47,18 +45,12 @@ fun LutEditBottomSheet(
     val coroutineScope = rememberCoroutineScope()
 
     var editingParams by remember { mutableStateOf(ColorRecipeParams.DEFAULT) }
-    var paletteState by remember { mutableStateOf(ColorPaletteState.DEFAULT) }
     var saveJob by remember { mutableStateOf<Job?>(null) }
     var hasPendingLutSave by remember { mutableStateOf(false) }
     val openingInitialParams = remember(lutId) { initialParams }
 
     fun loadParams(params: ColorRecipeParams) {
         editingParams = params
-        paletteState = ColorPaletteState(
-            x = params.paletteX,
-            y = params.paletteY,
-            density = params.paletteDensity
-        ).normalized()
     }
 
     fun scheduleLutSave(params: ColorRecipeParams) {
@@ -115,21 +107,10 @@ fun LutEditBottomSheet(
         ) {
             ColorRecipePanel(
                 currentParams = editingParams,
-                paletteState = paletteState,
-                onPaletteStateChange = { newState ->
-                    val normalizedState = newState.normalized()
-                    paletteState = normalizedState
-                    onParamsUpdated(ColorPaletteMapper.updatePaletteState(editingParams, normalizedState))
-                },
                 onParamChange = { param, value ->
                     onParamsUpdated(param.setValue(editingParams, value))
                 },
                 onParamsChange = { newParams ->
-                    paletteState = ColorPaletteState(
-                        x = newParams.paletteX,
-                        y = newParams.paletteY,
-                        density = newParams.paletteDensity
-                    ).normalized()
                     onParamsUpdated(newParams)
                 },
                 onRemarksChange = {

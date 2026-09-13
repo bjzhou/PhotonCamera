@@ -11,7 +11,6 @@ import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
 import androidx.core.graphics.createBitmap
-import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.lut.ChromaDenoiseShaders
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
@@ -159,9 +158,6 @@ class LutImageProcessor(context: Context? = null) {
     private var uVibranceLoc = 0
     private var uHighlightsLoc = 0
     private var uShadowsLoc = 0
-    private var uToneToeLoc = 0
-    private var uToneShoulderLoc = 0
-    private var uTonePivotLoc = 0
     private var uVignetteLoc = 0
     private var uBleachBypassLoc = 0
     private var uNoiseLoc = 0
@@ -337,12 +333,11 @@ class LutImageProcessor(context: Context? = null) {
         }
 
         // 提取色彩配方参数
-        val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
         val halation = 0f
-        val softLight = effectiveRecipeParams?.softLight ?: 0f
+        val softLight = colorRecipeParams?.softLight ?: 0f
 
         // 锐度属于色彩配方，在完成 sRGB 调色后统一处理；不读取 RAW/元数据锐化值。
-        val sharpening: Float = effectiveRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
+        val sharpening: Float = colorRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
         val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
@@ -396,7 +391,7 @@ class LutImageProcessor(context: Context? = null) {
             inputTexId,
             colorSpace,
             lutConfig,
-            effectiveRecipeParams,
+            colorRecipeParams,
             sharpening,
             lutMaskType,
         )
@@ -484,12 +479,11 @@ class LutImageProcessor(context: Context? = null) {
         }
 
         // 提取色彩配方参数
-        val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
         val halation = 0f
-        val softLight = effectiveRecipeParams?.softLight ?: 0f
+        val softLight = colorRecipeParams?.softLight ?: 0f
 
         // 锐度属于色彩配方，在完成 sRGB 调色后统一处理；不读取 RAW/元数据锐化值。
-        val sharpening: Float = effectiveRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
+        val sharpening: Float = colorRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
         val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
@@ -547,7 +541,7 @@ class LutImageProcessor(context: Context? = null) {
             inputTexId,
             renderColorSpace,
             lutConfig,
-            effectiveRecipeParams,
+            colorRecipeParams,
             sharpening,
             lutMaskType,
         )
@@ -792,7 +786,7 @@ class LutImageProcessor(context: Context? = null) {
             inputTextureId = bitmapDenoiseTexId[0],
             inputColorSpace = bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
             lutConfig = null,
-            effectiveRecipeParams = null,
+            colorRecipeParams = null,
             sharpening = 0f,
             lutMaskType = 0
         )
@@ -807,38 +801,35 @@ class LutImageProcessor(context: Context? = null) {
         inputTextureId: Int,
         inputColorSpace: ColorSpace,
         lutConfig: LutConfig?,
-        effectiveRecipeParams: ColorRecipeParams?,
+        colorRecipeParams: ColorRecipeParams?,
         sharpening: Float,
         lutMaskType: Int,
     ): Bitmap {
-        val colorRecipeEnabled = effectiveRecipeParams != null && !effectiveRecipeParams.isDefault()
-        val exposure = effectiveRecipeParams?.exposure ?: 0f
-        val contrast = effectiveRecipeParams?.contrast ?: 1f
-        val saturation = effectiveRecipeParams?.saturation ?: 1f
-        val temperature = effectiveRecipeParams?.temperature ?: 0f
-        val tint = effectiveRecipeParams?.tint ?: 0f
-        val fade = effectiveRecipeParams?.fade ?: 0f
-        val vibrance = effectiveRecipeParams?.color ?: 0f
-        val highlights = effectiveRecipeParams?.highlights ?: 0f
-        val shadows = effectiveRecipeParams?.shadows ?: 0f
-        val toneToe = effectiveRecipeParams?.toneToe ?: 0f
-        val toneShoulder = effectiveRecipeParams?.toneShoulder ?: 0f
-        val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
-        val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
-        val vignette = effectiveRecipeParams?.vignette ?: 0f
-        val flash = effectiveRecipeParams?.flash ?: 0f
-        val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
-        val clarity = effectiveRecipeParams?.clarity ?: 0f
-        val bloom = effectiveRecipeParams?.bloom ?: 0f
+        val colorRecipeEnabled = colorRecipeParams != null && !colorRecipeParams.isDefault()
+        val exposure = colorRecipeParams?.exposure ?: 0f
+        val contrast = colorRecipeParams?.contrast ?: 1f
+        val saturation = colorRecipeParams?.saturation ?: 1f
+        val temperature = colorRecipeParams?.temperature ?: 0f
+        val tint = colorRecipeParams?.tint ?: 0f
+        val fade = colorRecipeParams?.fade ?: 0f
+        val vibrance = colorRecipeParams?.color ?: 0f
+        val highlights = colorRecipeParams?.highlights ?: 0f
+        val shadows = colorRecipeParams?.shadows ?: 0f
+        val filmGrain = colorRecipeParams?.filmGrain ?: 0f
+        val vignette = colorRecipeParams?.vignette ?: 0f
+        val flash = colorRecipeParams?.flash ?: 0f
+        val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
+        val clarity = colorRecipeParams?.clarity ?: 0f
+        val bloom = colorRecipeParams?.bloom ?: 0f
         val halation = 0f
-        val softLight = effectiveRecipeParams?.softLight ?: 0f
-        val redHalation = effectiveRecipeParams?.redHalation ?: 0f
-        val chromaticAberration = effectiveRecipeParams?.chromaticAberration ?: 0f
-        val noise = effectiveRecipeParams?.noise ?: 0f
-        val lowRes = effectiveRecipeParams?.lowRes ?: 0f
-        val intensity = effectiveRecipeParams?.lutIntensity ?: 1f
-        val lchAdjustments = ColorRecipeGl.lchAdjustments(effectiveRecipeParams)
-        val primaryCalibrationMatrix = CameraRawCalibrationMatrix.build(effectiveRecipeParams)
+        val softLight = colorRecipeParams?.softLight ?: 0f
+        val redHalation = colorRecipeParams?.redHalation ?: 0f
+        val chromaticAberration = colorRecipeParams?.chromaticAberration ?: 0f
+        val noise = colorRecipeParams?.noise ?: 0f
+        val lowRes = colorRecipeParams?.lowRes ?: 0f
+        val intensity = colorRecipeParams?.lutIntensity ?: 1f
+        val lchAdjustments = ColorRecipeGl.lchAdjustments(colorRecipeParams)
+        val primaryCalibrationMatrix = CameraRawCalibrationMatrix.build(colorRecipeParams)
         val program = shaderProgram
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, width, height)
@@ -888,9 +879,6 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFade"), fade)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVibrance"), vibrance)
             ShadowsHighlightsShader.bindUniforms(program, highlights, shadows)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uToneToe"), toneToe)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uToneShoulder"), toneShoulder)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTonePivot"), tonePivot)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVignette"), vignette)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFlash"), flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBleachBypass"), bleachBypass)
@@ -906,29 +894,29 @@ class LutImageProcessor(context: Context? = null) {
             )
             GLES30.glUniform3f(
                 GLES30.glGetUniformLocation(program, "uGradingHues"),
-                effectiveRecipeParams.gradingShadowHue,
-                effectiveRecipeParams.gradingMidtoneHue,
-                effectiveRecipeParams.gradingHighlightHue
+                colorRecipeParams.gradingShadowHue,
+                colorRecipeParams.gradingMidtoneHue,
+                colorRecipeParams.gradingHighlightHue
             )
             GLES30.glUniform3f(
                 GLES30.glGetUniformLocation(program, "uGradingAmounts"),
-                effectiveRecipeParams.gradingShadowAmount,
-                effectiveRecipeParams.gradingMidtoneAmount,
-                effectiveRecipeParams.gradingHighlightAmount
+                colorRecipeParams.gradingShadowAmount,
+                colorRecipeParams.gradingMidtoneAmount,
+                colorRecipeParams.gradingHighlightAmount
             )
             GLES30.glUniform3f(
                 GLES30.glGetUniformLocation(program, "uGradingLuminances"),
-                effectiveRecipeParams.gradingShadowLuminance,
-                effectiveRecipeParams.gradingMidtoneLuminance,
-                effectiveRecipeParams.gradingHighlightLuminance,
+                colorRecipeParams.gradingShadowLuminance,
+                colorRecipeParams.gradingMidtoneLuminance,
+                colorRecipeParams.gradingHighlightLuminance,
             )
             GLES30.glUniform1f(
                 GLES30.glGetUniformLocation(program, "uGradingBalance"),
-                effectiveRecipeParams.gradingBalance
+                colorRecipeParams.gradingBalance
             )
             GLES30.glUniform1f(
                 GLES30.glGetUniformLocation(program, "uGradingBlending"),
-                effectiveRecipeParams.gradingBlending
+                colorRecipeParams.gradingBlending
             )
             ColorRecipeGl.bindLchAdjustments(
                 uLchHueAdjustmentsLoc,
@@ -940,10 +928,10 @@ class LutImageProcessor(context: Context? = null) {
         }
 
         // 设置曲线纹理（Unit 3）
-        val masterPts = effectiveRecipeParams?.masterCurvePoints
-        val redPts = effectiveRecipeParams?.redCurvePoints
-        val greenPts = effectiveRecipeParams?.greenCurvePoints
-        val bluePts = effectiveRecipeParams?.blueCurvePoints
+        val masterPts = colorRecipeParams?.masterCurvePoints
+        val redPts = colorRecipeParams?.redCurvePoints
+        val greenPts = colorRecipeParams?.greenCurvePoints
+        val bluePts = colorRecipeParams?.blueCurvePoints
         val curveActive = !CurveUtils.isIdentity(masterPts, redPts, greenPts, bluePts)
         if (curveActive) {
             val curveBuffer = CurveUtils.buildCurveTextureBuffer(masterPts, redPts, greenPts, bluePts)
@@ -959,7 +947,7 @@ class LutImageProcessor(context: Context? = null) {
             textureUnit = 6,
             samplerLocation = GLES30.glGetUniformLocation(program, "uBasicToneLut"),
             intensityLocation = GLES30.glGetUniformLocation(program, "uBasicToneIntensity"),
-            amount = effectiveRecipeParams?.let(ColorPaletteMapper::basicToneAmount) ?: 0f,
+            amount = colorRecipeParams?.tonality ?: 0f,
         )
 
         // 设置 HDF 参数
@@ -1299,9 +1287,6 @@ class LutImageProcessor(context: Context? = null) {
         uVibranceLoc = GLES30.glGetUniformLocation(shaderProgram, "uVibrance")
         uHighlightsLoc = GLES30.glGetUniformLocation(shaderProgram, "uHighlights")
         uShadowsLoc = GLES30.glGetUniformLocation(shaderProgram, "uShadows")
-        uToneToeLoc = GLES30.glGetUniformLocation(shaderProgram, "uToneToe")
-        uToneShoulderLoc = GLES30.glGetUniformLocation(shaderProgram, "uToneShoulder")
-        uTonePivotLoc = GLES30.glGetUniformLocation(shaderProgram, "uTonePivot")
         uVignetteLoc = GLES30.glGetUniformLocation(shaderProgram, "uVignette")
         uBleachBypassLoc = GLES30.glGetUniformLocation(shaderProgram, "uBleachBypass")
         uNoiseLoc = GLES30.glGetUniformLocation(shaderProgram, "uNoise")
@@ -2810,9 +2795,6 @@ class LutImageProcessor(context: Context? = null) {
             uniform float uVibrance;      // 0.0 ~ 2.0 (蓝色增强)
             uniform float uHighlights;    // -1.0 ~ +1.0 (高光调整)
             uniform float uShadows;       // -1.0 ~ +1.0 (阴影调整)
-            uniform float uToneToe;       // -1.0 ~ +1.0 (暗部曲线塑形)
-            uniform float uToneShoulder;  // -1.0 ~ +1.0 (亮部曲线塑形)
-            uniform float uTonePivot;     // -1.0 ~ +1.0 (曲线中点偏移)
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
             uniform float uFlash;         // 0.0 ~ 1.0 (镜头轴向直闪模拟)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
@@ -2890,46 +2872,6 @@ class LutImageProcessor(context: Context? = null) {
             }
 
             ${ShadowsHighlightsShader.GLSL}
-
-            float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
-                float safeLuma = clamp(luma, 0.0, 1.0);
-                float pivotPoint = clamp(0.5 + pivot * 0.12, 0.2, 0.8);
-                float toeAmount = clamp(abs(toe), 0.0, 1.0);
-                float shoulderAmount = clamp(abs(shoulder), 0.0, 1.0);
-                float toeGamma = (toe >= 0.0)
-                    ? mix(1.0, 0.68, toeAmount)
-                    : mix(1.0, 1.85, toeAmount);
-                float shoulderGamma = (shoulder >= 0.0)
-                    ? mix(1.0, 0.72, shoulderAmount)
-                    : mix(1.0, 1.85, shoulderAmount);
-
-                if (safeLuma <= pivotPoint) {
-                    float segment = clamp(safeLuma / max(pivotPoint, 0.0001), 0.0, 1.0);
-                    return clamp(pow(segment, toeGamma) * pivotPoint, 0.0, 1.0);
-                }
-
-                float segment = clamp((safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001), 0.0, 1.0);
-                float result = 1.0 - pow(max(0.0, 1.0 - segment), shoulderGamma) * (1.0 - pivotPoint);
-                return clamp(result, 0.0, 1.0);
-            }
-
-            vec3 applyToneCurve(vec3 color, float toe, float shoulder, float pivot) {
-                if (abs(toe) < 0.001 && abs(shoulder) < 0.001 && abs(pivot) < 0.001) {
-                    return color;
-                }
-                vec3 nonNegativeColor = max(color, vec3(0.0));
-                vec3 curveSampleColor = clamp(nonNegativeColor, 0.0, 1.0);
-                float luma = getLuma(curveSampleColor);
-                float peak = max(curveSampleColor.r, max(curveSampleColor.g, curveSampleColor.b));
-                float toneSignal = mix(luma, peak, 0.65);
-                float curvedSignal = applyToneCurveToLuma(toneSignal, toe, shoulder, pivot);
-                if (toneSignal < 0.0001) {
-                    return curveSampleColor;
-                }
-                float safeRatio = clamp(curvedSignal / max(toneSignal, 0.0001), 0.0, 16.0);
-                vec3 scaled = nonNegativeColor * safeRatio;
-                return sanitizeColor(mix(vec3(curvedSignal), scaled, 0.96));
-            }
 
             ${PreviewColorShaderModules.OKLAB}
 
@@ -3012,11 +2954,7 @@ class LutImageProcessor(context: Context? = null) {
                     color.rgb = applyContrastSCurve(color.rgb, uContrast);
                     color.rgb = sanitizeColor(color.rgb);
 
-                    // 3.5. 影调曲线（独立塑造高调/低调 profile）
-                    color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
-                    color.rgb = sanitizeColor(color.rgb);
-
-                    // 3.6. Oplus BasicTone 端点 LUT（符号在 CPU 侧选端点，绝对值控制强度）
+                    // 3.5. Oplus BasicTone 端点 LUT（符号在 CPU 侧选端点，绝对值控制强度）
                     color.rgb = applyBasicToneLut(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
 

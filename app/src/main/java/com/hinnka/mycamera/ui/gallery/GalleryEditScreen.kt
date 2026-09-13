@@ -62,8 +62,6 @@ import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.PostEditGeometry
-import com.hinnka.mycamera.model.ColorPaletteMapper
-import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.toEffectParams
@@ -1507,24 +1505,10 @@ fun GalleryEditScreen(
                                 EDIT_TAB_ADJUSTMENTS -> {
                                     Spacer(modifier = Modifier.height(6.dp))
                                     val effectiveRecipe = editPhotoRecipeParams ?: editLutRecipeParams
-                                    val paletteState = ColorPaletteState(
-                                        x = effectiveRecipe.paletteX,
-                                        y = effectiveRecipe.paletteY,
-                                        density = effectiveRecipe.paletteDensity
-                                    ).normalized()
                                     val applyEffectsToVideo by viewModel.editApplyEffectsToVideo.collectAsState()
 
                                     ColorRecipePanel(
                                         currentParams = effectiveRecipe,
-                                        paletteState = paletteState,
-                                        onPaletteStateChange = { state ->
-                                            viewModel.setPhotoRecipeParams(
-                                                ColorPaletteMapper.updatePaletteState(
-                                                    effectiveRecipe,
-                                                    state.normalized()
-                                                )
-                                            )
-                                        },
                                         onParamChange = { param, value ->
                                             viewModel.setPhotoRecipeParams(
                                                 param.setValue(effectiveRecipe, value)

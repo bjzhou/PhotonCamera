@@ -128,7 +128,7 @@ data class CameraPreset(
         val normalized = withoutLegacyHdf()
         return normalized
             .copy(
-                colorRecipe = ColorPaletteMapper.mergeIntoEffectiveParams(normalized.colorRecipe),
+                colorRecipe = normalized.colorRecipe,
                 lutId = normalizeLutId(lutId),
                 rawDcpId = rawDcpId?.takeIf { it.isNotBlank() },
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),
@@ -191,7 +191,7 @@ data class CameraPreset(
                 name = "builtin_portrait",
                 lutId = "astia",
                 colorRecipe = ColorRecipeParams.DEFAULT.copy(
-                    paletteY = 0.8f,
+                    tonality = -0.6f,
                     sharpness = -0.2f
                 ),
                 effects = EffectParams.DEFAULT.copy(
