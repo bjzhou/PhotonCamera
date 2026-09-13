@@ -409,7 +409,16 @@ data class CameraState(
 
     val isMultiFrameEnabled: Boolean
         get() = multiFrameOutputScale != null &&
-            (!useRaw || (isRawSupported && isRawMultiFrameSupported))
+            (!useRaw || (isRawSupported && isRawMultiFrameSupported && normalizedHdrPlusFrameCount > 1))
+
+    // A single RAW frame uses the ordinary capture and development path.
+    // Resolve the configured count without depending on the multi-frame enablement above.
+    private val normalizedHdrPlusFrameCount: Int
+        get() = MultiFrameConfig.normalizeHdrPlusFrameCount(
+            hdrPlusFrameCount,
+            bracketExposureEnabled = hdrPlusMergeMode.supportsBracketExposure &&
+                hdrPlusBracketExposureEnabled,
+        )
 
     // The RAW stacker only supports the standard 2x2 Bayer lattice. Resolve this
     // from the current lens so lens switches retain the user's multi-frame settings.
@@ -439,10 +448,7 @@ data class CameraState(
             isJpgMaxEnabled -> MultiFrameConfig.normalizeDenoiseFrameCount(
                 jpgMultiFrameDenoiseFrameCount
             )
-            isRawMaxEnabled -> MultiFrameConfig.normalizeHdrPlusFrameCount(
-                hdrPlusFrameCount,
-                bracketExposureEnabled = isHdrPlusBracketExposureEnabled,
-            )
+            isRawMaxEnabled -> normalizedHdrPlusFrameCount
             else -> 1
         }
 
