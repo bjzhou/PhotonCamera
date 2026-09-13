@@ -207,19 +207,7 @@ data class RawMetadata(
         val profile = when (selection) {
             is RawNoiseProfileSelection.Calibrated -> selection.profile
             is RawNoiseProfileSelection.Camera2 -> {
-                val hasUsableSourceProfile = when (noiseProfileLayout) {
-                    RawNoiseProfileLayout.CAMERA2_CFA,
-                    RawNoiseProfileLayout.CANONICAL_BAYER ->
-                        RawNoiseModel.fromCamera2NoiseProfile(channelNoiseProfile)
-                            .hasValidCamera2Profile
-                    RawNoiseProfileLayout.DNG_RGB ->
-                        RawNoiseModel.fromDngNoiseProfile(channelNoiseProfile).let { model ->
-                            model.shotNoise.all { it > 0f } &&
-                                model.readNoise.any { it > 0f }
-                        }
-                    RawNoiseProfileLayout.NONE -> false
-                }
-                if (hasUsableSourceProfile) return this
+                if (hasUsableSourceNoiseProfile()) return this
                 selection.fallbackProfile
             }
         }
@@ -228,6 +216,17 @@ data class RawMetadata(
             minimumSensitivityIso = minimumSensitivityIso,
             maximumAnalogSensitivityIso = maxAnalogSensitivity,
         )
+        if (model == null && profile.requiresCameraGainLimits && hasUsableSourceNoiseProfile()) {
+            // Imported DNGs can contain a calibrated NoiseProfile without the camera's
+            // ISO limits. Preserve that measured source instead of inventing native gains.
+            PLog.w(
+                TAG,
+                "RAW native noise profile ${selection.id} unavailable: iso=$iso " +
+                    "minIso=$minimumSensitivityIso maxAnalogIso=$maxAnalogSensitivity; " +
+                    "retaining source noise profile ($noiseProfileLayout)",
+            )
+            return this
+        }
         return if (model != null) {
             copy(
                 channelNoiseProfile = model.canonicalChannelPairs(),
@@ -239,6 +238,17 @@ data class RawMetadata(
                 noiseProfileLayout = RawNoiseProfileLayout.NONE,
             )
         }
+    }
+
+    private fun hasUsableSourceNoiseProfile(): Boolean = when (noiseProfileLayout) {
+        RawNoiseProfileLayout.CAMERA2_CFA,
+        RawNoiseProfileLayout.CANONICAL_BAYER ->
+            RawNoiseModel.fromCamera2NoiseProfile(channelNoiseProfile).hasValidCamera2Profile
+        RawNoiseProfileLayout.DNG_RGB ->
+            RawNoiseModel.fromDngNoiseProfile(channelNoiseProfile).let { model ->
+                model.shotNoise.all { it > 0f } && model.readNoise.any { it > 0f }
+            }
+        RawNoiseProfileLayout.NONE -> false
     }
 
     companion object {

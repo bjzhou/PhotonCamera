@@ -15,6 +15,43 @@ import kotlin.math.abs
  * tuning gain again.
  */
 class CalibratedRawNoiseProfileTest {
+    @Test
+    fun pixel5MatchesOriginalAgcArm64SamplesWithTargetCameraGainLimits() {
+        // Oracle: original AGC9.6.19 V7 ARM64 callback, not this implementation.
+        // See research/agc_96_v7_defaults and extract_agc96_pixel5_noise_model.py.
+        val samples = requireNotNull(javaClass.getResourceAsStream(
+            "/noise_profiles/agc96_pixel5_rear_samples.csv",
+        )).bufferedReader().use { it.readLines().drop(1).filter(String::isNotBlank) }
+        assertEquals(160, samples.size)
+        val profile = CalibratedRawNoiseProfile.AGC_GOOGLE_REDFIN_REAR
+        for (minimumIso in listOf(80, 800)) {
+            samples.forEach { line ->
+                val row = line.split(',')
+                val analog = row[0].toFloat()
+                val digital = row[1].toFloat()
+                val plane = row[2].toInt()
+                val maxAnalogIso = (minimumIso * analog).toInt()
+                val iso = (maxAnalogIso * digital).toInt()
+                val model = requireNotNull(profile.evaluate(iso, minimumIso, maxAnalogIso))
+                assertEquals("S: $line minIso=$minimumIso", row[3].toFloat().toRawBits(),
+                    model.shotNoise[plane].toRawBits())
+                assertEquals("O: $line minIso=$minimumIso", row[4].toFloat().toRawBits(),
+                    model.readNoise[plane].toRawBits())
+            }
+        }
+    }
+
+    @Test
+    fun pixel5RequiresRealCameraGainLimitsInsteadOfAssumingReferenceIso55() {
+        val profile = CalibratedRawNoiseProfile.AGC_GOOGLE_REDFIN_REAR
+        assertNull(profile.evaluate(800))
+        assertNull(profile.evaluate(800, 80, 0))
+        assertNull(profile.evaluate(800, 0, 400))
+        assertNull(profile.evaluate(800, 80, 40))
+        assertEquals(2.0, profile.digitalGainAt(800, 80, 400)!!, 0.0)
+        assertEquals(5.0, profile.analogGainAt(800, 80, 400)!!, 0.0)
+    }
+
     private val gcamC = """
         double compute_noise_model_entry_S(int plane, int sens) {
             static double noise_model_A[] = { 1e-6, 2e-6, 3e-6, 4e-6 };

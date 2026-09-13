@@ -119,6 +119,7 @@ class RawNoiseProfileManager(context: Context) {
     }
 
     private fun loadCalibratedProfile(info: RawNoiseProfileInfo): CalibratedRawNoiseProfile? {
+        if (info.id == PIXEL5_PROFILE_ID) return CalibratedRawNoiseProfile.AGC_GOOGLE_REDFIN_REAR
         calibratedCache[info.id]?.let { return it }
         val path = info.filePath ?: return null
         return runCatching {
@@ -141,12 +142,20 @@ class RawNoiseProfileManager(context: Context) {
         private const val TAG = "RawNoiseProfileManager"
         const val SYSTEM_PROFILE_ID = RawNoiseProfileSelection.SYSTEM_CAMERA2_ID
         const val ADAPTIVE_PROFILE_ID = "adaptive_x9_ultra"
+        const val PIXEL5_PROFILE_ID = "builtin_noise_pixel5_agc"
         const val PIXEL8_PRO_PROFILE_ID = "builtin_noise_pixel8_pro"
         const val X9_ULTRA_PROFILE_ID = "builtin_noise_x9_ultra"
         const val X9_ULTRA_3X_PROFILE_ID = "builtin_noise_x9_ultra_3x"
-        const val DEFAULT_PROFILE_ID = SYSTEM_PROFILE_ID
+        const val DEFAULT_PROFILE_ID = PIXEL5_PROFILE_ID
 
         private val BUILT_IN_PROFILES = listOf(
+            RawNoiseProfileInfo(
+                id = PIXEL5_PROFILE_ID,
+                nameMap = emptyMap(),
+                filePath = null,
+                isBuiltIn = true,
+                nameResId = R.string.raw_noise_profile_pixel5,
+            ),
             RawNoiseProfileInfo(
                 id = SYSTEM_PROFILE_ID,
                 nameMap = emptyMap(),

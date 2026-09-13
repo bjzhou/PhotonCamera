@@ -8,6 +8,23 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class RawMetadataNoiseProfileTest {
+    @Test
+    fun pixel5OverridesValidHalModelInBothFrameResolverAndRawMetadata() {
+        val profile = CalibratedRawNoiseProfile.AGC_GOOGLE_REDFIN_REAR
+        val selection = RawNoiseProfileSelection.Calibrated(profile)
+        val source = metadata(floatArrayOf(1f, 10f, 2f, 20f, 3f, 30f, 4f, 40f))
+            .copy(minimumSensitivityIso = 80, maxAnalogSensitivity = 400)
+        val expected = requireNotNull(profile.evaluate(TEST_ISO, 80, 400))
+        val resolved = source.withNoiseProfileSelection(selection)
+        assertEquals(RawNoiseProfileLayout.CANONICAL_BAYER, resolved.noiseProfileLayout)
+        assertArrayEquals(expected.canonicalChannelPairs(), resolved.channelNoiseProfile, 0f)
+        val frame = com.hinnka.mycamera.processor.RawNoiseModelResolver.resolve(
+            selection, TEST_ISO, 80, 400, source.channelNoiseProfile,
+        )
+        assertEquals(com.hinnka.mycamera.processor.RawNoiseModelSource.GCAM_CALIBRATED, frame.source)
+        assertArrayEquals(expected.canonicalChannelPairs(), frame.model.canonicalChannelPairs(), 0f)
+    }
+
     private val systemSelection = RawNoiseProfileSelection.Camera2(
         fallbackProfile = CalibratedRawNoiseProfile.MGC_GOOGLE_BLUELINE_REAR,
     )
