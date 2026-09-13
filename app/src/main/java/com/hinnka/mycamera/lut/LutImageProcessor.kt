@@ -2853,6 +2853,7 @@ class LutImageProcessor(context: Context? = null) {
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
             ${LogInputGl.GLSL}
             ${PreviewColorShaderModules.EXPOSURE}
+            ${ContrastShader.GLSL}
             ${DirectFlashShader.GLSL}
             ${ThreeWayColorGradingShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
@@ -3007,8 +3008,8 @@ class LutImageProcessor(context: Context? = null) {
                     color.rgb = applyShadowsHighlights(color.rgb, uvCoord);
                     color.rgb = sanitizeColor(color.rgb);
 
-                    // 3. 对比度（围绕中灰点调整）
-                    color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+                    // 3. 对比度（固定 0.5 中点的 S 曲线）
+                    color.rgb = applyContrastSCurve(color.rgb, uContrast);
                     color.rgb = sanitizeColor(color.rgb);
 
                     // 3.5. 影调曲线（独立塑造高调/低调 profile）

@@ -198,6 +198,7 @@ private class VideoLutShaderProgram(
             }
 
             ${BasicToneLutShader.GLSL}
+            ${ContrastShader.GLSL}
 
             float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
                 float safeLuma = clamp(luma, 0.0, 1.0);
@@ -564,7 +565,7 @@ private class VideoLutShaderProgram(
                     color.rgb = mix(color.rgb, shadowTarget, shadowMask);
                     color.rgb = sanitizeColor(color.rgb);
 
-                    color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+                    color.rgb = applyContrastSCurve(color.rgb, uContrast);
                     color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);

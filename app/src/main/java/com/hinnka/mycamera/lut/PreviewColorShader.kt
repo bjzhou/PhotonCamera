@@ -90,6 +90,7 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
             ${if (needsLogInput) LogInputGl.GLSL else ""}
             ${PreviewColorShaderModules.EXPOSURE}
+            ${ContrastShader.GLSL}
             ${DirectFlashShader.GLSL}
             ${ThreeWayColorGradingShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
@@ -224,10 +225,8 @@ internal object PreviewColorShader {
 
                     float luma = getLuma(color.rgb);
 
-                    if (abs(uContrast - 1.0) > 0.001) {
-                        color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
-                        color.rgb = sanitizeColor(color.rgb);
-                    }
+                    color.rgb = applyContrastSCurve(color.rgb, uContrast);
+                    color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
                     color.rgb = sanitizeColor(color.rgb);
