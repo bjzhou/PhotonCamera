@@ -112,7 +112,10 @@ internal object FilmGrainShaders {
                 fract(frameSeed * 0.569840296)
             ) * 4096.0;
             float seedPlane = mod(frameSeed, 4096.0) * 0.03125;
-            vec2 grainPixel = outputPixel / max(pixelScale, 0.25) + seedOffset;
+            // Spatial size is independent of density amplitude: fine grain at low
+            // settings, smoothly reaching the existing size at the midpoint.
+            float grainSize = mix(0.5, 1.0, smoothstep(0.0, 0.5, normalizedAmount));
+            vec2 grainPixel = outputPixel / (max(pixelScale, 0.25) * grainSize) + seedOffset;
             float lumaGrain = grainSimplex(vec3(grainPixel * 0.42, seedPlane));
             // Thin weak grain regions at low settings; restore full coverage by the midpoint.
             float sparseThreshold = 0.08 * (1.0 - smoothstep(0.0, 0.5, normalizedAmount));
@@ -129,7 +132,9 @@ internal object FilmGrainShaders {
             vec3 densityNoise = vec3(lumaGrain * lumaDensityStd * 2.7);
             densityNoise += dyeCloud * densityStd * 0.22;
             densityNoise *= highlightVisibility * grainCoverage;
-            density = max(density + densityNoise * grainAmount * 1.5, vec3(0.0));
+            // Scale all grain components together after their spatial and tonal shaping.
+            const float grainStrengthScale = 0.7;
+            density = max(density + densityNoise * grainAmount * 1.5 * grainStrengthScale, vec3(0.0));
             return grainLinearToSrgb(exp(-density * 2.302585093));
         }
     """.trimIndent()
