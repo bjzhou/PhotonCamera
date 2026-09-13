@@ -367,6 +367,23 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         )
     }
 
+    /** Capture both representations from the same rendered frame, with callbacks on the main thread. */
+    fun capturePhotoPreviewFrames(
+        onDisplayCaptured: (Bitmap) -> Unit,
+        onOriginalCaptured: (Bitmap) -> Unit,
+    ) {
+        queueEvent {
+            // Read the final display before the original pass can reuse intermediate render targets.
+            renderer.capturePreviewFrame(source = PreviewCaptureSource.FinalDisplay) { bitmap ->
+                post { onDisplayCaptured(bitmap) }
+            }
+            renderer.capturePreviewFrame(source = PreviewCaptureSource.Original) { bitmap ->
+                post { onOriginalCaptured(bitmap) }
+            }
+            requestRender()
+        }
+    }
+
     private fun capturePreviewFrameInternal(
         maxLongEdge: Int?,
         source: PreviewCaptureSource,

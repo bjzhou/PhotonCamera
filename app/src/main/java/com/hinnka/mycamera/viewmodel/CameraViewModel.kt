@@ -137,7 +137,9 @@ private data class CaptureSettingsSnapshot(
     val multipleExposure: Boolean,
     val photoId: String = UUID.randomUUID().toString(),
     val galleryRegistration: CompletableDeferred<Unit> = CompletableDeferred(),
-    @Volatile var thumbnail: Bitmap? = null,
+    // Exposure matching needs the unfiltered source; UI placeholders need the displayed look.
+    @Volatile var originalThumbnail: Bitmap? = null,
+    @Volatile var displayThumbnail: Bitmap? = null,
     var livePhotoVideo: CompletableDeferred<Pair<File, Long>?>? = null,
     var captureId: Long = 0L,
     @Volatile var captureCompleted: Boolean = false,
@@ -1966,7 +1968,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         )
                         if (!settings.multipleExposure && !settings.processingFinished) {
                             GalleryManager.registerProcessingPhoto(
-                                getApplication(), settings.photoId, metadata, settings.thumbnail
+                                getApplication(), settings.photoId, metadata, settings.displayThumbnail
                             )
                         }
                         settings.captureCompleted = true
@@ -3324,11 +3326,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.capture { id ->
             settings.captureId = id
             pendingCaptureSettings[id] = settings
-            generateThumbnail {
-                settings.thumbnail = it
-                GalleryManager.updateProcessingThumbnail(settings.photoId, it)
-                publishCapturedThumbnail(settings)
-            }
+            capturePhotoThumbnails(settings)
             if (settings.state.useLivePhoto && !cameraController.usesTorchForLivePhotoCapture()) {
                 cameraController.setCapturingLivePhoto(true)
                 livePhotoIndicatorJob?.cancel()
@@ -3351,7 +3349,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 CapturedThumbnail(
                     captureId = settings.captureId,
                     photoId = settings.photoId,
-                    bitmap = settings.thumbnail.takeUnless {
+                    bitmap = settings.displayThumbnail.takeUnless {
                         settings.processingFinished && settings.savedPhotoId == null && !settings.multipleExposure
                     },
                     savedPhotoId = settings.savedPhotoId,
@@ -3506,7 +3504,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             burstImageCount = 0
             burstPhotoId = UUID.randomUUID().toString()
             burstSettings = settings
-            generateThumbnail { settings.thumbnail = it }
+            capturePhotoThumbnails(settings)
             if (isShutterSoundEnabled) {
                 shutterSoundPlayer.playBurst()
             }
@@ -4415,6 +4413,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun getLutInfo(id: String): LutInfo? {
         return contentRepository.lutManager.getLutInfo(id)
+    }
+
+    private fun capturePhotoThumbnails(settings: CaptureSettingsSnapshot) {
+        val glView = glSurfaceView ?: run {
+            previewThumbnail = null
+            return
+        }
+        val rotation = capturePreviewThumbnailRotation()
+        glView.capturePhotoPreviewFrames(
+            onDisplayCaptured = { bitmap ->
+                val thumbnail = rotatePreviewBitmapForCapture(bitmap, rotation)
+                settings.displayThumbnail = thumbnail
+                GalleryManager.updateProcessingThumbnail(settings.photoId, thumbnail)
+                publishCapturedThumbnail(settings)
+            },
+            onOriginalCaptured = { bitmap ->
+                val thumbnail = rotatePreviewBitmapForCapture(bitmap, rotation)
+                settings.originalThumbnail = thumbnail
+                previewThumbnail = thumbnail
+            },
+        )
     }
 
     /**
@@ -5716,7 +5735,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     context,
                     metadata,
                     captureResult,
-                    settings.thumbnail,
+                    settings.displayThumbnail,
                     settings.state.useLivePhoto,
                     1.0f,
                     includeCropRegionInOutputSize = shouldIncludeCropRegionInOutputSize(image.format),
@@ -5734,7 +5753,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     context,
                     photoId,
                     image,
-                    settings.thumbnail,
+                    settings.originalThumbnail,
                     rotation,
                     aspectRatio,
                     resolvedCharacteristics,
@@ -6141,7 +6160,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 context,
                 metadata,
                 captureResult,
-                settings.thumbnail,
+                settings.displayThumbnail,
                 settings.state.useLivePhoto,
                 superResScale,
                 includeCropRegionInOutputSize = images.firstOrNull()?.let {
@@ -6176,7 +6195,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     exposureBias = captureExposureBias,
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = settings.preferences.exportDngWithRawExport,
-                    capturePreviewThumbnail = settings.thumbnail,
+                    capturePreviewThumbnail = settings.originalThumbnail,
                     capturePortraitMask = capturePortraitMask,
                     rawStackFrames = frames,
                     rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
@@ -6235,7 +6254,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 context,
                 metadata,
                 null,
-                settings.thumbnail,
+                settings.displayThumbnail,
                 false,
                 superResScale,
                 includeCropRegionInOutputSize = false,
@@ -6454,7 +6473,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             context,
             metadata,
             null,
-            settings.thumbnail,
+            settings.displayThumbnail,
             false,
             1.0f,
             photoId = photoId
