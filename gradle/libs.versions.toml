@@ -1,5 +1,5 @@
 [versions]
-agp = "8.12.3"
+agp = "8.13.2"
 kotlin = "2.3.0"
 coreKtx = "1.17.0"
 junit = "4.13.2"
@@ -27,8 +27,10 @@ recyclerview = "1.4.0"
 splashscreen = "1.2.0"
 room = "2.7.2"
 ksp = "2.3.6"
+bugly = "4.1.9.3"
 
 [libraries]
+bugly-crashreport = { module = "com.tencent.bugly:crashreport", version.ref = "bugly" }
 androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerview" }
 media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }

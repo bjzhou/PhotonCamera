@@ -42,7 +42,6 @@ configure_file(
 set_source_files_properties(
     "${MGC_DENOISE_ASM}"
     PROPERTIES
-    GENERATED TRUE
     OBJECT_DEPENDS "${MGC_DENOISE_CAPSULE}"
 )
 
@@ -77,7 +76,6 @@ configure_file(
 set_source_files_properties(
     "${MGC_DEMOIRE_ASM}"
     PROPERTIES
-    GENERATED TRUE
     OBJECT_DEPENDS "${MGC_DEMOIRE_CAPSULE}"
 )
 
@@ -112,7 +110,6 @@ configure_file(
 set_source_files_properties(
     "${MGC_SABRE_ASM}"
     PROPERTIES
-    GENERATED TRUE
     OBJECT_DEPENDS "${MGC_SABRE_CAPSULE}"
 )
 
@@ -151,8 +148,18 @@ configure_file(
 set_source_files_properties(
     "${MGC_SPATIAL_RGB_ASM}"
     PROPERTIES
-    GENERATED TRUE
     OBJECT_DEPENDS "${MGC_SPATIAL_RGB_CAPSULE}"
+)
+
+# These are configure-time outputs, so do not mark them GENERATED: Ninja clean
+# would delete them without a build-time command to recreate them. Track them
+# as configure dependencies so a missing output also causes CMake to regenerate it.
+set_property(
+    DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${MGC_DENOISE_ASM}"
+    "${MGC_DEMOIRE_ASM}"
+    "${MGC_SABRE_ASM}"
+    "${MGC_SPATIAL_RGB_ASM}"
 )
 
 # 4. 添加头文件路径
