@@ -12,7 +12,40 @@
 
 本公开仓库的标准 Ubuntu runner 是 4 vCPU/16 GB。三个渠道既重复编译，又争用同一台 runner 的 CPU/内存。新流程将它们拆成三个独立 matrix job，每个 job 只构建自己的 Release 变体；全部成功后，publish job 汇总三个 APK 并上传同一个 Release。任一渠道失败不会发布不完整产物。
 
-这会增加 native 配置/编译等公共步骤的总计算量，但减少三个渠道对同一机器的资源竞争与串行等待。实际收益要用新 CI 结果验证，不能直接承诺三倍速度，也不能用不同提交的历史时间宣称严格 A/B 结果。
+这会增加 native 配置/编译等公共步骤的总计算量，但减少三个渠道对同一机器的资源竞争与串行等待。下面使用相同源码的冷构建对照衡量收益，历史运行只作为背景。
+
+### 2026-09-14 真实 CI 冷构建
+
+[单 runner 对照 34823943668](https://github.com/bjzhou/PhotonCamera/actions/runs/34823943668)（`df72cf715`）与并行组的 Git 差异只有工作流文件。应用源码、AGP/R8、JDK、Gradle 参数和 runner 标准规格相同，两组均成功且禁用缓存。对照组沿用一条 Gradle 命令构建三个渠道的编排，内部任务仍按 Gradle 原有机制并发，因此“串行组”并非强制所有 task 单线程。
+
+| 指标 | 单 runner 三渠道 | 三个 runner 并行 |
+| --- | ---: | ---: |
+| 从 workflow 创建到全部 APK artifact 就绪、构建 job 结束 | 16 分 11 秒 | 11 分 28 秒 |
+| Gradle 完整构建（并行组取最慢渠道） | 15 分 45.86 秒 | 11 分 4.03 秒 |
+| 所有 build job 占用 runner 时间之和 | 16 分 8 秒 | 32 分 10 秒 |
+
+本次对照减少总等待 **4 分 43 秒（29.1%）**，runner 占用时间增加到 **1.99 倍**。这是用更多并行资源降低 CI 等待时间，不能宣称总计算量减少或 R8 算法本身提速。两组均是手动验证，不含正式 Release 发布 job；这是一次受云端执行环境波动影响的对照，不是长期稳定提速保证。
+
+单 runner 中，三个 Kotlin 任务各耗时 214–220 秒，三个 Lint Vital 分析各耗时 267–289 秒。Default R8 为 326.95 秒，日志显示它与三个渠道的 Lint 重叠；后续 Samsung/Meitu R8 分别为 99.85/74.92 秒。这个差距同时受到资源竞争和 JVM 预热影响，不能归因于渠道本身或把后两次当作冷启动性能。拆分 job 可以减少竞争与跨渠道等待，但也会重复 JVM 预热和公共 native 编译，所以收益没有达到三倍。
+
+[并行运行 34823602590](https://github.com/bjzhou/PhotonCamera/actions/runs/34823602590) 使用提交 `0f053b00f`，三个渠道均成功完成签名打包和 artifact 上传，发布 job 按手动运行条件跳过。从 workflow 创建到全部构建 job 完成为 **11 分 28 秒**。
+
+| Gradle profile 阶段 | default | samsung | meitu |
+| --- | ---: | ---: | ---: |
+| 完整构建 | 11 分 3.40 秒 | 9 分 6.36 秒 | 11 分 4.03 秒 |
+| R8 | 277.29 秒 | 202.62 秒 | 273.57 秒 |
+| Lint Vital 分析 | 234.47 秒 | 179.06 秒 | 231.76 秒 |
+| Kotlin 编译 | 150.49 秒 | 106.53 秒 | 148.96 秒 |
+| KSP | 23.97 秒 | 19.16 秒 | 23.69 秒 |
+| native 编译 | 91.26 秒 | 58.79 秒 | 90.28 秒 |
+
+阶段存在重叠，不能把各行相加当作总时间。三台 runner 虽使用相同标准规格，实际执行性能仍可能不同；Samsung 在 Kotlin、native、R8、Lint 多个阶段均较快，不能仅凭这次样本归因于渠道源码。
+
+Default 的 R8 内部总时间为 275.584 秒，其中 Create IR 为 154.711 秒（约 56%），名字压缩仅 0.914 秒。此处瓶颈仍是全程序优化，关闭名字压缩无法解决分钟级等待。Samsung Kotlin 报告中分析、IR 转换、代码生成分别为 40.258、10.151、45.531 秒，说明仅并行化 Kotlin 后端也不能消除整个 Kotlin 阶段。
+
+两组均明确记录未恢复/保存 Gradle 缓存，命令使用 `--no-build-cache`，日志无 `FROM-CACHE`。构建报告 artifact 为 `build-reports-serial`、`build-reports-default`、`build-reports-samsung`、`build-reports-meitu`，保留 7 天；关键计时留存于本文，R8 明细留在 Actions 日志。
+
+下载三个 APK artifact 后，确认各自根目录的文件名与 publish job 的汇总路径一致；`apksigner verify` 全部通过且证书相同。`aapt2 dump badging` 验证三个应用 ID 分别为 `com.hinnka.mycamera`、`com.samsung.android.scan3d`、`com.meitu.meiyancamera`，均仅包含 `arm64-v8a`。没有安装到设备，也未发布这些验证产物。
 
 ### CI 配置与复测
 
@@ -152,6 +185,10 @@ Lint 与 R8 并行，不能将两者耗时直接相加。clean 场景的 R8 比�
 
 ## 参考
 
+- [GitHub 标准托管 runner 的硬件规格](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+- [GitHub Actions 矩阵与任务依赖](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
+- [GitHub Actions 缓存作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)
+- [Gradle Daemon JVM 选择](https://docs.gradle.org/current/userguide/gradle_daemon.html#sec:daemon_jvm_criteria)
 - [AGP 8.13.2 与 Kotlin 2.3 支持](https://developer.android.com/build/releases/agp-8-13-0-release-notes)
 - [Android 构建性能：GC、内存与固定依赖版本](https://developer.android.com/build/optimize-your-build)
 - [R8 内部计时开关源码](https://r8.googlesource.com/r8/+/master/src/main/java/com/android/tools/r8/utils/InternalOptions.java)
