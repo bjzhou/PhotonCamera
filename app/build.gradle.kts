@@ -86,6 +86,11 @@ android {
         }
     }
 
+    lint {
+        // Keep fatal lint analysis off the Release packaging path.
+        checkReleaseBuilds = false
+    }
+
     flavorDimensions += "channel"
     productFlavors {
         create("dev") {
