@@ -47,6 +47,41 @@ Default 的 R8 内部总时间为 275.584 秒，其中 Create IR 为 154.711 秒
 
 下载三个 APK artifact 后，确认各自根目录的文件名与 publish job 的汇总路径一致；`apksigner verify` 全部通过且证书相同。`aapt2 dump badging` 验证三个应用 ID 分别为 `com.hinnka.mycamera`、`com.samsung.android.scan3d`、`com.meitu.meiyancamera`，均仅包含 `arm64-v8a`。没有安装到设备，也未发布这些验证产物。
 
+### 从 Release 打包中移除 Lint
+
+使用 `android.lint.checkReleaseBuilds = false`，让 `assemble*Release` 不再执行 fatal Lint 检查。`abortOnError = false` 只改变检查失败后的行为，并不能省去分析时间，因此不用于这次优化。代价是 Release 打包不再由 Lint fatal 问题阻断；Kotlin/Java/native 编译、R8、资源压缩和签名打包仍执行。
+
+三个发布渠道的 `assemble*Release --dry-run` 已确认没有 Lint 任务；显式 `:app:lintDefaultRelease --dry-run` 仍包含分析和报告任务，可以独立运行检查。
+
+这次分别在单 runner 与三 runner 流程中只改变上述开关，继续使用全新 GitHub runner、关闭 Actions 缓存与 Gradle build cache。Lint 与 R8 存在重叠，收益必须比较完整构建和 R8 任务实测，不能直接从总时间扣除原 Lint 耗时。
+
+[无 Lint 并行运行 34825825995](https://github.com/bjzhou/PhotonCamera/actions/runs/34825825995)（`e087143b1`）三个渠道均成功。全部产物就绪时间从 **11 分 28 秒降至 9 分 54 秒**，减少 **1 分 34 秒（13.7%）**；runner 占用时间之和从 32 分 10 秒降至 27 分 23 秒。与前一组相比，构建配置仅新增 `lint.checkReleaseBuilds = false`。
+
+| 并行组 Gradle 阶段 | default：有 Lint → 无 Lint | samsung：有 Lint → 无 Lint | meitu：有 Lint → 无 Lint |
+| --- | ---: | ---: | ---: |
+| 完整构建 | 663.40 → 558.38 秒 | 546.36 → 456.53 秒 | 664.03 → 573.01 秒 |
+| R8 | 277.29 → 178.18 秒 | 202.62 → 141.38 秒 | 273.57 → 188.45 秒 |
+| Kotlin 编译 | 150.49 → 147.77 秒 | 106.53 → 114.72 秒 | 148.96 → 150.25 秒 |
+| native 编译 | 91.26 → 87.49 秒 | 58.79 → 65.11 秒 | 90.28 → 86.04 秒 |
+
+三个渠道的实际日志与 profile 均无 Lint 任务，也无 `FROM-CACHE`。Default/Meitu 的 Kotlin/native 用时相近，R8 减少约 85–99 秒；这支持 Lint 与 R8 竞争资源是慢点之一，但仍是单次云端对照，不能把全部差异精确归因于同一个因素。
+
+[无 Lint 单 runner 运行 34825850842](https://github.com/bjzhou/PhotonCamera/actions/runs/34825850842)（`cb22224fe`）同样成功，但总等待为 **16 分 57 秒**，比有 Lint 的单 runner 基线 16 分 11 秒慢 46 秒；Gradle 为 16 分 32.58 秒。因此这组没有观察到完整 CI 提速，不能只展示并行组的正向结果。
+
+| 单 runner 阶段 | 有 Lint | 无 Lint |
+| --- | ---: | ---: |
+| Default Kotlin | 214.71 秒 | 310.24 秒 |
+| Samsung Kotlin | 214.33 秒 | 301.51 秒 |
+| Meitu Kotlin | 220.43 秒 | 304.47 秒 |
+| native 编译 | 58.92 秒 | 88.79 秒 |
+| Default R8 | 326.95 秒 | 217.20 秒 |
+| Samsung R8 | 99.85 秒 | 120.32 秒 |
+| Meitu R8 | 74.92 秒 | 96.37 秒 |
+
+这轮 Kotlin/native 在 Lint 原本执行之前就整体慢约 38–51%，说明存在明显的其他执行环境或资源调度差异；未采集底层 CPU 型号，不能确定具体原因。Default R8 虽减少约 110 秒，仍不足以抵消其他阶段变慢。这个单次样本既不能量化单 runner 关闭 Lint 的稳定收益，也不能支持用它替代并行流程。保留三渠道 matrix；当前可报告的是并行流程单次冷构建节省约 94 秒，并附带运行波动限制。
+
+下载无 Lint 的 Default APK，与有 Lint 的 Default APK 逐项比较 ZIP 中除 `META-INF/` 外的所有文件：816 项全部 SHA-256 相同，无新增、删除或变化，覆盖 DEX、Manifest、资源和 native 库。新 APK 的 `apksigner verify` 通过。这是构建内容校验，未安装到设备。
+
 ### CI 配置与复测
 
 - JDK 统一为 Amazon Corretto 21，与 `gradle-daemon-jvm.properties` 的 vendor/version 一致。原先 setup-java 设置 Temurin 17，而 Gradle 需要另行寻找 Amazon 21；统一配置不代表 JDK 下载成本凭空消失。
@@ -185,6 +220,7 @@ Lint 与 R8 并行，不能将两者耗时直接相加。clean 场景的 R8 比�
 
 ## 参考
 
+- [Android Lint Release 检查配置](https://developer.android.com/reference/tools/gradle-api/8.2/com/android/build/api/dsl/Lint)
 - [GitHub 标准托管 runner 的硬件规格](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 - [GitHub Actions 矩阵与任务依赖](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
 - [GitHub Actions 缓存作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)
