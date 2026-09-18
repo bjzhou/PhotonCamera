@@ -9651,6 +9651,7 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun ensureGles3() {
         DngCaptureDiagnostics.recordCurrentGl()
+        DngCaptureDiagnostics.put("merge.floatSamplerPrecision", "highp")
         val version = GLES30.glGetString(GLES30.GL_VERSION).orEmpty()
         check(version.contains("OpenGL ES 3.")) {
             "MGC Spatial merge requires GLES3, got: $version"
@@ -9715,6 +9716,7 @@ internal class GlesMgcRawSpatialStacker(
             TAG,
             "MGC Spatial GL vendor=${GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()} " +
             "renderer=${GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()} version=$version " +
+                "floatSamplerPrecision=highp " +
                 "strengthSsboMax=$maxShaderStorageBlockBytes " +
                 "strengthPackGroups=${maxComputePackGroupsX}x$maxComputePackGroupsY",
         )

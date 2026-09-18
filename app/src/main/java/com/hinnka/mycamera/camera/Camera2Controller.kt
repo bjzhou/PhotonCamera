@@ -9010,8 +9010,11 @@ class Camera2Controller(private val context: Context) {
                     rollingShutterSkewNs = frameResult.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
                     gyroWindow = frozenMetadata?.gyroWindow
                         ?: burstGyroRecorder.exposureWindow(sensorTimestampNs, exposureTimeNs),
-                    channelNoiseProfile = frozenMetadata?.channelNoiseProfile
-                        ?: captureChannelNoiseProfile(frameResult),
+                    // Resolve noise from the same result as this RAW's ISO/CFA. The early
+                    // snapshot belongs to the logical result, while dimension matching above
+                    // may select a different physical sensor. If its profile is absent, let
+                    // the noise resolver use its declared fallback, not another sensor's model.
+                    channelNoiseProfile = captureChannelNoiseProfile(frameResult),
                     multiFrameCaptureRole = frozenMetadata?.multiFrameCaptureRole
                         ?: (frameResult.request.tag as? MultiFrameCaptureRole),
                     dynamicBlackLevelByCfaPosition = frameResult

@@ -6,11 +6,15 @@ package com.hinnka.mycamera.processor
  * Sabre works on an extracted 2x2 Bayer texture, builds its guide and covariance at one sample
  * per Bayer quad, accumulates camera RGB and three independent weights in a full-resolution MRT,
  * then dehomogenizes the result before the ResolveSabre stage.
+ *
+ * Floating samplers explicitly use highp throughout, including sampler function parameters.
+ * The float default alone does not preserve sampled RAW values, noise variances or subpixel flow.
  */
 internal object GlesMgcRawSabreShaders {
     val extractBayer = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -38,6 +42,7 @@ internal object GlesMgcRawSabreShaders {
     val guideAndCovariance = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uExtractedBayer;
         uniform sampler2D uNoiseEstimates;
@@ -301,6 +306,7 @@ internal object GlesMgcRawSabreShaders {
     val baseFrameReferenceColor = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBaseGuide;
         uniform ivec2 uGuideSize;
@@ -319,6 +325,7 @@ internal object GlesMgcRawSabreShaders {
     val rejection = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBaseGuide;
         uniform sampler2D uAltGuide;
@@ -431,6 +438,7 @@ internal object GlesMgcRawSabreShaders {
     val merge = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uExtractedBayer;
         uniform sampler2D uFlow;
@@ -624,6 +632,7 @@ internal object GlesMgcRawSabreShaders {
     val copyMask = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         uniform sampler2D uRejection;
         uniform float uAccumulatedWeightScale;
         layout(location = 0) out float oAccumulatedWeight;
@@ -636,6 +645,7 @@ internal object GlesMgcRawSabreShaders {
     val copyAlpha = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         uniform sampler2D uSource;
         layout(location = 0) out float oWeight;
         void main() {
@@ -654,6 +664,7 @@ internal object GlesMgcRawSabreShaders {
     val reciprocalGreenWeight4x4 = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uAccumulatedWeightsGb;
         uniform ivec2 uInputSize;
@@ -681,6 +692,7 @@ internal object GlesMgcRawSabreShaders {
     val dehomogenize = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         uniform sampler2D uSourceWeightR;
         uniform sampler2D uSourceWeightGb;
         uniform sampler2D uSourceAlpha;
@@ -700,6 +712,7 @@ internal object GlesMgcRawSabreShaders {
 
     private val outputTransformBody = """
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uResolvedR;
@@ -737,7 +750,7 @@ internal object GlesMgcRawSabreShaders {
 
     val outputTransformUint16 = """
         #version 300 es
-        $outputTransformBody
+        ${outputTransformBody.prependIndent("        ")}
         layout(location = 0) out highp uvec4 oResolved;
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
@@ -748,7 +761,7 @@ internal object GlesMgcRawSabreShaders {
 
     val outputTransformFloat = """
         #version 300 es
-        $outputTransformBody
+        ${outputTransformBody.prependIndent("        ")}
         layout(location = 0) out vec4 oResolved;
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);

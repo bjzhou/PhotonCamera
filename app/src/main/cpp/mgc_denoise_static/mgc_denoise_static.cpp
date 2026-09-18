@@ -509,6 +509,7 @@ float DownsamplingEnergy(
 
 bool AdvancePyramidCorrelation(
     float spectrum[128],
+    bool chroma,
     float* coefficient_scale) {
     // Zero spectral amplitude represents zero noise energy, which has no
     // identifiable normalized spectrum. Carry that energy in the coefficients
@@ -521,8 +522,9 @@ bool AdvancePyramidCorrelation(
         *coefficient_scale = 0.0f;
         return true;
     }
-    // MGC's fixed eight-tap filter at 0x6b20e0/0x6b6200.
-    constexpr float filter[8] = {
+    // V25 CreateLumaDenoiseNoiseBuffers (0x4f85664) uses eight taps,
+    // CreateChromaDenoiseNoiseModelBuffers (0x4c4f084) uses four.
+    constexpr float luma_filter[8] = {
         -3.0f / 128.0f,
         -7.0f / 128.0f,
         17.0f / 128.0f,
@@ -532,6 +534,9 @@ bool AdvancePyramidCorrelation(
         -7.0f / 128.0f,
         -3.0f / 128.0f,
     };
+    constexpr float chroma_filter[4] = {0.125f, 0.375f, 0.375f, 0.125f};
+    const float* filter = chroma ? chroma_filter : luma_filter;
+    const int filter_size = chroma ? 4 : 8;
     float filtered[128] = {};
     float energy = 0.0f;
     for (int frequency = 0; frequency < 128; ++frequency) {
@@ -544,7 +549,7 @@ bool AdvancePyramidCorrelation(
             (static_cast<double>(frequency) + 0.5) *
                 2.0 * M_PI / 128.0 -
             M_PI;
-        for (int tap = 0; tap < 8; ++tap) {
+        for (int tap = 0; tap < filter_size; ++tap) {
             real += static_cast<double>(filter[tap]) *
                 std::cos(omega * tap);
             imaginary -= static_cast<double>(filter[tap]) *
@@ -561,7 +566,39 @@ bool AdvancePyramidCorrelation(
     for (int index = 0; index < 128; ++index) {
         spectrum[index] = filtered[index] * inverse_energy;
     }
-    *coefficient_scale = energy * energy;
+    const float convolution_scale = energy * energy;
+
+    // Both V25 builders then call NoiseModel::Downsample(2), 0x5f37dc4.
+    // Its spectrum resampler (0x5f3bbfc) interpolates the half-bin grid,
+    // folds the two aliases and restores even symmetry. Merely filtering
+    // leaves later levels in the previous level's frequency coordinates.
+    float expanded[256] = {};
+    for (int index = 64; index < 128; ++index) {
+        const float left = 0.25f * spectrum[index - 1] + 0.75f * spectrum[index];
+        const float right = 0.75f * spectrum[index] +
+            0.25f * spectrum[std::min(index + 1, 127)];
+        expanded[2 * index] = left;
+        expanded[2 * index + 1] = right;
+        expanded[255 - 2 * index] = left;
+        expanded[254 - 2 * index] = right;
+    }
+    for (int index = 64; index < 128; ++index) {
+        const float value = 0.5f * expanded[(index + 192) & 255] +
+            0.5f * expanded[index + 64];
+        spectrum[index] = value;
+        spectrum[127 - index] = value;
+    }
+    float downsample_energy = 0.0f;
+    for (int index = 0; index < 128; ++index) {
+        downsample_energy += spectrum[index];
+    }
+    downsample_energy *= 1.0f / 128.0f;
+    if (!(downsample_energy > 0.0f) || !std::isfinite(downsample_energy)) return false;
+    const float inverse_downsample_energy = 1.0f / downsample_energy;
+    for (int index = 0; index < 128; ++index) {
+        spectrum[index] *= inverse_downsample_energy;
+    }
+    *coefficient_scale = convolution_scale * (downsample_energy * downsample_energy);
     return true;
 }
 
@@ -843,6 +880,7 @@ bool BuildNoiseBuffers(
         float coefficient_scale = 0.0f;
         if (!AdvancePyramidCorrelation(
                 current_correlation,
+                false,
                 &coefficient_scale)) {
             return false;
         }
@@ -926,6 +964,7 @@ bool BuildChromaNoiseBuffers(
         float coefficient_scale = 0.0f;
         if (!AdvancePyramidCorrelation(
                 current_correlation,
+                true,
                 &coefficient_scale)) {
             return false;
         }

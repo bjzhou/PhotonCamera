@@ -6,11 +6,14 @@ package com.hinnka.mycamera.processor
  * The guide, rejection, dilation and merge equations below retain the embedded GLSL equations and
  * constants. The original program first extracts RAW16 into a half-resolution Bayer texture.
  * Photon reads R16UI directly; the RGB branch reconstructs jointly from native CFA observations.
+ * Float samplers (including helper parameters) must remain highp: the CPU/Halide alignment
+ * products are Float32, and normalized flow/noise samples cannot use the default lowp precision.
  */
 internal object GlesMgcRawSpatialShaders {
     val guide = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -114,6 +117,7 @@ internal object GlesMgcRawSpatialShaders {
     val rgbChromaGuide = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -225,6 +229,7 @@ internal object GlesMgcRawSpatialShaders {
     val covariance = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -428,6 +433,7 @@ internal object GlesMgcRawSpatialShaders {
     fun rejectionWithFlowSource(flowSource: String) = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBaseGuide;
         uniform sampler2D uAltGuide;
@@ -548,6 +554,7 @@ internal object GlesMgcRawSpatialShaders {
     val rejectionAcceptance = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uAcceptance;
         uniform ivec2 uSize;
@@ -574,6 +581,7 @@ internal object GlesMgcRawSpatialShaders {
     val rejectionPixelDifferenceDownsample = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uInput;
         uniform ivec2 uInputSize;
@@ -608,6 +616,7 @@ internal object GlesMgcRawSpatialShaders {
     val clippedGaussianHorizontal = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uInput;
         uniform ivec2 uSize;
@@ -634,6 +643,7 @@ internal object GlesMgcRawSpatialShaders {
     val clippedGaussianVertical = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uInput;
         uniform ivec2 uSize;
@@ -667,6 +677,7 @@ internal object GlesMgcRawSpatialShaders {
     val rejectionFilterDownsample = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uBaseLuma;
@@ -736,6 +747,7 @@ internal object GlesMgcRawSpatialShaders {
     val rejectionFilter = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uLuma;
         uniform sampler2D uRejection;
@@ -817,6 +829,7 @@ internal object GlesMgcRawSpatialShaders {
     val rejectionPostprocess = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uOriginalWeight;
         uniform sampler2D uFilteredWeight;
@@ -856,6 +869,7 @@ internal object GlesMgcRawSpatialShaders {
     private fun buildDilateRejection(includePixelDifference: Boolean) = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uRejection;
         uniform ivec2 uInputSize;
@@ -912,6 +926,7 @@ internal object GlesMgcRawSpatialShaders {
     val updateLinearKernelMask = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uRejection;
         uniform ivec2 uSize;
@@ -945,6 +960,7 @@ internal object GlesMgcRawSpatialShaders {
     val bentoGenerateHighlightMask = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBaseFrame;
         uniform ivec2 uSize;
@@ -974,6 +990,7 @@ internal object GlesMgcRawSpatialShaders {
     val bentoCountHighlightMask = """
         #version 310 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         uniform highp sampler2D uMask;
@@ -1009,6 +1026,7 @@ internal object GlesMgcRawSpatialShaders {
     val bentoAdjustHighlightMask = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBaseFrame;
         uniform sampler2D uUltrashortFrame;
@@ -1089,6 +1107,7 @@ internal object GlesMgcRawSpatialShaders {
     val bentoRewriteWeight = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uExistingWeight;
         uniform sampler2D uBentoMask;
@@ -1117,6 +1136,7 @@ internal object GlesMgcRawSpatialShaders {
     val mergeRgb = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -1339,6 +1359,7 @@ internal object GlesMgcRawSpatialShaders {
     val normalizeRgb16 = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uColorAndRWeight;
         uniform sampler2D uGbWeights;
@@ -1502,6 +1523,7 @@ internal object GlesMgcRawSpatialShaders {
     val copyRgb16ToFloat = """
         #version 310 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp uimage2D;
         precision highp image2D;
@@ -1526,6 +1548,7 @@ internal object GlesMgcRawSpatialShaders {
     val alignedRawClippingMask = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
 
@@ -1595,6 +1618,7 @@ internal object GlesMgcRawSpatialShaders {
     val mergeBayer = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -1852,6 +1876,7 @@ internal object GlesMgcRawSpatialShaders {
     val sabreMergeBayer = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -1979,6 +2004,7 @@ internal object GlesMgcRawSpatialShaders {
     val normalizeBayer = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBayerAndWeight;
         uniform ivec2 uOutputSize;
@@ -2012,6 +2038,7 @@ internal object GlesMgcRawSpatialShaders {
     val packBayerFixed16 = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBayerAndWeight;
         uniform ivec2 uSourceSize;
@@ -2044,6 +2071,7 @@ internal object GlesMgcRawSpatialShaders {
     val rawToGray = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -2104,6 +2132,7 @@ internal object GlesMgcRawSpatialShaders {
     private fun buildGrayDownsample(linearOutput: Boolean) = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uInput;
@@ -2145,6 +2174,7 @@ internal object GlesMgcRawSpatialShaders {
     private fun buildGrayDownsample4(linearOutput: Boolean) = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uInput;
@@ -2187,6 +2217,7 @@ internal object GlesMgcRawSpatialShaders {
     private fun buildAlignmentGradientProducts(sparseFineLevels: Boolean) = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uReference;
@@ -2278,6 +2309,7 @@ internal object GlesMgcRawSpatialShaders {
     private fun buildUpsampleAlignment(globalCandidateTexture: Boolean, sampleStep: Int = 1) = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uReference;
@@ -2419,6 +2451,7 @@ internal object GlesMgcRawSpatialShaders {
     val blockLucasKanade = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uReference;
@@ -2560,6 +2593,7 @@ internal object GlesMgcRawSpatialShaders {
     val alignL1 = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp isampler2D;
         uniform highp isampler2D uReference;
@@ -2649,6 +2683,7 @@ internal object GlesMgcRawSpatialShaders {
     val medianAlignment = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uAlignment;
         uniform ivec2 uGridSize;
@@ -2697,6 +2732,7 @@ internal object GlesMgcRawSpatialShaders {
     val convertAlignment = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uAlignment;
         uniform ivec2 uGridSize;
@@ -2742,6 +2778,7 @@ internal object GlesMgcRawSpatialShaders {
     val strengthAlignment = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uAlignment;
         uniform ivec2 uOutputSize;
@@ -2758,6 +2795,7 @@ internal object GlesMgcRawSpatialShaders {
     val strengthRejection = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uRejection;
         uniform ivec2 uOutputSize;
@@ -2787,6 +2825,7 @@ internal object GlesMgcRawSpatialShaders {
     val unblocker = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         precision highp usampler2D;
         uniform highp usampler2D uRaw;
@@ -2895,6 +2934,7 @@ internal object GlesMgcRawSpatialShaders {
     val unblockerBlur = """
         #version 300 es
         precision highp float;
+        precision highp sampler2D;
         precision highp int;
         uniform sampler2D uPreBlur;
         out float oUnblocker;

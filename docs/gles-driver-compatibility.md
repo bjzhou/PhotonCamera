@@ -166,6 +166,16 @@ shader storage block binding gets value 12, out of range [0 - 7]
 - 验证需使用同一浮点暗部渐变分别运行 `lowp` / `highp` shader，并读取采样后及
   sRGB 编码后的输出。CPU 模拟、shader 编译或精度能力查询均不证明目标驱动的实际采样行为。
 
+同一约束适用于 RAW 多帧的计算纹理：LK 的 `RGBA32F/R32F` 梯度乘积、像素位移、
+归一化 flow、guide 方差、noise LUT、融合累加值与权重。MGC V25 的 CPU/Halide
+Float32 对齐计算移植到 fragment 后，必须在所有读端保留高精度；纹理存储格式和接收
+变量的 `highp` 都不能弥补采样返回值已经发生的降精度。带 `sampler2D` 参数的滤波
+辅助函数也必须继承 `precision highp sampler2D`，不能只修正调用处的 uniform。
+
+NDK 编译器可确认修复前的 LK 浮点读取带有 `RelaxedPrecision`，修复后消失。这是
+已确认的源码精度契约缺失；没有反馈设备上的低/高精度读回对照时，不得将它写成某款
+GPU 已复现的故障，也不得把 `lowp` 一律等同于实际 FP16。
+
 ### `R16UI` 采样不代表可用于 image store
 
 GLES 3.1 可以通过 `usampler2D` 采样 `R16UI` texture，但核心 GLSL ES 3.10 image

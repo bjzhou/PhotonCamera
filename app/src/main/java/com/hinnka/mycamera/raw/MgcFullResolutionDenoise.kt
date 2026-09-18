@@ -19,9 +19,9 @@ import java.nio.ByteBuffer
  *
  * This class owns luma/chroma protobuf tuning selection and normalized
  * noise-model preparation. Spatial consumes its propagated correlation/coefficient/strength
- * outputs; classic Sabre consumes its dedicated luma tuning and scales the complete reference
- * NoiseModel by its measured merge factor. The native bridge converts normalized
- * read/shot/quadratic coefficients exactly once at the Q14 S16 kernel boundary.
+ * outputs; classic Sabre consumes its dedicated luma tuning and the variance propagated by
+ * MgcSabreMergedNoiseModel from per-frame models and V25's SNR correction. The native bridge
+ * converts normalized read/shot/quadratic coefficients once at the Q14 S16 kernel boundary.
  */
 internal object MgcFullResolutionDenoise {
     private const val TAG = "MgcFullResolutionDenoise"
