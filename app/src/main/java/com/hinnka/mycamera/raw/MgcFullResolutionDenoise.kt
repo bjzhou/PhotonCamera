@@ -548,7 +548,7 @@ internal object MgcFullResolutionDenoise {
      * DNG, so the native bridge enters that same working domain and removes
      * the gains again after YUV -> RGB.
      */
-    private fun normalizedRgbWhiteBalance(gains: FloatArray): FloatArray {
+    internal fun normalizedRgbWhiteBalance(gains: FloatArray): FloatArray {
         fun safeGain(index: Int, fallback: Float): Float {
             val value = gains.getOrElse(index) { fallback }
             return value.takeIf { it.isFinite() && it > 0f } ?: fallback

@@ -6,6 +6,29 @@ import org.junit.Test
 
 class RawTilePlannerTest {
     @Test
+    fun guidedUpsampleGridSurvivesUnevenDimensionsAndRotatedCrops() {
+        for (period in listOf(4, 8)) for (cfa in listOf(2, 6, 8))
+            for (rotation in listOf(0, 90, 180, 270)) {
+            val bounds = RawTileRect(7, 11, 4_986, 3_478)
+            val tiles = RawTilePlanner.plan(
+                sourceWidth = 5_003, sourceHeight = 3_501, outputSourceBounds = bounds,
+                rotation = rotation, coreEdgePx = 2_048, supportPx = 112,
+                cfaPeriod = cfa, processingPeriod = period,
+            )
+            assertEquals(bounds.width.toLong() * bounds.height,
+                tiles.sumOf { it.outputCore.width.toLong() * it.outputCore.height })
+            assertEquals(1, tiles.map { it.sourceWorking.width to it.sourceWorking.height }.toSet().size)
+            for (tile in tiles) {
+                assertTrue(tile.sourceWorking.contains(tile.sourceCore))
+                assertEquals(0, tile.sourceWorking.left % cfa)
+                assertEquals(0, tile.sourceWorking.top % cfa)
+                assertEquals(0, tile.sourceWorking.left % period)
+                assertEquals(0, tile.sourceWorking.top % period)
+            }
+        }
+    }
+
+    @Test
     fun hundredMegapixelOutputUsesDisjointBoundedCores() {
         val bounds = RawTileRect(0, 0, 11_648, 8_736)
         val tiles = RawTilePlanner.plan(

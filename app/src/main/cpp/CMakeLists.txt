@@ -149,6 +149,41 @@ set_source_files_properties(
 )
 
 set(
+    MGC_GUIDED_CAPSULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_guided_upsample_capsule.bin"
+)
+set(
+    MGC_GUIDED_CAPSULE_SHA256
+    "d0708404b1d62561eafcae6b3fd2207f3340da5b0036d403c1c30da18bcd2b98"
+)
+if(NOT EXISTS "${MGC_GUIDED_CAPSULE}")
+    message(
+        FATAL_ERROR
+        "MGC GuidedUpsample capsule is missing; restore the tracked "
+        "mgc_denoise_static/mgc_guided_upsample_capsule.bin asset"
+    )
+endif()
+file(SHA256 "${MGC_GUIDED_CAPSULE}" MGC_GUIDED_CAPSULE_ACTUAL_SHA256)
+if(NOT MGC_GUIDED_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_GUIDED_CAPSULE_SHA256)
+    message(FATAL_ERROR "MGC GuidedUpsample capsule hash mismatch")
+endif()
+set(
+    MGC_GUIDED_ASM
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_guided_upsample_static.S"
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_guided_upsample_static.S.in"
+    "${MGC_GUIDED_ASM}"
+    @ONLY
+)
+set_source_files_properties(
+    "${MGC_GUIDED_ASM}"
+    PROPERTIES
+    GENERATED TRUE
+    OBJECT_DEPENDS "${MGC_GUIDED_CAPSULE}"
+)
+
+set(
     MGC_SPATIAL_RGB_CAPSULE
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_spatial_rgb_merge_capsule.bin"
 )
@@ -304,7 +339,9 @@ add_library(my-native-lib SHARED
     mgc_denoise_static/mgc_sabre_resolve_jni.cpp
     mgc_denoise_static/mgc_spatial_rgb_merge_jni.cpp
     mgc_denoise_static/mgc_spatial_strength_jni.cpp
+    mgc_denoise_static/mgc_guided_upsample_jni.cpp
     mgc_denoise_static/mgc_sharpen_jni.cpp
+    "${MGC_GUIDED_ASM}"
     "${MGC_SHARPEN_ASM}"
     "${MGC_DENOISE_ASM}"
     "${MGC_DEMOIRE_ASM}"
@@ -346,6 +383,7 @@ set_source_files_properties(
 # multiply/adds and nearest-even U12 rounding. Keep these independent of fast-math.
 set_source_files_properties(
     raw_signal_stats_jni.cpp
+    mgc_denoise_static/mgc_guided_upsample_jni.cpp
     mgc_denoise_static/mgc_sharpen_jni.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"

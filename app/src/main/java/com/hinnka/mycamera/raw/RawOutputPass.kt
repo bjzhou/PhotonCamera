@@ -3,9 +3,10 @@ package com.hinnka.mycamera.raw
 import android.graphics.Rect
 import android.opengl.GLES30
 import android.opengl.Matrix
+import com.hinnka.mycamera.processor.GlesLanczosResampling
 import com.hinnka.mycamera.utils.PLog
 
-/** Applies output crop/rotation while copying the final texture to the readback target. */
+/** Crops/rotates finalized color; optional Lanczos-3 scaling runs after GuidedUpsample/sharpen. */
 internal class RawOutputPass(
     private val quad: RawFullscreenQuad,
 ) {
@@ -21,6 +22,10 @@ internal class RawOutputPass(
         val targetHeight: Int = bounds.height(),
         /** When present, [textureId] contains HDR ratios applied to this finalized sRGB base. */
         val hdrSdrBaseTextureId: Int? = null,
+        val geometry: RawOutputGeometry? = null,
+        val outputRegion: RawTileRect? = null,
+        val sourceOriginX: Int = 0,
+        val sourceOriginY: Int = 0,
     )
 
     data class Output(val textureId: Int, val width: Int, val height: Int)
@@ -71,17 +76,29 @@ internal class RawOutputPass(
         )
         Matrix.rotateM(textureMatrix, 0, -input.rotation.toFloat(), 0f, 0f, 1f)
         Matrix.translateM(textureMatrix, 0, -0.5f, -0.5f, 0f)
+        val samplingMatrix = input.geometry?.textureMatrix(
+            input.sourceWidth, input.sourceHeight, input.sourceOriginX, input.sourceOriginY,
+            input.outputRegion ?: input.geometry.fullRegion,
+        ) ?: textureMatrix
         GLES30.glUniformMatrix4fv(
             GLES30.glGetUniformLocation(activeProgram, "uTexMatrix"),
             1,
             false,
-            textureMatrix,
+            samplingMatrix,
             0,
         )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, input.textureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(activeProgram, "uTexture"), 0)
         bindHdrBase(activeProgram, input.hdrSdrBaseTextureId, input.textureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uResample"),
+            if (input.geometry?.resample == true) 1 else 0,
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uNativeGrid"),
+            if (input.geometry != null && !input.geometry.resample) 1 else 0,
+        )
         quad.draw(activeProgram)
         RawGlesProgram.logErrors("RawOutputPass.render")
         return Output(input.targetTextureId, input.targetWidth, input.targetHeight)
@@ -104,6 +121,8 @@ internal class RawOutputPass(
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(activeProgram, "uTexture"), 0)
         bindHdrBase(activeProgram, null, textureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(activeProgram, "uResample"), 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(activeProgram, "uNativeGrid"), 1)
         quad.draw(activeProgram)
         RawGlesProgram.logErrors("RawOutputPass.copy")
         return Output(targetTextureId, width, height)
@@ -138,6 +157,8 @@ internal class RawOutputPass(
         val FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
+            precision highp int;
+            precision highp sampler2D;
 
             in vec2 vTexCoord;
             out vec4 fragColor;
@@ -145,6 +166,17 @@ internal class RawOutputPass(
             uniform sampler2D uTexture;
             uniform sampler2D uSdrBase;
             uniform int uApplyHdrGain;
+            uniform int uResample;
+            uniform int uNativeGrid;
+
+            vec3 lanczosSource(ivec2 p) {
+                ivec2 size = textureSize(uTexture, 0);
+                p = clamp(p, ivec2(0), size - ivec2(1));
+                if (uApplyHdrGain != 0) return texelFetch(uSdrBase, p, 0).rgb;
+                return texelFetch(uTexture, p, 0).rgb;
+            }
+
+            ${GlesLanczosResampling.sampleRgb.prependIndent("            ")}
 
             vec3 srgbToLinear(vec3 color) {
                 return mix(
@@ -156,9 +188,25 @@ internal class RawOutputPass(
 
             void main() {
                 vec4 source = texture(uTexture, vTexCoord);
+                vec3 sdr = uApplyHdrGain != 0 ? texture(uSdrBase, vTexCoord).rgb : source.rgb;
+                if (uNativeGrid != 0) {
+                    // A 1x rotated crop is an exact pixel copy, with no bilinear filtering.
+                    ivec2 p = clamp(ivec2(vTexCoord * vec2(textureSize(uTexture, 0))),
+                        ivec2(0), textureSize(uTexture, 0) - ivec2(1));
+                    source = texelFetch(uTexture, p, 0);
+                    sdr = uApplyHdrGain != 0 ? texelFetch(uSdrBase, p, 0).rgb : source.rgb;
+                }
+                float hdrGain = source.r;
+                if (uResample != 0) {
+                    sdr = clamp(sampleLanczosRgb(
+                        vTexCoord * vec2(textureSize(uTexture, 0)) - vec2(0.5)
+                    ), 0.0, 1.0);
+                    source = vec4(sdr, 1.0);
+                }
                 if (uApplyHdrGain != 0) {
-                    vec3 sdrLinear = srgbToLinear(texture(uSdrBase, vTexCoord).rgb);
-                    source = vec4(sdrLinear * source.r, 1.0);
+                    // Use exactly the same reconstructed SDR as the display branch. The smooth
+                    // HDR ratio stays bilinear; sharpening/Lanczos must not ring that gain field.
+                    source = vec4(srgbToLinear(sdr) * hdrGain, 1.0);
                 }
                 fragColor = source;
             }

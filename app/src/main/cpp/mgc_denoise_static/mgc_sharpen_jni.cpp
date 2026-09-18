@@ -97,15 +97,44 @@ void SharpenRgbToRgba(const uint16_t *rgb, size_t count, uint8_t *rgba) {
     rgba[i * 4 + 3] = 255;
   }
 }
+bool SharpenFloatRgbaToYuv(const float *rgba, size_t count, int16_t *yuv) {
+  for (size_t i = 0; i < count; ++i) {
+    for (int c = 0; c < 3; ++c) {
+      if (!std::isfinite(rgba[4 * i + c])) return false;
+    }
+  }
+#pragma omp parallel for schedule(static) num_threads(4)
+  for (size_t i = 0; i < count; ++i) {
+    const float r = std::clamp(rgba[4 * i], 0.f, 1.f) * 4095.f;
+    const float g = std::clamp(rgba[4 * i + 1], 0.f, 1.f) * 4095.f;
+    const float b = std::clamp(rgba[4 * i + 2], 0.f, 1.f) * 4095.f;
+    for (int c = 0; c < 3; ++c) {
+      yuv[c * count + i] = static_cast<int16_t>(std::clamp<long>(
+          std::lrintf(kMatrix[c * 3] * r + kMatrix[c * 3 + 1] * g +
+                     kMatrix[c * 3 + 2] * b), -4095, 4095));
+    }
+  }
+  return true;
+}
+
+void SharpenRgbToFloatRgba(const uint16_t *rgb, size_t count, float *rgba) {
+#pragma omp parallel for schedule(static) num_threads(4)
+  for (size_t i = 0; i < count; ++i) {
+    for (int c = 0; c < 3; ++c) {
+      rgba[4 * i + c] = std::min<uint16_t>(rgb[3 * i + c], 4095) / 4095.f;
+    }
+    rgba[4 * i + 3] = 1.f;
+  }
+}
 } // namespace photon::mgc_denoise
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgba8(
+Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgbaFloat(
     JNIEnv *env, jobject, jobject rgba_buffer, jobject scratch_buffer,
     jint width, jint height, jfloat snr, jfloat attenuation, jfloatArray curve_points) {
   using namespace photon::mgc_denoise;
   if (!rgba_buffer || !scratch_buffer || !curve_points || width <= 0 || height <= 0 ||
-      !std::isfinite(snr) || snr <= 0 || !std::isfinite(attenuation) ||
+      !std::isfinite(snr) || snr < 0 || !std::isfinite(attenuation) ||
       attenuation < 0)
     return -1;
   const size_t count = size_t(width) * size_t(height);
@@ -114,11 +143,11 @@ Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgba8(
   const size_t scratch_bytes = (count + output_count) * 6;
   if (scratch_bytes > size_t(std::numeric_limits<int>::max()))
     return -1;
-  auto *rgba = static_cast<uint8_t *>(env->GetDirectBufferAddress(rgba_buffer));
+  auto *rgba = static_cast<float *>(env->GetDirectBufferAddress(rgba_buffer));
   auto *yuv =
       static_cast<int16_t *>(env->GetDirectBufferAddress(scratch_buffer));
   if (!rgba || !yuv ||
-      env->GetDirectBufferCapacity(rgba_buffer) < jlong(count * 4) ||
+      env->GetDirectBufferCapacity(rgba_buffer) < jlong(count * 4 * sizeof(float)) ||
       env->GetDirectBufferCapacity(scratch_buffer) < jlong(scratch_bytes))
     return -1;
   auto *rgb = reinterpret_cast<uint16_t *>(yuv + count * 3);
@@ -143,14 +172,14 @@ Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgba8(
   constexpr float corner_correction[3] = {0, 0, 0};
   using Clock = std::chrono::steady_clock;
   const auto start = Clock::now();
-  SharpenRgbaToYuv(rgba, count, yuv);
+  if (!SharpenFloatRgbaToYuv(rgba, count, yuv)) return -1;
   const auto converted = Clock::now();
   const int result = RunSharpenTo16Bit(
       yuv, width, height, curves, corner_correction, attenuation, rgb);
   if (result != 0)
     return result;
   const auto sharpened = Clock::now();
-  SharpenRgbToRgba(rgb, count, rgba);
+  SharpenRgbToFloatRgba(rgb, count, rgba);
   const auto finish = Clock::now();
   const auto ms = [](auto a, auto b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
@@ -165,7 +194,7 @@ Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgba8(
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_raw_MgcSharpen_nativeUploadRgba8(
+Java_com_hinnka_mycamera_raw_RawFloatTextureTransfer_nativeUpload(
     JNIEnv *, jobject, jint pbo, jint texture, jint width, jint height) {
   if (pbo <= 0 || texture <= 0 || width <= 0 || height <= 0)
     return JNI_FALSE;
@@ -175,7 +204,7 @@ Java_com_hinnka_mycamera_raw_MgcSharpen_nativeUploadRgba8(
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA,
-                  GL_UNSIGNED_BYTE, nullptr);
+                  GL_FLOAT, nullptr);
   const GLenum error = glGetError();
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
   return error == GL_NO_ERROR ? JNI_TRUE : JNI_FALSE;

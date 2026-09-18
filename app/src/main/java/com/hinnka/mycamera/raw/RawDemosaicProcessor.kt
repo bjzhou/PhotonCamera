@@ -850,7 +850,6 @@ class RawDemosaicProcessor {
         gpuLinearRgbSource: GpuLinearRgbSource?,
         gpuBayerSource: GpuBayerSource?,
         metadata: RawMetadata,
-        outputScale: Float,
         sourcePixelsIncludeLensShadingCorrection: Boolean,
         applyLensShadingCorrection: Boolean,
         mode: MgcSpatialGpuDenoiseMode = MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT,
@@ -1320,7 +1319,7 @@ class RawDemosaicProcessor {
                         globalOriginY = 0,
                         fullWidth = width,
                         fullHeight = height,
-                        outputScale = outputScale,
+                        outputScale = 1f,
                         metadata = defaultDenoiseMetadata,
                         preparedYuvNoiseModel = demosaicNoiseTransfer.takeIf {
                             mode == MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT
@@ -1390,7 +1389,7 @@ class RawDemosaicProcessor {
             PLog.i(
                 TAG,
                 "MGC Spatial GPU LinearRaw ready: source=$sourceLabel " +
-                    "size=${width}x$height outputScale=$outputScale " +
+                    "size=${width}x$height " +
                     "pass=${if (applyDefaultDenoise) {
                         mode.name
                     } else {
@@ -1639,6 +1638,7 @@ class RawDemosaicProcessor {
         val metadata: RawMetadata,
         val tiles: List<RawRenderTile>,
         val outputSourceBounds: Rect,
+        val outputGeometry: RawOutputGeometry,
         val rotation: Int,
         val includeHdrReference: Boolean,
         val hdrReferenceSceneExposureGain: Float,
@@ -1843,6 +1843,7 @@ class RawDemosaicProcessor {
         photonHdrNetInputExposureEv: Float? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        rawOutputScale: Float = 1f,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
@@ -1892,6 +1893,7 @@ class RawDemosaicProcessor {
                 photonHdrNetInputExposureEv = photonHdrNetInputExposureEv,
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
+                rawOutputScale = rawOutputScale,
                 dngFile = dngFile,
                 onMetadata = onMetadata
             )?.sdrBitmap
@@ -1938,6 +1940,7 @@ class RawDemosaicProcessor {
         rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        rawOutputScale: Float = 1f,
     ): Bitmap? = withContext(glDispatcher) {
         try {
             if (!isInitialized) {
@@ -1980,7 +1983,8 @@ class RawDemosaicProcessor {
                 spectralFilmTuning = spectralFilmTuning,
                 rawRenderingEngine = rawRenderingEngine,
                 rawToneMappingParameters = rawToneMappingParameters,
-                rawBlackBorderCrop = rawBlackBorderCrop
+                rawBlackBorderCrop = rawBlackBorderCrop,
+                rawOutputScale = rawOutputScale,
             )?.sdrBitmap
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process RAW buffer", e)
@@ -2087,6 +2091,7 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        rawOutputScale: Float = 1f,
         includeHdrReference: Boolean,
         photonHdrRatio: Float? = null,
         photonSourceToShortGain: Float? = null,
@@ -2138,6 +2143,7 @@ class RawDemosaicProcessor {
                 rawToneMappingParameters = rawToneMappingParameters,
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
+                rawOutputScale = rawOutputScale,
                 dngFile = dngFile,
                 onMetadata = onMetadata,
                 includeHdrReference = includeHdrReference,
@@ -2201,6 +2207,7 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        rawOutputScale: Float = 1f,
         includeHdrReference: Boolean,
         photonHdrRatio: Float? = null,
         photonSourceToShortGain: Float? = null,
@@ -2298,6 +2305,7 @@ class RawDemosaicProcessor {
                 rawToneMappingParameters = rawToneMappingParameters,
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
+                rawOutputScale = rawOutputScale,
                 includeHdrReference = includeHdrReference,
                 sourceDngRenderPlan = embeddedDngRenderPlan,
                 photonHdrRatio = photonHdrRatio,
@@ -2366,6 +2374,7 @@ class RawDemosaicProcessor {
         photonHdrNetInputExposureEv: Float? = null,
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        rawOutputScale: Float = 1f,
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false,
@@ -2612,7 +2621,6 @@ class RawDemosaicProcessor {
                 rawData = actualRawData,
                 rowStride = actualRowStride,
                 samplesPerPixel = actualSamplesPerPixel,
-                needsSharpen = RawSharpeningDefaults.toAlgorithmStrength(sharpeningValue) > 0f,
             )
         }
 
@@ -2753,6 +2761,11 @@ class RawDemosaicProcessor {
                 "legacyCrop=$cropRegion appliedLegacyCrop=$renderCropRegion " +
                 "aspectRatio=$aspectRatio rotation=$actualRotation outputSourceBounds=$outputSourceBounds"
         )
+        val outputGeometry = RawOutputGeometry(
+            RawTileRect(outputSourceBounds.left, outputSourceBounds.top,
+                outputSourceBounds.right, outputSourceBounds.bottom),
+            actualRotation, rawOutputScale,
+        )
         val rawOutputBounds = outputSourceBounds.toOutputBounds(actualRotation)
         val applicableDngWarpRectilinear = filterApplicableWarpRectilinear(
             warps = dngWarpRectilinear,
@@ -2811,8 +2824,9 @@ class RawDemosaicProcessor {
                 ),
                 rotation = actualRotation,
                 coreEdgePx = RAW_TILE_MAX_CORE_EDGE_PX,
-                supportPx = RAW_TILE_SUPPORT_PX,
+                supportPx = RAW_TILE_SUPPORT_PX + if (outputGeometry.resample) 3 else 0,
                 cfaPeriod = RawCfaCorrection.repeatPatternDim(actualMetadata.cfaPattern)[0],
+                processingPeriod = outputGeometry.mgcFinishResolution.processingPeriod,
             )
         } else {
             emptyList()
@@ -3153,8 +3167,8 @@ class RawDemosaicProcessor {
         )
 
             val bounds = rawOutputBounds
-            val finalWidth = bounds.width()
-            val finalHeight = bounds.height()
+            val finalWidth = outputGeometry.width
+            val finalHeight = outputGeometry.height
 
             if (rawRenderTiles.isEmpty()) {
                 // 4. A capture-profile pass may hand its full-resolution single-frame demosaic
@@ -3775,6 +3789,7 @@ class RawDemosaicProcessor {
                         metadata = actualMetadata,
                         tiles = rawRenderTiles,
                         outputSourceBounds = outputSourceBounds,
+                        outputGeometry = outputGeometry,
                         rotation = actualRotation,
                         includeHdrReference = includeHdrReference,
                         hdrReferenceSceneExposureGain = hdrReferenceSceneExposureGain,
@@ -3851,6 +3866,30 @@ class RawDemosaicProcessor {
             // it through ColorCorrectAll's camera-domain inputEV; other linear engines retain
             // the exact post-matrix 2^EV gain.
             checkGlError("Before LinearRcdPass")
+
+            if (outputGeometry.mgcFinishResolution.needsGuidedUpsample) {
+                mgcSharpen.guided.prepare(denoiseProfileTextureId, actualWidth, actualHeight,
+                    actualMetadata.whiteBalanceGains, outputGeometry.mgcFinishResolution)
+                renderLinearRcdPass(
+                    metadata = actualMetadata,
+                    sourceTextureId = mgcSharpen.guided.cameraTexture,
+                    targetFramebufferId = mgcSharpen.guided.profileFramebuffer,
+                    viewportWidth = mgcSharpen.guided.lowWidth,
+                    viewportHeight = mgcSharpen.guided.lowHeight,
+                    rawExposureCompensation = 0f,
+                    colorCorrectionMatrix = linearColorCorrectionMatrix,
+                    cameraWhite = linearCameraWhite,
+                    // HDRNet's PGTM contains HDRNet -> Dehaze/DHA, so its DCP color map is deferred
+                    // to the profile pass. Other paths retain their established linear-pass order.
+                    hueSatMap = activeDcpRenderPlan?.hueSatMap
+                        ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
+                    applyDngBaselineExposure = applyLinearDngBaselineExposure,
+                    clampProfileRgb = clampProfileRgb,
+                    hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
+                    hncsCameraDomainGains = hncsCameraDomainGains,
+                    label = "GuidedLowLinearRcdPass"
+                )
+            }
 
             renderLinearRcdPass(
                 metadata = actualMetadata,
@@ -3934,13 +3973,23 @@ class RawDemosaicProcessor {
                 } else {
                     profileToEngineTransform
             }
-            setupCombinedFramebuffer(actualWidth, actualHeight)
+            if (mgcSharpen.guided.isPrepared && colorEngine == RawRenderingEngine.DarktableFilmic) {
+                mgcSharpen.guided.downsampleReconstructedColor(combinedInputTexture)
+            }
+            val toneInputTexture = if (mgcSharpen.guided.isPrepared) {
+                mgcSharpen.guided.profileTexture
+            } else combinedInputTexture
+            val toneWidth = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.lowWidth else actualWidth
+            val toneHeight = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.lowHeight else actualHeight
+            val toneGlobalWidth = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.globalWidth else actualWidth
+            val toneGlobalHeight = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.globalHeight else actualHeight
+            setupCombinedFramebuffer(toneWidth, toneHeight)
             val combinedStart = System.currentTimeMillis()
             var hdrReferencePreparedFromCombinedInput = false
             val combinedOutput = try {
                 val output = renderCombinedPass(
                     metadata = actualMetadata,
-                    inputTextureId = combinedInputTexture,
+                    inputTextureId = toneInputTexture,
                     dcpRenderPlan = activeDcpRenderPlan,
                     applyDcpHueSatMap = deferDcpHueSatUntilAfterPgtm,
                     profileExposureUniforms = combinedProfileExposureUniforms,
@@ -3957,6 +4006,10 @@ class RawDemosaicProcessor {
                     rawToneMappingParameters = rawToneMappingParameters,
                     applyProfileGainTableMap =
                         hasProfileGainTableMap && colorEngine != RawRenderingEngine.DarktableFilmic,
+                    viewportWidth = toneWidth,
+                    viewportHeight = toneHeight,
+                    globalWidth = toneGlobalWidth,
+                    globalHeight = toneGlobalHeight,
                 )
                 // Filmic's wavelet reconstruction owns its prepared engine-domain source. Render
                 // the HDR reference before releasing those framebuffers so SDR and HDR consume
@@ -4046,7 +4099,8 @@ class RawDemosaicProcessor {
                 actualWidth,
                 actualHeight,
                 bounds,
-                sourceTextureForOutput
+                sourceTextureForOutput,
+                geometry = outputGeometry,
             )
             PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
             // HDR must use this exact finalized SDR color as well. Keep it through HDR output;
@@ -4117,6 +4171,7 @@ class RawDemosaicProcessor {
                         bounds,
                         hdrReferenceTextureId,
                         hdrSdrBaseTextureId = sourceTextureForOutput,
+                        geometry = outputGeometry,
                     )
                     val hdrGpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
                         label = "RAW HDR reference output",
@@ -4203,16 +4258,8 @@ class RawDemosaicProcessor {
         }) {
             "RAW tile resource reuse requires a stable working size"
         }
-        val outputWidth = if (config.rotation == 90 || config.rotation == 270) {
-            config.outputSourceBounds.height()
-        } else {
-            config.outputSourceBounds.width()
-        }
-        val outputHeight = if (config.rotation == 90 || config.rotation == 270) {
-            config.outputSourceBounds.width()
-        } else {
-            config.outputSourceBounds.height()
-        }
+        val outputWidth = config.outputGeometry.width
+        val outputHeight = config.outputGeometry.height
         val workingColorSpace = resolveWorkingColorSpace()
         val hdrColorSpace = android.graphics.ColorSpace.get(
             android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB
@@ -4257,8 +4304,8 @@ class RawDemosaicProcessor {
             isFilterBitmap = false
             blendMode = BlendMode.SRC
         }
-        val maximumOutputWidth = config.tiles.maxOf { it.outputCore.width }
-        val maximumOutputHeight = config.tiles.maxOf { it.outputCore.height }
+        val maximumOutputWidth = config.tiles.maxOf { config.outputGeometry.scaleRegion(it.outputCore).width }
+        val maximumOutputHeight = config.tiles.maxOf { config.outputGeometry.scaleRegion(it.outputCore).height }
         val estimatedTileGpuBytes =
             firstWorking.width.toLong() * firstWorking.height.toLong() * 96L
         val destinationBytes = outputWidth.toLong() * outputHeight.toLong() * 8L *
@@ -4295,6 +4342,7 @@ class RawDemosaicProcessor {
             for (tile in config.tiles) {
                 currentCoroutineContext().ensureActive()
                 val tileStartNs = System.nanoTime()
+                val scaledCore = config.outputGeometry.scaleRegion(tile.outputCore)
                 val working = tile.sourceWorking
                 val workWidth = working.width
                 val workHeight = working.height
@@ -4390,6 +4438,30 @@ class RawDemosaicProcessor {
                         denoiseValue = config.denoiseValue,
                     )
                 }
+                if (config.outputGeometry.mgcFinishResolution.needsGuidedUpsample) {
+                    val resolution = config.outputGeometry.mgcFinishResolution
+                    check(working.left % resolution.processingPeriod == 0 &&
+                        working.top % resolution.processingPeriod == 0)
+                    mgcSharpen.guided.prepare(denoisedTextureId, workWidth, workHeight,
+                        config.metadata.whiteBalanceGains, resolution)
+                    renderLinearRcdPass(
+                        metadata = config.metadata,
+                        sourceTextureId = mgcSharpen.guided.cameraTexture,
+                        targetFramebufferId = mgcSharpen.guided.profileFramebuffer,
+                        viewportWidth = mgcSharpen.guided.lowWidth,
+                        viewportHeight = mgcSharpen.guided.lowHeight,
+                        rawExposureCompensation = 0f,
+                        colorCorrectionMatrix = config.linearColorCorrectionMatrix,
+                        cameraWhite = config.linearCameraWhite,
+                        hueSatMap = config.hueSatMap
+                            ?.takeUnless { config.deferDcpHueSatUntilAfterPgtm },
+                        applyDngBaselineExposure = config.applyLinearDngBaselineExposure,
+                        clampProfileRgb = config.clampProfileRgb,
+                        hueSatMapSupportsOverrange = config.hueSatMapSupportsOverrange,
+                        hncsCameraDomainGains = config.hncsCameraDomainGains,
+                        label = "GuidedLowLinearRcdTilePass",
+                    )
+                }
                 renderLinearRcdPass(
                     metadata = config.metadata,
                     sourceTextureId = denoisedTextureId,
@@ -4417,7 +4489,7 @@ class RawDemosaicProcessor {
 
                 val combinedOutput = renderCombinedPass(
                     metadata = config.metadata,
-                    inputTextureId = demosaicTextureId,
+                    inputTextureId = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.profileTexture else demosaicTextureId,
                     dcpRenderPlan = config.activeDcpRenderPlan,
                     applyDcpHueSatMap = config.deferDcpHueSatUntilAfterPgtm,
                     profileExposureUniforms = config.profileExposureUniforms,
@@ -4437,8 +4509,10 @@ class RawDemosaicProcessor {
                     globalOriginY = working.top,
                     fullImageWidth = config.fullWidth,
                     fullImageHeight = config.fullHeight,
-                    viewportWidth = workWidth,
-                    viewportHeight = workHeight,
+                    viewportWidth = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.lowWidth else workWidth,
+                    viewportHeight = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.lowHeight else workHeight,
+                    globalWidth = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.globalWidth else workWidth,
+                    globalHeight = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.globalHeight else workHeight,
                 )
                 if (combinedOutput == null) {
                     PLog.e(TAG, "Combined tile pass failed at tile=${tile.index}")
@@ -4480,19 +4554,23 @@ class RawDemosaicProcessor {
                         width = workWidth,
                         height = workHeight,
                         bounds = localOutputBounds,
+                        geometry = config.outputGeometry,
+                        outputRegion = scaledCore,
+                        sourceOriginX = working.left,
+                        sourceOriginY = working.top,
                         sourceTextureId = hdrReferenceTextureId,
                         hdrSdrBaseTextureId = sharpenTextureId,
                     )
                     val hdrTileBitmap = readTilePixels(
-                        width = tile.outputCore.width,
-                        height = tile.outputCore.height,
+                        width = scaledCore.width,
+                        height = scaledCore.height,
                         colorSpace = hdrColorSpace,
                     ) ?: return null
                     try {
                         hdrCanvas?.drawBitmap(
                             hdrTileBitmap,
-                            tile.outputCore.left.toFloat(),
-                            tile.outputCore.top.toFloat(),
+                            scaledCore.left.toFloat(),
+                            scaledCore.top.toFloat(),
                             copyPaint,
                         )
                     } finally {
@@ -4504,18 +4582,22 @@ class RawDemosaicProcessor {
                     width = workWidth,
                     height = workHeight,
                     bounds = localOutputBounds,
+                    geometry = config.outputGeometry,
+                    outputRegion = scaledCore,
+                    sourceOriginX = working.left,
+                    sourceOriginY = working.top,
                     sourceTextureId = sharpenTextureId,
                 )
                 val tileBitmap = readTilePixels(
-                    width = tile.outputCore.width,
-                    height = tile.outputCore.height,
+                    width = scaledCore.width,
+                    height = scaledCore.height,
                     colorSpace = workingColorSpace,
                 ) ?: return null
                 try {
                     sdrCanvas.drawBitmap(
                         tileBitmap,
-                        tile.outputCore.left.toFloat(),
-                        tile.outputCore.top.toFloat(),
+                        scaledCore.left.toFloat(),
+                        scaledCore.top.toFloat(),
                         copyPaint,
                     )
                 } finally {
@@ -6530,8 +6612,8 @@ class RawDemosaicProcessor {
         combinedTextureId = textures[0]
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, combinedTextureId)
         GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
         )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -6553,7 +6635,7 @@ class RawDemosaicProcessor {
             textureId = combinedTextureId,
             width = width,
             height = height,
-            internalFormat = "RGBA8",
+            internalFormat = "RGBA16F",
         )
         checkGlError("setupCombinedFramebuffer")
     }
@@ -6736,6 +6818,8 @@ class RawDemosaicProcessor {
         )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
         val framebuffers = IntArray(1)
         GLES30.glGenFramebuffers(1, framebuffers, 0)
@@ -6784,8 +6868,8 @@ class RawDemosaicProcessor {
         sharpenTextureId = textures[0]
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sharpenTextureId)
         GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
         )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -6807,12 +6891,15 @@ class RawDemosaicProcessor {
             textureId = sharpenTextureId,
             width = width,
             height = height,
-            internalFormat = "RGBA8",
+            internalFormat = "RGBA16F",
         )
         checkGlError("setupSharpenFramebuffer")
     }
 
     private fun setupOutputFramebuffer(width: Int, height: Int) {
+        require(width in 1..maxTextureSize && height in 1..maxTextureSize) {
+            "RAW output ${width}x$height exceeds GL_MAX_TEXTURE_SIZE=$maxTextureSize"
+        }
         if (outputFramebufferId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(outputFramebufferId), 0)
             GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
@@ -6875,7 +6962,7 @@ class RawDemosaicProcessor {
      * 1. engine tone pass
      * 2. HNCS only: decode FilmCurve companding + HNCS -> linear output RGB
      * 3. optional adjustment pass: shadows/highlights + black/white levels in linear output RGB
-     * 4. sRGB pass: linear output RGB -> sRGB encoded RGBA8 for sharpen/output
+     * 4. sRGB pass: linear output RGB -> sRGB encoded RGBA16F for GuidedUpsample/sharpen/output
      */
     private fun renderCombinedPass(
         metadata: RawMetadata,
@@ -7568,21 +7655,23 @@ class RawDemosaicProcessor {
         rawData: ByteBuffer?,
         rowStride: Int,
         samplesPerPixel: Int,
-        needsSharpen: Boolean,
     ): RawMetadata {
         val needsSingleFrameDenoiseSnr =
             samplesPerPixel == 1 && frameCount == 1 && mgcDenoiseTuningSnr == null
-        val needsSharpenSnr = needsSharpen && frameCount == 1 && mgcSharpenTuningSnr == null
+        // Guided reconstruction is still required when the sharpening slider is zero.
+        val needsSharpenSnr = mgcSharpenTuningSnr == null
         if (!needsSingleFrameDenoiseSnr && !needsSharpenSnr) {
             return this
         }
-        val source = rawData ?: return this
         val signalStartNs = System.nanoTime()
-        val signal = estimateMgcReferenceSignal(
-            rawData = source,
+        val measuredSignal = rawData?.let { estimateMgcReferenceSignal(
+            rawData = it,
             rowStride = rowStride,
             samplesPerPixel = samplesPerPixel,
-        ) ?: return this
+        ) }
+        // V25 EstimateSnr (0x5EDD674): absent mean and unapplied gain use 0.18.
+        // Photon does not carry MGC's unapplied gain; do not substitute display EV.
+        val signal = measuredSignal ?: 0.18f
         val signalElapsedMs = (System.nanoTime() - signalStartNs) / 1_000_000L
         val noiseModel = when (noiseProfileLayout) {
             RawNoiseProfileLayout.CAMERA2_CFA ->
@@ -7605,30 +7694,27 @@ class RawDemosaicProcessor {
         val greenShot = 0.5f * (shot[1] + shot[2])
         val greenRead = 0.5f * (read[1] + read[2])
         val variance = greenShot * signal + greenRead
-        val snr = if (variance.isFinite() && variance > 1e-12f) {
+        check(variance.isFinite() && signal.isFinite() && signal >= 0f)
+        // V25 returns zero when modeled variance is not positive; curve lookup
+        // then uses its first SNR node. Missing noise data does not change geometry.
+        val snr = if (variance > 0f) {
             signal / sqrt(variance)
         } else {
-            Float.NaN
+            0f
         }
-        if (!snr.isFinite() || snr <= 0f) {
-            PLog.w(
-                TAG,
-                "MGC RAW render tuning unavailable: signal=$signal " +
-                    "greenShot=$greenShot greenRead=$greenRead layout=$noiseProfileLayout",
-            )
-            return this
-        }
+        check(snr.isFinite() && snr >= 0f)
         PLog.i(
             TAG,
                 "MGC RAW render tuning signal=$signal snr=$snr " +
                     "greenShot=$greenShot greenRead=$greenRead " +
                     "singleFrameDenoise=$needsSingleFrameDenoiseSnr " +
                     "sharpen=$needsSharpenSnr " +
-                    "signalSource=NATIVE_OMP signalMs=$signalElapsedMs",
+                    "signalSource=${if (measuredSignal != null) "NATIVE_OMP" else "MGC_MISSING_MEAN"} " +
+                    "signalMs=$signalElapsedMs",
         )
         return copy(
             mgcSharpenTuningSnr = if (needsSharpenSnr) snr else mgcSharpenTuningSnr,
-            mgcDenoiseTuningSnr = if (needsSingleFrameDenoiseSnr) {
+            mgcDenoiseTuningSnr = if (needsSingleFrameDenoiseSnr && measuredSignal != null && snr > 0f) {
                 snr
             } else {
                 mgcDenoiseTuningSnr
@@ -7693,36 +7779,25 @@ class RawDemosaicProcessor {
             }
         } ?: 1f
         val effectiveStrength = algorithmStrength * runtimeAttenuation
-        if (effectiveStrength <= 0f) {
+        if (effectiveStrength <= 0f && !mgcSharpen.guided.isPrepared) {
             renderSharpenPass(metadata, 0f, inputTextureId)
             return
         }
-        val snr = metadata.mgcSharpenTuningSnr
-        if (snr != null) {
-            check(snr.isFinite() && snr > 0f) { "MGC sharpen reference SNR is invalid: $snr" }
-            check(inputTextureId == combinedTextureId) { "MGC sharpen requires the encoded combined output" }
-            stackCompletionTimeline?.awaitPending(
-                syncPoint = "RAW_SHARPEN_INPUT", checkGlError = ::checkGlError,
-            )?.let { PLog.i(TAG, "MGC sharpen upstreamStackGpuWait=${it.totalWaitMs}ms") }
-            mgcSharpen.render(
-                sourceTexture = inputTextureId,
-                sourceFramebuffer = combinedFramebufferId,
-                targetTexture = sharpenTextureId,
-                width = metadata.width,
-                height = metadata.height,
-                snr = snr,
-                attenuation = effectiveStrength,
-                tuning = PhotonQualitySharpenTuning.resolve(metadata.rawMaxQualityTuningEnabled),
-            )
-        } else {
-            // Non-MGC GPU-only sources may have no reference RAW/statistics available.
-            PLog.w(TAG, "Original MGC sharpen unavailable: missing reference SNR; using GLES USM")
-            renderSharpenPass(
-                metadata,
-                RawSharpeningDefaults.toAlgorithmStrength(sliderValue) * runtimeAttenuation,
-                inputTextureId,
-            )
-        }
+        val snr = checkNotNull(metadata.mgcSharpenTuningSnr) { "MGC finish tuning was not prepared" }
+        check(snr.isFinite() && snr >= 0f) { "MGC sharpen reference SNR is invalid: $snr" }
+        check(inputTextureId == combinedTextureId) { "MGC sharpen requires the encoded combined output" }
+        stackCompletionTimeline?.awaitPending(
+            syncPoint = "RAW_SHARPEN_INPUT", checkGlError = ::checkGlError,
+        )?.let { PLog.i(TAG, "MGC sharpen upstreamStackGpuWait=${it.totalWaitMs}ms") }
+        mgcSharpen.render(
+            sourceTexture = inputTextureId,
+            targetTexture = sharpenTextureId,
+            width = metadata.width,
+            height = metadata.height,
+            snr = snr,
+            attenuation = effectiveStrength,
+            tuning = PhotonQualitySharpenTuning.resolve(metadata.rawMaxQualityTuningEnabled),
+        )
     }
 
     private fun renderSharpenPass(
@@ -8871,6 +8946,10 @@ class RawDemosaicProcessor {
         bounds: Rect,
         sourceTextureId: Int,
         hdrSdrBaseTextureId: Int? = null,
+        geometry: RawOutputGeometry? = null,
+        outputRegion: RawTileRect? = geometry?.fullRegion,
+        sourceOriginX: Int = 0,
+        sourceOriginY: Int = 0,
     ) {
         checkNotNull(
             outputPass.render(
@@ -8883,6 +8962,12 @@ class RawDemosaicProcessor {
                     targetFramebufferId = outputFramebufferId,
                     targetTextureId = outputTextureId,
                     hdrSdrBaseTextureId = hdrSdrBaseTextureId,
+                    geometry = geometry,
+                    outputRegion = outputRegion,
+                    sourceOriginX = sourceOriginX,
+                    sourceOriginY = sourceOriginY,
+                    targetWidth = outputRegion?.width ?: bounds.width(),
+                    targetHeight = outputRegion?.height ?: bounds.height(),
                 ),
             ),
         ) { "RAW output pass failed" }

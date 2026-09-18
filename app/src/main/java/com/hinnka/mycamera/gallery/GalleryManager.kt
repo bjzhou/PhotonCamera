@@ -58,6 +58,7 @@ import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawDngCaptureProfilePreparer
+import com.hinnka.mycamera.raw.RawOutputScaling
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -2393,6 +2394,7 @@ object GalleryManager {
                 rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                 rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                 rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
+                rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
                 spectralFilmStock = updatedMetadata.spectralFilmStock,
                 spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                 spectralFilmTuning = SpectralFilmTuning(
@@ -2487,6 +2489,7 @@ object GalleryManager {
                     rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                     rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                     rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
+                    rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(
@@ -3394,7 +3397,6 @@ object GalleryManager {
                     frames = effectiveRawStackFrames,
                     cfaPattern = stackCfaPattern,
                     outputMode = rawMaxSpatialOutputMode,
-                    outputScale = rawStackOutputScale,
                     masterBlackLevel = stackBlackLevel,
                     whiteLevel = stackWhiteLevel,
                     whiteBalanceGains = rawMetadata.whiteBalanceGains,
@@ -3508,7 +3510,6 @@ object GalleryManager {
                 gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
                 gpuBayerSource = finalStackResult.gpuBayerSource,
                 metadata = mergeOutputMetadata,
-                outputScale = rawStackOutputScale,
                 sourcePixelsIncludeLensShadingCorrection =
                     finalStackResult.lensShadingCorrectionApplied,
                 applyLensShadingCorrection = applyRawLensShading,
@@ -3556,13 +3557,13 @@ object GalleryManager {
                 mgcDenoiseTuningSnr = null,
             )
 
-            val outputRawBlackBorderCrop =
-                metadata.rawBlackBorderCrop.scaledForOutput(rawStackOutputScale)
             val stackedMetadata = metadata
                 .withNormalizedRawLevelCorrectionsCleared("MGC default-denoised RAW stack")
                 .copy(
                     cropRegion = null,
-                    rawBlackBorderCrop = outputRawBlackBorderCrop,
+                    customProperties = RawOutputScaling.write(
+                        metadata.customProperties, rawStackOutputScale,
+                    ),
                     // These fields describe the processor-specific FinishRaw denoise already
                     // baked into LinearRaw; the merge itself remains represented by the pixels.
                     rawDenoiseValue = if (defaultDenoiseRequested) {
@@ -3576,14 +3577,6 @@ object GalleryManager {
                         0f
                     },
                 )
-            if (outputRawBlackBorderCrop != metadata.rawBlackBorderCrop) {
-                PLog.i(
-                    TAG,
-                    "RAWmax black border crop mapped to output scale: " +
-                        "scale=$rawStackOutputScale native=${metadata.rawBlackBorderCrop} " +
-                        "output=$outputRawBlackBorderCrop"
-                )
-            }
 
             var updatedMetadata: MediaMetadata = stackedMetadata
             val rawSharpening = updatedMetadata.sharpening
@@ -3738,6 +3731,7 @@ object GalleryManager {
                     rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                     rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                     rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
+                    rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(
@@ -3830,6 +3824,7 @@ object GalleryManager {
                         rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                         rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                         rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
+                        rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
                         spectralFilmStock = updatedMetadata.spectralFilmStock,
                         spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                         spectralFilmTuning = SpectralFilmTuning(
@@ -4112,6 +4107,7 @@ object GalleryManager {
             rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
             rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
             rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
+            rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
             spectralFilmStock = updatedMetadata.spectralFilmStock,
             spectralFilmPrint = updatedMetadata.spectralFilmPrint,
             spectralFilmTuning = SpectralFilmTuning(
@@ -5563,6 +5559,7 @@ object GalleryManager {
                             rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                             rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                             rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
+                            rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
                             spectralFilmStock = updatedMetadata.spectralFilmStock,
                             spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                             spectralFilmTuning = SpectralFilmTuning(
@@ -5754,6 +5751,7 @@ object GalleryManager {
                     ),
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,
                     rawBlackBorderCrop = rawMetadata.rawBlackBorderCrop,
+                    rawOutputScale = RawOutputScaling.read(rawMetadata.customProperties),
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata?.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(

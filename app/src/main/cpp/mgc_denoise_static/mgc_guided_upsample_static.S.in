@@ -1,0 +1,1537 @@
+/* Generated mechanically from pinned MGC 9.7.047 V25 GuidedUpsample AOT.
+ * Do not edit; regenerate with
+ * scripts/research/generate_mgc_guided_upsample_static_asm.py.
+ */
+
+#if !defined(__aarch64__)
+#error "MGC GuidedUpsample static lift is arm64-only"
+#endif
+
+    .hidden photon_mgc_halide_error_5f94c78
+    .hidden photon_mgc_halide_error_5f94d60
+    .hidden photon_mgc_halide_error_5f94e38
+    .hidden photon_mgc_halide_error_5f94ec4
+    .hidden photon_mgc_halide_error_5f94fa8
+    .hidden photon_mgc_halide_error_5f95034
+    .hidden photon_mgc_halide_error_5f950cc
+    .hidden photon_mgc_halide_error_5f95158
+    .hidden photon_mgc_halide_error_5f95260
+    .hidden photon_mgc_halide_error_5f95540
+    .hidden photon_mgc_halide_error_5f95560
+    .hidden photon_mgc_halide_error_5f95638
+    .hidden photon_mgc_halide_error_5f956a4
+    .hidden photon_mgc_halide_error_5f95704
+    .hidden photon_mgc_halide_error_5f9579c
+    .hidden photon_mgc_halide_error_5f95a4c
+    .hidden photon_mgc_halide_do_par_for
+    .hidden photon_mgc_halide_free
+    .hidden photon_mgc_halide_malloc
+    .hidden photon_mgc_halide_trace
+
+.section .text.photon_mgc.GuidedUpsample.guided,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_guided_upsample_s16_to_16_bit
+    .hidden photon_mgc_guided_upsample_s16_to_16_bit
+    .type photon_mgc_guided_upsample_s16_to_16_bit, %function
+photon_mgc_guided_upsample_page_4b89000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x0, 0x9f8
+photon_mgc_guided_upsample_address_4b899f8:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x9f8, 0x408
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe00, 0x1fc
+photon_mgc_guided_upsample_page_4b8a000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xffc, 0x60
+    adrp x9, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x105c, 0xc
+    adrp x9, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1068, 0xbc4
+    adrp x15, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c2c, 0x10c
+    adrp x11, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1d38, 0x2b4
+photon_mgc_guided_upsample_page_4b8b000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fec, 0x950
+    adrp x11, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x293c, 0x8
+    adrp x11, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2944, 0x6a0
+photon_mgc_guided_upsample_page_4b8c000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2fe4, 0xc0
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x30a4, 0xf8
+    adrp x1, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x319c, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x31a0, 0x3c8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3568, 0x124
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x368c, 0x298
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3924, 0xcc
+    adrp x10, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x39f0, 0x19c
+    adrp x10, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3b8c, 0x4
+    adrp x10, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3b90, 0x98
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3c28, 0x394
+photon_mgc_guided_upsample_page_4b8d000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3fbc, 0xc94
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x4c50, 0x10c
+    adrp x0, photon_mgc_guided_upsample_page_6b9000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x4d5c, 0x228
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x4f84, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x4f90, 0x1c
+photon_mgc_guided_upsample_page_4b8e000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x4fac, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x4fe4, 0xb9c
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x5b80, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x5b8c, 0x8
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x5b94, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x5ba0, 0x3f8
+photon_mgc_guided_upsample_page_4b8f000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x5f98, 0x42c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x63c4, 0x16c
+    adrp x15, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x6530, 0x60
+    adrp x15, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x6590, 0x148
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x66d8, 0x1c
+    adrp x8, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x66f4, 0x78
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x676c, 0x814
+photon_mgc_guided_upsample_page_4b90000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x6f80, 0xc14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x7b94, 0xbc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x7c50, 0x14
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x7c64, 0x30
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x7c94, 0x14
+    adrp x11, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x7ca8, 0x2c4
+photon_mgc_guided_upsample_page_4b91000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x7f6c, 0xa4
+    adrp x11, photon_mgc_guided_upsample_page_6b9000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x8010, 0x20
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x8030, 0xa4
+    adrp x12, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x80d4, 0x8
+    adrp x12, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x80dc, 0x5cc
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x86a8, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x86ac, 0x6ac
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x8d58, 0x1e0
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x8f38, 0x8
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x8f40, 0x8
+photon_mgc_guided_upsample_page_4b92000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x8f48, 0x934
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x987c, 0x1c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x9898, 0x6c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x9904, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x994c, 0x1d4
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x9b20, 0x14
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x9b34, 0x298
+    adrp x8, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x9dcc, 0x160
+photon_mgc_guided_upsample_page_4b93000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x9f2c, 0x368
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xa294, 0xcc
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xa360, 0x464
+    adrp x15, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xa7c4, 0x378
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xab3c, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xab54, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xab5c, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xab78, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xab90, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xab98, 0x36c
+photon_mgc_guided_upsample_page_4b94000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xaf04, 0x138
+    adrp x16, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb03c, 0x310
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb34c, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb364, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb36c, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb388, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb3a0, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb3a8, 0x5f4
+    adrp x15, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xb99c, 0x390
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xbd2c, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xbd44, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xbd4c, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xbd6c, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xbd84, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xbd8c, 0x140
+photon_mgc_guided_upsample_page_4b95000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xbecc, 0x1000
+photon_mgc_guided_upsample_page_4b96000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xcecc, 0xab0
+    adrp x0, photon_mgc_guided_upsample_page_6b3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xd97c, 0x54c
+photon_mgc_guided_upsample_page_4b97000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xdec8, 0x84
+    adrp x0, photon_mgc_guided_upsample_page_6b3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xdf4c, 0xb0
+    adrp x0, photon_mgc_guided_upsample_page_6c6000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xdffc, 0x8
+    adrp x0, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe004, 0x660
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe664, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe684, 0x20
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe6a4, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe6ac, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe6cc, 0x20
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe6ec, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe6f4, 0x64
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe758, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe770, 0x24
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe794, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7b0, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7b4, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7b8, 0x8
+    bl photon_mgc_halide_error_5f95704
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7c0, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7d4, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7d8, 0x4
+    adrp x4, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7dc, 0x10
+    bl photon_mgc_halide_error_5f9579c
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7ec, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7f0, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7f4, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe7f8, 0x8
+    bl photon_mgc_halide_error_5f95704
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe800, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe824, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe840, 0x1c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe85c, 0x20
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe87c, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe884, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe894, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe89c, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe8c4, 0x20
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe8e4, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe8ec, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe914, 0x20
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe934, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe93c, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe95c, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe968, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe970, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe988, 0x8
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe990, 0xc
+    bl photon_mgc_halide_error_5f95a4c
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe99c, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe9a8, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe9c4, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe9cc, 0x30
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xe9fc, 0x8
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xea04, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xea30, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xea4c, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xea54, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xea6c, 0x14
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xea80, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xea88, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeaa4, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeab0, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeab8, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeae4, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeaf4, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeb00, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeb0c, 0x48
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeb54, 0x44
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeb98, 0x38
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xebd0, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xebf4, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xec00, 0x38
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xec38, 0x18
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xec50, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xec78, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xec9c, 0x48
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xece4, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xed0c, 0x14
+photon_mgc_guided_upsample_address_4b97f7c:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xed20, 0x84
+photon_mgc_guided_upsample_page_4b98000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xeda4, 0x384
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xf128, 0x25c
+    adrp x9, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xf384, 0xc
+    adrp x9, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xf390, 0xa08
+photon_mgc_guided_upsample_page_4b99000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xfd98, 0x1bc
+    adrp x15, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0xff54, 0x10c
+    adrp x11, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x10060, 0xc04
+    adrp x11, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x10c64, 0x8
+    adrp x11, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x10c6c, 0x11c
+photon_mgc_guided_upsample_page_4b9a000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x10d88, 0x644
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x113cc, 0xf8
+    adrp x1, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x114c4, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x114c8, 0x3c8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x11890, 0x124
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x119b4, 0x298
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x11c4c, 0xcc
+    adrp x10, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x11d18, 0x54
+photon_mgc_guided_upsample_page_4b9b000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x11d6c, 0x148
+    adrp x10, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x11eb4, 0x4
+    adrp x10, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x11eb8, 0x98
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x11f50, 0xe10
+photon_mgc_guided_upsample_page_4b9c000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x12d60, 0x218
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x12f78, 0x10c
+    adrp x0, photon_mgc_guided_upsample_page_6b9000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x13084, 0x228
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x132ac, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x132b8, 0x54
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1330c, 0xa40
+photon_mgc_guided_upsample_page_4b9d000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x13d4c, 0x15c
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x13ea8, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x13eb4, 0x8
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x13ebc, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x13ec8, 0x824
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x146ec, 0x16c
+    adrp x15, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x14858, 0x60
+    adrp x15, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x148b8, 0x148
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x14a00, 0x1c
+    adrp x8, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x14a1c, 0x78
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x14a94, 0x290
+photon_mgc_guided_upsample_page_4b9e000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x14d24, 0x1000
+photon_mgc_guided_upsample_page_4b9f000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x15d24, 0x198
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x15ebc, 0xbc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x15f78, 0x14
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x15f8c, 0x30
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x15fbc, 0x14
+    adrp x11, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x15fd0, 0x368
+    adrp x11, photon_mgc_guided_upsample_page_6b9000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x16338, 0x20
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x16358, 0xa4
+    adrp x12, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x163fc, 0x8
+    adrp x12, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x16404, 0x5cc
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x169d0, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x169d4, 0x324
+photon_mgc_guided_upsample_page_4ba0000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x16cf8, 0x388
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17080, 0x1e0
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17260, 0x8
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17268, 0x93c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17ba4, 0x1c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17bc0, 0x6c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17c2c, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17c74, 0x68
+photon_mgc_guided_upsample_page_4ba1000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17cdc, 0x16c
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17e48, 0x14
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x17e5c, 0x298
+    adrp x8, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x180f4, 0x4c8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x185bc, 0xcc
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18688, 0x464
+    adrp x15, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18aec, 0x1d4
+photon_mgc_guided_upsample_page_4ba2000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18cc0, 0x1a4
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18e64, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18e7c, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18e84, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18ea0, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18eb8, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x18ec0, 0x4a4
+    adrp x16, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x19364, 0x310
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x19674, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1968c, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x19694, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x196b0, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x196c8, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x196d0, 0x5bc
+photon_mgc_guided_upsample_page_4ba3000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x19c8c, 0x38
+    adrp x15, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x19cc4, 0x390
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1a054, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1a06c, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1a074, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1a094, 0x18
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1a0ac, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1a0b4, 0xbbc
+photon_mgc_guided_upsample_page_4ba4000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ac70, 0x1000
+photon_mgc_guided_upsample_page_4ba5000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1bc70, 0x34
+    adrp x0, photon_mgc_guided_upsample_page_6b3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1bca4, 0x5d0
+    adrp x0, photon_mgc_guided_upsample_page_6b3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c274, 0xb0
+    adrp x0, photon_mgc_guided_upsample_page_6c6000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c324, 0x8
+    adrp x0, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c32c, 0x660
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c98c, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c9ac, 0x20
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c9cc, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c9d4, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1c9f4, 0x20
+    adrp x30, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ca14, 0x8
+    adrp x7, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ca1c, 0x64
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ca80, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ca98, 0x24
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cabc, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cad8, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cadc, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cae0, 0x8
+    bl photon_mgc_halide_error_5f95704
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cae8, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cafc, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb00, 0x4
+    adrp x4, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb04, 0x10
+    bl photon_mgc_halide_error_5f9579c
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb14, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb18, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb1c, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb20, 0x8
+    bl photon_mgc_halide_error_5f95704
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb28, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb4c, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb68, 0x1c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cb84, 0x20
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cba4, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cbac, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cbbc, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cbc4, 0x28
+photon_mgc_guided_upsample_page_4ba6000:
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cbec, 0x20
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc0c, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc14, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc3c, 0x20
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc5c, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc64, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc84, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc90, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cc98, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ccb0, 0x8
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ccb8, 0xc
+    bl photon_mgc_halide_error_5f95a4c
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ccc4, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ccd0, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ccec, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ccf4, 0x30
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cd24, 0x8
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cd2c, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cd58, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cd74, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cd7c, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cd94, 0x14
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cda8, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cdb0, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cdcc, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cdd8, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cde0, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ce0c, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ce1c, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ce28, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ce34, 0x48
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ce7c, 0x44
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cec0, 0x38
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cef8, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cf1c, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cf28, 0x38
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cf60, 0x18
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cf78, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cfa0, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1cfc4, 0x48
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1d00c, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1d034, 0x14
+photon_mgc_guided_upsample_address_4ba6500:
+photon_mgc_guided_upsample_s16_to_16_bit:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1d048, 0x100
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1d148, 0x9cc
+    adrp x10, photon_mgc_guided_upsample_page_6b4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1db14, 0x2c
+photon_mgc_guided_upsample_page_4ba7000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1db40, 0x28
+    adrp x11, photon_mgc_guided_upsample_page_6b4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1db68, 0x84
+    adrp x9, photon_mgc_guided_upsample_page_6b7000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dbec, 0x2c
+    adrp x9, photon_mgc_guided_upsample_page_6c0000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dc18, 0x1c
+    adrp x11, photon_mgc_guided_upsample_page_6b4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dc34, 0x6c
+    adrp x9, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dca0, 0x8
+    adrp x9, photon_mgc_guided_upsample_page_6bf000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dca8, 0x8
+    adrp x9, photon_mgc_guided_upsample_page_6b9000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dcb0, 0x4
+    adrp x9, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dcb4, 0xe4
+    adrp x9, photon_mgc_guided_upsample_page_6be000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1dd98, 0x794
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e52c, 0x54
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e580, 0x40
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e5c0, 0x48
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e608, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e60c, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e640, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e674, 0x3c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e6b0, 0x48
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e6f8, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e6fc, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e728, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e754, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e788, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e7b4, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e7b8, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e7e4, 0x3c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e820, 0x8
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e828, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e850, 0x40
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e890, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e894, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e8b4, 0x30
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e8e4, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e918, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e91c, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e944, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e964, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e968, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e988, 0x3c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e9c4, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e9c8, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1e9f4, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ea18, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ea3c, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ea70, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ea74, 0x18
+photon_mgc_guided_upsample_page_4ba8000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ea8c, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ea98, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1eacc, 0x8
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ead4, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1eaf4, 0x44
+    b photon_mgc_halide_error_5f94ec4
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1eb38, 0xcc
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ec04, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ec08, 0x36c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ef74, 0x54
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1efc8, 0x40
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f008, 0x40
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f048, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f068, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f090, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f0b0, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f0d8, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f0f0, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f108, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f128, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f144, 0x2c
+    adrp x8, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f170, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f174, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f194, 0x428
+    adrp x11, photon_mgc_guided_upsample_page_6b4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f5bc, 0x214
+    adrp x1, photon_mgc_guided_upsample_page_61f1000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f7d0, 0x198
+    adrp x1, photon_mgc_guided_upsample_page_61f1000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f968, 0x44
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f9ac, 0x14
+    adrp x8, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f9c0, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f9c4, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1f9e4, 0x34
+photon_mgc_guided_upsample_page_4ba9000:
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fa18, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fa20, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fa28, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fa30, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fa3c, 0x30
+    b photon_mgc_halide_error_5f95560
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fa6c, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fa70, 0x40
+    b photon_mgc_halide_error_5f94c78
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fab0, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fab8, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fabc, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1facc, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fad0, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fae8, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1faec, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb00, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb04, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb18, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb1c, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb30, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb50, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb74, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fb90, 0x3c
+    b photon_mgc_halide_error_5f95158
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fbcc, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fbd4, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fbe4, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fbf4, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc04, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc14, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc2c, 0x38
+    b photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc64, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc6c, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc74, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc7c, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc88, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fc90, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fca0, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fca8, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fcb0, 0x3c
+    b photon_mgc_halide_error_5f94fa8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fcec, 0x34
+    b photon_mgc_halide_error_5f95638
+    adrp x1, photon_mgc_guided_upsample_page_d66000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fd20, 0x3c
+    b photon_mgc_halide_error_5f950cc
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fd5c, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fd64, 0x34
+    b photon_mgc_halide_error_5f956a4
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fd98, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fda0, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fdb0, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fdc8, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fdcc, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fde0, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fdf4, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe08, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe1c, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe20, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe30, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe44, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe58, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe64, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe68, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe80, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe94, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fe98, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fea8, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1febc, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fec0, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fed4, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fee8, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fefc, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff00, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff14, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff28, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff38, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff50, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff54, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff64, 0x34
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff98, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ff9c, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ffb4, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ffc4, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ffc8, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1ffdc, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fff4, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x1fff8, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2000c, 0x34
+    b photon_mgc_halide_error_5f95034
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x20040, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x20048, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2004c, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x20060, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d67000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x20064, 0x34
+    b photon_mgc_halide_error_5f95260
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x20098, 0x80c
+
+
+.section .text.photon_mgc.GuidedUpsample.box,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_box_downsample_s16
+    .hidden photon_mgc_box_downsample_s16
+photon_mgc_guided_upsample_page_4d2d000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x208a4, 0x9dc
+photon_mgc_guided_upsample_address_4d2d9dc:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x21280, 0x1f0
+    adrp x9, photon_mgc_guided_upsample_page_6b5000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x21470, 0x14
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x21484, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x21488, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x214a8, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x214d4, 0x10
+    adrp x3, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x214e4, 0x4
+    adrp x4, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x214e8, 0x3a0
+photon_mgc_guided_upsample_page_4d2e000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x21888, 0x3d4
+    adrp x9, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x21c5c, 0x4
+    adrp x9, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x21c60, 0x558
+    adrp x3, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x221b8, 0x4
+    adrp x4, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x221bc, 0x6bc
+photon_mgc_guided_upsample_page_4d2f000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x22878, 0x224
+    adrp x9, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x22a9c, 0x4
+    adrp x9, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x22aa0, 0x558
+    adrp x3, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x22ff8, 0x4
+    adrp x4, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x22ffc, 0x31c
+    adrp x9, photon_mgc_guided_upsample_page_6b5000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x23318, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x23324, 0x8
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2332c, 0x5c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x23388, 0x14
+    adrp x0, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2339c, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x233a0, 0x4b0
+photon_mgc_guided_upsample_page_4d30000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x23850, 0x2c0
+    adrp x9, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x23b10, 0x4
+    adrp x9, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x23b14, 0x560
+    adrp x0, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24074, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24078, 0x1b8
+    adrp x0, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24230, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_6bb000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24234, 0x60
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24294, 0x50
+    b photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x242e4, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x242ec, 0x2c
+    b photon_mgc_halide_error_5f94fa8
+photon_mgc_guided_upsample_address_4d30af0:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24318, 0x1fc
+    adrp x9, photon_mgc_guided_upsample_page_6b5000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24514, 0x8
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2451c, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24520, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24540, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24564, 0x10
+    adrp x4, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24574, 0x4
+    adrp x5, photon_mgc_guided_upsample_page_6bf000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24578, 0x294
+photon_mgc_guided_upsample_page_4d31000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2480c, 0x4ac
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24cb8, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x24cbc, 0x550
+    adrp x4, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2520c, 0x8
+    adrp x5, photon_mgc_guided_upsample_page_6bf000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x25214, 0x5e8
+photon_mgc_guided_upsample_page_4d32000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x257fc, 0x2b4
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x25ab0, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x25ab4, 0x550
+    adrp x4, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26004, 0x8
+    adrp x5, photon_mgc_guided_upsample_page_6bf000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2600c, 0x2fc
+    adrp x9, photon_mgc_guided_upsample_page_6b5000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26308, 0x1c
+    adrp x8, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26324, 0x8
+    adrp x8, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2632c, 0x54
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26380, 0x14
+    adrp x2, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26394, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_6bf000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26398, 0x43c
+photon_mgc_guided_upsample_page_4d33000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x267d4, 0x308
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26adc, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x26ae0, 0x550
+    adrp x2, photon_mgc_guided_upsample_page_6c4000
+    adrp x3, photon_mgc_guided_upsample_page_6bf000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x27030, 0x1a8
+    adrp x2, photon_mgc_guided_upsample_page_6c4000
+    adrp x3, photon_mgc_guided_upsample_page_6bf000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x271d8, 0x60
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x27238, 0x50
+    b photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x27288, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x27290, 0x2c
+    b photon_mgc_halide_error_5f94fa8
+photon_mgc_guided_upsample_address_4d33b10:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x272bc, 0x184
+    adrp x27, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x27440, 0x5c
+    adrp x16, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2749c, 0x2c8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x27764, 0x3c
+photon_mgc_guided_upsample_page_4d34000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x277a0, 0x7a0
+    adrp x8, photon_mgc_guided_upsample_page_6b5000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x27f40, 0x36c
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x282ac, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x282b0, 0x4e4
+photon_mgc_guided_upsample_page_4d35000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x28794, 0x3d8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x28b6c, 0x154
+    adrp x17, photon_mgc_guided_upsample_page_6ba000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x28cc0, 0x1c
+    adrp x6, photon_mgc_guided_upsample_page_6bc000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x28cdc, 0x160
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x28e3c, 0x2cc
+    adrp x8, photon_mgc_guided_upsample_page_6b5000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29108, 0x368
+    adrp x8, photon_mgc_guided_upsample_page_6c4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29470, 0x4
+    adrp x8, photon_mgc_guided_upsample_page_6c3000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29474, 0x304
+photon_mgc_guided_upsample_page_4d36000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29778, 0x7cc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29f44, 0x54
+    b photon_mgc_halide_error_5f95540
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29f98, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29fac, 0x28
+    b photon_mgc_halide_error_5f94fa8
+photon_mgc_guided_upsample_address_4d3686c:
+photon_mgc_box_downsample_s16:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x29fd4, 0x450
+    adrp x14, photon_mgc_guided_upsample_page_6b4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a424, 0x3c
+    adrp x14, photon_mgc_guided_upsample_page_6b4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a460, 0x14
+    adrp x17, photon_mgc_guided_upsample_page_6b6000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a474, 0x7c
+    adrp x9, photon_mgc_guided_upsample_page_6b4000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a4f0, 0x268
+photon_mgc_guided_upsample_page_4d37000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a758, 0x1e4
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a93c, 0x3c
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a978, 0x44
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a9bc, 0x40
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2a9fc, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aa00, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aa34, 0x30
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aa64, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aa68, 0x30
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aa98, 0x38
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aad0, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aad4, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ab00, 0x28
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ab28, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ab44, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ab6c, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ab98, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ab9c, 0x34
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2abd0, 0x40
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ac10, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ac14, 0x2c
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ac40, 0x25c
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2ae9c, 0x38
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aed4, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2aefc, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2af24, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2af3c, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2af64, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2af84, 0x38
+    adrp x19, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2afbc, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2afc0, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2afe0, 0x3c
+    adrp x1, photon_mgc_guided_upsample_page_61f1000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b01c, 0x160
+    adrp x1, photon_mgc_guided_upsample_page_61f1000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b17c, 0x18c
+    adrp x1, photon_mgc_guided_upsample_page_61f1000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b308, 0xdc
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b3e4, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b3f8, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b418, 0x28
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b440, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b448, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b454, 0x24
+    b photon_mgc_halide_error_5f95560
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b478, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b480, 0x4
+    adrp x2, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b484, 0x30
+    b photon_mgc_halide_error_5f94c78
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b4b4, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b4b8, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b4c4, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b4d0, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b4f0, 0x30
+    b photon_mgc_halide_error_5f95158
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b520, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b530, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b540, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b550, 0x28
+    b photon_mgc_halide_error_5f95638
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b578, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b584, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b594, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b5a4, 0x30
+    b photon_mgc_halide_error_5f94fa8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b5d4, 0x30
+    b photon_mgc_halide_error_5f950cc
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b604, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b60c, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b614, 0x28
+    b photon_mgc_halide_error_5f956a4
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b63c, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b644, 0xc
+photon_mgc_guided_upsample_page_4d38000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b650, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b654, 0x20
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b674, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b68c, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b690, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b6a4, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b6b4, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b6c0, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b6d8, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b6dc, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b6f0, 0x2c
+    b photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b71c, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b724, 0x24
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b748, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b75c, 0x1c
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b778, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b78c, 0xc
+    adrp x8, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b798, 0xc
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b7a4, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b7b8, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b7bc, 0x14
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b7d0, 0x2c
+    b photon_mgc_halide_error_5f95034
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b7fc, 0x8
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b804, 0x40
+    b photon_mgc_halide_error_5f94ec4
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b844, 0x4
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b848, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b84c, 0x18
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b864, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b868, 0x10
+    adrp x1, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b878, 0x4
+    adrp x3, photon_mgc_guided_upsample_page_d70000
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b87c, 0x28
+    b photon_mgc_halide_error_5f95260
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2b8a4, 0xd30
+
+.section .rodata.photon_mgc.guided_upsample_page_6b3000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6b3000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2c5d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6b4000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6b4000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2d5d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6b5000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6b5000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2e5d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6b6000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6b6000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x2f5d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6b7000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6b7000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x305d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6b9000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6b9000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x315d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6ba000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6ba000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x325d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6bb000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6bb000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x335d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6bc000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6bc000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x345d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6be000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6be000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x355d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6bf000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6bf000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x365d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6c0000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6c0000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x375d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6c3000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6c3000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x385d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6c4000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6c4000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x395d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_6c6000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_6c6000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3a5d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_d66000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_d66000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3b5d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_d67000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_d67000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3c5d4, 0x1000
+
+.section .rodata.photon_mgc.guided_upsample_page_d70000,"a",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_d70000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3d5d4, 0x1000
+
+.section .data.rel.ro.photon_mgc.guided_upsample_page_61f1000,"aw",@progbits
+    .p2align 12
+photon_mgc_guided_upsample_page_61f1000:
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3e5d4, 0x270
+    .xword photon_mgc_guided_upsample_address_4ba6500
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3e844, 0x80
+    .xword photon_mgc_guided_upsample_address_4b899f8
+    .xword photon_mgc_guided_upsample_address_4b97f7c
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3e8c4, 0x1e8
+    .xword photon_mgc_guided_upsample_address_4d2d9dc
+    .xword photon_mgc_guided_upsample_address_4d30af0
+    .xword photon_mgc_guided_upsample_address_4d33b10
+    .incbin "@MGC_GUIDED_CAPSULE@", 0x3eaac, 0xaf8
+
+.section .note.GNU-stack,"",@progbits

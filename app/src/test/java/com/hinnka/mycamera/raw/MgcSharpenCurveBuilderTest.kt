@@ -66,7 +66,7 @@ class MgcSharpenCurveBuilderTest {
     fun bandAmountWorksAtNodesBetweenNodesAndBeyondTableAndDoesNotMoveOtherBands() {
         val original = PhotonSharpenTuning.DEFAULT
         val adjusted = original.copy(amount = PhotonSharpenBands(.5f, 0f, 1f))
-        for (snr in listOf(.1f, 5f, 7.5f, 20f, 30f, 80f, 160f)) {
+        for (snr in listOf(0f, .1f, 5f, 7.5f, 20f, 30f, 80f, 160f)) {
             val baseline = MgcSharpenCurveBuilder.build(snr, original)
             val actual = MgcSharpenCurveBuilder.build(snr, adjusted)
             assertEquals(baseline.interpolation, actual.interpolation, 0f)
@@ -103,7 +103,7 @@ class MgcSharpenCurveBuilderTest {
         assertThrows(IllegalArgumentException::class.java) { PhotonSharpenTuning(emptyList()) }
         val node = PhotonSharpenTuning.DEFAULT.nodes.first()
         assertThrows(IllegalArgumentException::class.java) { PhotonSharpenTuning(listOf(node, node)) }
-        assertThrows(IllegalArgumentException::class.java) { MgcSharpenCurveBuilder.build(0f, PhotonSharpenTuning.DEFAULT) }
+        assertThrows(IllegalArgumentException::class.java) { MgcSharpenCurveBuilder.build(-1f, PhotonSharpenTuning.DEFAULT) }
         val suppress = PhotonSharpenCurve(lowContrastGain = 0f)
         val invalidExtrapolation = PhotonSharpenTuning(
             listOf(PhotonSharpenSnrNode(5f, suppress, suppress, suppress)),

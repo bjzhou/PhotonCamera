@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.processor
 
+import com.hinnka.mycamera.raw.RawOutputPass
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,17 +67,6 @@ class GlesMgcRawSpatialShadersTest {
         assertFalse(shader.contains("texelFetch"))
     }
 
-    @Test
-    fun sabreOutputScalingConsumesTheComputeConvertedFloatTexture() {
-        val shader = GlesMgcRawSabreShaders.resampleOutputLanczos
-
-        assertTrue(shader.contains("uniform sampler2D uSource"))
-        assertFalse(shader.contains("usampler2D"))
-        assertTrue(shader.contains("float lanczosWeight(float distance)"))
-        assertTrue(shader.contains("if (x >= 3.0) return 0.0"))
-        assertTrue(shader.contains("vec2(uSourceSize) / vec2(uOutputSize)"))
-        assertTrue(shader.contains("* 65504.0"))
-    }
 
     @Test
     fun rgbOpponentInterpolationIsGuidedByTheSameGreenReconstruction() {
@@ -118,9 +108,8 @@ class GlesMgcRawSpatialShadersTest {
         listOf(
             GlesMgcRawSpatialShaders.mergeRgb,
             GlesMgcRawSpatialShaders.normalizeRgb16,
-            GlesMgcRawSpatialShaders.resampleAotRgbHorizontal,
             GlesMgcRawSpatialShaders.normalizeAotRgb16,
-            GlesMgcRawSabreShaders.resampleOutputLanczos,
+            RawOutputPass.FRAGMENT_SHADER,
             GlesYuvSpatialShaders.lanczosOutput,
             GlesYuvSpatialShaders.lanczosFrameOutput,
         ).forEachIndexed { index, shader ->

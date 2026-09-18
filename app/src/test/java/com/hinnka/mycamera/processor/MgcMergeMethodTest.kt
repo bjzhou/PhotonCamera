@@ -20,19 +20,4 @@ class MgcMergeMethodTest {
         assertEquals(MgcMergeMethod.SPATIAL_RGB, MgcRawMaxMode.SPATIAL.mergeMethod)
     }
 
-    @Test
-    fun bothRawMaxModesPreserveRequestedRgbOutputScale() {
-        MgcRawMaxMode.entries.forEach { mode ->
-            assertEquals(
-                1.5f,
-                resolveRawStackOutputScale(mode.outputMode, 1.5f),
-                0f,
-            )
-        }
-        assertEquals(
-            1f,
-            resolveRawStackOutputScale(MgcSpatialOutputMode.BAYER, 1.5f),
-            0f,
-        )
-    }
 }

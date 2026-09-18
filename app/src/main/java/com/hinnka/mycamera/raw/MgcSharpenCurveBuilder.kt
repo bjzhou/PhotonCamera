@@ -16,7 +16,7 @@ internal object MgcSharpenCurveBuilder {
     }
 
     fun build(snr: Float, tuning: PhotonSharpenTuning): Selection {
-        require(snr.isFinite() && snr > 0f)
+        require(snr.isFinite() && snr >= 0f)
         val nodes = tuning.nodes
         // Revalidate the list at the boundary: callers may have supplied a mutable List.
         require(nodes.isNotEmpty() && nodes.zipWithNext().all { (a, b) -> a.snr < b.snr })

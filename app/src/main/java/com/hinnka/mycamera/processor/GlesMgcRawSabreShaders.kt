@@ -769,28 +769,4 @@ internal object GlesMgcRawSabreShaders {
         }
     """.trimIndent()
 
-    /** Lanczos-3 export scaling after native-grid fusion, ResolveSabre and VGN. */
-    val resampleOutputLanczos = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        precision highp sampler2D;
-        uniform sampler2D uSource;
-        uniform ivec2 uSourceSize;
-        uniform ivec2 uOutputSize;
-        layout(location = 0) out highp uvec4 oRgb16;
-
-        vec3 lanczosSource(ivec2 p) {
-            return texelFetch(uSource, clamp(p, ivec2(0), uSourceSize - ivec2(1)), 0).rgb;
-        }
-
-        ${GlesLanczosResampling.sampleRgb.prependIndent("        ")}
-
-        void main() {
-            vec2 sourcePosition = gl_FragCoord.xy *
-                vec2(uSourceSize) / vec2(uOutputSize) - vec2(0.5);
-            vec3 rgb = sampleLanczosRgb(sourcePosition);
-            oRgb16 = uvec4(uvec3(round(clamp(rgb, 0.0, 1.0) * 65504.0)), 65535u);
-        }
-    """.trimIndent()
 }

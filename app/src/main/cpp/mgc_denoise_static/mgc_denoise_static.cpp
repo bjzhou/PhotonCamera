@@ -743,6 +743,11 @@ PHOTON_MGC_DEFINE_HALIDE_ERROR(5ff6938)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ff8944)
 PHOTON_MGC_DEFINE_HALIDE_ERROR(5ff89a0)
 
+PHOTON_MGC_DEFINE_HALIDE_ERROR(5f95158)
+PHOTON_MGC_DEFINE_HALIDE_ERROR(5f95704)
+PHOTON_MGC_DEFINE_HALIDE_ERROR(5f9579c)
+PHOTON_MGC_DEFINE_HALIDE_ERROR(5f95a4c)
+
 #undef PHOTON_MGC_DEFINE_HALIDE_ERROR
 
 extern "C" __attribute__((visibility("hidden"))) uintptr_t
@@ -1881,6 +1886,53 @@ int RunSharpenTo16Bit(
         &correction_buffer,
         &output_buffer,
         sharpen_attenuation_scale);
+}
+
+
+// V25 S16 guide uses the same padded Q14 linear YUV domain as FinishRaw.
+extern "C" int photon_mgc_box_downsample_s16(
+    void*, HalideBuffer*, HalideBuffer*, int, HalideBuffer*);
+extern "C" int photon_mgc_guided_upsample_s16_to_16_bit(
+    void*, HalideBuffer*, HalideBuffer*, HalideBuffer*, HalideBuffer*, HalideBuffer*,
+    int, float, HalideBuffer*, float, HalideBuffer*, float, HalideBuffer*);
+
+int RunGuidedBoxDownsample(const int16_t* linear_yuv, int width, int height,
+                          int log2_scale, int16_t* low_yuv) {
+    if (!linear_yuv || !low_yuv || width <= 0 || height <= 0 ||
+        width % 128 || height % 16 || log2_scale < 1 || log2_scale > 2) return -1;
+    const int scale = 1 << log2_scale;
+    const HalideDimension full[] = {{0,width,1,0},{0,height,width,0},{0,3,width*height,0}};
+    const HalideDimension low[] = {{0,width/scale,1,0},
+        {0,height/scale,width/scale,0},{0,3,(width/scale)*(height/scale),0}};
+    auto y = MakeBuffer(const_cast<int16_t*>(linear_yuv), {0,16,1}, 2, full);
+    auto uv = MakeBuffer(const_cast<int16_t*>(linear_yuv), {0,16,1}, 3, full);
+    auto out = MakeBuffer(low_yuv, {0,16,1}, 3, low);
+    return photon_mgc_box_downsample_s16(nullptr, &y, &uv, log2_scale, &out);
+}
+
+int RunGuidedUpsampleTo16Bit(const int16_t* guide, int guide_width, int guide_height,
+    const int16_t* low_guide, const int16_t* low_output_yuv, int scale,
+    int width, int height, const float curves[30], float attenuation, uint16_t* output) {
+    if (!guide || !low_guide || !low_output_yuv || !curves || !output ||
+        guide_width <= 0 || guide_height <= 0 || guide_width % 128 || guide_height % 16 ||
+        width <= 0 || height <= 0 || width > guide_width || height > guide_height ||
+        (scale != 2 && scale != 4) || !std::isfinite(attenuation) || attenuation < 0) return -1;
+    const int lw = guide_width / scale, lh = guide_height / scale;
+    const HalideDimension full[] = {{0,guide_width,1,0},{0,guide_height,guide_width,0}};
+    const HalideDimension low[] = {{0,lw,1,0},{0,lh,lw,0},{0,3,lw*lh,0}};
+    const HalideDimension curve_dims[] = {{0,1,1,0},{0,5,1,0},{0,3,5,0},{0,2,15,0}};
+    const HalideDimension corner_dims[] = {{0,3,1,0}};
+    const HalideDimension out_dims[] = {{0,width,3,0},{0,(height+1)&~1,width*3,0},{0,3,1,0}};
+    float corner[3] = {};
+    auto g = MakeBuffer(const_cast<int16_t*>(guide), {0,16,1}, 2, full);
+    auto lg = MakeBuffer(const_cast<int16_t*>(low_guide), {0,16,1}, 2, low);
+    auto lo = MakeBuffer(const_cast<int16_t*>(low_output_yuv), {0,16,1}, 3, low);
+    auto cv = MakeBuffer(const_cast<float*>(curves), {2,32,1}, 4, curve_dims);
+    auto cc = MakeBuffer(corner, {2,32,1}, 1, corner_dims);
+    auto out = MakeBuffer(output, {1,16,1}, 3, out_dims);
+    // Non-skin S16 variant: skin buffers and the skin multiplier are unused.
+    return photon_mgc_guided_upsample_s16_to_16_bit(
+        nullptr, &g, nullptr, &lg, &lo, nullptr, scale, 0.f, &cv, attenuation, &cc, 0.f, &out);
 }
 
 }  // namespace photon::mgc_denoise

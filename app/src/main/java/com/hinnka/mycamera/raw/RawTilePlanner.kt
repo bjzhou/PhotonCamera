@@ -36,7 +36,7 @@ internal data class RawRenderTile(
  * Tiles own disjoint output cores. The overlap in [RawRenderTile.sourceWorking] is dependency
  * data only and is never copied to the destination. Working rectangles use a stable size wherever
  * the sensor permits it, so all GPU textures can be retained and reused by the serial tile
- * consumer. Their origins are aligned to the sensor CFA period.
+ * consumer. Their origins preserve both the CFA and downstream reconstruction grid.
  */
 internal object RawTilePlanner {
     /** Ordinary 12 MP 4:3 captures stay on the full-frame path in either orientation. */
@@ -58,6 +58,7 @@ internal object RawTilePlanner {
         coreEdgePx: Int,
         supportPx: Int,
         cfaPeriod: Int,
+        processingPeriod: Int = 1,
     ): List<RawRenderTile> {
         require(sourceWidth > 0 && sourceHeight > 0)
         require(
@@ -66,7 +67,10 @@ internal object RawTilePlanner {
                 outputSourceBounds.bottom <= sourceHeight
         )
         require(rotation in setOf(0, 90, 180, 270))
-        val phase = cfaPeriod.coerceAtLeast(2)
+        require(processingPeriod > 0)
+        val cfaPhase = cfaPeriod.coerceAtLeast(2)
+        tailrec fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
+        val phase = Math.multiplyExact(cfaPhase / gcd(cfaPhase, processingPeriod), processingPeriod)
         val maximumCoreEdge =
             alignDown(coreEdgePx.coerceAtLeast(phase), phase).coerceAtLeast(phase)
         val support = supportPx.coerceAtLeast(0)

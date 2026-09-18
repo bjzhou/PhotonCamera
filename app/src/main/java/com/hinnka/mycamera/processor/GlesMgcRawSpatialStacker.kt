@@ -47,10 +47,8 @@ internal fun resolveFusionReferenceSignal(
  * kernel units and SNR tuning range. The Bayer output preserves the CFA lattice. The RGB output
  * executes MGC 9.7.047 V25's complete native-grid MergeRgbRaw16F16 AOT, including its internal
  * full-resolution green reconstruction. Sabre likewise completes fusion, ResolveSabre and VGN on
- * the native grid. Requested larger RGB outputs are export-size transforms produced from those
- * completed camera-RGB results with the Lanczos-3 resampling kernel; they are not sensor-detail
- * super-resolution. MGC alignment, rejection, Bento admission and propagated-noise postprocessing
- * remain authoritative.
+ * the native grid. Display scaling follows FinishRaw/GuidedUpsample in the RAW renderer.
+ * MGC alignment, rejection, Bento admission and propagated-noise postprocessing remain authoritative.
  */
 internal class GlesMgcRawSpatialStacker(
     private val width: Int,
@@ -69,7 +67,6 @@ internal class GlesMgcRawSpatialStacker(
         MgcSpatialOutputMode.BAYER -> MgcMergeMethod.SPATIAL_BAYER
         MgcSpatialOutputMode.RGB -> MgcMergeMethod.SPATIAL_RGB
     },
-    outputScale: Float,
     private val useCurrentGlContext: Boolean,
     private val exportGpuLinearRgbSource: Boolean,
     private val gpuLinearRgbStorage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
@@ -413,20 +410,11 @@ internal class GlesMgcRawSpatialStacker(
     private val mergeWeightHeight = rejectionGeometry.mergeWeightHeight
     private val rejectionFilterWidth = rejectionGeometry.filterWidth
     private val rejectionFilterHeight = rejectionGeometry.filterHeight
-    private val normalizedOutputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
-    private val outputWidth = if (outputMode == MgcSpatialOutputMode.RGB) {
-        MultiFrameConfig.scaledRawOutputDimension(width, normalizedOutputScale)
-    } else {
-        width
-    }
-    private val outputHeight = if (outputMode == MgcSpatialOutputMode.RGB) {
-        MultiFrameConfig.scaledRawOutputDimension(height, normalizedOutputScale)
-    } else {
-        height
-    }
+    private val outputWidth = width
+    private val outputHeight = height
     // MergeRgbRaw16F16 is a native-grid merge: output coordinates are RAW coordinates and samples
     // outside the RAW extent use its mirror boundary. Only its private planar allocation is padded
-    // to complete 16x16 tiles; scaling happens after the AOT result has been materialized.
+    // to complete 16x16 tiles. Display scaling belongs after FinishRaw/GuidedUpsample.
     private val rgbAotStorageWidth = ceilDiv(width, RGB_AOT_TILE_SIZE) * RGB_AOT_TILE_SIZE
     private val rgbAotStorageHeight = ceilDiv(height, RGB_AOT_TILE_SIZE) * RGB_AOT_TILE_SIZE
     private val sensorWhiteLevelCode = max(1, whiteLevel)
@@ -531,12 +519,10 @@ internal class GlesMgcRawSpatialStacker(
     private var sabreReciprocalGreenWeightProgram = 0
     private var sabreDehomogenizeProgram = 0
     private var sabreOutputTransformProgram = 0
-    private var sabreResampleOutputProgram = 0
     private var currentMergeCovariance = 0
     private var mergeRgbProgram = 0
     private var normalizeBayerProgram = 0
     private var normalizeRgbProgram = 0
-    private var resampleAotRgbHorizontalProgram = 0
     private var normalizeAotRgbProgram = 0
     private var copyRgb16ToFloatProgram = 0
     private var rgbChromaPostprocessor: GlesMgcSpatialRgbChromaPostprocessor? = null
@@ -2470,7 +2456,6 @@ internal class GlesMgcRawSpatialStacker(
             sabreResolvedRgb = null
             releaseSabreMergePhaseTextures(nativeResolvedPlanes)
             val lensShadingTexture = createLensShadingTexture()
-            val resampleOutput = outputWidth != width || outputHeight != height
             val fullOutput = MgcSpatialRgbRect(0, 0, width, height)
             val fullOutputTile = MgcSpatialRgbTile(index = 0, outputCore = fullOutput)
             val chromaPostprocessor = checkNotNull(rgbChromaPostprocessor) {
@@ -2485,7 +2470,7 @@ internal class GlesMgcRawSpatialStacker(
                 output = chromaPostprocessor.normalizationTargetTexture(),
             )
             chromaPostprocessor.markTileWritten(fullOutputTile)
-            if (!exportGpuLinearRgbSource && !resampleOutput) {
+            if (!exportGpuLinearRgbSource) {
                 val outputBytes = width.toLong() * height * 3L * Short.SIZE_BYTES
                 cpuOutput = LargeDirectBuffer.allocate(outputBytes, "MGC Sabre VGN RGB16 output")
                     ?.order(ByteOrder.nativeOrder()) ?: error(
@@ -2497,85 +2482,14 @@ internal class GlesMgcRawSpatialStacker(
                 exportGpuLinearRgbSource -> {
                     { completionRecorder.mark(GpuStackCompletionStage.CHROMA_POSTPROCESS) }
                 }
-                resampleOutput -> {
-                    {
-                        GlesGpuCompletion.awaitSubmittedWork(
-                            label = "MGC Sabre VGN-to-Lanczos handoff",
-                            checkGlError = ::checkGlError,
-                        )
-                        Unit
-                    }
-                }
                 else -> null
             }
             val chromaResult = chromaPostprocessor.process(
                 obtainOutputBuffer = { checkNotNull(cpuOutput) },
-                deferFullSizeReadback = exportGpuLinearRgbSource || resampleOutput,
+                deferFullSizeReadback = exportGpuLinearRgbSource,
                 onFinalSubmitted = onChromaFinalSubmitted,
             )
             postprocessedUi = chromaResult.exportedTextureId
-            if (resampleOutput) {
-                check(postprocessedUi != 0) {
-                    "MGC Sabre VGN did not export its native-grid texture for output scaling"
-                }
-                if (exportGpuLinearRgbSource) {
-                    GlesGpuCompletion.awaitSubmittedWork(
-                        label = "MGC Sabre VGN-to-Lanczos handoff",
-                        checkGlError = ::checkGlError,
-                    )
-                }
-                val nativePostprocessedUi = postprocessedUi
-                postprocessedUi = 0
-                val nativePostprocessedFloat = createTexture(
-                    width,
-                    height,
-                    GLES30.GL_RGBA16F,
-                    GLES30.GL_NEAREST,
-                )
-                try {
-                    renderRgb16ToFloat(
-                        source = nativePostprocessedUi,
-                        target = nativePostprocessedFloat,
-                        imageWidth = width,
-                        imageHeight = height,
-                    )
-                } finally {
-                    GLES30.glDeleteTextures(1, intArrayOf(nativePostprocessedUi), 0)
-                }
-                val scaledPostprocessedUi = createTexture(
-                    outputWidth,
-                    outputHeight,
-                    GLES30.GL_RGBA16UI,
-                    GLES30.GL_NEAREST,
-                )
-                try {
-                    renderSabreResampledOutput(
-                        source = nativePostprocessedFloat,
-                        target = scaledPostprocessedUi,
-                    )
-                    if (exportGpuLinearRgbSource) {
-                        transferOwnedTexture(
-                            scaledPostprocessedUi,
-                            "MGC Sabre scaled RGB16 output",
-                        )
-                    }
-                    postprocessedUi = scaledPostprocessedUi
-                } finally {
-                    releaseOwnedTexture(
-                        nativePostprocessedFloat,
-                        "MGC Sabre native RGBA16F scaling source",
-                    )
-                }
-                if (!exportGpuLinearRgbSource) {
-                    try {
-                        cpuOutput = readSabreRgb16Output(postprocessedUi)
-                    } finally {
-                        detachRenderTargets()
-                        releaseOwnedTexture(postprocessedUi, "MGC Sabre scaled RGB16 output")
-                        postprocessedUi = 0
-                    }
-                }
-            }
             if (exportGpuLinearRgbSource) {
                 check(postprocessedUi != 0) {
                     "MGC Sabre VGN color noise/IIR did not export its filtered texture"
@@ -2624,7 +2538,7 @@ internal class GlesMgcRawSpatialStacker(
             PLog.i(
                 SABRE_TAG,
                 "MGC Sabre complete frames=${frames.size} native=${width}x$height " +
-                    "output=${outputWidth}x$outputHeight outputScale=$normalizedOutputScale " +
+                    "output=${outputWidth}x$outputHeight " +
                     "referenceSnr=${kernelTuning.referenceSnr} " +
                     "finishRawDenoiseSnr=$finishRawDenoiseSnr " +
                     "result=${if (exportedTexture != 0) gpuLinearRgbStorage.name + "_GPU" else "RGB16_CPU"} " +
@@ -3078,87 +2992,6 @@ internal class GlesMgcRawSpatialStacker(
         draw(program, width, height, intArrayOf(output))
     }
 
-    private fun renderSabreResampledOutput(source: Int, target: Int) {
-        check(sabreResampleOutputProgram != 0) {
-            "MGC Sabre Lanczos output program is not initialized"
-        }
-        GLES30.glUseProgram(sabreResampleOutputProgram)
-        bindTexture(sabreResampleOutputProgram, "uSource", 0, source)
-        uniform2i(sabreResampleOutputProgram, "uSourceSize", width, height)
-        uniform2i(
-            sabreResampleOutputProgram,
-            "uOutputSize",
-            outputWidth,
-            outputHeight,
-        )
-        draw(
-            sabreResampleOutputProgram,
-            outputWidth,
-            outputHeight,
-            intArrayOf(target),
-        )
-        GlesGpuScheduler.memoryBarrier()
-    }
-
-    private fun readSabreRgb16Output(texture: Int): ByteBuffer {
-        val outputByteCount = outputWidth.toLong() * outputHeight * 3L * Short.SIZE_BYTES
-        val scratchByteCount = outputWidth.toLong() * outputHeight * 4L * Short.SIZE_BYTES
-        require(outputByteCount in 1..Int.MAX_VALUE.toLong())
-        require(scratchByteCount in 1..Int.MAX_VALUE.toLong())
-        val output = LargeDirectBuffer.allocate(outputByteCount, "MGC Sabre scaled RGB16 output")
-            ?.order(ByteOrder.nativeOrder()) ?: error(
-            "Unable to allocate MGC Sabre scaled RGB16 output",
-        )
-        val scratch = LargeDirectBuffer.allocate(
-            scratchByteCount,
-            "MGC Sabre scaled RGBA16 readback",
-        )?.order(ByteOrder.nativeOrder())
-        if (scratch == null) {
-            LargeDirectBuffer.free(output)
-            error("Unable to allocate MGC Sabre scaled RGBA16 readback")
-        }
-        try {
-            GlesGpuCompletion.awaitSubmittedWork(
-                label = "MGC Sabre Lanczos RGB16 readback",
-                checkGlError = ::checkGlError,
-            )
-            bindRenderTargets(intArrayOf(texture), "MGC Sabre Lanczos RGB16 readback")
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
-            GLES30.glReadPixels(
-                0,
-                0,
-                outputWidth,
-                outputHeight,
-                GLES30.GL_RGBA_INTEGER,
-                GLES30.GL_UNSIGNED_SHORT,
-                scratch,
-            )
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            checkGlError("MGC Sabre Lanczos RGBA16 readback")
-            scratch.rewind()
-            check(
-                DirectBufferPixelPacker.unpackRgba16TileToRgb16(
-                    source = scratch,
-                    sourceWidth = outputWidth,
-                    sourceHeight = outputHeight,
-                    destination = output,
-                    destinationWidth = outputWidth,
-                    destinationHeight = outputHeight,
-                    destinationLeft = 0,
-                    destinationTop = 0,
-                ),
-            ) { "Unable to pack MGC Sabre Lanczos RGB16 output" }
-            output.rewind()
-            return output
-        } catch (throwable: Throwable) {
-            LargeDirectBuffer.free(output)
-            throw throwable
-        } finally {
-            LargeDirectBuffer.free(scratch)
-        }
-    }
-
     private fun readSabreAccumulatedRgba16f(texture: Int): ByteBuffer {
         val output = checkNotNull(
             LargeDirectBuffer.allocate(
@@ -3331,14 +3164,7 @@ internal class GlesMgcRawSpatialStacker(
             GlesMgcRawSabreShaders.outputTransformUint16,
             "mgc_sabre_output_transform_rgba16ui",
         )
-        if (outputWidth != width || outputHeight != height) {
-            sabreResampleOutputProgram = linkProgram(
-                GlesMgcRawSabreShaders.resampleOutputLanczos,
-                "mgc_sabre_output_lanczos",
-            )
-        }
-        if (outputWidth != width || outputHeight != height ||
-            (exportGpuLinearRgbSource && gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16F)
+        if (exportGpuLinearRgbSource && gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16F
         ) {
             copyRgb16ToFloatProgram = linkComputeProgram(
                 GlesMgcRawSpatialShaders.copyRgb16ToFloat,
@@ -3346,11 +3172,10 @@ internal class GlesMgcRawSpatialStacker(
             )
         }
         // ResolveSabre and VGN stay on the native grid. A requested larger output is a separate
-        // Lanczos export transform after VGN, so it cannot be mistaken for sensor-detail SR.
+        // display transform after FinishRaw/GuidedUpsample in RawDemosaicProcessor.
         rgbChromaPostprocessor = createRgbChromaPostprocessor(
             imageWidth = width,
             imageHeight = height,
-            iirOutputScale = 1f,
             exportFullSizeTexture = exportGpuLinearRgbSource ||
                 outputWidth != width || outputHeight != height,
         ).also { it.initPrograms() }
@@ -3508,12 +3333,6 @@ internal class GlesMgcRawSpatialStacker(
             }
             // Color noise/IIR owns a fixed RGBA16UI boundary, matching the VGN/Radiance
             // contract. The original planar F16 AOT output enters that boundary exactly once.
-            if (outputWidth != width || outputHeight != height) {
-                resampleAotRgbHorizontalProgram = linkProgram(
-                    GlesMgcRawSpatialShaders.resampleAotRgbHorizontal,
-                    "mgc_spatial_v25_aot_rgb_resample_x",
-                )
-            }
             normalizeAotRgbProgram = linkProgram(
                 GlesMgcRawSpatialShaders.normalizeAotRgb16,
                 "mgc_spatial_v25_aot_rgb16ui",
@@ -3564,14 +3383,13 @@ internal class GlesMgcRawSpatialStacker(
     private fun createRgbChromaPostprocessor(
         imageWidth: Int = outputWidth,
         imageHeight: Int = outputHeight,
-        iirOutputScale: Float = normalizedOutputScale,
         exportFullSizeTexture: Boolean = exportGpuLinearRgbSource,
     ): GlesMgcSpatialRgbChromaPostprocessor {
         return GlesMgcSpatialRgbChromaPostprocessor(
             imageWidth = imageWidth,
             imageHeight = imageHeight,
             calculationWbGains = calculationWhiteBalance,
-            outputScale = iirOutputScale,
+            outputScale = 1f,
             exportFullSizeTexture = exportFullSizeTexture,
             backend = object : GlesMgcSpatialRgbChromaPostprocessor.Backend {
                 override fun linkComputeProgram(source: String, name: String): Int =
@@ -8292,9 +8110,7 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
-     * Streams one native-grid planar F16 channel at a time into the requested RGBA16UI grid. A
-     * separable Lanczos-3 pass performs scaling before lens shading and the chroma stage, while
-     * keeping only one upload plane and one horizontal R16F intermediate live.
+     * Streams native-grid planar F16 channels into RGBA16UI before lens shading and chroma denoise.
      */
     private fun uploadAndNormalizeOriginalAotRgb(
         planarF16: ByteBuffer,
@@ -8316,20 +8132,6 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_R16F,
             GLES30.GL_NEAREST,
         )
-        val resampleOutput = outputWidth != width || outputHeight != height
-        check(!resampleOutput || resampleAotRgbHorizontalProgram != 0) {
-            "MGC Spatial RGB AOT resampling program is not initialized"
-        }
-        val horizontalTexture = if (resampleOutput) {
-            createTexture(
-                outputWidth,
-                height,
-                GLES30.GL_R16F,
-                GLES30.GL_NEAREST,
-            )
-        } else {
-            0
-        }
         try {
             GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
@@ -8352,41 +8154,9 @@ internal class GlesMgcRawSpatialStacker(
                     source,
                 )
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-                val normalizedSource = if (resampleOutput) {
-                    // The previous channel's normalization pass leaves a per-channel color
-                    // mask active. The horizontal target is R16F, so red must be writable for
-                    // every channel before this intermediate pass.
-                    GLES30.glColorMask(true, true, true, true)
-                    GLES30.glUseProgram(resampleAotRgbHorizontalProgram)
-                    bindTexture(
-                        resampleAotRgbHorizontalProgram,
-                        "uChannelPlane",
-                        0,
-                        planeTexture,
-                    )
-                    uniform2i(resampleAotRgbHorizontalProgram, "uSourceSize", width, height)
-                    uniform1i(resampleAotRgbHorizontalProgram, "uOutputWidth", outputWidth)
-                    draw(
-                        resampleAotRgbHorizontalProgram,
-                        outputWidth,
-                        height,
-                        intArrayOf(horizontalTexture),
-                    )
-                    // Framebuffer write -> sampler fetch in the vertical pass.
-                    GlesGpuScheduler.memoryBarrier()
-                    horizontalTexture
-                } else {
-                    planeTexture
-                }
                 GLES30.glUseProgram(normalizeAotRgbProgram)
-                bindTexture(normalizeAotRgbProgram, "uChannelPlane", 0, normalizedSource)
+                bindTexture(normalizeAotRgbProgram, "uChannelPlane", 0, planeTexture)
                 bindTexture(normalizeAotRgbProgram, "uLensShading", 1, lensShadingTexture)
-                uniform2i(
-                    normalizeAotRgbProgram,
-                    "uSourceSize",
-                    if (resampleOutput) outputWidth else width,
-                    height,
-                )
                 uniform2i(normalizeAotRgbProgram, "uOutputSize", outputWidth, outputHeight)
                 uniform1f(
                     normalizeAotRgbProgram,
@@ -8397,11 +8167,6 @@ internal class GlesMgcRawSpatialStacker(
                     normalizeAotRgbProgram,
                     "uUseLensShading",
                     if (hasLensShading()) 1 else 0,
-                )
-                uniform1i(
-                    normalizeAotRgbProgram,
-                    "uResampleVertical",
-                    if (resampleOutput) 1 else 0,
                 )
                 uniform1i(normalizeAotRgbProgram, "uChannel", channel)
                 GLES30.glColorMask(
@@ -8427,12 +8192,6 @@ internal class GlesMgcRawSpatialStacker(
         } finally {
             GLES30.glColorMask(true, true, true, true)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-            if (horizontalTexture != 0) {
-                releaseOwnedTexture(
-                    horizontalTexture,
-                    "MGC V25 Spatial RGB AOT horizontal resample",
-                )
-            }
             releaseOwnedTexture(planeTexture, "MGC V25 Spatial RGB AOT upload plane")
         }
     }
@@ -8576,7 +8335,7 @@ internal class GlesMgcRawSpatialStacker(
         PLog.i(
             TAG,
             "MGC Spatial strength coordinates mapped ${coveredSource.width}x${coveredSource.height} -> " +
-                "${targetWidth}x$targetHeight for ${normalizedOutputScale}x RGB output " +
+                "${targetWidth}x$targetHeight for native-grid RGB output " +
                 "backend=native-openmp took=" +
                 "${(System.nanoTime() - startNs) / 1_000_000L}ms",
         )

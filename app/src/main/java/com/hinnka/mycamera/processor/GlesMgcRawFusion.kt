@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.processor
 
 import android.graphics.Rect
-import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.utils.PLog
 
 /**
@@ -28,14 +27,12 @@ internal class GlesMgcRawFusion(
     private val lensShadingHeight: Int,
     private val outputMode: MgcSpatialOutputMode,
     private val mergeMethod: MgcMergeMethod,
-    outputScale: Float,
     private val useCurrentGlContext: Boolean,
     private val exportGpuLinearRgbSource: Boolean,
     private val gpuLinearRgbStorage: GpuLinearRgbStorage,
 ) {
     private val width = sourceBounds.width()
     private val height = sourceBounds.height()
-    private val outputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
 
     fun processFrames(frames: List<RawStackFrame>): RawStackResult? {
         if (frames.isEmpty()) return null
@@ -121,7 +118,6 @@ internal class GlesMgcRawFusion(
                 lensShading = lensShading,
                 lensShadingWidth = lensShadingWidth,
                 lensShadingHeight = lensShadingHeight,
-                outputScale = outputScale,
                 useCurrentGlContext = useCurrentGlContext,
                 exportGpuLinearRgbSource = exportGpuLinearRgbSource,
                 gpuLinearRgbStorage = gpuLinearRgbStorage,
@@ -198,7 +194,7 @@ internal class GlesMgcRawFusion(
                 "normal=${normalIndices.size} long=${longIndices.size} " +
                 "ultrashort=${if (shortIndex != null) 1 else 0} " +
                 "shortRatio=${shortRatio ?: "none"} excluded=${excludedIndices.size} " +
-                "outputScale=$outputScale AI alignment=disabled",
+                "AI alignment=disabled",
         )
         return GlesMgcRawSpatialStacker(
             width = width,
@@ -214,7 +210,6 @@ internal class GlesMgcRawFusion(
             lensShadingHeight = lensShadingHeight,
             outputMode = outputMode,
             mergeMethod = mergeMethod,
-            outputScale = outputScale,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
             gpuLinearRgbStorage = gpuLinearRgbStorage,

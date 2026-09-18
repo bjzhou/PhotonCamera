@@ -1414,48 +1414,7 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    /** Horizontal half of the Lanczos-3 output-grid resampler. */
-    val resampleAotRgbHorizontal = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        precision highp sampler2D;
-        uniform sampler2D uChannelPlane;
-        uniform ivec2 uSourceSize;
-        uniform int uOutputWidth;
-        out float oChannel;
-
-        ${GlesLanczosResampling.kernel.prependIndent("        ")}
-
-        void main() {
-            ivec2 outputPixel = ivec2(gl_FragCoord.xy);
-            float sourceX = (float(outputPixel.x) + 0.5) *
-                float(uSourceSize.x) / float(uOutputWidth) - 0.5;
-            int baseX = int(floor(sourceX));
-            float fraction = sourceX - float(baseX);
-            float total = 0.0;
-            float totalWeight = 0.0;
-            for (int x = -2; x <= 3; ++x) {
-                float weight = lanczosWeight(float(x) - fraction);
-                int sampleX = clamp(baseX + x, 0, uSourceSize.x - 1);
-                total += texelFetch(
-                    uChannelPlane,
-                    ivec2(sampleX, outputPixel.y),
-                    0
-                ).r * weight;
-                totalWeight += weight;
-            }
-            oChannel = total / max(totalWeight, 1.0e-8);
-        }
-    """.trimIndent()
-
-    /**
-     * Converts the original MGC MergeRgbRaw16F16 planar Q14 output to the stacker's RGB16
-     * boundary. The AOT output is already un-white-balanced camera RGB; WB is used only by the
-     * AOT's internal green guide and must not be divided out again here. When the requested output
-     * is larger than the native AOT grid, this pass applies the vertical half of the Lanczos-3
-     * resampler after [resampleAotRgbHorizontal].
-     */
+    /** Converts native planar Q14 camera RGB to RGB16, without resampling before FinishRaw. */
     val normalizeAotRgb16 = """
         #version 300 es
         precision highp float;
@@ -1463,42 +1422,15 @@ internal object GlesMgcRawSpatialShaders {
         precision highp sampler2D;
         uniform sampler2D uChannelPlane;
         uniform sampler2D uLensShading;
-        uniform ivec2 uSourceSize;
         uniform ivec2 uOutputSize;
         uniform float uOutputExposureScale;
         uniform int uUseLensShading;
-        uniform int uResampleVertical;
         uniform int uChannel;
         layout(location = 0) out highp uvec4 oRgb16;
 
-        ${GlesLanczosResampling.kernel.prependIndent("        ")}
-
-        float sampleChannel(ivec2 outputPixel) {
-            if (uResampleVertical == 0) {
-                return texelFetch(uChannelPlane, outputPixel, 0).r;
-            }
-            float sourceY = (float(outputPixel.y) + 0.5) *
-                float(uSourceSize.y) / float(uOutputSize.y) - 0.5;
-            int baseY = int(floor(sourceY));
-            float fraction = sourceY - float(baseY);
-            float total = 0.0;
-            float totalWeight = 0.0;
-            for (int y = -2; y <= 3; ++y) {
-                float weight = lanczosWeight(float(y) - fraction);
-                int sampleY = clamp(baseY + y, 0, uSourceSize.y - 1);
-                total += texelFetch(
-                    uChannelPlane,
-                    ivec2(outputPixel.x, sampleY),
-                    0
-                ).r * weight;
-                totalWeight += weight;
-            }
-            return total / max(totalWeight, 1.0e-8);
-        }
-
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
-            float value = sampleChannel(p) * (1.0 / 16384.0);
+            float value = texelFetch(uChannelPlane, p, 0).r * (1.0 / 16384.0);
             if (uUseLensShading != 0) {
                 vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uOutputSize);
                 vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));

@@ -77,7 +77,8 @@ internal class RawSrgbPass(
 
             void main() {
                 vec3 color = texture(uInputTexture, vTexCoord).rgb;
-                fragColor = vec4(linearToSrgb(color), 1.0);
+                // Retain the former UNORM target's SDR range without its 8-bit quantization.
+                fragColor = vec4(clamp(linearToSrgb(color), 0.0, 1.0), 1.0);
             }
         """.trimIndent()
     }

@@ -54,15 +54,6 @@ enum class MgcRawMaxMode {
         }
 }
 
-internal fun resolveRawStackOutputScale(
-    outputMode: MgcSpatialOutputMode,
-    outputScale: Float,
-): Float = if (outputMode == MgcSpatialOutputMode.RGB) {
-    MultiFrameConfig.normalizeOutputScale(outputScale)
-} else {
-    1f
-}
-
 /**
  * Physical storage of an opaque LinearRaw texture. RGBA16F is used only for the direct Spatial
  * default-denoise handoff; persistent render/DNG sources use RGBA16UI.
@@ -293,7 +284,6 @@ object MultiFrameStacker {
             MgcSpatialOutputMode.BAYER -> MgcMergeMethod.SPATIAL_BAYER
             MgcSpatialOutputMode.RGB -> MgcMergeMethod.SPATIAL_RGB
         },
-        outputScale: Float = 1f,
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
         whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
@@ -321,14 +311,12 @@ object MultiFrameStacker {
                 (physicalSourceBounds.width() and 1) == 0 &&
                 (physicalSourceBounds.height() and 1) == 0
         ) { "RAW physical crop must contain complete Bayer cells: $physicalSourceBounds" }
-        // Output scaling is an RGB export transform shared by Spatial and Sabre. Only the
-        // Bayer-preserving path must remain on the native sensor lattice.
-        val effectiveOutputScale = resolveRawStackOutputScale(outputMode, outputScale)
+        // Fusion and FinishRaw consume the native sensor grid. Display scaling follows sharpening.
         RawStackRuntimeDebug.d(TAG) {
             "Starting MGC ${if (mergeMethod == MgcMergeMethod.SABRE) "Sabre" else "Spatial ${outputMode.name}"} " +
                 "fusion for ${images.size} frames source=${sourceWidth}x$sourceHeight " +
                 "physicalCrop=$physicalSourceBounds " +
-                "Pattern=$cfaPattern outputScale=$effectiveOutputScale " +
+                "Pattern=$cfaPattern " +
                 "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel " +
                 "noiseProfile=${noiseProfileSelection.id} " +
                 "legacyHdrFlag=$enableHdrFusion"
@@ -353,7 +341,6 @@ object MultiFrameStacker {
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
             outputMode = outputMode,
             mergeMethod = mergeMethod,
-            outputScale = effectiveOutputScale,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
             gpuLinearRgbStorage = gpuLinearRgbStorage,

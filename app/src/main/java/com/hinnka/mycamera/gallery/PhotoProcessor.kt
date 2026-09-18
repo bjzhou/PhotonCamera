@@ -26,6 +26,7 @@ import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.processor.DepthBokehProcessor
 import com.hinnka.mycamera.processor.BokehStyle
+import com.hinnka.mycamera.raw.RawOutputScaling
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawHdrRenderResult
 import com.hinnka.mycamera.raw.RawMetadata
@@ -604,6 +605,7 @@ class PhotoProcessor(
             rawToneMappingParameters = metadata.rawToneMappingParameters,
             rawCfaCorrectionMode = metadata.rawCfaCorrectionMode,
             rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+            rawOutputScale = RawOutputScaling.read(metadata.customProperties),
             spectralFilmStock = metadata.spectralFilmStock,
             spectralFilmPrint = metadata.spectralFilmPrint,
             spectralFilmTuning = SpectralFilmTuning(
@@ -688,6 +690,7 @@ class PhotoProcessor(
             rawToneMappingParameters = metadata.rawToneMappingParameters,
             rawCfaCorrectionMode = metadata.rawCfaCorrectionMode,
             rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+            rawOutputScale = RawOutputScaling.read(metadata.customProperties),
             spectralFilmStock = metadata.spectralFilmStock,
             spectralFilmPrint = metadata.spectralFilmPrint,
             spectralFilmTuning = SpectralFilmTuning(
