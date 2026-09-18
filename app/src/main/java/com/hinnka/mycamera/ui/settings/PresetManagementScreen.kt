@@ -108,7 +108,7 @@ fun PresetManagementScreen(
     val lazyListState = rememberLazyListState()
 
     val presetFilePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
+        contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty() && !isImporting) {
             isImporting = true
@@ -238,7 +238,7 @@ fun PresetManagementScreen(
                     )
                 }
                 IconButton(
-                    onClick = { presetFilePicker.launch("*/*") },
+                    onClick = { presetFilePicker.launch(arrayOf("*/*")) },
                     enabled = !isImporting,
                 ) {
                     if (isImporting) {

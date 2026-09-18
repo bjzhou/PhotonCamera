@@ -2,13 +2,9 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.net.Uri
-import android.provider.MediaStore
 import com.hinnka.mycamera.utils.PLog
-import org.json.JSONArray
 import android.graphics.Rect
 import android.graphics.Bitmap
 import android.widget.Toast
@@ -23,6 +19,7 @@ import android.widget.LinearLayout
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -82,46 +79,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.recyclerview.widget.DiffUtil
 import android.os.Parcelable
-import org.json.JSONObject
 import kotlin.math.abs
-import androidx.core.net.toUri
 import com.hinnka.mycamera.ui.icons.AppIcons
-
-private const val GALLERY_SCREEN_TAG = "GalleryScreen"
-
-private fun buildSystemGalleryMediaPickIntent(context: Context): Intent {
-    val systemGalleryIntent = buildSystemGalleryActionPickIntent()
-    if (systemGalleryIntent.hasAvailableActivity(context)) {
-        return systemGalleryIntent
-    }
-
-    PLog.d(GALLERY_SCREEN_TAG, "ACTION_PICK media picker unavailable, falling back to ACTION_GET_CONTENT")
-    return buildGetContentMediaPickIntent()
-}
-
-private fun buildSystemGalleryActionPickIntent(): Intent {
-    return Intent(Intent.ACTION_PICK).apply {
-        setDataAndType(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "*/*")
-        putExtra(Intent.EXTRA_MIME_TYPES, buildGalleryMediaMimeTypes())
-        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-    }
-}
-
-private fun buildGetContentMediaPickIntent(): Intent {
-    return Intent(Intent.ACTION_GET_CONTENT).apply {
-        type = "*/*"
-        putExtra(Intent.EXTRA_MIME_TYPES, buildGalleryMediaMimeTypes())
-        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-    }
-}
-
-private fun buildGalleryMediaMimeTypes(): Array<String> {
-    return arrayOf("image/*", "video/*")
-}
-
-private fun Intent.hasAvailableActivity(context: Context): Boolean {
-    return resolveActivity(context.packageManager) != null
-}
 
 /**
  * 相册浏览界面
@@ -167,20 +126,16 @@ fun GalleryScreen(
         }
     }
 
-    fun importSelectedMedia(uris: List<Uri>, videoUris: List<Uri?>? = null) {
+    fun importSelectedMedia(selection: SelectedVisualMedia) {
+        val uris = selection.uris
         if (uris.isEmpty()) return
         val uniqueUris = uris.distinct().also { distinct ->
             if (distinct.size != uris.size) {
                 PLog.d("GalleryScreen", "Ignoring ${uris.size - distinct.size} duplicate selected media URI(s)")
             }
         }
-        val alignedVideoUris = videoUris?.let { uriVideoMap ->
-            uniqueUris.map { uri ->
-                val originalIndex = uris.indexOf(uri)
-                uriVideoMap.getOrNull(originalIndex)
-            }
-        }
-        viewModel.importPhotos(uniqueUris, alignedVideoUris) { importedIds ->
+        val videoUris = uniqueUris.map { selection.pairedVideoUris[it] }
+        viewModel.importPhotos(uniqueUris, videoUris) { importedIds ->
             if (importedIds.size == 1) {
                 val newPhotoId = importedIds.first()
                 viewModel.setCurrentPhotoById(newPhotoId)
@@ -191,46 +146,13 @@ fun GalleryScreen(
     }
 
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            result.data?.let { data ->
-                PLog.d("GalleryScreen", "Received ACTION_PICK result. Data URI: ${data.data}, ClipData count: ${data.clipData?.itemCount ?: 0}")
-
-                val mediaInfosStrs = data.getStringArrayListExtra("selected_media_infos")
-                val vivoLivePhotosMap = mutableMapOf<Uri, Uri>()
-                if (!mediaInfosStrs.isNullOrEmpty()) {
-                    try {
-                        for (text in mediaInfosStrs) {
-                            val jsonObject = JSONObject(text)
-                            val mainUriStr = jsonObject.optString("mainUri")
-                            val extraUriStr = jsonObject.optString("extraUri")
-                            if (!mainUriStr.isNullOrBlank() && !extraUriStr.isNullOrBlank()) {
-                                vivoLivePhotosMap[mainUriStr.toUri()] = extraUriStr.toUri()
-                            }
-                        }
-                    } catch (e: Exception) {
-                        PLog.e("GalleryScreen", "Failed to parse selected_media_infos", e)
-                    }
-                }
-
-                val uris = mutableListOf<Uri>()
-                val videoUris = mutableListOf<Uri?>()
-                fun addSelectedUri(uri: Uri) {
-                    uris.add(uri)
-                    videoUris.add(vivoLivePhotosMap[uri])
-                }
-
-                data.data?.let(::addSelectedUri)
-                data.clipData?.let { clipData ->
-                    for (i in 0 until clipData.itemCount) {
-                        clipData.getItemAt(i).uri?.let(::addSelectedUri)
-                    }
-                }
-
-                importSelectedMedia(uris, videoUris)
-            }
-        }
+        contract = PickMultipleVisualMediaWithLivePhoto()
+    ) { selection ->
+        PLog.d(
+            "GalleryScreen",
+            "Received photo picker result: ${selection.uris.size} media URI(s), ${selection.pairedVideoUris.size} Live Photo pair(s)"
+        )
+        importSelectedMedia(selection)
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -368,7 +290,7 @@ fun GalleryScreen(
                             }
                         } else {
                             IconButton(onClick = {
-                                launcher.launch(buildSystemGalleryMediaPickIntent(context))
+                                launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
                             }) {
                                 Icon(
                                     imageVector = AppIcons.AddPhotoAlternate,

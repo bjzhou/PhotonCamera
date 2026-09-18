@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -107,7 +108,7 @@ fun PuzzleScreen(
 
     // 多图选择 Launcher
     val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris ->
         if (uris.isNotEmpty()) {
             selectedPhotoUris.addAll(uris)
@@ -185,7 +186,7 @@ fun PuzzleScreen(
     // 首次进入界面若无照片则自动调起选择器，极佳用户体验
     LaunchedEffect(Unit) {
         if (selectedPhotoUris.isEmpty()) {
-            imagePickerLauncher.launch("image/*")
+            imagePickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         }
     }
 
@@ -285,7 +286,9 @@ fun PuzzleScreen(
                             .fillMaxWidth()
                             .height(280.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .clickable { imagePickerLauncher.launch("image/*") },
+                            .clickable {
+                                imagePickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
                         colors = CardDefaults.cardColors(
                             containerColor = Color.White.copy(alpha = 0.05f)
                         )
@@ -423,7 +426,9 @@ fun PuzzleScreen(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(12.dp))
                                                 .background(Color.White.copy(alpha = 0.08f))
-                                                .clickable { imagePickerLauncher.launch("image/*") }
+                                                .clickable {
+                                                    imagePickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                                }
                                                 .padding(horizontal = 12.dp, vertical = 6.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(4.dp)

@@ -294,7 +294,7 @@ fun FilterManagementScreen(
 
     // 批量文件选择器
     val lutFilePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
+        contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             pendingImportUris = uris
@@ -527,7 +527,7 @@ fun FilterManagementScreen(
                     // 导入按钮
                     IconButton(
                         onClick = {
-                            lutFilePicker.launch("*/*")
+                            lutFilePicker.launch(arrayOf("*/*"))
                         },
                         enabled = !isImporting
                     ) {

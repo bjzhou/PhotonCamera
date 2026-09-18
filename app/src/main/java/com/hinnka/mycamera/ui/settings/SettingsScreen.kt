@@ -628,7 +628,7 @@ fun SettingsScreen(
     }
 
     val importDcpLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetMultipleContents()
+        ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.importRawDcps(uris) { importedDcps, failedCount ->
@@ -667,7 +667,7 @@ fun SettingsScreen(
     }
 
     val importRawNoiseProfileLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetMultipleContents(),
+        ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.importRawNoiseProfiles(uris) { importedProfiles, failedCount ->
@@ -2196,7 +2196,7 @@ fun SettingsScreen(
                         spectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
                         onSelectDcp = { viewModel.setRawDcpId(it) },
                         onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
-                        onImportDcp = { importDcpLauncher.launch("*/*") },
+                        onImportDcp = { importDcpLauncher.launch(arrayOf("*/*")) },
                         onDeleteDcp = { dcp ->
                             viewModel.deleteRawDcp(dcp.id) { success ->
                                 android.widget.Toast.makeText(
@@ -2231,7 +2231,7 @@ fun SettingsScreen(
                         onSelectRawNoiseProfile = viewModel::setRawNoiseProfileId,
                         onRawNoiseProfileIdsByLensChange = viewModel::setRawNoiseProfileIdsByLens,
                         onImportRawNoiseProfile = {
-                            importRawNoiseProfileLauncher.launch("*/*")
+                            importRawNoiseProfileLauncher.launch(arrayOf("*/*"))
                         },
                         onDeleteRawNoiseProfile = { profile ->
                             viewModel.deleteRawNoiseProfile(profile.id) { success ->

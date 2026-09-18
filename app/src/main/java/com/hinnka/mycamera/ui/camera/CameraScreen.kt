@@ -335,7 +335,7 @@ fun CameraScreen(
     )
 
     val dcpImportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents(),
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
         onResult = { uris ->
             if (uris.isNotEmpty()) {
                 viewModel.importRawDcps(uris) { _, _ -> }
@@ -1678,7 +1678,7 @@ fun CameraScreen(
             onRawDcpChange = { viewModel.setRawDcpId(it) },
             onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
             onRawHncsFilmCurveModeChange = { viewModel.setRawHncsFilmCurveMode(it) },
-            onImportRawDcp = { dcpImportLauncher.launch("*/*") },
+            onImportRawDcp = { dcpImportLauncher.launch(arrayOf("*/*")) },
             onDeleteRawDcp = { dcp ->
                 viewModel.deleteRawDcp(dcp.id) { success ->
                     android.widget.Toast.makeText(
