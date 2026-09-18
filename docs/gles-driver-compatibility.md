@@ -13,6 +13,7 @@
 | Graphics GLSL ES 版本 | 已确认 | 同一 program 的 vertex/fragment `#version` 必须一致 |
 | SSBO binding | 跨驱动约束 | 查询上限；不同 program 复用低编号槽位 |
 | PBO 热路径回读 | 已确认存在驱动差异 | 优先 compute 打包到 SSBO，超限或编译失败时回退 framebuffer readback |
+| Float PBO 上传 RGBA16F | 已确认，Adreno | 优先 SSBO → write-only image；目标使用 immutable RGBA16F，保留 pixel unpack 回退 |
 | `readonly` SSBO 实参 | 已确认，Mali | SSBO 元素先复制到局部变量，再传给用户函数 |
 | `RGBA16F` / `RGBA16UI` image 原位读写 | 已确认 | 改用 framebuffer、`R32UI` half 打包、ping-pong 或 additive blending |
 | `RGBA16UI` attachment 回读 | 跨驱动约束 | 以 RGBA16 回读，在 native 层批量移除 Alpha |
@@ -298,8 +299,33 @@ Render-target helper 必须记录前一次 attachment 数量。数量减少时�
 
 - GLES 3.1 优先以 compute 将纹理按目标 ABI 打包到 SSBO，再在 CPU 消费点 map。PBO/SSBO 可复用同一 buffer object；dispatch 后包含 `GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT`。
 - `R8 -> byte` 或 `R16I -> short` 以 32-bit word 写 SSBO；分配长度向上对齐 4 字节，消费者逻辑长度不变。Android capsule ABI 为 native little-endian，lane 位移必须匹配。
-- Dispatch 前检查 `GL_MAX_SHADER_STORAGE_BLOCK_SIZE`；整图超限时回退 framebuffer readback，不得超限绑定 SSBO。GLES 3.0 或 compute program 编译失败也保留原 readback，且不得静默改变数据。
+- Dispatch 前检查 `GL_MAX_SHADER_STORAGE_BLOCK_SIZE`；判断的是本次 shader 访问的输入范围，不是 CPU 输出所需的总 buffer 容量。可按整行拆成多个 `glBindBufferRange`，每段大小不超过 block 上限、起点满足 `GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT`，shader 写入索引相对当前 range，采样坐标包含全图行偏移。各段写入互不重叠，全部提交后统一 barrier/map。无法容纳对齐条带、GLES 3.0 或 compute program 编译失败时保留 framebuffer readback，不得超限绑定 SSBO 或静默改变数据。
 - 已知尺寸 PBO 在 pipeline/capture 创建时分配，不在首个同步点调用 `glBufferData`。不要假设 PBO 能让所有驱动上的 `glReadPixels` 立即返回。
+
+分段 float SSBO 已在 PMA110 / Adreno 840 / V@0842.44 验证：37×19 非整工作组尺寸的
+对齐条带与尾段、4000×3000 输入强制按 128 MiB block 限额拆分，回读全部像素一致。
+该设备实际 block 上限为 2147483647 字节；强制限额验证范围绑定与索引契约，
+不代表已复现其他低上限驱动的性能问题。
+
+### Float PBO 上传
+
+**证据**：PMA110 / Adreno 840 / V@0842.44。在独立 EGL context，提前完成上游工作后，
+2728×2048 的 `GL_FLOAT` PBO → `RGBA16F` `glTexSubImage2D` 调用仍耗时 220–320ms，
+随后 `glFinish` 几乎不再等待；换用 immutable texture 不消除该耗时。1408×1024 未出现同等退化。
+不能据此把问题泛化为所有 PBO 或所有尺寸，也不能仅凭计时认定具体驱动内部实现。
+
+- Native 已将 float 输出写回同一 buffer 且完成 unmap 后，用 `readonly` SSBO +
+  `layout(rgba16f) writeonly image2D` 上传，避免同步 pixel unpack 路径。
+- 目标由 `glTexStorage2D` 分配 immutable RGBA16F，不使用 read/write image。
+  查询 image unit/compute image 上限；SSBO 仍按 block 限额及 offset alignment 分段。
+- Shader 将 readonly SSBO 元素复制到局部 `vec4` 后传入 `imageStore`。结束时包含
+  `GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT`，
+  并解除 image/SSBO 绑定；不在上传后额外同步等待。
+- Compute 不可用时保留原 `GL_FLOAT` PBO 上传；输出仍为同一 RGBA16F 精度。
+
+上述设备同尺寸 SSBO image 上传包含 GPU 完成约 3–4ms；对照覆盖完整 U12 灰阶及
+Q14/白平衡得到的浮点值，全部目标纹理值与原 PBO 路径一致。37×19 探针强制分段，
+覆盖尾段、上传后直接 sampler 消费和 framebuffer readback，未在 sampler 前插入 CPU wait。
 
 ### GPU -> GPU 交接
 

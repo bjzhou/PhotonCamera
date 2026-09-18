@@ -30,7 +30,7 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
         lowHeight = ((height + 15) and -16) / scale
         val capacityPixels = maxOf(width.toLong() * height, lowWidth.toLong() * lowHeight)
         try {
-            transfer.read(texture, width, height, capacityPixels) { rgba ->
+            transfer.read(texture, width, height, capacityPixels, label = "guidedPrepare") { rgba ->
                 handle = nativePrepare(rgba, width, height, resolution.log2Downsample,
                     MgcFullResolutionDenoise.normalizedRgbWhiteBalance(gains))
                 check(handle != 0L) { "MGC linear guide/BoxDownsample preparation failed" }
@@ -73,7 +73,7 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
         check(isPrepared && width == fullWidth && height == fullHeight)
         try {
             transfer.read(source, lowWidth, lowHeight,
-                maxOf(width.toLong() * height, lowWidth.toLong() * lowHeight)) { rgba ->
+                maxOf(width.toLong() * height, lowWidth.toLong() * lowHeight), label = "guidedRender") { rgba ->
                 val result = nativeRender(handle, rgba, attenuation, curves)
                 check(result == 0) { "MGC GuidedUpsample failed: $result" }
             }
@@ -91,8 +91,7 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, lowWidth, lowHeight,
-                0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+            GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA16F, lowWidth, lowHeight)
             check(GLES30.glGetError() == GLES30.GL_NO_ERROR)
             return texture
         } catch (error: Throwable) { GLES30.glDeleteTextures(1, names, 0); throw error }

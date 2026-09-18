@@ -6867,10 +6867,7 @@ class RawDemosaicProcessor {
         GLES30.glGenTextures(1, textures, 0)
         sharpenTextureId = textures[0]
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sharpenTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
-        )
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA16F, width, height)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
 

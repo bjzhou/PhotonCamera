@@ -30,7 +30,7 @@ internal class MgcSharpen {
             scratch = null
             scratch = checkNotNull(LargeDirectBuffer.allocate(scratchBytes, "MGC sharpen YUV/RGB"))
         }
-        transfer.read(sourceTexture, width, height) { mapped ->
+        transfer.read(sourceTexture, width, height, label = "sharpen") { mapped ->
             val result = nativeSharpenRgbaFloat(mapped, checkNotNull(scratch), width, height,
                 snr, attenuation, curves.points)
             check(result == 0) { "MGC original sharpen failed: $result" }

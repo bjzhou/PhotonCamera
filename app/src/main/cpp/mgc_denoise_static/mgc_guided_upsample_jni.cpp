@@ -1,6 +1,9 @@
 #include "mgc_denoise_static.h"
+#include "mgc_guided_prepare_adapter.h"
 #include "mgc_sharpen_adapter.h"
 #include <algorithm>
+#include <android/log.h>
+#include <chrono>
 #include <cmath>
 #include <jni.h>
 #include <limits>
@@ -8,6 +11,10 @@
 #include <vector>
 
 namespace {
+using Clock = std::chrono::steady_clock;
+double Milliseconds(Clock::time_point begin, Clock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - begin).count();
+}
 struct GuidedInputs {
   int width, height, padded_width, padded_height, scale;
   std::vector<int16_t> guide, low_guide;
@@ -46,45 +53,49 @@ Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativePrepare(
       env->GetDirectBufferCapacity(buffer) < jlong(ln * 16))
     return 0;
   try {
+    const auto start = Clock::now();
     auto state = std::make_unique<GuidedInputs>();
     state->width = width;
     state->height = height;
     state->padded_width = pw;
     state->padded_height = ph;
     state->scale = scale;
-    std::vector<uint16_t> rgb(n * 3);
-    // Same white-balanced Q14 boundary as MgcFullResolutionDenoise.
-    for (int y = 0; y < ph; ++y)
-      for (int x = 0; x < pw; ++x) {
-        const size_t source =
-            (size_t(std::min(y, height - 1)) * width + std::min(x, width - 1)) *
-            4;
-        const size_t dest = size_t(y) * pw + x;
-        for (int c = 0; c < 3; ++c) {
-          const float value = rgba[source + c];
-          if (!std::isfinite(value))
-            return 0;
-          rgb[c * n + dest] = uint16_t(
-              std::lround(std::clamp(value * wb[c], 0.f, 1.f) * 16383.f));
-        }
-      }
-    std::vector<int16_t> yuv(n * 3), low(ln * 3);
-    if (RunRgbRawToYuv(rgb.data(), pw, ph, yuv.data()) != 0)
-      return 0;
-    if (RunGuidedBoxDownsample(yuv.data(), pw, ph, log2_scale, low.data()) != 0)
-      return 0;
-    state->guide.assign(yuv.begin(), yuv.begin() + n);
+    Clock::time_point allocated, converted, boxed, guides;
+    std::vector<int16_t> low(ln * 3);
+    {
+      std::vector<int16_t> yuv(n * 3);
+      allocated = Clock::now();
+      if (!GuidedFloatRgbaToLinearYuv(rgba, width, height, pw, ph, wb, yuv.data()))
+        return 0;
+      converted = Clock::now();
+      if (RunGuidedBoxDownsample(yuv.data(), pw, ph, log2_scale, low.data()) != 0)
+        return 0;
+      boxed = Clock::now();
+      state->guide.assign(yuv.begin(), yuv.begin() + n);
+      // Release the two unused chroma planes before allocating low RGB.
+    }
     state->low_guide.assign(low.begin(), low.begin() + ln);
+    guides = Clock::now();
     // The low color branch starts before CCM/DCP/tone; never downsample an
     // encoded JPEG.
     std::vector<int16_t> low_rgb(ln * 3);
     if (RunYuvToRgb(low.data(), pw / scale, ph / scale, low_rgb.data()) != 0)
       return 0;
+    const auto low_color = Clock::now();
+#pragma omp parallel for schedule(static) num_threads(4)
     for (size_t i = 0; i < ln; ++i) {
       for (int c = 0; c < 3; ++c)
         rgba[i * 4 + c] = low_rgb[c * ln + i] / 16383.f / wb[c];
       rgba[i * 4 + 3] = 1.f;
     }
+    const auto finish = Clock::now();
+    __android_log_print(ANDROID_LOG_INFO, "PLog_MgcGuidedUpsample",
+        "prepare %dx%d scale=%d allocMs=%.1f q14YuvMs=%.1f boxMs=%.1f guidesMs=%.1f "
+        "lowRgbMs=%.1f rgbaMs=%.1f totalNativeMs=%.1f",
+        width, height, scale, Milliseconds(start, allocated),
+        Milliseconds(allocated, converted), Milliseconds(converted, boxed),
+        Milliseconds(boxed, guides), Milliseconds(guides, low_color),
+        Milliseconds(low_color, finish), Milliseconds(start, finish));
     return reinterpret_cast<jlong>(state.release());
   } catch (const std::bad_alloc &) {
     OutOfMemory(env);
@@ -121,18 +132,27 @@ Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativeRender(
         return -1;
     }
   try {
+    const auto start = Clock::now();
     std::vector<int16_t> yuv(ln * 3);
     std::vector<uint16_t> output(size_t(state->width) *
                                  ((state->height + 1) & ~1) * 3);
     if (!SharpenFloatRgbaToYuv(rgba, ln, yuv.data()))
       return -1;
+    const auto converted = Clock::now();
     const int result = RunGuidedUpsampleTo16Bit(
         state->guide.data(), state->padded_width, state->padded_height,
         state->low_guide.data(), yuv.data(), state->scale, state->width,
         state->height, curves, attenuation, output.data());
     if (result)
       return result;
+    const auto reconstructed = Clock::now();
     SharpenRgbToFloatRgba(output.data(), n, rgba);
+    const auto finish = Clock::now();
+    __android_log_print(ANDROID_LOG_INFO, "PLog_MgcGuidedUpsample",
+        "render %dx%d scale=%d yuvMs=%.1f guidedMs=%.1f rgbaMs=%.1f totalNativeMs=%.1f",
+        state->width, state->height, state->scale, Milliseconds(start, converted),
+        Milliseconds(converted, reconstructed), Milliseconds(reconstructed, finish),
+        Milliseconds(start, finish));
     return 0;
   } catch (const std::bad_alloc &) {
     OutOfMemory(env);

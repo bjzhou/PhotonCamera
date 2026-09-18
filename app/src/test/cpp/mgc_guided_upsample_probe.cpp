@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <jni.h>
+#include <numeric>
 #include <string>
 #include <vector>
 using namespace photon::mgc_denoise;
@@ -112,7 +113,7 @@ static std::vector<float> Jni(int w, int h, int scale, int originX = 0, int orig
   pixels.resize(size_t(w) * h * 4);
   return pixels;
 }
-static void Gpu(const char *shaderPath, const char *boxPath) {
+static void Gpu(const char *shaderPath, const char *boxPath, const char *uploadPath) {
   EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
   Check(eglInitialize(display, nullptr, nullptr), "EGL initialize");
   EGLint attributes[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE,
@@ -135,14 +136,14 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
     pixels[i * 4 + 2] = .25f;
     pixels[i * 4 + 3] = 1;
   }
-  GLuint textures[2];
-  glGenTextures(2, textures);
+  GLuint textures[3];
+  glGenTextures(3, textures);
   for (auto t : textures) {
     glBindTexture(GL_TEXTURE_2D, t);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT,
-                 pixels.data());
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, w, h);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_FLOAT, pixels.data());
   }
   GLuint framebuffer, pbo;
   glGenFramebuffers(1, &framebuffer);
@@ -182,8 +183,21 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
   glBindTexture(GL_TEXTURE_2D, textures[0]);
   glUniform1i(glGetUniformLocation(program, "uInput"), 0);
   glUniform2i(glGetUniformLocation(program, "uSize"), w, h);
-  glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, pbo);
-  glDispatchCompute((w + 7) / 8, (h + 7) / 8, 1);
+  GLint alignment = 0;
+  glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &alignment);
+  Check(alignment > 0, "SSBO offset alignment");
+  const int rowBytes = w * 16;
+  const int stripeRows = alignment / std::gcd(rowBytes, alignment);
+  // Artificially small block limit forces aligned range changes and a partial
+  // final stripe without needing a huge texture on the diagnostic device.
+  for (int row = 0; row < h; row += stripeRows) {
+    const int rows = std::min(stripeRows, h - row);
+    glUniform1i(glGetUniformLocation(program, "uRowOffset"), row);
+    glUniform1i(glGetUniformLocation(program, "uRows"), rows);
+    glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, pbo, row * rowBytes,
+                     rows * rowBytes);
+    glDispatchCompute((w + 7) / 8, (rows + 7) / 8, 1);
+  }
   glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
   glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
   glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
@@ -191,7 +205,7 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
       glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, pixels.size() * 4,
                        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT));
   Check(mapped && std::equal(pixels.begin(), pixels.end(), mapped),
-        "float SSBO preserves all samples including tail");
+        "float SSBO ranges preserve all samples including stripe tail");
   for (int i = 0; i < n; i++)
     mapped[i * 4] += .125f;
   Check(glUnmapBuffer(GL_PIXEL_PACK_BUFFER), "SSBO unmap");
@@ -206,8 +220,36 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
   for (int i = 0; i < n; i++)
     Check(result[i * 4] == pixels[i * 4] + .125f,
           "RGBA16F upload/sample precision");
+  std::ifstream uploadFile(uploadPath);
+  std::string uploadSource((std::istreambuf_iterator<char>(uploadFile)), {});
+  Check(!uploadSource.empty(), "production upload shader");
+  const char *uploadText = uploadSource.c_str();
+  GLuint uploadShader = glCreateShader(GL_COMPUTE_SHADER);
+  glShaderSource(uploadShader, 1, &uploadText, nullptr);
+  glCompileShader(uploadShader);
+  glGetShaderiv(uploadShader, GL_COMPILE_STATUS, &ok);
+  Check(ok, "upload compute compile");
+  GLuint uploadProgram = glCreateProgram();
+  glAttachShader(uploadProgram, uploadShader);
+  glLinkProgram(uploadProgram);
+  glGetProgramiv(uploadProgram, GL_LINK_STATUS, &ok);
+  Check(ok, "upload compute link");
+  glUseProgram(uploadProgram);
+  glBindImageTexture(0, textures[2], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+  glUniform2i(glGetUniformLocation(uploadProgram, "uSize"), w, h);
+  for (int row = 0; row < h; row += stripeRows) {
+    const int rows = std::min(stripeRows, h - row);
+    glUniform1i(glGetUniformLocation(uploadProgram, "uRowOffset"), row);
+    glUniform1i(glGetUniformLocation(uploadProgram, "uRows"), rows);
+    glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, pbo, row * rowBytes, rows * rowBytes);
+    glDispatchCompute((w + 7) / 8, (rows + 7) / 8, 1);
+  }
+  glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT |
+                  GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+  glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+  glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
   // Exercise Filmic's new padded linear-color branch with the production
-  // shader.
+  // shader immediately after image upload, without an intervening CPU wait/readback.
   std::ifstream boxFile(boxPath);
   std::string boxSource((std::istreambuf_iterator<char>(boxFile)), {});
   Check(!boxSource.empty(), "production box shader");
@@ -232,12 +274,16 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
   glLinkProgram(boxProgram);
   glGetProgramiv(boxProgram, GL_LINK_STATUS, &ok);
   Check(ok, "box program");
+  GLuint boxTexture;
+  glGenTextures(1, &boxTexture);
   for (int scale : {2, 4}) {
   const int lw = 128 / scale, lh = 32 / scale;
-  glBindTexture(GL_TEXTURE_2D, textures[1]);
+  glBindTexture(GL_TEXTURE_2D, boxTexture);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, lw, lh, 0, GL_RGBA, GL_FLOAT,
                nullptr);
-  glBindTexture(GL_TEXTURE_2D, textures[0]);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, boxTexture, 0);
+  Check(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "box framebuffer");
+  glBindTexture(GL_TEXTURE_2D, textures[2]);
   glUseProgram(boxProgram);
   glUniform1i(glGetUniformLocation(boxProgram, "uInput"), 0);
   glUniform1i(glGetUniformLocation(boxProgram, "uScale"), scale);
@@ -251,7 +297,7 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
         float expected = 0;
         for (int dy = 0; dy < scale; dy++)
           for (int dx = 0; dx < scale; dx++)
-            expected += pixels[(std::min(y * scale + dy, h - 1) * w +
+            expected += result[(std::min(y * scale + dy, h - 1) * w +
                                 std::min(x * scale + dx, w - 1)) *
                                    4 +
                                c] *
@@ -260,12 +306,19 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
               "padded linear box samples");
       }
   }
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[2], 0);
+  std::vector<float> uploaded(n * 4);
+  glReadPixels(0, 0, w, h, GL_RGBA, GL_FLOAT, uploaded.data());
+  Check(uploaded == result, "SSBO image upload matches PBO float upload exactly");
+  glDeleteTextures(1, &boxTexture);
+  glDeleteProgram(uploadProgram);
+  glDeleteShader(uploadShader);
   glDeleteProgram(boxProgram);
   glDeleteShader(vs);
   glDeleteShader(fs);
   printf("GPU padded linear color box passed\n");
   Check(glGetError() == GL_NO_ERROR, "GPU errors");
-  glDeleteTextures(2, textures);
+  glDeleteTextures(3, textures);
   glDeleteBuffers(1, &pbo);
   glDeleteFramebuffers(1, &framebuffer);
   glDeleteProgram(program);
@@ -278,8 +331,8 @@ static void Gpu(const char *shaderPath, const char *boxPath) {
 }
 
 int main(int argc, char **argv) {
-  Check(argc == 4, "fixture output directory, float and box shaders");
-  Gpu(argv[2], argv[3]);
+  Check(argc == 5, "fixture output directory, float, box and upload shaders");
+  Gpu(argv[2], argv[3], argv[4]);
   for (int scale : {2, 4}) {
     auto full = Jni(768, 640, scale);
     for (int origin : {0, 8, 16, 24, 56, 112}) {

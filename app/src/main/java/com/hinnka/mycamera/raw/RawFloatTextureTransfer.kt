@@ -3,6 +3,7 @@ package com.hinnka.mycamera.raw
 import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.processor.GlesGpuCompletion
+import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -12,11 +13,15 @@ internal class RawFloatTextureTransfer {
     private var capacity = 0
     private var framebuffer = 0
     private var program = 0
+    private var uploadProgram = 0
     private var initialized = false
     private var maxSsboBytes = 0L
+    private var ssboOffsetAlignment = 1
 
     fun read(texture: Int, width: Int, height: Int, capacityPixels: Long = width.toLong() * height,
+             label: String,
              consume: (ByteBuffer) -> Unit) {
+        val start = System.nanoTime()
         val inputBytes = width.toLong() * height * 16
         val bytes = capacityPixels * 16
         require(width > 0 && height > 0 && bytes >= inputBytes && bytes <= Int.MAX_VALUE)
@@ -32,16 +37,21 @@ internal class RawFloatTextureTransfer {
             checkGl("allocate float transfer")
             capacity = bytes.toInt()
         }
-        GlesGpuCompletion.awaitSubmittedWork("MGC float input", checkGlError = ::checkGl)
+        val allocationMs = elapsedMs(start)
+        val stripeRows = if (program != 0) {
+            RawFloatTransferLayout.stripeRows(width, height, maxSsboBytes, ssboOffsetAlignment)
+        } else 0
+        val upstreamWaitMs = GlesGpuCompletion.awaitSubmittedWork("MGC float $label", checkGlError = ::checkGl)
+        val transferStart = System.nanoTime()
         try {
-            if (program != 0 && bytes <= maxSsboBytes) {
+            if (stripeRows > 0) {
                 GLES31.glUseProgram(program)
                 GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
                 GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture)
                 GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uInput"), 0)
-                GLES31.glUniform2i(GLES31.glGetUniformLocation(program, "uSize"), width, height)
-                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, buffer)
-                GLES31.glDispatchCompute((width + 7) / 8, (height + 7) / 8, 1)
+                // Bind only the input region, independent of the larger native output capacity.
+                // Disjoint ranges can be submitted together; map once at the CPU boundary.
+                dispatchStripes(program, width, height, stripeRows)
                 GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT)
                 GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
             } else {
@@ -60,14 +70,29 @@ internal class RawFloatTextureTransfer {
                 GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_FLOAT, 0)
             }
             checkGl("read float texture")
+            val submitMs = elapsedMs(transferStart)
+            val mapStart = System.nanoTime()
             val mapped = checkNotNull(GLES30.glMapBufferRange(GLES30.GL_PIXEL_PACK_BUFFER,
                 0, bytes.toInt(), GLES30.GL_MAP_READ_BIT or GLES30.GL_MAP_WRITE_BIT) as? ByteBuffer)
+            val mapMs = elapsedMs(mapStart)
+            val nativeStart = System.nanoTime()
+            var nativeMs = 0.0
+            var unmapMs = 0.0
             try {
                 consume(mapped.order(ByteOrder.nativeOrder()))
             } finally {
+                nativeMs = elapsedMs(nativeStart)
+                val unmapStart = System.nanoTime()
                 check(GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)) { "Invalid float transfer mapping" }
+                unmapMs = elapsedMs(unmapStart)
             }
+            PLog.i(TAG, "$label size=${width}x$height inputBytes=$inputBytes capacityBytes=$bytes " +
+                "transfer=${if (stripeRows > 0) "SSBO" else "PBO"} stripeRows=$stripeRows " +
+                "maxSsboBytes=$maxSsboBytes allocationMs=$allocationMs upstreamGpuWaitMs=$upstreamWaitMs " +
+                "transferSubmitMs=$submitMs mapMs=$mapMs nativeMs=$nativeMs unmapMs=$unmapMs " +
+                "totalCpuMs=${elapsedMs(start)}")
         } finally {
+            if (stripeRows > 0) GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
             if (framebuffer != 0) {
                 GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, framebuffer)
@@ -78,8 +103,47 @@ internal class RawFloatTextureTransfer {
         }
     }
 
+    /** The destination uses immutable RGBA16F storage for write-only image access. */
     fun upload(texture: Int, width: Int, height: Int) {
-        check(nativeUpload(buffer, texture, width, height)) { "Float PBO upload failed" }
+        require(width > 0 && height > 0 && width.toLong() * height * 16 <= capacity)
+        val start = System.nanoTime()
+        val stripeRows = if (uploadProgram != 0) {
+            RawFloatTransferLayout.stripeRows(width, height, maxSsboBytes, ssboOffsetAlignment)
+        } else 0
+        if (stripeRows > 0) {
+            try {
+                // Unmap made the CPU writes visible. Avoid the driver's GL_FLOAT -> RGBA16F
+                // pixel-unpack path, which can block for hundreds of ms at some image sizes.
+                GLES31.glUseProgram(uploadProgram)
+                GLES31.glBindImageTexture(0, texture, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+                dispatchStripes(uploadProgram, width, height, stripeRows)
+                GLES31.glMemoryBarrier(GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+                checkGl("upload float texture via image store")
+            } finally {
+                GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
+            }
+        } else {
+            check(nativeUpload(buffer, texture, width, height)) { "Float PBO upload failed" }
+        }
+        PLog.i(TAG, "upload size=${width}x$height transfer=${if (stripeRows > 0) "SSBO_IMAGE" else "PBO"} " +
+            "stripeRows=$stripeRows uploadSubmitMs=${elapsedMs(start)}")
+    }
+
+    private fun dispatchStripes(computeProgram: Int, width: Int, height: Int, stripeRows: Int) {
+        GLES31.glUniform2i(GLES31.glGetUniformLocation(computeProgram, "uSize"), width, height)
+        val rowOffsetLocation = GLES31.glGetUniformLocation(computeProgram, "uRowOffset")
+        val rowsLocation = GLES31.glGetUniformLocation(computeProgram, "uRows")
+        val rowBytes = width * 16
+        for (row in 0 until height step stripeRows) {
+            val rows = minOf(stripeRows, height - row)
+            GLES31.glUniform1i(rowOffsetLocation, row)
+            GLES31.glUniform1i(rowsLocation, rows)
+            GLES31.glBindBufferRange(GLES31.GL_SHADER_STORAGE_BUFFER, 0, buffer,
+                row * rowBytes, rows * rowBytes)
+            GLES31.glDispatchCompute((width + 7) / 8, (rows + 7) / 8, 1)
+        }
     }
 
     fun releaseBuffers() {
@@ -91,7 +155,8 @@ internal class RawFloatTextureTransfer {
     fun release() {
         releaseBuffers()
         if (program != 0) GLES30.glDeleteProgram(program)
-        program = 0; initialized = false; maxSsboBytes = 0L
+        if (uploadProgram != 0) GLES30.glDeleteProgram(uploadProgram)
+        program = 0; uploadProgram = 0; initialized = false; maxSsboBytes = 0L; ssboOffsetAlignment = 1
     }
 
     private fun initialize() {
@@ -104,14 +169,27 @@ internal class RawFloatTextureTransfer {
             val limit = LongArray(1)
             GLES31.glGetInteger64v(GLES31.GL_MAX_SHADER_STORAGE_BLOCK_SIZE, limit, 0)
             maxSsboBytes = limit[0]
+            val alignment = IntArray(1)
+            GLES31.glGetIntegerv(GLES31.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, alignment, 0)
+            check(alignment[0] > 0) { "Invalid SSBO offset alignment: ${alignment[0]}" }
+            ssboOffsetAlignment = alignment[0]
             program = RawGlesProgram.compileCompute(PACK, "MgcFloatTransfer")
+            val imageUnits = IntArray(1)
+            val computeImages = IntArray(1)
+            GLES31.glGetIntegerv(GLES31.GL_MAX_IMAGE_UNITS, imageUnits, 0)
+            GLES31.glGetIntegerv(GLES31.GL_MAX_COMPUTE_IMAGE_UNIFORMS, computeImages, 0)
+            if (imageUnits[0] > 0 && computeImages[0] > 0) {
+                uploadProgram = RawGlesProgram.compileCompute(UNPACK, "MgcFloatUpload")
+            }
         }
     }
 
     private external fun nativeUpload(pbo: Int, texture: Int, width: Int, height: Int): Boolean
 
     companion object {
+        private const val TAG = "RawFloatTextureTransfer"
         init { System.loadLibrary("my-native-lib") }
+        private fun elapsedMs(start: Long) = (System.nanoTime() - start) / 1_000_000.0
         private fun checkGl(label: String) {
             val error = GLES30.glGetError()
             check(error == GLES30.GL_NO_ERROR) { "$label: GL error 0x${error.toString(16)}" }
@@ -123,11 +201,31 @@ internal class RawFloatTextureTransfer {
             layout(local_size_x = 8, local_size_y = 8) in;
             uniform highp sampler2D uInput;
             uniform ivec2 uSize;
+            uniform int uRowOffset;
+            uniform int uRows;
             layout(std430, binding = 0) writeonly buffer Pixels { vec4 pixels[]; };
             void main() {
                 ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (any(greaterThanEqual(p, uSize))) return;
-                pixels[p.y * uSize.x + p.x] = texelFetch(uInput, p, 0);
+                if (p.x >= uSize.x || p.y >= uRows) return;
+                pixels[p.y * uSize.x + p.x] = texelFetch(uInput, p + ivec2(0, uRowOffset), 0);
+            }
+        """.trimIndent()
+
+        internal val UNPACK = """
+            #version 310 es
+            precision highp float;
+            precision highp int;
+            layout(local_size_x = 8, local_size_y = 8) in;
+            layout(std430, binding = 0) readonly buffer Pixels { vec4 pixels[]; };
+            layout(rgba16f, binding = 0) writeonly uniform highp image2D uOutput;
+            uniform ivec2 uSize;
+            uniform int uRowOffset;
+            uniform int uRows;
+            void main() {
+                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+                if (p.x >= uSize.x || p.y >= uRows) return;
+                vec4 value = pixels[p.y * uSize.x + p.x];
+                imageStore(uOutput, p + ivec2(0, uRowOffset), value);
             }
         """.trimIndent()
     }

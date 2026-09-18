@@ -98,13 +98,46 @@ void SharpenRgbToRgba(const uint16_t *rgb, size_t count, uint8_t *rgba) {
   }
 }
 bool SharpenFloatRgbaToYuv(const float *rgba, size_t count, int16_t *yuv) {
-  for (size_t i = 0; i < count; ++i) {
+  const size_t groups = count / 4;
+  int invalid = 0;
+#pragma omp parallel for schedule(static) num_threads(4) reduction(| : invalid)
+  for (size_t group = 0; group < groups; ++group) {
+    const size_t i = group * 4;
+    const float32x4x4_t input = vld4q_f32(rgba + i * 4);
+    uint32x4_t nonfinite = vdupq_n_u32(0);
+    for (int c = 0; c < 3; ++c) {
+      const auto exponent = vandq_u32(vreinterpretq_u32_f32(input.val[c]),
+                                      vdupq_n_u32(0x7f800000));
+      nonfinite = vorrq_u32(nonfinite,
+                            vceqq_u32(exponent, vdupq_n_u32(0x7f800000)));
+    }
+    if (vmaxvq_u32(nonfinite)) {
+      invalid = 1;
+      continue;
+    }
+    const auto scaled = [](float32x4_t value) {
+      return vmulq_n_f32(vminq_f32(vmaxq_f32(value, vdupq_n_f32(0.f)),
+                                    vdupq_n_f32(1.f)), 4095.f);
+    };
+    const auto r = scaled(input.val[0]), g = scaled(input.val[1]),
+               b = scaled(input.val[2]);
+    for (int c = 0; c < 3; ++c) {
+      const auto value = vaddq_f32(
+          vaddq_f32(vmulq_n_f32(r, kMatrix[c * 3]),
+                     vmulq_n_f32(g, kMatrix[c * 3 + 1])),
+          vmulq_n_f32(b, kMatrix[c * 3 + 2]));
+      // Match lrintf's current rounding mode, retaining separate matrix adds.
+      const auto rounded = vcvtq_s32_f32(vrndiq_f32(value));
+      vst1_s16(yuv + c * count + i,
+                vmovn_s32(vmaxq_s32(vdupq_n_s32(-4095),
+                                    vminq_s32(vdupq_n_s32(4095), rounded))));
+    }
+  }
+  if (invalid) return false;
+  for (size_t i = groups * 4; i < count; ++i) {
     for (int c = 0; c < 3; ++c) {
       if (!std::isfinite(rgba[4 * i + c])) return false;
     }
-  }
-#pragma omp parallel for schedule(static) num_threads(4)
-  for (size_t i = 0; i < count; ++i) {
     const float r = std::clamp(rgba[4 * i], 0.f, 1.f) * 4095.f;
     const float g = std::clamp(rgba[4 * i + 1], 0.f, 1.f) * 4095.f;
     const float b = std::clamp(rgba[4 * i + 2], 0.f, 1.f) * 4095.f;
@@ -118,8 +151,22 @@ bool SharpenFloatRgbaToYuv(const float *rgba, size_t count, int16_t *yuv) {
 }
 
 void SharpenRgbToFloatRgba(const uint16_t *rgb, size_t count, float *rgba) {
+  const size_t groups = count / 4;
 #pragma omp parallel for schedule(static) num_threads(4)
-  for (size_t i = 0; i < count; ++i) {
+  for (size_t group = 0; group < groups; ++group) {
+    const size_t i = group * 4;
+    const uint16x4x3_t input = vld3_u16(rgb + i * 3);
+    float32x4x4_t output;
+    for (int c = 0; c < 3; ++c) {
+      const auto bounded = vmin_u16(input.val[c], vdup_n_u16(4095));
+      // Division preserves the scalar boundary's rounding; a reciprocal does not.
+      output.val[c] = vdivq_f32(vcvtq_f32_u32(vmovl_u16(bounded)),
+                                vdupq_n_f32(4095.f));
+    }
+    output.val[3] = vdupq_n_f32(1.f);
+    vst4q_f32(rgba + i * 4, output);
+  }
+  for (size_t i = groups * 4; i < count; ++i) {
     for (int c = 0; c < 3; ++c) {
       rgba[4 * i + c] = std::min<uint16_t>(rgb[3 * i + c], 4095) / 4095.f;
     }
