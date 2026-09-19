@@ -156,6 +156,7 @@ data class FrameEditorDraft(
 
 data class FrameLayoutDraft(
     val position: FramePosition = FramePosition.BOTTOM,
+    val orientation: FrameOrientation = FrameOrientation.AUTO,
     val heightDp: Int = 80,
     val backgroundColor: Int = Color.WHITE,
     val borderColor: Int = backgroundColor,
@@ -173,6 +174,7 @@ data class FrameLayoutDraft(
 ) {
     fun toFrameLayout(): FrameLayout = FrameLayout(
         position = position,
+        orientation = orientation,
         heightDp = heightDp.coerceAtLeast(0),
         backgroundColor = backgroundColor,
         borderColor = borderColor,
@@ -192,6 +194,7 @@ data class FrameLayoutDraft(
     companion object {
         fun fromLayout(layout: FrameLayout): FrameLayoutDraft = FrameLayoutDraft(
             position = layout.position,
+            orientation = layout.orientation,
             heightDp = layout.heightDp,
             backgroundColor = layout.backgroundColor,
             borderColor = layout.borderColor,

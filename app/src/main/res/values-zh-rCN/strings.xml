@@ -1271,4 +1271,9 @@
     <string name="settings_retain_capture_settings_description">重新打开相机时恢复曝光补偿、快门、ISO、对焦和白平衡及其自动／手动模式。关闭后清除已保存的设置。</string>
     <string name="settings_raw_digital_zoom_resampling">数码焦段分辨率还原</string>
     <string name="settings_raw_digital_zoom_resampling_description">将数码焦段照片重采样至当前物理镜头的分辨率，并应用输出倍率。</string>
+    <string name="frame_editor_orientation">模板方向</string>
+    <string name="frame_editor_orientation_auto">跟随照片</string>
+    <string name="frame_editor_orientation_landscape">横向设计</string>
+    <string name="frame_editor_orientation_portrait">竖向设计</string>
+    <string name="frame_editor_orientation_hint">固定设计方向时，边框和水印按需转到照片侧边，照片本身保持原有朝向。</string>
 </resources>

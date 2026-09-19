@@ -155,6 +155,7 @@ object FrameTemplateParser {
             put("version", template.version)
             put("layout", JSONObject().apply {
                 put("position", template.layout.position.name)
+                put("orientation", template.layout.orientation.name)
                 put("height", template.layout.heightDp)
                 put("backgroundColor", colorToHex(template.layout.backgroundColor))
                 put("borderColor", colorToHex(template.layout.borderColor))
@@ -261,6 +262,7 @@ object FrameTemplateParser {
         val backgroundColor = parseColor(obj.optString("backgroundColor", "#FFFFFF"))
         return FrameLayout(
             position = FramePosition.valueOf(obj.optString("position", "BOTTOM")),
+            orientation = FrameOrientation.valueOf(obj.optString("orientation", "AUTO")),
             heightDp = obj.optInt("height", 80),
             backgroundColor = backgroundColor,
             borderColor = parseColor(obj.optString("borderColor", colorToHex(backgroundColor))),

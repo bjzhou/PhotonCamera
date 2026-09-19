@@ -64,6 +64,7 @@ data class FrameTemplate(
  */
 data class FrameLayout(
     val position: FramePosition = FramePosition.BOTTOM,
+    val orientation: FrameOrientation = FrameOrientation.AUTO,
     val heightDp: Int = 80,
     val backgroundColor: Int = Color.WHITE,
     val borderColor: Int = backgroundColor, // 边框颜色，默认与背景色相同
@@ -79,6 +80,19 @@ data class FrameLayout(
     val imageResName: String? = null,  // 边框图片资源名称（仅 IMAGE 模式使用，内置资源）
     val imagePath: String? = null  // 边框图片文件路径（仅 IMAGE 模式使用，外部导入）
 )
+
+/** Design orientation; the photograph always retains its original viewing orientation. */
+enum class FrameOrientation {
+    AUTO,
+    LANDSCAPE,
+    PORTRAIT;
+
+    fun rotatesPhoto(width: Int, height: Int): Boolean = when (this) {
+        AUTO -> false
+        LANDSCAPE -> height > width
+        PORTRAIT -> width > height
+    }
+}
 
 /**
  * 边框位置

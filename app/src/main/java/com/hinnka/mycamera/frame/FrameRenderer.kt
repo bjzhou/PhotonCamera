@@ -71,8 +71,11 @@ class FrameRenderer(
 //        PLog.d(TAG, "render: $metadata")
 
         val layout = template.layout
+        val rotated = layout.orientation.rotatesPhoto(originalBitmap.width, originalBitmap.height)
+        val photoWidth = if (rotated) originalBitmap.height else originalBitmap.width
+        val photoHeight = if (rotated) originalBitmap.width else originalBitmap.height
 
-        val expectedHeight = originalBitmap.height * 0.08f
+        val expectedHeight = photoHeight * 0.08f
         val scale = expectedHeight / dpToPx(80) // 以 80dp 为基准高度计算缩放比例
 
         val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
@@ -85,29 +88,29 @@ class FrameRenderer(
 
         when (layout.position) {
             FramePosition.BOTTOM -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height + frameHeight
+                outputWidth = photoWidth
+                outputHeight = photoHeight + frameHeight
             }
 
             FramePosition.TOP -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height + frameHeight
+                outputWidth = photoWidth
+                outputHeight = photoHeight + frameHeight
             }
 
             FramePosition.BOTH -> {
-                outputWidth = originalBitmap.width + borderWidth * 2
-                outputHeight = originalBitmap.height + frameHeight * 2
+                outputWidth = photoWidth + borderWidth * 2
+                outputHeight = photoHeight + frameHeight * 2
             }
 
             FramePosition.OVERLAY -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height
+                outputWidth = photoWidth
+                outputHeight = photoHeight
             }
 
             FramePosition.BORDER -> {
                 // 照片顶部/左右边框 + 底部信息区；水印侧不额外占用 border。
-                outputWidth = originalBitmap.width + borderWidth * 2
-                outputHeight = originalBitmap.height + frameHeight + borderWidth
+                outputWidth = photoWidth + borderWidth * 2
+                outputHeight = photoHeight + frameHeight + borderWidth
             }
 
             FramePosition.IMAGE -> {
@@ -117,8 +120,19 @@ class FrameRenderer(
         }
 
         // 创建输出 Bitmap
-        val output = createBitmap(outputWidth, outputHeight)
+        val output = if (rotated) createBitmap(outputHeight, outputWidth) else createBitmap(outputWidth, outputHeight)
         val canvas = Canvas(output)
+        if (rotated) {
+            // Lay out the template in its design orientation, then return to the photo orientation.
+            if (layout.orientation == FrameOrientation.LANDSCAPE) {
+                canvas.translate(outputHeight.toFloat(), 0f)
+                canvas.rotate(90f)
+            } else {
+                canvas.translate(0f, outputWidth.toFloat())
+                canvas.rotate(-90f)
+            }
+            PLog.d(TAG, "Frame ${template.id}: ${layout.orientation} design on ${originalBitmap.width}x${originalBitmap.height} photo")
+        }
 
         // OVERLAY 模式不需要绘制整体背景
         if (layout.position != FramePosition.OVERLAY) {
@@ -162,8 +176,8 @@ class FrameRenderer(
             borderWidth = borderWidth,
             photoLeft = photoLeft,
             photoTop = photoTop,
-            photoWidth = originalBitmap.width.toFloat(),
-            photoHeight = originalBitmap.height.toFloat(),
+            photoWidth = photoWidth.toFloat(),
+            photoHeight = photoHeight.toFloat(),
             outputWidth = outputWidth.toFloat()
         )
         drawPhotoShadowIfNeeded(
@@ -171,12 +185,12 @@ class FrameRenderer(
             layout = layout,
             photoLeft = photoLeft,
             photoTop = photoTop,
-            photoWidth = originalBitmap.width.toFloat(),
-            photoHeight = originalBitmap.height.toFloat(),
+            photoWidth = photoWidth.toFloat(),
+            photoHeight = photoHeight.toFloat(),
             borderWidth = borderWidth,
             scale = scale
         )
-        drawPhotoBitmap(canvas, originalBitmap, layout, photoLeft, photoTop, scale)
+        drawPhotoBitmap(canvas, originalBitmap, layout, photoLeft, photoTop, scale, rotated)
 
         // 绘制边框内容
         when (layout.position) {
@@ -184,7 +198,7 @@ class FrameRenderer(
                 drawFrameContent(
                     canvas, template.elements, metadata, template.layout,
                     left = padding.toFloat(),
-                    top = originalBitmap.height.toFloat(),
+                    top = photoHeight.toFloat(),
                     right = (outputWidth - padding).toFloat(),
                     bottom = outputHeight.toFloat(),
                     scale = scale
@@ -216,7 +230,7 @@ class FrameRenderer(
                 drawFrameContent(
                     canvas, template.elements, metadata, template.layout,
                     left = padding.toFloat(),
-                    top = (originalBitmap.height + frameHeight).toFloat(),
+                    top = (photoHeight + frameHeight).toFloat(),
                     right = (outputWidth - padding).toFloat(),
                     bottom = outputHeight.toFloat(),
                     scale = scale
@@ -225,7 +239,7 @@ class FrameRenderer(
 
             FramePosition.OVERLAY -> {
                 // 叠加模式：绘制从全透明到半透明的渐变背景
-                val overlayTop = (originalBitmap.height - frameHeight).toFloat()
+                val overlayTop = (photoHeight - frameHeight).toFloat()
 
                 // 创建线性渐变：从顶部全透明到底部半透明
                 val gradientShader = LinearGradient(
@@ -253,7 +267,7 @@ class FrameRenderer(
 
             FramePosition.BORDER -> {
                 // 四周边框模式：底部信息区
-                val infoTop = (originalBitmap.height + borderWidth).toFloat()
+                val infoTop = (photoHeight + borderWidth).toFloat()
                 drawFrameContent(
                     canvas, template.elements, metadata, template.layout,
                     left = padding.toFloat(),
@@ -308,7 +322,10 @@ class FrameRenderer(
         originalBitmap: Bitmap,
         layout: FrameLayout,
     ): FrameGeometry? {
-        val expectedHeight = originalBitmap.height * 0.08f
+        val rotated = layout.orientation.rotatesPhoto(originalBitmap.width, originalBitmap.height)
+        val photoWidth = if (rotated) originalBitmap.height else originalBitmap.width
+        val photoHeight = if (rotated) originalBitmap.width else originalBitmap.height
+        val expectedHeight = photoHeight * 0.08f
         val scale = expectedHeight / dpToPx(80)
         val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
         val borderWidth = (dpToPx(layout.borderWidthDp) * scale).toInt()
@@ -320,36 +337,36 @@ class FrameRenderer(
 
         when (layout.position) {
             FramePosition.BOTTOM -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height + frameHeight
+                outputWidth = photoWidth
+                outputHeight = photoHeight + frameHeight
                 photoLeft = 0f
                 photoTop = 0f
             }
 
             FramePosition.TOP -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height + frameHeight
+                outputWidth = photoWidth
+                outputHeight = photoHeight + frameHeight
                 photoLeft = 0f
                 photoTop = frameHeight.toFloat()
             }
 
             FramePosition.BOTH -> {
-                outputWidth = originalBitmap.width + borderWidth * 2
-                outputHeight = originalBitmap.height + frameHeight * 2
+                outputWidth = photoWidth + borderWidth * 2
+                outputHeight = photoHeight + frameHeight * 2
                 photoLeft = borderWidth.toFloat()
                 photoTop = frameHeight.toFloat()
             }
 
             FramePosition.OVERLAY -> {
-                outputWidth = originalBitmap.width
-                outputHeight = originalBitmap.height
+                outputWidth = photoWidth
+                outputHeight = photoHeight
                 photoLeft = 0f
                 photoTop = 0f
             }
 
             FramePosition.BORDER -> {
-                outputWidth = originalBitmap.width + borderWidth * 2
-                outputHeight = originalBitmap.height + frameHeight + borderWidth
+                outputWidth = photoWidth + borderWidth * 2
+                outputHeight = photoHeight + frameHeight + borderWidth
                 photoLeft = borderWidth.toFloat()
                 photoTop = borderWidth.toFloat()
             }
@@ -359,13 +376,24 @@ class FrameRenderer(
 
         if (outputWidth <= 0 || outputHeight <= 0) return null
         return FrameGeometry(
-            outputWidth = outputWidth,
-            outputHeight = outputHeight,
-            photoRect = RectF(
+            outputWidth = if (rotated) outputHeight else outputWidth,
+            outputHeight = if (rotated) outputWidth else outputHeight,
+            // Same inverse rotation as the SDR canvas; gain samples stay upright with the photo.
+            photoRect = if (rotated && layout.orientation == FrameOrientation.LANDSCAPE) RectF(
+                outputHeight - photoTop - photoHeight,
+                photoLeft,
+                outputHeight - photoTop,
+                photoLeft + photoWidth
+            ) else if (rotated) RectF(
+                photoTop,
+                outputWidth - photoLeft - photoWidth,
+                photoTop + photoHeight,
+                outputWidth - photoLeft
+            ) else RectF(
                 photoLeft,
                 photoTop,
-                photoLeft + originalBitmap.width,
-                photoTop + originalBitmap.height
+                photoLeft + photoWidth,
+                photoTop + photoHeight
             )
         )
     }
@@ -407,28 +435,34 @@ class FrameRenderer(
         layout: FrameLayout,
         photoLeft: Float,
         photoTop: Float,
-        scale: Float
+        scale: Float,
+        rotated: Boolean,
     ) {
         val cornerRadius = dpToPx(layout.photoCornerRadiusDp.coerceAtLeast(0)).toFloat() * scale
-        if (cornerRadius <= 0f) {
-            canvas.drawBitmap(originalBitmap, photoLeft, photoTop, null)
-            return
-        }
-
-        val photoRect = RectF(
-            photoLeft,
-            photoTop,
-            photoLeft + originalBitmap.width,
-            photoTop + originalBitmap.height
-        )
-        photoClipPath.reset()
-        photoClipPath.addRoundRect(photoRect, cornerRadius, cornerRadius, Path.Direction.CW)
+        val photoWidth = if (rotated) originalBitmap.height else originalBitmap.width
+        val photoHeight = if (rotated) originalBitmap.width else originalBitmap.height
         canvas.withSave {
-            clipPath(photoClipPath)
-            drawBitmap(originalBitmap, photoLeft, photoTop, null)
+            if (cornerRadius > 0f) {
+                val photoRect = RectF(photoLeft, photoTop, photoLeft + photoWidth, photoTop + photoHeight)
+                photoClipPath.reset()
+                photoClipPath.addRoundRect(photoRect, cornerRadius, cornerRadius, Path.Direction.CW)
+                clipPath(photoClipPath)
+            }
+            if (rotated) {
+                // Counter the frame canvas rotation so the original photo remains upright.
+                if (layout.orientation == FrameOrientation.LANDSCAPE) {
+                    translate(photoLeft, photoTop + photoHeight)
+                    rotate(-90f)
+                } else {
+                    translate(photoLeft + photoWidth, photoTop)
+                    rotate(90f)
+                }
+                drawBitmap(originalBitmap, 0f, 0f, null)
+            } else {
+                drawBitmap(originalBitmap, photoLeft, photoTop, null)
+            }
         }
     }
-
     private fun drawPhotoBorder(
         canvas: Canvas,
         layout: FrameLayout,
@@ -1189,13 +1223,19 @@ class FrameRenderer(
         }
 
         // 检查方向是否匹配，如果不匹配则旋转边框
-        val isPhotoPortrait = originalBitmap.height > originalBitmap.width
+        val isPhotoPortrait = when (layout.orientation) {
+            FrameOrientation.AUTO -> originalBitmap.height > originalBitmap.width
+            FrameOrientation.LANDSCAPE -> false
+            FrameOrientation.PORTRAIT -> true
+        }
         val isFramePortrait = frameBitmap.height > frameBitmap.width
 
-        if (isPhotoPortrait != isFramePortrait) {
-            val matrix = Matrix()
-            // 如果原本是不匹配的，旋转90度
-            matrix.postRotate(90f)
+        val designRotation = if (isPhotoPortrait != isFramePortrait) 90f else 0f
+        val outputRotation = if (layout.orientation.rotatesPhoto(originalBitmap.width, originalBitmap.height)) {
+            if (layout.orientation == FrameOrientation.LANDSCAPE) 90f else -90f
+        } else 0f
+        if (designRotation + outputRotation != 0f) {
+            val matrix = Matrix().apply { postRotate(designRotation + outputRotation) }
             try {
                 val originalFrame = frameBitmap
                 val rotatedFrame = Bitmap.createBitmap(

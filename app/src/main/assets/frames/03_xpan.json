@@ -8,6 +8,7 @@
     "editable": true,
     "layout": {
         "position": "BOTH",
+            "orientation": "LANDSCAPE",
         "backgroundColor": "#FFFFFF",
         "lineSpacing": 16,
         "height": 300,

@@ -92,6 +92,7 @@ import com.hinnka.mycamera.frame.FontWeight as FrameFontWeight
 import com.hinnka.mycamera.frame.FrameEditorDraft
 import com.hinnka.mycamera.frame.FrameElementDraft
 import com.hinnka.mycamera.frame.FramePosition
+import com.hinnka.mycamera.frame.FrameOrientation
 import com.hinnka.mycamera.frame.LogoType
 import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.components.CustomSlider
@@ -542,6 +543,18 @@ private fun FrameBasicTab(
 
         item {
             SectionCard(title = stringResource(R.string.frame_editor_section_layout)) {
+                DropdownSelectionField(
+                    label = stringResource(R.string.frame_editor_orientation),
+                    currentLabel = frameOrientationLabel(draft.layout.orientation),
+                    options = FrameOrientation.entries,
+                    optionLabel = { frameOrientationLabel(it) },
+                    onSelected = { onDraftChange(draft.copy(layout = draft.layout.copy(orientation = it))) }
+                )
+                Text(
+                    text = stringResource(R.string.frame_editor_orientation_hint),
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 12.sp
+                )
                 if (draft.layout.position != FramePosition.IMAGE) {
                     IntField(
                         label = stringResource(R.string.frame_editor_layout_height),
@@ -1971,6 +1984,13 @@ private fun frameElementTypeLabel(type: FrameElementType): String = when (type) 
     FrameElementType.LOGO -> stringResource(R.string.frame_editor_element_logo)
     FrameElementType.DIVIDER -> stringResource(R.string.frame_editor_element_divider)
     FrameElementType.SPACER -> stringResource(R.string.frame_editor_element_spacer)
+}
+
+@Composable
+private fun frameOrientationLabel(orientation: FrameOrientation): String = when (orientation) {
+    FrameOrientation.AUTO -> stringResource(R.string.frame_editor_orientation_auto)
+    FrameOrientation.LANDSCAPE -> stringResource(R.string.frame_editor_orientation_landscape)
+    FrameOrientation.PORTRAIT -> stringResource(R.string.frame_editor_orientation_portrait)
 }
 
 @Composable
