@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.processor
 
-/** MGC 9.7.047 V25 Sabre/Spatial rejection defaults and runtime resolution scaling. */
+/** MGC V25 rejection defaults, resolution scaling, and Photon Classic-Sabre detail tuning. */
 internal object MgcSabreRejectionTuning {
     data class FlowVariationThresholds(
         val unblockerReduction: Float,
@@ -11,6 +11,17 @@ internal object MgcSabreRejectionTuning {
     const val COLOR_DIFFERENCE_GREEN = 0.35f
     const val EXTRA_MOTION_ROBUSTNESS_BOOST = 6f
     const val MOTION_ROBUSTNESS_VARIANCE_THRESHOLD = 25f
+
+    /**
+     * Photon Classic-Sabre tuning, not shared with Spatial/YUV rejection. Keep V25's measured
+     * variance allowance near the noise floor, then tighten it only when BOTH guides contain
+     * structure well above BOTH noise estimates. The bicubic comparison and noise floor remain
+     * unchanged; this reduces admission of residual misalignment without restoring asymmetric
+     * guide filtering. Ratios refer to variance, not amplitude SNR.
+     */
+    const val SABRE_DETAIL_VARIANCE_RATIO_START = 8f
+    const val SABRE_DETAIL_VARIANCE_RATIO_END = 32f
+    const val SABRE_DETAIL_VARIANCE_SCALE = 1.25f
 
     private const val REFERENCE_GUIDE_WIDTH = 2016f
     private const val BASE_FLOW_VARIATION_THRESHOLD = 1e-4f
