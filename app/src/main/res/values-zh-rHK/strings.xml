@@ -1213,8 +1213,8 @@
     <string name="video_log_lut_bake_hint">所選 LUT 和調色效果將寫入錄製影片。</string>
     <string name="video_log_format">Log 格式</string>
     <string name="video_log_color_space_auto">色彩空間已根據 Log 格式自動匹配。</string>
-    <string name="settings_raw_camera_color_matching">配合相機色彩</string>
-    <string name="settings_raw_camera_color_matching_description">開啟時會根據拍攝相機調整色彩，關閉時使用原版處理。</string>
+    <string name="settings_raw_camera_color_matching">色彩校正</string>
+    <string name="settings_raw_camera_color_matching_description">開啟後，根據手機等拍攝裝置的色彩特性進行校正，再套用哈蘇或 LUMIX 風格。關閉後，直接套用所選風格，不做拍攝裝置的色彩校正。</string>
     <string name="settings_color_palette">調色盤</string>
     <string name="settings_color_palette_description">在編輯頁顯示調色盤，可同時調整影調和飽和度。</string>
     <string name="settings_raw_max_quality_tuning">HDR+ 畫質調校</string>

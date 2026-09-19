@@ -921,8 +921,8 @@
     <string name="video_log_lut_bake_hint">ใช้ LUT และการปรับสีกับวิดีโอที่บันทึก</string>
     <string name="video_log_format">รูปแบบ Log</string>
     <string name="video_log_color_space_auto">ตั้งค่าปริภูมิสีให้ตรงกับรูปแบบ Log โดยอัตโนมัติ</string>
-    <string name="settings_raw_camera_color_matching">ปรับสีให้ตรงกับกล้อง</string>
-    <string name="settings_raw_camera_color_matching_description">เมื่อเปิดใช้งาน ระบบจะปรับสีตามกล้องที่ใช้ถ่ายภาพ เมื่อปิดใช้งานจะใช้การประมวลผลเดิม</string>
+    <string name="settings_raw_camera_color_matching">การปรับแก้สี</string>
+    <string name="settings_raw_camera_color_matching_description">เมื่อเปิดใช้งาน จะปรับแก้สีตามลักษณะสีของอุปกรณ์ที่ใช้ถ่ายภาพ เช่น โทรศัพท์ของคุณ ก่อนใช้สไตล์ Hasselblad หรือ LUMIX เมื่อปิดใช้งาน จะใช้สไตล์ที่เลือกโดยตรง โดยไม่ปรับแก้สีตามอุปกรณ์ที่ใช้ถ่ายภาพ</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale">สเกลเอาต์พุตลดนอยส์หลายเฟรม</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x คือขนาดต้นฉบับ ปรับความกว้างและความสูงได้สูงสุด 2x มีผลเฉพาะการลดนอยส์หลายเฟรม</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>

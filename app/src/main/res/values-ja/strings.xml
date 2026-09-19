@@ -1035,8 +1035,8 @@
     <string name="video_log_lut_bake_hint">選択した LUT と色調整を動画に適用します。</string>
     <string name="video_log_format">Log 形式</string>
     <string name="video_log_color_space_auto">色空間は Log 形式に合わせて自動設定されます。</string>
-    <string name="settings_raw_camera_color_matching">カメラの色に合わせる</string>
-    <string name="settings_raw_camera_color_matching_description">オンにすると撮影に使ったカメラに合わせて色を調整し、オフにすると元の処理を使用します。</string>
+    <string name="settings_raw_camera_color_matching">色補正</string>
+    <string name="settings_raw_camera_color_matching_description">オンにすると、スマートフォンなど、写真を撮影した機器の色の特性に合わせて補正してから、ハッセルブラッドまたはLUMIXのスタイルを適用します。オフにすると、撮影機器に応じた色補正を行わず、選択したスタイルを直接適用します。</string>
     <string name="camera_hyperfocal_label">HYP</string>
     <string name="camera_hyperfocal_distance_meters">%.1fm</string>
     <string name="settings_macro_camera_id_description">マクロレンズとして強制使用する背面カメラIDを選択します。「自動」では現在のカメラ検出方式を使用します。</string>
