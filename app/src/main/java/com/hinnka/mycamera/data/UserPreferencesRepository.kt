@@ -46,8 +46,12 @@ import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
 import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
@@ -344,6 +348,8 @@ data class CameraFeaturePreferencesUpdate(
 class UserPreferencesRepository(private val context: Context) {
 
     private val openAiApiKeyCipher = OpenAiApiKeyCipher()
+    private val preferencesDecodeMutex = Mutex()
+    private var decodedPreferences: Pair<Preferences, UserPreferences>? = null
 
     companion object {
         // DataStore Keys
@@ -554,7 +560,17 @@ class UserPreferencesRepository(private val context: Context) {
      * 用户偏好设置 Flow
      */
     val userPreferences: Flow<UserPreferences> = context.dataStore.data
-        .map { preferences ->
+        .map { preferences -> decodeUserPreferences(preferences) }
+        .flowOn(Dispatchers.IO)
+
+    // Keep each collector attached to DataStore so first() observes the current persisted
+    // snapshot, while sharing JSON parsing and Keystore work for equal snapshots. Replaying
+    // a shared flow here could instead return stale settings immediately after an edit.
+    private suspend fun decodeUserPreferences(preferences: Preferences): UserPreferences =
+        preferencesDecodeMutex.withLock {
+            decodedPreferences?.let { (snapshot, decoded) ->
+                if (snapshot == preferences) return@withLock decoded
+            }
             val customAspectRatios = parseCustomAspectRatios(preferences[CUSTOM_ASPECT_RATIOS])
             val availableAspectRatios = AspectRatio.entries + customAspectRatios
             val rawBaselineLutConfigured = preferences[RAW_BASELINE_LUT_CONFIGURED_KEY]
@@ -893,7 +909,9 @@ class UserPreferencesRepository(private val context: Context) {
                 customPresetsJson = preferences[CUSTOM_PRESETS_JSON] ?: "",
                 activePresetId = preferences[ACTIVE_PRESET_ID],
                 deletedBuiltInIds = preferences[DELETED_BUILT_IN_IDS] ?: ""
-            )
+            ).also { decoded ->
+                decodedPreferences = preferences to decoded
+            }
         }
 
     /**
