@@ -9,8 +9,14 @@ class RawOutputGeometryTest {
     fun fractionalScalingKeepsTileSamplesOnTheFullImageGrid() {
         val crop = RawTileRect(7, 11, 4986, 3478)
         for (rotation in listOf(0, 90, 180, 270)) {
-            for (scale in listOf(1f, 1.3f, 1.5f, 2f)) {
-                val geometry = RawOutputGeometry(crop, rotation, scale)
+            for ((scale, referenceScale) in listOf(
+                1f to 1, 1.3f to 1, 1.5f to 1, 2f to 1, 1f to 3, 2f to 3,
+            )) {
+                val geometry = RawOutputGeometry(
+                    crop, rotation, scale,
+                    referenceWidth = crop.width * referenceScale,
+                    referenceHeight = crop.height * referenceScale,
+                )
                 val tiles = RawTilePlanner.plan(
                     5003, 3501, crop, rotation, 2048, 115, 2, 4,
                 )
@@ -42,6 +48,19 @@ class RawOutputGeometryTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun digitalZoomRestoresPhysicalResolutionBeforeOutputScaleAndRotation() {
+        val crop = RawTileRect(0, 0, 1000, 750)
+        val landscape = RawOutputGeometry(crop, 0, 1f, 4000, 3000)
+        assertEquals(4000, landscape.width)
+        assertEquals(3000, landscape.height)
+        assertTrue(landscape.resample)
+        val portrait = RawOutputGeometry(crop, 90, 2f, 4000, 3000)
+        assertEquals(6000, portrait.width)
+        assertEquals(8000, portrait.height)
+        assertEquals(portrait.fullRegion, portrait.scaleRegion(RawTileRect(0, 0, 750, 1000)))
     }
 
     @Test

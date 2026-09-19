@@ -1146,4 +1146,6 @@
     <string name="settings_raw_canon_exposure_compensation_description">通常の露出補正に加えて、Canonレンダリングの露出を調整します。</string>
     <string name="settings_retain_capture_settings">カスタム撮影設定を保持</string>
     <string name="settings_retain_capture_settings_description">カメラを再度開いたときに、露出補正、シャッタースピード、ISO、フォーカス、ホワイトバランスと、それぞれの自動／手動モードを復元します。オフにすると保存済みの設定を消去します。</string>
+    <string name="settings_raw_digital_zoom_resampling">デジタルズームの解像度を復元</string>
+    <string name="settings_raw_digital_zoom_resampling_description">デジタルズーム写真を現在の物理レンズの解像度にリサンプリングし、出力倍率を適用します。</string>
 </resources>

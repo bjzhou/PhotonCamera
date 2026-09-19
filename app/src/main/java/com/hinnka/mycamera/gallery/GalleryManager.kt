@@ -59,6 +59,7 @@ import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawDngCaptureProfilePreparer
 import com.hinnka.mycamera.raw.RawOutputScaling
+import com.hinnka.mycamera.raw.RawDigitalZoomResampling
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -2230,7 +2231,12 @@ object GalleryManager {
                 userCrop = null,
                 metadataDefaultCrop = blackBorderDefaultCrop,
             )
-            var updatedMetadata: MediaMetadata = metadata.copy(cropRegion = null)
+            var updatedMetadata: MediaMetadata = metadata.copy(
+                cropRegion = null,
+                customProperties = RawDigitalZoomResampling.resolveCaptureProperties(
+                    metadata.customProperties, physicalRawCrop, metadata.rawBlackBorderCrop,
+                ),
+            )
             val rawSharpening = updatedMetadata.sharpening
                 ?: RawSharpeningDefaults.normalize(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
@@ -2395,6 +2401,7 @@ object GalleryManager {
                 rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                 rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
                 rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
+                rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                 spectralFilmStock = updatedMetadata.spectralFilmStock,
                 spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                 spectralFilmTuning = SpectralFilmTuning(
@@ -2490,6 +2497,7 @@ object GalleryManager {
                     rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                     rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
                     rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
+                    rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(
@@ -3562,7 +3570,10 @@ object GalleryManager {
                 .copy(
                     cropRegion = null,
                     customProperties = RawOutputScaling.write(
-                        metadata.customProperties, rawStackOutputScale,
+                        RawDigitalZoomResampling.resolveCaptureProperties(
+                            metadata.customProperties, physicalRawCrop, metadata.rawBlackBorderCrop,
+                        ),
+                        rawStackOutputScale,
                     ),
                     // These fields describe the processor-specific FinishRaw denoise already
                     // baked into LinearRaw; the merge itself remains represented by the pixels.
@@ -3732,6 +3743,7 @@ object GalleryManager {
                     rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                     rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
                     rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
+                    rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(
@@ -3825,6 +3837,7 @@ object GalleryManager {
                         rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                         rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
                         rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
+                        rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                         spectralFilmStock = updatedMetadata.spectralFilmStock,
                         spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                         spectralFilmTuning = SpectralFilmTuning(
@@ -4108,6 +4121,7 @@ object GalleryManager {
             rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
             rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
             rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
+            rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
             spectralFilmStock = updatedMetadata.spectralFilmStock,
             spectralFilmPrint = updatedMetadata.spectralFilmPrint,
             spectralFilmTuning = SpectralFilmTuning(
@@ -5560,6 +5574,7 @@ object GalleryManager {
                             rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
                             rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
                             rawOutputScale = RawOutputScaling.read(updatedMetadata.customProperties),
+                            rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                             spectralFilmStock = updatedMetadata.spectralFilmStock,
                             spectralFilmPrint = updatedMetadata.spectralFilmPrint,
                             spectralFilmTuning = SpectralFilmTuning(
@@ -5752,6 +5767,7 @@ object GalleryManager {
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,
                     rawBlackBorderCrop = rawMetadata.rawBlackBorderCrop,
                     rawOutputScale = RawOutputScaling.read(rawMetadata.customProperties),
+                    rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(rawMetadata.customProperties),
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata?.spectralFilmPrint,
                     spectralFilmTuning = SpectralFilmTuning(

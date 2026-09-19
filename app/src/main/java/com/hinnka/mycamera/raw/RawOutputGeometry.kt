@@ -4,14 +4,23 @@ import com.hinnka.mycamera.camera.MultiFrameConfig
 import kotlin.math.roundToInt
 
 /** Final display sampling grid. RAW, denoise and sharpen always keep their native grid. */
-internal class RawOutputGeometry(val sourceBounds: RawTileRect, val rotation: Int, scale: Float) {
+internal class RawOutputGeometry(
+    val sourceBounds: RawTileRect,
+    val rotation: Int,
+    scale: Float,
+    referenceWidth: Int = sourceBounds.width,
+    referenceHeight: Int = sourceBounds.height,
+) {
     init {
         require(rotation in setOf(0, 90, 180, 270))
+        require(referenceWidth > 0 && referenceHeight > 0)
     }
     private val nativeWidth = if (rotation % 180 == 0) sourceBounds.width else sourceBounds.height
     private val nativeHeight = if (rotation % 180 == 0) sourceBounds.height else sourceBounds.width
-    val width = MultiFrameConfig.scaledRawOutputDimension(nativeWidth, scale)
-    val height = MultiFrameConfig.scaledRawOutputDimension(nativeHeight, scale)
+    private val outputBaseWidth = if (rotation % 180 == 0) referenceWidth else referenceHeight
+    private val outputBaseHeight = if (rotation % 180 == 0) referenceHeight else referenceWidth
+    val width = MultiFrameConfig.scaledRawOutputDimension(outputBaseWidth, scale)
+    val height = MultiFrameConfig.scaledRawOutputDimension(outputBaseHeight, scale)
     val mgcFinishResolution = MgcFinishResolution.resolve(nativeWidth, nativeHeight, width, height)
     val resample = width != nativeWidth || height != nativeHeight
     val fullRegion = RawTileRect(0, 0, width, height)

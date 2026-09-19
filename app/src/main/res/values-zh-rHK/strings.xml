@@ -1244,4 +1244,6 @@
     <string name="settings_raw_canon_exposure_compensation_description">在一般曝光補償的基礎上，額外調整 Canon 渲染曝光。</string>
     <string name="settings_retain_capture_settings">保留自訂拍攝設定</string>
     <string name="settings_retain_capture_settings_description">重新開啟相機時還原曝光補償、快門、ISO、對焦和白平衡及其自動／手動模式。關閉後會清除已儲存的設定。</string>
+    <string name="settings_raw_digital_zoom_resampling">數碼焦段解像度還原</string>
+    <string name="settings_raw_digital_zoom_resampling_description">將數碼焦段相片重新取樣至目前實體鏡頭的解像度，並套用輸出倍率。</string>
 </resources>

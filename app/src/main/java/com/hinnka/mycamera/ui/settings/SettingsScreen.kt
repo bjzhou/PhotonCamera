@@ -156,6 +156,7 @@ import com.hinnka.mycamera.ui.components.DepthModelDownloadDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
+import com.hinnka.mycamera.ui.components.RawNoiseProfileSelector
 import com.hinnka.mycamera.ui.components.RawDngMetadataCorrectionSettings
 import com.hinnka.mycamera.ui.components.rawDcpLensOptions
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
@@ -411,6 +412,7 @@ fun SettingsScreen(
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
     val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
+    val rawDigitalZoomResamplingEnabled by viewModel.rawDigitalZoomResamplingEnabled.collectAsState()
     val availableDcps = viewModel.availableDcps
     val availableRawNoiseProfiles = viewModel.availableRawNoiseProfiles.filterNot {
         it.id == RawNoiseProfileManager.ADAPTIVE_PROFILE_ID
@@ -2087,6 +2089,17 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_raw_digital_zoom_resampling),
+                            description = stringResource(R.string.settings_raw_digital_zoom_resampling_description),
+                            checked = rawDigitalZoomResamplingEnabled,
+                            onCheckedChange = viewModel::setRawDigitalZoomResamplingEnabled,
+                        )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         val valueFormat = stringResource(R.string.settings_raw_max_output_scale_value)
                         SliderSettingItem(
                             title = stringResource(R.string.settings_raw_max_output_scale),
@@ -2133,6 +2146,37 @@ fun SettingsScreen(
                             color = Color.White.copy(alpha = 0.1f),
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
+
+                        if (availableRawNoiseProfiles.isNotEmpty()) {
+                            RawNoiseProfileSelector(
+                                lensOptions = rawDcpLensOptions(state.availableCameras),
+                                selectedProfileId = rawNoiseProfileId,
+                                profileIdsByLens = rawNoiseProfileIdsByLens,
+                                availableProfiles = availableRawNoiseProfiles,
+                                onSelectProfile = viewModel::setRawNoiseProfileId,
+                                onProfileIdsByLensChange = viewModel::setRawNoiseProfileIdsByLens,
+                                onImportProfile = {
+                                    importRawNoiseProfileLauncher.launch(arrayOf("*/*"))
+                                },
+                                onDeleteProfile = { profile ->
+                                    viewModel.deleteRawNoiseProfile(profile.id) { success ->
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            if (success) {
+                                                R.string.raw_noise_profile_delete_success
+                                            } else {
+                                                R.string.raw_noise_profile_delete_failed
+                                            },
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                },
+                            )
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                        }
 
                         SliderSettingItem(
                             title = stringResource(R.string.settings_raw_max_default_luma_denoise),
@@ -2225,27 +2269,6 @@ fun SettingsScreen(
                         onAdjustmentEnd = { commitRawSliderValues() },
                         hncsFilmCurveMode = rawHncsFilmCurveMode,
                         onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
-                        selectedRawNoiseProfileId = rawNoiseProfileId,
-                        rawNoiseProfileIdsByLens = rawNoiseProfileIdsByLens,
-                        availableRawNoiseProfiles = availableRawNoiseProfiles,
-                        onSelectRawNoiseProfile = viewModel::setRawNoiseProfileId,
-                        onRawNoiseProfileIdsByLensChange = viewModel::setRawNoiseProfileIdsByLens,
-                        onImportRawNoiseProfile = {
-                            importRawNoiseProfileLauncher.launch(arrayOf("*/*"))
-                        },
-                        onDeleteRawNoiseProfile = { profile ->
-                            viewModel.deleteRawNoiseProfile(profile.id) { success ->
-                                android.widget.Toast.makeText(
-                                    context,
-                                    if (success) {
-                                        R.string.raw_noise_profile_delete_success
-                                    } else {
-                                        R.string.raw_noise_profile_delete_failed
-                                    },
-                                    android.widget.Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                        },
                             contentMode = RawEditPanelContentMode.FULL
                         )
                     }

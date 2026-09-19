@@ -326,4 +326,6 @@
     <string name="settings_shutter_sound_preview_failed">Suara ini tidak dapat diputar. Silakan impor ulang atau pulihkan default.</string>
     <string name="settings_retain_capture_settings">Pertahankan pengaturan kamera kustom</string>
     <string name="settings_retain_capture_settings_description">Pulihkan kompensasi eksposur, kecepatan rana, ISO, fokus, dan keseimbangan putih beserta mode otomatis/manual masing-masing saat kamera dibuka kembali. Menonaktifkan opsi ini akan menghapus pengaturan yang tersimpan.</string>
+    <string name="settings_raw_digital_zoom_resampling">Pulihkan resolusi zoom digital</string>
+    <string name="settings_raw_digital_zoom_resampling_description">Mengambil sampel ulang foto zoom digital ke resolusi lensa fisik saat ini, lalu menerapkan skala output.</string>
 </resources>

@@ -326,4 +326,6 @@
     <string name="settings_shutter_sound_preview_failed">Impossible de lire ce son. Veuillez le réimporter ou rétablir la valeur par défaut.</string>
     <string name="settings_retain_capture_settings">Conserver les réglages personnalisés de l’appareil photo</string>
     <string name="settings_retain_capture_settings_description">Restaure la compensation d’exposition, la vitesse d’obturation, l’ISO, la mise au point et la balance des blancs, ainsi que leurs modes automatique/manuel, à la réouverture de l’appareil photo. La désactivation efface les réglages enregistrés.</string>
+    <string name="settings_raw_digital_zoom_resampling">Restaurer la résolution du zoom numérique</string>
+    <string name="settings_raw_digital_zoom_resampling_description">Rééchantillonne les photos prises au zoom numérique à la résolution de l’objectif physique actuel, puis applique le facteur de sortie.</string>
 </resources>

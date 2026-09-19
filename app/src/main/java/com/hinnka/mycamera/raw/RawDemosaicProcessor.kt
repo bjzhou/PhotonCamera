@@ -16,6 +16,7 @@ import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
 import android.util.Half
+import android.util.Size
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
@@ -1845,6 +1846,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawPhysicalOutputSize: Size? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
@@ -1895,6 +1897,7 @@ class RawDemosaicProcessor {
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawPhysicalOutputSize = rawPhysicalOutputSize,
                 dngFile = dngFile,
                 onMetadata = onMetadata
             )?.sdrBitmap
@@ -1942,6 +1945,7 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawPhysicalOutputSize: Size? = null,
     ): Bitmap? = withContext(glDispatcher) {
         try {
             if (!isInitialized) {
@@ -1986,6 +1990,7 @@ class RawDemosaicProcessor {
                 rawToneMappingParameters = rawToneMappingParameters,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawPhysicalOutputSize = rawPhysicalOutputSize,
             )?.sdrBitmap
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process RAW buffer", e)
@@ -2093,6 +2098,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawPhysicalOutputSize: Size? = null,
         includeHdrReference: Boolean,
         photonHdrRatio: Float? = null,
         photonSourceToShortGain: Float? = null,
@@ -2145,6 +2151,7 @@ class RawDemosaicProcessor {
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawPhysicalOutputSize = rawPhysicalOutputSize,
                 dngFile = dngFile,
                 onMetadata = onMetadata,
                 includeHdrReference = includeHdrReference,
@@ -2209,6 +2216,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawPhysicalOutputSize: Size? = null,
         includeHdrReference: Boolean,
         photonHdrRatio: Float? = null,
         photonSourceToShortGain: Float? = null,
@@ -2307,6 +2315,7 @@ class RawDemosaicProcessor {
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawPhysicalOutputSize = rawPhysicalOutputSize,
                 includeHdrReference = includeHdrReference,
                 sourceDngRenderPlan = embeddedDngRenderPlan,
                 photonHdrRatio = photonHdrRatio,
@@ -2376,6 +2385,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawPhysicalOutputSize: Size? = null,
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false,
@@ -2762,10 +2772,28 @@ class RawDemosaicProcessor {
                 "legacyCrop=$cropRegion appliedLegacyCrop=$renderCropRegion " +
                 "aspectRatio=$aspectRatio rotation=$actualRotation outputSourceBounds=$outputSourceBounds"
         )
+        val physicalOutputBounds = rawPhysicalOutputSize?.let { size ->
+            calculateOutputSourceBounds(
+                width = size.width,
+                height = size.height,
+                aspectRatio = aspectRatio,
+                cropRegion = null,
+                metadataDefaultCrop = Rect(0, 0, size.width, size.height),
+            )
+        }
         val outputGeometry = RawOutputGeometry(
             RawTileRect(outputSourceBounds.left, outputSourceBounds.top,
                 outputSourceBounds.right, outputSourceBounds.bottom),
             actualRotation, rawOutputScale,
+            referenceWidth = physicalOutputBounds?.width() ?: outputSourceBounds.width(),
+            referenceHeight = physicalOutputBounds?.height() ?: outputSourceBounds.height(),
+        )
+        PLog.i(
+            TAG,
+            "RAW_OUTPUT_RESAMPLING source=${outputSourceBounds.width()}x${outputSourceBounds.height()} " +
+                "physicalSize=$rawPhysicalOutputSize scale=$rawOutputScale " +
+                "output=${outputGeometry.width}x${outputGeometry.height} " +
+                "lanczos=${outputGeometry.resample}",
         )
         val rawOutputBounds = outputSourceBounds.toOutputBounds(actualRotation)
         val applicableDngWarpRectilinear = filterApplicableWarpRectilinear(
@@ -2780,7 +2808,9 @@ class RawDemosaicProcessor {
         // source processing footprint.
         val highResolutionOutput =
             RawTilePlanner.shouldTile(outputSourceBounds.width(), outputSourceBounds.height()) ||
-                RawTilePlanner.shouldTile(actualWidth, actualHeight)
+                RawTilePlanner.shouldTile(actualWidth, actualHeight) ||
+                (rawPhysicalOutputSize != null &&
+                    RawTilePlanner.shouldTile(outputGeometry.width, outputGeometry.height))
         val hasActiveWarp = applicableDngWarpRectilinear?.isNotEmpty() == true
         val captureExposureRequested =
             sceneExposureRequest != null || legacyAutoExposureRequest != null
@@ -2814,6 +2844,18 @@ class RawDemosaicProcessor {
             else -> null
         }
         val rawRenderTiles = if (highResolutionOutput && tileBlockingReason == null) {
+            // Keep restored output tiles bounded even when digital zoom exceeds the 2x
+            // output-scale setting. Source support and sample positions stay on the native grid.
+            val restoredOutputScale = if (rawPhysicalOutputSize != null) {
+                val rotatedBounds = outputSourceBounds.toOutputBounds(actualRotation)
+                maxOf(
+                    1f,
+                    outputGeometry.width.toFloat() / rotatedBounds.width(),
+                    outputGeometry.height.toFloat() / rotatedBounds.height(),
+                )
+            } else {
+                1f
+            }
             RawTilePlanner.plan(
                 sourceWidth = actualWidth,
                 sourceHeight = actualHeight,
@@ -2824,7 +2866,7 @@ class RawDemosaicProcessor {
                     outputSourceBounds.bottom,
                 ),
                 rotation = actualRotation,
-                coreEdgePx = RAW_TILE_MAX_CORE_EDGE_PX,
+                coreEdgePx = (RAW_TILE_MAX_CORE_EDGE_PX / restoredOutputScale).toInt(),
                 supportPx = RAW_TILE_SUPPORT_PX + if (outputGeometry.resample) 3 else 0,
                 cfaPeriod = RawCfaCorrection.repeatPatternDim(actualMetadata.cfaPattern)[0],
                 processingPeriod = outputGeometry.mgcFinishResolution.processingPeriod,

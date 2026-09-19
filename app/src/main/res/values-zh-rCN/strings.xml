@@ -1269,4 +1269,6 @@
     <string name="settings_raw_canon_exposure_compensation_description">在常规曝光补偿基础上，额外调整 Canon 渲染曝光。</string>
     <string name="settings_retain_capture_settings">保留自定义拍摄设置</string>
     <string name="settings_retain_capture_settings_description">重新打开相机时恢复曝光补偿、快门、ISO、对焦和白平衡及其自动／手动模式。关闭后清除已保存的设置。</string>
+    <string name="settings_raw_digital_zoom_resampling">数码焦段分辨率还原</string>
+    <string name="settings_raw_digital_zoom_resampling_description">将数码焦段照片重采样至当前物理镜头的分辨率，并应用输出倍率。</string>
 </resources>

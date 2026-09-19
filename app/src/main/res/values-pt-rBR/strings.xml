@@ -327,4 +327,6 @@
     <string name="settings_shutter_sound_preview_failed">Não é possível reproduzir este som. Importe-o novamente ou restaure o padrão.</string>
     <string name="settings_retain_capture_settings">Manter configurações personalizadas da câmera</string>
     <string name="settings_retain_capture_settings_description">Restaura a compensação de exposição, a velocidade do obturador, o ISO, o foco e o balanço de branco, incluindo os modos automático/manual, ao reabrir a câmera. Desativar esta opção apaga as configurações salvas.</string>
+    <string name="settings_raw_digital_zoom_resampling">Restaurar resolução do zoom digital</string>
+    <string name="settings_raw_digital_zoom_resampling_description">Reamostra as fotos com zoom digital para a resolução da lente física atual e aplica a escala de saída.</string>
 </resources>

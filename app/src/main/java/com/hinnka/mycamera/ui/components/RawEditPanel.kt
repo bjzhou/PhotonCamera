@@ -47,7 +47,6 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.RawNoiseProfileInfo
-import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -148,13 +147,6 @@ fun RawEditPanel(
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
     hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
-    selectedRawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
-    rawNoiseProfileIdsByLens: Map<String, String> = emptyMap(),
-    availableRawNoiseProfiles: List<RawNoiseProfileInfo> = emptyList(),
-    onSelectRawNoiseProfile: (String) -> Unit = {},
-    onRawNoiseProfileIdsByLensChange: ((Map<String, String>) -> Unit)? = null,
-    onImportRawNoiseProfile: (() -> Unit)? = null,
-    onDeleteRawNoiseProfile: ((RawNoiseProfileInfo) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -208,20 +200,6 @@ fun RawEditPanel(
             inlineEngineOptions = false,
             showToneMappingControls = contentMode != RawEditPanelContentMode.QUICK,
         )
-
-        if (contentMode == RawEditPanelContentMode.FULL && availableRawNoiseProfiles.isNotEmpty()) {
-            RawNoiseProfileSelector(
-                selectedProfileId = selectedRawNoiseProfileId,
-                profileIdsByLens = rawNoiseProfileIdsByLens,
-                lensOptions = dcpLensOptions,
-                availableProfiles = availableRawNoiseProfiles,
-                onSelectProfile = onSelectRawNoiseProfile,
-                onProfileIdsByLensChange = onRawNoiseProfileIdsByLensChange,
-                onImportProfile = onImportRawNoiseProfile,
-                onDeleteProfile = onDeleteRawNoiseProfile,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
 
         if (contentMode == RawEditPanelContentMode.FULL) {
             SliderSettingItem(

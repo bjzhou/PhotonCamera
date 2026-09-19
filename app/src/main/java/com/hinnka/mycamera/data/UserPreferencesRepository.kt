@@ -205,6 +205,7 @@ data class UserPreferences(
     val hdrPlusBracketExposureEnabled: Boolean =
         MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
+    val rawDigitalZoomResamplingEnabled: Boolean = false,
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
     val useJpeg444Export: Boolean = false, // 是否使用 JPEG 4:4:4 色度采样导出
@@ -470,6 +471,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val MULTIPLE_EXPOSURE_COUNT = intPreferencesKey("multiple_exposure_count")
         private val LEGACY_USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
         private val RAW_MAX_OUTPUT_SCALE = floatPreferencesKey("raw_max_output_scale")
+        private val RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED =
+            booleanPreferencesKey("raw_digital_zoom_resampling_enabled")
         private val LEGACY_RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_HEIC_EXPORT = booleanPreferencesKey("use_heic_export")
@@ -797,6 +800,8 @@ class UserPreferencesRepository(private val context: Context) {
                         fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
                     )
                 } ?: MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                rawDigitalZoomResamplingEnabled =
+                    preferences[RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED] ?: false,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useHeicExport = useHeicExport,
                 useJpeg444Export = useJpeg444Export,
@@ -2066,6 +2071,12 @@ class UserPreferencesRepository(private val context: Context) {
                 outputScale = scale,
                 fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
             )
+        }
+    }
+
+    suspend fun saveRawDigitalZoomResamplingEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED] = enabled
         }
     }
 

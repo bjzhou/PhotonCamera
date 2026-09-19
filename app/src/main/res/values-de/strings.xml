@@ -326,4 +326,6 @@
     <string name="settings_shutter_sound_preview_failed">Ton kann nicht wiedergegeben werden. Bitte importieren Sie ihn erneut oder stellen Sie den Standard wieder her.</string>
     <string name="settings_retain_capture_settings">Benutzerdefinierte Kameraeinstellungen beibehalten</string>
     <string name="settings_retain_capture_settings_description">Belichtungskorrektur, Verschlusszeit, ISO, Fokus und Weißabgleich einschließlich der jeweiligen Automatik-/Manuell-Modi beim erneuten Öffnen der Kamera wiederherstellen. Beim Ausschalten werden gespeicherte Einstellungen gelöscht.</string>
+    <string name="settings_raw_digital_zoom_resampling">Digitalzoom-Auflösung wiederherstellen</string>
+    <string name="settings_raw_digital_zoom_resampling_description">Skaliert Digitalzoom-Fotos auf die Auflösung des aktuellen physischen Objektivs und wendet anschließend den Ausgabefaktor an.</string>
 </resources>

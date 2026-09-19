@@ -77,6 +77,7 @@ import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawCaptureExposureCompensationMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.RawDigitalZoomResampling
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
@@ -197,7 +198,7 @@ private fun rawProcessingMetadataProperties(
 ): Map<String, String> = PhotonSensorSizeTuning.captureProperties(
     enabled = userPrefs?.let { it.useRawMax && it.rawMaxQualityTuningEnabled } == true,
     sensorPhysicalAreaMm2 = sensorPhysicalAreaMm2,
-)
+) + RawDigitalZoomResampling.captureProperties(userPrefs?.rawDigitalZoomResamplingEnabled == true)
 
 private fun resolveCaptureSharpening(
     isRawCapture: Boolean,
@@ -1709,6 +1710,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
     val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMax }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val rawDigitalZoomResamplingEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.rawDigitalZoomResamplingEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
@@ -4840,6 +4844,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         multipleExposureState = multipleExposureState.copy(targetCount = normalizedCount)
         viewModelScope.launch {
             userPreferencesRepository.saveMultipleExposureCount(normalizedCount)
+        }
+    }
+
+    fun setRawDigitalZoomResamplingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawDigitalZoomResamplingEnabled(enabled)
         }
     }
 
