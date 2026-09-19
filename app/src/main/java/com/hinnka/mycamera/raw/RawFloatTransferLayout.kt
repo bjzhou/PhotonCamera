@@ -2,9 +2,15 @@ package com.hinnka.mycamera.raw
 
 /** Each SSBO range covers whole rows and starts at a driver-aligned byte offset. */
 internal object RawFloatTransferLayout {
-    fun stripeRows(width: Int, height: Int, maxBlockBytes: Long, offsetAlignment: Int): Int {
-        require(width > 0 && height > 0 && offsetAlignment > 0)
-        val rowBytes = width.toLong() * 16
+    fun stripeRows(
+        width: Int,
+        height: Int,
+        maxBlockBytes: Long,
+        offsetAlignment: Int,
+        bytesPerPixel: Int = 16,
+    ): Int {
+        require(width > 0 && height > 0 && offsetAlignment > 0 && bytesPerPixel > 0)
+        val rowBytes = width.toLong() * bytesPerPixel
         if (rowBytes * height <= maxBlockBytes) return height
         var a = rowBytes
         var b = offsetAlignment.toLong()

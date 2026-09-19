@@ -25,18 +25,26 @@ class RawFloatTransferLayoutTest {
         assertEquals(3, RawFloatTransferLayout.stripeRows(37, 3, 37L * 16 * 3, 256))
     }
 
-    private fun checkCoverage(width: Int, height: Int, limit: Long, alignment: Int) {
-        val stripeRows = RawFloatTransferLayout.stripeRows(width, height, limit, alignment)
+    @Test
+    fun halfRgbaUsesEightBytePixelsIncludingOddWidthAndTail() {
+        checkCoverage(4033, 3025, 16L * 1024 * 1024, 256, bytesPerPixel = 8)
+        checkCoverage(37, 67, 37L * 8 * 32, 256, bytesPerPixel = 8)
+        assertEquals(0, RawFloatTransferLayout.stripeRows(37, 67, 37L * 8 * 31, 256, 8))
+        assertEquals(3, RawFloatTransferLayout.stripeRows(37, 3, 37L * 8 * 3, 256, 8))
+    }
+
+    private fun checkCoverage(width: Int, height: Int, limit: Long, alignment: Int, bytesPerPixel: Int = 16) {
+        val stripeRows = RawFloatTransferLayout.stripeRows(width, height, limit, alignment, bytesPerPixel)
         assertTrue(stripeRows > 0)
         var covered = 0L
         for (row in 0 until height step stripeRows) {
-            val offset = row.toLong() * width * 16
-            val bytes = minOf(stripeRows, height - row).toLong() * width * 16
+            val offset = row.toLong() * width * bytesPerPixel
+            val bytes = minOf(stripeRows, height - row).toLong() * width * bytesPerPixel
             assertEquals(covered, offset)
             assertEquals(0L, offset % alignment)
             assertTrue(bytes in 1..limit)
             covered += bytes
         }
-        assertEquals(width.toLong() * height * 16, covered)
+        assertEquals(width.toLong() * height * bytesPerPixel, covered)
     }
 }

@@ -13,6 +13,7 @@ import android.util.Half
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
+import com.hinnka.mycamera.raw.RawFloatTextureTransfer
 import com.hinnka.mycamera.raw.RawSceneAERawStats
 import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
@@ -2095,7 +2096,7 @@ internal class GlesMgcRawSpatialStacker(
             return null
         }
         var cpuOutput: ByteBuffer? = null
-        var sabreAccumulatedReadback: ByteBuffer? = null
+        val sabreTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
         var sabreResolvedRgb: ByteBuffer? = null
         var exportedTexture = 0
         var postprocessedUi = 0
@@ -2108,6 +2109,7 @@ internal class GlesMgcRawSpatialStacker(
             if (useCurrentGlContext) attachCurrentEgl() else initEgl()
             ensureGles3()
             initSabrePrograms()
+            sabreTransfer.prepare(width, height)
             renderFbo = createFramebuffer()
             applyRawRenderState()
 
@@ -2404,7 +2406,6 @@ internal class GlesMgcRawSpatialStacker(
             // The original merge shaders write normalized, white-balanced half floats. The
             // Resolve AOT accepts those RGBA16F bit patterns directly; rawScale applies only to
             // the black/white scalar parameters below.
-            sabreAccumulatedReadback = readSabreAccumulatedRgba16f(accumulatedColor)
             sabreResolvedRgb = checkNotNull(
                 LargeDirectBuffer.allocate(
                     width.toLong() * height * 3L * Short.SIZE_BYTES,
@@ -2427,24 +2428,28 @@ internal class GlesMgcRawSpatialStacker(
                     "outputWhite=${sabreResolveParameters.outputWhiteLevel} " +
                     "demosaicSharpness=${sabreResolveParameters.demosaicSharpness}",
             )
-            MgcSabreResolver.resolve(
-                accumulatedColorRgba16f = sabreAccumulatedReadback,
-                outputRgb16Planar = sabreResolvedRgb,
-                width = width,
-                height = height,
-                cfaPattern = cfaPattern,
-                finalBlackLevel = sabreResolveFinalBlackLevel,
-                finalGains = sabreResolveFinalGains,
-                demosaicWhiteLevel = demosaicWhiteLevel,
-                outputWhiteLevel = sabreResolveParameters.outputWhiteLevel,
-                demosaicBlendScale = -demosaicBlendRange * frames.size,
-                demosaicBlendBias = SABRE_DEMOSAIC_BLEND_END / demosaicBlendRange,
-                demosaicSharpnessScale =
-                    demosaicWhiteLevel * sabreResolveParameters.demosaicSharpness,
-            )
+            sabreTransfer.read(
+                accumulatedColor, width, height, label = "MGC Sabre Resolve",
+                writable = false,
+            ) { accumulated ->
+                MgcSabreResolver.resolve(
+                    accumulatedColorRgba16f = accumulated,
+                    outputRgb16Planar = checkNotNull(sabreResolvedRgb),
+                    width = width,
+                    height = height,
+                    cfaPattern = cfaPattern,
+                    finalBlackLevel = sabreResolveFinalBlackLevel,
+                    finalGains = sabreResolveFinalGains,
+                    demosaicWhiteLevel = demosaicWhiteLevel,
+                    outputWhiteLevel = sabreResolveParameters.outputWhiteLevel,
+                    demosaicBlendScale = -demosaicBlendRange * frames.size,
+                    demosaicBlendBias = SABRE_DEMOSAIC_BLEND_END / demosaicBlendRange,
+                    demosaicSharpnessScale =
+                        demosaicWhiteLevel * sabreResolveParameters.demosaicSharpness,
+                )
+            }
             logSabreResolvedRgbStats(sabreResolvedRgb)
-            LargeDirectBuffer.free(sabreAccumulatedReadback)
-            sabreAccumulatedReadback = null
+            sabreTransfer.releaseBuffers()
 
             val nativeResolvedPlanes = IntArray(3) {
                 createTexture(
@@ -2586,9 +2591,9 @@ internal class GlesMgcRawSpatialStacker(
             null
         } finally {
             images.forEach { it.close() }
+            sabreTransfer.release()
             release()
             GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, SABRE_TAG)
-            LargeDirectBuffer.free(sabreAccumulatedReadback)
             LargeDirectBuffer.free(sabreResolvedRgb)
             if (!returned) {
                 exportedCompletionTimeline?.releasePending()
@@ -2993,37 +2998,6 @@ internal class GlesMgcRawSpatialStacker(
         uniform1f(program, "uDemosaicWhiteLevel", demosaicWhiteLevel)
         uniform1f(program, "uOutputExposureScale", 1f)
         draw(program, width, height, intArrayOf(output))
-    }
-
-    private fun readSabreAccumulatedRgba16f(texture: Int): ByteBuffer {
-        val output = checkNotNull(
-            LargeDirectBuffer.allocate(
-                width.toLong() * height * 4L * Short.SIZE_BYTES,
-                "MGC Sabre accumulated RGBA16F",
-            ),
-        ) { "Unable to allocate MGC Sabre accumulated-color readback" }
-        try {
-            bindRenderTargets(intArrayOf(texture), "MGC Sabre accumulated-color readback")
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
-            GLES30.glReadPixels(
-                0,
-                0,
-                width,
-                height,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                output,
-            )
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            checkGlError("read MGC Sabre accumulated RGBA16F")
-            output.position(0)
-            output.limit(output.capacity())
-            return output
-        } catch (error: Exception) {
-            LargeDirectBuffer.free(output)
-            throw error
-        }
     }
 
     private fun uploadSabreResolvedRgb16Planar(buffer: ByteBuffer, textures: IntArray) {
