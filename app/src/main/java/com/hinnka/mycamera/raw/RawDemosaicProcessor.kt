@@ -18,6 +18,7 @@ import android.opengl.GLES31
 import android.util.Half
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.lut.ChromaDenoiseAlgorithm
@@ -3295,6 +3296,18 @@ class RawDemosaicProcessor {
 
             if (prepareCaptureProfile) {
                 val captureUsesHdrNet = sceneExposureRequest != null
+                // The preview cannot represent the captured brightness beyond its shutter cap.
+                // Keep ML AE's exposure when HDRNet develops a longer physical exposure.
+                val skipHdrNetViewfinderMatch = captureUsesHdrNet &&
+                    actualMetadata.shutterSpeed > CameraState.MAX_PHOTO_PREVIEW_SHUTTER_SPEED_NS
+                if (skipHdrNetViewfinderMatch) {
+                    PLog.i(
+                        TAG,
+                        "HDRNET_MATCH stage=SKIPPED reason=CAPTURE_SHUTTER_EXCEEDS_PREVIEW_LIMIT " +
+                            "captureShutterNs=${actualMetadata.shutterSpeed} " +
+                            "previewMaxShutterNs=${CameraState.MAX_PHOTO_PREVIEW_SHUTTER_SPEED_NS}",
+                    )
+                }
                 val captureUsesViewfinderBrightnessMatch =
                     sceneExposureRequest == null && legacyAutoExposureRequest != null
                 val captureUsesLocalLaplacian =
@@ -3371,7 +3384,8 @@ class RawDemosaicProcessor {
                     ?.takeIf { it.isFinite() && it > 0f }
                 val initialCaptureProfileOutput = when {
                     capturePhotonPgtmRequested && captureUsesHdrNet &&
-                        legacyAutoExposureRequest != null && captureHdrRatio != null &&
+                        (skipHdrNetViewfinderMatch || legacyAutoExposureRequest != null) &&
+                        captureHdrRatio != null &&
                         captureSourceToShortGain != null -> {
                         generateProfileGainTableMapOnGpu(
                             mode = DngPhotonProfileGainTableAlgorithm.Mode.HDR_NET,
@@ -3389,7 +3403,9 @@ class RawDemosaicProcessor {
                             statsBounds = processingBounds,
                             rendererBaselineExposureEv = initialBaselineExposureEv +
                                 dcpBaselineExposureOffsetEv,
-                            viewfinderReference = legacyAutoExposureRequest.referenceFrame,
+                            viewfinderReference = legacyAutoExposureRequest
+                                ?.takeUnless { skipHdrNetViewfinderMatch }
+                                ?.referenceFrame,
                             outputRotation = actualRotation,
                             // HDRNet's ratio describes capture exposure, not the DCP profile's
                             // independent BaselineExposureOffset rendering adjustment.
@@ -3528,8 +3544,13 @@ class RawDemosaicProcessor {
                     buildString {
                         append(summary.trimEnd())
                         appendLine()
-                        appendLine("hdrNetExposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL")
-                        appendLine("hdrNetExposureGrid=8x6_WEIGHTED_DIRECT_LOG2_EV")
+                        if (skipHdrNetViewfinderMatch) {
+                            appendLine("hdrNetExposureTarget=ML_AE")
+                            appendLine("hdrNetViewfinderMatchSkipped=CAPTURE_SHUTTER_EXCEEDS_PREVIEW_LIMIT")
+                        } else {
+                            appendLine("hdrNetExposureTarget=FULL_CAPTURE_VIEWFINDER_THUMBNAIL")
+                            appendLine("hdrNetExposureGrid=8x6_WEIGHTED_DIRECT_LOG2_EV")
+                        }
                         appendLine("hdrNetFinalShortGain=$outputShortGain")
                         appendLine("hdrNetFinalLongGain=${outputShortGain * outputHdrRatio}")
                         appendLine("hdrNetFinalHdrRatio=$outputHdrRatio")

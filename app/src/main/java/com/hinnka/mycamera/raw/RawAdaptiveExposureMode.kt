@@ -3,8 +3,9 @@ package com.hinnka.mycamera.raw
 /**
  * The mutually exclusive capture/development modes for adaptive RAW exposure handling.
  *
- * All modes preserve capture-time viewfinder brightness through BaselineExposure. [PHOTON_HDR]
- * runs ML AE plus HDRNet and spatially matches the HDRNet result to the complete viewfinder.
+ * [PHOTON_HDR] runs ML AE plus HDRNet and spatially matches the result to the complete viewfinder
+ * only when the capture shutter does not exceed the preview limit. Longer exposures retain the
+ * ML AE result without viewfinder matching. Other modes match through BaselineExposure.
  * [LEGACY_AUTO_EXPOSURE] also generates the historical Local Laplacian profile gain table. [OFF]
  * applies no HDR mapping and constrains its scalar viewfinder match with a RAW highlight guard.
  */

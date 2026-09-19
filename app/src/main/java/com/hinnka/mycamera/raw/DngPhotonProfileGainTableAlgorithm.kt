@@ -1370,7 +1370,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val statsBounds: Rect?,
         /** Total BaselineExposure used by DNG ProfileGainTableMap lookup. */
         val rendererBaselineExposureEv: Float,
-        /** Complete capture-time viewfinder target; null when regenerating without capture state. */
+        /** Complete viewfinder target; null for captures beyond the preview shutter limit or regeneration. */
         val viewfinderReference: RawLegacyExposurePreviewFrame?,
         /** Rotation that maps the sensor/model grid into [viewfinderReference] orientation. */
         val outputRotation: Int,

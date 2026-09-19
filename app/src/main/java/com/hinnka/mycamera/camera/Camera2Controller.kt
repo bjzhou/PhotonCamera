@@ -2916,24 +2916,26 @@ class Camera2Controller(private val context: Context) {
             // 保护：如果画面全黑，避免除以0或Log错误
             if (rawAvgLuminance < 1.0) return
 
-            // --- 2. 关键修复：预览流亮度补偿 ---
-            // 预览流的曝光时间被帧率限制了（比如最长只能 33ms）
-            // 但实际拍摄参数可能是 100ms。我们需要推算“如果预览流能曝光 100ms，亮度会是多少”
+            // --- 2. 按自动调整的参数选择测光域 ---
             val currentShutter = currentState.shutterSpeed
             val clampedPreviewTime = currentShutter.coerceAtMost(getMaxPreviewExposureTime(currentState))
-
-            // 补偿系数：如果当前设定快门是 66ms，预览限制是 33ms，那么真实亮度应该是预览亮度的 2 倍
-            val exposureRatio = currentShutter.toDouble() / clampedPreviewTime.toDouble()
-
-            // 【修正】使用补偿后的亮度来与目标值对比
-            val estimatedRealLuminance = rawAvgLuminance * exposureRatio
+            // 手动快门、自动 ISO：以实际预览亮度为目标。超过预览快门上限后，
+            // 不能用拍摄快门放大测光亮度，否则会持续降低 ISO，反而压暗取景器。
+            // 手动 ISO、自动快门：仍需换算拍摄亮度，才能在预览曝光不再变化时
+            // 求出正确的长曝光快门，而不是一直增加到传感器上限。
+            val exposureRatio = if (currentState.isShutterSpeedAuto) {
+                currentShutter.toDouble() / clampedPreviewTime.toDouble()
+            } else {
+                1.0
+            }
+            val meteredLuminance = rawAvgLuminance * exposureRatio
 
             val targetLuminance = 128.0 // Target (Gamma Corrected 18% Gray)
 
             // --- 3. 计算 EV 误差 ---
             // 使用 Log2 计算差了多少档光圈 (Stops)
             // 这是一个更符合人眼和相机光学的度量方式
-            val evErrorStops = ln(targetLuminance / estimatedRealLuminance) / ln(2.0)
+            val evErrorStops = ln(targetLuminance / meteredLuminance) / ln(2.0)
 
             // --- 4. 稳定性控制 (Deadband) ---
             // 如果误差在 +/- 0.3 EV (约 1/3 档) 以内，认为曝光准确，不调整
@@ -2955,7 +2957,7 @@ class Camera2Controller(private val context: Context) {
             var needsUpdate = false
 
             if (currentState.isIsoAuto) {
-                // ISO 优先模式：快门固定，调 ISO
+                // 快门优先模式：快门固定，调 ISO
                 val calculatedIso = (currentState.iso * correctionFactor).toInt()
                 val range = currentState.getIsoRange()
                 val clampedIso = calculatedIso.coerceIn(range.lower, range.upper)
@@ -2966,7 +2968,7 @@ class Camera2Controller(private val context: Context) {
                     needsUpdate = true
                 }
             } else {
-                // 快门优先模式：ISO 固定，调快门
+                // ISO 优先模式：ISO 固定，调快门
                 val calculatedShutter = (currentState.shutterSpeed * correctionFactor).toLong()
                 val range = currentState.getManualShutterSpeedRange()
                 val clampedShutter = calculatedShutter.coerceIn(range.lower, range.upper)
@@ -2979,6 +2981,15 @@ class Camera2Controller(private val context: Context) {
 
             // --- 7. 下发指令 ---
             if (needsUpdate) {
+                PLog.d(
+                    TAG,
+                    "SEMI_AUTO_METERING isoAuto=${currentState.isIsoAuto} " +
+                        "previewLuma=$rawAvgLuminance meteredLuma=$meteredLuminance " +
+                        "exposureRatio=$exposureRatio evError=$evErrorStops " +
+                        "previewShutterNs=$clampedPreviewTime " +
+                        "captureShutterNs=$currentShutter->$newShutter " +
+                        "iso=${currentState.iso}->$newIso",
+                )
                 // 更新状态
                 _state.value = currentState.copy(iso = newIso, shutterSpeed = newShutter)
 
