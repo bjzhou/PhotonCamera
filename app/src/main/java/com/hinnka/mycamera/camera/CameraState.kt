@@ -341,6 +341,7 @@ data class CameraState(
 
     // 是否正在拍照
     val isCapturing: Boolean = false,
+    val photoCaptureProgress: PhotoCaptureProgress? = null,
 
     // LUT 设置
     val currentLutName: String? = null,

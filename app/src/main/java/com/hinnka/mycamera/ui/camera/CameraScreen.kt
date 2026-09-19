@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -34,6 +35,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
@@ -67,6 +69,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
+import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.DevelopAnimationStyle
 import com.hinnka.mycamera.model.CameraPreset
@@ -2015,6 +2018,8 @@ private fun Controls(
                     captureMode = state.captureMode,
                     isProfessionalMode = state.useRaw && state.isRawSupported,
                     isCapturing = state.isCapturing,
+                    photoCaptureProgress = state.photoCaptureProgress,
+                    isBurstCapturing = state.burstCapturing,
                     isVideoRecording = state.videoRecordingState.isRecording,
                     isVideoProcessing = state.videoRecordingState.isProcessing,
                     isPaused = state.videoRecordingState.isPaused,
@@ -2205,6 +2210,8 @@ fun CaptureButton(
     captureMode: CaptureMode,
     isProfessionalMode: Boolean,
     isCapturing: Boolean,
+    photoCaptureProgress: PhotoCaptureProgress?,
+    isBurstCapturing: Boolean,
     isVideoRecording: Boolean,
     isVideoProcessing: Boolean,
     isPaused: Boolean,
@@ -2247,7 +2254,11 @@ fun CaptureButton(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(tween(1500)),
-        label = "livePhotoRotation"
+        label = "burstCaptureRotation"
+    )
+
+    val captureProgress = rememberPhotoCaptureProgress(
+        photoCaptureProgress.takeIf { isCapturing && captureMode == CaptureMode.PHOTO }
     )
 
     val currentDisabled by rememberUpdatedState(
@@ -2330,22 +2341,6 @@ fun CaptureButton(
                 )
         )
 
-        if (isCapturing) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val strokeWidth = 3.dp.toPx()
-                drawArc(
-                    color = Color(0xFFFFD700),
-                    startAngle = rotation - 90f,
-                    sweepAngle = 90f,
-                    useCenter = false,
-                    style = Stroke(
-                        width = strokeWidth,
-                        cap = StrokeCap.Round
-                    )
-                )
-            }
-        }
-
         // Center shutter surface
         val centerPadding by animateDpAsState(
             targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 19.dp else 2.dp,
@@ -2408,6 +2403,25 @@ fun CaptureButton(
                 )
             }
         }
+        if (isCapturing && captureMode == CaptureMode.PHOTO) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeWidth = 3.dp.toPx()
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.14f),
+                    radius = (size.minDimension - strokeWidth) / 2f,
+                    style = Stroke(width = strokeWidth)
+                )
+                drawArc(
+                    color = Color(0xFFFFD700),
+                    startAngle = if (isBurstCapturing) rotation - 90f else -90f,
+                    sweepAngle = if (isBurstCapturing) 90f else 360f * captureProgress.value,
+                    useCenter = false,
+                    topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f),
+                    size = Size(size.width - strokeWidth, size.height - strokeWidth),
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                )
+            }
+        }
         if (captureMode == CaptureMode.VIDEO && isVideoProcessing) {
             CircularProgressIndicator(
                 modifier = Modifier.size(34.dp),
@@ -2416,6 +2430,22 @@ fun CaptureButton(
             )
         }
     }
+}
+
+@Composable
+private fun rememberPhotoCaptureProgress(progress: PhotoCaptureProgress?): State<Float> {
+    val fraction = remember(progress) {
+        mutableFloatStateOf(progress?.fractionAt(SystemClock.elapsedRealtimeNanos()) ?: 0f)
+    }
+    LaunchedEffect(progress) {
+        if (progress == null) return@LaunchedEffect
+        while (isActive && fraction.floatValue < 1f) {
+            withFrameNanos {
+                fraction.floatValue = progress.fractionAt(SystemClock.elapsedRealtimeNanos())
+            }
+        }
+    }
+    return fraction
 }
 
 @Composable

@@ -531,6 +531,7 @@ class Camera2Controller(private val context: Context) {
     private fun failPhotoCapture(shot: PhotoCaptureContext, reason: String, drainQueue: Boolean = true) {
         if (shot.failed || shot.delivered) return
         shot.failed = true
+        clearPhotoCaptureProgress(shot)
         shot.timeout?.let { cameraHandler?.removeCallbacks(it) }
         shot.timeout = null
         shot.timestamps.forEach { timestamp ->
@@ -581,6 +582,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun finishPhotoCaptureSequence(shot: PhotoCaptureContext, successful: Boolean) {
         shot.sequenceCompleted = true
+        clearPhotoCaptureProgress(shot)
         if (!successful) failPhotoCapture(shot, "capture sequence aborted")
         if (shot.failed) settleFailedPhotoCapture(shot)
         if (activePhotoCapture === shot) {
@@ -677,16 +679,45 @@ class Camera2Controller(private val context: Context) {
         deliverNextPhotoCaptureIfReady()
     }
 
+    private fun clearPhotoCaptureProgress(shot: PhotoCaptureContext) {
+        _state.update {
+            if (it.photoCaptureProgress?.captureId == shot.id) {
+                it.copy(photoCaptureProgress = null)
+            } else {
+                it
+            }
+        }
+    }
+
     private fun submitPhotoCapture(
         shot: PhotoCaptureContext,
         session: CameraCaptureSession,
         requests: List<CaptureRequest>,
+        baseExposureResult: CaptureResult? = lastCaptureResult,
     ) {
         check(requests.size == shot.expectedFrames) {
             "Capture ${shot.id} reserved ${shot.expectedFrames} frames but built ${requests.size} requests"
         }
         shot.livePhotoStartTimestampUs = livePhotoVideoStartTimestampUs
         val captureSurface = shot.reader.surface
+        // Sum the actual request plan so HDR frames with different exposures contribute
+        // their own duration. Keep one timeline for the entire photo, including frame gaps.
+        val estimatedDurationNs = requests.sumOf { request ->
+            val manualExposure = request.get(CaptureRequest.CONTROL_AE_MODE) ==
+                CaptureRequest.CONTROL_AE_MODE_OFF
+            val exposureNs = if (manualExposure) {
+                request.get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: shot.state.shutterSpeed
+            } else {
+                baseExposureResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: shot.state.shutterSpeed
+            }
+            val frameDurationNs = if (manualExposure) {
+                request.get(CaptureRequest.SENSOR_FRAME_DURATION)
+            } else {
+                baseExposureResult?.get(CaptureResult.SENSOR_FRAME_DURATION)
+            }
+            maxOf(exposureNs, frameDurationNs ?: 0L, 1L)
+        }
+        var progressStarted = false
         val callback = object : CameraCaptureSession.CaptureCallback() {
             override fun onCaptureStarted(
                 session: CameraCaptureSession,
@@ -702,6 +733,16 @@ class Camera2Controller(private val context: Context) {
                 shot.timestampByFrameNumber[frameNumber] = timestamp
                 pendingCaptureStartedTimestamps[frameNumber] = timestamp
                 registerPhotoTimestamp(shot, timestamp)
+                if (!progressStarted && activePhotoCapture === shot && !shot.continuousBurst && !shot.failed) {
+                    progressStarted = true
+                    val progress = PhotoCaptureProgress(
+                        captureId = shot.id,
+                        // Sensor timestamps may use a different clock from elapsedRealtime.
+                        startedElapsedNs = SystemClock.elapsedRealtimeNanos(),
+                        estimatedDurationNs = estimatedDurationNs,
+                    )
+                    _state.update { it.copy(photoCaptureProgress = progress) }
+                }
             }
 
             override fun onCaptureCompleted(
@@ -7411,7 +7452,7 @@ class Camera2Controller(private val context: Context) {
         if (captureSession == null) return
         val shot = reservePhotoCapture(_state.value, reader) ?: return
         activePhotoCapture = shot
-        _state.update { it.copy(isCapturing = true) }
+        _state.update { it.copy(isCapturing = true, photoCaptureProgress = null) }
         try {
             onAccepted?.invoke(shot.id)
         } catch (e: Exception) {
@@ -7520,7 +7561,7 @@ class Camera2Controller(private val context: Context) {
 
             val shot = activePhotoCapture ?: error("Missing HDR capture reservation")
             shot.state = shot.state.copy(hdrBracketCapturing = true, hdrBracketFrameCount = hdrFrameCount)
-            submitPhotoCapture(shot, session, requests)
+            submitPhotoCapture(shot, session, requests, baseExposureResult)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to capture HDR bracket", e)
             _state.value = _state.value.copy(
@@ -8188,10 +8229,10 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 val shot = activePhotoCapture ?: error("Missing multi-frame capture reservation")
-                submitPhotoCapture(shot, session, requests)
+                submitPhotoCapture(shot, session, requests, baseExposureResult)
             } else {
                 val shot = activePhotoCapture ?: error("Missing single capture reservation")
-                submitPhotoCapture(shot, session, listOf(captureBuilder.build()))
+                submitPhotoCapture(shot, session, listOf(captureBuilder.build()), baseExposureResult)
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to perform capture", e)
