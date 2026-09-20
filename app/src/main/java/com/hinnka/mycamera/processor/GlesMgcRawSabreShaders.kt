@@ -408,26 +408,7 @@ internal object GlesMgcRawSabreShaders {
                 motionPrior) {
                 robustnessBoost = uExtraMotionRobustnessBoost;
             }
-            // Keep the symmetric V25 bicubic guides: an identical texture must not reject
-            // itself. Tighten only the measured-structure allowance, not the noise floor or
-            // the color-difference thresholds shared with Spatial/YUV. All values here have
-            // already been converted from guide alpha and scaled for the bicubic filter.
-            float detailNoise = greenOnly
-                ? max(referenceNoise.y, currentNoise.y)
-                : max(
-                    dot(referenceNoise, vec3(1.0 / 3.0)),
-                    dot(currentNoise, vec3(1.0 / 3.0))
-                );
-            float detailConfidence = smoothstep(
-                ${MgcSabreRejectionTuning.SABRE_DETAIL_VARIANCE_RATIO_START} * detailNoise,
-                ${MgcSabreRejectionTuning.SABRE_DETAIL_VARIANCE_RATIO_END} * detailNoise,
-                pixelVariance
-            );
-            pixelVariance *= mix(
-                2.0,
-                ${MgcSabreRejectionTuning.SABRE_DETAIL_VARIANCE_SCALE},
-                detailConfidence
-            );
+            pixelVariance *= 2.0;
             vec3 combinedNoise = referenceNoise + currentNoise;
             vec3 difference = current.rgb - reference.rgb;
             vec3 differenceSquared = max(

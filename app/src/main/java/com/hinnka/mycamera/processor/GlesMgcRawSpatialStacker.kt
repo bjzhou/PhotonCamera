@@ -2224,9 +2224,6 @@ internal class GlesMgcRawSpatialStacker(
                     "forceReferenceColorRgb=${sabreKernelParameters.forceReferenceColorRgb} " +
                     "mergeGradientThreshold=${PhotonCoreImagingTuning.fusion.mergeGradientThreshold ?: "adaptive"} " +
                     "guideColorSpace=sqrt noiseLut=qmc64x10 rejectionGuideFilter=bicubic-both-frames " +
-                    "detailVarianceScale=${MgcSabreRejectionTuning.SABRE_DETAIL_VARIANCE_SCALE} " +
-                    "detailVarianceNoiseRatio=${MgcSabreRejectionTuning.SABRE_DETAIL_VARIANCE_RATIO_START}.." +
-                    "${MgcSabreRejectionTuning.SABRE_DETAIL_VARIANCE_RATIO_END} " +
                     "alignmentInputGain=${referenceCalibration.alignmentGain} " +
                     "alignmentDomain=signed-s16",
             )

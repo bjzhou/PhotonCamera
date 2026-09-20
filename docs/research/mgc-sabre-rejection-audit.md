@@ -1,9 +1,5 @@
 # MGC V25 Sabre 区域误拒绝排查
 
-本文记录双侧 bicubic 修复时与 V25 的历史等价验证。后续仅对 Classic Sabre
-增加了[结构区域拒绝调校](../mgc-sabre-detail-rejection.md)，保留对称滤波；当前生产
-shader 的结构接纳权重有意偏离 V25，历史逐字节一致结论不覆盖这项调校。
-
 ## 结论
 
 经典 Sabre 的基准帧 reference-color 预滤波 pass 缺失，且 alternate guide 使用了
@@ -67,9 +63,6 @@ R8 rejection MRT、R8 DilateMask 和回读。
 这证明静止纹理误拒绝被消除，真实差异的拒绝仍然有效；不能替代 Android GPU 和实拍验证。
 
 ## 复跑
-
-以下原版等价流程应使用历史 1.28.0.1 源码/当时导出的 shader，并为验证脚本增加
-`--expect-v25`。当前生产 shader 已有结构调校，应按后续调校文档运行默认验证模式。
 
 先按项目要求在沙箱外执行 Kotlin 编译，再从项目根目录运行以下 PowerShell。
 基线提交固定为修复前的 `2cf1e3cb8963412343484c593deaf9d2665e5810`。
