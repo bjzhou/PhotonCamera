@@ -2591,10 +2591,7 @@ class Camera2Controller(private val context: Context) {
                 availableColorCorrectionModes = loadAvailableColorCorrectionModes(openCharacteristics)
                 awbColorTemperatureRange = loadAwbColorTemperatureRange(openCharacteristics)
                 lastWhiteBalanceResult = null
-                isRawSupported = isRawOutputSupported(capabilityCharacteristics) &&
-                        (outputPhysicalCameraId?.let {
-                            !isPhysicalOutputProfileFailed(it, ImageFormat.RAW_SENSOR)
-                        } ?: true)
+                isRawSupported = resolveRawCaptureOutput(capabilityCharacteristics, outputPhysicalCameraId) != null
 
                 availableAeModes =
                     openCharacteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
@@ -2711,8 +2708,8 @@ class Camera2Controller(private val context: Context) {
                 } else {
                     getCameraCharacteristicsCached(outputCameraIdForStreams)
                 }
-                var rawCaptureSize = if (effectivelyUseRaw) {
-                    CameraUtils.getRawCaptureSize(outputCharacteristicsForStreams)
+                var rawOutput = if (effectivelyUseRaw) {
+                    resolveRawCaptureOutput(outputCharacteristicsForStreams, outputPhysicalCameraId)
                 } else {
                     null
                 }
@@ -2720,8 +2717,8 @@ class Camera2Controller(private val context: Context) {
                         isP010Supported &&
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                         state.value.useP010
-                var captureFormat = if (rawCaptureSize != null) {
-                    ImageFormat.RAW_SENSOR
+                var captureFormat = if (rawOutput != null) {
+                    rawOutput.format
                 } else if (wantsP010 && isOutputFormatAdvertised(outputCharacteristicsForStreams, ImageFormat.YCBCR_P010)) {
                     ImageFormat.YCBCR_P010
                 } else {
@@ -2739,13 +2736,13 @@ class Camera2Controller(private val context: Context) {
                     activeOutputPhysicalCameraId = null
                     outputCameraIdForStreams = openCameraId
                     outputCharacteristicsForStreams = openCharacteristics
-                    rawCaptureSize = null
+                    rawOutput = null
                     captureFormat = ImageFormat.YUV_420_888
                 }
                 previewSize = CameraUtils.getFixedPreviewSize(outputCharacteristicsForStreams, aspectRatio)
                 surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
-                val captureSize = if (captureFormat == ImageFormat.RAW_SENSOR && rawCaptureSize != null) {
-                    rawCaptureSize
+                val captureSize = if (rawOutput != null) {
+                    rawOutput.size
                 } else {
                     CameraUtils.getBestCaptureSize(outputCharacteristicsForStreams, aspectRatio, captureFormat)
                 }
@@ -2768,7 +2765,8 @@ class Camera2Controller(private val context: Context) {
                     TAG,
                     "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${
                         when (captureFormat) {
-                            ImageFormat.RAW_SENSOR -> "RAW"
+                            ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
+                            ImageFormat.RAW10 -> "RAW10"
                             ImageFormat.YCBCR_P010 -> "P010"
                             else -> "YUV"
                         }
@@ -3450,6 +3448,25 @@ class Camera2Controller(private val context: Context) {
     ): Boolean {
         val failedPhysicalCameraId = activeOutputPhysicalCameraId ?: return false
         rememberPhysicalOutputProfileFailure(failedPhysicalCameraId, reason = reason)
+        if (isRawCaptureReader(imageReader)) {
+            val remainingRawOutput = getCameraCharacteristicsOrNull(failedPhysicalCameraId, "RAW output retry")
+                ?.let { resolveRawCaptureOutput(it, failedPhysicalCameraId) }
+            val surfaceTexture = previewSurfaceTexture
+            val handler = cameraHandler
+            if (remainingRawOutput != null && surfaceTexture != null && handler != null) {
+                PLog.w(
+                    TAG,
+                    "Retrying physical RAW output: physicalCameraId=$failedPhysicalCameraId, " +
+                            "format=${imageFormatToString(remainingRawOutput.format)}, reason=$reason"
+                )
+                // The other format needs its own ImageReader and advertised dimensions.
+                return handler.post {
+                    if (openGeneration == cameraOpenGeneration) {
+                        openCamera(surfaceTexture)
+                    }
+                }
+            }
+        }
         PLog.w(
             TAG,
             "Retrying preview session without physical output binding: " +
@@ -3622,9 +3639,10 @@ class Camera2Controller(private val context: Context) {
         if (selectedPhysicalCameraId != key.physicalCameraId) return
 
         when (key.readerFormat) {
-            ImageFormat.RAW_SENSOR -> {
-                isRawSupported = false
-                _state.value = _state.value.copy(isRawSupported = false)
+            ImageFormat.RAW_SENSOR, ImageFormat.RAW10 -> {
+                isRawSupported = getCameraCharacteristicsOrNull(key.physicalCameraId, "RAW output support")
+                    ?.let { resolveRawCaptureOutput(it, key.physicalCameraId) } != null
+                _state.value = _state.value.copy(isRawSupported = isRawSupported)
             }
 
             ImageFormat.YCBCR_P010 -> {
@@ -3645,8 +3663,11 @@ class Camera2Controller(private val context: Context) {
         return outputFormats.contains(format)
     }
 
-    private fun isRawOutputSupported(characteristics: CameraCharacteristics): Boolean {
-        return CameraUtils.getRawCaptureSize(characteristics) != null
+    private fun resolveRawCaptureOutput(
+        characteristics: CameraCharacteristics,
+        physicalCameraId: String?,
+    ): CameraUtils.RawCaptureOutput? = CameraUtils.getRawCaptureOutput(characteristics) { format ->
+        physicalCameraId == null || !isPhysicalOutputProfileFailed(physicalCameraId, format)
     }
 
     private fun onSessionConfigured(
@@ -3701,6 +3722,7 @@ class Camera2Controller(private val context: Context) {
         return when (format) {
             NO_IMAGE_READER_FORMAT -> "NO_IMAGE_READER"
             ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
+            ImageFormat.RAW10 -> "RAW10"
             ImageFormat.PRIVATE -> "PRIVATE"
             ImageFormat.YCBCR_P010 -> "YCBCR_P010"
             ImageFormat.YUV_420_888 -> "YUV_420_888"
@@ -3710,7 +3732,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun isRawCaptureReader(reader: ImageReader?): Boolean {
-        return reader?.imageFormat == ImageFormat.RAW_SENSOR
+        return reader?.imageFormat == ImageFormat.RAW_SENSOR || reader?.imageFormat == ImageFormat.RAW10
     }
 
     /**

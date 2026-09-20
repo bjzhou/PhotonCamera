@@ -3,7 +3,6 @@ package com.hinnka.mycamera.processor
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.graphics.ImageFormat
-import android.media.Image
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -1060,7 +1059,7 @@ class GlesYuvStacker(
     }
 
     private fun validateDirectPlaneUpload(
-        plane: Image.Plane,
+        plane: SafeImage.Plane,
         planeWidth: Int,
         planeHeight: Int,
         sampleBytes: Int,
@@ -1074,7 +1073,7 @@ class GlesYuvStacker(
     }
 
     private fun canUploadInterleavedChroma(
-        plane: Image.Plane,
+        plane: SafeImage.Plane,
         sampleBytes: Int,
         channelCount: Int,
         label: String,
@@ -1103,7 +1102,7 @@ class GlesYuvStacker(
     }
 
     private fun validatePlaneBuffer(
-        plane: Image.Plane,
+        plane: SafeImage.Plane,
         planeWidth: Int,
         planeHeight: Int,
         sampleBytes: Int,
@@ -1134,8 +1133,8 @@ class GlesYuvStacker(
     }
 
     private fun uploadStridedChromaPlanes(
-        cbPlane: Image.Plane,
-        crPlane: Image.Plane,
+        cbPlane: SafeImage.Plane,
+        crPlane: SafeImage.Plane,
         outputTexture: Int,
         sampleBytes: Int,
         internalFormat: Int,
@@ -1193,7 +1192,7 @@ class GlesYuvStacker(
     }
 
     private fun validatePlaneRowsUpload(
-        plane: Image.Plane,
+        plane: SafeImage.Plane,
         uploadWidth: Int,
         uploadHeight: Int,
         sampleBytes: Int,

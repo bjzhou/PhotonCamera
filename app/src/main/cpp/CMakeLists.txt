@@ -471,6 +471,8 @@ add_library(my-native-lib SHARED
     gles_hardware_buffer_jni.cpp
     dng_hdrnet_pgtm_jni.cpp
     raw_signal_stats_jni.cpp
+    raw10_unpack.cpp
+    raw10_unpack_jni.cpp
     raw_legacy_auto_exposure_solver.cpp
     mgc_strength_map_scaler.cpp
     mgc_eis_reconstruction_jni.cpp

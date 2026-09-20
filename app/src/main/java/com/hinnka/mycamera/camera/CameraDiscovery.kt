@@ -1538,9 +1538,7 @@ class CameraDiscovery(private val context: Context) {
             intrinsicZoomRatio = intrinsicZoomRatio,
             hardwareLevel = hardwareLevel,
             supportsManualProcessing = checkManualProcessingSupport(characteristics),
-            supportsRaw = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(
-                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW
-            ) == true,
+            supportsRaw = CameraUtils.getRawCaptureOutput(characteristics) != null,
             isCustomLensId = isCustomLensId,
             minimumFocusDistance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
         )

@@ -158,10 +158,31 @@ object CameraUtils {
         }
     }
 
-    fun getRawCaptureSize(characteristics: CameraCharacteristics): Size? {
+    data class RawCaptureOutput(val format: Int, val size: Size)
+
+    /** Prefer unpacked sensor output, but accept packed RAW10 independently of the RAW capability flag. */
+    fun getRawCaptureOutput(
+        characteristics: CameraCharacteristics,
+        isFormatAllowed: (Int) -> Boolean = { true },
+    ): RawCaptureOutput? {
+        for (format in intArrayOf(ImageFormat.RAW_SENSOR, ImageFormat.RAW10)) {
+            if (!isFormatAllowed(format)) continue
+            val size = getRawCaptureSize(characteristics, format) ?: continue
+            return RawCaptureOutput(format, size)
+        }
+        return null
+    }
+
+    fun getRawCaptureSize(characteristics: CameraCharacteristics): Size? =
+        getRawCaptureOutput(characteristics)?.size
+
+    private fun getRawCaptureSize(characteristics: CameraCharacteristics, format: Int): Size? {
         return try {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR) ?: return null
+            val sizes = map?.getOutputSizes(format)?.filter {
+                it.width > 0 && it.height > 0 &&
+                        (format != ImageFormat.RAW10 || (it.width % 4 == 0 && it.height % 2 == 0))
+            } ?: return null
             
             if (sizes.isEmpty()) return null
 
@@ -177,7 +198,7 @@ object CameraUtils {
             // Return the best match if found, otherwise fall back to the largest available size
             bestMatch ?: sizes.maxByOrNull { it.width * it.height }
         } catch (e: Exception) {
-            PLog.e("CameraUtils", "Failed to get RAW capture size: ${e.message}")
+            PLog.e("CameraUtils", "Failed to get RAW capture size for format=$format: ${e.message}")
             null
         }
     }
