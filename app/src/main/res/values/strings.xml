@@ -278,8 +278,8 @@
     <string name="settings_raw_max_output_scale">HDR+ output scale</string>
     <string name="settings_raw_max_output_scale_description">Adjusts the size of HDR+ photos. A higher scale produces larger photos and files, and may take longer to process.</string>
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
-    <string name="settings_raw_output_upscale_mode">Output upscaling</string>
-    <string name="settings_raw_output_upscale_mode_description">Selects the algorithm that magnifies the professional-mode output. RAISR and Lanczos-3 magnification are mutually exclusive.</string>
+    <string name="settings_raw_output_upscale_mode">Super resolution</string>
+    <string name="settings_raw_output_upscale_mode_description">Selects the super-resolution algorithm for professional mode. RAISR and Lanczos-3 magnification are mutually exclusive.</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
     <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
     <string name="settings_raw_max_output_scale_description_raisr">RAISR magnifies only at 2×, so the output scale is fixed while it is selected.</string>

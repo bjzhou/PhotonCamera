@@ -268,8 +268,8 @@
     <string name="settings_raw_max_output_scale">HDR+ 输出倍率</string>
     <string name="settings_raw_max_output_scale_description">调整 HDR+ 照片的输出尺寸。倍率越高，照片尺寸和文件体积越大，处理时间也可能更长。</string>
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
-    <string name="settings_raw_output_upscale_mode">输出放大算法</string>
-    <string name="settings_raw_output_upscale_mode_description">选择专业模式输出的放大算法。RAISR 与 Lanczos-3 倍率放大互斥。</string>
+    <string name="settings_raw_output_upscale_mode">超分</string>
+    <string name="settings_raw_output_upscale_mode_description">选择专业模式的超分算法。RAISR 与 Lanczos-3 倍率放大互斥。</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
     <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
     <string name="settings_raw_max_output_scale_description_raisr">RAISR 仅在 2× 下放大，选中期间输出倍率固定为 2×。</string>
