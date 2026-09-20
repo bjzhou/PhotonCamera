@@ -17,6 +17,9 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
 
     data class ReadTiming(val submitMs: Double, val mapMs: Double)
 
+    /** Allows read-only consumers to retain a CPU-buffer path on allocation/map exhaustion. */
+    class BufferUnavailableException(message: String) : IllegalStateException(message)
+
     private var buffer = 0
     private var capacity = 0
     private var framebuffer = 0
@@ -40,7 +43,13 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
         try {
             if (capacity < bytes) {
                 GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, bytes, null, GLES30.GL_STREAM_COPY)
-                checkGl("allocate float transfer")
+                val error = GLES30.glGetError()
+                if (error == GLES30.GL_OUT_OF_MEMORY) {
+                    throw BufferUnavailableException("Unable to allocate $bytes transfer bytes")
+                }
+                check(error == GLES30.GL_NO_ERROR) {
+                    "allocate float transfer: GL error 0x${error.toString(16)}"
+                }
                 capacity = bytes
             }
         } finally {
@@ -52,6 +61,7 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
              label: String,
              writable: Boolean = true,
              beforeMap: (() -> Unit)? = null,
+             logTag: String = TAG,
              consume: (ByteBuffer) -> Unit): ReadTiming {
         val start = System.nanoTime()
         val inputBytes = width.toLong() * height * layout.bytesPerPixel
@@ -106,8 +116,15 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
             val mapStart = System.nanoTime()
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
             val access = GLES30.GL_MAP_READ_BIT or (if (writable) GLES30.GL_MAP_WRITE_BIT else 0)
-            val mapped = checkNotNull(GLES30.glMapBufferRange(GLES30.GL_PIXEL_PACK_BUFFER,
-                0, bytes, access) as? ByteBuffer)
+            val mapped = GLES30.glMapBufferRange(GLES30.GL_PIXEL_PACK_BUFFER,
+                0, bytes, access) as? ByteBuffer
+            if (mapped == null) {
+                val error = GLES30.glGetError()
+                check(error == GLES30.GL_NO_ERROR || error == GLES30.GL_OUT_OF_MEMORY) {
+                    "map float transfer: GL error 0x${error.toString(16)}"
+                }
+                throw BufferUnavailableException("Unable to map $bytes transfer bytes")
+            }
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
             val mapMs = elapsedMs(mapStart)
             val nativeStart = System.nanoTime()
@@ -122,7 +139,7 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
                 check(GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)) { "Invalid float transfer mapping" }
                 unmapMs = elapsedMs(unmapStart)
             }
-            PLog.i(TAG, "$label layout=$layout size=${width}x$height inputBytes=$inputBytes capacityBytes=$bytes " +
+            PLog.i(logTag, "$label layout=$layout size=${width}x$height inputBytes=$inputBytes capacityBytes=$bytes " +
                 "transfer=${if (stripeRows > 0) "SSBO" else "PBO"} stripeRows=$stripeRows " +
                 "maxSsboBytes=$maxSsboBytes allocationMs=$allocationMs upstreamGpuWaitMs=$upstreamWaitMs " +
                 "transferSubmitMs=$submitMs mapMs=$mapMs nativeMs=$nativeMs unmapMs=$unmapMs " +

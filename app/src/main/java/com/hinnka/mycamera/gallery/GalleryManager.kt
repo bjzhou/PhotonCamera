@@ -409,6 +409,30 @@ object GalleryManager {
         }
     }
 
+    private fun markProcessingPhotoDisplayReady(
+        photoId: String,
+        imageFile: File,
+        metadata: MediaMetadata,
+        isRawSource: Boolean = false,
+    ) {
+        // Keep the entry until capture cleanup finishes so edits/deletion cannot race writers.
+        _processingPhotos.update { current ->
+            val pending = current[photoId] ?: return@update current
+            current + (photoId to pending.copy(
+                photo = pending.photo.copy(
+                    uri = Uri.fromFile(imageFile),
+                    size = imageFile.length(),
+                    width = metadata.width,
+                    height = metadata.height,
+                    metadata = metadata,
+                ),
+                isDisplayReady = true,
+                isRawSource = isRawSource,
+            ))
+        }
+        PLog.d(TAG, "Capture photo ready for display: $photoId, raw=$isRawSource")
+    }
+
     suspend fun finishProcessingPhoto(context: Context, photoId: String, saved: Boolean) {
         if (photoId !in _processingPhotos.value) return
         withContext(Dispatchers.IO) {
@@ -1990,8 +2014,17 @@ object GalleryManager {
     suspend fun saveBokehPhoto(context: Context, photoId: String, bitmap: Bitmap) = withContext(Dispatchers.IO) {
         val photoDir = getPhotoDir(context, photoId, true)
         val bokehFile = File(photoDir, BOKEH_FILE)
-        FileOutputStream(bokehFile).use { outputStream ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+        // Detail previews can read this file while capture post-processing continues.
+        val tempFile = File.createTempFile("bokeh_", ".jpg", photoDir)
+        try {
+            val written = FileOutputStream(tempFile).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+            }
+            if (!written || !tempFile.renameTo(bokehFile)) {
+                throw IOException("Failed to publish bokeh JPEG for $photoId")
+            }
+        } finally {
+            tempFile.delete()
         }
     }
 
@@ -2076,6 +2109,7 @@ object GalleryManager {
             val originalFile = writeInternalOriginalPhoto(photoDir, checkNotNull(previewBitmap), photoQuality)
                 ?: return@withContext
             PLog.d(TAG, "saveYuvPhoto internal original saved=${originalFile.name}")
+            markProcessingPhotoDisplayReady(photoId, originalFile, metadata)
             bokehBitmap = renderAndSaveBokehPhoto(context, photoId, metadata, checkNotNull(previewBitmap))
 
             preparedUltraHdrSource = photoProcessor.prepareUltraHdrSourceFromProcessedSdr(
@@ -2560,6 +2594,7 @@ object GalleryManager {
                 throw IOException("Failed to publish final JPEG for $photoId")
             }
             saveMetadata(context, photoId, updatedMetadata)
+            markProcessingPhotoDisplayReady(photoId, photoFile, updatedMetadata, isRawSource = true)
             val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
             val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {
                 photoProcessor.prepareUltraHdrSourceFromRawResult(
@@ -2739,10 +2774,14 @@ object GalleryManager {
             val tempFile = File(photoDir, "temp.jpg")
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
-            FileOutputStream(tempFile).use { outputStream ->
+            val jpegWritten = FileOutputStream(tempFile).use { outputStream ->
                 writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
-            tempFile.renameTo(photoFile)
+            if (!jpegWritten || !tempFile.renameTo(photoFile)) {
+                tempFile.delete()
+                throw IOException("Failed to publish final bitmap JPEG for $photoId")
+            }
+            markProcessingPhotoDisplayReady(photoId, photoFile, metadata)
 //            generateBokehPhoto(context, photoId, metadata, bitmap)
             buildDetailHdrCache(
                 context = context,
@@ -3178,6 +3217,7 @@ object GalleryManager {
 
             val originalFile = writeInternalOriginalPhoto(photoDir, previewBitmap, photoQuality) ?: return@withContext
             PLog.d(TAG, "saveYuvStackedPhoto internal original saved=${originalFile.name}")
+            markProcessingPhotoDisplayReady(photoId, originalFile, metadata)
             generateBokehPhoto(context, photoId, metadata, previewBitmap)
             // Auto Save
             if (shouldAutoSave) {
@@ -3936,6 +3976,7 @@ object GalleryManager {
             }
             saveMetadata(context, photoId, updatedMetadata)
             PLog.i(TAG, "RAW output schedule stage=SDR_JPEG_PUBLISHED")
+            markProcessingPhotoDisplayReady(photoId, photoFile, updatedMetadata, isRawSource = true)
             pendingDngWrite?.let { write ->
                 PLog.i(
                     TAG,
@@ -4151,11 +4192,15 @@ object GalleryManager {
             chromaNoiseReduction = rawChromaNoiseReduction
         )
 
-        FileOutputStream(tempFile).use { outputStream ->
+        val jpegWritten = FileOutputStream(tempFile).use { outputStream ->
             writeFinalJpeg(bitmap, outputStream, photoQuality)
         }
-        tempFile.renameTo(photoFile)
+        if (!jpegWritten || !tempFile.renameTo(photoFile)) {
+            tempFile.delete()
+            throw IOException("Failed to publish final RAW JPEG for $photoId")
+        }
         saveMetadata(context, photoId, updatedMetadata)
+        markProcessingPhotoDisplayReady(photoId, photoFile, updatedMetadata, isRawSource = true)
         val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
 
         val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {

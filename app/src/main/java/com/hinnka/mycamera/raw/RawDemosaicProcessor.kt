@@ -1411,6 +1411,9 @@ class RawDemosaicProcessor {
     private val sharpenPass = RawSharpenPass(fullscreenQuad)
     private val mgcSharpen = MgcSharpen()
     private val denoiseTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
+    /** Final SDR/HDR pixels keep the RGBA16F layout all the way into the Bitmap. */
+    private val outputTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
+    private var outputTransferAvailable = false
     /** RAISR reads the finalized tile as float RGBA, so it needs its own transfer layout. */
     private val raisrTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.FLOAT)
     /** Lifted MGC RAISR finish-stage magnification; only used at the 2x output scale. */
@@ -1501,9 +1504,6 @@ class RawDemosaicProcessor {
     private var sharpenHeight = 0
     private var outputFramebufferId = 0
     private var outputTextureId = 0
-    private var readbackPboSize = 0
-    private var readbackBuffer: ByteBuffer? = null
-    private var readbackBufferSize = 0
 
     // denoiseprofile 中间纹理: ping-pong (RGBA16F)
     private var gfTexId = intArrayOf(0, 0)
@@ -1517,8 +1517,6 @@ class RawDemosaicProcessor {
         SharedDepthEstimator.prewarm(context.applicationContext)
         PLog.d(TAG, "RAW DepthEstimator prewarmed, took=${System.currentTimeMillis() - start}ms")
     }
-
-    private var pboId = 0
 
     private var lensShadingTextureId = 0
     private var dummyShadingTextureId = 0
@@ -4113,18 +4111,31 @@ class RawDemosaicProcessor {
                 label = "RAW display output",
                 checkGlError = ::checkGlError,
             )
-            val readStart = System.currentTimeMillis()
+            val materializationStartNs = System.nanoTime()
+            var pixelTransferAndBitmapNs = 0L
+            var raisrUpscaleNs = 0L
+            var fallbackRenderNs = 0L
+            fun readSdrPixels(width: Int, height: Int, label: String = "SDR"): Bitmap? {
+                val startNs = System.nanoTime()
+                return try {
+                    readPixels(width, height, workingColorSpace, label)
+                } finally {
+                    pixelTransferAndBitmapNs += System.nanoTime() - startNs
+                }
+            }
             var raisrApplied = false
             val finalBitmap = if (raisrNativeGeometry != null) {
-                val nativeBitmap = readPixels(
+                val nativeBitmap = readSdrPixels(
                     raisrNativeGeometry.width,
                     raisrNativeGeometry.height,
-                    workingColorSpace,
+                    label = "SDR RAISR input",
                 )
                 val upscaled = nativeBitmap?.let {
+                    val raisrStartNs = System.nanoTime()
                     try {
                         mgcRaisrUpscale.upscale(it)
                     } finally {
+                        raisrUpscaleNs += System.nanoTime() - raisrStartNs
                         it.recycle()
                     }
                 }
@@ -4142,6 +4153,7 @@ class RawDemosaicProcessor {
                         "MGC RAISR unavailable for the untiled ${raisrNativeGeometry.width}x" +
                             "${raisrNativeGeometry.height} output; using Lanczos-3",
                     )
+                    val fallbackRenderStartNs = System.nanoTime()
                     renderOutputPass(
                         actualRotation,
                         actualWidth,
@@ -4150,20 +4162,27 @@ class RawDemosaicProcessor {
                         sourceTextureForOutput,
                         geometry = outputGeometry,
                     )
-                    val fallback = readPixels(finalWidth, finalHeight, workingColorSpace)
+                    fallbackRenderNs += System.nanoTime() - fallbackRenderStartNs
+                    val fallback = readSdrPixels(finalWidth, finalHeight, "SDR Lanczos fallback")
                     if (!includeHdrReference) releaseSharpenFramebuffer()
                     fallback
                 }
             } else {
-                readPixels(finalWidth, finalHeight, workingColorSpace)
+                readSdrPixels(finalWidth, finalHeight)
             }
-            val outputMaterializationMs = System.currentTimeMillis() - readStart
+            val outputMaterializationNs = System.nanoTime() - materializationStartNs
+            val outputOverheadNs = outputMaterializationNs - pixelTransferAndBitmapNs -
+                raisrUpscaleNs - fallbackRenderNs
             PLog.d(
                 TAG,
                 "RAW output materialization timing target=SDR " +
                     "upstreamStackGpuWait=${upstreamStackTiming?.totalWaitMs ?: 0L}ms " +
                     "renderGpuQueueWait=${outputGpuQueueWaitMs}ms " +
-                    "pixelTransferAndBitmap=${outputMaterializationMs}ms",
+                    "pixelTransferAndBitmap=${pixelTransferAndBitmapNs / 1_000_000.0}ms " +
+                    "raisrUpscale=${raisrUpscaleNs / 1_000_000.0}ms raisrApplied=$raisrApplied " +
+                    "fallbackRender=${fallbackRenderNs / 1_000_000.0}ms " +
+                    "outputOverhead=${outputOverheadNs / 1_000_000.0}ms " +
+                    "total=${outputMaterializationNs / 1_000_000.0}ms",
             )
 
             if (finalBitmap == null) {
@@ -4234,6 +4253,7 @@ class RawDemosaicProcessor {
                         android.graphics.ColorSpace.get(
                             android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB
                         ),
+                        label = "HDR",
                     )
                     val hdrMaterializationMs =
                         (System.nanoTime() - hdrReadStartNs) / 1_000_000L
@@ -4615,6 +4635,7 @@ class RawDemosaicProcessor {
                         width = scaledCore.width,
                         height = scaledCore.height,
                         colorSpace = hdrColorSpace,
+                        label = "HDR tile",
                     ) ?: return null
                     try {
                         hdrCanvas?.drawBitmap(
@@ -4831,44 +4852,9 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         colorSpace: android.graphics.ColorSpace,
-    ): Bitmap? {
-        val pixelSize = width * height * 8
-        val pixelBuffer = try {
-            obtainReadbackBuffer(pixelSize)
-        } catch (error: OutOfMemoryError) {
-            PLog.e(TAG, "Unable to allocate RAW tile readback ${width}x$height", error)
-            return null
-        }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
-        pixelBuffer.clear()
-        pixelBuffer.limit(pixelSize)
-        GLES30.glReadPixels(
-            0,
-            0,
-            width,
-            height,
-            GLES30.GL_RGBA,
-            GLES30.GL_HALF_FLOAT,
-            pixelBuffer,
-        )
-        checkGlError("readTilePixels")
-        pixelBuffer.position(0)
-        return try {
-            createBitmap(
-                width,
-                height,
-                Bitmap.Config.RGBA_F16,
-                colorSpace = colorSpace,
-            ).apply {
-                density = Bitmap.DENSITY_NONE
-                copyPixelsFromBuffer(pixelBuffer)
-            }
-        } catch (error: OutOfMemoryError) {
-            PLog.e(TAG, "Unable to allocate RAW tile bitmap ${width}x$height", error)
-            null
-        }
+        label: String = "SDR tile",
+    ): Bitmap? = readPixels(width, height, colorSpace, label)?.apply {
+        density = Bitmap.DENSITY_NONE
     }
 
     private fun releaseTiledRenderFramebuffers() {
@@ -4947,12 +4933,8 @@ class RawDemosaicProcessor {
         }
         outputTextureId = 0
         outputFramebufferId = 0
-        if (pboId != 0) {
-            GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
-            pboId = 0
-            readbackPboSize = 0
-        }
-        releaseReadbackBuffer()
+        outputTransfer.releaseBuffers()
+        outputTransferAvailable = false
         checkGlError("releaseTiledRenderFramebuffers")
     }
 
@@ -7009,6 +6991,21 @@ class RawDemosaicProcessor {
             internalFormat = "RGBA16F",
         )
         checkGlError("setupOutputFramebuffer")
+        // Allocate/compile before rendering; SDR, HDR and smaller edge tiles reuse this storage.
+        val transferPrepareStartNs = System.nanoTime()
+        outputTransferAvailable = try {
+            outputTransfer.prepare(width, height)
+            true
+        } catch (error: RawFloatTextureTransfer.BufferUnavailableException) {
+            outputTransfer.releaseBuffers()
+            PLog.w(TAG, "RAW output transfer allocation unavailable; using direct readback: ${error.message}")
+            false
+        }
+        PLog.i(
+            TAG,
+            "RAW output transfer preparation size=${width}x$height " +
+                "prepareMs=${(System.nanoTime() - transferPrepareStartNs) / 1_000_000.0}",
+        )
     }
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
@@ -9054,117 +9051,91 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * 从当前 outputFramebuffer 读取像素并创建 Bitmap。
-     *
-     * 优先使用 PBO（Pixel Buffer Object）：像素数据存放在 GPU 内存（通过 glMapBufferRange 映射为
-     * native ByteBuffer），完全不占用 Java 堆，避免超分时 fusedBayerBuffer +
-     * pixelBuffer 同时存活导致 Java 堆 OOM（512 MB 设备上三者合计可达 768 MB）。
-     * 若 PBO 分配或 map 失败则降级为直接分配 ByteBuffer。
+     * Pack the finalized texture into a half-float SSBO and map it once for Bitmap copying.
+     * The transfer owns aligned stripes and the framebuffer fallback for unsupported compute.
+     * texelFetch preserves the former readPixels row order, including a tile's partial viewport.
      */
     private fun readPixels(
         width: Int,
         height: Int,
-        colorSpace: android.graphics.ColorSpace
+        colorSpace: android.graphics.ColorSpace,
+        label: String = "SDR",
     ): Bitmap? {
-        val pixelSize = width * height * 8
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
-
-        // --- PBO 路径（避免 Java 堆分配）---
-        if (pboId == 0) {
-            val ids = IntArray(1)
-            GLES30.glGenBuffers(1, ids, 0)
-            pboId = ids[0]
+        var bitmap: Bitmap? = null
+        var completed = false
+        var bitmapAllocationMs = 0.0
+        var bitmapCopyMs = 0.0
+        fun allocateBitmap() {
+            if (bitmap != null) return
+            val startNs = System.nanoTime()
+            bitmap = createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace)
+            bitmapAllocationMs = (System.nanoTime() - startNs) / 1_000_000.0
         }
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
-        if (readbackPboSize != pixelSize) {
-            GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
-            readbackPboSize = if (GLES30.glGetError() == GLES30.GL_NO_ERROR) pixelSize else 0
+        fun copyPixels(pixels: ByteBuffer) {
+            val startNs = System.nanoTime()
+            checkNotNull(bitmap).copyPixelsFromBuffer(pixels)
+            bitmapCopyMs = (System.nanoTime() - startNs) / 1_000_000.0
         }
-        val pboReady = readbackPboSize == pixelSize
-        if (pboReady) {
-            // offset=0：读取写入已绑定的 PBO（GPU→GPU DMA，不阻塞 Java 堆）
-            GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, 0)
-            checkGlError("readPixels PBO glReadPixels")
-            // 映射 PBO 为 native ByteBuffer（不占用 Java 堆）
-            val mappedBuffer = GLES30.glMapBufferRange(
-                GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
-            ) as? ByteBuffer
-            if (mappedBuffer != null) {
-                return try {
-                    createBitmap(
-                        width,
-                        height,
-                        Bitmap.Config.RGBA_F16,
-                        colorSpace = colorSpace
-                    ).also { bmp ->
-                        bmp.copyPixelsFromBuffer(mappedBuffer.order(ByteOrder.nativeOrder()))
-                    }
-                } catch (e: OutOfMemoryError) {
-                    PLog.e(TAG, "OOM creating output bitmap ($width x $height)", e)
-                    null
-                } finally {
-                    GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
-                    GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        try {
+            if (outputTransferAvailable) {
+                try {
+                    outputTransfer.read(
+                        texture = outputTextureId,
+                        width = width,
+                        height = height,
+                        label = "RAW output $label",
+                        writable = false,
+                        // Packing is submitted before CPU Bitmap allocation starts.
+                        beforeMap = ::allocateBitmap,
+                        logTag = TAG,
+                        consume = ::copyPixels,
+                    )
+                } catch (error: RawFloatTextureTransfer.BufferUnavailableException) {
+                    outputTransfer.releaseBuffers()
+                    outputTransferAvailable = false
+                    PLog.w(TAG, "RAW output $label transfer unavailable; using direct readback: ${error.message}")
                 }
             }
-            PLog.w(TAG, "glMapBufferRange returned null, falling back to direct readPixels")
-        } else {
-            PLog.w(
-                TAG,
-                "PBO glBufferData failed for ${pixelSize}B, falling back to direct readPixels"
-            )
-        }
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-
-        // --- 降级路径：直接读到复用的 native ByteBuffer ---
-        val pixelBuffer = try {
-            obtainReadbackBuffer(pixelSize)
-        } catch (e: OutOfMemoryError) {
-            PLog.e(TAG, "OOM allocating pixel buffer ($width x $height, ${pixelSize}B)", e)
-            return null
-        }
-
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixelBuffer)
-        pixelBuffer.position(0)
-        checkGlError("readPixels direct")
-        return try {
-            createBitmap(
-                width,
-                height,
-                Bitmap.Config.RGBA_F16,
-                colorSpace = colorSpace
-            ).also { bitmap ->
-                bitmap.copyPixelsFromBuffer(pixelBuffer)
+            if (!outputTransferAvailable) {
+                // Preserve the existing native-memory fallback specifically for buffer exhaustion.
+                // Shader, dispatch and unmap errors still propagate instead of being hidden.
+                val startNs = System.nanoTime()
+                val byteCount = width.toLong() * height * 8
+                require(byteCount in 1..Int.MAX_VALUE.toLong())
+                val pixels = LargeDirectBuffer.allocate(byteCount, "RAW output $label readback")
+                    ?: throw OutOfMemoryError("Unable to allocate $byteCount output readback bytes")
+                try {
+                    GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, outputFramebufferId)
+                    GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
+                    GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+                    GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+                    GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
+                    GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixels)
+                    checkGlError("RAW output $label direct readback")
+                    PLog.i(TAG, "RAW output $label transfer=DIRECT allocationAndReadMs=" +
+                        (System.nanoTime() - startNs) / 1_000_000.0)
+                    allocateBitmap()
+                    pixels.position(0)
+                    copyPixels(pixels)
+                } finally {
+                    LargeDirectBuffer.free(pixels)
+                    GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, 0)
+                }
             }
-        } catch (e: OutOfMemoryError) {
-            PLog.e(TAG, "OOM creating output bitmap ($width x $height)", e)
-            null
+            PLog.i(
+                TAG,
+                "RAW output bitmap timing target=$label size=${width}x$height " +
+                    "bitmapAllocationMs=$bitmapAllocationMs bitmapCopyMs=$bitmapCopyMs",
+            )
+            completed = true
+            return bitmap
+        } catch (error: OutOfMemoryError) {
+            PLog.e(TAG, "OOM materializing RAW output $label ${width}x$height", error)
+            return null
+        } finally {
+            // Includes transfer/map/unmap failures after Bitmap allocation.
+            if (!completed) bitmap?.recycle()
         }
-    }
-
-    private fun obtainReadbackBuffer(pixelSize: Int): ByteBuffer {
-        val current = readbackBuffer
-        if (current != null && readbackBufferSize >= pixelSize) {
-            current.clear()
-            current.limit(pixelSize)
-            return current
-        }
-        releaseReadbackBuffer()
-        return (com.hinnka.mycamera.utils.DirectBufferAllocator.allocateNative(pixelSize.toLong())
-            ?.order(ByteOrder.nativeOrder())
-            ?: throw OutOfMemoryError("Failed to allocate native direct buffer")).also {
-            readbackBuffer = it
-            readbackBufferSize = pixelSize
-        }
-    }
-
-    private fun releaseReadbackBuffer() {
-        readbackBuffer?.let { com.hinnka.mycamera.utils.DirectBufferAllocator.freeNative(it) }
-        readbackBuffer = null
-        readbackBufferSize = 0
     }
 
     /**
@@ -9350,12 +9321,7 @@ class RawDemosaicProcessor {
             intArrayOf(outputFramebufferId),
             0
         )
-        if (pboId != 0) {
-            GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
-            pboId = 0
-            readbackPboSize = 0
-        }
-        releaseReadbackBuffer()
+        outputTransfer.release()
 
         if (lensShadingTextureId != 0) GLES30.glDeleteTextures(
             1,

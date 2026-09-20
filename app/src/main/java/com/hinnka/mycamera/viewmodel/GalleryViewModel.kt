@@ -818,7 +818,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             GalleryManager.processingPhotos.collect { pending ->
                 val finishedIds = _processingPhotos.value.keys - pending.keys
-                finishedIds.forEach { id ->
+                val displayReadyIds = pending.filter { (id, photo) ->
+                    photo.isDisplayReady && _processingPhotos.value[id]?.isDisplayReady != true
+                }.keys
+                (finishedIds + displayReadyIds).forEach { id ->
                     invalidatePreviewCache(id)
                     photoRefreshKeys[id] = System.currentTimeMillis()
                     if (currentPhotoMetadataId == id) currentPhotoMetadataId = null
@@ -830,7 +833,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 // Keep the preview visible until the same ID has its final file and metadata.
                 _processingPhotos.update { (it - finishedIds) + GalleryManager.processingPhotos.value }
-                if (finishedIds.isNotEmpty()) loadCurrentPhotoMetadata()
+                if (finishedIds.isNotEmpty() || displayReadyIds.isNotEmpty()) loadCurrentPhotoMetadata()
             }
         }
         viewModelScope.launch {
@@ -3444,7 +3447,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@withContext cached
                 }
 
-                val isRawPhoto = GalleryManager.getDngFile(context, photo.id).exists()
+                val isRawPhoto = GalleryManager.processingPhotos.value[photo.id]?.isRawSource == true ||
+                    GalleryManager.getDngFile(context, photo.id).exists()
                 val sourceBackedUri = photo.sourceUri ?: finalMetadata.sourceUri?.toUri()
                 val canLoadExternalUri = isSystemExternal || sourceBackedUri != null
                 val externalUri = sourceBackedUri ?: photo.uri

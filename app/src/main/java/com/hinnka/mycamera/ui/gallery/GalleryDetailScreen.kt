@@ -627,8 +627,9 @@ fun GalleryDetailScreen(
                     val photo = photos.getOrNull(page)
                     if (photo != null) {
                         val processingPhoto = processingPhotos[photo.id]
-                        key(photo.id, processingPhoto != null) {
-                            if (processingPhoto != null) {
+                        val waitingForImage = processingPhoto != null && !processingPhoto.isDisplayReady
+                        key(photo.id, waitingForImage) {
+                            if (processingPhoto != null && waitingForImage) {
                                 ProcessingPhotoPreview(processingPhoto, Modifier.fillMaxSize())
                             } else {
 
