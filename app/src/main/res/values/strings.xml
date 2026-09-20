@@ -1300,4 +1300,11 @@
     <string name="frame_editor_orientation_landscape">Landscape design</string>
     <string name="frame_editor_orientation_portrait">Portrait design</string>
     <string name="frame_editor_orientation_hint">A fixed design rotates the frame to the sides when needed. The photo stays upright.</string>
+    <string name="frame_editor_background_type">Background</string>
+    <string name="frame_editor_background_color">Solid Color</string>
+    <string name="frame_editor_background_blur">Gaussian Blur</string>
+    <string name="frame_editor_background_blur_radius">Blur Amount</string>
+    <string name="frame_editor_background_blur_hint">Fill the background with a blurred copy of the photo. In overlay mode, only the watermark area is blurred.</string>
+    <string name="frame_editor_background_glass">Liquid Glass</string>
+    <string name="frame_editor_background_glass_hint">Overlay a liquid glass capsule near the bottom of the photo, with space on both sides and below.</string>
 </resources>

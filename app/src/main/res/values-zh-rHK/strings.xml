@@ -1246,4 +1246,11 @@
     <string name="settings_retain_capture_settings_description">重新開啟相機時還原曝光補償、快門、ISO、對焦和白平衡及其自動／手動模式。關閉後會清除已儲存的設定。</string>
     <string name="settings_raw_digital_zoom_resampling">數碼焦段解像度還原</string>
     <string name="settings_raw_digital_zoom_resampling_description">將數碼焦段相片重新取樣至目前實體鏡頭的解像度，並套用輸出倍率。</string>
+    <string name="frame_editor_background_type">背景類型</string>
+    <string name="frame_editor_background_color">純色</string>
+    <string name="frame_editor_background_blur">高斯模糊</string>
+    <string name="frame_editor_background_blur_radius">模糊強度</string>
+    <string name="frame_editor_background_blur_hint">使用相片的模糊副本填充背景；疊加模式僅模糊浮水印區域。</string>
+    <string name="frame_editor_background_glass">液態玻璃</string>
+    <string name="frame_editor_background_glass_hint">在相片底部疊加液態玻璃膠囊，並在兩側和底部保留間距。</string>
 </resources>

@@ -329,4 +329,11 @@
     <string name="settings_retain_capture_settings_description">Restaura a compensação de exposição, a velocidade do obturador, o ISO, o foco e o balanço de branco, incluindo os modos automático/manual, ao reabrir a câmera. Desativar esta opção apaga as configurações salvas.</string>
     <string name="settings_raw_digital_zoom_resampling">Restaurar resolução do zoom digital</string>
     <string name="settings_raw_digital_zoom_resampling_description">Reamostra as fotos com zoom digital para a resolução da lente física atual e aplica a escala de saída.</string>
+    <string name="frame_editor_background_type">Tipo de fundo</string>
+    <string name="frame_editor_background_color">Cor sólida</string>
+    <string name="frame_editor_background_blur">Desfoque gaussiano</string>
+    <string name="frame_editor_background_blur_radius">Intensidade do desfoque</string>
+    <string name="frame_editor_background_blur_hint">Preenche o fundo com uma cópia desfocada da foto. No modo de sobreposição, somente a área da marca-d’água fica desfocada.</string>
+    <string name="frame_editor_background_glass">Vidro líquido</string>
+    <string name="frame_editor_background_glass_hint">Sobrepõe uma cápsula de vidro líquido na parte inferior da foto, com espaço nas laterais e abaixo.</string>
 </resources>

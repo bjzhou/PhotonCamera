@@ -15,26 +15,6 @@
   },
   "elements": [
     {
-      "type": "text",
-      "textType": "DEVICE_MODEL",
-      "alignment": "START",
-      "fontSize": 20,
-      "color": "#000000",
-      "fontWeight": "BOLD",
-      "fontFamily": "SlacksideOne.ttf",
-      "line": -1
-    },
-    {
-      "type": "divider",
-      "orientation": "VERTICAL",
-      "alignment": "START",
-      "length": 36,
-      "thickness": 1,
-      "color": "#E0E0E0",
-      "margin": 8,
-      "line": -1
-    },
-    {
       "type": "logo",
       "logoType": "BRAND",
       "alignment": "START",

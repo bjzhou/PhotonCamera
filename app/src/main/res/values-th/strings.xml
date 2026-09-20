@@ -946,4 +946,11 @@
     <string name="settings_retain_capture_settings_description">คืนค่าการชดเชยแสง ความเร็วชัตเตอร์ ISO โฟกัส และสมดุลแสงขาว รวมถึงโหมดอัตโนมัติ/แมนนวลของแต่ละรายการ เมื่อเปิดกล้องอีกครั้ง การปิดตัวเลือกนี้จะล้างการตั้งค่าที่บันทึกไว้</string>
     <string name="settings_raw_digital_zoom_resampling">คืนค่าความละเอียดซูมดิจิทัล</string>
     <string name="settings_raw_digital_zoom_resampling_description">ปรับความละเอียดภาพซูมดิจิทัลให้เท่ากับความละเอียดของเลนส์จริงที่ใช้อยู่ แล้วใช้ตัวคูณขนาดภาพขาออก</string>
+    <string name="frame_editor_background_type">ประเภทพื้นหลัง</string>
+    <string name="frame_editor_background_color">สีพื้น</string>
+    <string name="frame_editor_background_blur">เบลอเกาส์เซียน</string>
+    <string name="frame_editor_background_blur_radius">ระดับความเบลอ</string>
+    <string name="frame_editor_background_blur_hint">เติมพื้นหลังด้วยสำเนาภาพถ่ายที่เบลอ ในโหมดซ้อนทับ จะเบลอเฉพาะบริเวณลายน้ำเท่านั้น</string>
+    <string name="frame_editor_background_glass">กระจกเหลว</string>
+    <string name="frame_editor_background_glass_hint">ซ้อนแคปซูลกระจกเหลวไว้ด้านล่างของภาพ โดยเว้นระยะจากขอบทั้งสองด้านและขอบล่าง</string>
 </resources>

@@ -328,4 +328,11 @@
     <string name="settings_retain_capture_settings_description">Restaure la compensation d’exposition, la vitesse d’obturation, l’ISO, la mise au point et la balance des blancs, ainsi que leurs modes automatique/manuel, à la réouverture de l’appareil photo. La désactivation efface les réglages enregistrés.</string>
     <string name="settings_raw_digital_zoom_resampling">Restaurer la résolution du zoom numérique</string>
     <string name="settings_raw_digital_zoom_resampling_description">Rééchantillonne les photos prises au zoom numérique à la résolution de l’objectif physique actuel, puis applique le facteur de sortie.</string>
+    <string name="frame_editor_background_type">Arrière-plan</string>
+    <string name="frame_editor_background_color">Couleur unie</string>
+    <string name="frame_editor_background_blur">Flou gaussien</string>
+    <string name="frame_editor_background_blur_radius">Intensité du flou</string>
+    <string name="frame_editor_background_blur_hint">Remplit l’arrière-plan avec une copie floutée de la photo. En mode superposition, seule la zone du filigrane est floutée.</string>
+    <string name="frame_editor_background_glass">Verre liquide</string>
+    <string name="frame_editor_background_glass_hint">Superpose une capsule en verre liquide au bas de la photo, avec un espace sur les côtés et en dessous.</string>
 </resources>

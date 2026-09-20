@@ -328,4 +328,11 @@
     <string name="settings_retain_capture_settings_description">Pulihkan kompensasi eksposur, kecepatan rana, ISO, fokus, dan keseimbangan putih beserta mode otomatis/manual masing-masing saat kamera dibuka kembali. Menonaktifkan opsi ini akan menghapus pengaturan yang tersimpan.</string>
     <string name="settings_raw_digital_zoom_resampling">Pulihkan resolusi zoom digital</string>
     <string name="settings_raw_digital_zoom_resampling_description">Mengambil sampel ulang foto zoom digital ke resolusi lensa fisik saat ini, lalu menerapkan skala output.</string>
+    <string name="frame_editor_background_type">Latar belakang</string>
+    <string name="frame_editor_background_color">Warna solid</string>
+    <string name="frame_editor_background_blur">Buram Gaussian</string>
+    <string name="frame_editor_background_blur_radius">Intensitas keburaman</string>
+    <string name="frame_editor_background_blur_hint">Isi latar belakang dengan salinan foto yang diburamkan. Dalam mode overlay, hanya area watermark yang diburamkan.</string>
+    <string name="frame_editor_background_glass">Kaca cair</string>
+    <string name="frame_editor_background_glass_hint">Tampilkan kapsul kaca cair di bagian bawah foto, dengan jarak di kedua sisi dan bagian bawah.</string>
 </resources>

@@ -158,6 +158,8 @@ object FrameTemplateParser {
                 put("orientation", template.layout.orientation.name)
                 put("height", template.layout.heightDp)
                 put("backgroundColor", colorToHex(template.layout.backgroundColor))
+                put("backgroundType", template.layout.effectiveBackgroundType.name)
+                put("backgroundBlurRadius", template.layout.backgroundBlurRadiusDp)
                 put("borderColor", colorToHex(template.layout.borderColor))
                 put("lineSpacing", template.layout.lineSpacingDp)
                 put("padding", template.layout.paddingDp)
@@ -210,6 +212,7 @@ object FrameTemplateParser {
 
         if (template.layout.heightDp < 0) errors += "layout.height"
         if (template.layout.paddingDp < 0) errors += "layout.padding"
+        if (template.layout.backgroundBlurRadiusDp !in 1..100) errors += "layout.backgroundBlurRadius"
         if (template.layout.borderWidthDp < 0) errors += "layout.borderWidth"
         if (template.layout.photoCornerRadiusDp < 0) errors += "layout.photoCornerRadius"
         if (template.layout.photoShadowRadiusDp < 0) errors += "layout.photoShadowRadius"
@@ -260,11 +263,14 @@ object FrameTemplateParser {
      */
     private fun parseLayout(obj: JSONObject): FrameLayout {
         val backgroundColor = parseColor(obj.optString("backgroundColor", "#FFFFFF"))
+        val position = FramePosition.valueOf(obj.optString("position", "BOTTOM"))
         return FrameLayout(
-            position = FramePosition.valueOf(obj.optString("position", "BOTTOM")),
+            position = position,
             orientation = FrameOrientation.valueOf(obj.optString("orientation", "AUTO")),
             heightDp = obj.optInt("height", 80),
             backgroundColor = backgroundColor,
+            backgroundType = FrameBackgroundType.valueOf(obj.optString("backgroundType", "COLOR")).forPosition(position),
+            backgroundBlurRadiusDp = obj.optInt("backgroundBlurRadius", 32),
             borderColor = parseColor(obj.optString("borderColor", colorToHex(backgroundColor))),
             lineSpacingDp = obj.optInt("lineSpacing", 8),
             paddingDp = obj.optInt("padding", 16),

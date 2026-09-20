@@ -1,8 +1,8 @@
 {
     "id": "black_border",
     "name": {
-        "en": "Black",
-        "zh": "品质黑框"
+        "en": "Soft Focus",
+        "zh": "柔焦边框"
     },
     "version": 1,
     "editable": true,
@@ -10,6 +10,8 @@
         "position": "BORDER",
         "height": 200,
         "backgroundColor": "#1E1E1E",
+        "backgroundType": "GAUSSIAN_BLUR",
+        "backgroundBlurRadius": 32,
         "padding": 60,
         "borderWidth": 60
     },

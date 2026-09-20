@@ -1276,4 +1276,11 @@
     <string name="frame_editor_orientation_landscape">横向设计</string>
     <string name="frame_editor_orientation_portrait">竖向设计</string>
     <string name="frame_editor_orientation_hint">固定设计方向时，边框和水印按需转到照片侧边，照片本身保持原有朝向。</string>
+    <string name="frame_editor_background_type">背景类型</string>
+    <string name="frame_editor_background_color">纯色</string>
+    <string name="frame_editor_background_blur">高斯模糊</string>
+    <string name="frame_editor_background_blur_radius">模糊强度</string>
+    <string name="frame_editor_background_blur_hint">使用照片的模糊副本填充背景；叠加模式仅模糊水印区域。</string>
+    <string name="frame_editor_background_glass">液态玻璃</string>
+    <string name="frame_editor_background_glass_hint">在照片底部叠加液态玻璃胶囊，并在两侧和底部保留间距。</string>
 </resources>

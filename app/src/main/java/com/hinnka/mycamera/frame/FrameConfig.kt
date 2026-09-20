@@ -67,6 +67,8 @@ data class FrameLayout(
     val orientation: FrameOrientation = FrameOrientation.AUTO,
     val heightDp: Int = 80,
     val backgroundColor: Int = Color.WHITE,
+    val backgroundType: FrameBackgroundType = FrameBackgroundType.COLOR,
+    val backgroundBlurRadiusDp: Int = 32,
     val borderColor: Int = backgroundColor, // 边框颜色，默认与背景色相同
     val lineSpacingDp: Int = 8, // 行间距
     val paddingDp: Int = 16,
@@ -79,7 +81,20 @@ data class FrameLayout(
     val photoShadowColor: Int = 0xCC000000.toInt(),
     val imageResName: String? = null,  // 边框图片资源名称（仅 IMAGE 模式使用，内置资源）
     val imagePath: String? = null  // 边框图片文件路径（仅 IMAGE 模式使用，外部导入）
-)
+) {
+    val effectiveBackgroundType: FrameBackgroundType get() = backgroundType.forPosition(position)
+}
+
+enum class FrameBackgroundType {
+    COLOR,
+    GAUSSIAN_BLUR,
+    LIQUID_GLASS;
+
+    val usesPhoto: Boolean get() = this != COLOR
+
+    fun forPosition(position: FramePosition): FrameBackgroundType =
+        if (this == LIQUID_GLASS && position != FramePosition.OVERLAY) COLOR else this
+}
 
 /** Design orientation; the photograph always retains its original viewing orientation. */
 enum class FrameOrientation {
