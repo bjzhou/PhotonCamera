@@ -268,10 +268,10 @@
     <string name="settings_raw_max_output_scale_description">調整 HDR+ 相片的輸出尺寸。倍率越高，相片尺寸和檔案大小越大，處理時間也可能更長。</string>
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
     <string name="settings_raw_output_upscale_mode">輸出放大演算法</string>
-    <string name="settings_raw_output_upscale_mode_description">選擇專業模式輸出的放大演算法。MGC RAISR 與 Lanczos-3 倍率放大互斥。</string>
+    <string name="settings_raw_output_upscale_mode_description">選擇專業模式輸出的放大演算法。RAISR 與 Lanczos-3 倍率放大互斥。</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
-    <string name="settings_raw_output_upscale_mode_raisr">MGC RAISR</string>
-    <string name="settings_raw_max_output_scale_description_raisr">MGC RAISR 僅在 2× 下放大，選取期間輸出倍率固定為 2×。</string>
+    <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
+    <string name="settings_raw_max_output_scale_description_raisr">RAISR 僅在 2× 下放大，選取期間輸出倍率固定為 2×。</string>
     <string name="settings_multi_frame_denoise_frame_count">多幀降噪幀數</string>
     <string name="settings_multi_frame_denoise_frame_count_description">照片模式下多幀降噪使用的幀數。幀數越多降噪越明顯，但處理時間也越長。</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale">多幀降噪輸出倍率</string>

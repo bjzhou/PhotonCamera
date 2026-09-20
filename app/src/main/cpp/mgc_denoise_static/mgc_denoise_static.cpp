@@ -1,4 +1,6 @@
 #include "mgc_denoise_static.h"
+#include "mgc_raisr_timing.h"
+#include "mgc_raisr_executor.h"
 
 #include <android/log.h>
 #include <pthread.h>
@@ -399,6 +401,10 @@ int HalideDoParFor(
     int size,
     uint8_t* closure) {
     if (size <= 0) return 0;
+    if (photon_raisr::active_timing) ++photon_raisr::active_timing->parallel_calls;
+    if (photon_raisr::active_executor) {
+        return photon_raisr::active_executor->Run(user_context, task, minimum, size, closure);
+    }
 #if defined(MGC_DENOISE_FORCE_SERIAL)
     __android_log_print(
         ANDROID_LOG_INFO,
@@ -419,17 +425,22 @@ int HalideDoParFor(
         std::min<int>(std::min<long>(online_cpus, size), 16);
     pthread_t workers[15] = {};
     int created = 0;
-    for (int index = 1; index < worker_count; ++index) {
-        if (pthread_create(
-                &workers[created],
-                nullptr,
-                RunParallelJob,
-                &job) != 0) {
-            break;
+    {
+        photon_raisr::ScopedTiming timer(&photon_raisr::Timing::thread_create);
+        for (int index = 1; index < worker_count; ++index) {
+            if (pthread_create(
+                    &workers[created],
+                    nullptr,
+                    RunParallelJob,
+                    &job) != 0) {
+                break;
+            }
+            ++created;
         }
-        ++created;
     }
+    if (photon_raisr::active_timing) photon_raisr::active_timing->workers_created += created;
     RunParallelJob(&job);
+    photon_raisr::ScopedTiming join_timer(&photon_raisr::Timing::thread_join);
     for (int index = 0; index < created; ++index) {
         pthread_join(workers[index], nullptr);
     }

@@ -497,19 +497,15 @@ perf iter=2 in=1024x768 status=0 ms=88  msPerInputMP=112
 perf iter=3 in=1024x768 status=0 ms=60  msPerInputMP=77
 ```
 
-三点必须说明，否则数字会被误读：
+这些是历史小图探针数据，不能用来推断当前 App 的 12MP 分带耗时：
 
-1. **首次调用含分配与缺页开销**：iter1 的 225 ms 里约 165 ms 是首次分配/触碰内存，
-   稳态是 iter3 的 **60 ms / 0.786 MP ≈ 77 ms per 输入 MP**。按此外推 12MP 单线程约
-   **0.9 s**（先前记的 212 ms/MP 是含冷启动的首次值，已作废）。
-2. **这是单线程**。探针里的 `photon_mgc_halide_do_par_for` 顺序执行任务；App 里的
-   `HalideDoParFor`（`mgc_denoise_static.cpp:395`）会 `pthread_create` 最多 15 个 worker
-   真正并行，所以 App 实测应当更快。
-3. 因此 RAISR 落地后的耗时量级是**秒级以内**，而不是最初估计的"十几秒"。真机拍摄时用
-   `RAW_TILE_DONE` 的 `tookMs` 与 Lanczos 对照仍是最终判据。
-
-顺带说明：迭代间变快主要来自分配器复用与页缓存，显式做 scratch 池的额外收益有限
-（剩余约十几到二十个百分点），暂不为它引入每 tile 长驻的大块内存。
+1. 三次迭代有冷暖差异，但没有分项计时，无法把差值定量归因于分配/缺页，也不能据此
+   估计 scratch 池的收益。
+2. 探针里的 `photon_mgc_halide_do_par_for` 顺序执行任务；App 的 `HalideDoParFor`
+   每次调度会 `pthread_create` 最多 15 个 worker，完成后 `pthread_join`。分带会重复
+   这些调度，因此并行不保证比该探针更快。
+3. 当前 4080×3064 实拍日志的完整 RAISR 调用约为 3.889 s。应按下文的 AOT、glue、
+   搬运及线程调度分项判断瓶颈，不再使用小图线性外推的“12MP 约 0.9 s”结论。
 
 ## 真机验证清单（交给使用者执行）
 
@@ -518,8 +514,8 @@ perf iter=3 in=1024x768 status=0 ms=60  msPerInputMP=77
 
 **A. 设置项自检**
 
-1. 专业模式 →「图像质量」→「输出放大算法」应有 Lanczos-3 / MGC RAISR 两项。
-2. 选 MGC RAISR：输出倍率滑杆显示 `2.00×`、置灰不可拖，描述变为"MGC RAISR 仅在 2× 下放大…"。
+1. 专业模式 →「图像质量」→「输出放大算法」应有 Lanczos-3 / RAISR 两项；默认 Lanczos-3、1×。
+2. 选 RAISR：输出倍率滑杆显示 `2.00×`、置灰不可拖，描述变为"RAISR 仅在 2× 下放大…"。
 3. 切回 Lanczos-3：滑杆恢复 1.00×–2.00× 可拖动。
 4. 杀进程重开：选择与锁定的倍率都应被记住。
 
@@ -890,3 +886,46 @@ Gaussian blur 所需的融合乘加通过显式 `std::fma` 保留。
 `compileDefaultDebugKotlin`、`buildCMakeDebug` 均通过。
 
 这些证据验证内核调用、数值流程与分带；不替代实际照片的端到端画质或性能评估。
+
+## RAISR 耗时归因（2026-09-20，优化前）
+
+下述为分项日志引入时的实现。收到 18:41 实测后，已按原版纠正颜色输出与定点
+Lanczos，并完成线程复用、直接 RGBA8 输出及 SIMD 优化；当前实现与对照证据见
+[RAISR 原版处理方式与性能优化](../raisr-performance-original-parity.md)。
+
+18:19 的 4080×3064 日志中，`raisrUpscale=3888.673ms` 占
+`total=3960.535ms` 的 98.19%；前面的 `pixelTransferAndBitmap=48.217ms`
+已包含 HALF 读回和输入位图复制。`bitmapCopyMs=39.806` 不是 RAISR AOT 耗时，
+也不应再加到 `raisrUpscale` 内。`renderGpuQueueWait=34ms` 在该 total 起点之前。
+`raisrApplied=true`、`fallbackRender=0` 表明没有因 RAISR 失败而重做输出渲染。
+
+原 `raisrUpscale` 边界覆盖输出位图分配及完整 JNI 调用，不能仅凭该值断言主要耗时
+来自 AOT。静态核对可确认下列额外工作存在，但它们的实际耗时比例需真机日志：
+
+* 32 MiB 带缓冲预算在此宽度产生 95 行 core 容量，均分为 33 带。16 行 halo 加相位
+  对齐使实际处理 4102 行、16,736,160 个输入像素，相对原图增加 **33.88%**。
+  halo 为完整链的正确性约束，不能直接删除；缩小需重新验证全部倍率及分带接缝。
+* 每带有 F16 → float → RGB8 输入转换、gray 三平面复制、亮度 Lanczos、色度插值
+  和 RGB 重建，输出还有 RGB float → RGBA8 写入。中间平面每带重新分配/初始化。
+* AOT 通过共享运行时并行；每次 `HalideDoParFor` 都重新创建、等待 worker，未复用
+  线程池。这是可优化候选，不能从线程数量直接推算毫秒收益。
+* RAISR 内的 Lanczos 亮度是 composite 所需的 fallback 输入，即使
+  `fallbackRender=0` 也必须生成，不能作为重复的最终图像放大删除。
+
+新增计时每张图/每个 tile 汇总，使用线程局部收集器，不逐带打印：
+
+| 日志 | 字段及口径 |
+| --- | --- |
+| `RAISR bitmap timing` | `outputAllocationMs` 与 `nativeMs` 分离；后者含 JNI 日志打印 |
+| `RAISR native timing` | `bandAllocationMs + sourceConversionMs + aotMs + glueMs + outputWriteMs + overheadMs = totalMs`；total 包含锁/解锁位图、scratch 释放，不含本组日志打印 |
+| `RAISR stage timing` | AOT 的 RGB→灰度、orientation、hash、2x、DOG、composite、Census、Polysharp；glue 的 RGB 打包、灰度复制、Lanczos、色度重建及 `glueOtherMs`（其余分配/释放、Polysharp 的 C++ 辅助处理等） |
+| `RAISR runtime timing` | 调度调用数、创建线程数、创建和 join 的墙钟时间；已包含在 AOT 时间内，与 worker 执行重叠，不能再次相加，也不能直接相减得到纯计算耗时 |
+
+`processedMP` 和 `workRatio` 反映实际带内像素量，tile 以 core 为分母，包含横纵 halo。
+`aotMs` 是所有 AOT 调用边界内的墙钟时间之和，包含内核内部的分配、调度和等待，
+不是工作线程 CPU 时间之和。并行计数在 JNI 调用线程收集，其他照片/管线不混入。
+计时不改变算法、带预算、线程策略或量化顺序。
+
+本次 `compileDefaultDebugKotlin buildCMakeDebug` 通过；`adb devices -l` 无设备，
+因此尚未取得新增分项日志，不能判定 AOT 与外围处理谁占主要部分。下一次实拍同时保留
+`PLog_MgcRaisr`、`PLog_MgcRaisrUpscale` 与 `PLog_RawDemosaicProcessor` 日志即可归因。

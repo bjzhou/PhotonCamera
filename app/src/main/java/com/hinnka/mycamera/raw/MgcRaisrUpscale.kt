@@ -16,7 +16,7 @@ import java.nio.ByteBuffer
  * probe confirmed kernel by kernel.
  *
  * The upscale itself - the band loop, its scratch budget, the half-float and
- * ARGB_8888 to float conversion, the float to ARGB_8888 conversion - is native
+ * ARGB_8888 input conversion, direct RGBA8 output and worker reuse - is native
  * and bounded by a fixed budget rather than by the frame size, so nothing here
  * sizes a buffer or walks a pixel. This class only owns the two bitmaps that are
  * the frame the caller already holds and the image it asked for.
@@ -42,10 +42,13 @@ internal class MgcRaisrUpscale {
         if (width <= 0 || height <= 0) {
             return null
         }
+        val startNs = System.nanoTime()
         val output = createOutput(width * scale, height * scale) ?: return null
+        val nativeStartNs = System.nanoTime()
         val status = nativeUpscaleBitmap(source, output, resampleRate)
+        logTiming("bitmap", width, height, status, startNs, nativeStartNs)
         if (status != 0) {
-            PLog.e(TAG, "MGC RAISR upscale failed status=$status input=${width}x$height")
+            PLog.e(TAG, "RAISR upscale failed status=$status input=${width}x$height")
             output.recycle()
             return null
         }
@@ -75,7 +78,9 @@ internal class MgcRaisrUpscale {
         if (tileWidth <= 0 || tileHeight <= 0 || coreWidth <= 0 || coreHeight <= 0) {
             return null
         }
+        val startNs = System.nanoTime()
         val output = createOutput(coreWidth * scale, coreHeight * scale) ?: return null
+        val nativeStartNs = System.nanoTime()
         val status = nativeUpscaleTile(
             buffer,
             tileWidth,
@@ -87,10 +92,11 @@ internal class MgcRaisrUpscale {
             output,
             resampleRate,
         )
+        logTiming("tile", coreWidth, coreHeight, status, startNs, nativeStartNs)
         if (status != 0) {
             PLog.e(
                 TAG,
-                "MGC RAISR tile upscale failed status=$status core=${coreWidth}x$coreHeight",
+                "RAISR tile upscale failed status=$status core=${coreWidth}x$coreHeight",
             )
             output.recycle()
             return null
@@ -120,9 +126,27 @@ internal class MgcRaisrUpscale {
         try {
             Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         } catch (ignored: OutOfMemoryError) {
-            PLog.e(TAG, "MGC RAISR refused a ${width}x$height output bitmap")
+            PLog.e(TAG, "RAISR refused a ${width}x$height output bitmap")
             null
         }
+
+    private fun logTiming(
+        path: String,
+        width: Int,
+        height: Int,
+        status: Int,
+        startNs: Long,
+        nativeStartNs: Long,
+    ) {
+        val endNs = System.nanoTime()
+        PLog.d(
+            TAG,
+            "RAISR bitmap timing path=$path input=${width}x$height status=$status " +
+                "outputAllocationMs=${(nativeStartNs - startNs) / 1_000_000.0} " +
+                "nativeMs=${(endNs - nativeStartNs) / 1_000_000.0} " +
+                "totalMs=${(endNs - startNs) / 1_000_000.0}",
+        )
+    }
 
     private external fun nativeUpscaleBitmap(
         source: Bitmap,

@@ -10,10 +10,14 @@
 // three steps and their float rounding before calling the separable filter.
 
 #include <algorithm>
+#include <arm_neon.h>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <vector>
+
+#include "mgc_raisr_timing.h"
+#include "mgc_raisr_executor.h"
 
 namespace {
 
@@ -128,21 +132,25 @@ namespace {
 // convolution rounds only after both axes, and clamps at the image boundary.
 void BoxBlur3x3(const uint8_t* source, int width, int height, uint8_t* output) {
     std::vector<uint16_t> rows(size_t(width) * height);
-    for (int y = 0; y < height; ++y) {
-        const auto* line = source + size_t(y) * width;
-        for (int x = 0; x < width; ++x) {
-            rows[size_t(y) * width + x] = uint16_t(line[std::max(0, x - 1)]) +
-                line[x] + line[std::min(width - 1, x + 1)];
+    photon_raisr::ParallelForRows(height, [&](int begin, int end) {
+        for (int y = begin; y < end; ++y) {
+            const auto* line = source + size_t(y) * width;
+            for (int x = 0; x < width; ++x) {
+                rows[size_t(y) * width + x] = uint16_t(line[std::max(0, x - 1)]) +
+                    line[x] + line[std::min(width - 1, x + 1)];
+            }
         }
-    }
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            const int sum = rows[size_t(std::max(0, y - 1)) * width + x] +
-                rows[size_t(y) * width + x] +
-                rows[size_t(std::min(height - 1, y + 1)) * width + x];
-            output[size_t(y) * width + x] = uint8_t((sum + 4) / 9);
+    });
+    photon_raisr::ParallelForRows(height, [&](int begin, int end) {
+        for (int y = begin; y < end; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const int sum = rows[size_t(std::max(0, y - 1)) * width + x] +
+                    rows[size_t(y) * width + x] +
+                    rows[size_t(std::min(height - 1, y + 1)) * width + x];
+                output[size_t(y) * width + x] = uint8_t((sum + 4) / 9);
+            }
         }
-    }
+    });
 }
 
 // 0x3581E44: GaussianFilterFloatHalide at sigma=1.5, radius=ceil(3*sigma)=5.
@@ -158,26 +166,56 @@ void BlurHaloMask(const std::vector<float>& source, int width, int height,
     };
     constexpr float total = 0x1.e12e98p+1f;
     std::vector<float> rows(source.size());
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            float value = 0.0f;
-            for (int tap = -radius; tap <= radius; ++tap) {
-                value = std::fma(kernel[tap + radius],
-                    source[size_t(y) * width + std::clamp(x + tap, 0, width - 1)], value);
+    photon_raisr::ParallelForRows(height, [&](int begin, int end) {
+        for (int y = begin; y < end; ++y) {
+            const float* line = source.data() + size_t(y) * width;
+            float* target = rows.data() + size_t(y) * width;
+            int x = 0;
+            const auto scalar = [&](int column) {
+                float value = 0.0f;
+                for (int tap = -radius; tap <= radius; ++tap) {
+                    value = std::fma(kernel[tap + radius],
+                        line[std::clamp(column + tap, 0, width - 1)], value);
+                }
+                target[column] = value / total;
+            };
+            for (; x < std::min(radius, width); ++x) scalar(x);
+            // Four independent pixels, preserving the original eleven FMA steps
+            // and final IEEE division in each lane. No reassociation of taps.
+            for (; x + 3 + radius < width; x += 4) {
+                float32x4_t value = vdupq_n_f32(0.0f);
+                for (int tap = -radius; tap <= radius; ++tap) {
+                    value = vfmaq_n_f32(value, vld1q_f32(line + x + tap), kernel[tap + radius]);
+                }
+                vst1q_f32(target + x, vdivq_f32(value, vdupq_n_f32(total)));
             }
-            rows[size_t(y) * width + x] = value / total;
+            for (; x < width; ++x) scalar(x);
         }
-    }
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            float value = 0.0f;
+    });
+    photon_raisr::ParallelForRows(height, [&](int begin, int end) {
+        for (int y = begin; y < end; ++y) {
+            const float* lines[2 * radius + 1];
             for (int tap = -radius; tap <= radius; ++tap) {
-                value = std::fma(kernel[tap + radius],
-                    rows[size_t(std::clamp(y + tap, 0, height - 1)) * width + x], value);
+                lines[tap + radius] = rows.data() + size_t(std::clamp(y + tap, 0, height - 1)) * width;
             }
-            output[size_t(y) * width + x] = value / total;
+            float* target = output.data() + size_t(y) * width;
+            int x = 0;
+            for (; x + 3 < width; x += 4) {
+                float32x4_t value = vdupq_n_f32(0.0f);
+                for (int tap = 0; tap <= 2 * radius; ++tap) {
+                    value = vfmaq_n_f32(value, vld1q_f32(lines[tap] + x), kernel[tap]);
+                }
+                vst1q_f32(target + x, vdivq_f32(value, vdupq_n_f32(total)));
+            }
+            for (; x < width; ++x) {
+                float value = 0.0f;
+                for (int tap = 0; tap <= 2 * radius; ++tap) {
+                    value = std::fma(kernel[tap], lines[tap][x], value);
+                }
+                target[x] = value / total;
+            }
         }
-    }
+    });
 }
 
 }  // namespace
@@ -208,8 +246,10 @@ extern "C" int photon_mgc_polysharp_apply(const uint8_t* luma, int width, int he
     HalideBuffer kernel_y = MakeF32Buffer(const_cast<float*>(kernel.data()), 1, kernel_dims);
     HalideBuffer coeff = MakeF32Buffer(weights.data(), 1, coeff_dims);
     HalideBuffer out = MakeU8Buffer(destination, 2, image_dims);
-    return photon_mgc_polysharp_poly_filter(&image, &kernel_x, int(kernel.size()), &kernel_y,
-                                            int(kernel.size()), &coeff, &out);
+    return photon_raisr::Measure(&photon_raisr::Timing::polysharp, [&] {
+        return photon_mgc_polysharp_poly_filter(&image, &kernel_x, int(kernel.size()), &kernel_y,
+                                                int(kernel.size()), &coeff, &out);
+    });
 }
 
 // The five polynomial weights `Polysharp()` 0x3576868 builds for the filter: four
@@ -229,19 +269,27 @@ extern "C" int photon_mgc_polysharp_sharpen(const uint8_t* luma, int width, int 
                                             photon_mgc_polysharp_coefficients, polynomial.data());
     if (status != 0) return status;
     std::vector<uint8_t> reference(count);
-    BoxBlur3x3(luma, width, height, reference.data());
+    photon_raisr::Measure(&photon_raisr::Timing::polysharp_box, [&] {
+        BoxBlur3x3(luma, width, height, reference.data());
+    });
     std::vector<float> mask(count), alpha(count);
     const HalideDimension dims[] = {{0, width, 1, 0}, {0, height, width, 0}};
     HalideBuffer ref = MakeU8Buffer(reference.data(), 2, dims);
     HalideBuffer filtered = MakeU8Buffer(polynomial.data(), 2, dims);
     HalideBuffer halo = MakeF32Buffer(mask.data(), 2, dims);
-    status = photon_mgc_polysharp_halo_mask(&ref, &filtered, &halo);
+    status = photon_raisr::Measure(&photon_raisr::Timing::polysharp, [&] {
+        return photon_mgc_polysharp_halo_mask(&ref, &filtered, &halo);
+    });
     if (status != 0) return status;
-    BlurHaloMask(mask, width, height, alpha);
+    photon_raisr::Measure(&photon_raisr::Timing::polysharp_blur, [&] {
+        BlurHaloMask(mask, width, height, alpha);
+    });
     HalideBuffer original = MakeU8Buffer(const_cast<uint8_t*>(luma), 2, dims);
     HalideBuffer blend_mask = MakeF32Buffer(alpha.data(), 2, dims);
     HalideBuffer output = MakeU8Buffer(destination, 2, dims);
-    return photon_mgc_polysharp_blend_tau_mask(&original, &filtered, &blend_mask, &output, 4.0f);
+    return photon_raisr::Measure(&photon_raisr::Timing::polysharp, [&] {
+        return photon_mgc_polysharp_blend_tau_mask(&original, &filtered, &blend_mask, &output, 4.0f);
+    });
 }
 
 extern "C" int photon_mgc_polysharp_fill_kernel(float sigma, float* destination, int capacity) {

@@ -11,17 +11,10 @@
 //   orientation in/out, composite in/out: UInt8, 1 or 3 channels, planar
 //   randomness_lut: UInt8, one dimension of 256
 //
-// Two sub-steps of the original are not part of the lifted kernels and are
-// rebuilt here from their documented behaviour:
-//   * the cheap upscale that produces the composite's fallback luma. The
-//     original runs it inside npcam C++ that was not lifted, so this uses plain
-//     Lanczos-3 interpolation on the same luma grid.
-//   * the chroma recombination, which lives in the original's caller
-//     (libgcastartup.so+0x3364BC8) and has not been reconstructed. Chroma is
-//     carried through bilinearly and recombined with the BT.601 full-range
-//     matrix - the same matrix RgbToGray3ChOptHalideU8 uses, which the device
-//     probe confirmed numerically (grey(0,64,32) == 41 == 0.299*0 + 0.587*64 +
-//     0.114*32).
+// Original non-lifted stages are reconstructed and checked against the pinned
+// library: Q6 Lanczos-3 with two U8 rounding passes, and RGB luma replacement
+// (0x355FD48 -> 0x3C4DC7C -> ReplaceLumaPixelContig3ChOptHalide at 0x3C4F4D8).
+// See docs/research/raisr-performance-original-parity.md for numeric evidence.
 
 #include <android/log.h>
 #include <cmath>
@@ -30,14 +23,17 @@
 #include <vector>
 
 #include "mgc_raisr_bands.h"
+#include "mgc_raisr_color.h"
+#include "mgc_raisr_resample.h"
 
 namespace {
 
 constexpr const char* kTag = "PLog_MgcRaisr";
 
-// The band buffer is quantised exactly like the driver quantises its own input,
-// so the 8-bit round trip through the float band buffer is lossless.
+// GPU input is quantised once at the entry to the original UInt8 finish domain.
 using photon_raisr::ToU8;
+using photon_raisr::Measure;
+using photon_raisr::Timing;
 
 struct HalideType {
     uint8_t code;
@@ -114,129 +110,6 @@ HalideBuffer MakeU8Buffer(void* host, int32_t dimensions, const HalideDimension*
     return MakeBuffer(host, 1, 8, dimensions, dim);
 }
 
-float Clamp01(float value) { return value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value); }
-
-// Lanczos-3 weight, the kernel the original's cheap upscale uses
-// (`Resample(input_y, LanczosKernel<3>, cheap_upscaled_y, ...)` in RaisrUpsample).
-float Lanczos3Weight(float distance) {
-    constexpr float kLobes = 3.0f;
-    const float magnitude = std::fabs(distance);
-    if (magnitude >= kLobes) {
-        return 0.0f;
-    }
-    if (magnitude < 1.0e-7f) {
-        return 1.0f;
-    }
-    const float scaled = float(M_PI) * distance;
-    return (kLobes * std::sin(scaled) * std::sin(scaled / kLobes)) / (scaled * scaled);
-}
-
-// Exact 2x Lanczos-3 resample of one luma plane.  Output pixel X samples source
-// coordinate X/2 - 0.25, so the six taps only depend on the output parity; the
-// horizontal pass is cached for the whole plane and the vertical pass then costs
-// six multiply-adds per output pixel.
-void ResampleLanczos3To2x(const std::vector<uint8_t>& source, int width, int height,
-                          std::vector<uint8_t>& destination, int out_width, int out_height) {
-    float weight[2][6];
-    int base[2];
-    for (int parity = 0; parity < 2; ++parity) {
-        const float sample = 0.5f * float(parity) - 0.25f;
-        const int floor_index = int(std::floor(sample));
-        base[parity] = floor_index - 2;
-        float total = 0.0f;
-        for (int tap = 0; tap < 6; ++tap) {
-            weight[parity][tap] = Lanczos3Weight(sample - float(floor_index - 2 + tap));
-            total += weight[parity][tap];
-        }
-        for (int tap = 0; tap < 6; ++tap) {
-            weight[parity][tap] /= total;
-        }
-    }
-    std::vector<float> rows(size_t(width == 0 ? 0 : height) * size_t(out_width));
-    for (int row = 0; row < height; ++row) {
-        const uint8_t* line = source.data() + size_t(row) * width;
-        float* target = rows.data() + size_t(row) * out_width;
-        for (int out_x = 0; out_x < out_width; ++out_x) {
-            const int parity = out_x & 1;
-            const int source_base = (out_x >> 1) + base[parity];
-            float total = 0.0f;
-            for (int tap = 0; tap < 6; ++tap) {
-                const int index = source_base + tap;
-                if (index < 0 || index >= width) {
-                    continue;
-                }
-                total += weight[parity][tap] * float(line[index]);
-            }
-            target[out_x] = total;
-        }
-    }
-    for (int out_y = 0; out_y < out_height; ++out_y) {
-        const int parity = out_y & 1;
-        const int source_base = (out_y >> 1) + base[parity];
-        const float* weights = weight[parity];
-        uint8_t* target = destination.data() + size_t(out_y) * out_width;
-        for (int out_x = 0; out_x < out_width; ++out_x) {
-            float total = 0.0f;
-            for (int tap = 0; tap < 6; ++tap) {
-                const int index = source_base + tap;
-                if (index < 0 || index >= height) {
-                    continue;
-                }
-                total += weights[tap] * rows[size_t(index) * out_width + out_x];
-            }
-            target[out_x] = ToU8(total / 255.0f);
-        }
-    }
-}
-
-// Bilinear 2x sample of a single channel grid. Output pixel X maps to source
-// coordinate X/2 - 0.25, matching the half-pixel convention the per-shift
-// kernel's phase grid implies.
-uint8_t SampleBilinear2x(const std::vector<uint8_t>& source, int width, int height,
-                         int out_x, int out_y) {
-    const float source_x = 0.5f * out_x - 0.25f;
-    const float source_y = 0.5f * out_y - 0.25f;
-    int x0 = int(std::floor(source_x));
-    int y0 = int(std::floor(source_y));
-    const float fx = source_x - float(x0);
-    const float fy = source_y - float(y0);
-    int x1 = x0 + 1;
-    int y1 = y0 + 1;
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 < 0) x1 = 0;
-    if (y1 < 0) y1 = 0;
-    if (x0 > width - 1) x0 = width - 1;
-    if (x1 > width - 1) x1 = width - 1;
-    if (y0 > height - 1) y0 = height - 1;
-    if (y1 > height - 1) y1 = height - 1;
-    const float top = float(source[size_t(y0) * width + x0]) * (1.0f - fx) +
-        float(source[size_t(y0) * width + x1]) * fx;
-    const float bottom = float(source[size_t(y1) * width + x0]) * (1.0f - fx) +
-        float(source[size_t(y1) * width + x1]) * fx;
-    const float value = top * (1.0f - fy) + bottom * fy + 0.5f;
-    return value <= 0.0f ? 0 : (value >= 255.0f ? 255 : uint8_t(value));
-}
-
-// sRGB-encoded BT.601 full range, the matrix RgbToGray3ChOptHalideU8 was measured
-// to use. Chroma quantisation saturates before narrowing: rounding a positive
-// full-scale colour difference can produce 256, outside the UInt8 domain.
-void RgbToChroma(uint8_t r, uint8_t g, uint8_t b, uint8_t& cb, uint8_t& cr) {
-    cb = uint8_t(std::clamp(((-43 * r - 85 * g + 128 * b + 128) >> 8) + 128, 0, 255));
-    cr = uint8_t(std::clamp(((128 * r - 107 * g - 21 * b + 128) >> 8) + 128, 0, 255));
-}
-
-void YcbcrToRgb(int y, int cb, int cr, float& r, float& g, float& b) {
-    const int c = cb - 128;
-    const int d = cr - 128;
-    const int red = y + ((91881 * d) >> 16);
-    const int green = y - ((22554 * c + 46802 * d) >> 16);
-    const int blue = y + ((116130 * c) >> 16);
-    r = Clamp01(float(red < 0 ? 0 : (red > 255 ? 255 : red)) / 255.0f);
-    g = Clamp01(float(green < 0 ? 0 : (green > 255 ? 255 : green)) / 255.0f);
-    b = Clamp01(float(blue < 0 ? 0 : (blue > 255 ? 255 : blue)) / 255.0f);
-}
-
 } // namespace
 
 extern "C" {
@@ -281,9 +154,11 @@ int RefineLuma(std::vector<uint8_t>& raisr, std::vector<uint8_t>& fallback,
         sharpened.resize(raisr.size());
         HalideBuffer in = MakeU8Buffer(raisr.data(), 2, dims);
         HalideBuffer out = MakeU8Buffer(sharpened.data(), 2, dims);
-        const int status = photon_mgc_polysharp_sharpen_dog(
-            nullptr, &in, kRefineBaselineOffset, &lut, int32_t(params.strength_high),
-            int32_t(params.strength_mid), &out);
+        const int status = Measure(&Timing::dog, [&] {
+            return photon_mgc_polysharp_sharpen_dog(
+                nullptr, &in, kRefineBaselineOffset, &lut, int32_t(params.strength_high),
+                int32_t(params.strength_mid), &out);
+        });
         if (status != 0) return status;
         refined = sharpened.data();
     }
@@ -295,30 +170,37 @@ int RefineLuma(std::vector<uint8_t>& raisr, std::vector<uint8_t>& fallback,
     HalideBuffer right = MakeU8Buffer(refined, 2, dims);
     HalideBuffer out = MakeU8Buffer(destination.data(), 2, dims);
     if (params.artifact_correction > 0.0f) {
-        return photon_mgc_raisr_composite(
-            nullptr, &left, &right, &left, &lut,
-            int32_t(params.fallback_strength * 256.0f),
-            int32_t(params.artifact_correction * 256.0f),
-            int32_t(params.artifact_map_scale * 16.0f),
-            int16_t(params.artifact_map_bias * 256.0f), kDebugOutputSelect, &out);
+        return Measure(&Timing::composite, [&] {
+            return photon_mgc_raisr_composite(
+                nullptr, &left, &right, &left, &lut,
+                int32_t(params.fallback_strength * 256.0f),
+                int32_t(params.artifact_correction * 256.0f),
+                int32_t(params.artifact_map_scale * 16.0f),
+                int16_t(params.artifact_map_bias * 256.0f), kDebugOutputSelect, &out);
+        });
     }
     // With no artifact correction the original selects Census instead. When
     // DOG is disabled its repeated Census call writes the same result twice;
     // one invocation has the same inputs and final output.
-    return photon_mgc_polysharp_census(nullptr, &left, &right,
-        int32_t(params.fallback_strength * 16.0f), kRefineBaselineOffset, &lut, &out);
+    return Measure(&Timing::census, [&] {
+        return photon_mgc_polysharp_census(nullptr, &left, &right,
+            int32_t(params.fallback_strength * 16.0f), kRefineBaselineOffset, &lut, &out);
+    });
 }
 
 }  // namespace
 
 
-// Runs the whole RAISR luma chain on one image. `input` is float RGBA in 0..1
-// sRGB, `output` must hold 2x the pixels in the same layout. Exposed with C
-// linkage so the on-device probe can drive it without the app.
-extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int height,
-                                             float* output, float resample_rate) try {
+// Runs the whole RAISR chain on one band of float RGBA input. Only the requested
+// core is emitted, in tightly packed 2x RGBA8, with no intermediate float output.
+// Exposed with C linkage so the on-device probe can drive it without the app.
+extern "C" int photon_mgc_raisr_upscale_rgba8(const float* input, int width, int height,
+    uint8_t* output, int core_left, int core_top, int core_width, int core_height,
+    float resample_rate) try {
     if (input == nullptr || output == nullptr || width <= 0 || height <= 0 ||
-        !std::isfinite(resample_rate) || resample_rate <= 0.0f) {
+        !std::isfinite(resample_rate) || resample_rate <= 0.0f ||
+        core_left < 0 || core_top < 0 || core_width <= 0 || core_height <= 0 ||
+        core_left + core_width > width || core_top + core_height > height) {
         return -1;
     }
     const int out_width = width * 2;
@@ -327,11 +209,13 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
 
     // 1. rgbx_in_: UInt8, 3 channels, interleaved.
     std::vector<uint8_t> rgbx(source_pixels * 3);
-    for (size_t index = 0; index < source_pixels; ++index) {
-        rgbx[index * 3 + 0] = ToU8(input[index * 4 + 0]);
-        rgbx[index * 3 + 1] = ToU8(input[index * 4 + 1]);
-        rgbx[index * 3 + 2] = ToU8(input[index * 4 + 2]);
-    }
+    Measure(&Timing::rgb_pack, [&] {
+        for (size_t index = 0; index < source_pixels; ++index) {
+            rgbx[index * 3 + 0] = ToU8(input[index * 4 + 0]);
+            rgbx[index * 3 + 1] = ToU8(input[index * 4 + 1]);
+            rgbx[index * 3 + 2] = ToU8(input[index * 4 + 2]);
+        }
+    });
     // 2. Luma.
     std::vector<uint8_t> gray(source_pixels);
     // 3. Orientation input: the same luma as a planar 3 channel image.
@@ -362,18 +246,22 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
             {0, height, width, 0},
         };
         HalideBuffer out = MakeU8Buffer(gray.data(), 2, out_dims);
-        const int result = photon_mgc_raisr_rgb_to_gray(nullptr, &in, &out);
+        const int result = Measure(&Timing::rgb_to_gray, [&] {
+            return photon_mgc_raisr_rgb_to_gray(nullptr, &in, &out);
+        });
         if (result != 0) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "rgb_to_gray failed: %d", result);
             return result;
         }
     }
 
-    for (size_t index = 0; index < source_pixels; ++index) {
-        for (int channel = 0; channel < 3; ++channel) {
-            gray3[size_t(channel) * source_pixels + index] = gray[index];
+    Measure(&Timing::gray_replicate, [&] {
+        for (size_t index = 0; index < source_pixels; ++index) {
+            for (int channel = 0; channel < 3; ++channel) {
+                gray3[size_t(channel) * source_pixels + index] = gray[index];
+            }
         }
-    }
+    });
     {
         const HalideDimension dims[] = {
             {0, width, 1, 0},
@@ -382,8 +270,9 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
         };
         HalideBuffer in = MakeU8Buffer(gray3.data(), 3, dims);
         HalideBuffer out = MakeU8Buffer(orientation.data(), 3, dims);
-        const int result =
-            photon_mgc_raisr_orientation(nullptr, &in, kNumAngleBuckets, &out);
+        const int result = Measure(&Timing::orientation, [&] {
+            return photon_mgc_raisr_orientation(nullptr, &in, kNumAngleBuckets, &out);
+        });
         if (result != 0) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "orientation failed: %d", result);
             return result;
@@ -401,16 +290,19 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
         };
         HalideBuffer in = MakeU8Buffer(orientation.data(), 3, in_dims);
         HalideBuffer out = MakeU8Buffer(hash.data(), 2, out_dims);
-        const int result = photon_mgc_raisr_hash(nullptr, &in, kNumAngleBuckets, kMinStrength,
-                                                 kMaxStrength, kMinCoherence, kMaxCoherence,
-                                                 &out);
+        const int result = Measure(&Timing::hash, [&] {
+            return photon_mgc_raisr_hash(nullptr, &in, kNumAngleBuckets, kMinStrength,
+                                          kMaxStrength, kMinCoherence, kMaxCoherence, &out);
+        });
         if (result != 0) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "hash failed: %d", result);
             return result;
         }
     }
 
-    ResampleLanczos3To2x(gray, width, height, fallback, out_width, out_height);
+    Measure(&Timing::lanczos, [&] {
+        photon_raisr::ResampleLanczos3To2x(gray.data(), width, height, 1, fallback.data());
+    });
     {
         const HalideDimension luma_dims[] = {
             {0, width, 1, 0},
@@ -432,8 +324,9 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
                                           4, filter_dims);
         HalideBuffer hash_buffer = MakeU8Buffer(hash.data(), 2, up_dims);
         HalideBuffer out = MakeU8Buffer(raisr.data(), 2, up_dims);
-        const int result =
-            photon_mgc_raisr_upscale_2x(nullptr, &in, &filters, &hash_buffer, &out);
+        const int result = Measure(&Timing::upscale, [&] {
+            return photon_mgc_raisr_upscale_2x(nullptr, &in, &filters, &hash_buffer, &out);
+        });
         if (result != 0) {
             __android_log_print(ANDROID_LOG_ERROR, kTag, "upscale_2x failed: %d", result);
             return result;
@@ -464,34 +357,49 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
         luma.swap(polished);
     }
 
-    // Chroma is carried through bilinearly and recombined with the RAISR luma.
-    std::vector<uint8_t> cb(source_pixels);
-    std::vector<uint8_t> cr(source_pixels);
-    for (size_t index = 0; index < source_pixels; ++index) {
-        RgbToChroma(rgbx[index * 3 + 0], rgbx[index * 3 + 1], rgbx[index * 3 + 2],
-                    cb[index], cr[index]);
-    }
-    for (int y = 0; y < out_height; ++y) {
-        for (int x = 0; x < out_width; ++x) {
-            const int luma_value = luma[size_t(y) * out_width + x];
-            const int cb_value = SampleBilinear2x(cb, width, height, x, y);
-            const int cr_value = SampleBilinear2x(cr, width, height, x, y);
-            float red = 0.0f;
-            float green = 0.0f;
-            float blue = 0.0f;
-            YcbcrToRgb(luma_value, cb_value, cr_value, red, green, blue);
-            float* pixel = output + (size_t(y) * out_width + x) * 4;
-            pixel[0] = red;
-            pixel[1] = green;
-            pixel[2] = blue;
-            pixel[3] = 1.0f;
-        }
-    }
+    // Original RaisrUpsample -> 0x3C4DC7C: Lanczos-resample RGB, measure its
+    // quantized luma, then ReplaceLumaPixelContig3ChOptHalide's saturating delta.
+    // Keep the finish domain U8 through the final core-only bitmap write.
+    std::vector<uint8_t> color(size_t(out_width) * out_height * 3);
+    std::vector<uint8_t> color_luma(size_t(out_width) * out_height);
+    Measure(&Timing::rgb_resample, [&] {
+        photon_raisr::ResampleLanczos3To2x(rgbx.data(), width, height, 3, color.data());
+    });
+    const HalideDimension color_dims[] = {
+        {0, out_width, 3, 0}, {0, out_height, out_width * 3, 0}, {0, 3, 1, 0},
+    };
+    const HalideDimension gray_dims[] = {
+        {0, out_width, 1, 0}, {0, out_height, out_width, 0},
+    };
+    HalideBuffer color_buffer = MakeU8Buffer(color.data(), 3, color_dims);
+    HalideBuffer gray_buffer = MakeU8Buffer(color_luma.data(), 2, gray_dims);
+    const int color_status = Measure(&Timing::rgb_to_gray, [&] {
+        return photon_mgc_raisr_rgb_to_gray(nullptr, &color_buffer, &gray_buffer);
+    });
+    if (color_status != 0) return color_status;
+    Measure(&Timing::chroma, [&] {
+        photon_raisr::ReplaceLumaRgba8(color.data(), color_luma.data(), luma.data(),
+            out_width, core_left * 2, core_top * 2, core_width * 2, core_height * 2, output);
+    });
     return 0;
 } catch (const std::bad_alloc&) {
     // Every intermediate plane belongs to this call; unwind them before the
     // failure crosses the C/JNI boundary and let the caller discard the output.
     __android_log_print(ANDROID_LOG_ERROR, kTag, "unable to allocate RAISR intermediate planes");
+    return -2;
+}
+
+// Float output adapter used by the independent full-frame/banding probes.
+extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int height,
+                                             float* output, float resample_rate) try {
+    if (!input || !output || width <= 0 || height <= 0) return -1;
+    std::vector<uint8_t> rgba(size_t(width) * height * 16);
+    const int status = photon_mgc_raisr_upscale_rgba8(input, width, height, rgba.data(),
+        0, 0, width, height, resample_rate);
+    if (status != 0) return status;
+    for (size_t i = 0; i < rgba.size(); ++i) output[i] = rgba[i] / 255.0f;
+    return 0;
+} catch (const std::bad_alloc&) {
     return -2;
 }
 
@@ -519,9 +427,9 @@ class FullImageSink {
 public:
     FullImageSink(float* pixels, int out_width) : pixels_(pixels), out_width_(out_width) {}
 
-    void Write(int row, const float* pixels, int count) const {
-        std::memcpy(pixels_ + size_t(row) * out_width_ * 4, pixels,
-                    size_t(count) * 4 * sizeof(float));
+    void Write(int row, const uint8_t* pixels, int count) const {
+        float* target = pixels_ + size_t(row) * out_width_ * 4;
+        for (int i = 0; i < count * 4; ++i) target[i] = pixels[i] / 255.0f;
     }
 
 private:
@@ -531,8 +439,8 @@ private:
 
 }  // namespace
 
-// The same chain, band by band, so a caller never needs the 64 bytes per source
-// pixel one in-place call needs. `output` holds the 2x float RGBA image.
+// Research adapter for the same band runner the app uses. `output` holds the
+// 2x float RGBA image; the app sink instead copies RGBA8 straight into its bitmap.
 //
 // `band_core_rows` is explicit so the probe can compare this against
 // photon_mgc_raisr_upscale_rgba bit for bit at several band heights; the app

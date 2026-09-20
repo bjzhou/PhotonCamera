@@ -1,5 +1,10 @@
 # MGC 9.7.047 V25 RAISR 驱动胶水（npcam/C++ 侧）算法规格
 
+本文保留早期静态逆向记录；像素类型等已由后续动态探针纠正，见
+`mgc-raisr-output-upscale.md`。颜色重组与 Lanczos/线程运行时现已展开并验证，当前证据见
+[RAISR 原版处理方式与性能优化](../raisr-performance-original-parity.md)。旧文中“颜色重组在
+外层调用者内”的判断不成立：实际调用位于 `RaisrUpsample` 自身的 `0x355FD48`。
+
 本文只覆盖 **AOT 内核之外的胶水层**：`RaisrUpsample` 阶段、compiled-params、滤波器组、
 哈希接口、composite 输入、调用顺序与尺寸。三个 AOT 内核本体（2x per-shift 5x5 滤波、
 hash/filter-class、composite）由他人另行 lift，本文只写它们的**接口契约**。

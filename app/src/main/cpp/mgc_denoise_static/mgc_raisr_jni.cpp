@@ -4,7 +4,7 @@
 // The recovered ABI of the five lifted AOT kernels lives in
 // docs/research/mgc-raisr-output-upscale.md. Nothing about the chain itself
 // belongs in Kotlin: the band loop, its scratch budget, the half-float and
-// ARGB_8888 to float conversion and the float to ARGB_8888 conversion all run
+// ARGB_8888 input conversion and direct RGBA8 output all run
 // here, so a Kotlin caller only hands over the frame it already holds and gets
 // the finished 2x bitmap back.
 
@@ -21,6 +21,62 @@
 namespace {
 
 constexpr const char* kTag = "PLog_MgcRaisr";
+
+// Declared before bitmap locks so the total includes their release and all
+// scratch destruction. Emit once per image/tile, never once per band/pixel.
+class NativeTiming {
+public:
+    explicit NativeTiming(const char* path)
+        : path_(path), previous_(photon_raisr::active_timing),
+          start_(photon_raisr::TimingNowNs()) {
+        photon_raisr::active_timing = &timing_;
+    }
+    ~NativeTiming() {
+        const int64_t total = photon_raisr::TimingNowNs() - start_;
+        photon_raisr::active_timing = previous_;
+        const auto& t = timing_;
+        const int64_t aot = t.AotNs();
+        const int64_t glue = t.chain - aot;
+        __android_log_print(ANDROID_LOG_DEBUG, kTag,
+            "RAISR native timing path=%s status=%d input=%dx%d rate=%.4f bands=%d "
+            "processedMP=%.3f workRatio=%.3f bandAllocationMs=%.3f sourceConversionMs=%.3f "
+            "aotMs=%.3f glueMs=%.3f outputWriteMs=%.3f overheadMs=%.3f totalMs=%.3f",
+            path_, status, width, height, rate, t.bands, t.processed_pixels / 1e6,
+            width > 0 && height > 0 ? double(t.processed_pixels) / (int64_t(width) * height) : 0.0,
+            t.band_allocation / 1e6, t.source_conversion / 1e6, aot / 1e6, glue / 1e6,
+            t.output_write / 1e6,
+            (total - t.band_allocation - t.source_conversion - t.chain - t.output_write) / 1e6,
+            total / 1e6);
+        __android_log_print(ANDROID_LOG_DEBUG, kTag,
+            "RAISR stage timing path=%s rgbToGrayMs=%.3f orientationMs=%.3f hashMs=%.3f "
+            "upscale2xMs=%.3f dogMs=%.3f compositeMs=%.3f censusMs=%.3f polysharpAotMs=%.3f "
+            "rgbPackMs=%.3f grayReplicateMs=%.3f lanczosMs=%.3f replaceLumaMs=%.3f "
+            "rgbResampleMs=%.3f polysharpBoxMs=%.3f polysharpBlurMs=%.3f "
+            "glueOtherMs=%.3f",
+            path_, t.rgb_to_gray / 1e6, t.orientation / 1e6, t.hash / 1e6, t.upscale / 1e6,
+            t.dog / 1e6, t.composite / 1e6, t.census / 1e6, t.polysharp / 1e6,
+            t.rgb_pack / 1e6, t.gray_replicate / 1e6, t.lanczos / 1e6, t.chroma / 1e6,
+            t.rgb_resample / 1e6, t.polysharp_box / 1e6, t.polysharp_blur / 1e6,
+            (glue - t.rgb_pack - t.gray_replicate - t.lanczos - t.chroma -
+                t.rgb_resample - t.polysharp_box - t.polysharp_blur) / 1e6);
+        __android_log_print(ANDROID_LOG_DEBUG, kTag,
+            "RAISR runtime timing path=%s aotParallelCalls=%d cppParallelCalls=%d workersCreated=%d "
+            "threadCreateWallMs=%.3f workerWaitAndShutdownMs=%.3f sharedByAotAndGlue=true "
+            "overlapsWorkerExecution=true",
+            path_, t.parallel_calls, t.cpp_parallel_calls, t.workers_created, t.thread_create / 1e6,
+            t.thread_join / 1e6);
+    }
+    int width = 0;
+    int height = 0;
+    float rate = 0.0f;
+    int status = -1;
+
+private:
+    const char* path_;
+    photon_raisr::Timing timing_;
+    photon_raisr::Timing* previous_;
+    int64_t start_;
+};
 
 // One Android bitmap locked for the duration of a single upscale.
 class LockedBitmap {
@@ -172,15 +228,9 @@ class ArgbSink {
 public:
     ArgbSink(uint8_t* pixels, size_t stride) : pixels_(pixels), stride_(stride) {}
 
-    void Write(int row, const float* pixels, int count) const {
+    void Write(int row, const uint8_t* pixels, int count) const {
         uint8_t* target = pixels_ + size_t(row) * stride_;
-        for (int column = 0; column < count; ++column) {
-            const float* pixel = pixels + size_t(column) * 4;
-            target[column * 4 + 0] = photon_raisr::ToU8(pixel[0]);
-            target[column * 4 + 1] = photon_raisr::ToU8(pixel[1]);
-            target[column * 4 + 2] = photon_raisr::ToU8(pixel[2]);
-            target[column * 4 + 3] = 0xFF;
-        }
+        std::memcpy(target, pixels, size_t(count) * 4);
     }
 
 private:
@@ -201,6 +251,8 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleBitmap(JNIEnv* env, jc
                                                                 jobject source,
                                                                 jobject destination,
                                                                 jfloat resample_rate) {
+    NativeTiming timing("bitmap");
+    timing.rate = resample_rate;
     LockedBitmap source_bitmap;
     LockedBitmap destination_bitmap;
     if (!source_bitmap.Lock(env, source) || !destination_bitmap.Lock(env, destination)) {
@@ -214,6 +266,8 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleBitmap(JNIEnv* env, jc
     }
     const int width = source_bitmap.width();
     const int height = source_bitmap.height();
+    timing.width = width;
+    timing.height = height;
     if (destination_bitmap.format() != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
         destination_bitmap.width() != width * 2 || destination_bitmap.height() != height * 2) {
         __android_log_print(ANDROID_LOG_ERROR, kTag,
@@ -226,6 +280,7 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleBitmap(JNIEnv* env, jc
         BitmapSource(source_bitmap.bytes(), source_bitmap.stride(), width, source_bitmap.format()),
         ArgbSink(destination_bitmap.mutable_bytes(), destination_bitmap.stride()), width, height, 0,
         0, width, height, photon_raisr::BandCoreRows(width), resample_rate);
+    timing.status = status;
     if (status != 0) {
         __android_log_print(ANDROID_LOG_ERROR, kTag, "banded upscale failed: %d", status);
     }
@@ -241,6 +296,10 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleTile(
     JNIEnv* env, jclass, jobject source, jint tile_width, jint tile_height, jint core_left,
     jint core_top, jint core_width, jint core_height, jobject destination,
     jfloat resample_rate) {
+    NativeTiming timing("tile");
+    timing.width = core_width;
+    timing.height = core_height;
+    timing.rate = resample_rate;
     if (source == nullptr || tile_width <= 0 || tile_height <= 0 || core_width <= 0 ||
         core_height <= 0 || core_left < 0 || core_top < 0 || core_left + core_width > tile_width ||
         core_top + core_height > tile_height) {
@@ -282,6 +341,7 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleTile(
         ArgbSink(destination_bitmap.mutable_bytes(), destination_bitmap.stride()), region_width,
         region_height, core_left - left, core_top - top, core_width, core_height,
         photon_raisr::BandCoreRows(region_width), resample_rate);
+    timing.status = status;
     if (status != 0) {
         __android_log_print(ANDROID_LOG_ERROR, kTag, "banded tile upscale failed: %d", status);
     }

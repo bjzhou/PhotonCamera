@@ -479,10 +479,10 @@
     <string name="settings_raw_max_output_scale">HDR+出力スケール</string>
     <string name="settings_raw_max_output_scale_description">HDR+写真の出力サイズを調整します。倍率を上げるほど画像とファイルが大きくなり、処理時間も長くなる場合があります。</string>
     <string name="settings_raw_output_upscale_mode">出力アップスケール</string>
-    <string name="settings_raw_output_upscale_mode_description">プロフェッショナルモード出力の拡大アルゴリズムを選択します。MGC RAISR と Lanczos-3 の倍率拡大は排他的です。</string>
+    <string name="settings_raw_output_upscale_mode_description">プロフェッショナルモード出力の拡大アルゴリズムを選択します。RAISR と Lanczos-3 の倍率拡大は排他的です。</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
-    <string name="settings_raw_output_upscale_mode_raisr">MGC RAISR</string>
-    <string name="settings_raw_max_output_scale_description_raisr">MGC RAISR は 2× でのみ拡大するため、選択中は出力倍率が 2× に固定されます。</string>
+    <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
+    <string name="settings_raw_max_output_scale_description_raisr">RAISR は 2× でのみ拡大するため、選択中は出力倍率が 2× に固定されます。</string>
     <string name="settings_multi_frame_denoise_frame_count">マルチフレームNR枚数</string>
     <string name="settings_multi_frame_denoise_frame_count_description">写真モードのマルチフレームNRに使うフレーム数。増やすほどノイズは減りますが、処理時間は長くなります。</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale">マルチフレームNR出力スケール</string>

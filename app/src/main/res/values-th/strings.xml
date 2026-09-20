@@ -932,10 +932,10 @@
     <string name="settings_raw_max_quality_tuning">ปรับคุณภาพภาพ HDR+</string>
     <string name="settings_raw_max_quality_tuning_description">ปรับการประเมินสัญญาณรบกวนในการรวมภาพและการลดสัญญาณรบกวนตามขนาดจริงของเซ็นเซอร์ เมื่อปิดจะใช้พารามิเตอร์ภาพเริ่มต้น</string>
     <string name="settings_raw_output_upscale_mode">อัลกอริทึมการขยายเอาต์พุต</string>
-    <string name="settings_raw_output_upscale_mode_description">เลือกอัลกอริทึมที่ใช้ขยายเอาต์พุตในโหมดโปรเฟสชันนัล MGC RAISR และการขยายด้วย Lanczos-3 ใช้พร้อมกันไม่ได้</string>
+    <string name="settings_raw_output_upscale_mode_description">เลือกอัลกอริทึมที่ใช้ขยายเอาต์พุตในโหมดโปรเฟสชันนัล RAISR และการขยายด้วย Lanczos-3 ใช้พร้อมกันไม่ได้</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
-    <string name="settings_raw_output_upscale_mode_raisr">MGC RAISR</string>
-    <string name="settings_raw_max_output_scale_description_raisr">MGC RAISR ขยายได้ที่ 2× เท่านั้น ระหว่างที่เลือกไว้ อัตราขยายเอาต์พุตจะถูกล็อกไว้ที่ 2×</string>
+    <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
+    <string name="settings_raw_max_output_scale_description_raisr">RAISR ขยายได้ที่ 2× เท่านั้น ระหว่างที่เลือกไว้ อัตราขยายเอาต์พุตจะถูกล็อกไว้ที่ 2×</string>
     <string name="settings_shutter_sound_single">เสียงถ่ายภาพเดี่ยว</string>
     <string name="settings_shutter_sound_burst">เสียงถ่ายภาพต่อเนื่อง</string>
     <string name="settings_shutter_sound_custom_description">นำเข้าคลิปเสียงความยาวไม่เกิน 3 วินาที, 48 kHz, โมโนหรือสเตอริโอ เสียงถ่ายภาพต่อเนื่องจะเล่นซ้ำขณะถ่ายภาพ</string>
