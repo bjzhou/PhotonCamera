@@ -69,6 +69,7 @@ import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.model.EffectParams
@@ -1726,6 +1727,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             SharingStarted.Eagerly,
             MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
         )
+    val rawOutputUpscaleMode: StateFlow<RawOutputUpscaleMode> =
+        userPreferencesRepository.userPreferences
+            .map { it.rawOutputUpscaleMode }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, RawOutputUpscaleMode.DEFAULT)
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -3049,6 +3054,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawBlackBorderCrop = settings.blackBorderCrop,
             rawRenderingEngine = resolveCaptureRawRenderingEngine(userPrefs),
             rawToneMappingParameters = rawToneMappingParameters,
+            rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
             spectralFilmStock = spectralFilmSettings.stock,
             spectralFilmPrint = spectralFilmSettings.print,
             spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
@@ -4855,12 +4861,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setRawMaxOutputScale(scale: Float) {
         viewModelScope.launch {
-            val normalizedScale = MultiFrameConfig.normalizeOutputScale(
-                outputScale = scale,
-                fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
-            )
-            userPreferencesRepository.saveRawMaxOutputScale(normalizedScale)
             val prefs = userPreferencesRepository.userPreferences.first()
+            val normalizedScale = prefs.rawOutputUpscaleMode.resolveOutputScale(scale)
+            userPreferencesRepository.saveRawMaxOutputScale(normalizedScale)
             cameraController.setMultiFrameOutputScale(
                 resolveMultiFrameOutputScale(
                     useJpgMax = prefs.useJpgMax && !prefs.useRaw &&
@@ -4868,6 +4871,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     useRawMax = prefs.useRawMax && prefs.useRaw &&
                         !prefs.useMultipleExposure,
                     rawMaxOutputScale = normalizedScale,
+                    jpgMultiFrameDenoiseOutputScale = prefs.jpgMultiFrameDenoiseOutputScale,
+                )
+            )
+        }
+    }
+
+    /**
+     * 设置 RAWmax 输出放大算法。MGC RAISR 与原版一致只支持 2x per-shift 放大，
+     * 因此选中时输出倍率由偏好层锁定为 2x，与 Lanczos 连续倍率放大互斥。
+     */
+    fun setRawOutputUpscaleMode(mode: RawOutputUpscaleMode) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawOutputUpscaleMode(mode)
+            val prefs = userPreferencesRepository.userPreferences.first()
+            cameraController.setMultiFrameOutputScale(
+                resolveMultiFrameOutputScale(
+                    useJpgMax = prefs.useJpgMax && !prefs.useRaw &&
+                        !prefs.useMultipleExposure,
+                    useRawMax = prefs.useRawMax && prefs.useRaw &&
+                        !prefs.useMultipleExposure,
+                    rawMaxOutputScale = prefs.rawMaxOutputScale,
                     jpgMultiFrameDenoiseOutputScale = prefs.jpgMultiFrameDenoiseOutputScale,
                 )
             )
@@ -5830,6 +5854,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawBlackBorderCrop = settings.blackBorderCrop,
                 rawRenderingEngine = resolveCaptureRawRenderingEngine(userPrefs),
                 rawToneMappingParameters = rawToneMappingParameters,
+                rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
                 spectralFilmStock = spectralFilmSettings.stock,
                 spectralFilmPrint = spectralFilmSettings.print,
                 spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
@@ -6263,6 +6288,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawBlackBorderCrop = settings.blackBorderCrop,
                 rawRenderingEngine = resolveCaptureRawRenderingEngine(userPrefs),
                 rawToneMappingParameters = rawToneMappingParameters,
+                rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
                 spectralFilmStock = spectralFilmSettings.stock,
                 spectralFilmPrint = spectralFilmSettings.print,
                 spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
@@ -6585,6 +6611,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawBlackBorderCrop = settings.blackBorderCrop,
             rawRenderingEngine = resolveCaptureRawRenderingEngine(userPrefs),
             rawToneMappingParameters = rawToneMappingParameters,
+            rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
             spectralFilmStock = spectralFilmSettings.stock,
             spectralFilmPrint = spectralFilmSettings.print,
             spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,

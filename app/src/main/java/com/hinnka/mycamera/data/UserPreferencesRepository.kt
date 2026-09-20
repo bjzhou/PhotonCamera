@@ -69,6 +69,7 @@ import com.hinnka.mycamera.mgc.PhotonLookContract
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.processor.MgcRawMaxMode
+import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import org.json.JSONObject
 
 /**
@@ -205,6 +206,7 @@ data class UserPreferences(
     val hdrPlusBracketExposureEnabled: Boolean =
         MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
+    val rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT, // RAWmax 输出放大算法
     val rawDigitalZoomResamplingEnabled: Boolean = false,
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
@@ -471,6 +473,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val MULTIPLE_EXPOSURE_COUNT = intPreferencesKey("multiple_exposure_count")
         private val LEGACY_USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
         private val RAW_MAX_OUTPUT_SCALE = floatPreferencesKey("raw_max_output_scale")
+        private val RAW_OUTPUT_UPSCALE_MODE = stringPreferencesKey("raw_output_upscale_mode")
         private val RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED =
             booleanPreferencesKey("raw_digital_zoom_resampling_enabled")
         private val LEGACY_RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
@@ -604,6 +607,8 @@ class UserPreferencesRepository(private val context: Context) {
             val hdrPlusMergeMode = MgcRawMaxMode.entries.firstOrNull {
                 it.name == preferences[HDR_PLUS_MERGE_MODE]
             } ?: MgcRawMaxMode.DEFAULT
+            val rawOutputUpscaleMode =
+                RawOutputUpscaleMode.fromName(preferences[RAW_OUTPUT_UPSCALE_MODE])
             val hdrPlusBracketExposureEnabled = hdrPlusMergeMode.supportsBracketExposure &&
                 (preferences[HDR_PLUS_BRACKET_EXPOSURE_ENABLED]
                     ?: MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE)
@@ -793,13 +798,16 @@ class UserPreferencesRepository(private val context: Context) {
                     }
                     ?: MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
                 hdrPlusBracketExposureEnabled = hdrPlusBracketExposureEnabled,
-                rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
-                    ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
-                    MultiFrameConfig.normalizeOutputScale(
-                        outputScale = it,
-                        fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
-                    )
-                } ?: MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                rawMaxOutputScale = rawOutputUpscaleMode.resolveOutputScale(
+                    (preferences[RAW_MAX_OUTPUT_SCALE]
+                        ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
+                        MultiFrameConfig.normalizeOutputScale(
+                            outputScale = it,
+                            fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                        )
+                    } ?: MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE
+                ),
+                rawOutputUpscaleMode = rawOutputUpscaleMode,
                 rawDigitalZoomResamplingEnabled =
                     preferences[RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED] ?: false,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
@@ -2067,10 +2075,19 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun saveRawMaxOutputScale(scale: Float) {
         context.dataStore.edit { preferences ->
-            preferences[RAW_MAX_OUTPUT_SCALE] = MultiFrameConfig.normalizeOutputScale(
-                outputScale = scale,
-                fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
-            )
+            preferences[RAW_MAX_OUTPUT_SCALE] = RawOutputUpscaleMode.fromName(
+                preferences[RAW_OUTPUT_UPSCALE_MODE]
+            ).resolveOutputScale(scale)
+        }
+    }
+
+    /**
+     * 保存 RAWmax 输出放大算法。RAISR 自带 per-shift 放大倍率，选中时把输出倍率锁定到 2x。
+     */
+    suspend fun saveRawOutputUpscaleMode(mode: RawOutputUpscaleMode) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_OUTPUT_UPSCALE_MODE] = mode.name
+            mode.pinnedOutputScale?.let { preferences[RAW_MAX_OUTPUT_SCALE] = it }
         }
     }
 

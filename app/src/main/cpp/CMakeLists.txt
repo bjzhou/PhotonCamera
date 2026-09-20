@@ -184,6 +184,114 @@ set_source_files_properties(
 )
 
 set(
+    MGC_RAISR_CAPSULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_capsule.bin"
+)
+set(
+    MGC_RAISR_CAPSULE_SHA256
+    "d6c952ed507e340fb4e8075d7277126453d0faef35803d1add9a2e76e835f7cb"
+)
+if(NOT EXISTS "${MGC_RAISR_CAPSULE}")
+    message(
+        FATAL_ERROR
+        "MGC RAISR capsule is missing; regenerate it with "
+        "scripts/research/generate_mgc_raisr_static_asm.py"
+    )
+endif()
+file(SHA256 "${MGC_RAISR_CAPSULE}" MGC_RAISR_CAPSULE_ACTUAL_SHA256)
+if(NOT MGC_RAISR_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_RAISR_CAPSULE_SHA256)
+    message(
+        FATAL_ERROR
+        "MGC RAISR capsule hash mismatch; regenerate it with "
+        "scripts/research/generate_mgc_raisr_static_asm.py"
+    )
+endif()
+set(
+    MGC_RAISR_ASM
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_raisr_static.S"
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_static.S.in"
+    "${MGC_RAISR_ASM}"
+    @ONLY
+)
+set_source_files_properties(
+    "${MGC_RAISR_ASM}"
+    PROPERTIES
+    GENERATED TRUE
+    OBJECT_DEPENDS "${MGC_RAISR_CAPSULE}"
+)
+
+set(
+    MGC_RAISR_FILTERS
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_filters.bin"
+)
+set(
+    MGC_RAISR_FILTERS_SHA256
+    "0ace2b67b820732dd0cccebeea867521cf9144721196574918f618a1da9ed3c6"
+)
+set(
+    MGC_RAISR_RANDOMNESS_LUT
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_randomness_lut.bin"
+)
+set(
+    MGC_RAISR_RANDOMNESS_LUT_SHA256
+    "dd3e825c6571e9371bc94c3b781b6b6a652eaeb3a1b20544a61e0f573519398b"
+)
+if(NOT EXISTS "${MGC_RAISR_FILTERS}")
+    message(
+        FATAL_ERROR
+        "MGC RAISR filter bank is missing; regenerate it with "
+        "scripts/research/extract_mgc_raisr_filters.py"
+    )
+endif()
+file(SHA256 "${MGC_RAISR_FILTERS}" MGC_RAISR_FILTERS_ACTUAL_SHA256)
+if(NOT MGC_RAISR_FILTERS_ACTUAL_SHA256 STREQUAL MGC_RAISR_FILTERS_SHA256)
+    message(
+        FATAL_ERROR
+        "MGC RAISR filter bank hash mismatch; regenerate it with "
+        "scripts/research/extract_mgc_raisr_filters.py"
+    )
+endif()
+if(NOT EXISTS "${MGC_RAISR_RANDOMNESS_LUT}")
+    message(
+        FATAL_ERROR
+        "MGC RAISR randomness LUT is missing; regenerate it with "
+        "scripts/research/extract_mgc_raisr_randomness_lut.py"
+    )
+endif()
+file(
+    SHA256
+    "${MGC_RAISR_RANDOMNESS_LUT}"
+    MGC_RAISR_RANDOMNESS_LUT_ACTUAL_SHA256
+)
+if(
+    NOT MGC_RAISR_RANDOMNESS_LUT_ACTUAL_SHA256
+        STREQUAL MGC_RAISR_RANDOMNESS_LUT_SHA256
+)
+    message(
+        FATAL_ERROR
+        "MGC RAISR randomness LUT hash mismatch; regenerate it with "
+        "scripts/research/extract_mgc_raisr_randomness_lut.py"
+    )
+endif()
+set(
+    MGC_RAISR_TABLES_ASM
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_raisr_tables_static.S"
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_tables_static.S.in"
+    "${MGC_RAISR_TABLES_ASM}"
+    @ONLY
+)
+set_source_files_properties(
+    "${MGC_RAISR_TABLES_ASM}"
+    PROPERTIES
+    GENERATED TRUE
+    OBJECT_DEPENDS "${MGC_RAISR_FILTERS};${MGC_RAISR_RANDOMNESS_LUT}"
+)
+
+set(
     MGC_SPATIAL_RGB_CAPSULE
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_spatial_rgb_merge_capsule.bin"
 )
@@ -230,6 +338,8 @@ set_property(
     "${MGC_DEMOIRE_ASM}"
     "${MGC_SABRE_ASM}"
     "${MGC_SPATIAL_RGB_ASM}"
+    "${MGC_RAISR_ASM}"
+    "${MGC_RAISR_TABLES_ASM}"
 )
 
 # 4. 添加头文件路径
@@ -341,8 +451,12 @@ add_library(my-native-lib SHARED
     mgc_denoise_static/mgc_spatial_strength_jni.cpp
     mgc_denoise_static/mgc_guided_upsample_jni.cpp
     mgc_denoise_static/mgc_sharpen_jni.cpp
+    mgc_denoise_static/mgc_raisr_jni.cpp
+    mgc_denoise_static/mgc_raisr_driver.cpp
     "${MGC_GUIDED_ASM}"
     "${MGC_SHARPEN_ASM}"
+    "${MGC_RAISR_ASM}"
+    "${MGC_RAISR_TABLES_ASM}"
     "${MGC_DENOISE_ASM}"
     "${MGC_DEMOIRE_ASM}"
     "${MGC_SABRE_ASM}"

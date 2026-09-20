@@ -1411,6 +1411,10 @@ class RawDemosaicProcessor {
     private val sharpenPass = RawSharpenPass(fullscreenQuad)
     private val mgcSharpen = MgcSharpen()
     private val denoiseTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
+    /** RAISR reads the finalized tile as float RGBA, so it needs its own transfer layout. */
+    private val raisrTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.FLOAT)
+    /** Lifted MGC RAISR finish-stage magnification; only used at the 2x output scale. */
+    private val mgcRaisrUpscale = MgcRaisrUpscale()
     private val outputPass = RawOutputPass(fullscreenQuad)
     private val linearUintToFloatPass = RawLinearUintToFloatPass()
     private val linearRgbExpandPass = RawLinearRgbExpandPass()
@@ -1754,6 +1758,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
         rawPhysicalOutputSize: Size? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(glDispatcher) {
@@ -1805,6 +1810,7 @@ class RawDemosaicProcessor {
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawOutputUpscaleMode = rawOutputUpscaleMode,
                 rawPhysicalOutputSize = rawPhysicalOutputSize,
                 dngFile = dngFile,
                 onMetadata = onMetadata
@@ -1853,6 +1859,7 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
         rawPhysicalOutputSize: Size? = null,
     ): Bitmap? = withContext(glDispatcher) {
         try {
@@ -1898,6 +1905,7 @@ class RawDemosaicProcessor {
                 rawToneMappingParameters = rawToneMappingParameters,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawOutputUpscaleMode = rawOutputUpscaleMode,
                 rawPhysicalOutputSize = rawPhysicalOutputSize,
             )?.sdrBitmap
         } catch (e: Exception) {
@@ -2006,6 +2014,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
         rawPhysicalOutputSize: Size? = null,
         includeHdrReference: Boolean,
         photonHdrRatio: Float? = null,
@@ -2059,6 +2068,7 @@ class RawDemosaicProcessor {
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawOutputUpscaleMode = rawOutputUpscaleMode,
                 rawPhysicalOutputSize = rawPhysicalOutputSize,
                 dngFile = dngFile,
                 onMetadata = onMetadata,
@@ -2124,6 +2134,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
         rawPhysicalOutputSize: Size? = null,
         includeHdrReference: Boolean,
         photonHdrRatio: Float? = null,
@@ -2223,6 +2234,7 @@ class RawDemosaicProcessor {
                 rawCfaCorrectionMode = rawCfaCorrectionMode,
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 rawOutputScale = rawOutputScale,
+                rawOutputUpscaleMode = rawOutputUpscaleMode,
                 rawPhysicalOutputSize = rawPhysicalOutputSize,
                 includeHdrReference = includeHdrReference,
                 sourceDngRenderPlan = embeddedDngRenderPlan,
@@ -2293,6 +2305,7 @@ class RawDemosaicProcessor {
         rawCfaCorrectionMode: String? = null,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawOutputScale: Float = 1f,
+        rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
         rawPhysicalOutputSize: Size? = null,
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
@@ -2695,13 +2708,15 @@ class RawDemosaicProcessor {
             actualRotation, rawOutputScale,
             referenceWidth = physicalOutputBounds?.width() ?: outputSourceBounds.width(),
             referenceHeight = physicalOutputBounds?.height() ?: outputSourceBounds.height(),
+            upscaleMode = rawOutputUpscaleMode,
         )
         PLog.i(
             TAG,
             "RAW_OUTPUT_RESAMPLING source=${outputSourceBounds.width()}x${outputSourceBounds.height()} " +
                 "physicalSize=$rawPhysicalOutputSize scale=$rawOutputScale " +
                 "output=${outputGeometry.width}x${outputGeometry.height} " +
-                "lanczos=${outputGeometry.resample}",
+                "lanczos=${outputGeometry.resample} " +
+                "upscale=${rawOutputUpscaleMode.name} raisr=${outputGeometry.raisrUpsample}",
         )
         val rawOutputBounds = outputSourceBounds.toOutputBounds(actualRotation)
         val applicableDngWarpRectilinear = filterApplicableWarpRectilinear(
@@ -4064,6 +4079,14 @@ class RawDemosaicProcessor {
 
             // 7. 第四步：输出旋转 (Output Pass)
             setupOutputFramebuffer(finalWidth, finalHeight)
+            // MGC RAISR magnifies on its own, so this path finalizes the frame on
+            // its native grid and lifts it in one RAISR step instead of letting
+            // RawOutputPass resample it with Lanczos-3.
+            val raisrNativeGeometry = if (outputGeometry.raisrUpsample) {
+                outputGeometry.nativeGrid()
+            } else {
+                null
+            }
             val outputStart = System.currentTimeMillis()
             renderOutputPass(
                 actualRotation,
@@ -4071,12 +4094,15 @@ class RawDemosaicProcessor {
                 actualHeight,
                 bounds,
                 sourceTextureForOutput,
-                geometry = outputGeometry,
+                geometry = raisrNativeGeometry ?: outputGeometry,
             )
             PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
             // HDR must use this exact finalized SDR color as well. Keep it through HDR output;
             // processInternal's finally releases it on success, failure, or cancellation.
-            if (!includeHdrReference) releaseSharpenFramebuffer()
+            // The RAISR branch below holds it one step longer: a refused upscale re-renders
+            // this same finalized texture on the Lanczos-3 grid, so it may only be released
+            // once the lifted chain has actually produced the frame.
+            if (!includeHdrReference && raisrNativeGeometry == null) releaseSharpenFramebuffer()
 
             // 8. 读取结果。先单独等待 GPU，避免把前面所有异步 shader 工作记到 readPixels。
             val upstreamStackTiming = borrowedGpuSource?.stackCompletionTimeline?.awaitPending(
@@ -4088,7 +4114,49 @@ class RawDemosaicProcessor {
                 checkGlError = ::checkGlError,
             )
             val readStart = System.currentTimeMillis()
-            val finalBitmap = readPixels(finalWidth, finalHeight, workingColorSpace)
+            var raisrApplied = false
+            val finalBitmap = if (raisrNativeGeometry != null) {
+                val nativeBitmap = readPixels(
+                    raisrNativeGeometry.width,
+                    raisrNativeGeometry.height,
+                    workingColorSpace,
+                )
+                val upscaled = nativeBitmap?.let {
+                    try {
+                        mgcRaisrUpscale.upscale(it)
+                    } finally {
+                        it.recycle()
+                    }
+                }
+                raisrApplied = upscaled != null
+                if (upscaled != null) {
+                    if (!includeHdrReference) releaseSharpenFramebuffer()
+                    upscaled
+                } else {
+                    // The lifted chain can refuse a frame - no band scratch, or a
+                    // driver status - and the shot still has to complete. Reset
+                    // the output pass to the Lanczos-3 grid, exactly as when
+                    // RAISR is not the selected algorithm at all.
+                    PLog.w(
+                        TAG,
+                        "MGC RAISR unavailable for the untiled ${raisrNativeGeometry.width}x" +
+                            "${raisrNativeGeometry.height} output; using Lanczos-3",
+                    )
+                    renderOutputPass(
+                        actualRotation,
+                        actualWidth,
+                        actualHeight,
+                        bounds,
+                        sourceTextureForOutput,
+                        geometry = outputGeometry,
+                    )
+                    val fallback = readPixels(finalWidth, finalHeight, workingColorSpace)
+                    if (!includeHdrReference) releaseSharpenFramebuffer()
+                    fallback
+                }
+            } else {
+                readPixels(finalWidth, finalHeight, workingColorSpace)
+            }
             val outputMaterializationMs = System.currentTimeMillis() - readStart
             PLog.d(
                 TAG,
@@ -4133,6 +4201,17 @@ class RawDemosaicProcessor {
                             rawToneMappingParameters = rawToneMappingParameters,
                             applyProfileGainTableMap = hasProfileGainTableMap,
                             applyDcpHueSatMap = deferDcpHueSatUntilAfterPgtm,
+                        )
+                    }
+                    if (raisrApplied) {
+                        // The HDR gain reference is resampled on the GPU from the
+                        // finalized texture, so it cannot consume the CPU RAISR
+                        // result; it stays on the Lanczos-3 grid while the SDR
+                        // base is magnified by RAISR.
+                        PLog.w(
+                            TAG,
+                            "MGC RAISR is active; the Ultra HDR gain reference keeps " +
+                                "Lanczos-3 resampling while the SDR base uses RAISR",
                         )
                     }
                     renderOutputPass(
@@ -4548,6 +4627,75 @@ class RawDemosaicProcessor {
                         hdrTileBitmap.recycle()
                     }
                 }
+                // MGC RAISR magnifies the tile itself. The working texture is in
+                // source orientation, so the core is read back in source-local
+                // coordinates and upscaled; the native chain adds the halo its
+                // 5x5 window needs inside the tile and crops it again, then the
+                // caller rotates the result into output orientation.
+                val raisrTile: Bitmap? = if (config.outputGeometry.raisrUpsample) {
+                    var upscaledTile: Bitmap? = null
+                    raisrTransfer.read(
+                        texture = sharpenTextureId,
+                        width = workWidth,
+                        height = workHeight,
+                        capacityPixels = workWidth.toLong() * workHeight,
+                        label = "raisrTile",
+                    ) { rgba ->
+                        upscaledTile = mgcRaisrUpscale.upscaleTile(
+                            buffer = rgba,
+                            tileWidth = workWidth,
+                            tileHeight = workHeight,
+                            coreLeft = localSourceCore.left,
+                            coreTop = localSourceCore.top,
+                            coreWidth = localSourceCore.width(),
+                            coreHeight = localSourceCore.height(),
+                        )
+                    }
+                    val nativeTile = upscaledTile
+                    if (nativeTile == null) {
+                        PLog.e(TAG, "MGC RAISR produced no tile for ${localSourceCore}")
+                        null
+                    } else {
+                        val orientedTile =
+                            mgcRaisrUpscale.rotateForOutput(nativeTile, config.rotation)
+                        if (orientedTile !== nativeTile) {
+                            nativeTile.recycle()
+                        }
+                        // RAISR magnifies by exactly 2x, so the tile must land on
+                        // its scaled core. With RAW digital-zoom resampling the
+                        // 1x grid is the physical output size and the core is not
+                        // exactly doubled; drawing it anyway would misplace pixels,
+                        // so this tile falls back to Lanczos-3 instead.
+                        if (orientedTile.width != scaledCore.width ||
+                            orientedTile.height != scaledCore.height
+                        ) {
+                            PLog.e(
+                                TAG,
+                                "MGC RAISR tile is ${orientedTile.width}x${orientedTile.height} " +
+                                    "but its scaled core is ${scaledCore.width}x${scaledCore.height}; " +
+                                    "this tile falls back to Lanczos-3",
+                            )
+                            orientedTile.recycle()
+                            null
+                        } else {
+                            orientedTile
+                        }
+                    }
+                } else {
+                    null
+                }
+                if (raisrTile != null) {
+                    try {
+                        sdrCanvas.drawBitmap(
+                            raisrTile,
+                            scaledCore.left.toFloat(),
+                            scaledCore.top.toFloat(),
+                            copyPaint,
+                        )
+                    } finally {
+                        raisrTile.recycle()
+                    }
+                } else {
                 renderOutputPass(
                     rotation = config.rotation,
                     width = workWidth,
@@ -4574,11 +4722,14 @@ class RawDemosaicProcessor {
                 } finally {
                     tileBitmap.recycle()
                 }
+                }
                 GlesGpuScheduler.waitForGpuCheckpoint(TAG, "RAW tile ${tile.index + 1}")
                 PLog.d(
                     TAG,
                     "RAW_TILE_DONE index=${tile.index + 1}/${config.tiles.size} " +
                         "output=${tile.outputCore} source=${tile.sourceCore} work=$working " +
+                        "scaled=$scaledCore localCore=$localSourceCore " +
+                        "upscale=${if (config.outputGeometry.raisrUpsample) "raisr" else "lanczos"} " +
                         "tookMs=${(System.nanoTime() - tileStartNs) / 1_000_000}",
                 )
             }
@@ -4722,6 +4873,7 @@ class RawDemosaicProcessor {
 
     private fun releaseTiledRenderFramebuffers() {
         mgcSharpen.releaseBuffers()
+        raisrTransfer.releaseBuffers()
         vgnDemosaicAlgorithm.setTileTexturePoolingEnabled(false)
         if (rawTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
@@ -9097,6 +9249,7 @@ class RawDemosaicProcessor {
         sharpenPass.release()
         mgcSharpen.release()
         denoiseTransfer.release()
+        raisrTransfer.release()
         outputPass.release()
         hdrReferencePass.release()
         chromaDenoiseAlgorithm.release()

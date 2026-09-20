@@ -62,6 +62,9 @@ data class GalleryMediaEntity(
     val rawHncsRenderIntent: String = "standard",
     val rawHncsFilmCurveMode: String = "standard",
     val rawColorEngine: String,
+    /** Professional-mode output magnification algorithm; absent on older rows. */
+    @ColumnInfo(defaultValue = "'LANCZOS3'")
+    val rawOutputUpscaleMode: String = "LANCZOS3",
     @ColumnInfo(defaultValue = "'standard'")
     val rawLumixPhotoStyle: String = "standard",
     @ColumnInfo(defaultValue = "'standard'")

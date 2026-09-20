@@ -1,0 +1,34 @@
+/* MGC V25 RAISR static tables, lifted from the pinned libgcastartup.so.
+ *
+ * Regenerate the .bin assets with
+ *   scripts/research/extract_mgc_raisr_filters.py
+ *   scripts/research/extract_mgc_raisr_randomness_lut.py
+ *
+ * photon_mgc_raisr_filters: 216 classes x 25 taps x 4 shifts of int16 (Q12),
+ * indexed shift*5400 + cls*25 + ky*5 + kx.
+ * photon_mgc_raisr_randomness_lut: 16x16 dither levels {0, 5, 10, 15}.
+ */
+
+#if !defined(__aarch64__)
+#error "MGC RAISR static tables are arm64-only"
+#endif
+
+.section .rodata.photon_mgc_raisr_tables,"a",@progbits
+
+.p2align 6
+.global photon_mgc_raisr_filters
+.hidden photon_mgc_raisr_filters
+.type photon_mgc_raisr_filters, %object
+photon_mgc_raisr_filters:
+    .incbin "@MGC_RAISR_FILTERS@"
+.size photon_mgc_raisr_filters, 43200
+
+.p2align 6
+.global photon_mgc_raisr_randomness_lut
+.hidden photon_mgc_raisr_randomness_lut
+.type photon_mgc_raisr_randomness_lut, %object
+photon_mgc_raisr_randomness_lut:
+    .incbin "@MGC_RAISR_RANDOMNESS_LUT@"
+.size photon_mgc_raisr_randomness_lut, 256
+
+.section .note.GNU-stack,"",@progbits

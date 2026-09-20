@@ -8,8 +8,12 @@ internal class RawOutputGeometry(
     val sourceBounds: RawTileRect,
     val rotation: Int,
     scale: Float,
-    referenceWidth: Int = sourceBounds.width,
-    referenceHeight: Int = sourceBounds.height,
+    // Both references are in the unrotated frame, exactly like a physical output
+    // size; the constructor swaps them for 90/270. Passing the already-rotated
+    // native dimensions here transposes the grid.
+    private val referenceWidth: Int = sourceBounds.width,
+    private val referenceHeight: Int = sourceBounds.height,
+    val upscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
 ) {
     init {
         require(rotation in setOf(0, 90, 180, 270))
@@ -19,11 +23,27 @@ internal class RawOutputGeometry(
     private val nativeHeight = if (rotation % 180 == 0) sourceBounds.height else sourceBounds.width
     private val outputBaseWidth = if (rotation % 180 == 0) referenceWidth else referenceHeight
     private val outputBaseHeight = if (rotation % 180 == 0) referenceHeight else referenceWidth
-    val width = MultiFrameConfig.scaledRawOutputDimension(outputBaseWidth, scale)
-    val height = MultiFrameConfig.scaledRawOutputDimension(outputBaseHeight, scale)
+    /** RAISR pins its own per-shift magnification, so the mode owns the effective scale. */
+    val outputScale = upscaleMode.resolveOutputScale(scale)
+    val width = MultiFrameConfig.scaledRawOutputDimension(outputBaseWidth, outputScale)
+    val height = MultiFrameConfig.scaledRawOutputDimension(outputBaseHeight, outputScale)
     val mgcFinishResolution = MgcFinishResolution.resolve(nativeWidth, nativeHeight, width, height)
     val resample = width != nativeWidth || height != nativeHeight
+    /** MGC RAISR replaces the Lanczos-3 resample whenever both are eligible. */
+    val raisrUpsample = upscaleMode.usesRaisr(outputScale) && resample
     val fullRegion = RawTileRect(0, 0, width, height)
+
+    /**
+     * The same crop, rotation and reference grid at 1x, i.e. the grid MGC RAISR
+     * consumes before it magnifies the image itself.
+     *
+     * The reference must be carried over: with RAW digital-zoom resampling the
+     * 1x grid is the physical output size, not the crop size, and dropping it
+     * renders the capture on the wrong grid (a portrait burst comes out as a
+     * squashed landscape).
+     */
+    fun nativeGrid(): RawOutputGeometry =
+        RawOutputGeometry(sourceBounds, rotation, 1f, referenceWidth, referenceHeight)
 
     /** Round shared edges once on the global grid, never resize each tile independently. */
     fun scaleRegion(region: RawTileRect) = RawTileRect(
@@ -68,10 +88,27 @@ internal class RawOutputGeometry(
 /** Stored separately from native DNG dimensions; older already-scaled DNGs default to 1x. */
 object RawOutputScaling {
     private const val KEY = "rawDisplayOutputScale"
+    private const val MODE_KEY = "rawDisplayOutputUpscaleMode"
 
-    fun read(properties: Map<String, String>): Float =
-        MultiFrameConfig.normalizeOutputScale(properties[KEY]?.toFloatOrNull() ?: 1f)
+    fun read(properties: Map<String, String>): Float {
+        val requested = MultiFrameConfig.normalizeOutputScale(
+            properties[KEY]?.toFloatOrNull() ?: 1f,
+        )
+        return readUpscaleMode(properties).resolveOutputScale(requested)
+    }
 
-    fun write(properties: Map<String, String>, scale: Float): Map<String, String> =
-        properties + (KEY to MultiFrameConfig.normalizeOutputScale(scale).toString())
+    /** Absent on photos captured before the algorithm setting existed; those used Lanczos-3. */
+    fun readUpscaleMode(properties: Map<String, String>): RawOutputUpscaleMode =
+        RawOutputUpscaleMode.fromName(properties[MODE_KEY])
+
+    fun write(
+        properties: Map<String, String>,
+        scale: Float,
+        upscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
+    ): Map<String, String> {
+        val mode = if (upscaleMode.isMgcRaisr) upscaleMode else RawOutputUpscaleMode.DEFAULT
+        return properties +
+            (KEY to mode.resolveOutputScale(scale).toString()) +
+            (MODE_KEY to mode.name)
+    }
 }

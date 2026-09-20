@@ -19,6 +19,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
@@ -243,6 +244,7 @@ object GalleryMediaStore {
             rawHncsRenderIntent = metadata.rawHncsRenderIntent.assetValue,
             rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode.persistedValue,
             rawColorEngine = metadata.rawRenderingEngine.name,
+            rawOutputUpscaleMode = metadata.rawOutputUpscaleMode.name,
             rawAgxBlackRelativeExposure = metadata.rawToneMappingParameters.agxBlackRelativeExposure,
             rawAgxWhiteRelativeExposure = metadata.rawToneMappingParameters.agxWhiteRelativeExposure,
             rawAgxToe = metadata.rawToneMappingParameters.agxToe,
@@ -451,6 +453,7 @@ object GalleryMediaStore {
                 rawColorEngine,
                 fallback = RawRenderingEngine.AdobeCurve
             ),
+            rawOutputUpscaleMode = RawOutputUpscaleMode.fromName(rawOutputUpscaleMode),
             rawToneMappingParameters = RawToneMappingParameters(
                 agxBlackRelativeExposure = rawAgxBlackRelativeExposure,
                 agxWhiteRelativeExposure = rawAgxWhiteRelativeExposure,

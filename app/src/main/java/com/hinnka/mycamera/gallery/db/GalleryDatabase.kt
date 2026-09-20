@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 45,
+    version = 46,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -804,6 +804,16 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_45_46 = object : androidx.room.migration.Migration(45, 46) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Photos captured before the setting existed were all magnified with
+                // the Lanczos-3 path, so Lanczos-3 is the correct backfill.
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN rawOutputUpscaleMode TEXT NOT NULL DEFAULT 'LANCZOS3'"
+                )
+            }
+        }
+
         fun getInstance(context: Context): GalleryDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -855,7 +865,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_41_42,
                         MIGRATION_42_43,
                         MIGRATION_43_44,
-                        MIGRATION_44_45
+                        MIGRATION_44_45,
+                        MIGRATION_45_46
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

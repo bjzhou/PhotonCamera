@@ -96,6 +96,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.MgcRawMaxMode
+import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import androidx.core.net.toUri
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.Lifecycle
@@ -412,6 +413,7 @@ fun SettingsScreen(
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
     val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
+    val rawOutputUpscaleMode by viewModel.rawOutputUpscaleMode.collectAsState()
     val rawDigitalZoomResamplingEnabled by viewModel.rawDigitalZoomResamplingEnabled.collectAsState()
     val availableDcps = viewModel.availableDcps
     val availableRawNoiseProfiles = viewModel.availableRawNoiseProfiles.filterNot {
@@ -2100,11 +2102,38 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_raw_output_upscale_mode),
+                            description = stringResource(
+                                R.string.settings_raw_output_upscale_mode_description
+                            ),
+                            levels = listOf(
+                                RawOutputUpscaleMode.LANCZOS3 to stringResource(
+                                    R.string.settings_raw_output_upscale_mode_lanczos
+                                ),
+                                RawOutputUpscaleMode.MGC_RAISR to stringResource(
+                                    R.string.settings_raw_output_upscale_mode_raisr
+                                ),
+                            ),
+                            currentLevel = rawOutputUpscaleMode,
+                            onLevelSelected = viewModel::setRawOutputUpscaleMode,
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         val valueFormat = stringResource(R.string.settings_raw_max_output_scale_value)
+                        val raisrUpscaleActive = rawOutputUpscaleMode.isMgcRaisr
                         SliderSettingItem(
                             title = stringResource(R.string.settings_raw_max_output_scale),
                             description = stringResource(
-                                R.string.settings_raw_max_output_scale_description
+                                if (raisrUpscaleActive) {
+                                    R.string.settings_raw_max_output_scale_description_raisr
+                                } else {
+                                    R.string.settings_raw_max_output_scale_description
+                                }
                             ),
                             value = rawMaxOutputScaleUi,
                             valueRange = MultiFrameConfig.MIN_OUTPUT_SCALE..MultiFrameConfig.MAX_OUTPUT_SCALE,
@@ -2119,7 +2148,8 @@ fun SettingsScreen(
                             onValueChangeFinished = {
                                 viewModel.setRawMaxOutputScale(rawMaxOutputScaleUi)
                             },
-                            valueTextFormatter = { scale -> String.format(valueFormat, scale) }
+                            valueTextFormatter = { scale -> String.format(valueFormat, scale) },
+                            enabled = !raisrUpscaleActive,
                         )
 
                         HorizontalDivider(

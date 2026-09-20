@@ -268,6 +268,11 @@
     <string name="settings_raw_max_output_scale">HDR+ 输出倍率</string>
     <string name="settings_raw_max_output_scale_description">调整 HDR+ 照片的输出尺寸。倍率越高，照片尺寸和文件体积越大，处理时间也可能更长。</string>
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
+    <string name="settings_raw_output_upscale_mode">输出放大算法</string>
+    <string name="settings_raw_output_upscale_mode_description">选择专业模式输出的放大算法。MGC RAISR 与 Lanczos-3 倍率放大互斥。</string>
+    <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
+    <string name="settings_raw_output_upscale_mode_raisr">MGC RAISR</string>
+    <string name="settings_raw_max_output_scale_description_raisr">MGC RAISR 仅在 2× 下放大，选中期间输出倍率固定为 2×。</string>
     <string name="settings_multi_frame_denoise_frame_count">多帧降噪帧数</string>
     <string name="settings_multi_frame_denoise_frame_count_description">照片模式下多帧降噪使用的帧数。帧数越多降噪越明显，但处理时间也越长。</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale">多帧降噪输出倍率</string>

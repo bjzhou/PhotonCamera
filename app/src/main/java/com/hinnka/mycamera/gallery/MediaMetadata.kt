@@ -21,6 +21,7 @@ import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.RawCaptureExposureCompensationMetadata
 import com.hinnka.mycamera.utils.DeviceUtil
 import org.json.JSONObject
@@ -79,6 +80,8 @@ data class MediaMetadata(
     val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+    /** Professional-mode output magnification algorithm used for this capture. */
+    val rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT,
     val cameraId: String? = null,
     // 边框水印配置
     val frameId: String? = null,
@@ -351,6 +354,11 @@ data class MediaMetadata(
                     rawRenderingEngine = RawRenderingEngine.fromPersistedName(
                         if (obj.isNull("rawColorEngine")) null else obj.optString("rawColorEngine"),
                         fallback = RawRenderingEngine.AdobeCurve
+                    ),
+                    // Absent on older photos, which were all magnified with Lanczos-3.
+                    rawOutputUpscaleMode = RawOutputUpscaleMode.fromName(
+                        if (obj.isNull("rawOutputUpscaleMode")) null
+                        else obj.optString("rawOutputUpscaleMode")
                     ),
                     rawToneMappingParameters = RawToneMappingParameters(
                         agxBlackRelativeExposure = if (obj.isNull("rawAgxBlackRelativeExposure")) {
