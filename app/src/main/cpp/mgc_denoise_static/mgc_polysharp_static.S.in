@@ -1,0 +1,1969 @@
+/* Generated mechanically from pinned MGC 9.7.047 V25 RAISR AOT.
+ * Do not edit; regenerate with
+ * scripts/research/generate_mgc_raisr_static_asm.py.
+ */
+
+#if !defined(__aarch64__)
+#error "MGC RAISR static lift is arm64-only"
+#endif
+
+    .hidden photon_mgc_halide_error_5f94d60
+    .hidden photon_mgc_halide_error_5f94e38
+    .hidden photon_mgc_halide_error_5f94ec4
+    .hidden photon_mgc_halide_error_5f94fa8
+    .hidden photon_mgc_halide_error_5f95034
+    .hidden photon_mgc_halide_error_5f950cc
+    .hidden photon_mgc_halide_error_5f95260
+    .hidden photon_mgc_halide_error_5f95540
+    .hidden photon_mgc_halide_error_5f95560
+    .hidden photon_mgc_halide_error_5f95638
+    .hidden photon_mgc_halide_error_5f956a4
+    .hidden photon_mgc_halide_do_par_for
+    .hidden photon_mgc_halide_free
+    .hidden photon_mgc_halide_malloc
+    .hidden photon_mgc_halide_trace
+
+.section .text.photon_mgc.Polysharp.polysharp_refine,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_polysharp_census
+    .hidden photon_mgc_polysharp_census
+    .type photon_mgc_polysharp_census, %function
+    .global photon_mgc_polysharp_sharpen_dog
+    .hidden photon_mgc_polysharp_sharpen_dog
+    .type photon_mgc_polysharp_sharpen_dog, %function
+photon_mgc_polysharp_page_35a2000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x0, 0x7f8
+photon_mgc_polysharp_address_35a27f8:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x7f8, 0x100
+    adrp x13, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x8f8, 0x2c
+    adrp x11, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x924, 0x34
+    adrp x11, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x958, 0x14
+    adrp x12, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x96c, 0x8
+    adrp x11, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x974, 0x678
+photon_mgc_polysharp_page_35a3000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xfec, 0x1000
+photon_mgc_polysharp_page_35a4000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fec, 0x3ac
+    adrp x9, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2398, 0xc
+    adrp x9, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23a4, 0x1c
+    adrp x9, photon_mgc_polysharp_page_6ba000
+    adrp x12, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23c0, 0xc1c
+photon_mgc_polysharp_page_35a5000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2fdc, 0x9c
+photon_mgc_polysharp_address_35a509c:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3078, 0xa8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3120, 0x178
+    adrp x9, photon_mgc_polysharp_page_6b7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3298, 0xcc
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3364, 0x19c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3500, 0x1dc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x36dc, 0x34
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3710, 0x18
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3728, 0x14
+    adrp x8, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x373c, 0x30
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x376c, 0x2c
+    b photon_mgc_halide_error_5f95540
+photon_mgc_polysharp_address_35a57e4:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3798, 0x74
+    adrp x18, photon_mgc_polysharp_page_6bb000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x380c, 0x4
+    adrp x18, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3810, 0x4
+    adrp x1, photon_mgc_polysharp_page_6c4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3814, 0x10
+    adrp x1, photon_mgc_polysharp_page_6bb000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3824, 0x780
+photon_mgc_polysharp_page_35a6000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3fa4, 0x1000
+photon_mgc_polysharp_page_35a7000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x4fa4, 0x254
+photon_mgc_polysharp_address_35a7254:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x51f8, 0xb4
+photon_mgc_polysharp_address_35a7308:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x52ac, 0x2a8
+photon_mgc_polysharp_address_35a75b0:
+photon_mgc_polysharp_census:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5554, 0xb8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x560c, 0x344
+    adrp x26, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5950, 0x98
+    adrp x26, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x59e8, 0x58
+    adrp x2, photon_mgc_polysharp_page_6bf000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5a40, 0x330
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5d70, 0x40
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5db0, 0x14
+    adrp x2, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5dc4, 0xac
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5e70, 0x40
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5eb0, 0x38
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5ee8, 0x3c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5f24, 0x34
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5f58, 0x1c
+photon_mgc_polysharp_page_35a8000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5f74, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5f90, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x5fbc, 0x230
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x61ec, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6218, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x623c, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6260, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x627c, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6298, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x62bc, 0x128
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x63e4, 0x5c
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6440, 0xa4
+    adrp x9, photon_mgc_polysharp_page_6c0000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x64e4, 0x4
+    adrp x9, photon_mgc_polysharp_page_6be000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x64e8, 0xe0
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x65c8, 0x98
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6660, 0x28
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6688, 0x8c
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6714, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6724, 0x44
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6768, 0x18
+    adrp x9, photon_mgc_polysharp_page_6b2000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6780, 0x30
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x67b0, 0x9c
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x684c, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x685c, 0x10
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x686c, 0xb4
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6920, 0xc0
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x69e0, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x69f0, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6a18, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6a38, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6a64, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6a6c, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6a78, 0x28
+    b photon_mgc_halide_error_5f95560
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6aa0, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6aa4, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6ab4, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6ad8, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6ae8, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6afc, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6b0c, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6b2c, 0x1c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6b48, 0x1c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6b64, 0x14
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6b78, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6b94, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6ba4, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6bb4, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6bd0, 0x18
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6be8, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6bf8, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6c0c, 0x18
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6c24, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6c40, 0x2c
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6c6c, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6c74, 0x30
+    b photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6ca4, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6cb8, 0x2c
+    b photon_mgc_halide_error_5f94ec4
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6ce4, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6cec, 0x2c
+    b photon_mgc_halide_error_5f95034
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6d18, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6d1c, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6d2c, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6d3c, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6d48, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6d54, 0x30
+    b photon_mgc_halide_error_5f950cc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6d84, 0x2c
+    b photon_mgc_halide_error_5f95638
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6db0, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6db4, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6dc4, 0x30
+    b photon_mgc_halide_error_5f94fa8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6df4, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6dfc, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e04, 0x2c
+    b photon_mgc_halide_error_5f956a4
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e30, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e34, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+photon_mgc_polysharp_page_35a9000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e44, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e54, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e68, 0x4
+    adrp x3, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e6c, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e80, 0x4
+    adrp x3, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6e84, 0x2c
+    b photon_mgc_halide_error_5f95260
+photon_mgc_polysharp_address_35a9084:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6eb0, 0x104
+    adrp x6, photon_mgc_polysharp_page_6ba000
+    adrp x7, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6fb4, 0x14
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6fc8, 0x4
+    adrp x20, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x6fcc, 0x88
+    adrp x9, photon_mgc_polysharp_page_6b8000
+    adrp x10, photon_mgc_polysharp_page_6b7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x7054, 0xdc0
+photon_mgc_polysharp_page_35aa000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x7e14, 0x53c
+    adrp x6, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x8350, 0x8
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x8358, 0x4
+    adrp x7, photon_mgc_polysharp_page_6ba000
+    adrp x20, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x835c, 0xaa8
+photon_mgc_polysharp_page_35ab000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x8e04, 0xc60
+    adrp x7, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9a64, 0x4
+    adrp x6, photon_mgc_polysharp_page_6ba000
+    adrp x20, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9a68, 0x8
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9a70, 0xf0
+    adrp x11, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9b60, 0xc
+    adrp x10, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9b6c, 0xc
+    adrp x9, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9b78, 0x8
+    adrp x9, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9b80, 0x264
+photon_mgc_polysharp_page_35ac000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x9de4, 0x1000
+photon_mgc_polysharp_page_35ad000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xade4, 0x774
+photon_mgc_polysharp_address_35ad774:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xb558, 0xe4
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xb63c, 0x10
+    adrp x8, photon_mgc_polysharp_page_6b1000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xb64c, 0x48
+    adrp x14, photon_mgc_polysharp_page_6b7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xb694, 0x270
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xb904, 0x194
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xba98, 0x2c
+    adrp x0, photon_mgc_polysharp_page_6b1000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbac4, 0x1b0
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbc74, 0x30
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbca4, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbcb4, 0x14
+    adrp x8, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbcc8, 0x2c
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbcf4, 0x28
+    b photon_mgc_halide_error_5f95540
+photon_mgc_polysharp_address_35adf68:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbd1c, 0x98
+photon_mgc_polysharp_page_35ae000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbdb4, 0x4
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbdb8, 0x154
+    adrp x10, photon_mgc_polysharp_page_6b7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xbf0c, 0x3a4
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc2b0, 0x28
+    adrp x8, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc2d8, 0x28
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc300, 0x20
+    b photon_mgc_halide_error_5f95540
+photon_mgc_polysharp_address_35ae584:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc320, 0x98
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc3b8, 0x108
+    adrp x11, photon_mgc_polysharp_page_6b8000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc4c0, 0x420
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc8e0, 0x28
+    adrp x8, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc908, 0x28
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc930, 0x20
+    b photon_mgc_halide_error_5f95540
+photon_mgc_polysharp_address_35aebcc:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc950, 0x48
+    adrp x3, photon_mgc_polysharp_page_6bb000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xc998, 0x74
+    adrp x11, photon_mgc_polysharp_page_6b2000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xca0c, 0x18
+    adrp x26, photon_mgc_polysharp_page_6bb000
+    adrp x27, photon_mgc_polysharp_page_6bc000
+    adrp x28, photon_mgc_polysharp_page_6c4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xca24, 0x34c
+photon_mgc_polysharp_page_35af000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xcd70, 0x1000
+photon_mgc_polysharp_page_35b0000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xdd70, 0x644
+photon_mgc_polysharp_address_35b0644:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xe3b4, 0x10
+    adrp x5, photon_mgc_polysharp_page_6bb000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xe3c4, 0x94
+    adrp x0, photon_mgc_polysharp_page_6c4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xe458, 0xc
+    adrp x0, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xe464, 0x4
+    adrp x2, photon_mgc_polysharp_page_6bb000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xe468, 0x8f8
+photon_mgc_polysharp_page_35b1000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xed60, 0x1000
+photon_mgc_polysharp_page_35b2000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xfd60, 0xe0
+photon_mgc_polysharp_address_35b20e0:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xfe40, 0x1b4
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0xfff4, 0x3c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x10030, 0x158
+    adrp x10, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x10188, 0xc
+    adrp x10, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x10194, 0x8
+    adrp x11, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1019c, 0x8
+    adrp x10, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x101a4, 0xba4
+photon_mgc_polysharp_page_35b3000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x10d48, 0x448
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11190, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x111c8, 0x68
+    adrp x8, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11230, 0xc
+    adrp x8, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1123c, 0x10
+    adrp x8, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1124c, 0x10
+    adrp x9, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1125c, 0x82c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11a88, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11aac, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11ae0, 0x1cc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11cac, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11ccc, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11d00, 0x18
+photon_mgc_polysharp_page_35b4000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11d18, 0x10
+    adrp x19, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x11d28, 0x2d8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12000, 0xc
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1200c, 0x28
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12034, 0x1c4
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x121f8, 0x10
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12208, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12234, 0x290
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x124c4, 0x3f0
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x128b4, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x128c0, 0x1c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x128dc, 0x410
+photon_mgc_polysharp_page_35b5000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12cec, 0x2ac
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12f98, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12fa4, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12fb0, 0x44
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x12ff4, 0x20
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13014, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1303c, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13060, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13084, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x130ac, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x130d0, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x130f4, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13118, 0x3c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13154, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13160, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13168, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13174, 0x40
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x131b4, 0x18
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x131cc, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x131d8, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x131e0, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x131ec, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x131fc, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13208, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13210, 0x3c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1324c, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13258, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1325c, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13268, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13270, 0x8
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13278, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1327c, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13288, 0xc
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13294, 0x3c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x132d0, 0x1c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x132ec, 0x40
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1332c, 0x40
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1336c, 0x18
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13384, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x133a8, 0x54
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x133fc, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13404, 0x38
+photon_mgc_polysharp_address_35b57f4:
+photon_mgc_polysharp_sharpen_dog:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1343c, 0x5d8
+    adrp x24, photon_mgc_polysharp_page_6bf000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13a14, 0x68
+    adrp x21, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13a7c, 0xe0
+    adrp x26, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13b5c, 0xe0
+photon_mgc_polysharp_page_35b6000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13c3c, 0x1c4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13e00, 0x38
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13e38, 0x34
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13e6c, 0x30
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13e9c, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13ec8, 0x24
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13eec, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13f10, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x13f3c, 0x1c8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14104, 0x30
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14134, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14158, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1417c, 0x16c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x142e8, 0x60
+    adrp x9, photon_mgc_polysharp_page_6bb000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14348, 0x14
+    adrp x8, photon_mgc_polysharp_page_6be000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1435c, 0x14
+    adrp x8, photon_mgc_polysharp_page_6bb000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14370, 0x8
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14378, 0x174
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x144ec, 0x13c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14628, 0x10
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14638, 0x94
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x146cc, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x146dc, 0x118
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x147f4, 0x10
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14804, 0x98
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1489c, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x148b0, 0x160
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14a10, 0x10
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14a20, 0xb0
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14ad0, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14ae0, 0xa8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14b88, 0x24
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14bac, 0x10
+photon_mgc_polysharp_page_35b7000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14bbc, 0x60
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14c1c, 0x18
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14c34, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14c7c, 0x10
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14c8c, 0x24
+    adrp x9, photon_mgc_polysharp_page_6b2000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14cb0, 0xd0
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14d80, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14d94, 0x128
+    adrp x6, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14ebc, 0x28
+    adrp x5, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14ee4, 0x8
+    adrp x3, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14eec, 0x8
+    adrp x4, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x14ef4, 0x190
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15084, 0x14
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15098, 0x844
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x158dc, 0x8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x158e4, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15908, 0x184
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15a8c, 0x8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15a94, 0x14
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15aa8, 0xc8
+photon_mgc_polysharp_page_35b8000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15b70, 0xc8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15c38, 0x154
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15d8c, 0x8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15d94, 0x8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15d9c, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15dd8, 0x28
+    adrp x17, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x15e00, 0x2c4
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x160c4, 0x5c
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16120, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16134, 0xb8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x161ec, 0x1c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16208, 0x34
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1623c, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16268, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1628c, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x162b4, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x162dc, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16304, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16328, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16350, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16378, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x163b4, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x163e4, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16410, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16438, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1645c, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16484, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x164ac, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x164d0, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x164f8, 0x20
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16518, 0x40
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16558, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16564, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16570, 0x34
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x165a4, 0x34
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x165d8, 0x30
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16608, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16634, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1663c, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16648, 0x8
+    bl photon_mgc_halide_error_5f95560
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16650, 0x44
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16694, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x166a4, 0x40
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x166e4, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x166f4, 0x6c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16760, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16770, 0x50
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x167c0, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x167d0, 0x4c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1681c, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1682c, 0x90
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x168bc, 0x14
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x168d0, 0x54
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16924, 0xc
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16930, 0x6c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1699c, 0x6c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16a08, 0x50
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16a58, 0x34
+photon_mgc_polysharp_page_35b9000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16a8c, 0x18
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16aa4, 0x214
+    adrp x18, photon_mgc_polysharp_page_6b8000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16cb8, 0x1ac
+    adrp x8, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16e64, 0x4
+    adrp x8, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16e68, 0x8
+    adrp x8, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16e70, 0x8
+    adrp x8, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16e78, 0xcc
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16f44, 0x10
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x16f54, 0xb18
+photon_mgc_polysharp_page_35ba000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x17a6c, 0x52c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x17f98, 0x8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x17fa0, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x17fc4, 0x208
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x181cc, 0x8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x181d4, 0x14
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x181e8, 0x208
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x183f0, 0x150
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x18540, 0x8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x18548, 0x8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x18550, 0x84
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x185d4, 0x2c
+    adrp x4, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x18600, 0x5c
+    adrp x1, photon_mgc_polysharp_page_6ba000
+    adrp x2, photon_mgc_polysharp_page_6ba000
+    adrp x3, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1865c, 0x158
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x187b4, 0x14
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x187c8, 0x260
+photon_mgc_polysharp_page_35bb000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x18a28, 0x5e4
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1900c, 0x8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19014, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19038, 0x188
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x191c0, 0x8
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x191c8, 0x14
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x191dc, 0x190
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1936c, 0x154
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x194c0, 0x8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x194c8, 0x8
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x194d0, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1950c, 0x1c
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19528, 0xc
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19534, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19560, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1956c, 0x20
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1958c, 0x20
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x195ac, 0x34
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x195e0, 0x18
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x195f8, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19604, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19610, 0xc
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1961c, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19630, 0x60
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19690, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x196ac, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x196b8, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x196c4, 0x1c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x196e0, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x196ec, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x196f8, 0x70
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19768, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19774, 0x10
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19784, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19790, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1979c, 0x8
+    bl photon_mgc_halide_error_5f95540
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x197a4, 0x44
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x197e8, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x197f8, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19808, 0x24
+    b photon_mgc_halide_error_5f950cc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1982c, 0xc
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19838, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19848, 0x28
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19870, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19874, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19888, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1989c, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x198ac, 0x14
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x198c0, 0x2c
+    b photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x198ec, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x198f0, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19900, 0x24
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19924, 0x30
+photon_mgc_polysharp_page_35bc000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19954, 0x4
+    b photon_mgc_halide_error_5f94ec4
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19958, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19960, 0x24
+    b photon_mgc_halide_error_5f95034
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19984, 0x4
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19988, 0x4
+    adrp x3, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1998c, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1999c, 0x4
+    adrp x3, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x199a0, 0x10
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x199b0, 0x4
+    adrp x3, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x199b4, 0x28
+    b photon_mgc_halide_error_5f95260
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x199dc, 0x24
+    b photon_mgc_halide_error_5f95638
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19a00, 0x8
+    adrp x1, photon_mgc_polysharp_page_bb7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19a08, 0x24
+    b photon_mgc_halide_error_5f956a4
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x19a2c, 0xeec
+
+
+.section .text.photon_mgc.Polysharp.polysharp_poly_filter,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_polysharp_poly_filter
+    .hidden photon_mgc_polysharp_poly_filter
+    .type photon_mgc_polysharp_poly_filter, %function
+photon_mgc_polysharp_page_3576000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1a918, 0x9f0
+photon_mgc_polysharp_address_35769f0:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1b308, 0x4d0
+    adrp x17, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1b7d8, 0x13c
+photon_mgc_polysharp_page_3577000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1b914, 0x174
+    adrp x18, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ba88, 0x38c
+    adrp x14, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1be14, 0x184
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1bf98, 0x238
+    adrp x8, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1c1d0, 0x1f0
+    adrp x5, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1c3c0, 0x168
+    adrp x14, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1c528, 0x220
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1c748, 0x1b0
+photon_mgc_polysharp_page_3578000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1c8f8, 0x20
+    adrp x8, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1c918, 0x178
+    adrp x18, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ca90, 0x1b0
+    adrp x13, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1cc40, 0x210
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ce50, 0x118
+    adrp x12, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1cf68, 0x190
+    adrp x6, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d0f8, 0x1a0
+    adrp x13, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d298, 0x234
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d4cc, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d4f4, 0x194
+    adrp x0, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d688, 0x15c
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d7e4, 0xe8
+photon_mgc_polysharp_page_3579000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d8cc, 0xf8
+    adrp x16, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1d9c4, 0x1c8
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1db8c, 0x184
+    adrp x14, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1dd10, 0x1dc
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1deec, 0x144
+    adrp x12, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e030, 0x148
+    adrp x16, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e178, 0x10
+    adrp x16, photon_mgc_polysharp_page_6bf000
+    adrp x18, photon_mgc_polysharp_page_6b5000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e188, 0x74
+    adrp x17, photon_mgc_polysharp_page_6b6000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e1fc, 0x1a0
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e39c, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e3d0, 0x40
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e410, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e430, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e454, 0x40
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e494, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e4c0, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e4e8, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e514, 0x34
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e548, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e574, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e59c, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e5c0, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e5f0, 0x30
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e620, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e64c, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e66c, 0x5c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e6c8, 0x20
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e6e8, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e70c, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e740, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e77c, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e7a0, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e7cc, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e7f0, 0x54
+photon_mgc_polysharp_page_357a000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1e844, 0x1c0
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ea04, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ea20, 0x44
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ea64, 0x28
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ea8c, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ea9c, 0x1c
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1eab8, 0x38
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1eaf0, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1eb08, 0x20
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1eb28, 0x38
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1eb60, 0x18
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1eb78, 0x18
+photon_mgc_polysharp_address_357a378:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1eb90, 0x2b8
+    adrp x18, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ee48, 0x174
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1efbc, 0x1b0
+    adrp x13, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f16c, 0x1bc
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f328, 0x14c
+    adrp x13, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f474, 0x1d4
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f648, 0x108
+    adrp x13, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f750, 0xac
+photon_mgc_polysharp_page_357b000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f7fc, 0x108
+    adrp x17, photon_mgc_polysharp_page_6b6000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f904, 0x2c
+    adrp x15, photon_mgc_polysharp_page_6bf000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f930, 0x1c
+    adrp x16, photon_mgc_polysharp_page_6b5000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1f94c, 0x180
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1facc, 0x14
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fae0, 0x40
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fb20, 0x4c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fb6c, 0x50
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fbbc, 0x54
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fc10, 0x4c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fc5c, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fc90, 0x4c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fcdc, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fd24, 0x54
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fd78, 0x28
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fda0, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fdd0, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fdf4, 0xd4
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fec8, 0x2c
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1fef4, 0x14
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ff08, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ff18, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ff30, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ff48, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ff58, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ff68, 0x24
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ff8c, 0x24
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ffb0, 0x14
+photon_mgc_polysharp_address_357b834:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x1ffc4, 0x7cc
+photon_mgc_polysharp_page_357c000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x20790, 0x14
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x207a4, 0x624
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x20dc8, 0x608
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x213d0, 0x3b4
+photon_mgc_polysharp_page_357d000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x21784, 0x350
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x21ad4, 0x2bc
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x21d90, 0x2a4
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22034, 0x2e0
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22314, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2233c, 0x84
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x223c0, 0x60
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22420, 0x40
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22460, 0x28
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22488, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x224b0, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x224dc, 0x48
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22524, 0x50
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22574, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x225a0, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x225cc, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22604, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22640, 0x30
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22670, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x226a0, 0x28
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x226c8, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x226f0, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22714, 0x18
+photon_mgc_polysharp_page_357e000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2272c, 0x44
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22770, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22794, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x227bc, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x227f0, 0x38
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22828, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2284c, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22874, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22898, 0x1e8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22a80, 0x30
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22ab0, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22ab8, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22ac4, 0x24
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22ae8, 0x20
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22b08, 0x14
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22b1c, 0x18
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22b34, 0x34
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22b68, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22b80, 0xc
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22b8c, 0x2c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22bb8, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22bc8, 0x24
+photon_mgc_polysharp_address_357e514:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22bec, 0x2e8
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x22ed4, 0x2c8
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2319c, 0x2c0
+    bl memset
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2345c, 0x270
+photon_mgc_polysharp_page_357f000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x236cc, 0x54
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23720, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23730, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23768, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x237a0, 0x38
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x237d8, 0x3c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23814, 0x50
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23864, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23888, 0x30
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x238b8, 0x2c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x238e4, 0x38
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2391c, 0x28
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23944, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23970, 0x24
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23994, 0xc8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23a5c, 0x28
+    b photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23a84, 0xc
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23a90, 0xc
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23a9c, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23ab4, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23acc, 0x1c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23ae8, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23b00, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23b10, 0x10
+    bl photon_mgc_halide_error_5f94fa8
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23b20, 0x14
+photon_mgc_polysharp_address_357f4c8:
+photon_mgc_polysharp_poly_filter:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23b34, 0xc4
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x23bf8, 0x424
+    adrp x26, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2401c, 0x4c
+    adrp x24, photon_mgc_polysharp_page_6be000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24068, 0x60
+    adrp x27, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x240c8, 0x34
+    adrp x26, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x240fc, 0x84
+    adrp x11, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24180, 0x30c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2448c, 0x3c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x244c8, 0x34
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x244fc, 0x34
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24530, 0x20
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24550, 0x34
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24584, 0x34
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x245b8, 0x34
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x245ec, 0x28
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24614, 0x1c
+photon_mgc_polysharp_page_3580000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24630, 0x230
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24860, 0x30
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24890, 0x20
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x248b0, 0x28
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x248d8, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x248f0, 0x24
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24914, 0x20
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24934, 0x30
+    b photon_mgc_halide_error_5f950cc
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24964, 0x548
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x24eac, 0x19c
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25048, 0x3c
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25084, 0x580
+photon_mgc_polysharp_page_3581000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25604, 0x34
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25638, 0x120
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25758, 0x38
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25790, 0x124
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x258b4, 0x2c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x258e0, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x258e8, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x258f0, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x258f8, 0x28
+    b photon_mgc_halide_error_5f95560
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25920, 0x4
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25924, 0xc
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25930, 0xc
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2593c, 0x1c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25958, 0x1c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25974, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2597c, 0x14
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25990, 0x1c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x259ac, 0x1c
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x259c8, 0xc
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x259d4, 0x30
+    b photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a04, 0xc
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a10, 0x18
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a28, 0x14
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a3c, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a4c, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a54, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a64, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a6c, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a7c, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25a84, 0x28
+    b photon_mgc_halide_error_5f95638
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25aac, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25abc, 0x30
+    b photon_mgc_halide_error_5f94fa8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25aec, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25af4, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25afc, 0x28
+    b photon_mgc_halide_error_5f956a4
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25b24, 0x2c
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25b50, 0x8
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25b58, 0x3c
+    b photon_mgc_halide_error_5f94ec4
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25b94, 0x2c
+    b photon_mgc_halide_error_5f95034
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25bc0, 0x4
+    adrp x3, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25bc4, 0x10
+    adrp x1, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25bd4, 0x4
+    adrp x3, photon_mgc_polysharp_page_baa000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25bd8, 0x30
+    b photon_mgc_halide_error_5f95260
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x25c08, 0x93c
+
+
+.section .text.photon_mgc.Polysharp.polysharp_halo_blend,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_polysharp_blend_tau_mask
+    .hidden photon_mgc_polysharp_blend_tau_mask
+    .type photon_mgc_polysharp_blend_tau_mask, %function
+    .global photon_mgc_polysharp_halo_mask
+    .hidden photon_mgc_polysharp_halo_mask
+    .type photon_mgc_polysharp_halo_mask, %function
+photon_mgc_polysharp_page_3582000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26544, 0x2d4
+photon_mgc_polysharp_address_35822d4:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26818, 0xe4
+photon_mgc_polysharp_address_35823b8:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x268fc, 0x68
+    adrp x27, photon_mgc_polysharp_page_6b9000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26964, 0x34
+    adrp x23, photon_mgc_polysharp_page_6c2000
+    adrp x30, photon_mgc_polysharp_page_6c5000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26998, 0x4
+    adrp x26, photon_mgc_polysharp_page_6bf000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2699c, 0x10c
+    adrp x21, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26aa8, 0x10
+    adrp x19, photon_mgc_polysharp_page_6b5000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26ab8, 0x3c
+    adrp x7, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26af4, 0x48
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26b3c, 0x48
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26b84, 0x64
+    adrp x1, photon_mgc_polysharp_page_6c5000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26be8, 0x20c
+    adrp x13, photon_mgc_polysharp_page_6c6000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26df4, 0xd4
+    adrp x7, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26ec8, 0x2c
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26ef4, 0x2c
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x26f20, 0x278
+photon_mgc_polysharp_address_3582c8c:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27198, 0x2dc
+    adrp x2, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27474, 0xc
+    adrp x2, photon_mgc_polysharp_page_6b5000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27480, 0x40
+    adrp x2, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x274c0, 0x40
+photon_mgc_polysharp_page_3583000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27500, 0x8
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27508, 0x48
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27550, 0x2a0
+    adrp x2, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x277f0, 0x2c
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2781c, 0x2c
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27848, 0x5f8
+    adrp x11, photon_mgc_polysharp_page_6c6000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x27e40, 0x304
+photon_mgc_polysharp_address_3583c5c:
+photon_mgc_polysharp_blend_tau_mask:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28144, 0xa0
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x281e4, 0x150
+    adrp x17, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28334, 0x24
+    adrp x8, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28358, 0x64
+    adrp x14, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x283bc, 0x11c
+photon_mgc_polysharp_page_3584000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x284d8, 0x204
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x286dc, 0x54
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28730, 0x20
+    adrp x15, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28750, 0x84
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x287d4, 0x38
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2880c, 0x38
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28844, 0x24
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28868, 0x30
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28898, 0x278
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28b10, 0x40
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28b50, 0x34
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28b84, 0x34
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28bb8, 0x28
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28be0, 0x28
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28c08, 0x24
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28c2c, 0x78
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28ca4, 0xf8
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28d9c, 0xa8
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28e44, 0x78
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28ebc, 0x20
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28edc, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28ee4, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28eec, 0x24
+    b photon_mgc_halide_error_5f95560
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f10, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f18, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f28, 0x14
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f3c, 0x14
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f50, 0xc
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f5c, 0xc
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f68, 0x18
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f80, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28f88, 0x18
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28fa0, 0x28
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28fc8, 0x4
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28fcc, 0x2c
+    b photon_mgc_halide_error_5f94d60
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28ff8, 0x4
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x28ffc, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29018, 0x14
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2902c, 0x20
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2904c, 0x28
+    b photon_mgc_halide_error_5f94ec4
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29074, 0x14
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29088, 0x2c
+    b photon_mgc_halide_error_5f95034
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x290b4, 0x4
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x290b8, 0x4
+    adrp x3, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x290bc, 0x28
+    b photon_mgc_halide_error_5f95260
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x290e4, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x290f4, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29104, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29114, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2911c, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2912c, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2913c, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29144, 0x24
+    b photon_mgc_halide_error_5f95638
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29168, 0x2c
+    b photon_mgc_halide_error_5f94fa8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29194, 0x2c
+    b photon_mgc_halide_error_5f950cc
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x291c0, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x291c8, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x291d0, 0x24
+    b photon_mgc_halide_error_5f956a4
+photon_mgc_polysharp_address_3584e18:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x291f4, 0x1e8
+photon_mgc_polysharp_page_3585000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x293dc, 0x5c8
+photon_mgc_polysharp_address_35855c8:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x299a4, 0x130
+    adrp x13, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29ad4, 0x47c
+    adrp x13, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x29f50, 0x388
+    adrp x15, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2a2d8, 0xf8
+photon_mgc_polysharp_page_3586000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2a3d0, 0x1d4
+photon_mgc_polysharp_address_35861d4:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2a5a4, 0x184
+    adrp x10, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2a728, 0x86c
+    adrp x11, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2af94, 0x3ec
+    adrp x14, photon_mgc_polysharp_page_6bc000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2b380, 0x44
+photon_mgc_polysharp_page_3587000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2b3c4, 0x2bc
+photon_mgc_polysharp_address_35872bc:
+photon_mgc_polysharp_halo_mask:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2b680, 0x38
+    adrp x6, photon_mgc_polysharp_page_6c5000
+    adrp x19, photon_mgc_polysharp_page_6ba000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2b6b8, 0x148
+    adrp x4, photon_mgc_polysharp_page_6c5000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2b800, 0x164
+    adrp x20, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2b964, 0x48
+    adrp x19, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2b9ac, 0x90
+    adrp x28, photon_mgc_polysharp_page_6b4000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2ba3c, 0x244
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bc80, 0x38
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bcb8, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bce4, 0x2c
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bd10, 0x28
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bd38, 0x28
+    b photon_mgc_halide_error_5f94e38
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bd60, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bd7c, 0x24
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bda0, 0x1fc
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bf9c, 0x30
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bfcc, 0x28
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2bff4, 0x28
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c01c, 0x18
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c034, 0x18
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c04c, 0x7c
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c0c8, 0x1c8
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c290, 0x80
+    adrp x1, photon_mgc_polysharp_page_61e7000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c310, 0x58
+photon_mgc_polysharp_page_3588000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c368, 0x34
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c39c, 0x20
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c3bc, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c3c4, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c3cc, 0x24
+    b photon_mgc_halide_error_5f95560
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c3f0, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c400, 0x14
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c414, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c424, 0x14
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c438, 0x14
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c44c, 0xc
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c458, 0x2c
+    b photon_mgc_halide_error_5f94d60
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c484, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c494, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c4b0, 0x1c
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c4cc, 0x30
+    b photon_mgc_halide_error_5f94ec4
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c4fc, 0x10
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c50c, 0x2c
+    b photon_mgc_halide_error_5f94fa8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c538, 0x8
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c540, 0x24
+    b photon_mgc_halide_error_5f95638
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c564, 0x2c
+    b photon_mgc_halide_error_5f950cc
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c590, 0xc
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c59c, 0x28
+    b photon_mgc_halide_error_5f95034
+    adrp x1, photon_mgc_polysharp_page_bab000
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c5c4, 0x24
+    b photon_mgc_halide_error_5f956a4
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2c5e8, 0xd04
+
+.section .rodata.photon_mgc.polysharp_page_6b1000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b1000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2d2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6b2000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b2000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2e2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6b4000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b4000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x2f2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6b5000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b5000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x302ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6b6000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b6000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x312ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6b7000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b7000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x322ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6b8000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b8000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x332ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6b9000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6b9000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x342ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6ba000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6ba000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x352ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6bb000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6bb000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x362ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6bc000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6bc000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x372ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6be000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6be000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x382ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6bf000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6bf000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x392ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6c0000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6c0000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3a2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6c2000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6c2000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3b2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6c4000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6c4000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3c2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6c5000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6c5000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3d2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_6c6000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_6c6000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3e2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_baa000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_baa000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x3f2ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_bab000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_bab000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x402ec, 0x1000
+
+.section .rodata.photon_mgc.polysharp_page_bb7000,"a",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_bb7000:
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x412ec, 0x1000
+
+.section .data.rel.ro.photon_mgc.polysharp_page_61e7000,"aw",@progbits
+    .p2align 12
+photon_mgc_polysharp_page_61e7000:
+    .xword photon_mgc_polysharp_address_35769f0
+    .xword photon_mgc_polysharp_address_357a378
+    .xword photon_mgc_polysharp_address_357b834
+    .xword photon_mgc_polysharp_address_357e514
+    .xword photon_mgc_polysharp_address_35822d4
+    .xword photon_mgc_polysharp_address_35823b8
+    .xword photon_mgc_polysharp_address_3582c8c
+    .xword photon_mgc_polysharp_address_3584e18
+    .xword photon_mgc_polysharp_address_35855c8
+    .xword photon_mgc_polysharp_address_35861d4
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x422ec, 0x58
+    .xword photon_mgc_polysharp_address_35a27f8
+    .xword photon_mgc_polysharp_address_35a509c
+    .xword photon_mgc_polysharp_address_35a57e4
+    .xword photon_mgc_polysharp_address_35a7254
+    .xword photon_mgc_polysharp_address_35a7308
+    .xword photon_mgc_polysharp_address_35a9084
+    .xword photon_mgc_polysharp_address_35ad774
+    .xword photon_mgc_polysharp_address_35adf68
+    .xword photon_mgc_polysharp_address_35ae584
+    .xword photon_mgc_polysharp_address_35aebcc
+    .xword photon_mgc_polysharp_address_35b0644
+    .xword photon_mgc_polysharp_address_35b20e0
+    .incbin "@MGC_POLYSHARP_CAPSULE@", 0x42344, 0xef8
+
+.section .note.GNU-stack,"",@progbits

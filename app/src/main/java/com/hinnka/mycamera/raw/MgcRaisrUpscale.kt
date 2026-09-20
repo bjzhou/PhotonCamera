@@ -36,14 +36,14 @@ internal class MgcRaisrUpscale {
      * (RGBA_F16 as the GPU hands it back, or ARGB_8888); the native side owns
      * that conversion too. `source` stays untouched.
      */
-    fun upscale(source: Bitmap): Bitmap? {
+    fun upscale(source: Bitmap, resampleRate: Float): Bitmap? {
         val width = source.width
         val height = source.height
         if (width <= 0 || height <= 0) {
             return null
         }
         val output = createOutput(width * scale, height * scale) ?: return null
-        val status = nativeUpscaleBitmap(source, output)
+        val status = nativeUpscaleBitmap(source, output, resampleRate)
         if (status != 0) {
             PLog.e(TAG, "MGC RAISR upscale failed status=$status input=${width}x$height")
             output.recycle()
@@ -57,8 +57,8 @@ internal class MgcRaisrUpscale {
      *
      * [buffer] holds the whole working tile at native scale in its own (source)
      * orientation, and the core occupies `coreLeft/coreTop/coreWidth/coreHeight`
-     * inside it. The native side feeds the chain the core plus the halo its 5x5
-     * window needs and crops the margin from the 2x result again, so the tile
+     * inside it. The native side feeds the chain the core plus the context its
+     * RAISR/refine/Polysharp stages need and crops the margin from the 2x result, so the tile
      * scratch stays inside the same budget as the whole-frame path. The caller
      * rotates the result into output orientation.
      */
@@ -70,6 +70,7 @@ internal class MgcRaisrUpscale {
         coreTop: Int,
         coreWidth: Int,
         coreHeight: Int,
+        resampleRate: Float,
     ): Bitmap? {
         if (tileWidth <= 0 || tileHeight <= 0 || coreWidth <= 0 || coreHeight <= 0) {
             return null
@@ -84,6 +85,7 @@ internal class MgcRaisrUpscale {
             coreWidth,
             coreHeight,
             output,
+            resampleRate,
         )
         if (status != 0) {
             PLog.e(
@@ -122,7 +124,11 @@ internal class MgcRaisrUpscale {
             null
         }
 
-    private external fun nativeUpscaleBitmap(source: Bitmap, destination: Bitmap): Int
+    private external fun nativeUpscaleBitmap(
+        source: Bitmap,
+        destination: Bitmap,
+        resampleRate: Float,
+    ): Int
 
     private external fun nativeUpscaleTile(
         source: ByteBuffer,
@@ -133,6 +139,7 @@ internal class MgcRaisrUpscale {
         coreWidth: Int,
         coreHeight: Int,
         destination: Bitmap,
+        resampleRate: Float,
     ): Int
 
     companion object {

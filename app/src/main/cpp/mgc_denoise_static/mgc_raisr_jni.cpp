@@ -199,7 +199,8 @@ bool IsSourceFormat(int32_t format) {
 extern "C" JNIEXPORT jint JNICALL
 Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleBitmap(JNIEnv* env, jclass,
                                                                 jobject source,
-                                                                jobject destination) {
+                                                                jobject destination,
+                                                                jfloat resample_rate) {
     LockedBitmap source_bitmap;
     LockedBitmap destination_bitmap;
     if (!source_bitmap.Lock(env, source) || !destination_bitmap.Lock(env, destination)) {
@@ -224,7 +225,7 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleBitmap(JNIEnv* env, jc
     const int status = photon_raisr::RunBands(
         BitmapSource(source_bitmap.bytes(), source_bitmap.stride(), width, source_bitmap.format()),
         ArgbSink(destination_bitmap.mutable_bytes(), destination_bitmap.stride()), width, height, 0,
-        0, width, height, photon_raisr::BandCoreRows(width));
+        0, width, height, photon_raisr::BandCoreRows(width), resample_rate);
     if (status != 0) {
         __android_log_print(ANDROID_LOG_ERROR, kTag, "banded upscale failed: %d", status);
     }
@@ -238,7 +239,8 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleBitmap(JNIEnv* env, jc
 extern "C" JNIEXPORT jint JNICALL
 Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleTile(
     JNIEnv* env, jclass, jobject source, jint tile_width, jint tile_height, jint core_left,
-    jint core_top, jint core_width, jint core_height, jobject destination) {
+    jint core_top, jint core_width, jint core_height, jobject destination,
+    jfloat resample_rate) {
     if (source == nullptr || tile_width <= 0 || tile_height <= 0 || core_width <= 0 ||
         core_height <= 0 || core_left < 0 || core_top < 0 || core_left + core_width > tile_width ||
         core_top + core_height > tile_height) {
@@ -252,8 +254,10 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleTile(
     if (capacity < jlong(tile_width) * tile_height * 4 * jlong(sizeof(float))) {
         return -1;
     }
-    const int left = std::max(0, core_left - photon_raisr::kBandHaloPx);
-    const int top = std::max(0, core_top - photon_raisr::kBandHaloPx);
+    // Preserve the DOG pyramid phase when cropping context out of the tile.
+    const int alignment = photon_raisr::kBandAlignmentPx;
+    const int left = std::max(0, core_left - photon_raisr::kBandHaloPx) / alignment * alignment;
+    const int top = std::max(0, core_top - photon_raisr::kBandHaloPx) / alignment * alignment;
     const int right = std::min<int>(tile_width, core_left + core_width + photon_raisr::kBandHaloPx);
     const int bottom =
         std::min<int>(tile_height, core_top + core_height + photon_raisr::kBandHaloPx);
@@ -277,7 +281,7 @@ Java_com_hinnka_mycamera_raw_MgcRaisrUpscale_nativeUpscaleTile(
         TileSource(pixels, tile_width, region_width, left, top),
         ArgbSink(destination_bitmap.mutable_bytes(), destination_bitmap.stride()), region_width,
         region_height, core_left - left, core_top - top, core_width, core_height,
-        photon_raisr::BandCoreRows(region_width));
+        photon_raisr::BandCoreRows(region_width), resample_rate);
     if (status != 0) {
         __android_log_print(ANDROID_LOG_ERROR, kTag, "banded tile upscale failed: %d", status);
     }

@@ -781,3 +781,112 @@ adb push raisr_probe /data/local/tmp/ && adb shell "cd /data/local/tmp && ./rais
 即使只做最小忠实集合（哈希 + 2x per-shift + composite + 驱动胶水），
 也包含 3 个 AOT 闭包的提升、静态数据提取、npcam 胶水重写、JNI、管线接入与
 多语言设置，属于多阶段工程；3x/4x 与 polysharp/blender 内核可按需扩展到同一框架。
+
+## Polysharp 接入（同一放大链的后半段）
+
+V25 的输出放大链在 RAISR 之后还有 **Polysharp**：`upsample2022_hdrplus.cc` 的
+`RaisrUpsample`(0x355F230) 依次执行 `NanoRaisrDirectUpscaleAndRefineLumaMin`
+(0x3589540，含 refine 链) 与 `Polysharp`(0x357680C)。本次把两者的全部内核按同一
+套提升流程接入。
+
+### 提升的闭包（`generate_mgc_polysharp_static_asm.py`，复用 RAISR 生成器机制）
+
+| 闭包 | 入口 | 任务槽 | 说明 |
+| --- | --- | --- | --- |
+| `polysharp_refine` | 0x35A75B0 / 0x35B57F4 | 12 | Census + SharpenDOG 页范围重叠，故合成一个闭包 |
+| `polysharp_poly_filter` | 0x357F4C8 | 4 | 多项式滤波核心 |
+| `polysharp_halo_blend` | 0x3583C5C / 0x35872BC | 6 | Blend + HaloMask，HaloMask 的冷路径读到落在 Blend 页内的 worker |
+
+capsule `mgc_polysharp_capsule.bin` 275004 B，
+SHA-256 `9972245659a83ba2debc392054b3b8de95efa58f2a6eb6ae15ccd891cbb6c49c`，
+由 `CMakeLists.txt` 校验；生成器自检覆盖 `task_pointers=22`、无 PC 相对引用逃逸、
+外部调用全部落在宿主 shim 上。
+
+**ABI 全部在真机上实锤（validation callback = 0）**，其中两条只有实测才能得到：
+
+* `SharpenDOGHalide` / `CensusHighFreqBlenderHalide` 的 traits 串以
+  `-user_context` 结尾（首个参数是 `void*`），而 `SeparableIterativePolyFilterHalide`
+  / `HaloMaskHalide` / `BlendTwoImagesWithTauAndMask` 是 `-no_runtime`
+  （首个参数就是 buffer）；混用会让整串参数错位。
+* 多项式滤波器的签名是交错的
+  `(image_, kernel_x_, size_x, kernel_y_, size_y, coeff_, output_)`，且
+  `kernel_x_/kernel_y_/coeff_` 都是 **1-D** buffer；`halo_mask_` 与 blend 的
+  `alpha` 是 **F32**，blend 的 `alpha` 还是**第 3 个**参数。
+
+### refine 条件分支（经原版 wrapper 逐像素对照）
+
+`0x35A2474` 中的 DOG、composite、Census 不是一条无条件串行链：
+
+* DOG 强度来自 `(resample_rate - 2) * 55 / 6 + 15`；另一个强度为 0。
+  `SharpenDOGHalide(ctx, image, 3, lut, int(strength_high), int(strength_mid), out)`。
+* 禁用 blend 时直接返回 DOG 结果，DOG 也禁用时复制 RAISR 图。
+* 启用 blend 且 artifact correction > 0 时，composite 混合 Lanczos fallback 和
+  DOG 结果（DOG 禁用时使用 RAISR 图），然后返回，不再调用 Census。
+* 启用 blend 且没有 artifact correction 时，改用
+  `Census(ctx, fallback, refined, int(fallback_strength*16), 3, lut, out)`。
+  Census 只有这 7 个参数；末尾不存在额外 baseline 参数。原版无 DOG 路径中重复写入
+  相同结果的 Census 调用合并为一次。
+
+原版 `RaisrUpsample` 从 **0x6BE390** 复制的四个 float 是 `{0.7, 1, 3, -0.25}`，
+经 wrapper 的 Q8/Q8/Q4/Q8 转换得到 **`{179, 256, 48, -64}`**。
+此前记录的 `{0, 3, 0, 1}` 及“DOG → composite → census×2”均为误读，已修正。
+正常输出参数选中 DOG → composite 分支。
+
+倍率沿 `RawOutputGeometry` 的同一源坐标轴计算；90°/270° 时用输出高度除源宽度，
+因此不会因旋转或宽高舍入而改变强度，同时保留 RAW 数码变焦倍率。
+
+### Polysharp 完整路径
+
+`Polysharp()` (0x357680C) 先计算多项式图，再调用 halo removal (0x35816C4)：
+
+1. 构造 `sigma=strength`、`size=4*int(3*sigma)+3` 的二维 Gaussian。
+   每点 `exp(-(inverse*dy² + inverse*dx²))`，`inverse=1/(sigma²+sigma²)`；
+   按行以 float 累加并归一化，保留原版未融合的乘加顺序。
+2. **按中心值的 0.03 倍裁剪**（0x3588CB4），再提取中心行/列并各自归一化
+   （0x3588880）。生产强度 0.38～0.699285 的最终核均为 **3 taps**。
+   不能跳过二维归一化或改用 double，否则会改变量化前的浮点结果。
+3. 使用系数 `{0, 6, -13, 7, 1}` 执行 `SeparableIterativePolyFilterHalide`。
+4. 原图做 **3×3 box blur**，clamp 边界，结果为 `(九点和+4)/9`。
+   原版调用 0x40A2DD8，使用 `{1,1,1}` 两个核并启用归一化。
+5. `HaloMaskHalide(box_blurred_original U8, polynomial U8, mask F32)`。
+6. mask 做 Gaussian blur：sigma=1.5、radius=5、clamp 边界。
+   权重来自 0x4095998..0x4095A48 的 Halide exp 近似；固定权重以 hex float 保存。
+   水平、垂直各自 FMA 累加后除权重和，保持原版 float 舍入。
+7. `BlendTwoImagesWithTauAndMask(original U8, polynomial U8, alpha F32, out U8, tau=4.0f)`。
+   **tau 位于 s0**，原先仅验证 buffer ABI 漏掉了该浮点参数。
+
+仅当 `s = -0.7/resample_rate + 0.699285 >= 0.38` 时执行 Polysharp；纯 2× 输出不触发。
+原版另有外部 tuning cap；Photon 未引入该机型 tuning 对象，使用上述倍率曲线。
+任一步失败均返回错误，由调用方处理整次放大失败，不能静默输出未完成的锐化结果。
+
+### 分带和分块的上下文与相位
+
+* 完整 RAISR/DOG/composite/Polysharp 链使用 **16 个输入像素 halo**。
+  旧的 4/8 像素测试只覆盖当时的部分链路，不能证明完整后处理的支持范围。
+* DOG 含 4 输出像素周期的金字塔，对应 2 输入像素。分带起点和 JNI 裁剪起点均向下
+  对齐 2 像素，避免奇数起点重新定义采样相位。
+* 对齐最多增加 1 行，计入分带缓冲分配和 32 MiB 传输缓冲预算。
+* Polysharp 的多项式滤波、halo mask 和 Gaussian mask blur 均在 halo 内执行，最后
+  只写出 core；不会混合相邻分带的最终图像来掩盖接缝。
+
+### 原版真机对照（2026-09-20 修复验证）
+
+通过 `dlopen` 固定版本的 `libgcastartup.so`，按基址调用原版函数；测试用独立 native
+探针，不安装 App，也不修改捕获设置：
+
+* Polysharp：强度 `0.38/0.465/0.55/0.6/0.666/0.69` × 常量、阶跃、纹理、渐变、
+  角点脉冲、中心脉冲，36 组 96×96，**331776 个像素全部一致**，包括整图边界。
+* refine：blend 开/关 × DOG 强度 `0/15/24` × correction `0/1`，12 组 96×96，
+  **110592 个像素全部一致**。包括 Census 替代分支与无 DOG 分支。
+* Gaussian/box 辅助步骤：4 类输入分别比较原版，36864 个 float/uint8 全部一致。
+* 分带：192×129 随机输入、倍率 `2/2.99/4/8/24`、core `16/40/64`，15 组完整
+  驱动输出全部与整帧逐位一致，Halide 错误回调为 0。奇数图高用于覆盖不均匀 core 起点。
+* ROI：193×129 随机输入，奇数内部起点及图像边界 × 倍率 `2/2.99/8/24`，
+  16 组裁剪加分带输出全部与整帧对应区域逐位一致。
+
+最终探针链接 Gradle 生成的 Polysharp/RAISR 对象文件复核。CMake 对这两个驱动及
+RAISR JNI 使用 `-fno-fast-math -ffp-contract=off`，避免全局 fast-math 改变取整前结果；
+Gaussian blur 所需的融合乘加通过显式 `std::fma` 保留。
+`compileDefaultDebugKotlin`、`buildCMakeDebug` 均通过。
+
+这些证据验证内核调用、数值流程与分带；不替代实际照片的端到端画质或性能评估。

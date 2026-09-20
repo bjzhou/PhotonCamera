@@ -4085,6 +4085,14 @@ class RawDemosaicProcessor {
             } else {
                 null
             }
+            // MGC derives the refine strength from the resample rate between the
+            // luma it upscales and the final output, i.e. the crop-to-output
+            // ratio including RAW digital zoom.
+            val raisrResampleRate = if (outputGeometry.raisrUpsample) {
+                outputGeometry.cropToOutputResampleRate
+            } else {
+                1f
+            }
             val outputStart = System.currentTimeMillis()
             renderOutputPass(
                 actualRotation,
@@ -4133,7 +4141,7 @@ class RawDemosaicProcessor {
                 val upscaled = nativeBitmap?.let {
                     val raisrStartNs = System.nanoTime()
                     try {
-                        mgcRaisrUpscale.upscale(it)
+                        mgcRaisrUpscale.upscale(it, raisrResampleRate)
                     } finally {
                         raisrUpscaleNs += System.nanoTime() - raisrStartNs
                         it.recycle()
@@ -4407,6 +4415,13 @@ class RawDemosaicProcessor {
                     )
             }
             vgnDemosaicAlgorithm.setTileTexturePoolingEnabled(true)
+            // The refine chain derives its strength from this rate, exactly like the
+            // untiled path; the tiled path owns its own scope.
+            val raisrResampleRate = if (config.outputGeometry.raisrUpsample) {
+                config.outputGeometry.cropToOutputResampleRate
+            } else {
+                1f
+            }
             setupOutputFramebuffer(maximumOutputWidth, maximumOutputHeight)
 
             for (tile in config.tiles) {
@@ -4651,7 +4666,7 @@ class RawDemosaicProcessor {
                 // MGC RAISR magnifies the tile itself. The working texture is in
                 // source orientation, so the core is read back in source-local
                 // coordinates and upscaled; the native chain adds the halo its
-                // 5x5 window needs inside the tile and crops it again, then the
+                // RAISR/refine/Polysharp stages need inside the tile and crops it again, then the
                 // caller rotates the result into output orientation.
                 val raisrTile: Bitmap? = if (config.outputGeometry.raisrUpsample) {
                     var upscaledTile: Bitmap? = null
@@ -4670,6 +4685,7 @@ class RawDemosaicProcessor {
                             coreTop = localSourceCore.top,
                             coreWidth = localSourceCore.width(),
                             coreHeight = localSourceCore.height(),
+                            resampleRate = raisrResampleRate,
                         )
                     }
                     val nativeTile = upscaledTile

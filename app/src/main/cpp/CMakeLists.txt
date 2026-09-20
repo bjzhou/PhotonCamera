@@ -223,6 +223,45 @@ set_source_files_properties(
 )
 
 set(
+    MGC_POLYSHARP_CAPSULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_polysharp_capsule.bin"
+)
+set(
+    MGC_POLYSHARP_CAPSULE_SHA256
+    "9972245659a83ba2debc392054b3b8de95efa58f2a6eb6ae15ccd891cbb6c49c"
+)
+if(NOT EXISTS "${MGC_POLYSHARP_CAPSULE}")
+    message(
+        FATAL_ERROR
+        "MGC Polysharp capsule is missing; regenerate it with "
+        "scripts/research/generate_mgc_polysharp_static_asm.py"
+    )
+endif()
+file(SHA256 "${MGC_POLYSHARP_CAPSULE}" MGC_POLYSHARP_CAPSULE_ACTUAL_SHA256)
+if(NOT MGC_POLYSHARP_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_POLYSHARP_CAPSULE_SHA256)
+    message(
+        FATAL_ERROR
+        "MGC Polysharp capsule hash mismatch; regenerate it with "
+        "scripts/research/generate_mgc_polysharp_static_asm.py"
+    )
+endif()
+set(
+    MGC_POLYSHARP_ASM
+    "${CMAKE_CURRENT_BINARY_DIR}/mgc_polysharp_static.S"
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_polysharp_static.S.in"
+    "${MGC_POLYSHARP_ASM}"
+    @ONLY
+)
+set_source_files_properties(
+    "${MGC_POLYSHARP_ASM}"
+    PROPERTIES
+    GENERATED TRUE
+    OBJECT_DEPENDS "${MGC_POLYSHARP_CAPSULE}"
+)
+
+set(
     MGC_RAISR_FILTERS
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_filters.bin"
 )
@@ -340,6 +379,7 @@ set_property(
     "${MGC_SPATIAL_RGB_ASM}"
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
+    "${MGC_POLYSHARP_ASM}"
 )
 
 # 4. 添加头文件路径
@@ -453,10 +493,12 @@ add_library(my-native-lib SHARED
     mgc_denoise_static/mgc_sharpen_jni.cpp
     mgc_denoise_static/mgc_raisr_jni.cpp
     mgc_denoise_static/mgc_raisr_driver.cpp
+    mgc_denoise_static/mgc_polysharp_driver.cpp
     "${MGC_GUIDED_ASM}"
     "${MGC_SHARPEN_ASM}"
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
+    "${MGC_POLYSHARP_ASM}"
     "${MGC_DENOISE_ASM}"
     "${MGC_DEMOIRE_ASM}"
     "${MGC_SABRE_ASM}"
@@ -528,6 +570,17 @@ set_source_files_properties(
 # Keep them independent of the target-wide fast-math flags.
 set_source_files_properties(
     mgc_denoise_static/mgc_denoise_static.cpp
+    PROPERTIES
+    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
+)
+
+# RAISR fixed-point conversions and Polysharp kernel normalization must keep
+# the original scalar float order. BlurHaloMask uses explicit FMA where the
+# original Halide pipeline does, without reassociating its accumulation.
+set_source_files_properties(
+    mgc_denoise_static/mgc_raisr_driver.cpp
+    mgc_denoise_static/mgc_polysharp_driver.cpp
+    mgc_denoise_static/mgc_raisr_jni.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

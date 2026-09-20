@@ -33,6 +33,14 @@ R_AARCH64_RELATIVE = 0x403
 
 CAPSULE_PLACEHOLDER = "@MGC_RAISR_CAPSULE@"
 
+# The machinery is shared by every capsule lifted from the pinned library; a
+# sibling generator (generate_mgc_polysharp_static_asm.py) imports this module
+# and overrides these two names, so the emitted symbols and section names stay
+# distinguishable while the defaults keep this generator's output byte-identical.
+SYMBOL_PREFIX = "photon_mgc_raisr"
+TEXT_SECTION_BASENAME = "photon_mgc.Raisr"
+DATA_SECTION_BASENAME = "photon_mgc.raisr"
+
 # libgcastartup.so is linked so that these sections have address == file offset.
 # A capsule copies bytes by file offset, so only these sections may be lifted.
 IDENTITY_MAPPED_SECTIONS = (
@@ -239,11 +247,11 @@ def section_for(address: int) -> str | None:
 
 
 def address_symbol(address: int) -> str:
-    return f"photon_mgc_raisr_address_{address:x}"
+    return f"{SYMBOL_PREFIX}_address_{address:x}"
 
 
 def page_symbol(address: int) -> str:
-    return f"photon_mgc_raisr_page_{address:x}"
+    return f"{SYMBOL_PREFIX}_page_{address:x}"
 
 
 def error_symbol(address: int) -> str:
@@ -498,7 +506,7 @@ def generate(source_path: Path, output_path: Path, capsule_path: Path) -> None:
         lines.extend(
             [
                 "",
-                f'.section .text.photon_mgc.Raisr.{closure.name},"ax",@progbits',
+                f'.section .text.{TEXT_SECTION_BASENAME}.{closure.name},"ax",@progbits',
                 "    .p2align 12",
             ]
         )
@@ -543,7 +551,7 @@ def generate(source_path: Path, output_path: Path, capsule_path: Path) -> None:
         flags = '"aw"' if relocations else '"a"'
         lines.extend(
             [
-                f'.section {section}.photon_mgc.raisr_page_{page:x},{flags},@progbits',
+                f'.section {section}.{DATA_SECTION_BASENAME}_page_{page:x},{flags},@progbits',
                 "    .p2align 12",
                 f"{page_symbol(page)}:",
             ]

@@ -27,6 +27,13 @@ internal class RawOutputGeometry(
     val outputScale = upscaleMode.resolveOutputScale(scale)
     val width = MultiFrameConfig.scaledRawOutputDimension(outputBaseWidth, outputScale)
     val height = MultiFrameConfig.scaledRawOutputDimension(outputBaseHeight, outputScale)
+    /**
+     * Includes reference-grid resampling for RAW digital zoom. Measure along the
+     * unrotated source width so rotation and per-axis output rounding cannot
+     * change the strength of the RAISR refinement chain.
+     */
+    val cropToOutputResampleRate =
+        (if (rotation % 180 == 0) width else height).toFloat() / sourceBounds.width
     val mgcFinishResolution = MgcFinishResolution.resolve(nativeWidth, nativeHeight, width, height)
     val resample = width != nativeWidth || height != nativeHeight
     /** MGC RAISR replaces the Lanczos-3 resample whenever both are eligible. */

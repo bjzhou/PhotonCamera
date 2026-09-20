@@ -5,9 +5,8 @@
 // 12 MP frame. This runner instead distributes the image into horizontal bands
 // bounded by the requested core capacity, feeds each band kBandHaloPx rows beyond its
 // own core, and hands every finished core row to a sink. The on-device probe
-// measured the haloed crop as bit-identical to the full-frame result from two
-// rows of halo on (docs/research/mgc-raisr-output-upscale.md), so banding only
-// changes the peak allocation.
+// compares the complete haloed chain against full-frame output, including odd
+// band origins (docs/research/mgc-raisr-output-upscale.md).
 //
 // `Source` must provide `void Fill(int top, int rows, float* destination)`,
 // filling `rows` rows of `width` RGBA float pixels each; `Sink` must provide
@@ -24,8 +23,14 @@
 
 namespace photon_raisr {
 
-// Rows of context a band needs beyond its own core.
-constexpr int kBandHaloPx = 4;
+// Polysharp uses three iterations of a three-tap polynomial kernel, then halo
+// masking and an eleven-tap Gaussian. Include the preceding RAISR/DOG/composite
+// support as well; validate the complete chain against a full frame.
+constexpr int kBandHaloPx = 16;
+// SharpenDOG has a 4-output-pixel pyramid grid (two input pixels). A band
+// cannot reset that phase when an evenly distributed core starts on an odd row.
+constexpr int kBandAlignmentPx = 2;
+constexpr int kBandAlignmentSlackPx = kBandAlignmentPx - 1;
 
 // Floor for the requested band capacity. Distribute the core evenly across
 // bands so a short remainder cannot produce an undersized AOT input. When more
@@ -34,7 +39,7 @@ constexpr int kBandHaloPx = 4;
 // image_fallback_ extent check even when all preceding bands were large enough.
 constexpr int kMinimumBandCoreRows = 16;
 
-// Peak scratch one band may occupy.
+// RGBA transfer-buffer budget for one band; stage-private scratch is additional.
 constexpr int64_t kBandScratchBudgetBytes = 32 * 1024 * 1024;
 
 // Bytes one source pixel occupies across the band buffer: the chain reads RGBA
@@ -50,20 +55,22 @@ inline uint8_t ToU8(float value) {
 }
 
 extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int height,
-                                             float* output);
+                                             float* output, float resample_rate);
 
 // Core rows one band may cover at this width without leaving the budget, never
 // fewer than kMinimumBandCoreRows. At any real frame width the budget is the
-// binding constraint; the floor only takes over past ~21k columns, where it
-// still caps a band at width * 1536 bytes.
+// binding constraint; the floor only takes over past ~10.7k columns, where it
+// still caps the transfer buffer at width * 3136 bytes (16 core + 33 context rows).
 inline int BandCoreRows(int width) {
     const int64_t rows = kBandScratchBudgetBytes / (int64_t(width) * kBandBytesPerSourcePixel);
-    return int(std::max<int64_t>(kMinimumBandCoreRows, rows - 2 * kBandHaloPx));
+    return int(std::max<int64_t>(kMinimumBandCoreRows,
+                                 rows - 2 * kBandHaloPx - kBandAlignmentSlackPx));
 }
 
 template <typename Source, typename Sink>
 int RunBands(const Source& source, const Sink& sink, int width, int height, int core_left,
-             int core_top, int core_width, int core_height, int band_core_rows) {
+             int core_top, int core_width, int core_height, int band_core_rows,
+             float resample_rate) {
     if (width <= 0 || height <= 0 || core_width <= 0 || core_height <= 0 || core_left < 0 ||
         core_top < 0 || core_left + core_width > width || core_top + core_height > height) {
         return -1;
@@ -75,21 +82,23 @@ int RunBands(const Source& source, const Sink& sink, int width, int height, int 
     const int out_width = width * 2;
     std::vector<float> band;
     try {
-        band.resize(size_t(width) * size_t(rows_per_band + 2 * kBandHaloPx) * 16);
+        band.resize(size_t(width) *
+                    size_t(rows_per_band + 2 * kBandHaloPx + kBandAlignmentSlackPx) * 16);
     } catch (const std::bad_alloc&) {
         return -2;
     }
     int top = core_top;
     for (int index = 0; index < band_count; ++index) {
         const int rows = base_rows + (index < extra_rows ? 1 : 0);
-        const int band_top = std::max(0, top - kBandHaloPx);
+        const int band_top = std::max(0, top - kBandHaloPx) / kBandAlignmentPx *
+            kBandAlignmentPx;
         const int band_bottom = std::min(height, top + rows + kBandHaloPx);
         const int band_height = band_bottom - band_top;
         source.Fill(band_top, band_height, band.data());
         // The chain builds all of its UInt8 planes from the input before it
         // writes the first output pixel, so one buffer can carry both.
-        const int status =
-            photon_mgc_raisr_upscale_rgba(band.data(), width, band_height, band.data());
+        const int status = photon_mgc_raisr_upscale_rgba(band.data(), width, band_height,
+                                                         band.data(), resample_rate);
         if (status != 0) {
             return status;
         }

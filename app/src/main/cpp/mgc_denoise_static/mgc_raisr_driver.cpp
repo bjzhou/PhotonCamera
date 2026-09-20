@@ -15,7 +15,7 @@
 // rebuilt here from their documented behaviour:
 //   * the cheap upscale that produces the composite's fallback luma. The
 //     original runs it inside npcam C++ that was not lifted, so this uses plain
-//     bilinear interpolation on the same luma grid.
+//     Lanczos-3 interpolation on the same luma grid.
 //   * the chroma recombination, which lives in the original's caller
 //     (libgcastartup.so+0x3364BC8) and has not been reconstructed. Chroma is
 //     carried through bilinearly and recombined with the BT.601 full-range
@@ -77,13 +77,28 @@ constexpr float kMinStrength = 0.0523100868f;
 constexpr float kMaxStrength = 0.00511798495f;
 constexpr float kMinCoherence = -0.0055033979f;
 constexpr float kMaxCoherence = -0.0482351705f;
-// Composite strength parameters, the fixed-point forms of the constants the
-// original caller feeds (0x6BE0390 through fcvtzs #8/#8/#4/#8).
-constexpr int32_t kFallbackStrengthQ8 = 0;
-constexpr int32_t kArtifactCorrectionMaxStrengthQ8 = 3;
-constexpr int32_t kArtifactMapScaleQ4 = 0;
-constexpr int16_t kArtifactMapBiasQ8 = 1;
+constexpr int32_t kRefineBaselineOffset = 3;
+// RaisrUpsample computes the DOG strength from the resample rate before calling
+// the refine chain (0x355F5D4..0x355F620):
+//     strength = (resample_rate - 2.0f) * 55.0f / 6.0f + 15.0f
+// and hands it to the DOG wrapper, which truncates it to int32.  The second
+// strength stays 0, so the wrapper passes (baseline 3, strength_high 0,
+// strength_mid (int)strength).
+constexpr float kRefineStrengthBase = 15.0f;
+constexpr float kRefineStrengthRateOffset = 2.0f;
 constexpr int16_t kDebugOutputSelect = 0;
+
+// RaisrUpsample copies {0.7, 1, 3, -0.25} from 0x6BE390 into params+0xC.
+// Keep floats until each wrapper's Q4/Q8 conversion; these are not integers.
+struct RefineParams {
+    float strength_mid;
+    float strength_high = 0.0f;
+    bool blend = true;
+    float fallback_strength = 0.7f;
+    float artifact_correction = 1.0f;
+    float artifact_map_scale = 3.0f;
+    float artifact_map_bias = -0.25f;
+};
 
 HalideBuffer MakeBuffer(void* host, uint8_t code, uint8_t bits, int32_t dimensions,
                         const HalideDimension* dim, uint16_t lanes = 1) {
@@ -100,6 +115,79 @@ HalideBuffer MakeU8Buffer(void* host, int32_t dimensions, const HalideDimension*
 }
 
 float Clamp01(float value) { return value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value); }
+
+// Lanczos-3 weight, the kernel the original's cheap upscale uses
+// (`Resample(input_y, LanczosKernel<3>, cheap_upscaled_y, ...)` in RaisrUpsample).
+float Lanczos3Weight(float distance) {
+    constexpr float kLobes = 3.0f;
+    const float magnitude = std::fabs(distance);
+    if (magnitude >= kLobes) {
+        return 0.0f;
+    }
+    if (magnitude < 1.0e-7f) {
+        return 1.0f;
+    }
+    const float scaled = float(M_PI) * distance;
+    return (kLobes * std::sin(scaled) * std::sin(scaled / kLobes)) / (scaled * scaled);
+}
+
+// Exact 2x Lanczos-3 resample of one luma plane.  Output pixel X samples source
+// coordinate X/2 - 0.25, so the six taps only depend on the output parity; the
+// horizontal pass is cached for the whole plane and the vertical pass then costs
+// six multiply-adds per output pixel.
+void ResampleLanczos3To2x(const std::vector<uint8_t>& source, int width, int height,
+                          std::vector<uint8_t>& destination, int out_width, int out_height) {
+    float weight[2][6];
+    int base[2];
+    for (int parity = 0; parity < 2; ++parity) {
+        const float sample = 0.5f * float(parity) - 0.25f;
+        const int floor_index = int(std::floor(sample));
+        base[parity] = floor_index - 2;
+        float total = 0.0f;
+        for (int tap = 0; tap < 6; ++tap) {
+            weight[parity][tap] = Lanczos3Weight(sample - float(floor_index - 2 + tap));
+            total += weight[parity][tap];
+        }
+        for (int tap = 0; tap < 6; ++tap) {
+            weight[parity][tap] /= total;
+        }
+    }
+    std::vector<float> rows(size_t(width == 0 ? 0 : height) * size_t(out_width));
+    for (int row = 0; row < height; ++row) {
+        const uint8_t* line = source.data() + size_t(row) * width;
+        float* target = rows.data() + size_t(row) * out_width;
+        for (int out_x = 0; out_x < out_width; ++out_x) {
+            const int parity = out_x & 1;
+            const int source_base = (out_x >> 1) + base[parity];
+            float total = 0.0f;
+            for (int tap = 0; tap < 6; ++tap) {
+                const int index = source_base + tap;
+                if (index < 0 || index >= width) {
+                    continue;
+                }
+                total += weight[parity][tap] * float(line[index]);
+            }
+            target[out_x] = total;
+        }
+    }
+    for (int out_y = 0; out_y < out_height; ++out_y) {
+        const int parity = out_y & 1;
+        const int source_base = (out_y >> 1) + base[parity];
+        const float* weights = weight[parity];
+        uint8_t* target = destination.data() + size_t(out_y) * out_width;
+        for (int out_x = 0; out_x < out_width; ++out_x) {
+            float total = 0.0f;
+            for (int tap = 0; tap < 6; ++tap) {
+                const int index = source_base + tap;
+                if (index < 0 || index >= height) {
+                    continue;
+                }
+                total += weights[tap] * rows[size_t(index) * out_width + out_x];
+            }
+            target[out_x] = ToU8(total / 255.0f);
+        }
+    }
+}
 
 // Bilinear 2x sample of a single channel grid. Output pixel X maps to source
 // coordinate X/2 - 0.25, matching the half-pixel convention the per-shift
@@ -163,14 +251,76 @@ int photon_mgc_raisr_composite(void*, HalideBuffer*, HalideBuffer*, HalideBuffer
                                HalideBuffer*);
 extern const int16_t photon_mgc_raisr_filters[];
 extern const uint8_t photon_mgc_raisr_randomness_lut[];
+
+// Lifted Polysharp kernels (mgc_polysharp_static.S).  Their ABIs were pinned on
+// device: SharpenDOG and Census carry a user context, the lib_enhance pipelines
+// do not.  Only these two take part in the luma refine chain.
+int photon_mgc_polysharp_sharpen_dog(void*, HalideBuffer*, int32_t, HalideBuffer*, int32_t,
+                                     int32_t, HalideBuffer*);
+int photon_mgc_polysharp_census(void*, HalideBuffer*, HalideBuffer*, int32_t, int32_t,
+                                HalideBuffer*, HalideBuffer*);
 }
+
+extern "C" int photon_mgc_polysharp_sharpen(const uint8_t* luma, int width, int height,
+                                            float strength, uint8_t* destination);
+
+namespace {
+
+// The branches in 0x35A2474 are alternatives, not sequential Census passes.
+int RefineLuma(std::vector<uint8_t>& raisr, std::vector<uint8_t>& fallback,
+               int width, int height, const RefineParams& params,
+               std::vector<uint8_t>& destination) {
+    const HalideDimension dims[] = {{0, width, 1, 0}, {0, height, width, 0}};
+    const HalideDimension lut_dims[] = {{0, 256, 1, 0}};
+    HalideBuffer lut = MakeU8Buffer(const_cast<uint8_t*>(photon_mgc_raisr_randomness_lut),
+                                    1, lut_dims);
+    std::vector<uint8_t> sharpened;
+    uint8_t* refined = raisr.data();
+    const bool sharpen = std::max(params.strength_mid, params.strength_high) > 0.0f;
+    if (sharpen) {
+        sharpened.resize(raisr.size());
+        HalideBuffer in = MakeU8Buffer(raisr.data(), 2, dims);
+        HalideBuffer out = MakeU8Buffer(sharpened.data(), 2, dims);
+        const int status = photon_mgc_polysharp_sharpen_dog(
+            nullptr, &in, kRefineBaselineOffset, &lut, int32_t(params.strength_high),
+            int32_t(params.strength_mid), &out);
+        if (status != 0) return status;
+        refined = sharpened.data();
+    }
+    if (!params.blend) {
+        std::memcpy(destination.data(), refined, raisr.size());
+        return 0;
+    }
+    HalideBuffer left = MakeU8Buffer(fallback.data(), 2, dims);
+    HalideBuffer right = MakeU8Buffer(refined, 2, dims);
+    HalideBuffer out = MakeU8Buffer(destination.data(), 2, dims);
+    if (params.artifact_correction > 0.0f) {
+        return photon_mgc_raisr_composite(
+            nullptr, &left, &right, &left, &lut,
+            int32_t(params.fallback_strength * 256.0f),
+            int32_t(params.artifact_correction * 256.0f),
+            int32_t(params.artifact_map_scale * 16.0f),
+            int16_t(params.artifact_map_bias * 256.0f), kDebugOutputSelect, &out);
+    }
+    // With no artifact correction the original selects Census instead. When
+    // DOG is disabled its repeated Census call writes the same result twice;
+    // one invocation has the same inputs and final output.
+    return photon_mgc_polysharp_census(nullptr, &left, &right,
+        int32_t(params.fallback_strength * 16.0f), kRefineBaselineOffset, &lut, &out);
+}
+
+}  // namespace
 
 
 // Runs the whole RAISR luma chain on one image. `input` is float RGBA in 0..1
 // sRGB, `output` must hold 2x the pixels in the same layout. Exposed with C
 // linkage so the on-device probe can drive it without the app.
 extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int height,
-                                             float* output) try {
+                                             float* output, float resample_rate) try {
+    if (input == nullptr || output == nullptr || width <= 0 || height <= 0 ||
+        !std::isfinite(resample_rate) || resample_rate <= 0.0f) {
+        return -1;
+    }
     const int out_width = width * 2;
     const int out_height = height * 2;
     const size_t source_pixels = size_t(width) * height;
@@ -260,11 +410,7 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
         }
     }
 
-    for (int y = 0; y < out_height; ++y) {
-        for (int x = 0; x < out_width; ++x) {
-            fallback[size_t(y) * out_width + x] = SampleBilinear2x(gray, width, height, x, y);
-        }
-    }
+    ResampleLanczos3To2x(gray, width, height, fallback, out_width, out_height);
     {
         const HalideDimension luma_dims[] = {
             {0, width, 1, 0},
@@ -293,29 +439,29 @@ extern "C" int photon_mgc_raisr_upscale_rgba(const float* input, int width, int 
             return result;
         }
     }
-    {
-        const HalideDimension up_dims[] = {
-            {0, out_width, 1, 0},
-            {0, out_height, out_width, 0},
-        };
-        const HalideDimension lut_dims[] = {
-            {0, 256, 1, 0},
-        };
-        HalideBuffer fallback_buffer = MakeU8Buffer(fallback.data(), 2, up_dims);
-        HalideBuffer raisr_buffer = MakeU8Buffer(raisr.data(), 2, up_dims);
-        HalideBuffer lut = MakeU8Buffer(const_cast<uint8_t*>(photon_mgc_raisr_randomness_lut), 1,
-                                        lut_dims);
-        HalideBuffer out = MakeU8Buffer(luma.data(), 2, up_dims);
-        // The artifact argument is present in the ABI but never read by the
-        // kernel; the original also passes the target buffer there.
-        const int result = photon_mgc_raisr_composite(
-            nullptr, &fallback_buffer, &raisr_buffer, &fallback_buffer, &lut,
-            kFallbackStrengthQ8, kArtifactCorrectionMaxStrengthQ8, kArtifactMapScaleQ4,
-            kArtifactMapBiasQ8, kDebugOutputSelect, &out);
-        if (result != 0) {
-            __android_log_print(ANDROID_LOG_ERROR, kTag, "composite failed: %d", result);
-            return result;
+    const float refine_strength =
+        (resample_rate - kRefineStrengthRateOffset) * 55.0f / 6.0f + kRefineStrengthBase;
+    const int refine_status = RefineLuma(raisr, fallback, out_width, out_height,
+                                         RefineParams{refine_strength}, luma);
+    if (refine_status != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "refine failed: %d", refine_status);
+        return refine_status;
+    }
+
+    // Polysharp: RaisrUpsample only runs it when the strength it derives from the
+    // resample rate reaches 0.38 (0x355F940..0x355F99C), with
+    //     s = -0.7 / resample_rate + 0.699285.
+    // The original additionally applies an external device-tuning cap.
+    const float polysharp_strength = -0.7f / resample_rate + 0.699285f;
+    if (polysharp_strength >= 0.38f) {
+        std::vector<uint8_t> polished(size_t(out_width) * out_height);
+        const int status = photon_mgc_polysharp_sharpen(luma.data(), out_width, out_height,
+                                                        polysharp_strength, polished.data());
+        if (status != 0) {
+            __android_log_print(ANDROID_LOG_ERROR, kTag, "polysharp failed: %d", status);
+            return status;
         }
+        luma.swap(polished);
     }
 
     // Chroma is carried through bilinearly and recombined with the RAISR luma.
@@ -393,10 +539,12 @@ private:
 // passes photon_raisr::BandCoreRows(width), which keeps one band inside the
 // scratch budget.
 extern "C" int photon_mgc_raisr_upscale_rgba_banded(const float* input, int width, int height,
-                                                    float* output, int band_core_rows) {
+                                                    float* output, int band_core_rows,
+                                                    float resample_rate) {
     if (input == nullptr || output == nullptr) {
         return -1;
     }
     return photon_raisr::RunBands(FullImageSource(input, width), FullImageSink(output, width * 2),
-                                  width, height, 0, 0, width, height, band_core_rows);
+                                  width, height, 0, 0, width, height, band_core_rows,
+                                  resample_rate);
 }
