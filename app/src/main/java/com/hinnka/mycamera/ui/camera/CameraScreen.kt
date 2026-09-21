@@ -1724,7 +1724,12 @@ fun CameraScreen(
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding
         )
 
-        val filterPanelTop = if (!isXpan && !isVideoMode) topBarHeight else 0.dp
+        // During navigation measurement or window resizing, the viewport can be
+        // shorter than the toolbar. The panel then has no available vertical space.
+        val filterPanelTop = minOf(
+            if (!isXpan && !isVideoMode) topBarHeight else 0.dp,
+            maxHeight
+        )
         val fallbackFilterPanelBottom = when {
             isXpan -> maxHeight - 48.dp
             isVideoMode -> maxHeight - 170.dp
@@ -1735,10 +1740,11 @@ fun CameraScreen(
         } else {
             filterButtonBounds?.bottom
         }
-        val filterPanelBottom = filterPanelAnchorY?.let { anchorY ->
+        val requestedFilterPanelBottom = filterPanelAnchorY?.let { anchorY ->
             val parentTop = cameraScreenBounds?.top ?: 0f
             with(density) { (anchorY - parentTop).toDp() - 8.dp }
-        }?.coerceIn(filterPanelTop, maxHeight) ?: fallbackFilterPanelBottom
+        } ?: fallbackFilterPanelBottom
+        val filterPanelBottom = requestedFilterPanelBottom.coerceIn(filterPanelTop, maxHeight)
 
         AnimatedVisibility(
             activePanel == ActivePanel.FILTERS,
