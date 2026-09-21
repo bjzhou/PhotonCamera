@@ -332,7 +332,13 @@
     <string name="frame_editor_background_type">Tipo de fundo</string>
     <string name="frame_editor_background_color">Cor sólida</string>
     <string name="frame_editor_background_blur">Desfoque gaussiano</string>
-    <string name="frame_editor_background_blur_radius">Intensidade do desfoque</string>
+    <string name="frame_editor_layout_vertical_padding">Espaçamento interno vertical (px)</string>
+    <string name="frame_editor_layout_border_height">Altura da moldura superior (px)</string>
+    <string name="frame_editor_design_width">Largura do design (px)</string>
+    <string name="frame_editor_design_height">Altura do design (px)</string>
+    <string name="frame_editor_dimension_hint">Todas as dimensões são pixels da tela de design. Molduras, textos e logos são redimensionados uniformemente pela largura real da foto ÷ largura do design; a área da foto se adapta à altura real.</string>
+    <string name="frame_editor_element_spacing">Espaçamento dos elementos (px)</string>
+    <string name="frame_editor_background_blur_radius">Intensidade do desfoque (px)</string>
     <string name="frame_editor_background_blur_hint">Preenche o fundo com uma cópia desfocada da foto. No modo de sobreposição, somente a área da marca-d’água fica desfocada.</string>
     <string name="frame_editor_background_glass">Vidro líquido</string>
     <string name="frame_editor_background_glass_hint">Sobrepõe uma cápsula de vidro líquido na parte inferior da foto, com espaço nas laterais e abaixo.</string>

@@ -4,13 +4,19 @@
         "en": "Overlay",
         "zh": "无框水印"
     },
-    "version": 1,
+    "version": 2,
     "editable": true,
     "layout": {
         "position": "OVERLAY",
-        "height": 165,
+        "height": 495,
         "backgroundColor": "#EE000000",
-        "padding": 20
+        "padding": 60,
+        "designSize": {
+            "width": 4096,
+            "height": 3072
+        },
+        "verticalPadding": 60,
+        "elementSpacing": 24
     },
     "elements": [
         {
@@ -18,14 +24,15 @@
             "logoType": "BRAND",
             "alignment": "CENTER",
             "light": true,
-            "size": 32,
-            "line": 0
+            "size": 96,
+            "line": 0,
+            "margin": 24
         },
         {
             "type": "text",
             "textType": "DEVICE_MODEL",
             "alignment": "CENTER",
-            "fontSize": 16,
+            "fontSize": 48,
             "color": "#FFFFFF",
             "fontWeight": "BOLD",
             "line": 1
@@ -34,7 +41,7 @@
             "type": "text",
             "textType": "FOCAL_LENGTH_35MM",
             "alignment": "CENTER",
-            "fontSize": 12,
+            "fontSize": 36,
             "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2
@@ -43,7 +50,7 @@
             "type": "text",
             "textType": "APERTURE",
             "alignment": "CENTER",
-            "fontSize": 12,
+            "fontSize": 36,
             "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2
@@ -52,7 +59,7 @@
             "type": "text",
             "textType": "SHUTTER_SPEED",
             "alignment": "CENTER",
-            "fontSize": 12,
+            "fontSize": 36,
             "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2
@@ -61,7 +68,7 @@
             "type": "text",
             "textType": "ISO",
             "alignment": "CENTER",
-            "fontSize": 12,
+            "fontSize": 36,
             "color": "#FDFDFD",
             "fontWeight": "NORMAL",
             "line": 2

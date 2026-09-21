@@ -684,21 +684,21 @@
     <string name="frame_editor_section_layout">布局</string>
     <string name="frame_editor_section_elements">元素列表</string>
     <string name="frame_editor_layout_position">位置模式</string>
-    <string name="frame_editor_layout_height">邊框高度 (dp)</string>
-    <string name="frame_editor_layout_padding">內邊距 (dp)</string>
+    <string name="frame_editor_layout_height">邊框高度 (px)</string>
+    <string name="frame_editor_layout_padding">內邊距 (px)</string>
     <string name="frame_editor_layout_background">背景色</string>
     <string name="frame_editor_layout_border_color">邊框色彩</string>
     <string name="frame_editor_color_opacity">透明度</string>
     <string name="frame_editor_color_hex_value">色彩值</string>
     <string name="frame_editor_color_hex_hint">支援 #RRGGBB 或 #AARRGGBB。</string>
     <string name="frame_editor_color_hex_error">請輸入有效的色彩值。</string>
-    <string name="frame_editor_layout_line_spacing">行間距 (dp)</string>
-    <string name="frame_editor_layout_border_width">邊框寬度 (dp)</string>
-    <string name="frame_editor_photo_corner_radius">相片圓角 (dp)</string>
+    <string name="frame_editor_layout_line_spacing">行間距 (px)</string>
+    <string name="frame_editor_layout_border_width">邊框寬度 (px)</string>
+    <string name="frame_editor_photo_corner_radius">相片圓角 (px)</string>
     <string name="frame_editor_photo_shadow">相片陰影</string>
-    <string name="frame_editor_photo_shadow_radius">陰影模糊 (dp)</string>
-    <string name="frame_editor_photo_shadow_offset_x">陰影 X 偏移 (dp)</string>
-    <string name="frame_editor_photo_shadow_offset_y">陰影 Y 偏移 (dp)</string>
+    <string name="frame_editor_photo_shadow_radius">陰影模糊 (px)</string>
+    <string name="frame_editor_photo_shadow_offset_x">陰影 X 偏移 (px)</string>
+    <string name="frame_editor_photo_shadow_offset_y">陰影 Y 偏移 (px)</string>
     <string name="frame_editor_photo_shadow_color">陰影色彩</string>
     <string name="frame_editor_image_hint">圖片邊框使用帶透明區域的 PNG 或 WebP。選中的素材會被復制到應用私有目錄。</string>
     <string name="frame_editor_pick_image">選擇邊框圖片</string>
@@ -711,7 +711,7 @@
     <string name="frame_editor_text_type">文字類型</string>
     <string name="frame_editor_alignment">對齊方式</string>
     <string name="frame_editor_line">行號</string>
-    <string name="frame_editor_text_size">字號 (sp)</string>
+    <string name="frame_editor_text_size">字號 (px)</string>
     <string name="frame_editor_text_color">文字色彩</string>
     <string name="frame_editor_font_weight">字重</string>
     <string name="frame_editor_font_family">字體</string>
@@ -722,15 +722,15 @@
     <string name="frame_editor_text_suffix">后綴</string>
     <string name="frame_editor_logo_type">Logo 類型</string>
     <string name="frame_editor_logo_source">Logo 來源</string>
-    <string name="frame_editor_logo_size">Logo 尺寸 (dp)</string>
-    <string name="frame_editor_logo_max_width">Logo 最大寬度 (dp)</string>
-    <string name="frame_editor_margin">邊距 (dp)</string>
+    <string name="frame_editor_logo_size">Logo 寬度 (px)</string>
+    <string name="frame_editor_logo_max_width">Logo 最大寬度 (px)</string>
+    <string name="frame_editor_margin">邊距 (px)</string>
     <string name="frame_editor_logo_light">使用淺色 Logo 變體</string>
     <string name="frame_editor_divider_orientation">分隔線方向</string>
-    <string name="frame_editor_divider_length">分隔線長度 (dp)</string>
-    <string name="frame_editor_divider_thickness">分隔線粗細 (dp)</string>
+    <string name="frame_editor_divider_length">分隔線長度 (px)</string>
+    <string name="frame_editor_divider_thickness">分隔線粗細 (px)</string>
     <string name="frame_editor_divider_color">分隔線色彩</string>
-    <string name="frame_editor_spacer_width">間距寬度 (dp)</string>
+    <string name="frame_editor_spacer_width">間距寬度 (px)</string>
     <string name="frame_editor_rules_title_render">渲染規則</string>
     <string name="frame_editor_rule_line_global">行號為 -1 表示全局元素，它會同步推進所有可見行的布局起點。</string>
     <string name="frame_editor_rule_vertical_divider">垂直分隔線只有在同一行左右兩側都存在可見的非分隔線元素時才會顯示。</string>
@@ -774,9 +774,9 @@
     <string name="frame_editor_divider_orientation_horizontal">水平</string>
     <string name="frame_editor_divider_orientation_vertical">垂直</string>
     <string name="frame_editor_summary_text">%1$s ? %2$s ? 行=%3$d</string>
-    <string name="frame_editor_summary_logo">%1$s ? %2$s ? %3$ddp</string>
-    <string name="frame_editor_summary_divider">%1$s ? %2$s ? %3$ddp</string>
-    <string name="frame_editor_summary_spacer">行=%1$d ? %2$ddp</string>
+    <string name="frame_editor_summary_logo">%1$s ? %2$s ? %3$.3f px</string>
+    <string name="frame_editor_summary_divider">%1$s ? %2$s ? %3$.3f px</string>
+    <string name="frame_editor_summary_spacer">行=%1$d ? %2$.3f px</string>
 
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">相機校正</string>
@@ -1254,7 +1254,13 @@
     <string name="frame_editor_background_type">背景類型</string>
     <string name="frame_editor_background_color">純色</string>
     <string name="frame_editor_background_blur">高斯模糊</string>
-    <string name="frame_editor_background_blur_radius">模糊強度</string>
+    <string name="frame_editor_layout_vertical_padding">垂直內邊距 (px)</string>
+    <string name="frame_editor_layout_border_height">頂部邊框高度 (px)</string>
+    <string name="frame_editor_design_width">設計寬度 (px)</string>
+    <string name="frame_editor_design_height">設計高度 (px)</string>
+    <string name="frame_editor_dimension_hint">所有尺寸均為設計畫布中的像素。邊框、文字和 Logo 按實際圖寬 ÷ 設計寬度統一等比縮放，相片區域適應實際高度。</string>
+    <string name="frame_editor_element_spacing">元素間距 (px)</string>
+    <string name="frame_editor_background_blur_radius">模糊強度 (px)</string>
     <string name="frame_editor_background_blur_hint">使用相片的模糊副本填充背景；疊加模式僅模糊浮水印區域。</string>
     <string name="frame_editor_background_glass">液態玻璃</string>
     <string name="frame_editor_background_glass_hint">在相片底部疊加液態玻璃膠囊，並在兩側和底部保留間距。</string>

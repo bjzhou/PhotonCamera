@@ -9,6 +9,7 @@ import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.frame.FrameElement
 import com.hinnka.mycamera.frame.FrameTemplate
 import com.hinnka.mycamera.frame.FrameTemplateParser
+import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.raw.ColorSpace
@@ -497,7 +498,8 @@ class CustomImportManager(private val context: Context) {
             } else {
                 File(frame.path).takeIf { it.exists() }?.readText() ?: return null
             }
-            json.toByteArray(Charsets.UTF_8)
+            val template = FrameTemplateParser.parseTemplate(json)
+            FrameTemplateParser.serializeTemplate(template).toByteArray(Charsets.UTF_8)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to export frame JSON: ${frame.id}", e)
             null
@@ -632,15 +634,25 @@ class CustomImportManager(private val context: Context) {
             val name = displayName ?: fileName.substringBeforeLast('.')
 
             // 创建边框配置 JSON
+            val designSize = FrameRenderer(context).readImageFrameDesignSize(imageFile.absolutePath)
+            if (designSize == null) {
+                imageFile.delete()
+                PLog.e(TAG, "Image frame has no transparent photo window: $fileName")
+                return null
+            }
             val frameConfig = JSONObject().apply {
                 put("id", frameId)
                 put("name", JSONObject().apply {
                     put("en", name)
                     put("zh", name)
                 })
-                put("version", 1)
+                put("version", FrameTemplate.CURRENT_VERSION)
                 put("layout", JSONObject().apply {
                     put("position", "IMAGE")
+                    put("designSize", JSONObject().apply {
+                        put("width", designSize.width)
+                        put("height", designSize.height)
+                    })
                     put("imagePath", imageFile.absolutePath)
                 })
                 put("elements", JSONArray())
@@ -668,7 +680,8 @@ class CustomImportManager(private val context: Context) {
         return try {
             val fileName = getFileName(uri) ?: "frame_${System.currentTimeMillis()}.png"
             val extension = fileName.substringAfterLast('.', "png")
-            val imageFileName = (frameIdHint ?: "frame_${UUID.randomUUID()}") + "_image.$extension"
+            // A draft must not replace the source template's image before the user saves it.
+            val imageFileName = (frameIdHint ?: "frame") + "_${UUID.randomUUID()}_image.$extension"
             val imageFile = File(customFrameDir, imageFileName)
 
             openInputStream(uri)?.use { inputStream ->
@@ -677,6 +690,11 @@ class CustomImportManager(private val context: Context) {
                 }
             } ?: return null
 
+            if (FrameRenderer(context).readImageFrameDesignSize(imageFile.absolutePath) == null) {
+                imageFile.delete()
+                PLog.e(TAG, "Frame editor image has no transparent photo window: $fileName")
+                return null
+            }
             imageFile.absolutePath
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import frame editor image", e)

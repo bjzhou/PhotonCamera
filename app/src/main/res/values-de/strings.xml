@@ -331,7 +331,13 @@
     <string name="frame_editor_background_type">Hintergrund</string>
     <string name="frame_editor_background_color">Einfarbig</string>
     <string name="frame_editor_background_blur">Gaußsche Unschärfe</string>
-    <string name="frame_editor_background_blur_radius">Unschärfegrad</string>
+    <string name="frame_editor_layout_vertical_padding">Vertikaler Innenabstand (px)</string>
+    <string name="frame_editor_layout_border_height">Obere Rahmenhöhe (px)</string>
+    <string name="frame_editor_design_width">Designbreite (px)</string>
+    <string name="frame_editor_design_height">Designhöhe (px)</string>
+    <string name="frame_editor_dimension_hint">Alle Maße sind Pixel auf der Designfläche. Rahmen, Text und Logos werden gleichmäßig mit tatsächlicher Fotobreite ÷ Designbreite skaliert; der Fotobereich passt sich der tatsächlichen Höhe an.</string>
+    <string name="frame_editor_element_spacing">Elementabstand (px)</string>
+    <string name="frame_editor_background_blur_radius">Unschärfegrad (px)</string>
     <string name="frame_editor_background_blur_hint">Füllt den Hintergrund mit einer unscharfen Kopie des Fotos. Im Überlagerungsmodus wird nur der Wasserzeichenbereich unscharf dargestellt.</string>
     <string name="frame_editor_background_glass">Flüssiges Glas</string>
     <string name="frame_editor_background_glass_hint">Legt eine Liquid-Glass-Kapsel unten über das Foto, mit Abstand zu beiden Seiten und zum unteren Rand.</string>

@@ -4,10 +4,15 @@
         "en": "PORTRA 400",
         "zh": "炮塔400"
     },
-    "version": 1,
+    "version": 2,
     "layout": {
         "position": "IMAGE",
-        "imageResName": "frame_portra_400"
+        "imageResName": "frame_portra_400",
+        "designSize": {
+            "width": 1835,
+            "height": 1225
+        },
+        "elementSpacing": 24
     },
     "elements": []
 }

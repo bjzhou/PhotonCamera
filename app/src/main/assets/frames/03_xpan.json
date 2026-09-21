@@ -4,16 +4,22 @@
         "en": "XPAN",
         "zh": "XPAN"
     },
-    "version": 1,
+    "version": 2,
     "editable": true,
     "layout": {
         "position": "BOTH",
-            "orientation": "LANDSCAPE",
         "backgroundColor": "#FFFFFF",
-        "lineSpacing": 16,
-        "height": 300,
-        "borderWidth": 30,
-        "padding": 50
+        "lineSpacing": 48,
+        "height": 900,
+        "borderWidth": 90,
+        "padding": 150,
+        "designSize": {
+            "width": 8320,
+            "height": 3072
+        },
+        "verticalPadding": 150,
+        "borderHeight": 90,
+        "elementSpacing": 24
     },
     "elementsTop": [
         {
@@ -22,8 +28,9 @@
             "overrideSource": "xpan",
             "alignment": "START",
             "light": false,
-            "size": 108,
-            "line": -1
+            "line": -1,
+            "margin": 24,
+            "width": 821.819742
         }
     ],
     "elements": [
@@ -31,7 +38,7 @@
             "type": "text",
             "textType": "DEVICE_MODEL",
             "alignment": "START",
-            "fontSize": 48,
+            "fontSize": 144,
             "color": "#000000",
             "fontWeight": "BOLD",
             "line": 0
@@ -40,7 +47,7 @@
             "type": "text",
             "textType": "FOCAL_LENGTH_35MM",
             "alignment": "START",
-            "fontSize": 32,
+            "fontSize": 96,
             "color": "#666666",
             "line": 1
         },
@@ -48,7 +55,7 @@
             "type": "text",
             "textType": "APERTURE",
             "alignment": "START",
-            "fontSize": 32,
+            "fontSize": 96,
             "color": "#666666",
             "line": 1
         },
@@ -56,7 +63,7 @@
             "type": "text",
             "textType": "SHUTTER_SPEED",
             "alignment": "START",
-            "fontSize": 32,
+            "fontSize": 96,
             "color": "#666666",
             "line": 1
         },
@@ -64,7 +71,7 @@
             "type": "text",
             "textType": "ISO",
             "alignment": "START",
-            "fontSize": 32,
+            "fontSize": 96,
             "color": "#666666",
             "line": 1
         },
@@ -74,8 +81,9 @@
             "overrideSource": "photon",
             "alignment": "END",
             "light": false,
-            "size": 56,
-            "line": -1
+            "line": -1,
+            "margin": 24,
+            "width": 1660.067797
         }
     ]
 }

@@ -82,7 +82,7 @@ fun ColorWalkScreen(
     // Real Rendering of the Frame
     val framePreviewBitmap by produceState<Bitmap?>(null, frameDraft) {
         delay(200) // Debounce rendering to avoid stutter during drag
-        value = viewModel.renderFrameEditorPreview(frameDraft, portrait = false)
+        value = viewModel.renderFrameEditorPreview(frameDraft)
     }
 
     val recommendedLuts by produceState(emptyList(), currentHue) {

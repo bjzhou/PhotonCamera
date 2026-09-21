@@ -42,13 +42,7 @@ internal object FrameBackgroundRenderer {
             workingCanvas.drawColor(Color.BLACK)
             workingCanvas.scale(workingWidth.toFloat() / width, workingHeight.toFloat() / height)
             workingCanvas.translate(width / 2f, height / 2f)
-            val rotated = layout.orientation.rotatesPhoto(photo.width, photo.height)
-            val photoWidth = if (rotated) photo.height else photo.width
-            val photoHeight = if (rotated) photo.width else photo.height
-            val fillScale = maxOf(width.toFloat() / photoWidth, height.toFloat() / photoHeight)
-            if (rotated) {
-                workingCanvas.rotate(if (layout.orientation == FrameOrientation.LANDSCAPE) -90f else 90f)
-            }
+            val fillScale = maxOf(width.toFloat() / photo.width, height.toFloat() / photo.height)
             workingCanvas.scale(fillScale, fillScale)
             workingCanvas.drawBitmap(
                 photo, null,

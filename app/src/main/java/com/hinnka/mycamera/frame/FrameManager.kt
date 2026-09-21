@@ -89,7 +89,9 @@ class FrameManager(private val context: Context) {
         val template = loadTemplate(frameId)
         val frameInfo = getFrameInfo(frameId)
         return if (template != null) {
-            FrameEditorDraft.fromTemplate(template, frameInfo)
+            val metadata = FramePreviewFactory.createPreviewMetadata(4096, 3072)
+            val resolvedTemplate = FrameRenderer(context).resolveLegacyLogoWidths(template, metadata)
+            FrameEditorDraft.fromTemplate(resolvedTemplate, frameInfo)
         } else {
             FrameEditorDraft.createNew(imageFrame = imageFrame)
         }

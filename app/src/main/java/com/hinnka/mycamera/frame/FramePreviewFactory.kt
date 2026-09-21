@@ -12,20 +12,20 @@ import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.utils.DeviceUtil
 import java.util.Calendar
 import java.util.TimeZone
+import kotlin.math.roundToInt
 
 /**
- * 生成边框编辑器使用的固定样片与样例 EXIF。
+ * 按边框设计尺寸的比例生成编辑器样片与样例 EXIF。
  */
 object FramePreviewFactory {
 
-    private const val PORTRAIT_WIDTH = 1080
-    private const val PORTRAIT_HEIGHT = 1440
-    private const val LANDSCAPE_WIDTH = 1440
-    private const val LANDSCAPE_HEIGHT = 1080
+    private const val PREVIEW_LONG_EDGE = 1440
 
-    fun createPreviewBitmap(portrait: Boolean): Bitmap {
-        val width = if (portrait) PORTRAIT_WIDTH else LANDSCAPE_WIDTH
-        val height = if (portrait) PORTRAIT_HEIGHT else LANDSCAPE_HEIGHT
+    fun createPreviewBitmap(designSize: FrameDesignSize): Bitmap {
+        require(designSize.isValid) { "Invalid frame preview design size" }
+        val longEdge = maxOf(designSize.width, designSize.height)
+        val width = (designSize.width / longEdge * PREVIEW_LONG_EDGE).roundToInt().coerceAtLeast(1)
+        val height = (designSize.height / longEdge * PREVIEW_LONG_EDGE).roundToInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 

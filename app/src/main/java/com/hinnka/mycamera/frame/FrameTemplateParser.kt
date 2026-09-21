@@ -2,7 +2,6 @@ package com.hinnka.mycamera.frame
 
 import android.content.Context
 import android.graphics.Color
-import androidx.compose.runtime.snapshots.toInt
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -130,15 +129,76 @@ object FrameTemplateParser {
      */
     fun parseTemplate(json: String): FrameTemplate {
         val obj = JSONObject(json)
+        val version = obj.optInt("version", 1)
+        require(version in 1..FrameTemplate.CURRENT_VERSION) { "Unsupported frame template version: $version" }
+        if (version == 1) migrateLegacyDesignPixels(obj)
         
         return FrameTemplate(
             id = obj.getString("id"),
             nameMap = parseNameMap(obj.opt("name")),
-            version = obj.optInt("version", 1),
+            version = FrameTemplate.CURRENT_VERSION,
             layout = parseLayout(obj.getJSONObject("layout")),
             elements = parseElements(obj.getJSONArray("elements")),
             elementsTop = obj.optJSONArray("elementsTop")?.let { parseElements(it) }
         )
+    }
+
+    /** Convert original dp/sp values to design pixels at the 4096 × 3072 reference size. */
+    private fun migrateLegacyDesignPixels(obj: JSONObject) {
+        val legacyScale = 3.0
+        fun JSONObject.convert(key: String, default: Double) {
+            put(key, optDouble(key, default) * legacyScale)
+        }
+
+        val layout = obj.getJSONObject("layout")
+        if (!layout.has("designSize")) {
+            val designSize = when (val orientation = layout.optString("orientation", "AUTO")) {
+                "AUTO", "LANDSCAPE" -> FrameDesignSize()
+                "PORTRAIT" -> FrameDesignSize(width = 3072f, height = 4096f)
+                else -> throw IllegalArgumentException("Invalid legacy frame orientation: $orientation")
+            }
+            layout.put("designSize", JSONObject().apply {
+                put("width", designSize.width)
+                put("height", designSize.height)
+            })
+        }
+        layout.remove("orientation")
+        layout.apply {
+            put("verticalPadding", optDouble("verticalPadding", optDouble("padding", 16.0)) * legacyScale)
+            put("borderHeight", optDouble("borderHeight", optDouble("borderWidth", 0.0)) * legacyScale)
+            convert("height", 80.0)
+            convert("backgroundBlurRadius", 32.0)
+            convert("elementSpacing", 8.0)
+            convert("lineSpacing", 8.0)
+            convert("padding", 16.0)
+            convert("borderWidth", 0.0)
+            convert("photoCornerRadius", 0.0)
+            convert("photoShadowRadius", 0.0)
+            convert("photoShadowOffsetX", 0.0)
+            convert("photoShadowOffsetY", 2.0)
+        }
+        listOfNotNull(obj.optJSONArray("elements"), obj.optJSONArray("elementsTop")).forEach { elements ->
+            for (index in 0 until elements.length()) {
+                elements.getJSONObject(index).apply {
+                    when (optString("type")) {
+                        "text" -> convert("fontSize", 14.0)
+                        "logo" -> {
+                            if (has("width")) convert("width", 0.0)
+                            convert("size", 24.0)
+                            convert("maxWidth", 0.0)
+                            convert("margin", 8.0)
+                        }
+                        "divider" -> {
+                            convert("length", 16.0)
+                            convert("thickness", 1.0)
+                            convert("margin", 8.0)
+                        }
+                        "spacer" -> convert("width", 8.0)
+                    }
+                }
+            }
+        }
+        obj.put("version", FrameTemplate.CURRENT_VERSION)
     }
 
     /**
@@ -152,34 +212,40 @@ object FrameTemplateParser {
                     put(lang, value)
                 }
             })
-            put("version", template.version)
+            put("version", FrameTemplate.CURRENT_VERSION)
             put("layout", JSONObject().apply {
                 put("position", template.layout.position.name)
-                put("orientation", template.layout.orientation.name)
-                put("height", template.layout.heightDp)
+                put("designSize", JSONObject().apply {
+                    put("width", template.layout.designSize.width)
+                    put("height", template.layout.designSize.height)
+                })
+                put("height", template.layout.heightPx)
                 put("backgroundColor", colorToHex(template.layout.backgroundColor))
                 put("backgroundType", template.layout.effectiveBackgroundType.name)
-                put("backgroundBlurRadius", template.layout.backgroundBlurRadiusDp)
+                put("backgroundBlurRadius", template.layout.backgroundBlurRadiusPx)
                 put("borderColor", colorToHex(template.layout.borderColor))
-                put("lineSpacing", template.layout.lineSpacingDp)
-                put("padding", template.layout.paddingDp)
-                if (template.layout.borderWidthDp > 0) {
-                    put("borderWidth", template.layout.borderWidthDp)
+                put("elementSpacing", template.layout.elementSpacingPx)
+                put("lineSpacing", template.layout.lineSpacingPx)
+                put("padding", template.layout.paddingPx)
+                put("verticalPadding", template.layout.verticalPaddingPx)
+                put("borderHeight", template.layout.borderHeightPx)
+                if (template.layout.borderWidthPx > 0) {
+                    put("borderWidth", template.layout.borderWidthPx)
                 }
-                if (template.layout.photoCornerRadiusDp > 0) {
-                    put("photoCornerRadius", template.layout.photoCornerRadiusDp)
+                if (template.layout.photoCornerRadiusPx > 0) {
+                    put("photoCornerRadius", template.layout.photoCornerRadiusPx)
                 }
                 if (template.layout.photoShadowEnabled) {
                     put("photoShadowEnabled", true)
                 }
-                if (template.layout.photoShadowRadiusDp > 0) {
-                    put("photoShadowRadius", template.layout.photoShadowRadiusDp)
+                if (template.layout.photoShadowRadiusPx > 0) {
+                    put("photoShadowRadius", template.layout.photoShadowRadiusPx)
                 }
-                if (template.layout.photoShadowOffsetXDp != 0) {
-                    put("photoShadowOffsetX", template.layout.photoShadowOffsetXDp)
+                if (template.layout.photoShadowOffsetXPx != 0f) {
+                    put("photoShadowOffsetX", template.layout.photoShadowOffsetXPx)
                 }
-                if (template.layout.photoShadowOffsetYDp != 2) {
-                    put("photoShadowOffsetY", template.layout.photoShadowOffsetYDp)
+                if (template.layout.photoShadowOffsetYPx != 6.0f) {
+                    put("photoShadowOffsetY", template.layout.photoShadowOffsetYPx)
                 }
                 if (template.layout.photoShadowColor != 0xCC000000.toInt()) {
                     put("photoShadowColor", colorToHex(template.layout.photoShadowColor))
@@ -210,12 +276,22 @@ object FrameTemplateParser {
             errors += "name"
         }
 
-        if (template.layout.heightDp < 0) errors += "layout.height"
-        if (template.layout.paddingDp < 0) errors += "layout.padding"
-        if (template.layout.backgroundBlurRadiusDp !in 1..100) errors += "layout.backgroundBlurRadius"
-        if (template.layout.borderWidthDp < 0) errors += "layout.borderWidth"
-        if (template.layout.photoCornerRadiusDp < 0) errors += "layout.photoCornerRadius"
-        if (template.layout.photoShadowRadiusDp < 0) errors += "layout.photoShadowRadius"
+        if (template.version != FrameTemplate.CURRENT_VERSION) errors += "version"
+        with(template.layout) {
+            if (!designSize.isValid) errors += "layout.designSize"
+            validateDimension(heightPx, "layout.height", errors)
+            validateDimension(elementSpacingPx, "layout.elementSpacing", errors)
+            validateDimension(lineSpacingPx, "layout.lineSpacing", errors)
+            validateDimension(paddingPx, "layout.padding", errors)
+            validateDimension(verticalPaddingPx, "layout.verticalPadding", errors)
+            validateDimension(backgroundBlurRadiusPx, "layout.backgroundBlurRadius", errors)
+            validateDimension(borderWidthPx, "layout.borderWidth", errors)
+            validateDimension(borderHeightPx, "layout.borderHeight", errors)
+            validateDimension(photoCornerRadiusPx, "layout.photoCornerRadius", errors)
+            validateDimension(photoShadowRadiusPx, "layout.photoShadowRadius", errors)
+            validateDimension(photoShadowOffsetXPx, "layout.photoShadowOffsetX", errors, allowNegative = true)
+            validateDimension(photoShadowOffsetYPx, "layout.photoShadowOffsetY", errors, allowNegative = true)
+        }
         if (template.layout.position == FramePosition.IMAGE &&
             template.layout.imageResName.isNullOrBlank() &&
             template.layout.imagePath.isNullOrBlank()
@@ -237,25 +313,35 @@ object FrameTemplateParser {
     private fun validateElement(element: FrameElement, path: String, errors: MutableList<String>) {
         when (element) {
             is FrameElement.Text -> {
-                if (element.fontSizeSp < 0) errors += "$path.fontSize"
+                validateDimension(element.fontSizePx, "$path.fontSize", errors)
             }
 
             is FrameElement.Logo -> {
-                if (element.sizeDp < 0) errors += "$path.size"
-                if (element.maxWidth < 0) errors += "$path.maxWidth"
-                if (element.marginDp < 0) errors += "$path.margin"
+                element.widthPx?.let { validateDimension(it, "$path.width", errors) }
+                validateDimension(element.sizePx, "$path.size", errors)
+                validateDimension(element.maxWidthPx, "$path.maxWidth", errors)
+                validateDimension(element.marginPx, "$path.margin", errors)
             }
 
             is FrameElement.Divider -> {
-                if (element.lengthDp < 0) errors += "$path.length"
-                if (element.thicknessDp < 0) errors += "$path.thickness"
-                if (element.marginDp < 0) errors += "$path.margin"
+                validateDimension(element.lengthPx, "$path.length", errors)
+                validateDimension(element.thicknessPx, "$path.thickness", errors)
+                validateDimension(element.marginPx, "$path.margin", errors)
             }
 
             is FrameElement.Spacer -> {
-                if (element.widthDp < 0) errors += "$path.width"
+                validateDimension(element.widthPx, "$path.width", errors)
             }
         }
+    }
+
+    private fun validateDimension(
+        value: Float,
+        path: String,
+        errors: MutableList<String>,
+        allowNegative: Boolean = false
+    ) {
+        if (!value.isFinite() || (!allowNegative && value < 0f)) errors += path
     }
     
     /**
@@ -264,22 +350,31 @@ object FrameTemplateParser {
     private fun parseLayout(obj: JSONObject): FrameLayout {
         val backgroundColor = parseColor(obj.optString("backgroundColor", "#FFFFFF"))
         val position = FramePosition.valueOf(obj.optString("position", "BOTTOM"))
+        val designObj = obj.getJSONObject("designSize")
+        val designSize = FrameDesignSize(
+            width = designObj.getDouble("width").toFloat(),
+            height = designObj.getDouble("height").toFloat(),
+        )
+        require(designSize.isValid) { "Invalid frame design size" }
         return FrameLayout(
             position = position,
-            orientation = FrameOrientation.valueOf(obj.optString("orientation", "AUTO")),
-            heightDp = obj.optInt("height", 80),
+            designSize = designSize,
+            heightPx = obj.optDouble("height", 240.0).toFloat(),
             backgroundColor = backgroundColor,
             backgroundType = FrameBackgroundType.valueOf(obj.optString("backgroundType", "COLOR")).forPosition(position),
-            backgroundBlurRadiusDp = obj.optInt("backgroundBlurRadius", 32),
+            backgroundBlurRadiusPx = obj.optDouble("backgroundBlurRadius", 96.0).toFloat(),
             borderColor = parseColor(obj.optString("borderColor", colorToHex(backgroundColor))),
-            lineSpacingDp = obj.optInt("lineSpacing", 8),
-            paddingDp = obj.optInt("padding", 16),
-            borderWidthDp = obj.optInt("borderWidth", 0),
-            photoCornerRadiusDp = obj.optInt("photoCornerRadius", 0),
+            elementSpacingPx = obj.optDouble("elementSpacing", 24.0).toFloat(),
+            lineSpacingPx = obj.optDouble("lineSpacing", 24.0).toFloat(),
+            paddingPx = obj.optDouble("padding", 48.0).toFloat(),
+            verticalPaddingPx = obj.optDouble("verticalPadding", obj.optDouble("padding", 48.0)).toFloat(),
+            borderWidthPx = obj.optDouble("borderWidth", 0.0).toFloat(),
+            borderHeightPx = obj.optDouble("borderHeight", obj.optDouble("borderWidth", 0.0)).toFloat(),
+            photoCornerRadiusPx = obj.optDouble("photoCornerRadius", 0.0).toFloat(),
             photoShadowEnabled = obj.optBoolean("photoShadowEnabled", false),
-            photoShadowRadiusDp = obj.optInt("photoShadowRadius", 0),
-            photoShadowOffsetXDp = obj.optInt("photoShadowOffsetX", 0),
-            photoShadowOffsetYDp = obj.optInt("photoShadowOffsetY", 2),
+            photoShadowRadiusPx = obj.optDouble("photoShadowRadius", 0.0).toFloat(),
+            photoShadowOffsetXPx = obj.optDouble("photoShadowOffsetX", 0.0).toFloat(),
+            photoShadowOffsetYPx = obj.optDouble("photoShadowOffsetY", 6.0).toFloat(),
             photoShadowColor = parseColor(obj.optString("photoShadowColor", "#CC000000")),
             imageResName = obj.optString("imageResName").takeIf { it.isNotEmpty() },
             imagePath = obj.optString("imagePath").takeIf { it.isNotEmpty() }
@@ -322,7 +417,7 @@ object FrameTemplateParser {
                 put("type", "text")
                 put("textType", element.textType.name)
                 put("alignment", element.alignment.name)
-                put("fontSize", element.fontSizeSp)
+                put("fontSize", element.fontSizePx)
                 put("color", colorToHex(element.color))
                 put("fontWeight", element.fontWeight.name)
                 element.fontFamily?.let { put("fontFamily", it) }
@@ -340,14 +435,18 @@ object FrameTemplateParser {
                 put("logoType", element.logoType.name)
                 element.overrideSource?.let { put("overrideSource", it) }
                 put("alignment", element.alignment.name)
-                put("size", element.sizeDp)
-                if (element.maxWidth > 0) {
-                    put("maxWidth", element.maxWidth)
+                if (element.widthPx != null) {
+                    put("width", element.widthPx)
+                } else {
+                    put("size", element.sizePx)
+                    if (element.maxWidthPx > 0) {
+                        put("maxWidth", element.maxWidthPx)
+                    }
                 }
                 if (element.light) {
                     put("light", true)
                 }
-                put("margin", element.marginDp)
+                put("margin", element.marginPx)
                 if (element.line != 0) {
                     put("line", element.line)
                 }
@@ -357,10 +456,10 @@ object FrameTemplateParser {
                 put("type", "divider")
                 put("orientation", element.orientation.name)
                 put("alignment", element.alignment.name)
-                put("length", element.lengthDp)
-                put("thickness", element.thicknessDp)
+                put("length", element.lengthPx)
+                put("thickness", element.thicknessPx)
                 put("color", colorToHex(element.color))
-                put("margin", element.marginDp)
+                put("margin", element.marginPx)
                 if (element.line != 0) {
                     put("line", element.line)
                 }
@@ -368,7 +467,7 @@ object FrameTemplateParser {
 
             is FrameElement.Spacer -> JSONObject().apply {
                 put("type", "spacer")
-                put("width", element.widthDp)
+                put("width", element.widthPx)
                 if (element.line != 0) {
                     put("line", element.line)
                 }
@@ -383,7 +482,7 @@ object FrameTemplateParser {
         return FrameElement.Text(
             textType = TextType.valueOf(obj.getString("textType")),
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "START")),
-            fontSizeSp = obj.optInt("fontSize", 14),
+            fontSizePx = obj.optDouble("fontSize", 42.0).toFloat(),
             color = parseColor(obj.optString("color", "#333333")),
             fontWeight = FontWeight.valueOf(obj.optString("fontWeight", "NORMAL")),
             fontFamily = obj.optString("fontFamily").takeIf { it.isNotEmpty() },
@@ -403,10 +502,11 @@ object FrameTemplateParser {
             logoType = LogoType.valueOf(obj.getString("logoType")),
             overrideSource = obj.optString("overrideSource").takeIf { it.isNotEmpty() },
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "CENTER")),
-            sizeDp = obj.optInt("size", 24),
-            maxWidth = obj.optInt("maxWidth", 0),
+            widthPx = if (obj.has("width")) obj.getDouble("width").toFloat() else null,
+            sizePx = obj.optDouble("size", 72.0).toFloat(),
+            maxWidthPx = obj.optDouble("maxWidth", 0.0).toFloat(),
             light = obj.optBoolean("light", false),
-            marginDp = obj.optInt("margin", 8),
+            marginPx = obj.optDouble("margin", 24.0).toFloat(),
             line = obj.optInt("line", 0)
         )
     }
@@ -415,13 +515,14 @@ object FrameTemplateParser {
      * 解析分隔线元素
      */
     private fun parseDividerElement(obj: JSONObject): FrameElement.Divider {
+        val orientation = DividerOrientation.valueOf(obj.optString("orientation", "VERTICAL"))
         return FrameElement.Divider(
-            orientation = DividerOrientation.valueOf(obj.optString("orientation", "VERTICAL")),
+            orientation = orientation,
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "CENTER")),
-            lengthDp = obj.optInt("length", 16),
-            thicknessDp = obj.optInt("thickness", 1),
+            lengthPx = obj.optDouble("length", 48.0).toFloat(),
+            thicknessPx = obj.optDouble("thickness", 3.0).toFloat(),
             color = parseColor(obj.optString("color", "#CCCCCC")),
-            marginDp = obj.optInt("margin", 8),
+            marginPx = obj.optDouble("margin", 24.0).toFloat(),
             line = obj.optInt("line", 0)
         )
     }
@@ -431,7 +532,7 @@ object FrameTemplateParser {
      */
     private fun parseSpacerElement(obj: JSONObject): FrameElement.Spacer {
         return FrameElement.Spacer(
-            widthDp = obj.optInt("width", 8),
+            widthPx = obj.optDouble("width", 24.0).toFloat(),
             line = obj.optInt("line", 0)
         )
     }

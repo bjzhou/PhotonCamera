@@ -94,7 +94,6 @@ import com.hinnka.mycamera.frame.FrameEditorDraft
 import com.hinnka.mycamera.frame.FrameBackgroundType
 import com.hinnka.mycamera.frame.FrameElementDraft
 import com.hinnka.mycamera.frame.FramePosition
-import com.hinnka.mycamera.frame.FrameOrientation
 import com.hinnka.mycamera.frame.LogoType
 import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.components.CustomSlider
@@ -127,7 +126,6 @@ fun FrameEditorScreen(
     }
     var draft by remember(frameId, imageFrame) { mutableStateOf(initialDraft) }
     var selectedTab by rememberSaveable(frameId, imageFrame) { mutableIntStateOf(0) }
-    var previewPortrait by rememberSaveable(frameId, imageFrame) { mutableStateOf(true) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isRenderingPreview by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
@@ -136,6 +134,7 @@ fun FrameEditorScreen(
     var showAddElementMenu by remember { mutableStateOf(false) }
     var pendingFontElementId by remember { mutableStateOf<String?>(null) }
     var pendingLogoElementId by remember { mutableStateOf<String?>(null) }
+    val imageImportFailedMessage = stringResource(R.string.import_failed, 1)
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -146,12 +145,22 @@ fun FrameEditorScreen(
                 viewModel.importFrameEditorImage(uri, draft.editableFrameId)
             }
             if (importedPath != null) {
+                val designSize = withContext(Dispatchers.IO) {
+                    viewModel.readFrameEditorImageDesignSize(importedPath)
+                }
+                if (designSize == null) {
+                    validationMessage = imageImportFailedMessage
+                    return@launch
+                }
                 draft = draft.copy(
                     layout = draft.layout.copy(
                         imagePath = importedPath,
-                        imageResName = null
+                        imageResName = null,
+                        designSize = designSize
                     )
                 )
+            } else {
+                validationMessage = imageImportFailedMessage
             }
         }
     }
@@ -196,11 +205,11 @@ fun FrameEditorScreen(
         draft = hydratedDraft
     }
 
-    LaunchedEffect(draft, previewPortrait) {
+    LaunchedEffect(draft) {
         isRenderingPreview = true
         delay(150)
         previewBitmap = runCatching {
-            viewModel.renderFrameEditorPreview(draft, previewPortrait)
+            viewModel.renderFrameEditorPreview(draft)
         }.getOrNull()
         isRenderingPreview = false
     }
@@ -344,8 +353,6 @@ fun FrameEditorScreen(
             PreviewCard(
                 previewBitmap = previewBitmap,
                 isRendering = isRenderingPreview,
-                portrait = previewPortrait,
-                onOrientationChange = { previewPortrait = it },
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
 
@@ -450,8 +457,6 @@ private fun ScaffoldWithBottomBar(
 private fun PreviewCard(
     previewBitmap: Bitmap?,
     isRendering: Boolean,
-    portrait: Boolean,
-    onOrientationChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -487,27 +492,6 @@ private fun PreviewCard(
                 }
             }
 
-            Surface(
-                color = Color.Black.copy(alpha = 0.36f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.align(Alignment.TopEnd)
-            ) {
-                IconButton(
-                    onClick = { onOrientationChange(!portrait) },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = AppIcons.ScreenRotation,
-                        contentDescription = if (portrait) {
-                            stringResource(R.string.frame_editor_preview_landscape)
-                        } else {
-                            stringResource(R.string.frame_editor_preview_portrait)
-                        },
-                        tint = if (portrait) AccentColor else Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
         }
     }
 }
@@ -548,33 +532,55 @@ private fun FrameBasicTab(
 
         item {
             SectionCard(title = stringResource(R.string.frame_editor_section_layout)) {
-                DropdownSelectionField(
-                    label = stringResource(R.string.frame_editor_orientation),
-                    currentLabel = frameOrientationLabel(draft.layout.orientation),
-                    options = FrameOrientation.entries,
-                    optionLabel = { frameOrientationLabel(it) },
-                    onSelected = { onDraftChange(draft.copy(layout = draft.layout.copy(orientation = it))) }
+                NumberField(
+                    label = stringResource(R.string.frame_editor_design_width),
+                    value = draft.layout.designSize.width,
+                    minimum = Float.MIN_VALUE,
+                    onValueChange = {
+                        onDraftChange(draft.copy(layout = draft.layout.copy(
+                            designSize = draft.layout.designSize.copy(width = it)
+                        )))
+                    }
+                )
+                NumberField(
+                    label = stringResource(R.string.frame_editor_design_height),
+                    value = draft.layout.designSize.height,
+                    minimum = Float.MIN_VALUE,
+                    onValueChange = {
+                        onDraftChange(draft.copy(layout = draft.layout.copy(
+                            designSize = draft.layout.designSize.copy(height = it)
+                        )))
+                    }
                 )
                 Text(
-                    text = stringResource(R.string.frame_editor_orientation_hint),
+                    text = stringResource(R.string.frame_editor_dimension_hint),
                     color = Color.White.copy(alpha = 0.65f),
                     fontSize = 12.sp
                 )
                 if (draft.layout.position != FramePosition.IMAGE) {
-                    IntField(
+                    NumberField(
                         label = stringResource(R.string.frame_editor_layout_height),
-                        value = draft.layout.heightDp,
+                        value = draft.layout.heightPx,
                         onValueChange = {
-                            onDraftChange(draft.copy(layout = draft.layout.copy(heightDp = it.coerceAtLeast(0))))
+                            onDraftChange(draft.copy(layout = draft.layout.copy(heightPx = it.coerceAtLeast(0f))))
                         }
                     )
-                    IntField(
+                    NumberField(
                         label = stringResource(R.string.frame_editor_layout_padding),
-                        value = draft.layout.paddingDp,
+                        value = draft.layout.paddingPx,
                         onValueChange = {
-                            onDraftChange(draft.copy(layout = draft.layout.copy(paddingDp = it.coerceAtLeast(0))))
+                            onDraftChange(draft.copy(layout = draft.layout.copy(paddingPx = it.coerceAtLeast(0f))))
                         }
                     )
+                    if (draft.layout.position == FramePosition.OVERLAY) {
+                        NumberField(
+                            label = stringResource(R.string.frame_editor_layout_vertical_padding),
+                            value = draft.layout.verticalPaddingPx,
+                            onValueChange = {
+                                onDraftChange(draft.copy(layout = draft.layout.copy(verticalPaddingPx = it)))
+                            }
+                        )
+                    }
                     DropdownSelectionField(
                         label = stringResource(R.string.frame_editor_background_type),
                         currentLabel = frameBackgroundTypeLabel(draft.layout.backgroundType),
@@ -588,11 +594,11 @@ private fun FrameBasicTab(
                             color = Color.White.copy(alpha = 0.65f),
                             fontSize = 12.sp
                         )
-                        IntField(
+                        NumberField(
                             label = stringResource(R.string.frame_editor_background_blur_radius),
-                            value = draft.layout.backgroundBlurRadiusDp,
+                            value = draft.layout.backgroundBlurRadiusPx,
                             onValueChange = {
-                                onDraftChange(draft.copy(layout = draft.layout.copy(backgroundBlurRadiusDp = it.coerceIn(1, 100))))
+                                onDraftChange(draft.copy(layout = draft.layout.copy(backgroundBlurRadiusPx = it)))
                             }
                         )
                     } else if (draft.layout.backgroundType == FrameBackgroundType.LIQUID_GLASS) {
@@ -617,27 +623,45 @@ private fun FrameBasicTab(
                             }
                         )
                     }
-                    IntField(
+                    NumberField(
                         label = stringResource(R.string.frame_editor_layout_line_spacing),
-                        value = draft.layout.lineSpacingDp,
+                        value = draft.layout.lineSpacingPx,
                         onValueChange = {
-                            onDraftChange(draft.copy(layout = draft.layout.copy(lineSpacingDp = it.coerceAtLeast(0))))
+                            onDraftChange(draft.copy(layout = draft.layout.copy(lineSpacingPx = it.coerceAtLeast(0f))))
+                        }
+                    )
+                    NumberField(
+                        label = stringResource(R.string.frame_editor_element_spacing),
+                        value = draft.layout.elementSpacingPx,
+                        onValueChange = {
+                            onDraftChange(draft.copy(layout = draft.layout.copy(elementSpacingPx = it)))
                         }
                     )
                     if (draft.layout.position == FramePosition.BORDER || draft.layout.position == FramePosition.BOTH) {
-                        IntField(
+                        NumberField(
                             label = stringResource(R.string.frame_editor_layout_border_width),
-                            value = draft.layout.borderWidthDp,
+                            value = draft.layout.borderWidthPx,
                             onValueChange = {
-                                onDraftChange(draft.copy(layout = draft.layout.copy(borderWidthDp = it.coerceAtLeast(0))))
+                                onDraftChange(draft.copy(layout = draft.layout.copy(borderWidthPx = it.coerceAtLeast(0f))))
                             }
                         )
-                        if (draft.layout.borderWidthDp > 0) {
-                            IntField(
-                                label = stringResource(R.string.frame_editor_photo_corner_radius),
-                                value = draft.layout.photoCornerRadiusDp,
+                        if (draft.layout.position == FramePosition.BORDER) {
+                            NumberField(
+                                label = stringResource(R.string.frame_editor_layout_border_height),
+                                value = draft.layout.borderHeightPx,
                                 onValueChange = {
-                                    onDraftChange(draft.copy(layout = draft.layout.copy(photoCornerRadiusDp = it.coerceAtLeast(0))))
+                                    onDraftChange(draft.copy(layout = draft.layout.copy(borderHeightPx = it)))
+                                }
+                            )
+                        }
+                        if (draft.layout.borderWidthPx > 0 ||
+                            (draft.layout.position == FramePosition.BORDER && draft.layout.borderHeightPx > 0)
+                        ) {
+                            NumberField(
+                                label = stringResource(R.string.frame_editor_photo_corner_radius),
+                                value = draft.layout.photoCornerRadiusPx,
+                                onValueChange = {
+                                    onDraftChange(draft.copy(layout = draft.layout.copy(photoCornerRadiusPx = it.coerceAtLeast(0f))))
                                 }
                             )
                             SwitchRow(
@@ -648,10 +672,10 @@ private fun FrameBasicTab(
                                         draft.copy(
                                             layout = draft.layout.copy(
                                                 photoShadowEnabled = it,
-                                                photoShadowRadiusDp = if (it && draft.layout.photoShadowRadiusDp == 0) {
-                                                    36
+                                                photoShadowRadiusPx = if (it && draft.layout.photoShadowRadiusPx == 0f) {
+                                                    108.0f
                                                 } else {
-                                                    draft.layout.photoShadowRadiusDp
+                                                    draft.layout.photoShadowRadiusPx
                                                 }
                                             )
                                         )
@@ -659,27 +683,27 @@ private fun FrameBasicTab(
                                 }
                             )
                             if (draft.layout.photoShadowEnabled) {
-                                IntField(
+                                NumberField(
                                     label = stringResource(R.string.frame_editor_photo_shadow_radius),
-                                    value = draft.layout.photoShadowRadiusDp,
+                                    value = draft.layout.photoShadowRadiusPx,
                                     onValueChange = {
-                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowRadiusDp = it.coerceAtLeast(0))))
+                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowRadiusPx = it.coerceAtLeast(0f))))
                                     }
                                 )
-                                IntField(
+                                NumberField(
                                     label = stringResource(R.string.frame_editor_photo_shadow_offset_x),
-                                    value = draft.layout.photoShadowOffsetXDp,
+                                    value = draft.layout.photoShadowOffsetXPx,
                                     allowNegative = true,
                                     onValueChange = {
-                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowOffsetXDp = it)))
+                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowOffsetXPx = it)))
                                     }
                                 )
-                                IntField(
+                                NumberField(
                                     label = stringResource(R.string.frame_editor_photo_shadow_offset_y),
-                                    value = draft.layout.photoShadowOffsetYDp,
+                                    value = draft.layout.photoShadowOffsetYPx,
                                     allowNegative = true,
                                     onValueChange = {
-                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowOffsetYDp = it)))
+                                        onDraftChange(draft.copy(layout = draft.layout.copy(photoShadowOffsetYPx = it)))
                                     }
                                 )
                                 ColorField(
@@ -1159,10 +1183,10 @@ private fun ElementEditor(
                 allowNegative = true,
                 onValueChange = { onElementChange(element.copy(line = it)) }
             )
-            IntField(
+            NumberField(
                 label = stringResource(R.string.frame_editor_text_size),
-                value = element.fontSizeSp,
-                onValueChange = { onElementChange(element.copy(fontSizeSp = it.coerceAtLeast(0))) }
+                value = element.fontSizePx,
+                onValueChange = { onElementChange(element.copy(fontSizePx = it.coerceAtLeast(0f))) }
             )
             ColorField(
                 label = stringResource(R.string.frame_editor_text_color),
@@ -1287,20 +1311,15 @@ private fun ElementEditor(
                 allowNegative = true,
                 onValueChange = { onElementChange(element.copy(line = it)) }
             )
-            IntField(
+            NumberField(
                 label = stringResource(R.string.frame_editor_logo_size),
-                value = element.sizeDp,
-                onValueChange = { onElementChange(element.copy(sizeDp = it.coerceAtLeast(0))) }
+                value = element.widthPx,
+                onValueChange = { onElementChange(element.copy(widthPx = it.coerceAtLeast(0f))) }
             )
-            IntField(
-                label = stringResource(R.string.frame_editor_logo_max_width),
-                value = element.maxWidth,
-                onValueChange = { onElementChange(element.copy(maxWidth = it.coerceAtLeast(0))) }
-            )
-            IntField(
+            NumberField(
                 label = stringResource(R.string.frame_editor_margin),
-                value = element.marginDp,
-                onValueChange = { onElementChange(element.copy(marginDp = it.coerceAtLeast(0))) }
+                value = element.marginPx,
+                onValueChange = { onElementChange(element.copy(marginPx = it.coerceAtLeast(0f))) }
             )
             SwitchRow(
                 label = stringResource(R.string.frame_editor_logo_light),
@@ -1330,25 +1349,25 @@ private fun ElementEditor(
                 allowNegative = true,
                 onValueChange = { onElementChange(element.copy(line = it)) }
             )
-            IntField(
+            NumberField(
                 label = stringResource(R.string.frame_editor_divider_length),
-                value = element.lengthDp,
-                onValueChange = { onElementChange(element.copy(lengthDp = it.coerceAtLeast(0))) }
+                value = element.lengthPx,
+                onValueChange = { onElementChange(element.copy(lengthPx = it.coerceAtLeast(0f))) }
             )
-            IntField(
+            NumberField(
                 label = stringResource(R.string.frame_editor_divider_thickness),
-                value = element.thicknessDp,
-                onValueChange = { onElementChange(element.copy(thicknessDp = it.coerceAtLeast(0))) }
+                value = element.thicknessPx,
+                onValueChange = { onElementChange(element.copy(thicknessPx = it.coerceAtLeast(0f))) }
             )
             ColorField(
                 label = stringResource(R.string.frame_editor_divider_color),
                 value = element.color,
                 onValueChange = { onElementChange(element.copy(color = it)) }
             )
-            IntField(
+            NumberField(
                 label = stringResource(R.string.frame_editor_margin),
-                value = element.marginDp,
-                onValueChange = { onElementChange(element.copy(marginDp = it.coerceAtLeast(0))) }
+                value = element.marginPx,
+                onValueChange = { onElementChange(element.copy(marginPx = it.coerceAtLeast(0f))) }
             )
         }
 
@@ -1359,10 +1378,10 @@ private fun ElementEditor(
                 allowNegative = true,
                 onValueChange = { onElementChange(element.copy(line = it)) }
             )
-            IntField(
+            NumberField(
                 label = stringResource(R.string.frame_editor_spacer_width),
-                value = element.widthDp,
-                onValueChange = { onElementChange(element.copy(widthDp = it.coerceAtLeast(0))) }
+                value = element.widthPx,
+                onValueChange = { onElementChange(element.copy(widthPx = it.coerceAtLeast(0f))) }
             )
         }
     }
@@ -1407,6 +1426,36 @@ private fun TextFieldSection(
         onValueChange = onValueChange,
         label = { Text(label) },
         singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun NumberField(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    allowNegative: Boolean = false,
+    minimum: Float = if (allowNegative) -Float.MAX_VALUE else 0f,
+    maximum: Float = Float.MAX_VALUE,
+) {
+    var text by remember { mutableStateOf(value.toString()) }
+    fun parse(input: String): Float? = input.replace(',', '.').toFloatOrNull()
+    LaunchedEffect(value) {
+        // Keep intermediate decimal input ("1.", "1.00") while the model updates.
+        if (parse(text) != value) text = value.toString()
+    }
+    val number = parse(text)
+    OutlinedTextField(
+        value = text,
+        onValueChange = { input ->
+            text = input
+            parse(input)?.takeIf { it.isFinite() && it in minimum..maximum }?.let(onValueChange)
+        },
+        label = { Text(label) },
+        isError = text.isNotEmpty() && (number == null || !number.isFinite() || number !in minimum..maximum),
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth()
     )
 }
@@ -2036,13 +2085,6 @@ private fun frameBackgroundTypeLabel(type: FrameBackgroundType): String = when (
 }
 
 @Composable
-private fun frameOrientationLabel(orientation: FrameOrientation): String = when (orientation) {
-    FrameOrientation.AUTO -> stringResource(R.string.frame_editor_orientation_auto)
-    FrameOrientation.LANDSCAPE -> stringResource(R.string.frame_editor_orientation_landscape)
-    FrameOrientation.PORTRAIT -> stringResource(R.string.frame_editor_orientation_portrait)
-}
-
-@Composable
 private fun framePositionLabel(position: FramePosition): String = when (position) {
     FramePosition.TOP -> stringResource(R.string.frame_editor_position_top)
     FramePosition.BOTTOM -> stringResource(R.string.frame_editor_position_bottom)
@@ -2165,17 +2207,17 @@ private fun elementSummary(element: FrameElementDraft): String = when (element) 
         R.string.frame_editor_summary_logo,
         logoTypeLabel(element.logoType),
         alignmentLabel(element.alignment),
-        element.sizeDp
+        element.widthPx
     )
     is FrameElementDraft.Divider -> stringResource(
         R.string.frame_editor_summary_divider,
         dividerOrientationLabel(element.orientation),
         alignmentLabel(element.alignment),
-        element.lengthDp
+        element.lengthPx
     )
     is FrameElementDraft.Spacer -> stringResource(
         R.string.frame_editor_summary_spacer,
         element.line,
-        element.widthDp
+        element.widthPx
     )
 }

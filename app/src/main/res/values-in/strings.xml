@@ -331,7 +331,13 @@
     <string name="frame_editor_background_type">Latar belakang</string>
     <string name="frame_editor_background_color">Warna solid</string>
     <string name="frame_editor_background_blur">Buram Gaussian</string>
-    <string name="frame_editor_background_blur_radius">Intensitas keburaman</string>
+    <string name="frame_editor_layout_vertical_padding">Jarak dalam vertikal (px)</string>
+    <string name="frame_editor_layout_border_height">Tinggi bingkai atas (px)</string>
+    <string name="frame_editor_design_width">Lebar Desain (px)</string>
+    <string name="frame_editor_design_height">Tinggi Desain (px)</string>
+    <string name="frame_editor_dimension_hint">Semua ukuran menggunakan piksel kanvas desain. Bingkai, teks, dan logo diskalakan seragam menurut lebar foto aktual ÷ lebar desain; area foto menyesuaikan tinggi aktual.</string>
+    <string name="frame_editor_element_spacing">Jarak Elemen (px)</string>
+    <string name="frame_editor_background_blur_radius">Intensitas keburaman (px)</string>
     <string name="frame_editor_background_blur_hint">Isi latar belakang dengan salinan foto yang diburamkan. Dalam mode overlay, hanya area watermark yang diburamkan.</string>
     <string name="frame_editor_background_glass">Kaca cair</string>
     <string name="frame_editor_background_glass_hint">Tampilkan kapsul kaca cair di bagian bawah foto, dengan jarak di kedua sisi dan bagian bawah.</string>

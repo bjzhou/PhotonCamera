@@ -4,21 +4,28 @@
         "en": "Polaroid",
         "zh": "拍立得"
     },
-    "version": 1,
+    "version": 2,
     "editable": true,
     "layout": {
         "position": "BORDER",
-        "height": 120,
-        "borderWidth": 24,
+        "height": 360,
+        "borderWidth": 72,
         "backgroundColor": "#FFFEF8",
-        "padding": 24
+        "padding": 72,
+        "designSize": {
+            "width": 4096,
+            "height": 3072
+        },
+        "verticalPadding": 72,
+        "borderHeight": 72,
+        "elementSpacing": 24
     },
     "elements": [
         {
             "type": "text",
             "textType": "DATE",
             "alignment": "CENTER",
-            "fontSize": 14,
+            "fontSize": 42,
             "color": "#666666",
             "format": "yyyy.MM.dd HH:mm"
         }

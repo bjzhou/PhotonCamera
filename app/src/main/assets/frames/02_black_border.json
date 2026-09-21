@@ -4,16 +4,23 @@
         "en": "Soft Focus",
         "zh": "柔焦边框"
     },
-    "version": 1,
+    "version": 2,
     "editable": true,
     "layout": {
         "position": "BORDER",
-        "height": 200,
+        "height": 600,
         "backgroundColor": "#1E1E1E",
         "backgroundType": "GAUSSIAN_BLUR",
-        "backgroundBlurRadius": 32,
-        "padding": 60,
-        "borderWidth": 60
+        "backgroundBlurRadius": 96,
+        "padding": 180,
+        "borderWidth": 180,
+        "designSize": {
+            "width": 4096,
+            "height": 3072
+        },
+        "verticalPadding": 180,
+        "borderHeight": 180,
+        "elementSpacing": 24
     },
     "elements": [
         {
@@ -21,14 +28,15 @@
             "logoType": "BRAND",
             "alignment": "CENTER",
             "light": true,
-            "size": 40,
-            "line": 0
+            "size": 120,
+            "line": 0,
+            "margin": 24
         },
         {
             "type": "text",
             "textType": "DEVICE_MODEL",
             "alignment": "CENTER",
-            "fontSize": 24,
+            "fontSize": 72,
             "color": "#C6AE7A",
             "fontWeight": "BOLD",
             "line": 1
@@ -37,7 +45,7 @@
             "type": "text",
             "textType": "FOCAL_LENGTH_35MM",
             "alignment": "CENTER",
-            "fontSize": 14,
+            "fontSize": 42,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2
@@ -46,7 +54,7 @@
             "type": "text",
             "textType": "APERTURE",
             "alignment": "CENTER",
-            "fontSize": 14,
+            "fontSize": 42,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2
@@ -55,7 +63,7 @@
             "type": "text",
             "textType": "SHUTTER_SPEED",
             "alignment": "CENTER",
-            "fontSize": 14,
+            "fontSize": 42,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2
@@ -64,7 +72,7 @@
             "type": "text",
             "textType": "ISO",
             "alignment": "CENTER",
-            "fontSize": 14,
+            "fontSize": 42,
             "color": "#C6AE7A",
             "fontWeight": "NORMAL",
             "line": 2

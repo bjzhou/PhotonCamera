@@ -4,20 +4,26 @@
         "en": "Time",
         "zh": "胶片时间"
     },
-    "version": 1,
+    "version": 2,
     "editable": true,
     "layout": {
         "position": "OVERLAY",
         "backgroundColor": "#00000000",
-        "height": 250,
-        "padding": 120
+        "height": 750,
+        "padding": 360,
+        "designSize": {
+            "width": 4096,
+            "height": 3072
+        },
+        "verticalPadding": 360,
+        "elementSpacing": 24
     },
     "elements": [
         {
             "type": "text",
             "textType": "DATE",
             "alignment": "END",
-            "fontSize": 24,
+            "fontSize": 72,
             "color": "#FFA600",
             "fontFamily": "DS-DIGIB.TTF",
             "format": "\"yy MM dd"

@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.*
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
-import android.util.TypedValue
 import androidx.annotation.RequiresApi
 import androidx.core.graphics.withSave
 import androidx.core.graphics.drawable.toBitmap
@@ -71,16 +70,16 @@ class FrameRenderer(
 //        PLog.d(TAG, "render: $metadata")
 
         val layout = template.layout
-        val rotated = layout.orientation.rotatesPhoto(originalBitmap.width, originalBitmap.height)
-        val photoWidth = if (rotated) originalBitmap.height else originalBitmap.width
-        val photoHeight = if (rotated) originalBitmap.width else originalBitmap.height
+        val photoWidth = originalBitmap.width
+        val photoHeight = originalBitmap.height
 
-        val expectedHeight = photoHeight * 0.08f
-        val scale = expectedHeight / dpToPx(80) // 以 80dp 为基准高度计算缩放比例
+        val dimensions = FrameDimensions(photoWidth, photoHeight, layout.designSize, layout.elementSpacingPx)
 
-        val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
-        val padding = (dpToPx(layout.paddingDp) * scale).toInt()
-        val borderWidth = (dpToPx(layout.borderWidthDp) * scale).toInt()
+        val frameHeight = dimensions.toPixels(layout.heightPx).toInt()
+        val padding = dimensions.toPixels(layout.paddingPx)
+        val verticalPadding = dimensions.toPixels(layout.verticalPaddingPx)
+        val borderWidth = dimensions.toPixels(layout.borderWidthPx).toInt()
+        val borderHeight = dimensions.toPixels(layout.borderHeightPx).toInt()
 
         // 计算输出尺寸
         val outputWidth: Int
@@ -110,7 +109,7 @@ class FrameRenderer(
             FramePosition.BORDER -> {
                 // 照片顶部/左右边框 + 底部信息区；水印侧不额外占用 border。
                 outputWidth = photoWidth + borderWidth * 2
-                outputHeight = photoHeight + frameHeight + borderWidth
+                outputHeight = photoHeight + frameHeight + borderHeight
             }
 
             FramePosition.IMAGE -> {
@@ -120,19 +119,9 @@ class FrameRenderer(
         }
 
         // 创建输出 Bitmap
-        val output = if (rotated) createBitmap(outputHeight, outputWidth) else createBitmap(outputWidth, outputHeight)
+        val output = createBitmap(outputWidth, outputHeight)
         val canvas = Canvas(output)
-        if (rotated) {
-            // Lay out the template in its design orientation, then return to the photo orientation.
-            if (layout.orientation == FrameOrientation.LANDSCAPE) {
-                canvas.translate(outputHeight.toFloat(), 0f)
-                canvas.rotate(90f)
-            } else {
-                canvas.translate(0f, outputWidth.toFloat())
-                canvas.rotate(-90f)
-            }
-            PLog.d(TAG, "Frame ${template.id}: ${layout.orientation} design on ${originalBitmap.width}x${originalBitmap.height} photo")
-        }
+        PLog.d(TAG, "Frame ${template.id}: design=${layout.designSize.width}x${layout.designSize.height}, photo=${photoWidth}x${photoHeight}, scale=${dimensions.scale}")
 
         // 绘制原图
         val photoLeft: Float
@@ -161,12 +150,12 @@ class FrameRenderer(
 
             FramePosition.BORDER -> {
                 photoLeft = borderWidth.toFloat()
-                photoTop = borderWidth.toFloat()
+                photoTop = borderHeight.toFloat()
             }
         }
         if (layout.position != FramePosition.OVERLAY) {
             if (layout.effectiveBackgroundType.usesPhoto) {
-                drawPhotoBackground(canvas, originalBitmap, layout, outputWidth, outputHeight, scale)
+                drawPhotoBackground(canvas, originalBitmap, layout, outputWidth, outputHeight, dimensions)
             } else {
                 backgroundPaint.color = layout.backgroundColor
                 canvas.drawRect(0f, 0f, outputWidth.toFloat(), outputHeight.toFloat(), backgroundPaint)
@@ -176,6 +165,7 @@ class FrameRenderer(
             canvas = canvas,
             layout = layout,
             borderWidth = borderWidth,
+            borderHeight = borderHeight,
             photoLeft = photoLeft,
             photoTop = photoTop,
             photoWidth = photoWidth.toFloat(),
@@ -190,31 +180,32 @@ class FrameRenderer(
             photoWidth = photoWidth.toFloat(),
             photoHeight = photoHeight.toFloat(),
             borderWidth = borderWidth,
-            scale = scale
+            borderHeight = borderHeight,
+            dimensions = dimensions
         )
-        drawPhotoBitmap(canvas, originalBitmap, layout, photoLeft, photoTop, scale, rotated)
+        drawPhotoBitmap(canvas, originalBitmap, layout, photoLeft, photoTop, dimensions)
 
         // 绘制边框内容
         when (layout.position) {
             FramePosition.BOTTOM -> {
                 drawFrameContent(
                     canvas, template.elements, metadata, template.layout,
-                    left = padding.toFloat(),
+                    left = padding,
                     top = photoHeight.toFloat(),
-                    right = (outputWidth - padding).toFloat(),
+                    right = outputWidth - padding,
                     bottom = outputHeight.toFloat(),
-                    scale = scale
+                    dimensions = dimensions
                 )
             }
 
             FramePosition.TOP -> {
                 drawFrameContent(
                     canvas, template.elements, metadata, template.layout,
-                    left = padding.toFloat(),
+                    left = padding,
                     top = 0f,
-                    right = (outputWidth - padding).toFloat(),
+                    right = outputWidth - padding,
                     bottom = frameHeight.toFloat(),
-                    scale = scale
+                    dimensions = dimensions
                 )
             }
 
@@ -222,20 +213,20 @@ class FrameRenderer(
                 // 顶部
                 drawFrameContent(
                     canvas, template.elementsTop ?: template.elements, metadata, template.layout,
-                    left = padding.toFloat(),
+                    left = padding,
                     top = 0f,
-                    right = (outputWidth - padding).toFloat(),
+                    right = outputWidth - padding,
                     bottom = frameHeight.toFloat(),
-                    scale = scale
+                    dimensions = dimensions
                 )
                 // 底部
                 drawFrameContent(
                     canvas, template.elements, metadata, template.layout,
-                    left = padding.toFloat(),
+                    left = padding,
                     top = (photoHeight + frameHeight).toFloat(),
-                    right = (outputWidth - padding).toFloat(),
+                    right = outputWidth - padding,
                     bottom = outputHeight.toFloat(),
-                    scale = scale
+                    dimensions = dimensions
                 )
             }
 
@@ -246,16 +237,16 @@ class FrameRenderer(
                 val glassBounds = if (layout.effectiveBackgroundType == FrameBackgroundType.LIQUID_GLASS) {
                     FrameGlassOverlay.bounds(
                         outputWidth.toFloat(), outputHeight.toFloat(), frameHeight.toFloat(),
-                        dpToPx(80) * scale / 80f
+                        dimensions
                     )
                 } else null
 
                 if (glassBounds != null) {
-                    drawPhotoBackground(canvas, originalBitmap, layout, outputWidth, outputHeight, scale)
+                    drawPhotoBackground(canvas, originalBitmap, layout, outputWidth, outputHeight, dimensions)
                 } else if (layout.effectiveBackgroundType.usesPhoto) {
                     if (frameHeight > 0) canvas.withSave {
                         clipRect(0f, overlayTop, outputWidth.toFloat(), outputHeight.toFloat())
-                        drawPhotoBackground(this, originalBitmap, layout, outputWidth, outputHeight, scale)
+                        drawPhotoBackground(this, originalBitmap, layout, outputWidth, outputHeight, dimensions)
                     }
                 } else {
                     // 创建线性渐变：从顶部全透明到底部半透明
@@ -274,34 +265,34 @@ class FrameRenderer(
 
                 // 胶囊内的文字与背景共同上移；圆角外的照片不被文字覆盖。
                 if (glassBounds != null) {
-                    val contentBounds = FrameGlassOverlay.contentBounds(glassBounds, padding.toFloat())
+                    val contentBounds = FrameGlassOverlay.contentBounds(glassBounds, padding, verticalPadding)
                     if (!contentBounds.isEmpty) canvas.withSave {
                         clipPath(FrameGlassOverlay.outline(glassBounds))
                         drawFrameContent(
                             this, template.elements, metadata, layout,
-                            contentBounds.left, contentBounds.top, contentBounds.right, contentBounds.bottom, scale
+                            contentBounds.left, contentBounds.top, contentBounds.right, contentBounds.bottom, dimensions
                         )
                     }
                 } else {
                     drawFrameContent(
                         canvas, template.elements, metadata, layout,
-                        left = padding.toFloat(), top = overlayTop + padding.toFloat(),
-                        right = (outputWidth - padding).toFloat(), bottom = outputHeight.toFloat() - padding.toFloat(),
-                        scale = scale
+                        left = padding, top = overlayTop + verticalPadding,
+                        right = outputWidth - padding, bottom = outputHeight.toFloat() - verticalPadding,
+                        dimensions = dimensions
                     )
                 }
             }
 
             FramePosition.BORDER -> {
                 // 四周边框模式：底部信息区
-                val infoTop = (photoHeight + borderWidth).toFloat()
+                val infoTop = (photoHeight + borderHeight).toFloat()
                 drawFrameContent(
                     canvas, template.elements, metadata, template.layout,
-                    left = padding.toFloat(),
+                    left = padding,
                     top = infoTop,
-                    right = (outputWidth - padding).toFloat(),
+                    right = outputWidth - padding,
                     bottom = outputHeight.toFloat(),
-                    scale = scale
+                    dimensions = dimensions
                 )
             }
         }
@@ -315,13 +306,12 @@ class FrameRenderer(
         layout: FrameLayout,
         width: Int,
         height: Int,
-        scale: Float,
+        dimensions: FrameDimensions,
     ) {
-        val blurRadius = layout.backgroundBlurRadiusDp.coerceIn(1, 100)
-        val unitScale = dpToPx(80) * scale / 80f
-        val frameHeight = (dpToPx(layout.heightDp) * scale).toInt().toFloat()
+        val blurRadius = layout.backgroundBlurRadiusPx.coerceAtLeast(0f)
+        val frameHeight = dimensions.toPixels(layout.heightPx).toInt().toFloat()
         val materialBounds = if (layout.effectiveBackgroundType == FrameBackgroundType.LIQUID_GLASS) {
-            FrameGlassOverlay.bounds(width.toFloat(), height.toFloat(), frameHeight, unitScale)
+            FrameGlassOverlay.bounds(width.toFloat(), height.toFloat(), frameHeight, dimensions)
         } else {
             RectF(0f, 0f, width.toFloat(), height.toFloat()).apply {
                 if (layout.position == FramePosition.OVERLAY) top = (height - frameHeight).coerceAtLeast(0f)
@@ -329,9 +319,9 @@ class FrameRenderer(
         }
         FrameBackgroundRenderer.draw(
             context, canvas, photo, layout, width, height,
-            sigma = dpToPx(blurRadius) * scale,
+            sigma = dimensions.toPixels(blurRadius),
             materialBounds = materialBounds,
-            unitScale = unitScale,
+            unitScale = dimensions.toPixels(3.0f),
         )
     }
 
@@ -354,12 +344,12 @@ class FrameRenderer(
         val geometry = calculateFrameGeometry(originalBitmap, template.layout) ?: return gainmapContents
         val layout = template.layout
         val photoBackground = layout.effectiveBackgroundType.usesPhoto
-        val rotated = layout.orientation.rotatesPhoto(originalBitmap.width, originalBitmap.height)
-        val photoHeight = if (rotated) originalBitmap.width else originalBitmap.height
-        val scale = photoHeight * 0.08f / dpToPx(80)
-        val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
+        val photoHeight = originalBitmap.height
+        val photoWidth = originalBitmap.width
+        val dimensions = FrameDimensions(photoWidth, photoHeight, layout.designSize, layout.elementSpacingPx)
+        val frameHeight = dimensions.toPixels(layout.heightPx).toInt()
         val replacedOverlay = photoBackground && layout.position == FramePosition.OVERLAY && frameHeight > 0
-        val cornerRadius = if (photoBackground) dpToPx(layout.photoCornerRadiusDp.coerceAtLeast(0)) * scale else 0f
+        val cornerRadius = dimensions.toPixels(layout.photoCornerRadiusPx.coerceAtLeast(0f))
         if (
             !replacedOverlay && cornerRadius == 0f &&
             geometry.outputWidth == originalBitmap.width &&
@@ -386,17 +376,8 @@ class FrameRenderer(
                 output.width.toFloat() / geometry.outputWidth,
                 output.height.toFloat() / geometry.outputHeight
             )
-            val designWidth = if (rotated) geometry.outputHeight else geometry.outputWidth
-            val designHeight = if (rotated) geometry.outputWidth else geometry.outputHeight
-            if (rotated) {
-                if (layout.orientation == FrameOrientation.LANDSCAPE) {
-                    canvas.translate(designHeight.toFloat(), 0f)
-                    canvas.rotate(90f)
-                } else {
-                    canvas.translate(0f, designWidth.toFloat())
-                    canvas.rotate(-90f)
-                }
-            }
+            val designWidth = geometry.outputWidth
+            val designHeight = geometry.outputHeight
             val neutralPaint = Paint().apply {
                 color = neutralColor
                 blendMode = BlendMode.SRC
@@ -409,7 +390,7 @@ class FrameRenderer(
             if (layout.effectiveBackgroundType == FrameBackgroundType.LIQUID_GLASS) {
                 val capsule = FrameGlassOverlay.bounds(
                     designWidth.toFloat(), designHeight.toFloat(), frameHeight.toFloat(),
-                    dpToPx(80) * scale / 80f
+                    dimensions
                 )
                 if (!capsule.isEmpty) canvas.drawPath(FrameGlassOverlay.outline(capsule), neutralPaint)
             } else {
@@ -423,13 +404,12 @@ class FrameRenderer(
         originalBitmap: Bitmap,
         layout: FrameLayout,
     ): FrameGeometry? {
-        val rotated = layout.orientation.rotatesPhoto(originalBitmap.width, originalBitmap.height)
-        val photoWidth = if (rotated) originalBitmap.height else originalBitmap.width
-        val photoHeight = if (rotated) originalBitmap.width else originalBitmap.height
-        val expectedHeight = photoHeight * 0.08f
-        val scale = expectedHeight / dpToPx(80)
-        val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
-        val borderWidth = (dpToPx(layout.borderWidthDp) * scale).toInt()
+        val photoWidth = originalBitmap.width
+        val photoHeight = originalBitmap.height
+        val dimensions = FrameDimensions(photoWidth, photoHeight, layout.designSize, layout.elementSpacingPx)
+        val frameHeight = dimensions.toPixels(layout.heightPx).toInt()
+        val borderWidth = dimensions.toPixels(layout.borderWidthPx).toInt()
+        val borderHeight = dimensions.toPixels(layout.borderHeightPx).toInt()
 
         val outputWidth: Int
         val outputHeight: Int
@@ -467,9 +447,9 @@ class FrameRenderer(
 
             FramePosition.BORDER -> {
                 outputWidth = photoWidth + borderWidth * 2
-                outputHeight = photoHeight + frameHeight + borderWidth
+                outputHeight = photoHeight + frameHeight + borderHeight
                 photoLeft = borderWidth.toFloat()
-                photoTop = borderWidth.toFloat()
+                photoTop = borderHeight.toFloat()
             }
 
             FramePosition.IMAGE -> return null
@@ -477,20 +457,9 @@ class FrameRenderer(
 
         if (outputWidth <= 0 || outputHeight <= 0) return null
         return FrameGeometry(
-            outputWidth = if (rotated) outputHeight else outputWidth,
-            outputHeight = if (rotated) outputWidth else outputHeight,
-            // Same inverse rotation as the SDR canvas; gain samples stay upright with the photo.
-            photoRect = if (rotated && layout.orientation == FrameOrientation.LANDSCAPE) RectF(
-                outputHeight - photoTop - photoHeight,
-                photoLeft,
-                outputHeight - photoTop,
-                photoLeft + photoWidth
-            ) else if (rotated) RectF(
-                photoTop,
-                outputWidth - photoLeft - photoWidth,
-                photoTop + photoHeight,
-                outputWidth - photoLeft
-            ) else RectF(
+            outputWidth = outputWidth,
+            outputHeight = outputHeight,
+            photoRect = RectF(
                 photoLeft,
                 photoTop,
                 photoLeft + photoWidth,
@@ -548,12 +517,11 @@ class FrameRenderer(
         layout: FrameLayout,
         photoLeft: Float,
         photoTop: Float,
-        scale: Float,
-        rotated: Boolean,
+        dimensions: FrameDimensions,
     ) {
-        val cornerRadius = dpToPx(layout.photoCornerRadiusDp.coerceAtLeast(0)).toFloat() * scale
-        val photoWidth = if (rotated) originalBitmap.height else originalBitmap.width
-        val photoHeight = if (rotated) originalBitmap.width else originalBitmap.height
+        val cornerRadius = dimensions.toPixels(layout.photoCornerRadiusPx.coerceAtLeast(0f))
+        val photoWidth = originalBitmap.width
+        val photoHeight = originalBitmap.height
         canvas.withSave {
             if (cornerRadius > 0f) {
                 val photoRect = RectF(photoLeft, photoTop, photoLeft + photoWidth, photoTop + photoHeight)
@@ -561,39 +529,28 @@ class FrameRenderer(
                 photoClipPath.addRoundRect(photoRect, cornerRadius, cornerRadius, Path.Direction.CW)
                 clipPath(photoClipPath)
             }
-            if (rotated) {
-                // Counter the frame canvas rotation so the original photo remains upright.
-                if (layout.orientation == FrameOrientation.LANDSCAPE) {
-                    translate(photoLeft, photoTop + photoHeight)
-                    rotate(-90f)
-                } else {
-                    translate(photoLeft + photoWidth, photoTop)
-                    rotate(90f)
-                }
-                drawBitmap(originalBitmap, 0f, 0f, null)
-            } else {
-                drawBitmap(originalBitmap, photoLeft, photoTop, null)
-            }
+            drawBitmap(originalBitmap, photoLeft, photoTop, null)
         }
     }
     private fun drawPhotoBorder(
         canvas: Canvas,
         layout: FrameLayout,
         borderWidth: Int,
+        borderHeight: Int,
         photoLeft: Float,
         photoTop: Float,
         photoWidth: Float,
         photoHeight: Float,
         outputWidth: Float
     ) {
-        if (borderWidth <= 0) return
+        if (borderWidth <= 0 && borderHeight <= 0) return
         if (layout.effectiveBackgroundType.usesPhoto) return
         if (layout.position != FramePosition.BORDER && layout.position != FramePosition.BOTH) return
 
         backgroundPaint.color = layout.borderColor
 
         if (layout.position == FramePosition.BORDER) {
-            canvas.drawRect(0f, 0f, outputWidth, borderWidth.toFloat(), backgroundPaint)
+            canvas.drawRect(0f, 0f, outputWidth, borderHeight.toFloat(), backgroundPaint)
         }
 
         canvas.drawRect(
@@ -620,19 +577,20 @@ class FrameRenderer(
         photoWidth: Float,
         photoHeight: Float,
         borderWidth: Int,
-        scale: Float
+        borderHeight: Int,
+        dimensions: FrameDimensions
     ) {
-        val supportsBorderShadow = borderWidth > 0 &&
+        val supportsBorderShadow = (borderWidth > 0 || (layout.position == FramePosition.BORDER && borderHeight > 0)) &&
             (layout.position == FramePosition.BORDER || layout.position == FramePosition.BOTH)
         if (!supportsBorderShadow || !layout.photoShadowEnabled) return
 
         val shadowAlpha = (layout.photoShadowColor ushr 24) and 0xFF
         if (shadowAlpha == 0) return
 
-        val radius = dpToPx(layout.photoShadowRadiusDp.coerceAtLeast(0)).toFloat() * scale
-        val cornerRadius = dpToPx(layout.photoCornerRadiusDp.coerceAtLeast(0)).toFloat() * scale
-        val offsetX = dpToPx(layout.photoShadowOffsetXDp) * scale
-        val offsetY = dpToPx(layout.photoShadowOffsetYDp) * scale
+        val radius = dimensions.toPixels(layout.photoShadowRadiusPx.coerceAtLeast(0f))
+        val cornerRadius = dimensions.toPixels(layout.photoCornerRadiusPx.coerceAtLeast(0f))
+        val offsetX = dimensions.toPixels(layout.photoShadowOffsetXPx)
+        val offsetY = dimensions.toPixels(layout.photoShadowOffsetYPx)
 
         photoShadowPaint.reset()
         photoShadowPaint.isAntiAlias = true
@@ -658,7 +616,7 @@ class FrameRenderer(
         top: Float,
         right: Float,
         bottom: Float,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ) {
         // 将元素按对齐方式分组并过滤不可见元素
         val startElements = filterVisibleGroup(
@@ -682,13 +640,9 @@ class FrameRenderer(
         val height = bottom - top
 
         val linePixelHeights = allLines.map { line ->
-            val maxElement = visibleElements.filter { it.line == line }.maxBy { it.size }
-            when (maxElement) {
-                is FrameElement.Text -> spToPx(maxElement.fontSizeSp) * scale
-                else -> dpToPx(maxElement.size) * scale
-            }
+            visibleElements.filter { it.line == line }.maxOf { measureElementHeight(it, metadata, dimensions) }
         }
-        val spacingPx = dpToPx(layout.lineSpacingDp) * scale
+        val spacingPx = dimensions.toPixels(layout.lineSpacingPx)
         val totalContentHeight = linePixelHeights.sum() + (if (lineCount > 1) (lineCount - 1) * spacingPx else 0f)
 
         val startY = top + (height - totalContentHeight) / 2f
@@ -720,7 +674,7 @@ class FrameRenderer(
                 val centerY = getLineCenterY(line)
 
                 val x = currentXPerLine.getOrDefault(line, initialX)
-                val width = drawElement(canvas, element, metadata, x, centerY, leftToRight, scale)
+                val width = drawElement(canvas, element, metadata, x, centerY, leftToRight, dimensions)
 
                 val nextX = if (leftToRight) x + width else x - width
 
@@ -743,13 +697,15 @@ class FrameRenderer(
             // 按行分组
             val elementsByLine = groupElements.groupBy { getLine(it) }
             val availableWidth = right - left
-            val elementSpacing = dpToPx(8) * scale  // 元素间距
-
             for ((line, lineElements) in elementsByLine) {
+                val trailingSpacing = when (lineElements.last()) {
+                    is FrameElement.Text, is FrameElement.Logo -> dimensions.elementSpacing
+                    else -> 0f
+                }
                 // 计算该行的总宽度（扣除最后一个元素的间距）
                 val lineWidth = lineElements.sumOf {
-                    measureElementWidth(it, metadata, scale).toDouble()
-                }.toFloat() - elementSpacing  // 减去最后一个元素多余的间距
+                    measureElementWidth(it, metadata, dimensions).toDouble()
+                }.toFloat() - trailingSpacing
 
                 // 计算该行的起始 X 位置（居中）
                 val startX = left + (availableWidth - lineWidth) / 2f
@@ -757,11 +713,8 @@ class FrameRenderer(
 
                 // 绘制该行的所有元素
                 var currentX = startX
-                for ((index, element) in lineElements.withIndex()) {
-                    val isLast = index == lineElements.size - 1
-                    val width = drawElement(canvas, element, metadata, currentX, centerY, true, scale)
-                    // 最后一个元素不加间距
-                    currentX += if (isLast) (width - elementSpacing) else width
+                for (element in lineElements) {
+                    currentX += drawElement(canvas, element, metadata, currentX, centerY, true, dimensions)
                 }
             }
         }
@@ -804,13 +757,13 @@ class FrameRenderer(
         elements: List<FrameElement>,
         metadata: MediaMetadata,
         showAppBranding: Boolean,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ): Float {
         val xPerLine = mutableMapOf<Int, Float>()
         val realLines = elements.map { getLine(it) }.filter { it >= 0 }.distinct().sorted()
         val knownLines = if (realLines.isEmpty()) listOf(0) else realLines
         for (element in elements) {
-            val width = measureElementWidth(element, metadata, scale)
+            val width = measureElementWidth(element, metadata, dimensions)
             val line = getLine(element)
 
             if (line == -1) {
@@ -871,36 +824,57 @@ class FrameRenderer(
     /**
      * 测量单个元素宽度
      */
+    private fun dividerLength(element: FrameElement.Divider, dimensions: FrameDimensions): Float =
+        dimensions.toPixels(element.lengthPx)
+
+    private fun dividerThickness(element: FrameElement.Divider, dimensions: FrameDimensions): Float =
+        dimensions.toPixels(element.thicknessPx)
+
+    private fun measureElementHeight(
+        element: FrameElement,
+        metadata: MediaMetadata,
+        dimensions: FrameDimensions,
+    ): Float = when (element) {
+        is FrameElement.Text -> dimensions.toPixels(element.fontSizePx)
+        is FrameElement.Logo -> measureLogoSize(element, metadata, dimensions).second.toFloat()
+        is FrameElement.Divider -> if (element.orientation == DividerOrientation.VERTICAL) {
+            dividerLength(element, dimensions)
+        } else {
+            dividerThickness(element, dimensions)
+        }
+        is FrameElement.Spacer -> 0f
+    }
+
     private fun measureElementWidth(
         element: FrameElement,
         metadata: MediaMetadata,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ): Float {
         return when (element) {
             is FrameElement.Text -> {
                 val text = getTextContent(element, metadata) ?: return 0f
-                textPaint.textSize = spToPx(element.fontSizeSp) * scale
+                textPaint.textSize = dimensions.toPixels(element.fontSizePx)
                 textPaint.typeface = getTextTypeface(element, metadata)
-                textPaint.measureText(text) + dpToPx(8) * scale
+                textPaint.measureText(text) + dimensions.elementSpacing
             }
 
             is FrameElement.Logo -> {
                 val logoKey = metadata.customProperties["LOGO"]
                 if (logoKey == "none") return 0f
-                val (bmpW, _) = measureLogoSize(element, metadata, scale)
-                bmpW + dpToPx(element.marginDp) * scale * 2 + dpToPx(8) * scale
+                val (bmpW, _) = measureLogoSize(element, metadata, dimensions)
+                bmpW + dimensions.toPixels(element.marginPx) * 2 + dimensions.elementSpacing
             }
 
             is FrameElement.Divider -> {
                 if (element.orientation == DividerOrientation.VERTICAL) {
-                    (dpToPx(element.thicknessDp) + dpToPx(element.marginDp * 2)) * scale
+                    dividerThickness(element, dimensions) + dimensions.toPixels(element.marginPx) * 2
                 } else {
-                    0f
+                    dividerLength(element, dimensions) + dimensions.toPixels(element.marginPx) * 2
                 }
             }
 
             is FrameElement.Spacer -> {
-                dpToPx(element.widthDp) * scale
+                dimensions.toPixels(element.widthPx)
             }
         }
     }
@@ -917,7 +891,7 @@ class FrameRenderer(
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ): Float {
         return when (element) {
             is FrameElement.Text -> drawTextElement(
@@ -927,7 +901,7 @@ class FrameRenderer(
                 x,
                 centerY,
                 leftToRight,
-                scale
+                dimensions
             )
 
             is FrameElement.Logo -> drawLogoElement(
@@ -937,11 +911,11 @@ class FrameRenderer(
                 centerY,
                 leftToRight,
                 metadata,
-                scale
+                dimensions
             )
 
-            is FrameElement.Divider -> drawDividerElement(canvas, element, x, centerY, leftToRight, scale)
-            is FrameElement.Spacer -> dpToPx(element.widthDp) * scale
+            is FrameElement.Divider -> drawDividerElement(canvas, element, x, centerY, leftToRight, dimensions)
+            is FrameElement.Spacer -> dimensions.toPixels(element.widthPx)
         }
     }
 
@@ -955,12 +929,12 @@ class FrameRenderer(
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ): Float {
         val text = getTextContent(element, metadata) ?: return x
 
         textPaint.color = element.color
-        textPaint.textSize = spToPx(element.fontSizeSp) * scale
+        textPaint.textSize = dimensions.toPixels(element.fontSizePx)
         textPaint.typeface = getTextTypeface(element, metadata)
 
         val textWidth = textPaint.measureText(text)
@@ -970,7 +944,7 @@ class FrameRenderer(
         val drawX = if (leftToRight) x else x - textWidth
         canvas.drawText(text, drawX, textY, textPaint)
 
-        val spacing = dpToPx(8) * scale
+        val spacing = dimensions.elementSpacing
         return textWidth + spacing
     }
 
@@ -1021,54 +995,70 @@ class FrameRenderer(
         return "$prefix$finalContent$suffix"
     }
 
+    /** Resolve legacy height-based sizes on the reference photo, never on the current aspect ratio. */
+    fun resolveLegacyLogoWidths(template: FrameTemplate, metadata: MediaMetadata): FrameTemplate {
+        fun resolve(elements: List<FrameElement>): List<FrameElement> = elements.map { element ->
+            if (element is FrameElement.Logo && element.widthPx == null) {
+                val ratio = logoAspectRatio(element, metadata)
+                element.copy(widthPx = legacyLogoWidthPx(element, ratio))
+            } else element
+        }
+        return template.copy(
+            elements = resolve(template.elements),
+            elementsTop = template.elementsTop?.let { resolve(it) }
+        )
+    }
+
+    private fun legacyLogoWidthPx(
+        element: FrameElement.Logo,
+        aspectRatio: Float,
+    ): Float {
+        // Legacy size is a design-pixel height; preserve the source aspect ratio.
+        val width = element.sizePx * aspectRatio
+        return if (element.maxWidthPx > 0f) minOf(width, element.maxWidthPx) else width
+    }
+
+    private fun logoAspectRatio(element: FrameElement.Logo, metadata: MediaMetadata?): Float {
+        val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
+        val width: Int
+        val height: Int
+        if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            if (logoKey.startsWith("content://")) {
+                context.contentResolver.openInputStream(android.net.Uri.parse(logoKey))?.use {
+                    BitmapFactory.decodeStream(it, null, options)
+                }
+            } else {
+                BitmapFactory.decodeFile(logoKey, options)
+            }
+            width = options.outWidth
+            height = options.outHeight
+        } else {
+            val drawableRes = when (element.logoType) {
+                LogoType.APP -> R.mipmap.ic_launcher_round
+                LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
+            }
+            val drawable = requireNotNull(context.getDrawable(drawableRes))
+            width = drawable.intrinsicWidth
+            height = drawable.intrinsicHeight
+        }
+        require(width > 0 && height > 0) { "Invalid logo dimensions: $logoKey ($width x $height)" }
+        return width.toFloat() / height
+    }
+
     private fun measureLogoSize(
         element: FrameElement.Logo,
         metadata: MediaMetadata?,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ): Pair<Int, Int> {
-        val size = (dpToPx(element.sizeDp) * scale).toInt()
-        val maxWidth = if (element.maxWidth > 0) {
-            (dpToPx(element.maxWidth) * scale).toInt()
-        } else {
-            0
-        }
-
-        // 获取对应的 drawable
-        val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
-
-        try {
-            val bitmap = if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
-                BitmapFactory.decodeFile(logoKey)
-            } else {
-                val drawableRes = when (element.logoType) {
-                    LogoType.APP -> R.mipmap.ic_launcher_round
-                    LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
-                }
-                val drawable = context.getDrawable(drawableRes) ?: return 0 to 0
-                val w = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else size
-                val h = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else size
-                drawableToBitmap(drawable, w, h)
-            } ?: return 0 to 0
-
-            val intrinsicW = bitmap.width
-            val intrinsicH = bitmap.height
-            return if (intrinsicW > 0 && intrinsicH > 0) {
-                val ratio = (intrinsicW.toFloat() / intrinsicH.toFloat())
-                val width = (size * ratio).toInt()
-                if (maxWidth in 1..<width) {
-                    // 超过最大宽度，按最大宽度计算高度
-                    val adjustedHeight = (maxWidth / ratio).toInt()
-                    maxWidth to adjustedHeight
-                } else {
-                    width to size
-                }
-            } else {
-                // 无内在尺寸，退回到方形
-                size to size
-            }
+        return try {
+            val ratio = logoAspectRatio(element, metadata)
+            val widthPx = element.widthPx ?: legacyLogoWidthPx(element, ratio)
+            val width = dimensions.toPixels(widthPx)
+            width.roundToInt() to (width / ratio).roundToInt()
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to measure logo size", e)
-            return 0 to 0
+            0 to 0
         }
     }
 
@@ -1082,31 +1072,33 @@ class FrameRenderer(
         centerY: Float,
         leftToRight: Boolean,
         metadata: MediaMetadata? = null,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ): Float {
         // 如果是 App Logo 且不显示品牌，则跳过
-        val margin = dpToPx(element.marginDp) * scale
-
-        val size = (dpToPx(element.sizeDp) * scale).toInt()
+        val margin = dimensions.toPixels(element.marginPx)
 
         // 获取对应的 drawable
         val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
         if (logoKey == "none") return 0f
 
         try {
-            val (bmpW, bmpH) = measureLogoSize(element, metadata, scale)
-            if (bmpW <= 0 || bmpH <= 0) return x
+            val (bmpW, bmpH) = measureLogoSize(element, metadata, dimensions)
+            if (bmpW <= 0 || bmpH <= 0) return 0f
 
-            val bitmap = if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
+            val bitmap = (if (logoKey != null && logoKey.startsWith("content://")) {
+                context.contentResolver.openInputStream(android.net.Uri.parse(logoKey))?.use {
+                    BitmapFactory.decodeStream(it)
+                }
+            } else if (logoKey != null && logoKey.startsWith("/")) {
                 BitmapFactory.decodeFile(logoKey)
             } else {
                 val drawableRes = when (element.logoType) {
                     LogoType.APP -> R.mipmap.ic_launcher_round
                     LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
                 }
-                val drawable = context.getDrawable(drawableRes) ?: return x
+                val drawable = context.getDrawable(drawableRes) ?: return 0f
                 drawableToBitmap(drawable, bmpW.coerceAtLeast(1), bmpH.coerceAtLeast(1))
-            } ?: return x
+            }) ?: return 0f
 
             // 如果 bitmap 尺寸与 measure 不一致，则缩放
             val drawnBitmap = if (bitmap.width != bmpW || bitmap.height != bmpH) {
@@ -1120,7 +1112,7 @@ class FrameRenderer(
 
             canvas.drawBitmap(drawnBitmap, drawX, drawY, null)
 
-            return bmpW + margin * 2 + dpToPx(8) * scale
+            return bmpW + margin * 2 + dimensions.elementSpacing
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to draw logo", e)
             return 0f
@@ -1185,28 +1177,29 @@ class FrameRenderer(
         x: Float,
         centerY: Float,
         leftToRight: Boolean,
-        scale: Float = 1f
+        dimensions: FrameDimensions
     ): Float {
         linePaint.color = element.color
-        linePaint.strokeWidth = dpToPx(element.thicknessDp) * scale
+        linePaint.strokeWidth = dividerThickness(element, dimensions)
 
-        val length = dpToPx(element.lengthDp) * scale
-        val margin = dpToPx(element.marginDp) * scale
+        val length = dividerLength(element, dimensions)
+        val margin = dimensions.toPixels(element.marginPx)
 
         val drawX = if (leftToRight) x + margin else x - margin
 
         if (element.orientation == DividerOrientation.VERTICAL) {
+            val centerX = drawX + if (leftToRight) linePaint.strokeWidth / 2f else -linePaint.strokeWidth / 2f
             canvas.drawLine(
-                drawX, centerY - length / 2f,
-                drawX, centerY + length / 2f,
+                centerX, centerY - length / 2f,
+                centerX, centerY + length / 2f,
                 linePaint
             )
             return margin * 2 + linePaint.strokeWidth
         } else {
             // 水平线（通常不常用）
             canvas.drawLine(
-                drawX - length / 2f, centerY,
-                drawX + length / 2f, centerY,
+                drawX, centerY,
+                drawX + if (leftToRight) length else -length, centerY,
                 linePaint
             )
             return length + margin * 2
@@ -1222,34 +1215,51 @@ class FrameRenderer(
      * @param layout 边框布局配置
      * @return 合成后的图片
      */
-    private fun renderImageFrame(originalBitmap: Bitmap, layout: FrameLayout): Bitmap {
-        val frameBitmap = loadImageFrameBitmap(originalBitmap, layout) ?: return originalBitmap
-
-        // 检测透明区域的边界
-        val transparentBounds = detectTransparentBounds(frameBitmap)
-        if (transparentBounds.width() <= 0 || transparentBounds.height() <= 0) {
-            PLog.e(TAG, "No transparent area detected in frame image")
-            frameBitmap.recycle()
-            return originalBitmap
-        }
-
-        PLog.d(TAG, "Transparent bounds: $transparentBounds, frame size: ${frameBitmap.width}x${frameBitmap.height}")
-
-        // 保持模板图片原始尺寸，将原图按 centerCrop 方式填满透明区域，避免出现黑边。
-        val output = createBitmap(frameBitmap.width, frameBitmap.height)
-        val canvas = Canvas(output)
-
-        drawBitmapCenterCrop(
-            canvas = canvas,
-            bitmap = originalBitmap,
-            destination = RectF(transparentBounds)
+    private fun imageFrameGeometry(
+        photo: Bitmap,
+        frame: Bitmap,
+        aperture: Rect,
+        layout: FrameLayout,
+    ): FrameGeometry {
+        val dimensions = FrameDimensions(photo.width, photo.height, layout.designSize, layout.elementSpacingPx)
+        val left = dimensions.toPixels(aperture.left * layout.designSize.width / aperture.width()).roundToInt()
+        val right = dimensions.toPixels((frame.width - aperture.right) * layout.designSize.width / aperture.width()).roundToInt()
+        val top = dimensions.toPixels(aperture.top * layout.designSize.height / aperture.height()).roundToInt()
+        val bottom = dimensions.toPixels((frame.height - aperture.bottom) * layout.designSize.height / aperture.height()).roundToInt()
+        return FrameGeometry(
+            photo.width + left + right,
+            photo.height + top + bottom,
+            RectF(left.toFloat(), top.toFloat(), (left + photo.width).toFloat(), (top + photo.height).toFloat())
         )
+    }
 
-        // 再绘制边框图片（透明区域会显示下面的照片）
-        canvas.drawBitmap(frameBitmap, 0f, 0f, null)
-        frameBitmap.recycle()
-
-        return output
+    private fun renderImageFrame(originalBitmap: Bitmap, layout: FrameLayout): Bitmap {
+        val frame = loadImageFrameBitmap(layout) ?: return originalBitmap
+        try {
+            val aperture = detectTransparentBounds(frame)
+            if (aperture.isEmpty) {
+                PLog.e(TAG, "No transparent area detected in frame image")
+                return originalBitmap
+            }
+            val geometry = imageFrameGeometry(originalBitmap, frame, aperture, layout)
+            val output = createBitmap(geometry.outputWidth, geometry.outputHeight)
+            val canvas = Canvas(output)
+            canvas.drawBitmap(originalBitmap, geometry.photoRect.left, geometry.photoRect.top, null)
+            // Keep the four borders attached to the real photo rectangle as its aspect ratio changes.
+            val sourceX = intArrayOf(0, aperture.left, aperture.right, frame.width)
+            val sourceY = intArrayOf(0, aperture.top, aperture.bottom, frame.height)
+            val targetX = floatArrayOf(0f, geometry.photoRect.left, geometry.photoRect.right, output.width.toFloat())
+            val targetY = floatArrayOf(0f, geometry.photoRect.top, geometry.photoRect.bottom, output.height.toFloat())
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            for (row in 0..2) for (column in 0..2) {
+                val source = Rect(sourceX[column], sourceY[row], sourceX[column + 1], sourceY[row + 1])
+                val target = RectF(targetX[column], targetY[row], targetX[column + 1], targetY[row + 1])
+                if (!source.isEmpty && !target.isEmpty) canvas.drawBitmap(frame, source, target, paint)
+            }
+            return output
+        } finally {
+            frame.recycle()
+        }
     }
 
     private fun renderImageFrameGainmapContents(
@@ -1258,46 +1268,33 @@ class FrameRenderer(
         layout: FrameLayout,
         neutralColor: Int,
     ): Bitmap {
-        val frameBitmap = loadImageFrameBitmap(originalBitmap, layout) ?: return gainmapContents
+        val frame = loadImageFrameBitmap(layout) ?: return gainmapContents
         try {
-            val transparentBounds = detectTransparentBounds(frameBitmap)
-            if (transparentBounds.width() <= 0 || transparentBounds.height() <= 0) {
-                PLog.e(TAG, "No transparent area detected in frame image gainmap")
-                return gainmapContents
-            }
-
-            val output = createNeutralGainmapBitmap(
-                width = (frameBitmap.width * gainmapContents.width.toFloat() / originalBitmap.width.toFloat())
-                    .roundToInt()
-                    .coerceAtLeast(1),
-                height = (frameBitmap.height * gainmapContents.height.toFloat() / originalBitmap.height.toFloat())
-                    .roundToInt()
-                    .coerceAtLeast(1),
-                source = gainmapContents,
-                neutralColor = neutralColor,
+            val aperture = detectTransparentBounds(frame)
+            if (aperture.isEmpty) return gainmapContents
+            val geometry = imageFrameGeometry(originalBitmap, frame, aperture, layout)
+            return renderGainmapIntoPhotoRect(
+                originalBitmap, gainmapContents, geometry.outputWidth, geometry.outputHeight,
+                geometry.photoRect, neutralColor
             )
-            val canvas = Canvas(output)
-            val outputScaleX = output.width.toFloat() / frameBitmap.width.toFloat()
-            val outputScaleY = output.height.toFloat() / frameBitmap.height.toFloat()
-            drawBitmapCenterCrop(
-                canvas = canvas,
-                bitmap = gainmapContents,
-                destination = RectF(
-                    transparentBounds.left * outputScaleX,
-                    transparentBounds.top * outputScaleY,
-                    transparentBounds.right * outputScaleX,
-                    transparentBounds.bottom * outputScaleY
-                ),
-                paint = gainmapPaint,
-            )
-            return output
         } finally {
-            frameBitmap.recycle()
+            frame.recycle()
         }
     }
 
-    private fun loadImageFrameBitmap(originalBitmap: Bitmap, layout: FrameLayout): Bitmap? {
-        var frameBitmap = try {
+    /** The transparent photo window defines an imported image frame's design dimensions. */
+    fun readImageFrameDesignSize(imagePath: String): FrameDesignSize? {
+        val bitmap = BitmapFactory.decodeFile(imagePath) ?: return null
+        return try {
+            val bounds = detectTransparentBounds(bitmap)
+            if (bounds.isEmpty) null else FrameDesignSize(bounds.width().toFloat(), bounds.height().toFloat())
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun loadImageFrameBitmap(layout: FrameLayout): Bitmap? {
+        val frameBitmap = try {
             val options = BitmapFactory.Options().apply {
                 inMutable = true
                 inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -1336,37 +1333,6 @@ class FrameRenderer(
             return null
         }
 
-        // 检查方向是否匹配，如果不匹配则旋转边框
-        val isPhotoPortrait = when (layout.orientation) {
-            FrameOrientation.AUTO -> originalBitmap.height > originalBitmap.width
-            FrameOrientation.LANDSCAPE -> false
-            FrameOrientation.PORTRAIT -> true
-        }
-        val isFramePortrait = frameBitmap.height > frameBitmap.width
-
-        val designRotation = if (isPhotoPortrait != isFramePortrait) 90f else 0f
-        val outputRotation = if (layout.orientation.rotatesPhoto(originalBitmap.width, originalBitmap.height)) {
-            if (layout.orientation == FrameOrientation.LANDSCAPE) 90f else -90f
-        } else 0f
-        if (designRotation + outputRotation != 0f) {
-            val matrix = Matrix().apply { postRotate(designRotation + outputRotation) }
-            try {
-                val originalFrame = frameBitmap
-                val rotatedFrame = Bitmap.createBitmap(
-                    originalFrame, 0, 0,
-                    originalFrame.width, originalFrame.height,
-                    matrix, true
-                )
-                frameBitmap = rotatedFrame
-                // 只有当 createBitmap 返回了新的 Bitmap 对象时才回收原始对象
-                if (rotatedFrame !== originalFrame) {
-                    originalFrame.recycle()
-                }
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to rotate frame bitmap", e)
-            }
-        }
-
         return frameBitmap
     }
 
@@ -1395,33 +1361,6 @@ class FrameRenderer(
         val config = source.config?.takeUnless { it == Bitmap.Config.HARDWARE } ?: Bitmap.Config.ALPHA_8
         return Bitmap.createBitmap(width, height, config).also {
             it.eraseColor(neutralColor)
-        }
-    }
-
-    private fun drawBitmapCenterCrop(
-        canvas: Canvas,
-        bitmap: Bitmap,
-        destination: RectF,
-        paint: Paint? = null,
-    ) {
-        if (destination.width() <= 0f || destination.height() <= 0f) return
-
-        val srcWidth = bitmap.width.toFloat()
-        val srcHeight = bitmap.height.toFloat()
-        val dstWidth = destination.width()
-        val dstHeight = destination.height()
-
-        val scale = maxOf(dstWidth / srcWidth, dstHeight / srcHeight)
-        val scaledWidth = srcWidth * scale
-        val scaledHeight = srcHeight * scale
-
-        val left = destination.left - (scaledWidth - dstWidth) / 2f
-        val top = destination.top - (scaledHeight - dstHeight) / 2f
-        val targetRect = RectF(left, top, left + scaledWidth, top + scaledHeight)
-
-        canvas.withSave {
-            clipRect(destination)
-            drawBitmap(bitmap, null, targetRect, paint)
         }
     }
 
@@ -1491,22 +1430,6 @@ class FrameRenderer(
     }
 
     // 工具方法
-
-    private fun dpToPx(dp: Int): Int {
-        return TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            dp.toFloat(),
-            context.resources.displayMetrics
-        ).toInt()
-    }
-
-    private fun spToPx(sp: Int): Int {
-        return TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_SP,
-            sp.toFloat(),
-            context.resources.displayMetrics
-        ).toInt()
-    }
 
     private fun formatDate(timestamp: Long, format: String): String {
         return try {

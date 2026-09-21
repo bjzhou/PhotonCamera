@@ -1,72 +1,79 @@
 {
-  "id": "classic_white",
-  "name": {
-    "en": "White",
-    "zh": "经典白框"
-  },
-  "version": 1,
-  "editable": true,
-  "layout": {
-    "position": "BORDER",
-    "height": 80,
-    "backgroundColor": "#FFFFFF",
-    "padding": 8,
-    "borderWidth": 8
-  },
-  "elements": [
-    {
-      "type": "logo",
-      "logoType": "BRAND",
-      "alignment": "START",
-      "size": 32,
-      "maxWidth": 128,
-      "margin": 8,
-      "line": -1
+    "id": "classic_white",
+    "name": {
+        "en": "White",
+        "zh": "经典白框"
     },
-    {
-      "type": "text",
-      "textType": "APERTURE",
-      "alignment": "END",
-      "fontSize": 16,
-      "color": "#333333",
-      "fontWeight": "BOLD",
-      "line": 0
+    "version": 2,
+    "editable": true,
+    "layout": {
+        "position": "BORDER",
+        "height": 240,
+        "backgroundColor": "#FFFFFF",
+        "padding": 24,
+        "borderWidth": 24,
+        "designSize": {
+            "width": 4096,
+            "height": 3072
+        },
+        "verticalPadding": 24,
+        "borderHeight": 24,
+        "elementSpacing": 24
     },
-    {
-      "type": "text",
-      "textType": "FOCAL_LENGTH_35MM",
-      "alignment": "END",
-      "fontSize": 16,
-      "color": "#333333",
-      "fontWeight": "BOLD",
-      "line": 0
-    },
-    {
-      "type": "text",
-      "textType": "SHUTTER_SPEED",
-      "alignment": "END",
-      "fontSize": 16,
-      "color": "#333333",
-      "fontWeight": "BOLD",
-      "line": 0
-    },
-    {
-      "type": "text",
-      "textType": "ISO",
-      "alignment": "END",
-      "fontSize": 16,
-      "color": "#333333",
-      "fontWeight": "BOLD",
-      "line": 0
-    },
-    {
-      "type": "text",
-      "textType": "DATETIME",
-      "alignment": "END",
-      "fontSize": 12,
-      "color": "#666666",
-      "format": "yyyy.MM.dd HH:mm:ss",
-      "line": 1
-    }
-  ]
+    "elements": [
+        {
+            "type": "logo",
+            "logoType": "BRAND",
+            "alignment": "START",
+            "size": 96,
+            "maxWidth": 384,
+            "margin": 24,
+            "line": -1
+        },
+        {
+            "type": "text",
+            "textType": "APERTURE",
+            "alignment": "END",
+            "fontSize": 48,
+            "color": "#333333",
+            "fontWeight": "BOLD",
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "FOCAL_LENGTH_35MM",
+            "alignment": "END",
+            "fontSize": 48,
+            "color": "#333333",
+            "fontWeight": "BOLD",
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "SHUTTER_SPEED",
+            "alignment": "END",
+            "fontSize": 48,
+            "color": "#333333",
+            "fontWeight": "BOLD",
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "ISO",
+            "alignment": "END",
+            "fontSize": 48,
+            "color": "#333333",
+            "fontWeight": "BOLD",
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "DATETIME",
+            "alignment": "END",
+            "fontSize": 36,
+            "color": "#666666",
+            "format": "yyyy.MM.dd HH:mm:ss",
+            "line": 1
+        }
+    ]
 }

@@ -294,7 +294,7 @@
     <!-- Frame Import Help -->
     
     <!-- Camera Calibration -->
-    <string name="frame_editor_summary_spacer">行=%1$d • %2$ddp</string>
+    <string name="frame_editor_summary_spacer">行=%1$d • %2$.3f px</string>
     <string name="settings_section_calibration">カメラキャリブレーション</string>
     <string name="settings_camera_orientation">写真の向き</string>
     <string name="settings_camera_orientation_description">レンズごとに写真の回転補正を個別に設定します。</string>
@@ -722,21 +722,21 @@
     <string name="frame_editor_section_layout">レイアウト</string>
     <string name="frame_editor_section_elements">要素</string>
     <string name="frame_editor_layout_position">位置</string>
-    <string name="frame_editor_layout_height">フレーム高さ（dp）</string>
-    <string name="frame_editor_layout_padding">余白（dp）</string>
+    <string name="frame_editor_layout_height">フレーム高さ（px）</string>
+    <string name="frame_editor_layout_padding">余白（px）</string>
     <string name="frame_editor_layout_background">背景色</string>
     <string name="frame_editor_layout_border_color">枠線色</string>
     <string name="frame_editor_color_opacity">不透明度</string>
     <string name="frame_editor_color_hex_value">カラー値</string>
     <string name="frame_editor_color_hex_hint">#RRGGBB または #AARRGGBB を使用してください。</string>
     <string name="frame_editor_color_hex_error">有効なカラー値を入力してください。</string>
-    <string name="frame_editor_layout_line_spacing">行間（dp）</string>
-    <string name="frame_editor_layout_border_width">枠線幅（dp）</string>
-    <string name="frame_editor_photo_corner_radius">写真の角丸半径（dp）</string>
+    <string name="frame_editor_layout_line_spacing">行間（px）</string>
+    <string name="frame_editor_layout_border_width">枠線幅（px）</string>
+    <string name="frame_editor_photo_corner_radius">写真の角丸半径（px）</string>
     <string name="frame_editor_photo_shadow">写真のドロップシャドウ</string>
-    <string name="frame_editor_photo_shadow_radius">影ぼかし（dp）</string>
-    <string name="frame_editor_photo_shadow_offset_x">影Xオフセット（dp）</string>
-    <string name="frame_editor_photo_shadow_offset_y">影Yオフセット（dp）</string>
+    <string name="frame_editor_photo_shadow_radius">影ぼかし（px）</string>
+    <string name="frame_editor_photo_shadow_offset_x">影Xオフセット（px）</string>
+    <string name="frame_editor_photo_shadow_offset_y">影Yオフセット（px）</string>
     <string name="frame_editor_photo_shadow_color">影色</string>
     <string name="frame_editor_image_hint">画像フレームには透過PNGまたはWebPを使用します。選択した素材はアプリストレージへコピーされます。</string>
     <string name="frame_editor_pick_image">フレーム画像を選択</string>
@@ -749,7 +749,7 @@
     <string name="frame_editor_text_type">テキスト種別</string>
     <string name="frame_editor_alignment">配置</string>
     <string name="frame_editor_line">行</string>
-    <string name="frame_editor_text_size">文字サイズ（sp）</string>
+    <string name="frame_editor_text_size">文字サイズ（px）</string>
     <string name="frame_editor_text_color">文字色</string>
     <string name="frame_editor_font_weight">フォントウェイト</string>
     <string name="frame_editor_font_family">フォントファミリー</string>
@@ -760,15 +760,15 @@
     <string name="frame_editor_text_suffix">接尾辞</string>
     <string name="frame_editor_logo_type">ロゴ種別</string>
     <string name="frame_editor_logo_source">ロゴソース</string>
-    <string name="frame_editor_logo_size">ロゴサイズ（dp）</string>
-    <string name="frame_editor_logo_max_width">ロゴ最大幅（dp）</string>
-    <string name="frame_editor_margin">マージン（dp）</string>
+    <string name="frame_editor_logo_size">ロゴの幅（px）</string>
+    <string name="frame_editor_logo_max_width">ロゴ最大幅（px）</string>
+    <string name="frame_editor_margin">マージン（px）</string>
     <string name="frame_editor_logo_light">明色用ロゴを使用</string>
     <string name="frame_editor_divider_orientation">区切り線の向き</string>
-    <string name="frame_editor_divider_length">区切り線の長さ（dp）</string>
-    <string name="frame_editor_divider_thickness">区切り線の太さ（dp）</string>
+    <string name="frame_editor_divider_length">区切り線の長さ（px）</string>
+    <string name="frame_editor_divider_thickness">区切り線の太さ（px）</string>
     <string name="frame_editor_divider_color">区切り線色</string>
-    <string name="frame_editor_spacer_width">スペーサー幅（dp）</string>
+    <string name="frame_editor_spacer_width">スペーサー幅（px）</string>
     <string name="frame_editor_rules_title_render">描画ルール</string>
     <string name="frame_editor_rule_line_global">Line = -1 は、表示中の全行をまとめて進めるグローバル要素を意味します。</string>
     <string name="frame_editor_rule_vertical_divider">縦区切り線は、同じ行の左右それぞれに1つ以上の表示中の非区切り要素がある場合のみ表示されます。</string>
@@ -1156,7 +1156,13 @@
     <string name="frame_editor_background_type">背景タイプ</string>
     <string name="frame_editor_background_color">単色</string>
     <string name="frame_editor_background_blur">ガウスぼかし</string>
-    <string name="frame_editor_background_blur_radius">ぼかしの強さ</string>
+    <string name="frame_editor_layout_vertical_padding">上下の余白（px）</string>
+    <string name="frame_editor_layout_border_height">上部フレームの高さ（px）</string>
+    <string name="frame_editor_design_width">デザインの幅 (px)</string>
+    <string name="frame_editor_design_height">デザインの高さ (px)</string>
+    <string name="frame_editor_dimension_hint">すべての寸法はデザインキャンバス上のピクセルです。フレーム、文字、ロゴは実際の写真幅 ÷ デザイン幅で均等に拡大縮小し、写真領域は実際の高さに合わせます。</string>
+    <string name="frame_editor_element_spacing">要素間隔 (px)</string>
+    <string name="frame_editor_background_blur_radius">ぼかしの強さ (px)</string>
     <string name="frame_editor_background_blur_hint">写真をぼかしたコピーで背景を塗りつぶします。オーバーレイモードでは、透かしの領域だけがぼかされます。</string>
     <string name="frame_editor_background_glass">リキッドグラス</string>
     <string name="frame_editor_background_glass_hint">写真の下部に液体ガラスのカプセルを重ね、左右と下端に余白を設けます。</string>

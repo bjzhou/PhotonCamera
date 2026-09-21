@@ -5,13 +5,12 @@ import android.graphics.RectF
 
 /** Shared capsule geometry for the SDR material, watermark content and HDR gain mask. */
 internal object FrameGlassOverlay {
-    private const val MARGIN_DP = 48f
-
-    fun bounds(width: Float, height: Float, frameHeight: Float, unitScale: Float): RectF {
-        val margin = minOf(MARGIN_DP * unitScale, minOf(width, height) / 4f)
-        val bottom = height - margin
-        val capsuleHeight = frameHeight.coerceIn(0f, height - 2f * margin)
-        return RectF(margin, bottom - capsuleHeight, width - margin, bottom)
+    fun bounds(width: Float, height: Float, frameHeight: Float, dimensions: FrameDimensions): RectF {
+        val marginX = minOf(dimensions.toPixels(144.0f), width / 4f)
+        val marginY = minOf(dimensions.toPixels(144.0f), height / 4f)
+        val bottom = height - marginY
+        val capsuleHeight = frameHeight.coerceIn(0f, height - 2f * marginY)
+        return RectF(marginX, bottom - capsuleHeight, width - marginX, bottom)
     }
 
     fun radius(bounds: RectF): Float = minOf(bounds.width(), bounds.height()) / 2f
@@ -21,8 +20,8 @@ internal object FrameGlassOverlay {
         addRoundRect(bounds, radius, radius, Path.Direction.CW)
     }
 
-    fun contentBounds(bounds: RectF, padding: Float): RectF = RectF(bounds).apply {
+    fun contentBounds(bounds: RectF, padding: Float, verticalPadding: Float): RectF = RectF(bounds).apply {
         // Keep all text lines inside the straight portion, away from the rounded end caps.
-        inset(maxOf(padding, radius(bounds)), padding)
+        inset(maxOf(padding, radius(bounds)), verticalPadding)
     }
 }

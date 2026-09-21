@@ -331,7 +331,13 @@
     <string name="frame_editor_background_type">Arrière-plan</string>
     <string name="frame_editor_background_color">Couleur unie</string>
     <string name="frame_editor_background_blur">Flou gaussien</string>
-    <string name="frame_editor_background_blur_radius">Intensité du flou</string>
+    <string name="frame_editor_layout_vertical_padding">Marge intérieure verticale (px)</string>
+    <string name="frame_editor_layout_border_height">Hauteur du cadre supérieur (px)</string>
+    <string name="frame_editor_design_width">Largeur du design (px)</string>
+    <string name="frame_editor_design_height">Hauteur du design (px)</string>
+    <string name="frame_editor_dimension_hint">Toutes les dimensions sont en pixels du canevas de conception. Les cadres, textes et logos sont mis à l’échelle uniformément selon la largeur réelle de la photo ÷ la largeur de conception ; la zone photo suit la hauteur réelle.</string>
+    <string name="frame_editor_element_spacing">Espacement des éléments (px)</string>
+    <string name="frame_editor_background_blur_radius">Intensité du flou (px)</string>
     <string name="frame_editor_background_blur_hint">Remplit l’arrière-plan avec une copie floutée de la photo. En mode superposition, seule la zone du filigrane est floutée.</string>
     <string name="frame_editor_background_glass">Verre liquide</string>
     <string name="frame_editor_background_glass_hint">Superpose une capsule en verre liquide au bas de la photo, avec un espace sur les côtés et en dessous.</string>

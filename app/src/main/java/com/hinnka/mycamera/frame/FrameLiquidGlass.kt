@@ -35,7 +35,7 @@ internal object FrameLiquidGlass {
         unitScale: Float,
     ) {
         if (materialBounds.isEmpty) return
-        val backdropPaint = backdropPaint(photo, layout.orientation, width, height)
+        val backdropPaint = backdropPaint(photo, width, height)
         check(layout.position == FramePosition.OVERLAY)
         val outline = FrameGlassOverlay.outline(materialBounds)
         val radius = FrameGlassOverlay.radius(materialBounds)
@@ -53,18 +53,13 @@ internal object FrameLiquidGlass {
 
     private fun backdropPaint(
         photo: Bitmap,
-        orientation: FrameOrientation,
         width: Int,
         height: Int,
     ): Paint {
-        val rotated = orientation.rotatesPhoto(photo.width, photo.height)
-        val sourceWidth = if (rotated) photo.height else photo.width
-        val sourceHeight = if (rotated) photo.width else photo.height
-        val scale = maxOf(width.toFloat() / sourceWidth, height.toFloat() / sourceHeight)
+        val scale = maxOf(width.toFloat() / photo.width, height.toFloat() / photo.height)
         val matrix = Matrix().apply {
             setTranslate(-photo.width / 2f, -photo.height / 2f)
             postScale(scale, scale)
-            if (rotated) postRotate(if (orientation == FrameOrientation.LANDSCAPE) -90f else 90f)
             postTranslate(width / 2f, height / 2f)
         }
         return Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {

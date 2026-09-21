@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.frame
 
 import android.graphics.Color
-import androidx.compose.runtime.snapshots.toInt
 import java.util.UUID
 
 /**
@@ -36,7 +35,7 @@ data class FrameEditorDraft(
         return FrameTemplate(
             id = templateId,
             nameMap = mapOf("en" to safeName, "zh" to safeName),
-            version = 1,
+            version = FrameTemplate.CURRENT_VERSION,
             layout = layout.toFrameLayout(),
             elements = if (layout.position == FramePosition.IMAGE) {
                 emptyList()
@@ -64,7 +63,7 @@ data class FrameEditorDraft(
                     FrameElementDraft.Text(
                         textType = TextType.DEVICE_MODEL,
                         alignment = ElementAlignment.START,
-                        fontSizeSp = 20,
+                        fontSizePx = 60.0f,
                         color = Color.BLACK,
                         fontWeight = FontWeight.BOLD,
                         line = -1
@@ -72,7 +71,7 @@ data class FrameEditorDraft(
                     FrameElementDraft.Text(
                         textType = TextType.APERTURE,
                         alignment = ElementAlignment.END,
-                        fontSizeSp = 16,
+                        fontSizePx = 48.0f,
                         color = 0xFF333333.toInt(),
                         fontWeight = FontWeight.BOLD,
                         line = 0
@@ -80,7 +79,7 @@ data class FrameEditorDraft(
                     FrameElementDraft.Text(
                         textType = TextType.FOCAL_LENGTH_35MM,
                         alignment = ElementAlignment.END,
-                        fontSizeSp = 16,
+                        fontSizePx = 48.0f,
                         color = 0xFF333333.toInt(),
                         fontWeight = FontWeight.BOLD,
                         line = 0
@@ -88,7 +87,7 @@ data class FrameEditorDraft(
                     FrameElementDraft.Text(
                         textType = TextType.SHUTTER_SPEED,
                         alignment = ElementAlignment.END,
-                        fontSizeSp = 16,
+                        fontSizePx = 48.0f,
                         color = 0xFF333333.toInt(),
                         fontWeight = FontWeight.BOLD,
                         line = 0
@@ -96,7 +95,7 @@ data class FrameEditorDraft(
                     FrameElementDraft.Text(
                         textType = TextType.ISO,
                         alignment = ElementAlignment.END,
-                        fontSizeSp = 16,
+                        fontSizePx = 48.0f,
                         color = 0xFF333333.toInt(),
                         fontWeight = FontWeight.BOLD,
                         line = 0
@@ -104,7 +103,7 @@ data class FrameEditorDraft(
                     FrameElementDraft.Text(
                         textType = TextType.DATETIME,
                         alignment = ElementAlignment.END,
-                        fontSizeSp = 12,
+                        fontSizePx = 36.0f,
                         color = 0xFF666666.toInt(),
                         format = "yyyy.MM.dd HH:mm:ss",
                         line = 1
@@ -122,10 +121,12 @@ data class FrameEditorDraft(
                 } else {
                     FrameLayoutDraft(
                         position = FramePosition.BORDER,
-                        heightDp = 80,
+                        heightPx = 240.0f,
                         backgroundColor = Color.WHITE,
-                        paddingDp = 20,
-                        borderWidthDp = 4
+                        paddingPx = 60.0f,
+                        verticalPaddingPx = 60.0f,
+                        borderWidthPx = 12.0f,
+                        borderHeightPx = 12.0f
                     )
                 },
                 elements = defaultElements,
@@ -156,40 +157,46 @@ data class FrameEditorDraft(
 
 data class FrameLayoutDraft(
     val position: FramePosition = FramePosition.BOTTOM,
-    val orientation: FrameOrientation = FrameOrientation.AUTO,
-    val heightDp: Int = 80,
+    val designSize: FrameDesignSize = FrameDesignSize(),
+    val heightPx: Float = 240.0f,
     val backgroundColor: Int = Color.WHITE,
     val backgroundType: FrameBackgroundType = FrameBackgroundType.COLOR,
-    val backgroundBlurRadiusDp: Int = 32,
+    val backgroundBlurRadiusPx: Float = 96.0f,
     val borderColor: Int = backgroundColor,
-    val lineSpacingDp: Int = 8,
-    val paddingDp: Int = 16,
-    val borderWidthDp: Int = 0,
-    val photoCornerRadiusDp: Int = 0,
+    val elementSpacingPx: Float = 24.0f,
+    val lineSpacingPx: Float = 24.0f,
+    val paddingPx: Float = 48.0f,
+    val verticalPaddingPx: Float = paddingPx,
+    val borderWidthPx: Float = 0f,
+    val borderHeightPx: Float = borderWidthPx,
+    val photoCornerRadiusPx: Float = 0f,
     val photoShadowEnabled: Boolean = false,
-    val photoShadowRadiusDp: Int = 0,
-    val photoShadowOffsetXDp: Int = 0,
-    val photoShadowOffsetYDp: Int = 2,
+    val photoShadowRadiusPx: Float = 0f,
+    val photoShadowOffsetXPx: Float = 0f,
+    val photoShadowOffsetYPx: Float = 6.0f,
     val photoShadowColor: Int = 0xCC000000.toInt(),
     val imageResName: String? = null,
     val imagePath: String? = null
 ) {
     fun toFrameLayout(): FrameLayout = FrameLayout(
         position = position,
-        orientation = orientation,
-        heightDp = heightDp.coerceAtLeast(0),
+        designSize = designSize,
+        heightPx = heightPx,
         backgroundColor = backgroundColor,
         backgroundType = backgroundType.forPosition(position),
-        backgroundBlurRadiusDp = backgroundBlurRadiusDp.coerceIn(1, 100),
+        backgroundBlurRadiusPx = backgroundBlurRadiusPx,
         borderColor = borderColor,
-        lineSpacingDp = lineSpacingDp,
-        paddingDp = paddingDp.coerceAtLeast(0),
-        borderWidthDp = borderWidthDp.coerceAtLeast(0),
-        photoCornerRadiusDp = photoCornerRadiusDp.coerceAtLeast(0),
+        elementSpacingPx = elementSpacingPx,
+        lineSpacingPx = lineSpacingPx,
+        paddingPx = paddingPx,
+        verticalPaddingPx = verticalPaddingPx,
+        borderWidthPx = borderWidthPx,
+        borderHeightPx = borderHeightPx,
+        photoCornerRadiusPx = photoCornerRadiusPx,
         photoShadowEnabled = photoShadowEnabled,
-        photoShadowRadiusDp = photoShadowRadiusDp.coerceAtLeast(0),
-        photoShadowOffsetXDp = photoShadowOffsetXDp,
-        photoShadowOffsetYDp = photoShadowOffsetYDp,
+        photoShadowRadiusPx = photoShadowRadiusPx,
+        photoShadowOffsetXPx = photoShadowOffsetXPx,
+        photoShadowOffsetYPx = photoShadowOffsetYPx,
         photoShadowColor = photoShadowColor,
         imageResName = imageResName,
         imagePath = imagePath
@@ -198,20 +205,23 @@ data class FrameLayoutDraft(
     companion object {
         fun fromLayout(layout: FrameLayout): FrameLayoutDraft = FrameLayoutDraft(
             position = layout.position,
-            orientation = layout.orientation,
-            heightDp = layout.heightDp,
+            designSize = layout.designSize,
+            heightPx = layout.heightPx,
             backgroundColor = layout.backgroundColor,
             backgroundType = layout.effectiveBackgroundType,
-            backgroundBlurRadiusDp = layout.backgroundBlurRadiusDp,
+            backgroundBlurRadiusPx = layout.backgroundBlurRadiusPx,
             borderColor = layout.borderColor,
-            lineSpacingDp = layout.lineSpacingDp,
-            paddingDp = layout.paddingDp,
-            borderWidthDp = layout.borderWidthDp,
-            photoCornerRadiusDp = layout.photoCornerRadiusDp,
+            elementSpacingPx = layout.elementSpacingPx,
+            lineSpacingPx = layout.lineSpacingPx,
+            paddingPx = layout.paddingPx,
+            verticalPaddingPx = layout.verticalPaddingPx,
+            borderWidthPx = layout.borderWidthPx,
+            borderHeightPx = layout.borderHeightPx,
+            photoCornerRadiusPx = layout.photoCornerRadiusPx,
             photoShadowEnabled = layout.photoShadowEnabled,
-            photoShadowRadiusDp = layout.photoShadowRadiusDp,
-            photoShadowOffsetXDp = layout.photoShadowOffsetXDp,
-            photoShadowOffsetYDp = layout.photoShadowOffsetYDp,
+            photoShadowRadiusPx = layout.photoShadowRadiusPx,
+            photoShadowOffsetXPx = layout.photoShadowOffsetXPx,
+            photoShadowOffsetYPx = layout.photoShadowOffsetYPx,
             photoShadowColor = layout.photoShadowColor,
             imageResName = layout.imageResName,
             imagePath = layout.imagePath
@@ -229,7 +239,7 @@ sealed class FrameElementDraft(
         override val draftId: String = UUID.randomUUID().toString(),
         val textType: TextType = TextType.DEVICE_MODEL,
         val alignment: ElementAlignment = ElementAlignment.START,
-        val fontSizeSp: Int = 14,
+        val fontSizePx: Float = 42.0f,
         val color: Int = Color.DKGRAY,
         val fontWeight: FontWeight = FontWeight.NORMAL,
         val fontFamily: String? = null,
@@ -242,7 +252,7 @@ sealed class FrameElementDraft(
         override fun toFrameElement(): FrameElement = FrameElement.Text(
             textType = textType,
             alignment = alignment,
-            fontSizeSp = fontSizeSp.coerceAtLeast(0),
+            fontSizePx = fontSizePx,
             color = color,
             fontWeight = fontWeight,
             fontFamily = fontFamily,
@@ -259,20 +269,18 @@ sealed class FrameElementDraft(
         val logoType: LogoType = LogoType.BRAND,
         val overrideSource: String? = null,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
-        val sizeDp: Int = 24,
-        val maxWidth: Int = 0,
+        val widthPx: Float = 240.0f,
         val light: Boolean = false,
-        val marginDp: Int = 8,
+        val marginPx: Float = 24.0f,
         override val line: Int = 0
     ) : FrameElementDraft(draftId, line) {
         override fun toFrameElement(): FrameElement = FrameElement.Logo(
             logoType = logoType,
             overrideSource = overrideSource,
             alignment = alignment,
-            sizeDp = sizeDp.coerceAtLeast(0),
-            maxWidth = maxWidth.coerceAtLeast(0),
+            widthPx = widthPx,
             light = light,
-            marginDp = marginDp.coerceAtLeast(0),
+            marginPx = marginPx,
             line = line
         )
     }
@@ -281,30 +289,30 @@ sealed class FrameElementDraft(
         override val draftId: String = UUID.randomUUID().toString(),
         val orientation: DividerOrientation = DividerOrientation.VERTICAL,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
-        val lengthDp: Int = 16,
-        val thicknessDp: Int = 1,
+        val lengthPx: Float = 48.0f,
+        val thicknessPx: Float = 3.0f,
         val color: Int = Color.LTGRAY,
-        val marginDp: Int = 8,
+        val marginPx: Float = 24.0f,
         override val line: Int = 0
     ) : FrameElementDraft(draftId, line) {
         override fun toFrameElement(): FrameElement = FrameElement.Divider(
             orientation = orientation,
             alignment = alignment,
-            lengthDp = lengthDp.coerceAtLeast(0),
-            thicknessDp = thicknessDp.coerceAtLeast(0),
+            lengthPx = lengthPx,
+            thicknessPx = thicknessPx,
             color = color,
-            marginDp = marginDp.coerceAtLeast(0),
+            marginPx = marginPx,
             line = line
         )
     }
 
     data class Spacer(
         override val draftId: String = UUID.randomUUID().toString(),
-        val widthDp: Int = 8,
+        val widthPx: Float = 24.0f,
         override val line: Int = 0
     ) : FrameElementDraft(draftId, line) {
         override fun toFrameElement(): FrameElement = FrameElement.Spacer(
-            widthDp = widthDp.coerceAtLeast(0),
+            widthPx = widthPx,
             line = line
         )
     }
@@ -315,40 +323,39 @@ sealed class FrameElementDraft(
                 is FrameElement.Text -> Text(
                     textType = element.textType,
                     alignment = element.alignment,
-                fontSizeSp = element.fontSizeSp,
-                color = element.color,
-                fontWeight = element.fontWeight,
-                fontFamily = element.fontFamily,
-                overrideText = element.overrideText,
-                format = element.format,
-                prefix = element.prefix,
-                suffix = element.suffix,
-                line = element.line
-            )
+                    fontSizePx = element.fontSizePx,
+                    color = element.color,
+                    fontWeight = element.fontWeight,
+                    fontFamily = element.fontFamily,
+                    overrideText = element.overrideText,
+                    format = element.format,
+                    prefix = element.prefix,
+                    suffix = element.suffix,
+                    line = element.line
+                )
 
-            is FrameElement.Logo -> Logo(
-                logoType = element.logoType,
-                overrideSource = element.overrideSource,
-                alignment = element.alignment,
-                sizeDp = element.sizeDp,
-                maxWidth = element.maxWidth,
-                light = element.light,
-                marginDp = element.marginDp,
+                is FrameElement.Logo -> Logo(
+                    logoType = element.logoType,
+                    overrideSource = element.overrideSource,
+                    alignment = element.alignment,
+                    widthPx = requireNotNull(element.widthPx) { "Resolve legacy logo widths before editing" },
+                    light = element.light,
+                    marginPx = element.marginPx,
                     line = element.line
                 )
 
                 is FrameElement.Divider -> Divider(
                     orientation = element.orientation,
                     alignment = element.alignment,
-                    lengthDp = element.lengthDp,
-                    thicknessDp = element.thicknessDp,
+                    lengthPx = element.lengthPx,
+                    thicknessPx = element.thicknessPx,
                     color = element.color,
-                    marginDp = element.marginDp,
+                    marginPx = element.marginPx,
                     line = element.line
                 )
 
                 is FrameElement.Spacer -> Spacer(
-                    widthDp = element.widthDp,
+                    widthPx = element.widthPx,
                     line = element.line
                 )
             }

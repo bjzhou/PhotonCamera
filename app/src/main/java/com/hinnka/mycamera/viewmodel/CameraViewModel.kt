@@ -4775,9 +4775,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return contentRepository.frameManager.importEditorFrameImage(uri, frameIdHint)
     }
 
-    suspend fun renderFrameEditorPreview(draft: FrameEditorDraft, portrait: Boolean): Bitmap =
+    fun readFrameEditorImageDesignSize(path: String) =
+        contentRepository.frameRenderer.readImageFrameDesignSize(path)
+
+    suspend fun renderFrameEditorPreview(draft: FrameEditorDraft): Bitmap =
         withContext(Dispatchers.Default) {
-            val source = FramePreviewFactory.createPreviewBitmap(portrait)
+            val source = FramePreviewFactory.createPreviewBitmap(draft.layout.designSize)
             val template = draft.toTemplate(draft.editableFrameId ?: draft.sourceFrameId ?: "preview_frame")
             val metadata = FramePreviewFactory.createPreviewMetadata(source.width, source.height)
             contentRepository.frameRenderer.render(source, template, metadata)

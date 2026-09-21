@@ -332,7 +332,13 @@
     <string name="frame_editor_background_type">배경 유형</string>
     <string name="frame_editor_background_color">단색</string>
     <string name="frame_editor_background_blur">가우시안 흐림</string>
-    <string name="frame_editor_background_blur_radius">흐림 강도</string>
+    <string name="frame_editor_layout_vertical_padding">세로 안쪽 여백 (px)</string>
+    <string name="frame_editor_layout_border_height">상단 프레임 높이 (px)</string>
+    <string name="frame_editor_design_width">디자인 너비 (px)</string>
+    <string name="frame_editor_design_height">디자인 높이 (px)</string>
+    <string name="frame_editor_dimension_hint">모든 치수는 디자인 캔버스의 픽셀 단위입니다. 프레임, 텍스트 및 로고는 실제 사진 너비 ÷ 디자인 너비에 따라 동일한 비율로 조정되며 사진 영역은 실제 높이에 맞춰집니다.</string>
+    <string name="frame_editor_element_spacing">요소 간격 (px)</string>
+    <string name="frame_editor_background_blur_radius">흐림 강도 (px)</string>
     <string name="frame_editor_background_blur_hint">사진을 흐리게 처리한 복사본으로 배경을 채웁니다. 오버레이 모드에서는 워터마크 영역만 흐려집니다.</string>
     <string name="frame_editor_background_glass">리퀴드 글래스</string>
     <string name="frame_editor_background_glass_hint">사진 하단에 리퀴드 글래스 캡슐을 겹쳐 표시하고 양옆과 아래에 여백을 둡니다.</string>

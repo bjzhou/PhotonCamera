@@ -493,21 +493,21 @@
     <string name="frame_editor_section_layout">เค้าโครง</string>
     <string name="frame_editor_section_elements">รายการองค์ประกอบ</string>
     <string name="frame_editor_layout_position">โหมดตำแหน่ง</string>
-    <string name="frame_editor_layout_height">ความสูงของเส้นขอบ (dp)</string>
-    <string name="frame_editor_layout_padding">ช่องว่างภายใน (dp)</string>
+    <string name="frame_editor_layout_height">ความสูงของเส้นขอบ (px)</string>
+    <string name="frame_editor_layout_padding">ช่องว่างภายใน (px)</string>
     <string name="frame_editor_layout_background">สีพื้นหลัง</string>
     <string name="frame_editor_layout_border_color">สีเส้นขอบ</string>
     <string name="frame_editor_color_opacity">ความโปร่งใส</string>
     <string name="frame_editor_color_hex_value">ค่าสี</string>
     <string name="frame_editor_color_hex_hint">ใช้ #RRGGBB หรือ #AARRGGBB</string>
     <string name="frame_editor_color_hex_error">ป้อนค่าสีที่ถูกต้อง</string>
-    <string name="frame_editor_layout_line_spacing">ระยะห่างระหว่างบรรทัด (dp)</string>
-    <string name="frame_editor_layout_border_width">ความกว้างของเส้นขอบ (dp)</string>
-    <string name="frame_editor_photo_corner_radius">มุมโค้งมนของภาพถ่าย (dp)</string>
+    <string name="frame_editor_layout_line_spacing">ระยะห่างระหว่างบรรทัด (px)</string>
+    <string name="frame_editor_layout_border_width">ความกว้างของเส้นขอบ (px)</string>
+    <string name="frame_editor_photo_corner_radius">มุมโค้งมนของภาพถ่าย (px)</string>
     <string name="frame_editor_photo_shadow">เงาของภาพถ่าย</string>
-    <string name="frame_editor_photo_shadow_radius">เงาเบลอ (dp)</string>
-    <string name="frame_editor_photo_shadow_offset_x">ออฟเซ็ต Shadow X (dp)</string>
-    <string name="frame_editor_photo_shadow_offset_y">ชดเชยเงา Y (dp)</string>
+    <string name="frame_editor_photo_shadow_radius">เงาเบลอ (px)</string>
+    <string name="frame_editor_photo_shadow_offset_x">ออฟเซ็ต Shadow X (px)</string>
+    <string name="frame_editor_photo_shadow_offset_y">ชดเชยเงา Y (px)</string>
     <string name="frame_editor_photo_shadow_color">สีเงา</string>
     <string name="frame_editor_image_hint">เส้นขอบรูปภาพใช้ PNG หรือ WebP โดยมีพื้นที่โปร่งใส สื่อที่เลือกจะถูกคัดลอกไปยังไดเร็กทอรีส่วนตัวของแอปพลิเคชัน</string>
     <string name="frame_editor_pick_image">เลือกรูปภาพขอบ</string>
@@ -520,7 +520,7 @@
     <string name="frame_editor_text_type">ประเภทข้อความ</string>
     <string name="frame_editor_alignment">การจัดตำแหน่ง</string>
     <string name="frame_editor_line">หมายเลขบรรทัด</string>
-    <string name="frame_editor_text_size">ขนาดตัวอักษร (sp)</string>
+    <string name="frame_editor_text_size">ขนาดตัวอักษร (px)</string>
     <string name="frame_editor_text_color">สีข้อความ</string>
     <string name="frame_editor_font_weight">น้ำหนักตัวอักษร</string>
     <string name="frame_editor_font_family">แบบอักษร</string>
@@ -531,15 +531,15 @@
     <string name="frame_editor_text_suffix">คำต่อท้าย</string>
     <string name="frame_editor_logo_type">ประเภทโลโก้</string>
     <string name="frame_editor_logo_source">แหล่งที่มาของโลโก้</string>
-    <string name="frame_editor_logo_size">ขนาดโลโก้ (dp)</string>
-    <string name="frame_editor_logo_max_width">ความกว้างสูงสุดของโลโก้ (dp)</string>
-    <string name="frame_editor_margin">ระยะขอบ (dp)</string>
+    <string name="frame_editor_logo_size">ความกว้างโลโก้ (px)</string>
+    <string name="frame_editor_logo_max_width">ความกว้างสูงสุดของโลโก้ (px)</string>
+    <string name="frame_editor_margin">ระยะขอบ (px)</string>
     <string name="frame_editor_logo_light">ใช้รูปแบบโลโก้ที่สว่างกว่า</string>
     <string name="frame_editor_divider_orientation">ทิศทางตัวแบ่ง</string>
-    <string name="frame_editor_divider_length">ความยาวตัวแบ่ง (dp)</string>
-    <string name="frame_editor_divider_thickness">ความหนาของตัวแบ่ง (dp)</string>
+    <string name="frame_editor_divider_length">ความยาวตัวแบ่ง (px)</string>
+    <string name="frame_editor_divider_thickness">ความหนาของตัวแบ่ง (px)</string>
     <string name="frame_editor_divider_color">สีตัวแบ่ง</string>
-    <string name="frame_editor_spacer_width">ความกว้างของระยะห่าง (dp)</string>
+    <string name="frame_editor_spacer_width">ความกว้างของระยะห่าง (px)</string>
     <string name="frame_editor_rules_title_render">กฎการแสดงผล</string>
     <string name="frame_editor_rule_line_global">หมายเลขบรรทัด -1 แสดงถึงองค์ประกอบส่วนกลางที่เลื่อนจุดเริ่มต้นของเค้าโครงของบรรทัดที่มองเห็นทั้งหมดไปพร้อมๆ กัน</string>
     <string name="frame_editor_rule_vertical_divider">ตัวคั่นแนวตั้งจะปรากฏขึ้นก็ต่อเมื่อมีองค์ประกอบที่ไม่มีตัวคั่นที่มองเห็นได้ทางด้านซ้ายและด้านขวาของแถวเดียวกัน</string>
@@ -583,9 +583,9 @@
     <string name="frame_editor_divider_orientation_horizontal">ระดับ</string>
     <string name="frame_editor_divider_orientation_vertical">แนวตั้ง</string>
     <string name="frame_editor_summary_text">%1$s • %2$s • แถว=%3$d</string>
-    <string name="frame_editor_summary_logo">%1$s • %2$s • %3$ddp</string>
-    <string name="frame_editor_summary_divider">%1$s • %2$s • %3$ddp</string>
-    <string name="frame_editor_summary_spacer">แถว=%1$d • %2$ddp</string>
+    <string name="frame_editor_summary_logo">%1$s • %2$s • %3$.3f px</string>
+    <string name="frame_editor_summary_divider">%1$s • %2$s • %3$.3f px</string>
+    <string name="frame_editor_summary_spacer">แถว=%1$d • %2$.3f px</string>
 
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">การปรับเทียบกล้อง</string>
@@ -954,7 +954,13 @@
     <string name="frame_editor_background_type">ประเภทพื้นหลัง</string>
     <string name="frame_editor_background_color">สีพื้น</string>
     <string name="frame_editor_background_blur">เบลอเกาส์เซียน</string>
-    <string name="frame_editor_background_blur_radius">ระดับความเบลอ</string>
+    <string name="frame_editor_layout_vertical_padding">ระยะห่างภายในแนวตั้ง (px)</string>
+    <string name="frame_editor_layout_border_height">ความสูงของกรอบด้านบน (px)</string>
+    <string name="frame_editor_design_width">ความกว้างการออกแบบ (px)</string>
+    <string name="frame_editor_design_height">ความสูงการออกแบบ (px)</string>
+    <string name="frame_editor_dimension_hint">ขนาดทั้งหมดเป็นพิกเซลบนพื้นที่ออกแบบ กรอบ ข้อความ และโลโก้จะปรับขนาดด้วยอัตราส่วนเดียวกันตามความกว้างภาพจริง ÷ ความกว้างแบบ ส่วนพื้นที่ภาพจะปรับตามความสูงจริง</string>
+    <string name="frame_editor_element_spacing">ระยะห่างองค์ประกอบ (px)</string>
+    <string name="frame_editor_background_blur_radius">ระดับความเบลอ (px)</string>
     <string name="frame_editor_background_blur_hint">เติมพื้นหลังด้วยสำเนาภาพถ่ายที่เบลอ ในโหมดซ้อนทับ จะเบลอเฉพาะบริเวณลายน้ำเท่านั้น</string>
     <string name="frame_editor_background_glass">กระจกเหลว</string>
     <string name="frame_editor_background_glass_hint">ซ้อนแคปซูลกระจกเหลวไว้ด้านล่างของภาพ โดยเว้นระยะจากขอบทั้งสองด้านและขอบล่าง</string>

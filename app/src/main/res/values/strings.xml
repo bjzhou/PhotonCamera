@@ -732,21 +732,21 @@
     <string name="frame_editor_section_layout">Layout</string>
     <string name="frame_editor_section_elements">Elements</string>
     <string name="frame_editor_layout_position">Position</string>
-    <string name="frame_editor_layout_height">Frame Height (dp)</string>
-    <string name="frame_editor_layout_padding">Padding (dp)</string>
+    <string name="frame_editor_layout_height">Frame Height (px)</string>
+    <string name="frame_editor_layout_padding">Padding (px)</string>
     <string name="frame_editor_layout_background">Background Color</string>
     <string name="frame_editor_layout_border_color">Border Color</string>
     <string name="frame_editor_color_opacity">Opacity</string>
     <string name="frame_editor_color_hex_value">Color Value</string>
     <string name="frame_editor_color_hex_hint">Use #RRGGBB or #AARRGGBB.</string>
     <string name="frame_editor_color_hex_error">Enter a valid color value.</string>
-    <string name="frame_editor_layout_line_spacing">Line Spacing (dp)</string>
-    <string name="frame_editor_layout_border_width">Border Width (dp)</string>
-    <string name="frame_editor_photo_corner_radius">Photo Corner Radius (dp)</string>
+    <string name="frame_editor_layout_line_spacing">Line Spacing (px)</string>
+    <string name="frame_editor_layout_border_width">Border Width (px)</string>
+    <string name="frame_editor_photo_corner_radius">Photo Corner Radius (px)</string>
     <string name="frame_editor_photo_shadow">Photo Shadow</string>
-    <string name="frame_editor_photo_shadow_radius">Shadow Blur (dp)</string>
-    <string name="frame_editor_photo_shadow_offset_x">Shadow X Offset (dp)</string>
-    <string name="frame_editor_photo_shadow_offset_y">Shadow Y Offset (dp)</string>
+    <string name="frame_editor_photo_shadow_radius">Shadow Blur (px)</string>
+    <string name="frame_editor_photo_shadow_offset_x">Shadow X Offset (px)</string>
+    <string name="frame_editor_photo_shadow_offset_y">Shadow Y Offset (px)</string>
     <string name="frame_editor_photo_shadow_color">Shadow Color</string>
     <string name="frame_editor_image_hint">Image frames use a transparent PNG or WebP. The selected asset will be copied into app storage.</string>
     <string name="frame_editor_pick_image">Choose Frame Image</string>
@@ -759,7 +759,7 @@
     <string name="frame_editor_text_type">Text Type</string>
     <string name="frame_editor_alignment">Alignment</string>
     <string name="frame_editor_line">Line</string>
-    <string name="frame_editor_text_size">Text Size (sp)</string>
+    <string name="frame_editor_text_size">Text Size (px)</string>
     <string name="frame_editor_text_color">Text Color</string>
     <string name="frame_editor_font_weight">Font Weight</string>
     <string name="frame_editor_font_family">Font Family</string>
@@ -770,15 +770,15 @@
     <string name="frame_editor_text_suffix">Suffix</string>
     <string name="frame_editor_logo_type">Logo Type</string>
     <string name="frame_editor_logo_source">Logo Source</string>
-    <string name="frame_editor_logo_size">Logo Size (dp)</string>
-    <string name="frame_editor_logo_max_width">Logo Max Width (dp)</string>
-    <string name="frame_editor_margin">Margin (dp)</string>
+    <string name="frame_editor_logo_size">Logo Width (px)</string>
+    <string name="frame_editor_logo_max_width">Logo Max Width (px)</string>
+    <string name="frame_editor_margin">Margin (px)</string>
     <string name="frame_editor_logo_light">Use light logo variant</string>
     <string name="frame_editor_divider_orientation">Divider Orientation</string>
-    <string name="frame_editor_divider_length">Divider Length (dp)</string>
-    <string name="frame_editor_divider_thickness">Divider Thickness (dp)</string>
+    <string name="frame_editor_divider_length">Divider Length (px)</string>
+    <string name="frame_editor_divider_thickness">Divider Thickness (px)</string>
     <string name="frame_editor_divider_color">Divider Color</string>
-    <string name="frame_editor_spacer_width">Spacer Width (dp)</string>
+    <string name="frame_editor_spacer_width">Spacer Width (px)</string>
     <string name="frame_editor_rules_title_render">Render Rules</string>
     <string name="frame_editor_rule_line_global">Line = -1 means a global element that advances every visible row together.</string>
     <string name="frame_editor_rule_vertical_divider">Vertical dividers appear only when there is at least one visible non-divider element on both sides in the same row.</string>
@@ -822,9 +822,9 @@
     <string name="frame_editor_divider_orientation_horizontal">Horizontal</string>
     <string name="frame_editor_divider_orientation_vertical">Vertical</string>
     <string name="frame_editor_summary_text">%1$s • %2$s • line=%3$d</string>
-    <string name="frame_editor_summary_logo">%1$s • %2$s • %3$ddp</string>
-    <string name="frame_editor_summary_divider">%1$s • %2$s • %3$ddp</string>
-    <string name="frame_editor_summary_spacer">line=%1$d • %2$ddp</string>
+    <string name="frame_editor_summary_logo">%1$s • %2$s • %3$.3f px</string>
+    <string name="frame_editor_summary_divider">%1$s • %2$s • %3$.3f px</string>
+    <string name="frame_editor_summary_spacer">line=%1$d • %2$.3f px</string>
 
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Camera Calibration</string>
@@ -1300,15 +1300,16 @@
     <string name="settings_retain_capture_settings_description">Restore exposure compensation, shutter speed, ISO, focus and white balance, including auto/manual modes, when reopening the camera. Turning this off clears saved settings.</string>
     <string name="settings_raw_digital_zoom_resampling">Restore digital zoom resolution</string>
     <string name="settings_raw_digital_zoom_resampling_description">Resamples digital zoom photos to the current physical lens resolution, then applies the output scale.</string>
-    <string name="frame_editor_orientation">Template orientation</string>
-    <string name="frame_editor_orientation_auto">Follow photo</string>
-    <string name="frame_editor_orientation_landscape">Landscape design</string>
-    <string name="frame_editor_orientation_portrait">Portrait design</string>
-    <string name="frame_editor_orientation_hint">A fixed design rotates the frame to the sides when needed. The photo stays upright.</string>
     <string name="frame_editor_background_type">Background</string>
     <string name="frame_editor_background_color">Solid Color</string>
     <string name="frame_editor_background_blur">Gaussian Blur</string>
-    <string name="frame_editor_background_blur_radius">Blur Amount</string>
+    <string name="frame_editor_layout_vertical_padding">Vertical Padding (px)</string>
+    <string name="frame_editor_layout_border_height">Top Border Height (px)</string>
+    <string name="frame_editor_design_width">Design width (px)</string>
+    <string name="frame_editor_design_height">Design height (px)</string>
+    <string name="frame_editor_dimension_hint">All dimensions are pixels on the design canvas. Frames, text and logos scale uniformly by actual photo width ÷ design width; the photo area adapts to the actual height.</string>
+    <string name="frame_editor_element_spacing">Element Spacing (px)</string>
+    <string name="frame_editor_background_blur_radius">Blur Amount (px)</string>
     <string name="frame_editor_background_blur_hint">Fill the background with a blurred copy of the photo. In overlay mode, only the watermark area is blurred.</string>
     <string name="frame_editor_background_glass">Liquid Glass</string>
     <string name="frame_editor_background_glass_hint">Overlay a liquid glass capsule near the bottom of the photo, with space on both sides and below.</string>
