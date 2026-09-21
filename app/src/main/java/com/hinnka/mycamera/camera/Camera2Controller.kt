@@ -41,6 +41,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.stabilization.ExternalLensStabilizationConfig
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.StabilizationImageReader
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -61,7 +62,7 @@ import com.hinnka.mycamera.video.VideoRecordingState
 import com.hinnka.mycamera.video.VideoStabilizationMode
 import com.hinnka.mycamera.video.resolveSurfaceTextureVideoOrientationDegrees
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
@@ -271,7 +272,7 @@ class Camera2Controller(private val context: Context) {
     private var previewSurface: Surface? = null
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var imageReader: ImageReader? = null
-    private var stabilizationImageReader: ImageReader? = null
+    private var stabilizationImageReader: StabilizationImageReader? = null
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal)
     private var nrLevel = NoiseReductionLevel.DEFAULT
@@ -2086,8 +2087,7 @@ class Camera2Controller(private val context: Context) {
         if (closeImageReader) {
             safeCloseImageReader(imageReader)
             imageReader = null
-            safeCloseImageReader(stabilizationImageReader)
-            stabilizationImageReader = null
+            closeStabilizationImageReader()
         }
     }
 
@@ -3023,6 +3023,11 @@ class Camera2Controller(private val context: Context) {
         forceWithoutVendorSessionParameters: Boolean = false,
         openGeneration: Long = cameraOpenGeneration
     ) {
+        val handler = cameraHandler ?: return
+        if (Looper.myLooper() != handler.looper) {
+            handler.post { createPreviewSession(forceWithoutVendorSessionParameters, openGeneration) }
+            return
+        }
         if (openGeneration != cameraOpenGeneration) {
             PLog.w(TAG, "Skipping stale preview session creation")
             return
@@ -3097,7 +3102,7 @@ class Camera2Controller(private val context: Context) {
                             add(createOutputConfiguration(encoderSurface))
                         }
                     },
-                    Executors.newSingleThreadExecutor(),
+                    Executor { handler.post(it) },
                     object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
                             if (openGeneration != cameraOpenGeneration || sessionGeneration != previewSessionGeneration) {
@@ -3160,7 +3165,7 @@ class Camera2Controller(private val context: Context) {
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
                 outputConfigs,
-                Executors.newSingleThreadExecutor(),
+                Executor { handler.post(it) },
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         if (openGeneration != cameraOpenGeneration || sessionGeneration != previewSessionGeneration) {
@@ -3249,7 +3254,8 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun ensureStabilizationImageReader(): ImageReader? {
+    private fun ensureStabilizationImageReader(): StabilizationImageReader? {
+        val handler = cameraHandler ?: return null
         val state = _state.value
         if (!shouldUseAlgorithmicStabilization()) return null
         val size = when (state.captureMode) {
@@ -3260,21 +3266,17 @@ class Camera2Controller(private val context: Context) {
         }
         if (size.width <= 0 || size.height <= 0) return null
         stabilizationImageReader?.let { existing ->
-            if (existing.width == size.width && existing.height == size.height &&
-                existing.imageFormat == ImageFormat.YUV_420_888
-            ) {
+            if (existing.width == size.width && existing.height == size.height) {
                 return existing
             }
-            safeCloseImageReader(existing)
-            stabilizationImageReader = null
+            closeStabilizationImageReader()
         }
-        return ImageReader.newInstance(
+        return StabilizationImageReader(
             size.width,
             size.height,
-            ImageFormat.YUV_420_888,
             RealtimeStabilizationCoordinator.STABILIZATION_IMAGE_READER_MAX_IMAGES,
         ).also { reader ->
-            reader.setOnImageAvailableListener({ source ->
+            reader.setOnImageAvailableListener(handler) { source ->
                 while (true) {
                     val image = try {
                         source.acquireNextImage()
@@ -3285,7 +3287,7 @@ class Camera2Controller(private val context: Context) {
                     logStabilizationInputStats(image)
                     realtimeStabilizationCoordinator.submitStabilizationImage(image)
                 }
-            }, cameraHandler)
+            }
             stabilizationImageReader = reader
             stabilizationInputStatsFirstTimestampNs = 0L
             stabilizationInputStatsFrames = 0
@@ -3293,8 +3295,8 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun logStabilizationInputStats(image: Image) {
-        val timestampNs = image.timestamp
+    private fun logStabilizationInputStats(image: StabilizationImageReader.AcquiredImage) {
+        val timestampNs = image.timestampNs
         if (timestampNs <= 0L) return
         stabilizationInputFrameCount += 1L
         if (stabilizationInputStatsFirstTimestampNs == 0L) {
@@ -3423,10 +3425,18 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun closeUnusedStabilizationImageReader(activeReader: ImageReader?) {
+    private fun closeUnusedStabilizationImageReader(activeReader: StabilizationImageReader?) {
         if (activeReader != null) return
-        safeCloseImageReader(stabilizationImageReader)
+        closeStabilizationImageReader()
+    }
+
+    private fun closeStabilizationImageReader() {
+        val reader = stabilizationImageReader ?: return
         stabilizationImageReader = null
+        // Stop acquisition first, then release queued frames. Renderer leases retain both
+        // their source image and its reader until the upload/sampling has finished.
+        reader.close()
+        realtimeStabilizationCoordinator.discardStabilizationImages(reader)
     }
 
     private fun retryPreviewSessionWithoutVendorSessionParameters(

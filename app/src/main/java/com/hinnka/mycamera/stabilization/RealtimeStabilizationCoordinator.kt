@@ -175,8 +175,8 @@ private data class SequencedNativeResult(
     val result: MgcEisNativeEngine.FrameResult,
 )
 
-private data class BufferedStabilizationImage(
-    val image: Image,
+private class BufferedStabilizationImage(
+    val image: StabilizationImageReader.AcquiredImage,
     val width: Int,
     val height: Int,
     val pendingSessionIds: MutableSet<Long>,
@@ -608,16 +608,16 @@ class RealtimeStabilizationCoordinator(context: Context) {
      * Accepts every ImageReader image in FIFO order. This is the only EIS frame-boundary source:
      * SurfaceTexture callbacks are presentation signals and must never advance the native feeder.
      */
-    fun submitStabilizationImage(image: Image) {
-        val timestampNs = image.timestamp
+    internal fun submitStabilizationImage(image: StabilizationImageReader.AcquiredImage) {
+        val timestampNs = image.timestampNs
         synchronized(lock) {
-            if (activeSessionCount <= 0 || timestampNs <= 0L ||
+            if (image.owner.isClosed || activeSessionCount <= 0 || timestampNs <= 0L ||
                 image.width != nativeFrameWidth || image.height != nativeFrameHeight
             ) {
                 image.close()
                 return
             }
-            bufferedImages.remove(timestampNs)?.image?.close()
+            bufferedImages.remove(timestampNs)?.let(::retireBufferedImageLocked)
             bufferedImages[timestampNs] = BufferedStabilizationImage(
                 image = image,
                 width = image.width,
@@ -627,6 +627,24 @@ class RealtimeStabilizationCoordinator(context: Context) {
             trimBufferedImagesLocked()
             onFrameBoundaryLocked(timestampNs)
         }
+    }
+
+    internal fun discardStabilizationImages(reader: StabilizationImageReader) {
+        synchronized(lock) {
+            val iterator = bufferedImages.values.iterator()
+            while (iterator.hasNext()) {
+                val buffered = iterator.next()
+                if (buffered.image.owner === reader) {
+                    iterator.remove()
+                    retireBufferedImageLocked(buffered)
+                }
+            }
+        }
+    }
+
+    private fun retireBufferedImageLocked(buffered: BufferedStabilizationImage) {
+        buffered.pendingSessionIds.clear()
+        if (buffered.acquiredLeaseCount == 0) buffered.image.close()
     }
 
     private fun acquire(
@@ -739,7 +757,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
         frameMetadata.clear()
         frameBoundaries.clear()
         nativeResults.clear()
-        bufferedImages.values.forEach { it.image.close() }
+        bufferedImages.values.forEach(::retireBufferedImageLocked)
         bufferedImages.clear()
         activeSessions.clear()
         gyroFeedBoundaryNs = 0L
@@ -993,22 +1011,23 @@ class RealtimeStabilizationCoordinator(context: Context) {
         buffered.acquiredLeaseCount += 1
         StabilizationImage(
             timestampNs = timestampNs,
-            // A camera-session teardown may revoke an ImageReader image while
-            // a delayed native result is still queued. Its dimensions were
-            // captured while the image was valid; the renderer then handles a
-            // revoked plane as a dropped frame rather than crashing the GL thread.
             width = buffered.width,
             height = buffered.height,
-            image = buffered.image,
-            onClose = { releaseImageLease(timestampNs) },
+            image = buffered.image.image,
+            onClose = { releaseImageLease(timestampNs, buffered) },
         )
     }
 
-    private fun releaseImageLease(timestampNs: Long) {
+    private fun releaseImageLease(timestampNs: Long, buffered: BufferedStabilizationImage) {
         synchronized(lock) {
-            val buffered = bufferedImages[timestampNs] ?: return
-            buffered.acquiredLeaseCount = (buffered.acquiredLeaseCount - 1).coerceAtLeast(0)
-            closeFullyConsumedImagesLocked()
+            // Keep the actual buffer alive across resets and duplicate timestamps. A lease
+            // from an old session must never release a new buffer with the same timestamp.
+            check(buffered.acquiredLeaseCount > 0)
+            buffered.acquiredLeaseCount -= 1
+            if (buffered.pendingSessionIds.isEmpty() && buffered.acquiredLeaseCount == 0) {
+                bufferedImages.remove(timestampNs, buffered)
+                buffered.image.close()
+            }
         }
     }
 
