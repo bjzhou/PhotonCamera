@@ -9,7 +9,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 
 /**
  * 开关设置项
@@ -54,8 +55,8 @@ fun SwitchSettingItem(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = AccentOrange,
+                    checkedThumbColor = OnAccentColor,
+                    checkedTrackColor = AccentColor,
                     uncheckedThumbColor = Color.Gray,
                     uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
                     uncheckedBorderColor = Color.Transparent

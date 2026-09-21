@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import com.hinnka.mycamera.ui.theme.AccentColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -52,7 +53,7 @@ fun CustomSlider(
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
     thumbRadius: Dp = 8.dp,
     trackHeight: Dp = 4.dp,
-    activeTrackColor: Color = Color.White,
+    activeTrackColor: Color = AccentColor,
     inactiveTrackColor: Color = Color.Gray.copy(alpha = 0.5f),
     trackGradientColors: List<Color>? = null,
     thumbColor: Color = Color.White

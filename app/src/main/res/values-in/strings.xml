@@ -335,4 +335,9 @@
     <string name="frame_editor_background_blur_hint">Isi latar belakang dengan salinan foto yang diburamkan. Dalam mode overlay, hanya area watermark yang diburamkan.</string>
     <string name="frame_editor_background_glass">Kaca cair</string>
     <string name="frame_editor_background_glass_hint">Tampilkan kapsul kaca cair di bagian bawah foto, dengan jarak di kedua sisi dan bagian bawah.</string>
+    <string name="settings_accent_color">Warna sorotan</string>
+    <string name="settings_accent_color_description">Gunakan satu warna sorotan untuk kontrol, parameter kamera, progres pengambilan gambar, dan mode Pro.</string>
+    <string name="settings_accent_color_reset">Pulihkan default</string>
+    <string name="settings_accent_color_hex_hint">Masukkan kode warna enam digit dalam format #RRGGBB.</string>
+    <string name="settings_accent_color_hex_error">Masukkan enam karakter heksadesimal (0–9, A–F).</string>
 </resources>

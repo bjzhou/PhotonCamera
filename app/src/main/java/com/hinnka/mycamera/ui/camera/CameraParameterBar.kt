@@ -25,13 +25,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.video.CaptureMode
 import kotlin.math.roundToLong
 
-internal val CameraParameterAccent = Color(0xFFFFD700)
 
 @Composable
 fun CameraParameterBar(
@@ -116,7 +116,7 @@ internal fun ParameterItem(
         targetValue = when {
             item.isWarning -> Color(0xFFFF6666)
             !item.isEnabled -> Color.White.copy(alpha = 0.38f)
-            isSelected -> CameraParameterAccent
+            isSelected -> AccentColor
             else -> Color.White.copy(alpha = 0.95f)
         },
         label = "parameterValueColor"
@@ -124,7 +124,7 @@ internal fun ParameterItem(
     val labelColor by animateColorAsState(
         targetValue = when {
             !item.isEnabled -> Color.White.copy(alpha = 0.3f)
-            isSelected -> CameraParameterAccent.copy(alpha = if (titleOnly) 1f else 0.8f)
+            isSelected -> AccentColor.copy(alpha = if (titleOnly) 1f else 0.8f)
             titleOnly -> Color.White.copy(alpha = 0.9f)
             else -> Color.White.copy(alpha = 0.6f)
         },
@@ -187,7 +187,7 @@ internal fun ParameterItem(
                         .padding(bottom = 3.dp)
                         .size(16.dp, 2.dp)
                         .clip(CircleShape)
-                        .background(CameraParameterAccent)
+                        .background(AccentColor)
                 )
             }
         }
@@ -204,7 +204,7 @@ private fun PhotoParameterTitle(
     val backgroundColor by animateColorAsState(
         targetValue = when {
             !isEnabled -> Color.Black.copy(alpha = 0.12f)
-            isSelected -> CameraParameterAccent.copy(alpha = 0.16f)
+            isSelected -> AccentColor.copy(alpha = 0.16f)
             else -> Color.Black.copy(alpha = 0.28f)
         },
         label = "photoParameterBackground"
@@ -212,7 +212,7 @@ private fun PhotoParameterTitle(
     val borderColor by animateColorAsState(
         targetValue = when {
             !isEnabled -> Color.White.copy(alpha = 0.05f)
-            isSelected -> CameraParameterAccent.copy(alpha = 0.6f)
+            isSelected -> AccentColor.copy(alpha = 0.6f)
             else -> Color.White.copy(alpha = 0.12f)
         },
         label = "photoParameterBorder"

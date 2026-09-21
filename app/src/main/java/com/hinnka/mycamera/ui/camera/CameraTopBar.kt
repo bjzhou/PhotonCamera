@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.ui.components.PhysicalButton
 import com.hinnka.mycamera.video.CaptureMode
@@ -104,7 +105,7 @@ fun CameraTopBar(
             if (timerSeconds > 0) {
                 Text(
                     text = "${timerSeconds}s",
-                    color = Color.Yellow,
+                    color = AccentColor,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.autoRotate()
@@ -127,7 +128,7 @@ fun CameraTopBar(
                 painterResource(R.drawable.ic_live_photo),
                 contentDescription = stringResource(R.string.settings_use_live_photo),
                 modifier = Modifier.size(20.dp).autoRotate(),
-                tint = if (useLivePhoto) Color.Yellow else Color.White
+                tint = if (useLivePhoto) AccentColor else Color.White
             )
         }
 
@@ -139,7 +140,7 @@ fun CameraTopBar(
                 imageVector = AppIcons.BarChart,
                 contentDescription = stringResource(R.string.histogram),
                 modifier = Modifier.size(20.dp).autoRotate(),
-                tint = if (showHistogram) Color.Yellow else Color.White
+                tint = if (showHistogram) AccentColor else Color.White
             )
         }
 
@@ -349,7 +350,7 @@ private fun VideoActionIcon(
             contentDescription = contentDescription,
             modifier = Modifier.size(20.dp).autoRotate(),
             tint = if (enabled) {
-                if (active) Color(0xFFFFD700) else Color.White
+                if (active) AccentColor else Color.White
             } else {
                 Color.White.copy(alpha = 0.3f)
             }
@@ -445,7 +446,7 @@ private fun RecordingHud(
                 Box(Modifier.size(3.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.4f)))
                 Text(
                     text = "LOG",
-                    color = Color(0xFFE5A324).copy(alpha = 0.8f),
+                    color = AccentColor.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold
                 )

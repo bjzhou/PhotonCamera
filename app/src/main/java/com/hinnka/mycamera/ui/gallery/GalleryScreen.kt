@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.utils.PLog
 import android.graphics.Rect
 import android.graphics.Bitmap
@@ -66,7 +67,7 @@ import com.hinnka.mycamera.gallery.ProcessingPhoto
 import com.hinnka.mycamera.ui.components.ProcessingPhotoShimmerView
 import coil.load
 import coil.dispose
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.GalleryBatchOperation
 import com.hinnka.mycamera.viewmodel.GalleryTab
@@ -360,7 +361,7 @@ fun GalleryScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(4.dp),
-                                    color = AccentOrange,
+                                    color = AccentColor,
                                     trackColor = Color.White.copy(alpha = 0.15f)
                                 )
                             }
@@ -461,7 +462,7 @@ fun GalleryScreen(
                                     contentDescription =
                                         stringResource(R.string.paste_settings),
                                     tint = if (canPasteSettings) {
-                                        AccentOrange
+                                        AccentColor
                                     } else {
                                         Color.White.copy(alpha = 0.38f)
                                     },
@@ -502,7 +503,7 @@ fun GalleryScreen(
                                         contentDescription =
                                             stringResource(R.string.export),
                                         tint = if (canExport) {
-                                            AccentOrange
+                                            AccentColor
                                         } else {
                                             Color.White.copy(alpha = 0.38f)
                                         },
@@ -564,7 +565,7 @@ fun GalleryScreen(
                             }
                             permissionLauncher.launch(permission)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange)
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentColor)
                     ) {
                         Text(stringResource(R.string.grant_permission))
                     }
@@ -588,7 +589,7 @@ fun GalleryScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator(
-                        color = AccentOrange,
+                        color = AccentColor,
                         modifier = Modifier.size(28.dp),
                         strokeWidth = 2.dp
                     )
@@ -659,7 +660,8 @@ fun GalleryScreen(
                                     checked = deleteExportedState,
                                     onCheckedChange = { deleteExportedState = it },
                                     colors = CheckboxDefaults.colors(
-                                        checkedColor = AccentOrange,
+                                        checkedColor = AccentColor,
+                    checkmarkColor = OnAccentColor,
                                         uncheckedColor = Color.White.copy(alpha = 0.6f)
                                     )
                                 )
@@ -717,7 +719,7 @@ private fun GalleryTabRow(
         indicator = { tabPositions ->
             TabRowDefaults.SecondaryIndicator(
                 modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                color = AccentOrange
+                color = AccentColor
             )
         }
     ) {
@@ -887,7 +889,7 @@ private class GalleryFastScrollerView(
     private val bubbleMargin = (48 * density).toInt()
 
     private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xE6FF5722.toInt() // AccentOrange with alpha
+        color = 0xE6FF5722.toInt() // Selection overlay annotation
     }
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0x29FFFFFF.toInt() // White with 0.16 alpha

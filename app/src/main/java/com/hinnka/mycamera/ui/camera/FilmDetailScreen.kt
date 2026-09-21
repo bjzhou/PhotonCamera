@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.Film
 import android.widget.Toast
@@ -276,7 +277,7 @@ private fun ExamplePhotoCard(example: String) {
                         imageVector = AppIcons.Bookmark,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
-                        tint = Color(0xFFFFD700)
+                        tint = AccentColor
                     )
                     Text(
                         text = stringResource(R.string.set_as_reference),

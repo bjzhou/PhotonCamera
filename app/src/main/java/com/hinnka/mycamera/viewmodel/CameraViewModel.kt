@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.viewmodel
 
+
 import android.app.Application
 import android.app.ActivityManager
 import android.content.Context
@@ -6709,6 +6710,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     PLog.e(TAG, "Failed to save custom background image", e)
                 }
             }
+        }
+    }
+
+    fun setAccentColor(color: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveAccentColor(color)
         }
     }
 

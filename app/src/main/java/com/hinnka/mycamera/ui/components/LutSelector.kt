@@ -17,6 +17,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import com.hinnka.mycamera.ui.theme.PremiumGold
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.camera.ViewfinderTextShadow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,7 +65,6 @@ private fun LutCategoryTab.stableKey(): String = when (this) {
 }
 
 private const val NONE_LUT_ITEM_KEY = "__photon_lut_selector_none__"
-private val LutPanelAccent = Color(0xFFFFD700)
 private val LutPanelSurface = Color.Black.copy(alpha = 0.15f)
 internal val LutPanelOptionSize = 64.dp
 internal val LutPanelOptionShape = RoundedCornerShape(8.dp)
@@ -503,7 +504,7 @@ fun LutSelector(
 
                                 Text(
                                     text = categoryName,
-                                    color = if (isSelected) LutPanelAccent else Color.White,
+                                    color = if (isSelected) AccentColor else Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                                     style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
@@ -593,10 +594,10 @@ private fun LutSelectorModeTab(
     Row(
         modifier = Modifier
             .clip(shape)
-            .background(if (isSelected) LutPanelAccent.copy(alpha = 0.12f) else LutPanelSurface)
+            .background(if (isSelected) AccentColor.copy(alpha = 0.12f) else LutPanelSurface)
             .border(
                 width = 1.dp,
-                color = if (isSelected) LutPanelAccent.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.12f),
+                color = if (isSelected) AccentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.12f),
                 shape = shape
             )
             .clickable(
@@ -610,7 +611,7 @@ private fun LutSelectorModeTab(
     ) {
         Text(
             text = text,
-            color = if (isSelected) LutPanelAccent else Color.White.copy(alpha = 0.88f),
+            color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.88f),
             fontSize = 11.sp,
             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
             style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
@@ -618,7 +619,7 @@ private fun LutSelectorModeTab(
         if (badgeText != null) {
             Text(
                 text = badgeText,
-                color = LutPanelAccent,
+                color = AccentColor,
                 fontSize = 12.sp,
                 lineHeight = 12.sp,
                 fontWeight = FontWeight.Bold,
@@ -649,7 +650,7 @@ private fun LutItem(
     val context = LocalContext.current
     val itemShape = RoundedCornerShape(12.dp)
     val borderColor by animateColorAsState(
-        targetValue = if (isSelected) LutPanelAccent else Color.White.copy(alpha = 0.15f),
+        targetValue = if (isSelected) AccentColor else Color.White.copy(alpha = 0.15f),
         label = "lutItemBorder"
     )
 
@@ -752,7 +753,7 @@ private fun LutItem(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .background(
-                            color = Color(0xFFFFD700),
+                            color = PremiumGold,
                             shape = RoundedCornerShape(bottomStart = 4.dp)
                         )
                         .padding(horizontal = 4.dp, vertical = 2.dp)
@@ -771,7 +772,7 @@ private fun LutItem(
 
         Text(
             text = name,
-            color = if (isSelected) LutPanelAccent else Color.White,
+            color = if (isSelected) AccentColor else Color.White,
             fontSize = 9.sp,
             lineHeight = 11.sp,
             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,

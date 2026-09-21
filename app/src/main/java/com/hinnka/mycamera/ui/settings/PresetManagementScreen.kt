@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -349,7 +350,7 @@ fun PresetManagementScreen(
                         showRestoreDefaultsDialog = false
                     }
                 ) {
-                    Text(stringResource(R.string.preset_restore_defaults), color = Color(0xFFFFD700))
+                    Text(stringResource(R.string.preset_restore_defaults), color = AccentColor)
                 }
             },
             dismissButton = {
@@ -377,10 +378,10 @@ private fun PresetManagementItem(
 ) {
     val cardColor = when {
         isDragging -> Color.White.copy(alpha = 0.14f)
-        isActive -> Color(0xFFFFD700).copy(alpha = 0.10f)
+        isActive -> AccentColor.copy(alpha = 0.10f)
         else -> Color.White.copy(alpha = 0.055f)
     }
-    val borderColor = if (isActive) Color(0xFFFFD700).copy(alpha = 0.7f) else Color.White.copy(alpha = 0.10f)
+    val borderColor = if (isActive) AccentColor.copy(alpha = 0.7f) else Color.White.copy(alpha = 0.10f)
 
     Card(
         modifier = Modifier
@@ -411,7 +412,7 @@ private fun PresetManagementItem(
                 ) {
                     Text(
                         text = if (isModified) "$displayName*" else displayName,
-                        color = if (isActive) Color(0xFFFFD700) else Color.White,
+                        color = if (isActive) AccentColor else Color.White,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -496,12 +497,12 @@ private fun PresetBadge(text: String, highlighted: Boolean) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(if (highlighted) Color(0xFFFFD700).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.10f))
+            .background(if (highlighted) AccentColor.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.10f))
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(
             text = text,
-            color = if (highlighted) Color(0xFFFFD700) else Color.White.copy(alpha = 0.65f),
+            color = if (highlighted) AccentColor else Color.White.copy(alpha = 0.65f),
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium
         )

@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
@@ -64,8 +66,8 @@ fun SliderSettingItem(
                     onCheckedChange = onToggleChange,
                     modifier = Modifier.scale(0.7f).size(40.dp, 24.dp),
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFFFF6B35),
+                        checkedThumbColor = OnAccentColor,
+                        checkedTrackColor = AccentColor,
                         uncheckedThumbColor = Color.Gray,
                         uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
                         uncheckedBorderColor = Color.Transparent
@@ -105,7 +107,7 @@ fun SliderSettingItem(
                 enabled = enabled,
                 valueRange = valueRange,
                 thumbColor = Color.White.copy(alpha = if (enabled) 1f else 0.35f),
-                activeTrackColor = Color(0xFFFF6B35).copy(alpha = if (enabled) 1f else 0.35f),
+                activeTrackColor = AccentColor.copy(alpha = if (enabled) 1f else 0.35f),
                 inactiveTrackColor = Color.White.copy(alpha = if (enabled) 0.2f else 0.12f),
                 onDoubleTap = {
                     if (enabled && resetValue != null) {

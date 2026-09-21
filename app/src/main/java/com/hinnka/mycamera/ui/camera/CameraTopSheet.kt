@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
@@ -171,7 +173,7 @@ fun CameraTopSheet(
                                     .heightIn(min = 40.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(
-                                        if (isSelected) Color(0xFFFF6B35) else Color.White.copy(
+                                        if (isSelected) AccentColor else Color.White.copy(
                                             alpha = 0.12f
                                         )
                                     )
@@ -181,7 +183,7 @@ fun CameraTopSheet(
                             ) {
                                 Text(
                                     text = ratio.getDisplayName(),
-                                    color = if (isSelected) Color.Black else Color.White,
+                                    color = if (isSelected) OnAccentColor else Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 )
@@ -270,7 +272,7 @@ fun CameraTopSheet(
                                     .heightIn(min = 40.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(
-                                        if (isSelected) Color(0xFFFFD700) else Color.White.copy(
+                                        if (isSelected) AccentColor else Color.White.copy(
                                             alpha = 0.12f
                                         )
                                     )
@@ -280,7 +282,7 @@ fun CameraTopSheet(
                             ) {
                                 Text(
                                     text = videoAspectRatioLabel(ratio),
-                                    color = if (isSelected) Color.Black else Color.White,
+                                    color = if (isSelected) OnAccentColor else Color.White,
                                     fontSize = 13.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 )
@@ -584,7 +586,7 @@ private fun VideoSettingTile(
             .height(40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (expanded) Color(0xFFFFD700) else Color.White.copy(alpha = 0.14f)
+                if (expanded) AccentColor else Color.White.copy(alpha = 0.14f)
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -592,7 +594,7 @@ private fun VideoSettingTile(
     ) {
         Text(
             text = title,
-            color = if (expanded) Color.Black.copy(alpha = 0.75f) else Color.White.copy(alpha = 0.72f),
+            color = if (expanded) OnAccentColor.copy(alpha = 0.75f) else Color.White.copy(alpha = 0.72f),
             fontSize = 9.sp,
             lineHeight = 12.sp,
             fontWeight = FontWeight.Medium,
@@ -604,7 +606,7 @@ private fun VideoSettingTile(
         ) {
             QuickSettingLabel(
                 text = summary,
-                color = if (expanded) Color.Black else Color.White,
+                color = if (expanded) OnAccentColor else Color.White,
                 maxFontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
@@ -612,7 +614,7 @@ private fun VideoSettingTile(
             Icon(
                 imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.OpenInFull,
                 contentDescription = null,
-                tint = if (expanded) Color.Black else Color.White.copy(alpha = 0.8f),
+                tint = if (expanded) OnAccentColor else Color.White.copy(alpha = 0.8f),
                 modifier = Modifier.size(12.dp)
             )
         }
@@ -644,7 +646,7 @@ private fun VideoOptionChip(
             .heightIn(min = 36.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (selected) Color(0xFFFFD700) else Color.White.copy(alpha = 0.12f)
+                if (selected) AccentColor else Color.White.copy(alpha = 0.12f)
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -652,7 +654,7 @@ private fun VideoOptionChip(
     ) {
         Text(
             text = title,
-            color = if (selected) Color.Black else Color.White,
+            color = if (selected) OnAccentColor else Color.White,
             fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
         )
@@ -944,7 +946,7 @@ fun QuickSettingButton2(
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (checked) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.White.copy(
+                if (checked) AccentColor else Color.White.copy(
                     alpha = 0.15f
                 )
             )
@@ -959,14 +961,14 @@ fun QuickSettingButton2(
         ) {
             QuickSettingLabel(
                 text = title,
-                color = if (checked) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
+                color = if (checked) OnAccentColor else Color.White.copy(alpha = 0.9f),
                 fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.weight(1f)
             )
             Icon(
                 imageVector = AppIcons.ChevronRight,
                 contentDescription = null,
-                tint = if (checked) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
+                tint = if (checked) OnAccentColor else Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.size(14.dp)
             )
         }
@@ -987,7 +989,7 @@ fun QuickSettingToggle(
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (checked) Color(0xFFFF6B35).copy(alpha = 0.15f * contentAlpha) else Color.White.copy(
+                if (checked) AccentColor.copy(alpha = contentAlpha) else Color.White.copy(
                     alpha = 0.15f
                 )
             )
@@ -1003,7 +1005,7 @@ fun QuickSettingToggle(
             QuickSettingLabel(
                 text = title,
                 color = if (checked) {
-                    Color(0xFFFF6B35).copy(alpha = contentAlpha)
+                    OnAccentColor.copy(alpha = contentAlpha)
                 } else {
                     Color.White.copy(alpha = 0.9f * contentAlpha)
                 },
@@ -1018,7 +1020,7 @@ fun QuickSettingToggle(
                     .clip(androidx.compose.foundation.shape.CircleShape)
                     .background(
                         if (checked) {
-                            Color(0xFFFF6B35).copy(alpha = contentAlpha)
+                            OnAccentColor.copy(alpha = contentAlpha)
                         } else {
                             Color.White.copy(alpha = 0.2f * contentAlpha)
                         }

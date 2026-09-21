@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
+import com.hinnka.mycamera.ui.theme.AccentColor
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
@@ -441,7 +443,7 @@ fun ColorRecipePanel(
                     Icon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = null,
-                        tint = Color(0xFFFFC46B),
+                        tint = AccentColor,
                         modifier = Modifier.size(12.dp)
                     )
                     Text(

@@ -1,5 +1,8 @@
 package com.hinnka.mycamera.ui.components
 
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.accentContentColor
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -41,7 +44,6 @@ import kotlin.math.roundToInt
 
 private val PaletteHorizontalInset = 18.dp
 private val PaletteVerticalInset = 16.dp
-private val PaletteAccent = Color(0xFFFFC76B)
 private const val PaletteReferenceStepCount = 9
 
 @Composable
@@ -51,6 +53,7 @@ fun ColorRecipePalettePanel(
     modifier: Modifier = Modifier
 ) {
     val paletteState = ColorPaletteMapper.deriveFromParams(currentParams)
+    val accentColor = AccentColor
     val currentOnPaletteStateChange = rememberUpdatedState<(ColorPaletteState) -> Unit> { state ->
         onParamsChange(ColorPaletteMapper.updatePaletteState(currentParams, state))
     }
@@ -167,7 +170,8 @@ fun ColorRecipePalettePanel(
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     drawPalette(
                         x = normalizedState.x,
-                        y = normalizedState.y
+                        y = normalizedState.y,
+                        accentColor = accentColor
                     )
                 }
             }
@@ -220,7 +224,7 @@ private fun PaletteAxisValue(
         )
         Text(
             text = formatAxisValue(value),
-            color = if (value == 0f) Color.White.copy(alpha = 0.72f) else PaletteAccent,
+            color = if (value == 0f) Color.White.copy(alpha = 0.72f) else AccentColor,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
             fontFamily = FontFamily.Monospace
@@ -248,7 +252,8 @@ private fun formatAxisValue(value: Float): String {
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPalette(
     x: Float,
-    y: Float
+    y: Float,
+    accentColor: Color
 ) {
     val corner = CornerRadius(14.dp.toPx(), 14.dp.toPx())
     val horizontalInset = PaletteHorizontalInset.toPx()
@@ -313,13 +318,13 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPalette(
     val selectedY = grid.top + grid.height * y.coerceIn(0f, 1f)
 
     drawLine(
-        color = PaletteAccent.copy(alpha = 0.30f),
+        color = accentColor.copy(alpha = 0.30f),
         start = Offset(selectedX, grid.top),
         end = Offset(selectedX, grid.bottom),
         strokeWidth = 1.dp.toPx()
     )
     drawLine(
-        color = PaletteAccent.copy(alpha = 0.30f),
+        color = accentColor.copy(alpha = 0.30f),
         start = Offset(grid.left, selectedY),
         end = Offset(grid.right, selectedY),
         strokeWidth = 1.dp.toPx()
@@ -346,12 +351,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPalette(
         center = thumbCenter
     )
     drawCircle(
-        color = PaletteAccent,
+        color = accentColor,
         radius = 9.dp.toPx(),
         center = thumbCenter
     )
     drawCircle(
-        color = Color.White.copy(alpha = 0.92f),
+        color = accentContentColor(accentColor).copy(alpha = 0.92f),
         radius = 4.dp.toPx(),
         center = thumbCenter
     )

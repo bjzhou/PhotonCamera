@@ -30,7 +30,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.GalleryManager
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,7 +83,7 @@ fun BurstDetailScreen(
 
     if (isLoading) {
         Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = AccentOrange)
+            CircularProgressIndicator(color = AccentColor)
         }
         return
     }
@@ -195,7 +195,7 @@ fun BurstDetailScreen(
                             Icon(
                                 imageVector = if (isMainPhoto) Icons.Default.Star else AppIcons.StarBorder,
                                 contentDescription = "设为主图",
-                                tint = if (isMainPhoto) AccentOrange else Color.White
+                                tint = if (isMainPhoto) AccentColor else Color.White
                             )
                         }
                     }
@@ -210,7 +210,7 @@ fun BurstDetailScreen(
                         Icon(
                             imageVector = AppIcons.Output,
                             contentDescription = stringResource(R.string.export),
-                            tint = AccentOrange
+                            tint = AccentColor
                         )
                     }
 
@@ -231,7 +231,7 @@ fun BurstDetailScreen(
                             Icon(
                                 painterResource(R.drawable.ic_output_all),
                                 contentDescription = stringResource(R.string.export_all),
-                                tint = AccentOrange
+                                tint = AccentColor
                             )
                         }
                     }
@@ -380,7 +380,7 @@ fun BurstDetailScreen(
                                     .clip(RoundedCornerShape(8.dp))
                                     .border(
                                         width = if (isSelected) 2.dp else 0.dp,
-                                        color = if (isSelected) AccentOrange else Color.Transparent,
+                                        color = if (isSelected) AccentColor else Color.Transparent,
                                         shape = RoundedCornerShape(8.dp)
                                     )
                                     .clickable {
@@ -399,7 +399,7 @@ fun BurstDetailScreen(
                                     Icon(
                                         imageVector = Icons.Default.Star,
                                         contentDescription = "",
-                                        tint = AccentOrange,
+                                        tint = AccentColor,
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
                                             .padding(horizontal = 4.dp, vertical = 2.dp)
@@ -480,7 +480,7 @@ fun BurstDetailScreen(
                         }
                     }
                 ) {
-                    Text(stringResource(R.string.export), color = AccentOrange)
+                    Text(stringResource(R.string.export), color = AccentColor)
                 }
             },
             dismissButton = {
@@ -532,7 +532,7 @@ fun BurstDetailScreen(
                         }
                     }
                 ) {
-                    Text(stringResource(R.string.export_all), color = AccentOrange)
+                    Text(stringResource(R.string.export_all), color = AccentColor)
                 }
             },
             dismissButton = {
@@ -619,7 +619,7 @@ private fun ZoomableImage(
 
         if (isLoading) {
             CircularProgressIndicator(
-                color = AccentOrange,
+                color = AccentColor,
                 modifier = Modifier.size(48.dp)
             )
         }

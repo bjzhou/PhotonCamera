@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
@@ -474,7 +475,7 @@ private fun FrameManagementItem(
     modifier: Modifier = Modifier
 ) {
     var showActionsMenu by remember { mutableStateOf(false) }
-    val borderColor = if (isDefault) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f)
+    val borderColor = if (isDefault) AccentColor else Color.White.copy(alpha = 0.2f)
     val backgroundColor = when {
         isDragging -> Color.White.copy(alpha = 0.2f)
         isDefault -> Color.White.copy(alpha = 0.1f)
@@ -540,13 +541,13 @@ private fun FrameManagementItem(
                 }
                 Text(
                     text = typeText,
-                    color = if (isBuiltIn) Color.White.copy(alpha = 0.5f) else Color(0xFFFF6B35),
+                    color = if (isBuiltIn) Color.White.copy(alpha = 0.5f) else AccentColor,
                     fontSize = 11.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .background(
                             if (isBuiltIn) Color.White.copy(alpha = 0.1f)
-                            else Color(0xFFFF6B35).copy(alpha = 0.2f)
+                            else AccentColor.copy(alpha = 0.2f)
                         )
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 )
@@ -557,7 +558,7 @@ private fun FrameManagementItem(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.current_default),
-                    color = Color(0xFFFF6B35),
+                    color = AccentColor,
                     fontSize = 12.sp
                 )
             }

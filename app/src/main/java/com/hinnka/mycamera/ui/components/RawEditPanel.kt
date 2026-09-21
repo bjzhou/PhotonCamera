@@ -31,6 +31,8 @@ import androidx.compose.ui.window.Dialog
 import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.lut.LutInfo
@@ -652,7 +654,7 @@ private fun <T> RawPhotoStyleSelector(
             Spacer(Modifier.height(4.dp))
             Text(
                 labels.getValue(selectedStyle),
-                color = Color(0xFFE5A324),
+                color = AccentColor,
                 fontSize = 14.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -706,7 +708,7 @@ private fun <T> RawPhotoStyleSelector(
                             ) {
                                 Text(
                                     labels.getValue(style),
-                                    color = if (selected) Color(0xFFE5A324) else Color.White,
+                                    color = if (selected) AccentColor else Color.White,
                                     fontSize = 16.sp,
                                     modifier = Modifier.weight(1f),
                                 )
@@ -714,7 +716,7 @@ private fun <T> RawPhotoStyleSelector(
                                 // Reserve the indicator width for every row, including unselected rows.
                                 Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
                                     if (selected) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFE5A324))
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = AccentColor)
                                     }
                                 }
                             }
@@ -771,14 +773,14 @@ private fun RawChoiceSetting(
                     modifier = Modifier
                         .height(36.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f))
+                        .background(if (selected) AccentColor else Color.White.copy(alpha = 0.1f))
                         .clickable { onLevelSelected(level) }
                         .padding(horizontal = 12.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = label,
-                        color = Color.White,
+                        color = if (selected) OnAccentColor else Color.White,
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -825,7 +827,7 @@ private fun RawNumberInputSetting(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
                 cursorColor = Color.White,
-                focusedBorderColor = Color(0xFFFF6B35),
+                focusedBorderColor = AccentColor,
                 unfocusedBorderColor = Color.White.copy(alpha = 0.25f),
                 focusedContainerColor = Color.Transparent,
                 unfocusedContainerColor = Color.Transparent
@@ -1169,14 +1171,14 @@ private fun RawDROModeSettingItem(
                         .height(36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(
-                            if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f)
+                            if (isSelected) AccentColor else Color.White.copy(alpha = 0.1f)
                         )
                         .clickable { onModeSelected(mode) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = label,
-                        color = Color.White,
+                        color = if (isSelected) OnAccentColor else Color.White,
                         fontSize = 12.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                         textAlign = TextAlign.Center,
@@ -1224,8 +1226,8 @@ private fun RawSwitchSettingItem(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = Color(0xFFFF6B35),
+                checkedThumbColor = OnAccentColor,
+                checkedTrackColor = AccentColor,
                 uncheckedThumbColor = Color.Gray,
                 uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
                 uncheckedBorderColor = Color.Transparent
@@ -1359,7 +1361,7 @@ private fun RawColorEngineItem(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.Transparent)
+            .background(if (isSelected) AccentColor.copy(alpha = 0.15f) else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1368,7 +1370,7 @@ private fun RawColorEngineItem(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                color = if (isSelected) Color(0xFFFF6B35) else Color.White,
+                color = if (isSelected) AccentColor else Color.White,
                 fontSize = 14.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1386,7 +1388,7 @@ private fun RawColorEngineItem(
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = null,
-                tint = Color(0xFFFF6B35),
+                tint = AccentColor,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -1536,7 +1538,7 @@ fun RawDcpSelector(
                         }) {
                             Text(
                                 text = stringResource(R.string.raw_dcp_import),
-                                color = Color(0xFFFF6B35),
+                                color = AccentColor,
                                 fontSize = 14.sp
                             )
                         }
@@ -1804,7 +1806,7 @@ fun RawNoiseProfileSelector(
                         ) {
                             Text(
                                 text = stringResource(R.string.raw_noise_profile_import),
-                                color = Color(0xFFFF6B35),
+                                color = AccentColor,
                                 fontSize = 14.sp,
                             )
                         }
@@ -1948,7 +1950,7 @@ private fun DcpTargetItem(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.12f) else Color.Transparent)
+            .background(if (isSelected) AccentColor.copy(alpha = 0.12f) else Color.Transparent)
             .clickable { onClick() }
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1965,7 +1967,7 @@ private fun DcpTargetItem(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = description,
-                color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.58f),
+                color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.58f),
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
                 maxLines = 1,
@@ -1994,7 +1996,7 @@ private fun DcpItem(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.Transparent)
+            .background(if (isSelected) AccentColor.copy(alpha = 0.15f) else Color.Transparent)
             .clickable { onClick() }
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -2002,7 +2004,7 @@ private fun DcpItem(
     ) {
         Text(
             text = name,
-            color = if (isSelected) Color(0xFFFF6B35) else Color.White,
+            color = if (isSelected) AccentColor else Color.White,
             fontSize = 12.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -2012,7 +2014,7 @@ private fun DcpItem(
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = null,
-                tint = Color(0xFFFF6B35),
+                tint = AccentColor,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -2276,7 +2278,7 @@ fun RawSpectralFilmSelector(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.Transparent)
+                                .background(if (isSelected) AccentColor.copy(alpha = 0.15f) else Color.Transparent)
                                 .clickable {
                                     onSelectFilm(film)
                                     showSheet = false
@@ -2287,7 +2289,7 @@ fun RawSpectralFilmSelector(
                         ) {
                             Text(
                                 text = SpectralFilmUiInfo.getFilmDisplayName(film),
-                                color = if (isSelected) Color(0xFFFF6B35) else Color.White,
+                                color = if (isSelected) AccentColor else Color.White,
                                 fontSize = 14.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -2297,7 +2299,7 @@ fun RawSpectralFilmSelector(
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = null,
-                                    tint = Color(0xFFFF6B35),
+                                    tint = AccentColor,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -2386,7 +2388,7 @@ fun RawSpectralPrintSelector(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f) else Color.Transparent)
+                                .background(if (isSelected) AccentColor.copy(alpha = 0.15f) else Color.Transparent)
                                 .clickable {
                                     onSelectPrint(print)
                                     showSheet = false
@@ -2397,7 +2399,7 @@ fun RawSpectralPrintSelector(
                         ) {
                             Text(
                                 text = SpectralFilmUiInfo.getPrintDisplayName(print),
-                                color = if (isSelected) Color(0xFFFF6B35) else Color.White,
+                                color = if (isSelected) AccentColor else Color.White,
                                 fontSize = 14.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -2407,7 +2409,7 @@ fun RawSpectralPrintSelector(
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = null,
-                                    tint = Color(0xFFFF6B35),
+                                    tint = AccentColor,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }

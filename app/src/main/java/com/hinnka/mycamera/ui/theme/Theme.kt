@@ -2,7 +2,6 @@ package com.hinnka.mycamera.ui.theme
 
 import android.app.Activity
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -10,16 +9,19 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.hinnka.mycamera.data.UserPreferencesRepository
+import com.hinnka.mycamera.model.AppAppearance
 
 private val DarkColorScheme = darkColorScheme(
-    primary = AccentOrange,
-    secondary = AccentOrangeLight,
-    tertiary = AccentOrangeDark,
+    primary = DefaultAccentColor,
     background = DarkBackground,
     surface = DarkSurface,
     surfaceVariant = DarkSurfaceVariant,
@@ -32,9 +34,7 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = AccentOrange,
-    secondary = AccentOrangeLight,
-    tertiary = AccentOrangeDark
+    primary = DefaultAccentColor
 )
 
 @Composable
@@ -43,13 +43,40 @@ fun PhotonCameraTheme(
     dynamicColor: Boolean = false, // 禁用动态颜色以保持一致性
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
+    val context = LocalContext.current
+    // Observe only appearance, without decoding camera settings or initializing camera resources.
+    val accentFlow = remember(context.applicationContext) {
+        UserPreferencesRepository(context.applicationContext).accentColor
+    }
+    val accentArgb by accentFlow.collectAsState(initial = AppAppearance.DEFAULT_ACCENT_COLOR)
+    val accent = Color(accentArgb)
+    val baseColorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
+    }
+    val colorScheme = remember(baseColorScheme, accent) {
+        val container = lerp(baseColorScheme.surface, accent, 0.22f)
+        val onAccent = accentContentColor(accent)
+        val onContainer = accentContentColor(container)
+        baseColorScheme.copy(
+            primary = accent,
+            onPrimary = onAccent,
+            primaryContainer = container,
+            onPrimaryContainer = onContainer,
+            secondary = accent,
+            onSecondary = onAccent,
+            secondaryContainer = container,
+            onSecondaryContainer = onContainer,
+            tertiary = accent,
+            onTertiary = onAccent,
+            tertiaryContainer = container,
+            onTertiaryContainer = onContainer,
+            inversePrimary = accent,
+            surfaceTint = accent
+        )
     }
     
     val view = LocalView.current

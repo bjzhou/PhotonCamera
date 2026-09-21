@@ -34,6 +34,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.LensType
@@ -268,7 +269,7 @@ fun ZoomControlBar(
                     modifier = Modifier
                         .size(32.dp)
                         .padding(8.dp),
-                    tint = Color.Yellow
+                    tint = AccentColor
                 )
             }
         }
@@ -284,7 +285,7 @@ fun ZoomControlBar(
             if (!isCameraReady) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
-                    color = Color(0xFFFFD700),
+                    color = AccentColor,
                     strokeWidth = 2.dp
                 )
             } else if (isContinuousZooming) {
@@ -361,7 +362,7 @@ private fun ZoomRuler(
     onLensSwitch: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val activeColor = Color(0xFFFFD700)
+    val activeColor = AccentColor
     val inactiveColor = Color.White
 
     val stopsState by rememberUpdatedState(stopItems)
@@ -508,14 +509,14 @@ fun ZoomContinuousRuler(
     displayMode: ZoomDisplayMode,
     modifier: Modifier = Modifier
 ) {
-    val yellow = Color(0xFFFFD700)
+    val accentColor = AccentColor
     val textMeasurer = rememberTextMeasurer()
 
     Box(modifier = modifier) {
         Canvas(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 4.dp)) {
             val width = size.width
             val height = size.height
-            val yellowPx = yellow
+            val accent = accentColor
             
             // 绘制刻度。在当前 Zoom 附近绘制。
             // 我们在尺子上每隔一定的比例（比如 1.1倍）画一个大刻度。
@@ -606,13 +607,13 @@ fun ZoomContinuousRuler(
             
             // 绘制指示器背景发光
             drawCircle(
-                color = yellowPx.copy(alpha = 0.2f),
+                color = accent.copy(alpha = 0.2f),
                 center = Offset(centerX, height - 6.dp.toPx()),
                 radius = 8.dp.toPx()
             )
             
             drawRect(
-                color = yellowPx,
+                color = accent,
                 topLeft = Offset(centerX - indicatorWidth / 2f, height - 15.dp.toPx()),
                 size = Size(indicatorWidth, 15.dp.toPx())
             )
@@ -627,7 +628,7 @@ fun ZoomContinuousRuler(
                 style = androidx.compose.ui.text.TextStyle(
                     fontSize = 14.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    color = yellowPx,
+                    color = accent,
                     shadow = ViewfinderTextShadow
                 )
             )

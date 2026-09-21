@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.TextType
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,9 +139,9 @@ fun WatermarkEditSheet(
                                 onPropertiesChange(properties.toMap())
                             }
                         },
-                        color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                        color = if (isSelected) AccentColor.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
                         shape = RoundedCornerShape(8.dp),
-                        border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
+                        border = if (isSelected) BorderStroke(1.dp, AccentColor) else null
                     ) {
                         Text(
                             text = if (id == "Custom" && isSelected) {
@@ -149,7 +149,7 @@ fun WatermarkEditSheet(
                             } else name,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             fontSize = 13.sp,
-                            color = if (isSelected) AccentOrange else Color.White
+                            color = if (isSelected) AccentColor else Color.White
                         )
                     }
                 }
@@ -185,11 +185,11 @@ fun WatermarkEditSheet(
                         placeholder = { Text(stringResource(R.string.default_from_photo)) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AccentOrange,
+                            focusedBorderColor = AccentColor,
                             unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                            focusedLabelColor = AccentOrange,
+                            focusedLabelColor = AccentColor,
                             unfocusedLabelColor = Color.White.copy(alpha = 0.5f),
-                            cursorColor = AccentOrange
+                            cursorColor = AccentColor
                         ),
                         singleLine = true
                     )
@@ -228,9 +228,9 @@ fun WatermarkEditSheet(
                                             onPropertiesChange(properties.toMap())
                                         }
                                     },
-                                    color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                                    color = if (isSelected) AccentColor.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
                                     shape = RoundedCornerShape(8.dp),
-                                    border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
+                                    border = if (isSelected) BorderStroke(1.dp, AccentColor) else null
                                 ) {
                                     Text(
                                         text = if (id == "Custom" && isSelected) {
@@ -239,7 +239,7 @@ fun WatermarkEditSheet(
                                         } else name,
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                         fontSize = 11.sp,
-                                        color = if (isSelected) AccentOrange else Color.White
+                                        color = if (isSelected) AccentColor else Color.White
                                     )
                                 }
                             }

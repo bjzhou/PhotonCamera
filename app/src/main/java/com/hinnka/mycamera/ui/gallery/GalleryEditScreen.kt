@@ -55,6 +55,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.request.ImageRequest
+import com.hinnka.mycamera.ui.theme.PremiumGold
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
@@ -78,7 +80,7 @@ import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionBottomSheet
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
@@ -749,7 +751,7 @@ fun GalleryEditScreen(
                                 Icon(
                                     imageVector = AppIcons.PushPin,
                                     contentDescription = "Show Reference",
-                                    tint = Color(0xFFFFD700),
+                                    tint = AccentColor,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -1067,7 +1069,7 @@ fun GalleryEditScreen(
                 // 加载指示器
                 if (isLoadingPreview) {
                     CircularProgressIndicator(
-                        color = AccentOrange,
+                        color = AccentColor,
                         modifier = Modifier.size(48.dp)
                     )
                 }
@@ -1171,7 +1173,7 @@ fun GalleryEditScreen(
                                     Icon(
                                         imageVector = AppIcons.BarChart,
                                         contentDescription = stringResource(R.string.histogram),
-                                        tint = if (showImageHistogram) AccentOrange else Color.White
+                                        tint = if (showImageHistogram) AccentColor else Color.White
                                     )
                                 }
                             }
@@ -1203,7 +1205,7 @@ fun GalleryEditScreen(
                                     Icon(
                                         imageVector = Icons.Default.Check,
                                         contentDescription = stringResource(R.string.save),
-                                        tint = AccentOrange
+                                        tint = AccentColor
                                     )
                                 }
                             }
@@ -1473,7 +1475,7 @@ fun GalleryEditScreen(
                                                         Icon(
                                                             imageVector = AppIcons.Tune,
                                                             contentDescription = null,
-                                                            tint = Color(0xFFFFD700),
+                                                            tint = AccentColor,
                                                             modifier = Modifier.size(14.dp)
                                                         )
                                                         Text(
@@ -2063,7 +2065,7 @@ private fun BokehStyleButton(
             .background(Color(0xFF121212))
             .border(
                 width = if (selected) 3.dp else 1.dp,
-                color = if (selected) AccentOrange else Color.White.copy(alpha = 0.22f),
+                color = if (selected) AccentColor else Color.White.copy(alpha = 0.22f),
                 shape = shape,
             )
             .selectable(
@@ -2109,7 +2111,7 @@ private fun CompactToggleChip(
             .height(28.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(
-                if (checked) AccentOrange.copy(alpha = 0.18f)
+                if (checked) AccentColor.copy(alpha = 0.18f)
                 else Color.White.copy(alpha = 0.1f)
             )
             .toggleable(
@@ -2123,7 +2125,7 @@ private fun CompactToggleChip(
     ) {
         Text(
             text = title,
-            color = if (checked) AccentOrange else Color.White.copy(alpha = 0.72f),
+            color = if (checked) AccentColor else Color.White.copy(alpha = 0.72f),
             fontSize = 9.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1
@@ -2133,7 +2135,7 @@ private fun CompactToggleChip(
                 .size(width = 24.dp, height = 14.dp)
                 .clip(CircleShape)
                 .background(
-                    if (checked) AccentOrange
+                    if (checked) AccentColor
                     else Color.White.copy(alpha = 0.18f)
                 )
         ) {
@@ -2142,7 +2144,7 @@ private fun CompactToggleChip(
                     .offset(x = thumbOffset, y = 2.dp)
                     .size(10.dp)
                     .background(
-                        if (checked) Color.Black else Color.White.copy(alpha = 0.78f),
+                        if (checked) OnAccentColor else Color.White.copy(alpha = 0.78f),
                         CircleShape
                     )
             )
@@ -2177,7 +2179,7 @@ private fun TabItem(
         Box(
             modifier = Modifier
                 .size(width = 24.dp, height = 2.dp)
-                .background(if (isSelected) AccentOrange else Color.Transparent)
+                .background(if (isSelected) AccentColor else Color.Transparent)
         )
     }
 }
@@ -2206,11 +2208,11 @@ private fun FrameOption(
                 .size(56.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(
-                    if (isSelected) AccentOrange.copy(alpha = 0.3f)
+                    if (isSelected) AccentColor.copy(alpha = 0.3f)
                     else Color.White.copy(alpha = 0.1f)
                 )
                 .then(
-                    if (isSelected) Modifier.border(2.dp, AccentOrange, RoundedCornerShape(8.dp))
+                    if (isSelected) Modifier.border(2.dp, AccentColor, RoundedCornerShape(8.dp))
                     else Modifier
                 ),
             contentAlignment = Alignment.Center
@@ -2225,7 +2227,7 @@ private fun FrameOption(
             } else {
                 Text(
                     text = name.take(2).uppercase(),
-                    color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
+                    color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.7f),
                     fontSize = 16.sp
                 )
             }
@@ -2259,7 +2261,7 @@ private fun FrameOption(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .background(
-                            color = Color(0xFFFFD700),
+                            color = PremiumGold,
                             shape = RoundedCornerShape(bottomStart = 4.dp)
                         )
                         .padding(horizontal = 4.dp, vertical = 2.dp)
@@ -2300,7 +2302,7 @@ private fun FrameOption(
 
         Text(
             text = name,
-            color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
+            color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.7f),
             fontSize = 11.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

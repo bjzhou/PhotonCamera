@@ -1,11 +1,24 @@
 package com.hinnka.mycamera.ui.theme
 
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import com.hinnka.mycamera.model.AppAppearance
 
-// 主题色
-val AccentOrange = Color(0xFFFF6B35)
-val AccentOrangeLight = Color(0xFFFF8A5C)
-val AccentOrangeDark = Color(0xFFE55A2B)
+val DefaultAccentColor = Color(AppAppearance.DEFAULT_ACCENT_COLOR)
+
+/** One configurable accent for controls, camera selections, progress and professional mode. */
+val AccentColor: Color
+    @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.primary
+
+val OnAccentColor: Color
+    @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onPrimary
+
+/** Choose the foreground with the higher WCAG contrast on a solid accent. */
+fun accentContentColor(color: Color): Color =
+    if (color.luminance() > 0.179f) Color.Black else Color.White
 
 // 深色主题
 val DarkBackground = Color(0xFF0D0D0D)
@@ -21,6 +34,10 @@ val TextTertiary = Color(0x80FFFFFF) // 50% white
 val SuccessGreen = Color(0xFF4CAF50)
 val ErrorRed = Color(0xFFE53935)
 val WarningYellow = Color(0xFFFFC107)
+
+// Membership branding is independent of the configurable interface accent.
+val PremiumGold = Color(0xFFFFD700)
+val PremiumAmber = Color(0xFFFFA000)
 
 // 旧颜色（保持兼容）
 val Purple80 = Color(0xFFD0BCFF)

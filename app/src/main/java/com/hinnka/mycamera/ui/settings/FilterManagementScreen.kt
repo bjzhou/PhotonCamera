@@ -35,6 +35,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.PremiumGold
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.color.TransferCurve
@@ -562,7 +565,7 @@ fun FilterManagementScreen(
                 LinearProgressIndicator(
                     progress = { progress.first.toFloat() / (progress.second.takeIf { it > 0 } ?: 1) },
                     modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                    color = Color(0xFFFF6B35),
+                    color = AccentColor,
                     trackColor = Color.White.copy(alpha = 0.1f)
                 )
             }
@@ -590,7 +593,7 @@ fun FilterManagementScreen(
                     if (currentTabIndex < tabPositions.size) {
                         TabRowDefaults.SecondaryIndicator(
                             modifier = Modifier.tabIndicatorOffset(tabPositions[currentTabIndex]),
-                            color = Color(0xFFFF6B35)
+                            color = AccentColor
                         )
                     }
                 }
@@ -663,7 +666,7 @@ fun FilterManagementScreen(
                                     modifier = Modifier
                                         .size(72.dp)
                                         .background(
-                                            color = Color(0xFFFF6B35).copy(alpha = 0.12f),
+                                            color = AccentColor.copy(alpha = 0.12f),
                                             shape = RoundedCornerShape(36.dp)
                                         ),
                                     contentAlignment = Alignment.Center
@@ -671,7 +674,7 @@ fun FilterManagementScreen(
                                     Icon(
                                         imageVector = AppIcons.StarBorder,
                                         contentDescription = null,
-                                        tint = Color(0xFFFF6B35),
+                                        tint = AccentColor,
                                         modifier = Modifier.size(34.dp)
                                     )
                                 }
@@ -999,8 +1002,8 @@ fun FilterManagementScreen(
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFF6B35),
-                                contentColor = Color.White
+                                containerColor = AccentColor,
+                                contentColor = OnAccentColor
                             ),
                             shape = RoundedCornerShape(8.dp)
                         ) {
@@ -1026,8 +1029,8 @@ fun FilterManagementScreen(
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFF6B35),
-                                contentColor = Color.White
+                                containerColor = AccentColor,
+                                contentColor = OnAccentColor
                             ),
                             shape = RoundedCornerShape(8.dp)
                         ) {
@@ -1217,11 +1220,11 @@ fun FilterManagementScreen(
                                 onClick = { selectedLutType = 0 },
                                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                                 colors = SegmentedButtonDefaults.colors(
-                                    activeContainerColor = Color(0xFFFF6B35),
-                                    activeContentColor = Color.White,
+                                    activeContainerColor = AccentColor,
+                                    activeContentColor = OnAccentColor,
                                     inactiveContainerColor = Color.Transparent,
                                     inactiveContentColor = Color.White.copy(alpha = 0.5f),
-                                    activeBorderColor = Color(0xFFFF6B35),
+                                    activeBorderColor = AccentColor,
                                     inactiveBorderColor = Color.White.copy(alpha = 0.2f)
                                 )
                             ) {
@@ -1232,11 +1235,11 @@ fun FilterManagementScreen(
                                 onClick = { selectedLutType = 1 },
                                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                                 colors = SegmentedButtonDefaults.colors(
-                                    activeContainerColor = Color(0xFFFF6B35),
-                                    activeContentColor = Color.White,
+                                    activeContainerColor = AccentColor,
+                                    activeContentColor = OnAccentColor,
                                     inactiveContainerColor = Color.Transparent,
                                     inactiveContentColor = Color.White.copy(alpha = 0.5f),
-                                    activeBorderColor = Color(0xFFFF6B35),
+                                    activeBorderColor = AccentColor,
                                     inactiveBorderColor = Color.White.copy(alpha = 0.2f)
                                 )
                             ) {
@@ -1260,8 +1263,8 @@ fun FilterManagementScreen(
                                     label = { Text(stringResource(R.string.video_log_format)) },
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                                     colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                                        focusedBorderColor = Color(0xFFFF6B35),
-                                        focusedLabelColor = Color(0xFFFF6B35),
+                                        focusedBorderColor = AccentColor,
+                                        focusedLabelColor = AccentColor,
                                         unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
                                     ),
                                     modifier = Modifier.fillMaxWidth().menuAnchor()
@@ -1279,9 +1282,7 @@ fun FilterManagementScreen(
                                                 expanded = false
                                             },
                                             colors = MenuDefaults.itemColors(
-                                                textColor = if (selectedLogProfile == profile) Color(
-                                                    0xFFFF6B35
-                                                ) else Color.White
+                                                textColor = if (selectedLogProfile == profile) AccentColor else Color.White
                                             )
                                         )
                                     }
@@ -1843,12 +1844,12 @@ private fun FilterManagementItem(
     modifier: Modifier = Modifier
 ) {
     val borderColor = when {
-        isSelected -> Color(0xFFFF6B35)
-        isDefault -> Color(0xFFFF6B35).copy(alpha = 0.5f)
+        isSelected -> AccentColor
+        isDefault -> AccentColor.copy(alpha = 0.5f)
         else -> Color.White.copy(alpha = 0.2f)
     }
     val backgroundColor = when {
-        isSelected -> Color(0xFFFF6B35).copy(alpha = 0.2f)
+        isSelected -> AccentColor.copy(alpha = 0.2f)
         isDragging -> Color.White.copy(alpha = 0.2f)
         isDefault -> Color.White.copy(alpha = 0.1f)
         else -> Color.White.copy(alpha = 0.05f)
@@ -1873,7 +1874,8 @@ private fun FilterManagementItem(
                 checked = isSelected,
                 onCheckedChange = { onToggleSelection() },
                 colors = CheckboxDefaults.colors(
-                    checkedColor = Color(0xFFFF6B35),
+                    checkedColor = AccentColor,
+                    checkmarkColor = OnAccentColor,
                     uncheckedColor = Color.White.copy(alpha = 0.5f)
                 ),
                 modifier = Modifier.padding(4.dp)
@@ -1921,12 +1923,12 @@ private fun FilterManagementItem(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = stringResource(R.string.billing_vip_tag),
-                        color = Color(0xFFFFD700),
+                        color = PremiumGold,
                         fontSize = 8.sp,
                         lineHeight = 15.sp,
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFFFFD700).copy(alpha = 0.2f))
+                            .background(PremiumGold.copy(alpha = 0.2f))
                             .padding(horizontal = 4.dp, vertical = 1.dp)
                     )
                 }
@@ -1950,7 +1952,7 @@ private fun FilterManagementItem(
                     Icon(
                         imageVector = Icons.Default.Star,
                         contentDescription = stringResource(R.string.favorite),
-                        tint = Color(0xFFFFD700),
+                        tint = AccentColor,
                         modifier = Modifier.size(14.dp)
                     )
                 }
@@ -1959,7 +1961,7 @@ private fun FilterManagementItem(
             if (isDefault) {
                 Text(
                     text = stringResource(R.string.current_default),
-                    color = Color(0xFFFF6B35),
+                    color = AccentColor,
                     fontSize = 11.sp
                 )
             }
@@ -2021,7 +2023,7 @@ private fun FilterManagementItem(
                                 Icon(
                                     if (lutInfo.isFavorite) Icons.Default.Star else AppIcons.StarBorder,
                                     null,
-                                    tint = Color(0xFFFFD700)
+                                    tint = AccentColor
                                 )
                             },
                             onClick = {

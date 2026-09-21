@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.ui.icons.AppIcons
 
@@ -152,7 +153,7 @@ private fun ToolboxCard(item: ToolboxItem) {
             Icon(
                 imageVector = item.icon,
                 contentDescription = null,
-                tint = Color(0xFFFF6B35),
+                tint = AccentColor,
                 modifier = Modifier.size(32.dp)
             )
             Spacer(modifier = Modifier.height(12.dp))

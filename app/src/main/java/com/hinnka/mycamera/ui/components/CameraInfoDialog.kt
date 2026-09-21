@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.camera.CameraInfo
 
 @Composable
@@ -213,7 +214,7 @@ private fun InfoRow(
         )
         Text(
             text = value,
-            color = if (highlight) Color(0xFFFFD700) else Color.White,
+            color = if (highlight) AccentColor else Color.White,
             fontSize = 14.sp,
             fontWeight = if (highlight) FontWeight.Bold else FontWeight.Normal,
             fontFamily = FontFamily.Monospace,

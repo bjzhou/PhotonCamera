@@ -35,14 +35,11 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -64,6 +61,8 @@ import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
@@ -120,7 +119,6 @@ private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
 private const val DefaultIso = 100f
 private const val DefaultAwbTemperature = 5000f
 private const val DefaultFocusDistance = 0f
-private val ProfessionalModeColor = Color(0xFFFFA36C)
 private val CameraTopBarBaseTopPadding = 32.dp
 private val CameraTopBarBaseHeight = 80.dp
 private val VideoTopBarBaseHeight = 80.dp
@@ -1888,7 +1886,7 @@ fun MultipleExposureOverlay(
                 Icon(
                     imageVector = AppIcons.Layers,
                     contentDescription = null,
-                    tint = Color(0xFFE5A324),
+                    tint = AccentColor,
                     modifier = Modifier.size(16.dp)
                 )
 
@@ -1923,7 +1921,7 @@ fun MultipleExposureOverlay(
                             Icons.Default.Check,
                             contentDescription = stringResource(R.string.multiple_exposure_finish),
                             modifier = Modifier.size(16.dp),
-                            tint = Color(0xFFE5A324)
+                            tint = AccentColor
                         )
                     }
 
@@ -2226,6 +2224,13 @@ fun CaptureButton(
     onLongPressEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val progressColor = AccentColor
+    val showMultipleExposureProgress = captureMode == CaptureMode.PHOTO && multipleExposureEnabled
+    val showCaptureProgress = captureMode == CaptureMode.PHOTO && isCapturing
+    val showVideoProcessingProgress = captureMode == CaptureMode.VIDEO && isVideoProcessing
+    val showActivityProgress = showCaptureProgress || showVideoProcessingProgress
+    val progressRingCount = (if (showMultipleExposureProgress) 1 else 0) +
+        (if (showActivityProgress) 1 else 0)
     val infiniteTransition = rememberInfiniteTransition(label = "infinite transition")
     var isPressed by remember { mutableStateOf(false) }
     val customImage = remember(customImagePath) {
@@ -2254,7 +2259,7 @@ fun CaptureButton(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(tween(1500)),
-        label = "burstCaptureRotation"
+        label = "captureProgressRotation"
     )
 
     val captureProgress = rememberPhotoCaptureProgress(
@@ -2304,23 +2309,6 @@ fun CaptureButton(
         shape = CircleShape,
         contentAlignment = Alignment.Center
     ) {
-        if (multipleExposureEnabled) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val strokeWidth = 5.dp.toPx()
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.14f),
-                    style = Stroke(width = strokeWidth)
-                )
-                drawArc(
-                    color = Color(0xFFE5A324),
-                    startAngle = -90f,
-                    sweepAngle = 360f * multipleExposureProgress.coerceIn(0f, 1f),
-                    useCenter = false,
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-                )
-            }
-        }
-
         val ringColor = when {
             captureMode == CaptureMode.VIDEO && isVideoProcessing ->
                 Color.White.copy(alpha = 0.5f)
@@ -2343,7 +2331,11 @@ fun CaptureButton(
 
         // Center shutter surface
         val centerPadding by animateDpAsState(
-            targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 19.dp else 2.dp,
+            targetValue = when {
+                captureMode == CaptureMode.VIDEO && isVideoRecording -> 19.dp
+                progressRingCount > 0 -> CaptureProgressRingDefaults.contentPadding(progressRingCount)
+                else -> 2.dp
+            },
             animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessLow),
             label = "centerPadding"
         )
@@ -2362,7 +2354,7 @@ fun CaptureButton(
                     )
                 )
             }
-            isProfessionalMode -> Modifier.background(ProfessionalModeColor)
+            isProfessionalMode -> Modifier.background(AccentColor)
             else -> {
                 Modifier.background(
                     Brush.verticalGradient(
@@ -2403,30 +2395,23 @@ fun CaptureButton(
                 )
             }
         }
-        if (isCapturing && captureMode == CaptureMode.PHOTO) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val strokeWidth = 3.dp.toPx()
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.14f),
-                    radius = (size.minDimension - strokeWidth) / 2f,
-                    style = Stroke(width = strokeWidth)
-                )
-                drawArc(
-                    color = Color(0xFFFFD700),
-                    startAngle = if (isBurstCapturing) rotation - 90f else -90f,
-                    sweepAngle = if (isBurstCapturing) 90f else 360f * captureProgress.value,
-                    useCenter = false,
-                    topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f),
-                    size = Size(size.width - strokeWidth, size.height - strokeWidth),
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-                )
-            }
+        if (showMultipleExposureProgress) {
+            CaptureProgressRing(
+                color = progressColor,
+                startAngle = -90f,
+                sweepAngle = 360f * multipleExposureProgress.coerceIn(0f, 1f)
+            )
         }
-        if (captureMode == CaptureMode.VIDEO && isVideoProcessing) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(34.dp),
-                color = Color.White,
-                strokeWidth = 3.dp
+        if (showActivityProgress) {
+            val isIndeterminate = isBurstCapturing || showVideoProcessingProgress
+            CaptureProgressRing(
+                color = progressColor,
+                startAngle = if (isIndeterminate) rotation - 90f else -90f,
+                sweepAngle = if (isIndeterminate) 90f else 360f * captureProgress.value,
+                inset = CaptureProgressRingDefaults.OuterInset +
+                    if (showMultipleExposureProgress) CaptureProgressRingDefaults.RingSpacing else 0.dp,
+                modifier = if (isIndeterminate) Modifier.progressSemantics()
+                    else Modifier.progressSemantics(captureProgress.value)
             )
         }
     }
@@ -2481,7 +2466,7 @@ private fun CaptureModeSwitcher(
         )
         val selectedBackground by animateColorAsState(
             targetValue = if (shootingMode == CameraShootingMode.PROFESSIONAL) {
-                ProfessionalModeColor
+                AccentColor
             } else {
                 Color.White
             },
@@ -2502,6 +2487,7 @@ private fun CaptureModeSwitcher(
         ) {
             ModeSwitcherItem(
                 label = stringResource(R.string.capture_mode_professional),
+                selectedContentColor = accentContentColor(selectedBackground),
                 selected = shootingMode == CameraShootingMode.PROFESSIONAL,
                 enabled = enabled && professionalModeEnabled,
                 onClick = { onModeSelected(CameraShootingMode.PROFESSIONAL) },
@@ -2531,7 +2517,8 @@ private fun ModeSwitcherItem(
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    selectedContentColor: Color = Color.Black
 ) {
     Box(
         modifier = modifier
@@ -2543,7 +2530,7 @@ private fun ModeSwitcherItem(
         Text(
             text = label,
             color = when {
-                selected -> Color.Black.copy(alpha = 0.88f)
+                selected -> selectedContentColor.copy(alpha = 0.88f)
                 enabled -> Color.White.copy(alpha = 0.82f)
                 else -> Color.White.copy(alpha = 0.3f)
             },

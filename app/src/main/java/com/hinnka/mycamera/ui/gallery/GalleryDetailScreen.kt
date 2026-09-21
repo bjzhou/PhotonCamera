@@ -50,11 +50,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import com.hinnka.mycamera.ui.theme.WarningYellow
 import com.hinnka.mycamera.R
 import androidx.compose.ui.res.painterResource
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.GalleryManager
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
 import androidx.media3.exoplayer.ExoPlayer
@@ -520,7 +522,7 @@ fun GalleryDetailScreen(
                         ) {
                             Text(
                                 text = stringResource(R.string.hdr_label),
-                                color = if (hdrEnabled) AccentOrange else Color.White.copy(alpha = 0.72f),
+                                color = if (hdrEnabled) AccentColor else Color.White.copy(alpha = 0.72f),
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -802,7 +804,8 @@ fun GalleryDetailScreen(
                                     checked = deleteExportedState,
                                     onCheckedChange = { deleteExportedState = it },
                                     colors = CheckboxDefaults.colors(
-                                        checkedColor = AccentOrange,
+                                        checkedColor = AccentColor,
+                    checkmarkColor = OnAccentColor,
                                         uncheckedColor = Color.White.copy(alpha = 0.6f)
                                     )
                                 )
@@ -873,7 +876,7 @@ fun GalleryDetailScreen(
                         }
                     }
                 ) {
-                    Text(stringResource(R.string.export), color = AccentOrange)
+                    Text(stringResource(R.string.export), color = AccentColor)
                 }
             },
             dismissButton = {
@@ -921,7 +924,7 @@ fun GalleryDetailScreen(
                             }
                             val statusColor = when (option.support) {
                                 VideoExportSupport.SUPPORTED -> MaterialTheme.colorScheme.primary
-                                VideoExportSupport.MAY_FAIL -> AccentOrange
+                                VideoExportSupport.MAY_FAIL -> WarningYellow
                                 VideoExportSupport.UNSUPPORTED,
                                 VideoExportSupport.SOURCE_TOO_SMALL -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                             }
@@ -1359,8 +1362,8 @@ private fun AiScoreBottomSheet(
                     onClick = onPurchase,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = AccentOrange,
-                        contentColor = Color.Black
+                        containerColor = AccentColor,
+                        contentColor = OnAccentColor
                     )
                 ) {
                     Text(
@@ -1801,8 +1804,8 @@ private fun HdrStrengthPanel(
                     checked = enabled,
                     onCheckedChange = onEnabledChange,
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AccentOrange,
+                        checkedThumbColor = OnAccentColor,
+                        checkedTrackColor = AccentColor,
                         uncheckedThumbColor = Color.LightGray,
                         uncheckedTrackColor = Color.DarkGray
                     )
@@ -1825,7 +1828,7 @@ private fun HdrStrengthPanel(
                     )
                     Text(
                         text = "${(strength * 100f).roundToInt()}%",
-                        color = AccentOrange,
+                        color = AccentColor,
                         fontWeight = FontWeight.Bold,
                         fontSize = 9.sp
                     )
@@ -2451,7 +2454,7 @@ private fun ZoomableImage(
             ) {
                 Text(
                     text = stringResource(R.string.gallery_raw_badge),
-                    color = AccentOrange,
+                    color = AccentColor,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -2461,7 +2464,7 @@ private fun ZoomableImage(
 
         if (isLoading) {
             CircularProgressIndicator(
-                color = AccentOrange,
+                color = AccentColor,
                 modifier = Modifier.size(48.dp)
             )
         }

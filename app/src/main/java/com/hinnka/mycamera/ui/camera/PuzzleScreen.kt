@@ -48,7 +48,7 @@ import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.ExifWriter
 import androidx.compose.ui.graphics.toArgb
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.roundToInt
@@ -248,7 +248,7 @@ fun PuzzleScreen(
                         } else {
                             Text(
                                 text = stringResource(R.string.puzzle_save),
-                                color = AccentOrange,
+                                color = AccentColor,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp
                             )
@@ -310,7 +310,7 @@ fun PuzzleScreen(
                                 Icon(
                                     imageVector = Icons.Default.Add,
                                     contentDescription = null,
-                                    tint = AccentOrange,
+                                    tint = AccentColor,
                                     modifier = Modifier.size(32.dp)
                                 )
                             }
@@ -357,7 +357,7 @@ fun PuzzleScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 CircularProgressIndicator(
-                                    color = AccentOrange,
+                                    color = AccentColor,
                                     modifier = Modifier.size(36.dp)
                                 )
                             }
@@ -436,7 +436,7 @@ fun PuzzleScreen(
                                             Icon(
                                                 imageVector = Icons.Default.Add,
                                                 contentDescription = null,
-                                                tint = AccentOrange,
+                                                tint = AccentColor,
                                                 modifier = Modifier.size(14.dp)
                                             )
                                             Text(
@@ -488,7 +488,7 @@ fun PuzzleScreen(
                                                             contentAlignment = Alignment.Center
                                                         ) {
                                                             CircularProgressIndicator(
-                                                                color = AccentOrange.copy(alpha = 0.5f),
+                                                                color = AccentColor.copy(alpha = 0.5f),
                                                                 modifier = Modifier.size(20.dp),
                                                                 strokeWidth = 2.dp
                                                             )
@@ -538,7 +538,7 @@ fun PuzzleScreen(
                                                         // 序号
                                                         Text(
                                                             text = "${index + 1}",
-                                                            color = AccentOrange,
+                                                            color = AccentColor,
                                                             fontSize = 11.sp,
                                                             fontWeight = FontWeight.Bold
                                                         )
@@ -584,8 +584,8 @@ fun PuzzleScreen(
                                             value = columns.toFloat(),
                                             onValueChange = { columns = it.roundToInt() },
                                             valueRange = 1f..4f,
-                                            activeTrackColor = AccentOrange,
-                                            thumbColor = AccentOrange,
+                                            activeTrackColor = AccentColor,
+                                            thumbColor = AccentColor,
                                             modifier = Modifier.weight(1f)
                                         )
                                         Text(
@@ -613,8 +613,8 @@ fun PuzzleScreen(
                                             value = spacingDp,
                                             onValueChange = { spacingDp = it },
                                             valueRange = 0f..24f,
-                                            activeTrackColor = AccentOrange,
-                                            thumbColor = AccentOrange,
+                                            activeTrackColor = AccentColor,
+                                            thumbColor = AccentColor,
                                             modifier = Modifier.weight(1f)
                                         )
                                         Text(
@@ -642,8 +642,8 @@ fun PuzzleScreen(
                                             value = cornerRadiusDp,
                                             onValueChange = { cornerRadiusDp = it },
                                             valueRange = 0f..24f,
-                                            activeTrackColor = AccentOrange,
-                                            thumbColor = AccentOrange,
+                                            activeTrackColor = AccentColor,
+                                            thumbColor = AccentColor,
                                             modifier = Modifier.weight(1f)
                                         )
                                         Text(
@@ -669,8 +669,8 @@ fun PuzzleScreen(
                                             Row(
                                                 modifier = Modifier
                                                     .clip(RoundedCornerShape(12.dp))
-                                                    .background(if (isWhiteBackground) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f))
-                                                    .border(1.dp, if (isWhiteBackground) AccentOrange else Color.Transparent, RoundedCornerShape(12.dp))
+                                                    .background(if (isWhiteBackground) AccentColor.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f))
+                                                    .border(1.dp, if (isWhiteBackground) AccentColor else Color.Transparent, RoundedCornerShape(12.dp))
                                                     .clickable { isWhiteBackground = true }
                                                     .padding(horizontal = 16.dp, vertical = 8.dp),
                                                 verticalAlignment = Alignment.CenterVertically
@@ -683,8 +683,8 @@ fun PuzzleScreen(
                                             Row(
                                                 modifier = Modifier
                                                     .clip(RoundedCornerShape(12.dp))
-                                                    .background(if (!isWhiteBackground) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f))
-                                                    .border(1.dp, if (!isWhiteBackground) AccentOrange else Color.Transparent, RoundedCornerShape(12.dp))
+                                                    .background(if (!isWhiteBackground) AccentColor.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f))
+                                                    .border(1.dp, if (!isWhiteBackground) AccentColor else Color.Transparent, RoundedCornerShape(12.dp))
                                                     .clickable { isWhiteBackground = false }
                                                     .padding(horizontal = 16.dp, vertical = 8.dp),
                                                 verticalAlignment = Alignment.CenterVertically
@@ -759,18 +759,18 @@ private fun FrameSelectorItem(
                 .size(64.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(
-                    if (isSelected) AccentOrange.copy(alpha = 0.25f)
+                    if (isSelected) AccentColor.copy(alpha = 0.25f)
                     else Color.White.copy(alpha = 0.06f)
                 )
                 .then(
-                    if (isSelected) Modifier.border(2.dp, AccentOrange, RoundedCornerShape(12.dp))
+                    if (isSelected) Modifier.border(2.dp, AccentColor, RoundedCornerShape(12.dp))
                     else Modifier
                 ),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = name.take(3).uppercase(),
-                color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.6f),
+                color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.6f),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
@@ -780,7 +780,7 @@ private fun FrameSelectorItem(
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = name,
-            color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.5f),
+            color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.5f),
             fontSize = 10.sp,
             textAlign = TextAlign.Center,
             maxLines = 1
@@ -811,7 +811,7 @@ private fun TabItem(
         Box(
             modifier = Modifier
                 .size(width = 18.dp, height = 2.dp)
-                .background(if (isSelected) AccentOrange else Color.Transparent)
+                .background(if (isSelected) AccentColor else Color.Transparent)
         )
     }
 }

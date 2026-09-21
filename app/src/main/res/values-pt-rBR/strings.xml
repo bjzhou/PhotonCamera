@@ -336,4 +336,9 @@
     <string name="frame_editor_background_blur_hint">Preenche o fundo com uma cópia desfocada da foto. No modo de sobreposição, somente a área da marca-d’água fica desfocada.</string>
     <string name="frame_editor_background_glass">Vidro líquido</string>
     <string name="frame_editor_background_glass_hint">Sobrepõe uma cápsula de vidro líquido na parte inferior da foto, com espaço nas laterais e abaixo.</string>
+    <string name="settings_accent_color">Cor de destaque</string>
+    <string name="settings_accent_color_description">Use uma única cor para controles, parâmetros da câmera, progresso da captura e modo Pro.</string>
+    <string name="settings_accent_color_reset">Restaurar padrão</string>
+    <string name="settings_accent_color_hex_hint">Insira um código de cor de seis dígitos no formato #RRGGBB.</string>
+    <string name="settings_accent_color_hex_error">Insira seis caracteres hexadecimais (0–9, A–F).</string>
 </resources>

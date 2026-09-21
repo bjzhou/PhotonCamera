@@ -85,6 +85,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.DividerOrientation
 import com.hinnka.mycamera.frame.ElementAlignment
@@ -97,7 +98,7 @@ import com.hinnka.mycamera.frame.FrameOrientation
 import com.hinnka.mycamera.frame.LogoType
 import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.components.CustomSlider
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -310,14 +311,14 @@ fun FrameEditorScreen(
                                 }
                             },
                             enabled = !isSaving,
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentColor),
                             modifier = Modifier.weight(1f)
                         ) {
                             if (isSaving) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
                                     strokeWidth = 2.dp,
-                                    color = Color.White
+                                    color = OnAccentColor
                                 )
                             } else {
                                 Text(
@@ -358,7 +359,7 @@ fun FrameEditorScreen(
                     if (selectedTab < positions.size) {
                         TabRowDefaults.SecondaryIndicator(
                             modifier = Modifier.tabIndicatorOffset(positions[selectedTab]),
-                            color = AccentOrange
+                            color = AccentColor
                         )
                     }
                 }
@@ -471,7 +472,7 @@ private fun PreviewCard(
                 contentAlignment = Alignment.Center
             ) {
                 when {
-                    isRendering -> CircularProgressIndicator(color = AccentOrange)
+                    isRendering -> CircularProgressIndicator(color = AccentColor)
                     previewBitmap != null -> androidx.compose.foundation.Image(
                         bitmap = previewBitmap.asImageBitmap(),
                         contentDescription = null,
@@ -502,7 +503,7 @@ private fun PreviewCard(
                         } else {
                             stringResource(R.string.frame_editor_preview_portrait)
                         },
-                        tint = if (portrait) AccentOrange else Color.White,
+                        tint = if (portrait) AccentColor else Color.White,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -807,19 +808,19 @@ private fun FrameElementsTab(
                     val bottomSelected = !editingTop
                     Surface(
                         onClick = { editingTop = false },
-                        color = if (bottomSelected) AccentOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                        color = if (bottomSelected) AccentColor.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .weight(1f)
                             .border(
                                 width = 1.dp,
-                                color = if (bottomSelected) AccentOrange else Color.Transparent,
+                                color = if (bottomSelected) AccentColor else Color.Transparent,
                                 shape = RoundedCornerShape(12.dp)
                             )
                     ) {
                         Text(
                             text = stringResource(R.string.frame_editor_position_bottom),
-                            color = if (bottomSelected) AccentOrange else Color.White,
+                            color = if (bottomSelected) AccentColor else Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier.padding(vertical = 12.dp, horizontal = 16.dp)
@@ -833,19 +834,19 @@ private fun FrameElementsTab(
                             }
                             editingTop = true
                         },
-                        color = if (editingTop) AccentOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                        color = if (editingTop) AccentColor.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .weight(1f)
                             .border(
                                 width = 1.dp,
-                                color = if (editingTop) AccentOrange else Color.Transparent,
+                                color = if (editingTop) AccentColor else Color.Transparent,
                                 shape = RoundedCornerShape(12.dp)
                             )
                     ) {
                         Text(
                             text = stringResource(R.string.frame_editor_position_top),
-                            color = if (editingTop) AccentOrange else Color.White,
+                            color = if (editingTop) AccentColor else Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier.padding(vertical = 12.dp, horizontal = 16.dp)
@@ -1048,7 +1049,7 @@ private fun ElementListItem(
     onDelete: () -> Unit,
     dragModifier: Modifier,
 ) {
-    val borderColor = if (selected) AccentOrange else Color.White.copy(alpha = 0.15f)
+    val borderColor = if (selected) AccentColor else Color.White.copy(alpha = 0.15f)
     val background = when {
         dragging -> Color.White.copy(alpha = 0.12f)
         selected -> Color.White.copy(alpha = 0.08f)
@@ -1498,8 +1499,17 @@ internal fun ColorPickerDialog(
     title: String,
     initialColor: Int,
     onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit
+    onConfirm: (Int) -> Unit,
+    allowAlpha: Boolean = true
 ) {
+    fun displayHex(color: Int): String = if (allowAlpha) colorToHex(color)
+        else String.format(java.util.Locale.ROOT, "#%06X", color and 0xFFFFFF)
+
+    fun parseHex(text: String): Int? = if (allowAlpha) parseColorHexInput(text)
+        else text.trim().removePrefix("#")
+            .takeIf { hex -> hex.length == 6 && hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' } }
+            ?.let(::parseColorHexInput)
+
     val hsv = remember(initialColor) {
         FloatArray(3).also { AndroidColor.colorToHSV(initialColor, it) }
     }
@@ -1508,8 +1518,8 @@ internal fun ColorPickerDialog(
     var value by remember(initialColor) { mutableStateOf(hsv[2]) }
     var alpha by remember(initialColor) { mutableStateOf((initialColor ushr 24) / 255f) }
     var selectedColor by remember(initialColor) { mutableIntStateOf(initialColor) }
-    var colorHexText by remember(initialColor) { mutableStateOf(colorToHex(initialColor)) }
-    val isColorHexError = parseColorHexInput(colorHexText) == null
+    var colorHexText by remember(initialColor) { mutableStateOf(displayHex(initialColor)) }
+    val isColorHexError = parseHex(colorHexText) == null
 
     fun updateColorFromHsv(
         newHue: Float = hue,
@@ -1522,7 +1532,7 @@ internal fun ColorPickerDialog(
         value = newValue.coerceIn(0f, 1f)
         alpha = newAlpha.coerceIn(0f, 1f)
         selectedColor = hsvToColor(hue, saturation, value, alpha)
-        colorHexText = colorToHex(selectedColor)
+        colorHexText = displayHex(selectedColor)
     }
 
     fun updateColorFromHex(color: Int) {
@@ -1553,7 +1563,7 @@ internal fun ColorPickerDialog(
                             .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(8.dp))
                     )
                     Text(
-                        text = colorToHex(selectedColor),
+                        text = displayHex(selectedColor),
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -1564,15 +1574,15 @@ internal fun ColorPickerDialog(
                     value = colorHexText,
                     onValueChange = { text ->
                         colorHexText = text
-                        parseColorHexInput(text)?.let(::updateColorFromHex)
+                        parseHex(text)?.let(::updateColorFromHex)
                     },
                     label = { Text(stringResource(R.string.frame_editor_color_hex_value)) },
                     supportingText = {
                         Text(
                             text = if (isColorHexError) {
-                                stringResource(R.string.frame_editor_color_hex_error)
+                                stringResource(if (allowAlpha) R.string.frame_editor_color_hex_error else R.string.settings_accent_color_hex_error)
                             } else {
-                                stringResource(R.string.frame_editor_color_hex_hint)
+                                stringResource(if (allowAlpha) R.string.frame_editor_color_hex_hint else R.string.settings_accent_color_hex_hint)
                             }
                         )
                     },
@@ -1599,7 +1609,7 @@ internal fun ColorPickerDialog(
                     onHueChange = { updateColorFromHsv(newHue = it) }
                 )
 
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (allowAlpha) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween

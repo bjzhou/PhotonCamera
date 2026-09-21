@@ -336,4 +336,9 @@
     <string name="frame_editor_background_blur_hint">사진을 흐리게 처리한 복사본으로 배경을 채웁니다. 오버레이 모드에서는 워터마크 영역만 흐려집니다.</string>
     <string name="frame_editor_background_glass">리퀴드 글래스</string>
     <string name="frame_editor_background_glass_hint">사진 하단에 리퀴드 글래스 캡슐을 겹쳐 표시하고 양옆과 아래에 여백을 둡니다.</string>
+    <string name="settings_accent_color">강조 색상</string>
+    <string name="settings_accent_color_description">컨트롤, 촬영 매개변수, 촬영 진행 상황 및 프로 모드에 공통 강조 색상을 설정합니다.</string>
+    <string name="settings_accent_color_reset">기본값 복원</string>
+    <string name="settings_accent_color_hex_hint">#RRGGBB 형식의 6자리 색상 코드를 입력하세요.</string>
+    <string name="settings_accent_color_hex_error">16진수 문자(0–9, A–F) 6자리를 입력하세요.</string>
 </resources>

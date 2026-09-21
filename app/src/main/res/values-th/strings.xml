@@ -958,4 +958,9 @@
     <string name="frame_editor_background_blur_hint">เติมพื้นหลังด้วยสำเนาภาพถ่ายที่เบลอ ในโหมดซ้อนทับ จะเบลอเฉพาะบริเวณลายน้ำเท่านั้น</string>
     <string name="frame_editor_background_glass">กระจกเหลว</string>
     <string name="frame_editor_background_glass_hint">ซ้อนแคปซูลกระจกเหลวไว้ด้านล่างของภาพ โดยเว้นระยะจากขอบทั้งสองด้านและขอบล่าง</string>
+    <string name="settings_accent_color">สีไฮไลต์</string>
+    <string name="settings_accent_color_description">ใช้สีไฮไลต์เดียวกันสำหรับตัวควบคุม พารามิเตอร์กล้อง ความคืบหน้าการถ่ายภาพ และโหมดโปร</string>
+    <string name="settings_accent_color_reset">คืนค่าเริ่มต้น</string>
+    <string name="settings_accent_color_hex_hint">ป้อนรหัสสีหกหลักในรูปแบบ #RRGGBB</string>
+    <string name="settings_accent_color_hex_error">ป้อนอักขระฐานสิบหกหกตัว (0–9, A–F)</string>
 </resources>

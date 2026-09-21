@@ -335,4 +335,9 @@
     <string name="frame_editor_background_blur_hint">Füllt den Hintergrund mit einer unscharfen Kopie des Fotos. Im Überlagerungsmodus wird nur der Wasserzeichenbereich unscharf dargestellt.</string>
     <string name="frame_editor_background_glass">Flüssiges Glas</string>
     <string name="frame_editor_background_glass_hint">Legt eine Liquid-Glass-Kapsel unten über das Foto, mit Abstand zu beiden Seiten und zum unteren Rand.</string>
+    <string name="settings_accent_color">Akzentfarbe</string>
+    <string name="settings_accent_color_description">Eine gemeinsame Akzentfarbe für Steuerelemente, Aufnahmeparameter, Aufnahmefortschritt und Profi-Modus festlegen.</string>
+    <string name="settings_accent_color_reset">Standard wiederherstellen</string>
+    <string name="settings_accent_color_hex_hint">Einen sechsstelligen Farbcode im Format #RRGGBB eingeben.</string>
+    <string name="settings_accent_color_hex_error">Sechs hexadezimale Zeichen (0–9, A–F) eingeben.</string>
 </resources>

@@ -1160,4 +1160,9 @@
     <string name="frame_editor_background_blur_hint">写真をぼかしたコピーで背景を塗りつぶします。オーバーレイモードでは、透かしの領域だけがぼかされます。</string>
     <string name="frame_editor_background_glass">リキッドグラス</string>
     <string name="frame_editor_background_glass_hint">写真の下部に液体ガラスのカプセルを重ね、左右と下端に余白を設けます。</string>
+    <string name="settings_accent_color">アクセントカラー</string>
+    <string name="settings_accent_color_description">コントロール、撮影パラメータ、撮影の進行状況、プロモードに共通の色を設定します。</string>
+    <string name="settings_accent_color_reset">初期値に戻す</string>
+    <string name="settings_accent_color_hex_hint">#RRGGBB 形式で6桁のカラーコードを入力してください。</string>
+    <string name="settings_accent_color_hex_error">16進数の文字（0–9、A–F）を6桁入力してください。</string>
 </resources>

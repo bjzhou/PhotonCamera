@@ -20,6 +20,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.hinnka.mycamera.ui.theme.PremiumAmber
+import com.hinnka.mycamera.ui.theme.PremiumGold
 import com.hinnka.mycamera.R
 
 @Composable
@@ -70,7 +72,7 @@ fun PaymentDialog(
                             .clip(RoundedCornerShape(16.dp))
                             .background(
                                 Brush.linearGradient(
-                                    listOf(Color(0xFFFFD700), Color(0xFFFFA000))
+                                    listOf(PremiumGold, PremiumAmber)
                                 )
                             ),
                         contentAlignment = Alignment.Center
@@ -124,7 +126,7 @@ fun PaymentDialog(
                             .height(56.dp),
                         shape = RoundedCornerShape(28.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFFFD700),
+                            containerColor = PremiumGold,
                             contentColor = Color.Black
                         )
                     ) {
@@ -157,7 +159,7 @@ private fun FeatureItem(text: String) {
         Icon(
             imageVector = Icons.Default.Star,
             contentDescription = null,
-            tint = Color(0xFFFFD700),
+            tint = PremiumGold,
             modifier = Modifier.size(16.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))

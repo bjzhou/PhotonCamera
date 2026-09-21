@@ -22,6 +22,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.CameraPreset
@@ -228,7 +229,7 @@ fun PresetEditorScreen(
                     TextButton(onClick = { onSave() }) {
                         Text(
                             text = stringResource(R.string.preset_save),
-                            color = Color(0xFFFFD700),
+                            color = AccentColor,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
                         )

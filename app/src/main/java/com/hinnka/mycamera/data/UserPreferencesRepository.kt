@@ -1,6 +1,8 @@
 package com.hinnka.mycamera.data
 
+
 import android.content.Context
+import com.hinnka.mycamera.model.AppAppearance
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -48,6 +50,7 @@ import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -216,6 +219,7 @@ data class UserPreferences(
     val colorPaletteEnabled: Boolean = false,
     val developAnimationStyle: DevelopAnimationStyle = DevelopAnimationStyle.FILM,
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
+    val accentColor: Int = AppAppearance.DEFAULT_ACCENT_COLOR,
     val captureButtonStyle: CaptureButtonStyle = CaptureButtonStyle.DEFAULT,
     val captureButtonColor: Int = 0xFFFFFFFF.toInt(),
     val captureButtonImagePath: String? = null,
@@ -487,6 +491,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
         private val CAPTURE_BUTTON_STYLE = stringPreferencesKey("capture_button_style")
         private val CAPTURE_BUTTON_COLOR = intPreferencesKey("capture_button_color")
+        private val ACCENT_COLOR = intPreferencesKey("ui_accent_color")
         private val CAPTURE_BUTTON_IMAGE_PATH = stringPreferencesKey("capture_button_image_path")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
         private val APPLY_ULTRA_HDR = booleanPreferencesKey("apply_ultra_hdr")
@@ -565,6 +570,10 @@ class UserPreferencesRepository(private val context: Context) {
     /**
      * 用户偏好设置 Flow
      */
+    val accentColor: Flow<Int> = context.dataStore.data
+        .map { AppAppearance.opaqueAccent(it[ACCENT_COLOR] ?: AppAppearance.DEFAULT_ACCENT_COLOR) }
+        .distinctUntilChanged()
+
     val userPreferences: Flow<UserPreferences> = context.dataStore.data
         .map { preferences -> decodeUserPreferences(preferences) }
         .flowOn(Dispatchers.IO)
@@ -824,6 +833,7 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[CAPTURE_BUTTON_STYLE]
                 ),
                 captureButtonColor = preferences[CAPTURE_BUTTON_COLOR] ?: 0xFFFFFFFF.toInt(),
+                accentColor = AppAppearance.opaqueAccent(preferences[ACCENT_COLOR] ?: AppAppearance.DEFAULT_ACCENT_COLOR),
                 captureButtonImagePath = preferences[CAPTURE_BUTTON_IMAGE_PATH]
                     ?.takeIf { it.isNotBlank() },
                 droMode = preferences[DRO_MODE] ?: if (preferences[RAW_DRO_ENABLED_KEY] == true) "DR100" else "OFF",
@@ -2160,6 +2170,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveBackgroundImage(image: String) {
         context.dataStore.edit { preferences ->
             preferences[BACKGROUND_IMAGE] = image
+        }
+    }
+
+    suspend fun saveAccentColor(color: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[ACCENT_COLOR] = AppAppearance.opaqueAccent(color)
         }
     }
 

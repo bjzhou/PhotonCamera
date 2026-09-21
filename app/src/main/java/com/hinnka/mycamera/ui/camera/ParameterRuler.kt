@@ -31,6 +31,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -70,6 +72,7 @@ fun ParameterRuler(
     val scaleValues = remember(parameter, minValue, maxValue, valueStep) {
         getScaleValues(parameter, minValue, maxValue, valueStep)
     }
+    val accentColor = AccentColor
     var selectedValue by remember(parameter, scaleValues) { mutableFloatStateOf(currentValue) }
     var scrollIndex by remember(parameter, scaleValues) {
         mutableFloatStateOf(closestScaleIndex(scaleValues, currentValue).toFloat())
@@ -203,7 +206,7 @@ fun ParameterRuler(
             Text(
                 text = formatParameterValue(parameter, displayedValue),
                 modifier = Modifier.padding(top = 3.dp),
-                color = CameraParameterAccent,
+                color = AccentColor,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 style = TextStyle(shadow = ViewfinderTextShadow),
@@ -232,7 +235,7 @@ fun ParameterRuler(
                     )
                 }
                 drawLine(
-                    CameraParameterAccent,
+                    accentColor,
                     Offset(center, baseline - 23.dp.toPx()), Offset(center, baseline + 2.dp.toPx()),
                     2.dp.toPx(), StrokeCap.Round
                 )
@@ -254,14 +257,14 @@ private fun RulerModeButton(
             .clip(CircleShape)
             .toggleable(value = selected, enabled = enabled, role = Role.Switch, onValueChange = { onClick() })
             .padding(horizontal = 6.dp, vertical = 10.dp)
-            .border(1.dp, if (selected) CameraParameterAccent else Color.White.copy(alpha = 0.3f), CircleShape)
-            .background(if (selected) CameraParameterAccent else Color.Transparent, CircleShape),
+            .border(1.dp, if (selected) AccentColor else Color.White.copy(alpha = 0.3f), CircleShape)
+            .background(if (selected) AccentColor else Color.Transparent, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.runtime.CompositionLocalProvider(
             androidx.compose.material3.LocalContentColor provides when {
                 !enabled -> Color.White.copy(alpha = 0.3f)
-                selected -> Color.Black
+                selected -> OnAccentColor
                 else -> Color.White
             },
             content = content

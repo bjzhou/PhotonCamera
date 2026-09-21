@@ -94,6 +94,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.PremiumAmber
+import com.hinnka.mycamera.ui.theme.PremiumGold
+import com.hinnka.mycamera.ui.theme.AccentColor
+import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
@@ -2482,6 +2486,16 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
+                        AccentColorSetting(
+                            color = userPreferences.accentColor,
+                            onColorSelected = viewModel::setAccentColor
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         CaptureButtonAppearanceSetting(viewModel = viewModel)
 
                         HorizontalDivider(
@@ -2967,7 +2981,7 @@ fun SettingsScreen(
                         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFFE5A324),
+                            focusedBorderColor = AccentColor,
                             unfocusedBorderColor = Color.White.copy(alpha = 0.2f)
                         )
                     )
@@ -3468,9 +3482,9 @@ private fun AspectRatioDialog(
                             unfocusedTextColor = Color.White,
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,
-                            focusedBorderColor = Color(0xFFFF6B35),
+                            focusedBorderColor = AccentColor,
                             unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                            cursorColor = Color(0xFFFF6B35)
+                            cursorColor = AccentColor
                         )
                     )
                     Text(
@@ -3491,9 +3505,9 @@ private fun AspectRatioDialog(
                             unfocusedTextColor = Color.White,
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,
-                            focusedBorderColor = Color(0xFFFF6B35),
+                            focusedBorderColor = AccentColor,
                             unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                            cursorColor = Color(0xFFFF6B35)
+                            cursorColor = AccentColor
                         )
                     )
                     IconButton(
@@ -3506,14 +3520,14 @@ private fun AspectRatioDialog(
                         modifier = Modifier
                             .size(48.dp)
                             .background(
-                                if (canAddCustomRatio) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f),
+                                if (canAddCustomRatio) AccentColor else Color.White.copy(alpha = 0.1f),
                                 RoundedCornerShape(12.dp)
                             )
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = stringResource(R.string.settings_custom_aspect_ratio),
-                            tint = if (canAddCustomRatio) Color.White else Color.White.copy(alpha = 0.3f)
+                            tint = if (canAddCustomRatio) OnAccentColor else Color.White.copy(alpha = 0.3f)
                         )
                     }
                 }
@@ -3523,7 +3537,7 @@ private fun AspectRatioDialog(
             TextButton(onClick = onDismiss) {
                 Text(
                     text = stringResource(R.string.confirm),
-                    color = Color(0xFFFF6B35),
+                    color = AccentColor,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -3545,12 +3559,12 @@ private fun AspectRatioGridItem(
             .width(72.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f)
+                if (isSelected) AccentColor.copy(alpha = 0.15f)
                 else Color.White.copy(alpha = 0.05f)
             )
             .border(
                 1.dp,
-                if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f),
+                if (isSelected) AccentColor else Color.White.copy(alpha = 0.1f),
                 RoundedCornerShape(12.dp)
             )
             .clickable(enabled = enabled) { onClick() }
@@ -3587,7 +3601,7 @@ private fun AspectRatioGridItem(
                     modifier = Modifier
                         .size(displayW, displayH)
                         .background(
-                            if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.3f),
+                            if (isSelected) AccentColor else Color.White.copy(alpha = 0.3f),
                             RoundedCornerShape(2.dp)
                         )
                 )
@@ -3595,7 +3609,7 @@ private fun AspectRatioGridItem(
             
             Text(
                 text = ratio.getDisplayName(),
-                color = if (isSelected) Color(0xFFFF6B35) else if (enabled) Color.White else Color.White.copy(alpha = 0.3f),
+                color = if (isSelected) AccentColor else if (enabled) Color.White else Color.White.copy(alpha = 0.3f),
                 fontSize = 11.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                 textAlign = TextAlign.Center
@@ -3683,8 +3697,8 @@ fun SwitchSettingItem(
             onCheckedChange = onCheckedChange,
             enabled = enabled,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = Color(0xFFFF6B35),
+                checkedThumbColor = OnAccentColor,
+                checkedTrackColor = AccentColor,
                 uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
                 uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
             )
@@ -3734,7 +3748,7 @@ fun TextInputSettingItem(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = if (isSecret) "\u2022".repeat(8) else value,
-                    color = Color(0xFFE5A324), // 主题色
+                    color = AccentColor, // 主题色
                     fontSize = 14.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -3847,7 +3861,7 @@ fun DropdownSettingItem(
                         R.string.settings_ai_model_select
                     )
                 },
-                color = Color(0xFFE5A324).copy(alpha = alpha), // 主题色
+                color = AccentColor.copy(alpha = alpha), // 主题色
                 fontSize = 14.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -3894,7 +3908,7 @@ fun DropdownSettingItem(
                             text = {
                                 Text(
                                     text = option,
-                                    color = if (option == value) Color(0xFFE5A324) else Color.White
+                                    color = if (option == value) AccentColor else Color.White
                                 )
                             },
                             onClick = {
@@ -4166,7 +4180,7 @@ private fun PremiumCard(
                 .fillMaxWidth()
                 .background(
                     androidx.compose.ui.graphics.Brush.linearGradient(
-                        listOf(Color(0xFFFFD700), Color(0xFFFFA000))
+                        listOf(PremiumGold, PremiumAmber)
                     )
                 )
                 .padding(20.dp)
@@ -4556,16 +4570,16 @@ private fun customVendorKeyTextFieldColors() =
     androidx.compose.material3.OutlinedTextFieldDefaults.colors(
         focusedTextColor = Color.White,
         unfocusedTextColor = Color.White,
-        focusedBorderColor = Color(0xFFE5A324),
+        focusedBorderColor = AccentColor,
         unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-        focusedLabelColor = Color(0xFFE5A324),
+        focusedLabelColor = AccentColor,
         unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
         focusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
         unfocusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
         errorTextColor = Color.White,
         errorSupportingTextColor = Color(0xFFFF8A80),
         errorBorderColor = Color(0xFFFF8A80),
-        cursorColor = Color(0xFFE5A324)
+        cursorColor = AccentColor
     )
 
 /**
@@ -5175,11 +5189,11 @@ private fun RawBlackBorderCropField(
         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
             focusedTextColor = Color.White,
             unfocusedTextColor = Color.White,
-            focusedBorderColor = Color(0xFFE5A324),
+            focusedBorderColor = AccentColor,
             unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-            focusedLabelColor = Color(0xFFE5A324),
+            focusedLabelColor = AccentColor,
             unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
-            cursorColor = Color(0xFFE5A324)
+            cursorColor = AccentColor
         )
     )
 }
@@ -5347,8 +5361,8 @@ private fun VendorCaptureKeySettingItem(
                     onSettingsChange(settings.withOverride(key, checked, value))
                 },
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = Color(0xFFFF6B35),
+                    checkedThumbColor = OnAccentColor,
+                    checkedTrackColor = AccentColor,
                     uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
                     uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
                 )
@@ -5383,16 +5397,16 @@ private fun VendorCaptureKeySettingItem(
                 colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
                     unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFFE5A324),
+                    focusedBorderColor = AccentColor,
                     unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                    focusedLabelColor = Color(0xFFE5A324),
+                    focusedLabelColor = AccentColor,
                     unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
                     focusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
                     unfocusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
                     errorTextColor = Color.White,
                     errorSupportingTextColor = Color(0xFFFF8A80),
                     errorBorderColor = Color(0xFFFF8A80),
-                    cursorColor = Color(0xFFE5A324)
+                    cursorColor = AccentColor
                 )
             )
         }
@@ -5452,14 +5466,14 @@ fun <T> QualityLevelSetting(
                         .height(36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(
-                            if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f)
+                            if (isSelected) AccentColor else Color.White.copy(alpha = 0.1f)
                         )
                         .clickable { onLevelSelected(level) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = label,
-                        color = Color.White,
+                        color = if (isSelected) OnAccentColor else Color.White,
                         fontSize = 12.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                         textAlign = TextAlign.Center,
@@ -5661,7 +5675,7 @@ private fun RawDngMetadataCorrectionLensItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (isCorrected) Color(0xFFFF6B35).copy(alpha = 0.12f) else Color.Transparent
+                if (isCorrected) AccentColor.copy(alpha = 0.12f) else Color.Transparent
             )
             .clickable(onClick = onClick)
             .padding(16.dp),
@@ -5671,7 +5685,7 @@ private fun RawDngMetadataCorrectionLensItem(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                color = if (isCorrected) Color(0xFFFF6B35) else Color.White,
+                color = if (isCorrected) AccentColor else Color.White,
                 fontSize = 14.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -5886,7 +5900,7 @@ private fun CameraOrientationLensItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (isCorrected) Color(0xFFFF6B35).copy(alpha = 0.12f) else Color.Transparent
+                if (isCorrected) AccentColor.copy(alpha = 0.12f) else Color.Transparent
             )
             .clickable(onClick = onClick)
             .padding(16.dp),
@@ -5904,7 +5918,7 @@ private fun CameraOrientationLensItem(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = orientation,
-                color = if (isCorrected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.58f),
+                color = if (isCorrected) AccentColor else Color.White.copy(alpha = 0.58f),
                 fontSize = 12.sp,
                 lineHeight = 16.sp
             )
@@ -5931,7 +5945,7 @@ private fun CameraOrientationOptionItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.12f) else Color.Transparent
+                if (isSelected) AccentColor.copy(alpha = 0.12f) else Color.Transparent
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -5940,14 +5954,14 @@ private fun CameraOrientationOptionItem(
     ) {
         Text(
             text = label,
-            color = if (isSelected) Color(0xFFFF6B35) else Color.White,
+            color = if (isSelected) AccentColor else Color.White,
             fontSize = 14.sp
         )
         if (isSelected) {
             Icon(
                 imageVector = Icons.Filled.Check,
                 contentDescription = null,
-                tint = Color(0xFFFF6B35),
+                tint = AccentColor,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -5998,13 +6012,13 @@ fun VolumeKeyActionSetting(
                         .weight(1f)
                         .height(40.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f))
+                        .background(if (isSelected) AccentColor else Color.White.copy(alpha = 0.1f))
                         .clickable { onActionSelected(option) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = label,
-                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f),
+                        color = if (isSelected) OnAccentColor else Color.White.copy(alpha = 0.7f),
                         fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                         textAlign = TextAlign.Center,
@@ -6066,13 +6080,13 @@ fun DefaultFocalLengthSetting(
                     .width(64.dp)
                     .height(40.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(if (noneSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f))
+                    .background(if (noneSelected) AccentColor else Color.White.copy(alpha = 0.1f))
                     .clickable { onFocalLengthSelected(0f) },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = stringResource(R.string.none),
-                    color = if (noneSelected) Color.White else Color.White.copy(alpha = 0.7f),
+                    color = if (noneSelected) OnAccentColor else Color.White.copy(alpha = 0.7f),
                     fontSize = 11.sp,
                     fontWeight = if (noneSelected) FontWeight.Bold else FontWeight.Normal,
                     textAlign = TextAlign.Center
@@ -6349,7 +6363,7 @@ private fun CaptureButtonAppearanceItem(
             .background(Color.White.copy(alpha = 0.06f))
             .border(
                 width = 2.dp,
-                color = if (selected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.12f),
+                color = if (selected) AccentColor else Color.White.copy(alpha = 0.12f),
                 shape = RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick)
@@ -6388,7 +6402,7 @@ private fun BackgroundItem(
             .clip(RoundedCornerShape(8.dp))
             .border(
                 width = 2.dp,
-                color = if (isSelected) Color(0xFFFF6B35) else Color.Transparent,
+                color = if (isSelected) AccentColor else Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )
             .clickable(onClick = onClick)
@@ -6432,7 +6446,7 @@ private fun CustomBackgroundItem(
             .background(Color.White.copy(alpha = 0.1f))
             .border(
                 width = 2.dp,
-                color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f),
+                color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.2f),
                 shape = RoundedCornerShape(8.dp)
             )
             .clickable(onClick = onClick),
@@ -6488,7 +6502,7 @@ private fun FocalLengthChip(
             .height(40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (isSelected) Color(0xFFFF6B35)
+                if (isSelected) AccentColor
                 else if (isHidden) Color.White.copy(alpha = 0.05f)
                 else if (isCustom) Color(0xFF2A3A5C)
                 else Color.White.copy(alpha = 0.1f)
@@ -6513,7 +6527,7 @@ private fun FocalLengthChip(
         ) {
             Text(
                 text = "${CustomFocalLengthValue.displayText(focalLength)}${if (isCustom) "*" else ""}",
-                color = if (isSelected) Color.White else if (isHidden) Color.White.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.7f),
+                color = if (isSelected) OnAccentColor else if (isHidden) Color.White.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.7f),
                 fontSize = 11.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                 textAlign = TextAlign.Center
@@ -6522,7 +6536,7 @@ private fun FocalLengthChip(
                 Icon(
                     imageVector = if (isHidden) AppIcons.VisibilityOff else AppIcons.Visibility,
                     contentDescription = null,
-                    tint = if (isSelected) Color.White else if (isHidden) Color.White.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.5f),
+                    tint = if (isSelected) OnAccentColor else if (isHidden) Color.White.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.5f),
                     modifier = Modifier
                         .size(16.dp)
                         .clickable { onToggleVisibility() }
@@ -6532,7 +6546,7 @@ private fun FocalLengthChip(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = null,
-                    tint = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f),
+                    tint = if (isSelected) OnAccentColor else Color.White.copy(alpha = 0.5f),
                     modifier = Modifier
                         .size(16.dp)
                         .clickable { onRemove() }

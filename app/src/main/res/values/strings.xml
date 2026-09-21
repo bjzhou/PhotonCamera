@@ -1312,4 +1312,9 @@
     <string name="frame_editor_background_blur_hint">Fill the background with a blurred copy of the photo. In overlay mode, only the watermark area is blurred.</string>
     <string name="frame_editor_background_glass">Liquid Glass</string>
     <string name="frame_editor_background_glass_hint">Overlay a liquid glass capsule near the bottom of the photo, with space on both sides and below.</string>
+    <string name="settings_accent_color">Highlight color</string>
+    <string name="settings_accent_color_description">Use one highlight color for controls, camera parameters, capture progress, and Professional mode.</string>
+    <string name="settings_accent_color_reset">Restore default</string>
+    <string name="settings_accent_color_hex_hint">Enter a six-digit color in #RRGGBB format.</string>
+    <string name="settings_accent_color_hex_error">Enter six hexadecimal digits (0–9, A–F).</string>
 </resources>

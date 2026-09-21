@@ -1288,4 +1288,9 @@
     <string name="frame_editor_background_blur_hint">使用照片的模糊副本填充背景；叠加模式仅模糊水印区域。</string>
     <string name="frame_editor_background_glass">液态玻璃</string>
     <string name="frame_editor_background_glass_hint">在照片底部叠加液态玻璃胶囊，并在两侧和底部保留间距。</string>
+    <string name="settings_accent_color">高亮色</string>
+    <string name="settings_accent_color_description">统一设置控件、拍摄参数、拍摄进度与专业模式的高亮颜色。</string>
+    <string name="settings_accent_color_reset">恢复默认</string>
+    <string name="settings_accent_color_hex_hint">输入 #RRGGBB 格式的六位颜色值。</string>
+    <string name="settings_accent_color_hex_error">请输入六位十六进制字符（0–9、A–F）。</string>
 </resources>

@@ -335,4 +335,9 @@
     <string name="frame_editor_background_blur_hint">Remplit l’arrière-plan avec une copie floutée de la photo. En mode superposition, seule la zone du filigrane est floutée.</string>
     <string name="frame_editor_background_glass">Verre liquide</string>
     <string name="frame_editor_background_glass_hint">Superpose une capsule en verre liquide au bas de la photo, avec un espace sur les côtés et en dessous.</string>
+    <string name="settings_accent_color">Couleur d’accentuation</string>
+    <string name="settings_accent_color_description">Utilisez une couleur commune pour les commandes, les paramètres et la progression de capture, ainsi que le mode Pro.</string>
+    <string name="settings_accent_color_reset">Rétablir par défaut</string>
+    <string name="settings_accent_color_hex_hint">Saisissez un code couleur à six chiffres au format #RRGGBB.</string>
+    <string name="settings_accent_color_hex_error">Saisissez six caractères hexadécimaux (0–9, A–F).</string>
 </resources>

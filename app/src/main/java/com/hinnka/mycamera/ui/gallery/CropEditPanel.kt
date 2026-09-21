@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.gallery.PostEditGeometry
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.Icons
@@ -167,11 +167,11 @@ fun CropEditPanel(
                 contentPadding = PaddingValues(horizontal = 8.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(
                     containerColor = if (isHorizontallyMirrored) {
-                        AccentOrange.copy(alpha = 0.18f)
+                        AccentColor.copy(alpha = 0.18f)
                     } else {
                         Color.White.copy(alpha = 0.05f)
                     },
-                    contentColor = if (isHorizontallyMirrored) AccentOrange else Color.White.copy(0.6f)
+                    contentColor = if (isHorizontallyMirrored) AccentColor else Color.White.copy(0.6f)
                 )
             ) {
                 Icon(
@@ -206,7 +206,7 @@ fun CropEditPanel(
                     is CropAspectOption.Original -> stringResource(R.string.crop_original)
                     else -> selectedOption.displayName
                 },
-                color = AccentOrange,
+                color = AccentColor,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -256,7 +256,7 @@ private fun StraightenControl(
             )
             Text(
                 text = stringResource(R.string.crop_straighten_degrees, degrees),
-                color = AccentOrange,
+                color = AccentColor,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
@@ -306,6 +306,7 @@ private fun StraightenRuler(
     onDoubleTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val accentColor = AccentColor
     val currentOnDegreesChanged by rememberUpdatedState(onDegreesChanged)
     val currentOnDoubleTap by rememberUpdatedState(onDoubleTap)
     val trackInsetPx = with(LocalDensity.current) { 10.dp.toPx() }
@@ -356,7 +357,7 @@ private fun StraightenRuler(
         val thumbHeight = 30.dp.toPx()
         val thumbX = trackInsetPx + normalizedValue * trackWidth
         drawRoundRect(
-            color = AccentOrange,
+            color = accentColor,
             topLeft = Offset(thumbX - thumbWidth / 2f, centerY - thumbHeight / 2f),
             size = Size(thumbWidth, thumbHeight),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(
@@ -430,13 +431,13 @@ private fun CropAspectOptionItem(
             modifier = Modifier
                 .size(48.dp)
                 .background(
-                    if (isSelected) AccentOrange.copy(alpha = 0.15f)
+                    if (isSelected) AccentColor.copy(alpha = 0.15f)
                     else Color.White.copy(alpha = 0.05f),
                     RoundedCornerShape(10.dp)
                 )
                 .border(
                     1.dp,
-                    if (isSelected) AccentOrange else Color.White.copy(alpha = 0.1f),
+                    if (isSelected) AccentColor else Color.White.copy(alpha = 0.1f),
                     RoundedCornerShape(10.dp)
                 ),
             contentAlignment = Alignment.Center
@@ -446,7 +447,7 @@ private fun CropAspectOptionItem(
                     Icon(
                         imageVector = AppIcons.FilterNone,
                         contentDescription = null,
-                        tint = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.5f),
+                        tint = if (isSelected) AccentColor else Color.White.copy(alpha = 0.5f),
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -454,7 +455,7 @@ private fun CropAspectOptionItem(
                     Icon(
                         imageVector = AppIcons.Article,
                         contentDescription = null,
-                        tint = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.5f),
+                        tint = if (isSelected) AccentColor else Color.White.copy(alpha = 0.5f),
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -477,7 +478,7 @@ private fun CropAspectOptionItem(
                         modifier = Modifier
                             .size(displayW, displayH)
                             .background(
-                                if (isSelected) AccentOrange else Color.White.copy(alpha = 0.4f),
+                                if (isSelected) AccentColor else Color.White.copy(alpha = 0.4f),
                                 RoundedCornerShape(2.dp)
                             )
                     )
@@ -487,7 +488,7 @@ private fun CropAspectOptionItem(
 
         Text(
             text = displayText,
-            color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.6f),
+            color = if (isSelected) AccentColor else Color.White.copy(alpha = 0.6f),
             fontSize = 11.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1,

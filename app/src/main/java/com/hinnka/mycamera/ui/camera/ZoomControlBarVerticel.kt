@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.LensType
@@ -249,7 +250,7 @@ fun ZoomControlBarVerticel(
                     modifier = Modifier.size(32.dp)
                         .background(Color.Black.copy(alpha = 0.3f), CircleShape)
                         .padding(8.dp),
-                    tint = Color.Yellow
+                    tint = AccentColor
                 )
             }
         }
@@ -264,7 +265,7 @@ fun ZoomControlBarVerticel(
             if (!isCameraReady) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
-                    color = Color(0xFFFFD700),
+                    color = AccentColor,
                     strokeWidth = 2.dp
                 )
             } else if (isContinuousZooming) {
@@ -341,7 +342,7 @@ private fun ZoomRulerVertical(
     onLensSwitch: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val activeColor = Color(0xFFFFD700)
+    val activeColor = AccentColor
     val inactiveColor = Color.White
 
     val stopsState by rememberUpdatedState(stopItems)
@@ -489,7 +490,7 @@ fun ZoomContinuousRulerVertical(
     displayMode: ZoomDisplayMode,
     modifier: Modifier = Modifier
 ) {
-    val yellow = Color(0xFFFFD700)
+    val accentColor = AccentColor
     val textMeasurer = rememberTextMeasurer()
 
     Box(
@@ -499,7 +500,7 @@ fun ZoomContinuousRulerVertical(
         Canvas(modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 24.dp)) {
             val width = size.width
             val height = size.height
-            val yellowPx = yellow
+            val accent = accentColor
 
             // 垂直标尺：当前 zoom 在中心，向上为放大，向下为缩小
             val visibleRatioRange = 1.5f
@@ -586,13 +587,13 @@ fun ZoomContinuousRulerVertical(
             val indicatorHeight = 2.dp.toPx()
 
             drawCircle(
-                color = yellowPx.copy(alpha = 0.2f),
+                color = accent.copy(alpha = 0.2f),
                 center = Offset(width - 6.dp.toPx(), centerY),
                 radius = 8.dp.toPx()
             )
 
             drawRect(
-                color = yellowPx,
+                color = accent,
                 topLeft = Offset(width - 15.dp.toPx(), centerY - indicatorHeight / 2f),
                 size = Size(15.dp.toPx(), indicatorHeight)
             )
@@ -607,7 +608,7 @@ fun ZoomContinuousRulerVertical(
                 style = TextStyle(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = yellowPx,
+                    color = accent,
                     shadow = ViewfinderTextShadow
                 )
             )

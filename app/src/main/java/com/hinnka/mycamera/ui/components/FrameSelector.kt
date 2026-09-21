@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.ViewfinderTextShadow
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.theme.AccentColor
 
 /**
  * 边框选择器组件
@@ -174,8 +174,8 @@ fun FrameControlPanel(
                     checked = showAppBranding,
                     onCheckedChange = onBrandingToggle,
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = AccentOrange,
-                        checkedTrackColor = AccentOrange.copy(alpha = 0.5f),
+                        checkedThumbColor = AccentColor,
+                        checkedTrackColor = AccentColor.copy(alpha = 0.5f),
                         uncheckedThumbColor = Color.Gray,
                         uncheckedTrackColor = Color.Gray.copy(alpha = 0.3f)
                     )
