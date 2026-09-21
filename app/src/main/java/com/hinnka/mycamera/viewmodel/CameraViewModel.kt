@@ -3007,7 +3007,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
             hasEmbeddedGainmap = false,
-            isProfessionalCapture = baselineTarget == BaselineColorCorrectionTarget.RAW,
             userPrefs = userPrefs,
         )
         val baselineMetadata = resolveBaselineMetadata(
@@ -3134,11 +3133,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun defaultHdrEffectEnabled(
         hasEmbeddedGainmap: Boolean,
-        isProfessionalCapture: Boolean,
         userPrefs: UserPreferences?,
     ): Boolean {
         if (hasEmbeddedGainmap) return true
-        return isProfessionalCapture && (userPrefs?.ultraHdrGainMapEnabled ?: false)
+        return userPrefs?.ultraHdrGainMapEnabled ?: false
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {
@@ -5806,7 +5804,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
                 hasEmbeddedGainmap = false,
-                isProfessionalCapture = isRawCapture,
                 userPrefs = userPrefs,
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
@@ -6240,7 +6237,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
                 hasEmbeddedGainmap = false,
-                isProfessionalCapture = isRawStack,
                 userPrefs = userPrefs,
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
@@ -6568,7 +6564,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs)
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
             hasEmbeddedGainmap = false,
-            isProfessionalCapture = isRawCapture,
             userPrefs = userPrefs,
         )
         val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)

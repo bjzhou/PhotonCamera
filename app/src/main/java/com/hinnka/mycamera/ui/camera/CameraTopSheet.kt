@@ -201,12 +201,6 @@ fun CameraTopSheet(
                                 onClick = { showRenderingEngineSheet = true },
                                 modifier = itemModifier
                             )
-                            QuickSettingToggle(
-                                title = stringResource(R.string.settings_ultra_hdr_gain_map),
-                                checked = ultraHdrEnabled,
-                                onCheckedChange = onUltraHdrToggle,
-                                modifier = itemModifier
-                            )
                         } else {
                             QuickSettingToggle(
                                 title = stringResource(R.string.settings_use_jpg_max),
@@ -221,6 +215,12 @@ fun CameraTopSheet(
                                 modifier = itemModifier
                             )
                         }
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                            checked = ultraHdrEnabled,
+                            onCheckedChange = onUltraHdrToggle,
+                            modifier = itemModifier
+                        )
                         QuickSettingToggle(
                             title = stringResource(R.string.camera_preview_stabilization),
                             checked = photoPreviewStabilizationEnabled,
@@ -790,7 +790,7 @@ private fun QuickSettingGrid(
     itemHeight: Dp = 48.dp,
     content: @Composable (Modifier) -> Unit
 ) {
-    // Fixed column counts keep the photo controls in two rows inside the square sheet.
+    // Keep a consistent column count as the available photo controls change.
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
