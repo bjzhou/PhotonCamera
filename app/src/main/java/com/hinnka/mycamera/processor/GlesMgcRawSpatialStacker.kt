@@ -4379,11 +4379,9 @@ internal class GlesMgcRawSpatialStacker(
         )
         renderConvertedAlignment(alignment, output, alignmentTileSize)
 
-        // V25's converted flow is expanded over the dense RAW/2 rejection domain. XY stays
-        // piecewise-constant over each final alignment tile, but the 3x3 range in B is
-        // calculated in this dense domain and therefore remains confined to the one-pixel
-        // boundary around a flow discontinuity. All downstream consumers operate in normalized
-        // image coordinates, so the dense texture is sampled with an identity transform.
+        // Expand V25's tile-domain converted values onto our dense RAW/2 texture. Both XY
+        // and the 3x3 tile-flow range in B stay constant within each alignment tile. Consumers
+        // use normalized image coordinates and therefore keep the identity sampling transform.
         return ConvertedAlignment(
             texture = output,
             scaleX = 1f,
@@ -4405,12 +4403,6 @@ internal class GlesMgcRawSpatialStacker(
             "uGridSize",
             alignment.gridWidth,
             alignment.gridHeight,
-        )
-        uniform2i(
-            convertAlignmentProgram,
-            "uOutputSize",
-            rejectionWidth,
-            rejectionHeight,
         )
         uniform1i(convertAlignmentProgram, "uAlignmentTileSize", alignmentTileSize)
         uniform1i(convertAlignmentProgram, "uAlignmentGridMin", alignment.gridMin)
@@ -4621,6 +4613,15 @@ internal class GlesMgcRawSpatialStacker(
         bindTexture(rejectionProgram, "uUnblocker", 3, unblockerTexture)
         bindTexture(rejectionProgram, "uNoiseEstimates", 4, noiseTexture)
         uniform2i(rejectionProgram, "uGuideSize", guideWidth, guideHeight)
+        // MGC constructs the 1.5-pixel border in full-resolution Bayer coordinates.
+        uniform4f(
+            rejectionProgram,
+            "uFrameBorderPadded",
+            SABRE_SAMPLE_BORDER_PIXELS / width,
+            SABRE_SAMPLE_BORDER_PIXELS / height,
+            1f - SABRE_SAMPLE_BORDER_PIXELS / width,
+            1f - SABRE_SAMPLE_BORDER_PIXELS / height,
+        )
         uniform2i(
             rejectionProgram,
             "uRejectionSize",

@@ -427,10 +427,13 @@ internal object GlesMgcRawSpatialShaders {
         vec4 rejectionFlow(vec2 uv) {
             return texture(uFlow, uv * uFlowScaleOffset.xy + uFlowScaleOffset.zw);
         }
-    """.trimIndent())
+    """.trimIndent(), usePaddedFrameBorder = true)
 
     /** Share rejection equations while allowing the caller to supply dense or tiled flow. */
-    fun rejectionWithFlowSource(flowSource: String) = """
+    fun rejectionWithFlowSource(
+        flowSource: String,
+        usePaddedFrameBorder: Boolean = false,
+    ) = """
         #version 300 es
         precision highp float;
         precision highp sampler2D;
@@ -441,6 +444,7 @@ internal object GlesMgcRawSpatialShaders {
         uniform sampler2D uNoiseEstimates;
         uniform ivec2 uGuideSize;
         uniform ivec2 uRejectionSize;
+        ${if (usePaddedFrameBorder) "uniform vec4 uFrameBorderPadded;" else ""}
         uniform vec2 uUnblockerScale;
         uniform vec4 uNoiseTextureScaleBias;
         uniform vec2 uColorDifferenceMultiplier;
@@ -454,8 +458,24 @@ internal object GlesMgcRawSpatialShaders {
         $flowSource
 
         vec2 mirrorUv(vec2 uv) {
+            ${if (usePaddedFrameBorder) """
+            if (uv.x <= uFrameBorderPadded.x) {
+                uv.x = 2.0 * uFrameBorderPadded.x - uv.x;
+            }
+            if (uv.y <= uFrameBorderPadded.y) {
+                uv.y = 2.0 * uFrameBorderPadded.y - uv.y;
+            }
+            if (uv.x > uFrameBorderPadded.z) {
+                uv.x = 2.0 * uFrameBorderPadded.z - uv.x;
+            }
+            if (uv.y > uFrameBorderPadded.w) {
+                uv.y = 2.0 * uFrameBorderPadded.w - uv.y;
+            }
+            return uv;
+            """.trimIndent().prependIndent("            ") else """
             uv = mod(uv, 2.0);
             return mix(uv, 2.0 - uv, greaterThan(uv, vec2(1.0)));
+            """.trimIndent().prependIndent("            ")}
         }
 
         vec4 sampleBiquadraticAbsolute(sampler2D image, vec2 uv) {
@@ -2656,10 +2676,10 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * ConvertAlignmentHalide (0x362479c): expand the final 16-RAW-pixel alignment tiles onto
-     * RAW/2, convert Bayer-quad displacements to normalized UV and store the dense 3x3 flow
-     * range in B. The range is evaluated after expansion: it is nonzero only immediately beside
-     * a tile-flow discontinuity, rather than across both complete neighboring tiles.
+     * ConvertAlignmentHalide (0x362479c) evaluates the 3x3 flow range on the alignment grid.
+     * Expand that tile-owned range and normalized displacement together onto RAW/2 for our
+     * dense consumers. Clamp the center tile before its neighborhood so the grid's halo uses
+     * the same complete converted value as nearest sampling of the original sparse texture.
      */
     val convertAlignment = """
         #version 300 es
@@ -2668,15 +2688,12 @@ internal object GlesMgcRawSpatialShaders {
         precision highp int;
         uniform sampler2D uAlignment;
         uniform ivec2 uGridSize;
-        uniform ivec2 uOutputSize;
         uniform int uAlignmentTileSize;
         uniform int uAlignmentGridMin;
         uniform float uAlignmentScale;
         uniform vec2 uFlowNormalizationSize;
         out vec4 oFlow;
-        vec2 denseFlowAt(ivec2 p) {
-            ivec2 dense = clamp(p, ivec2(0), uOutputSize - ivec2(1));
-            ivec2 tile = dense / uAlignmentTileSize - ivec2(uAlignmentGridMin);
+        vec2 flowAtTile(ivec2 tile) {
             return texelFetch(
                 uAlignment,
                 clamp(tile, ivec2(0), uGridSize - ivec2(1)),
@@ -2685,12 +2702,16 @@ internal object GlesMgcRawSpatialShaders {
         }
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
-            vec2 flowPixels = denseFlowAt(p);
+            ivec2 tile = clamp(
+                p / uAlignmentTileSize - ivec2(uAlignmentGridMin),
+                ivec2(0), uGridSize - ivec2(1)
+            );
+            vec2 flowPixels = flowAtTile(tile);
             vec2 minimumFlow = vec2(1.0e20);
             vec2 maximumFlow = vec2(-1.0e20);
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
-                    vec2 v = denseFlowAt(p + ivec2(x, y));
+                    vec2 v = flowAtTile(tile + ivec2(x, y));
                     minimumFlow = min(minimumFlow, v);
                     maximumFlow = max(maximumFlow, v);
                 }
