@@ -34,7 +34,7 @@ object OrientationObserver {
     var continuousOrientationDegrees by mutableFloatStateOf(0f)
         private set
 
-    // 存储拍摄方向，包含反向竖屏，用于照片保存/处理
+    // 存储拍摄方向，包含反向竖屏，用于照片保存/处理和录像方向元数据
     var captureRotationDegrees by mutableStateOf(0f)
         private set
 

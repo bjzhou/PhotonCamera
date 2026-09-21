@@ -7271,10 +7271,18 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees: Int): Int {
-        return resolveSurfaceTextureVideoOrientationDegrees(
-            deviceRotationDegrees = OrientationObserver.rotationDegrees.toInt(),
+        // UI 在反向竖屏时保持 0°，录像必须使用包含 180° 的拍摄方向。
+        val captureRotationDegrees = OrientationObserver.captureRotationDegrees.toInt()
+        val orientationHintDegrees = resolveSurfaceTextureVideoOrientationDegrees(
+            deviceRotationDegrees = captureRotationDegrees,
             calibrationOffsetDegrees = orientationOffsetDegrees,
         )
+        PLog.d(
+            TAG,
+            "Video orientation: capture=$captureRotationDegrees, " +
+                "calibrationOffset=$orientationOffsetDegrees, orientationHint=$orientationHintDegrees"
+        )
+        return orientationHintDegrees
     }
 
 // ==================== 延时拍摄和网格线 ====================
