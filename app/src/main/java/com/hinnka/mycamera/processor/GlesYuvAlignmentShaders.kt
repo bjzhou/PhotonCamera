@@ -18,7 +18,6 @@ internal object GlesYuvAlignmentShaders {
         uniform highp isampler2D uReference;
         uniform highp sampler2D uCurrent;
         uniform highp sampler2D uProducts0;
-        uniform highp sampler2D uProducts1;
         uniform highp sampler2D uInitialAlignment;
         uniform ivec2 uImageSize;
         uniform ivec2 uGridSize;
@@ -50,7 +49,7 @@ internal object GlesYuvAlignmentShaders {
             vec2 inverseSize = 1.0 / vec2(uImageSize);
             vec2 target = vec2(0.0);
             vec2 gradientSum = vec2(0.0);
-            float currentSum = 0.0;
+            float residualSum = 0.0;
             for (int y = 0; y < 64; y += sampleStep) {
                 if (y >= uTileSize) break;
                 for (int x = 0; x < 64; x += sampleStep) {
@@ -61,22 +60,21 @@ internal object GlesYuvAlignmentShaders {
                     vec2 encoded = textureLod(uCurrent,
                         (vec2(p) + flow + 0.5) * inverseSize, 0.0).rg;
                     float current = dot(encoded, vec2(16.0, 1.0));
+                    float residual = current - referenceAt(p);
                     vec2 gradient = gradientAt(p);
-                    target += current * gradient;
+                    target += residual * gradient;
                     if (uNormalize != 0) {
-                        currentSum += current;
+                        residualSum += residual;
                         gradientSum += gradient;
                     }
                 }
             }
-            // sum((current - mean) * gradient), with no second image traversal.
-            if (uNormalize != 0) target -= (currentSum / count) * gradientSum;
+            // Center the residual itself, avoiding subtraction of large intensity products.
+            if (uNormalize != 0) target -= (residualSum / count) * gradientSum;
             vec4 products0 = texelFetch(uProducts0, tile, 0);
-            float products1 = texelFetch(uProducts1, tile, 0).r;
-            vec2 b = 0.5 * target / count - vec2(products0.w, products1);
-            float inverseDeterminant = 1.0 / (
-                1.0 + products0.x * products0.y - products0.z * products0.z
-            );
+            vec2 b = 0.5 * target / count;
+            // The shared reference pass materializes det(H) in alpha before adding +1.
+            float inverseDeterminant = 1.0 / (1.0 + products0.w);
             vec2 delta = inverseDeterminant * vec2(
                 products0.z * b.y - products0.y * b.x,
                 products0.z * b.x - products0.x * b.y

@@ -79,6 +79,9 @@ internal class GlesMgcRawSpatialStacker(
         val width: Int,
         val height: Int,
         val scaleToBayerQuads: Float,
+        val tileSize: Int,
+        val gridWidth: Int,
+        val gridHeight: Int,
     )
 
     private data class Alignment(
@@ -88,6 +91,8 @@ internal class GlesMgcRawSpatialStacker(
         val tileStride: Int,
         val scaleToBayerQuads: Float,
         val gridMin: Int,
+        val offsetX: Int = 0,
+        val offsetY: Int = 0,
     )
 
     private data class GlobalAlignmentCandidate(
@@ -136,9 +141,7 @@ internal class GlesMgcRawSpatialStacker(
         val gridHeight: Int,
         val tileStride: Int,
         val tileSize: Int,
-        val normalize: Boolean,
         val products0: Int,
-        val products1: Int,
     )
 
     private data class PreparedTemporalFrame(
@@ -472,7 +475,6 @@ internal class GlesMgcRawSpatialStacker(
     private val uniformLocations = HashMap<Int, HashMap<String, Int>>()
     private val textureSpecs = HashMap<Int, TextureSpec>()
     private val noiseLutCache = HashMap<List<Int>, CachedNoiseLut>()
-    private var globalAlignment: GlesSpatialGlobalAlignment? = null
     private val validatedRenderTargetSpecs = HashSet<List<TextureSpec>>()
     private val temporalScratchTextures = SequentialScratchTextures()
     private var activeSequentialScratchTextures: SequentialScratchTextures? = null
@@ -488,6 +490,8 @@ internal class GlesMgcRawSpatialStacker(
     private var alignProgram = 0
     private var alignmentGradientProductsProgram = 0
     private var upsampleAlignmentProgram = 0
+    private var medianAlignmentProgram = 0
+    private var globalAlignment: GlesSpatialGlobalAlignment? = null
     private var blockLucasKanadeProgram = 0
     private var convertAlignmentProgram = 0
     private var strengthAlignmentProgram = 0
@@ -541,11 +545,19 @@ internal class GlesMgcRawSpatialStacker(
         size = PIXEL_DIFFERENCE_KERNEL_SIZE,
         sigma = PIXEL_DIFFERENCE_SMOOTH_SIGMA,
     )
+    private val alignmentPlan = MgcRawLkPyramidPlan(
+        width, height,
+        if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
+            SPATIAL_ALIGN_MAX_TILE_SIZE
+        } else {
+            SABRE_ALIGN_MAX_TILE_SIZE
+        },
+    )
     private val conservativeRgbFlowBounds = MgcSpatialRgbFlowBounds(
-        -MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS,
-        -MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS,
-        MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS,
-        MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS,
+        -alignmentPlan.maximumDisplacement,
+        -alignmentPlan.maximumDisplacement,
+        alignmentPlan.maximumDisplacement,
+        alignmentPlan.maximumDisplacement,
     )
 
     fun processFrames(frames: List<RawStackFrame>): RawStackResult? {
@@ -1785,8 +1797,7 @@ internal class GlesMgcRawSpatialStacker(
                     frames = rgbMergeFrames,
                     images = images,
                     outputExposureScale = outputExposure.normalizationScale,
-                    mergeSharpness = RGB_AOT_MERGE_SHARPNESS_SCALE *
-                        finishRawSharpenAttenuationScale,
+                    mergeSharpness = finishRawSharpenAttenuationScale,
                     capture = aotCapture,
                     preparedAlignment = preparedStrengthAtlases.first,
                     preparedRejection = preparedStrengthAtlases.second,
@@ -2301,6 +2312,8 @@ internal class GlesMgcRawSpatialStacker(
                     referenceGrayPyramid,
                     currentGrayPyramid,
                     referenceAlignmentProducts,
+                    frameIndex = index,
+                    finalTileSupport = MgcSabreAlignmentOffset.tileSupport(kernelTuning.referenceSnr),
                 )
                 val flow = createConvertedAlignment(alignment)
                 val unblockerWidth = ceilDiv(width, UNBLOCKER_FULLRES_TILE_SIZE * 2)
@@ -3092,10 +3105,7 @@ internal class GlesMgcRawSpatialStacker(
             GlesMgcRawSpatialShaders.alignmentGradientProducts,
             "mgc_sabre_alignment_gradient_products",
         )
-        upsampleAlignmentProgram = linkProgram(
-            GlesMgcRawSpatialShaders.upsampleAlignment,
-            "mgc_sabre_upsample_alignment",
-        )
+        upsampleAlignmentProgram = initMergeUpsampleAlignment()
         blockLucasKanadeProgram = linkProgram(
             GlesMgcRawSpatialShaders.blockLucasKanade,
             "mgc_sabre_block_lucas_kanade",
@@ -3155,13 +3165,18 @@ internal class GlesMgcRawSpatialStacker(
         ).also { it.initPrograms() }
     }
 
-    private fun initSpatialUpsampleAlignment(): Int {
+    private fun initMergeUpsampleAlignment(): Int {
+        if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
+            medianAlignmentProgram = linkProgram(
+                GlesMgcRawSpatialShaders.medianAlignment, "mgc_median_alignment",
+            )
+        }
         if (supportsComputePrograms) {
             val reduction = GlesSpatialGlobalAlignment(cpuCompatibleMean = true)
             try {
                 reduction.init()
                 val program = linkProgram(
-                    GlesMgcRawSpatialShaders.upsampleAlignmentWithGpuCandidate,
+                    GlesMgcRawSpatialShaders.rawUpsampleAlignment,
                     "mgc_upsample_alignment_gpu_candidate",
                 )
                 globalAlignment = reduction
@@ -3200,7 +3215,7 @@ internal class GlesMgcRawSpatialStacker(
                 GlesMgcRawSpatialShaders.alignmentGradientProducts,
                 "mgc_alignment_gradient_products",
             )
-            upsampleAlignmentProgram = initSpatialUpsampleAlignment()
+            upsampleAlignmentProgram = initMergeUpsampleAlignment()
             blockLucasKanadeProgram = linkProgram(
                 GlesMgcRawSpatialShaders.blockLucasKanade,
                 "mgc_block_lucas_kanade",
@@ -3738,18 +3753,20 @@ internal class GlesMgcRawSpatialStacker(
             width = finestWidth,
             height = finestHeight,
             scaleToBayerQuads = 1f,
+            tileSize = alignmentPlan.levels.first().tileSize,
+            gridWidth = alignmentPlan.levels.first().gridWidth,
+            gridHeight = alignmentPlan.levels.first().gridHeight,
         )
 
         var levelWidth = finestWidth
         var levelHeight = finestHeight
-        var scaleToBayerQuads = 1
-        for (step in ALIGN_PYRAMID_DOWNSAMPLE_STEPS) {
+        for (level in alignmentPlan.levels.drop(1)) {
+            val step = level.downsample
             check(step == 2 || step == 4)
-            scaleToBayerQuads *= step
             // Every downsampled level carries the positive-side support sample used by
             // Halide's clamped interpolation. The finest level itself has no extra sample.
-            val nextWidth = ceilDiv(finestWidth, scaleToBayerQuads) + 1
-            val nextHeight = ceilDiv(finestHeight, scaleToBayerQuads) + 1
+            val nextWidth = level.width
+            val nextHeight = level.height
             val nextTexture = createTexture(
                 nextWidth,
                 nextHeight,
@@ -3767,7 +3784,10 @@ internal class GlesMgcRawSpatialStacker(
                 texture = nextTexture,
                 width = nextWidth,
                 height = nextHeight,
-                scaleToBayerQuads = scaleToBayerQuads.toFloat(),
+                scaleToBayerQuads = level.scale.toFloat(),
+                tileSize = level.tileSize,
+                gridWidth = level.gridWidth,
+                gridHeight = level.gridHeight,
             )
         }
         return levels
@@ -3775,8 +3795,18 @@ internal class GlesMgcRawSpatialStacker(
 
     /** Returns the logical RAW/4 base-luma input required by FilterRejectionMap. */
     private fun buildRejectionBaseLuma(referenceGrayPyramid: List<TextureLevel>): Int {
-        check(referenceGrayPyramid.size > 1) {
-            "FilterRejectionMap requires the RAW/4 reference-luma pyramid level"
+        if (referenceGrayPyramid.size == 1) {
+            // PrepareBase may stop before RAW/4 has a valid LK tile. Rejection still needs
+            // that luma image; its existence must not depend on the alignment tile count.
+            val fine = referenceGrayPyramid.first()
+            val lumaWidth = fine.width / 2 + 1
+            val lumaHeight = fine.height / 2 + 1
+            val luma = createTexture(lumaWidth, lumaHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
+            GLES30.glUseProgram(downsampleProgram)
+            bindTexture(downsampleProgram, "uInput", 0, fine.texture)
+            uniform2i(downsampleProgram, "uInputSize", fine.width, fine.height)
+            draw(downsampleProgram, lumaWidth, lumaHeight, intArrayOf(luma))
+            return luma
         }
         val raw4 = referenceGrayPyramid[1]
         check(raw4.width >= mergeWeightWidth && raw4.height >= mergeWeightHeight) {
@@ -3792,28 +3822,23 @@ internal class GlesMgcRawSpatialStacker(
      *
      * Gradient products depend on neither the current frame nor its initial flow. Keeping these
      * small textures alive across temporal frames removes four serial tile reductions per frame
-     * without changing LK iterations, accumulation order, or output precision.
+     * without changing LK iterations. The alpha channel materializes det(H) before LK adds
+     * its regularizer; LK accumulates current-minus-reference residuals instead of subtracting
+     * two large intensity-product sums.
      */
     private fun buildReferenceAlignmentProducts(
         reference: List<TextureLevel>,
     ): List<ReferenceAlignmentProducts> {
-        check(reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
+        check(reference.size == alignmentPlan.levels.size)
         val startNs = System.nanoTime()
-        return reference.mapIndexed { levelIndex, level ->
-            val tileSize = ALIGN_LEVEL_TILE_STRIDES[levelIndex]
-            val normalize = levelIndex != 0
+        return reference.map { level ->
+            val tileSize = level.tileSize
             val gridWidth = alignmentGridWidth(level, tileSize)
             val gridHeight = alignmentGridHeight(level, tileSize)
             val products0 = createTexture(
                 gridWidth,
                 gridHeight,
                 GLES30.GL_RGBA32F,
-                GLES30.GL_NEAREST,
-            )
-            val products1 = createTexture(
-                gridWidth,
-                gridHeight,
-                GLES30.GL_R32F,
                 GLES30.GL_NEAREST,
             )
             GLES30.glUseProgram(alignmentGradientProductsProgram)
@@ -3831,16 +3856,11 @@ internal class GlesMgcRawSpatialStacker(
             )
             uniform1i(alignmentGradientProductsProgram, "uTileStride", tileSize)
             uniform1i(alignmentGradientProductsProgram, "uTileSize", tileSize)
-            uniform1i(
-                alignmentGradientProductsProgram,
-                "uNormalize",
-                if (normalize) 1 else 0,
-            )
             draw(
                 alignmentGradientProductsProgram,
                 gridWidth,
                 gridHeight,
-                intArrayOf(products0, products1),
+                intArrayOf(products0),
             )
             ReferenceAlignmentProducts(
                 referenceTexture = level.texture,
@@ -3848,9 +3868,7 @@ internal class GlesMgcRawSpatialStacker(
                 gridHeight = gridHeight,
                 tileStride = tileSize,
                 tileSize = tileSize,
-                normalize = normalize,
                 products0 = products0,
-                products1 = products1,
             )
         }.also { products ->
             PLog.i(
@@ -3863,36 +3881,22 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
-     * BuildAlignPyramidForBurst (0x3883e98), using the options captured at runtime from this
-     * MGC build:
-     *
-     *   [target=256, minTile=8, maxTile=64, finestTile=-1,
-     *    finestLkIterations=2, coarserLkIterations=3]
-     *   normalizeFinest=false, normalizeCoarser=true, useL1Search=false
-     *
-     * Runtime Halide entry tracing gives the complete execution geometry for 4080x3064:
-     *
-     *   65x49 / tile 8 / grid 6x4 / normalize
-     *   256x193 / tile 16 / grid 14x10 / normalize
-     *   1021x767 / tile 32 / grid 30x22 / normalize
-     *   2040x1532 / tile 32 / grid 62x46 / no normalization
-     *
-     * The first three levels use three LK iterations; the finest uses two. The standalone
-     * AlignL1 search is absent, but UpsampleAlignment still selects among three neighboring
-     * coarse-flow candidates using target-level L1 residuals before every finer LK level.
-     * AlignPyramid::AlignAlt then performs one final UpsampleAlignment pass from the 32-quad
-     * finest LK grid to Spatial MergeBayerRaw16's full 8-quad grid. The final pass evaluates
-     * 16x16 target blocks and selects a whole neighboring LK candidate by L1 residual; it is
-     * not a bilinear resample. That final output is the alignment object consumed by merge and
-     * separately converted into MGC's sparse normalized-flow grid for rejection.
+     * Execute the LK plan with two finest and three coarser iterations. Spatial's configured
+     * maximum tile also determines AlignAlt's final candidate-window origin, as in 38CA05C.
+     * Spatial's default 16-quad configuration uses a 16-quad final window with no inset.
+     * The merge grid remains stride 8 regardless of the LK support. Sabre's existing LK-only
+     * configuration is separate from its SNR-selected final support; this is not a claim of
+     * parity with the original classic Sabre L1 search path.
      */
     private fun alignPyramids(
         reference: List<TextureLevel>,
         current: List<TextureLevel>,
         referenceProducts: List<ReferenceAlignmentProducts>,
+        frameIndex: Int = 0,
+        finalTileSupport: Int = alignmentPlan.maximumTileSize,
     ): Alignment {
         check(reference.size == current.size)
-        check(reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
+        check(reference.size == alignmentPlan.levels.size)
         check(referenceProducts.size == reference.size)
         // Scoped to this solve: the frame arena may recycle these names on the next frame.
         val scratch = AlignmentScratch { w, h ->
@@ -3904,10 +3908,10 @@ internal class GlesMgcRawSpatialStacker(
             reference = coarse,
             current = current[coarseIndex],
             initial = null,
-            tileStride = ALIGN_LEVEL_TILE_STRIDES[coarseIndex],
-            tileSize = ALIGN_LEVEL_TILE_STRIDES[coarseIndex],
-            iterations = ALIGN_LK_ITERATIONS_COARSER,
-            normalize = true,
+            tileStride = coarse.tileSize,
+            tileSize = coarse.tileSize,
+            iterations = if (coarseIndex == 0) ALIGN_LK_ITERATIONS_FINEST else ALIGN_LK_ITERATIONS_COARSER,
+            normalize = coarseIndex != 0,
             referenceProducts = referenceProducts[coarseIndex],
             scratch = scratch,
         )
@@ -3915,14 +3919,15 @@ internal class GlesMgcRawSpatialStacker(
         val schedule = ArrayList<String>().apply {
             add(
                 "${coarse.width}x${coarse.height}:" +
-                    "${ALIGN_LEVEL_TILE_STRIDES[coarseIndex]}px," +
-                    "LK${ALIGN_LK_ITERATIONS_COARSER},normalize=true"
+                    "${coarse.tileSize}px," +
+                    "LK${if (coarseIndex == 0) ALIGN_LK_ITERATIONS_FINEST else ALIGN_LK_ITERATIONS_COARSER}," +
+                    "normalize=${coarseIndex != 0}"
             )
         }
         for (levelIndex in coarseIndex - 1 downTo 0) {
             val level = reference[levelIndex]
             val coarser = reference[levelIndex + 1]
-            val tileSize = ALIGN_LEVEL_TILE_STRIDES[levelIndex]
+            val tileSize = level.tileSize
             val scale =
                 coarser.scaleToBayerQuads / level.scaleToBayerQuads
             val finest = levelIndex == 0
@@ -3932,6 +3937,12 @@ internal class GlesMgcRawSpatialStacker(
                 ALIGN_LK_ITERATIONS_COARSER
             }
             val normalize = !finest
+            // V25 estimates this candidate from the complete preceding flow grid,
+            // before each ordinary pyramid transition (38D389C / 38D3B04).
+            val gpuCandidate = globalAlignment?.estimate(
+                alignment.texture, alignment.gridWidth, alignment.gridHeight,
+            ) ?: 0
+            val globalCandidate = if (gpuCandidate == 0) estimateGlobalAlignmentCandidate(alignment) else null
             val upsampled = renderUpsampledAlignment(
                 reference = level,
                 current = current[levelIndex],
@@ -3942,6 +3953,8 @@ internal class GlesMgcRawSpatialStacker(
                 targetTileStride = tileSize,
                 targetTileSize = tileSize,
                 scratch = scratch,
+                globalCandidate = globalCandidate,
+                gpuGlobalCandidate = gpuCandidate,
             )
             alignment = renderLucasKanadeLevel(
                 reference = level,
@@ -3957,13 +3970,20 @@ internal class GlesMgcRawSpatialStacker(
             schedule +=
                 "${level.width}x${level.height}:${tileSize}px," +
                     "LK$iterations,normalize=$normalize," +
-                    "levelScale=$scale"
+                    "levelScale=$scale,global=histogram"
         }
-        val finalUpsampleMode = if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
-            val gpuCandidate = globalAlignment?.estimate(
-                alignment.texture, alignment.gridWidth, alignment.gridHeight,
-            ) ?: 0
-            val globalCandidate = if (gpuCandidate == 0) estimateGlobalAlignmentCandidate(alignment) else null
+        // MGC's caller selects the non-overlapping 8-quad layout for every merge enum
+        // from Sabre through Spatial RGB (0x344BF84 / 0x5B94448). The finest LK grid
+        // is only an intermediate result; feeding it directly to Sabre leaves 64-RAW-pixel
+        // blocks and skips the final local/global candidate selection.
+        val finalUpsampleMode = run {
+            val candidateSupport = minOf(MERGE_BAYER_RAW_TILE_SIZE, finalTileSupport)
+            val windowInset = (finalTileSupport - candidateSupport) / 2
+            val offset = if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
+                MgcSabreAlignmentOffset.forFrame(frameIndex, MERGE_BAYER_RAW_TILE_SIZE / 2)
+            } else {
+                MgcSabreAlignmentOffset.ZERO
+            }
             alignment = renderUpsampledAlignment(
                 reference = reference.first(),
                 current = current.first(),
@@ -3972,15 +3992,37 @@ internal class GlesMgcRawSpatialStacker(
                 targetGridHeight = bayerAlignmentHeight,
                 targetGridMin = MERGE_ALIGNMENT_GRID_MIN,
                 targetTileStride = MERGE_BAYER_RAW_TILE_SIZE / 2,
-                targetTileSize = MERGE_BAYER_RAW_TILE_SIZE,
-                globalCandidate = globalCandidate,
-                gpuGlobalCandidateTexture = gpuCandidate,
+                targetTileSize = candidateSupport,
+                targetOffsetX = offset.x,
+                targetOffsetY = offset.y,
+                targetWindowInset = windowInset,
                 scratch = scratch,
             )
+            if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
+                // SpatialMergeProcessor::Run writes median_filter_alignment=true
+                // (35F1204); AlignAlt applies MedianFilter3x3Halide twice after the
+                // final upsample (38D2A58). Rejection and merge must share that result.
+                repeat(2) {
+                    val output = scratch.target(
+                        alignment.gridWidth, alignment.gridHeight, alignment.texture,
+                    )
+                    GLES30.glUseProgram(medianAlignmentProgram)
+                    bindTexture(medianAlignmentProgram, "uAlignment", 0, alignment.texture)
+                    uniform2i(
+                        medianAlignmentProgram, "uGridSize",
+                        alignment.gridWidth, alignment.gridHeight,
+                    )
+                    draw(
+                        medianAlignmentProgram, alignment.gridWidth, alignment.gridHeight,
+                        intArrayOf(output),
+                    )
+                    alignment = alignment.copy(texture = output)
+                }
+            }
             schedule +=
                 "${reference.first().width}x${reference.first().height}:" +
                     "${MERGE_BAYER_RAW_TILE_SIZE / 2}px," +
-                    "UpsampleL1(tile=${MERGE_BAYER_RAW_TILE_SIZE})"
+                    "UpsampleL1(tile=$candidateSupport,inset=$windowInset)"
             check(
                 alignment.gridWidth == bayerAlignmentWidth &&
                     alignment.gridHeight == bayerAlignmentHeight &&
@@ -3988,16 +4030,9 @@ internal class GlesMgcRawSpatialStacker(
                     alignment.scaleToBayerQuads == 1f &&
                     alignment.gridMin == MERGE_ALIGNMENT_GRID_MIN
             ) {
-                "Spatial AlignAlt final output does not match MergeBayerRaw16's alignment grid"
+                "MGC AlignAlt final output does not match the 8-quad merge alignment grid"
             }
-            if (globalCandidate == null) {
-                "merge-grid/global-gpu"
-            } else {
-                "merge-grid/global-${if (globalCandidate.usedHistogramPeak) "mode" else "mean"}" +
-                    "(${globalCandidate.x},${globalCandidate.y},n=${globalCandidate.peakSupport})"
-            }
-        } else {
-            "level-transitions-only"
+            "merge-grid/offset(${offset.x},${offset.y})"
         }
         PLog.i(
             TAG,
@@ -4008,8 +4043,9 @@ internal class GlesMgcRawSpatialStacker(
                 "flowScale=${alignment.scaleToBayerQuads} useL1=false " +
                 "gradientProducts=cached " +
                 "upsampleL1=$finalUpsampleMode/3-candidate " +
-                "median=false " +
-                "runtimeOptions=256/8/64/-1/2/3/0/1/0 " +
+                "medianPasses=${if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) 2 else 0} " +
+                "runtimeOptions=256/8/${alignmentPlan.maximumTileSize}/-1/2/3/0/1/0 " +
+                "finalSupport=$finalTileSupport " +
                 "schedule=${schedule.joinToString(" -> ")}",
         )
         return alignment
@@ -4019,10 +4055,9 @@ internal class GlesMgcRawSpatialStacker(
      * UpsampleAlignmentI16Halide selects a whole coarse-flow candidate rather than blending
      * neighboring motion vectors. This preserves discontinuities at moving-object boundaries.
      *
-     * The original runtime uses three candidates at pyramid transitions. Before the final
-     * merge-grid expansion it derives one global motion candidate from the finest LK field and
-     * invokes the four-candidate worker. The global candidate is important when all three local
-     * neighbors belong to the same erroneous motion island.
+     * Ordinary pyramid transitions include the global histogram candidate with cost
+     * multiplier 1. The final call at 0x38D29F4 passes threshold=-1 and reads only the
+     * three local candidates.
      */
     private fun renderUpsampledAlignment(
         reference: TextureLevel,
@@ -4034,8 +4069,11 @@ internal class GlesMgcRawSpatialStacker(
         targetTileStride: Int,
         targetTileSize: Int,
         scratch: AlignmentScratch,
+        targetOffsetX: Int = 0,
+        targetOffsetY: Int = 0,
+        targetWindowInset: Int = 0,
         globalCandidate: GlobalAlignmentCandidate? = null,
-        gpuGlobalCandidateTexture: Int = 0,
+        gpuGlobalCandidate: Int = 0,
     ): Alignment {
         require(reference.width == current.width && reference.height == current.height)
         require(targetGridWidth > 0 && targetGridHeight > 0)
@@ -4065,23 +4103,22 @@ internal class GlesMgcRawSpatialStacker(
         uniform1i(upsampleAlignmentProgram, "uInitialTileStride", initial.tileStride)
         uniform1i(upsampleAlignmentProgram, "uTargetTileStride", targetTileStride)
         uniform1i(upsampleAlignmentProgram, "uTargetTileSize", targetTileSize)
+        uniform2i(
+            upsampleAlignmentProgram, "uTargetImageOffset",
+            targetOffsetX - targetWindowInset, targetOffsetY - targetWindowInset,
+        )
         uniform1f(upsampleAlignmentProgram, "uInitialScale", initialScale)
         uniform1i(
-            upsampleAlignmentProgram,
-            "uHasGlobalCandidate",
-            if (globalCandidate != null || gpuGlobalCandidateTexture != 0) 1 else 0,
+            upsampleAlignmentProgram, "uHasGlobalCandidate",
+            if (globalCandidate != null || gpuGlobalCandidate != 0) 1 else 0,
         )
         if (globalAlignment != null) {
-            // Bind a valid float sampler even at transitions where the global branch is off.
             bindTexture(
                 upsampleAlignmentProgram, "uGlobalCandidateTexture", 3,
-                gpuGlobalCandidateTexture.takeIf { it != 0 } ?: initial.texture,
+                if (gpuGlobalCandidate != 0) gpuGlobalCandidate else initial.texture,
             )
         } else {
-            uniform2f(
-                upsampleAlignmentProgram, "uGlobalCandidate",
-                globalCandidate?.x ?: 0f, globalCandidate?.y ?: 0f,
-            )
+            uniform2f(upsampleAlignmentProgram, "uGlobalCandidate", globalCandidate?.x ?: 0f, globalCandidate?.y ?: 0f)
         }
         draw(
             upsampleAlignmentProgram,
@@ -4097,11 +4134,13 @@ internal class GlesMgcRawSpatialStacker(
             tileStride = targetTileStride,
             scaleToBayerQuads = reference.scaleToBayerQuads,
             gridMin = targetGridMin,
+            offsetX = targetOffsetX,
+            offsetY = targetOffsetY,
         )
     }
 
     /**
-     * EstimateGlobalAlignment from MGC V25's final AlignPyramid::AlignAlt pass.
+     * EstimateGlobalAlignment from MGC V25's intermediate AlignPyramid::AlignAlt transitions.
      *
      * Flow components are rounded with C llroundf semantics and accumulated into a 129x129
      * histogram over [-64, 64]. A peak supported by at least ten tiles is used directly;
@@ -4227,8 +4266,7 @@ internal class GlesMgcRawSpatialStacker(
                 referenceProducts.gridWidth == gridWidth &&
                 referenceProducts.gridHeight == gridHeight &&
                 referenceProducts.tileStride == tileStride &&
-                referenceProducts.tileSize == tileSize &&
-                referenceProducts.normalize == normalize
+                referenceProducts.tileSize == tileSize
         ) {
             "Cached LK reference products do not match the requested pyramid level"
         }
@@ -4236,6 +4274,8 @@ internal class GlesMgcRawSpatialStacker(
         var input = initial
         repeat(iterations) {
             val output = scratch.target(gridWidth, gridHeight, input?.texture ?: 0)
+            // Texture allocation changes the active unit's binding; finish it before binding inputs.
+            val inputTexture = input?.texture ?: createZeroFlowTexture()
             GLES30.glUseProgram(blockLucasKanadeProgram)
             bindTexture(blockLucasKanadeProgram, "uReference", 0, reference.texture)
             bindTexture(blockLucasKanadeProgram, "uCurrent", 1, current.texture)
@@ -4247,15 +4287,8 @@ internal class GlesMgcRawSpatialStacker(
             )
             bindTexture(
                 blockLucasKanadeProgram,
-                "uProducts1",
-                3,
-                referenceProducts.products1,
-            )
-            val inputTexture = input?.texture ?: createZeroFlowTexture()
-            bindTexture(
-                blockLucasKanadeProgram,
                 "uInitialAlignment",
-                4,
+                3,
                 inputTexture,
             )
             uniform2i(
@@ -4356,6 +4389,24 @@ internal class GlesMgcRawSpatialStacker(
         require(alignment.gridWidth > 0 && alignment.gridHeight > 0) {
             "ConvertAlignment requires a non-empty alignment grid"
         }
+        if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
+            // Preserve the original sparse texture and its per-frame transform. Expanding
+            // it first to RAW/2 quantizes shifted tile boundaries to two RAW pixels.
+            require(alignment.gridMin == 0 && alignment.scaleToBayerQuads == 1f)
+            val output = createTexture(
+                alignment.gridWidth, alignment.gridHeight, GLES30.GL_RGBA16F, GLES30.GL_NEAREST,
+            )
+            renderConvertedAlignment(
+                alignment, output, 1, alignment.gridWidth, alignment.gridHeight,
+            )
+            return ConvertedAlignment(
+                texture = output,
+                scaleX = (width / 2).toFloat() / (alignment.gridWidth * alignment.tileStride),
+                scaleY = (height / 2).toFloat() / (alignment.gridHeight * alignment.tileStride),
+                offsetX = 2f * alignment.offsetX / width,
+                offsetY = 2f * alignment.offsetY / height,
+            )
+        }
         val strideInBayerQuads =
             alignment.tileStride.toFloat() * alignment.scaleToBayerQuads
         require(strideInBayerQuads.isFinite() && strideInBayerQuads > 0f) {
@@ -4395,6 +4446,8 @@ internal class GlesMgcRawSpatialStacker(
         alignment: Alignment,
         output: Int,
         alignmentTileSize: Int,
+        outputWidth: Int = rejectionWidth,
+        outputHeight: Int = rejectionHeight,
     ) {
         GLES30.glUseProgram(convertAlignmentProgram)
         bindTexture(convertAlignmentProgram, "uAlignment", 0, alignment.texture)
@@ -4419,8 +4472,8 @@ internal class GlesMgcRawSpatialStacker(
         )
         draw(
             convertAlignmentProgram,
-            rejectionWidth,
-            rejectionHeight,
+            outputWidth,
+            outputHeight,
             intArrayOf(output),
         )
     }
@@ -9386,6 +9439,18 @@ internal class GlesMgcRawSpatialStacker(
     private fun ensureGles3() {
         DngCaptureDiagnostics.recordCurrentGl()
         DngCaptureDiagnostics.put("merge.floatSamplerPrecision", "highp")
+        DngCaptureDiagnostics.put("merge.alignmentSolver", "residual-gram-determinant")
+        DngCaptureDiagnostics.put("merge.rejectionFilterContract", "v25-halide-box4-u8-linear4")
+        DngCaptureDiagnostics.put("merge.unblockerContract", "v25-raw16-integer-moments-mirror")
+        DngCaptureDiagnostics.put("merge.alignmentContract", "v25-lk-plan-rounded4-global-final-support")
+        DngCaptureDiagnostics.put("merge.alignmentMaxTile", alignmentPlan.maximumTileSize)
+        DngCaptureDiagnostics.put(
+            "merge.alignmentMedianPasses",
+            if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) 2 else 0,
+        )
+        if (processorPipeline == MgcRawProcessorPipeline.SABRE) {
+            DngCaptureDiagnostics.put("merge.sabreFlowLayout", "sparse-8quad-per-frame-offset")
+        }
         val version = GLES30.glGetString(GLES30.GL_VERSION).orEmpty()
         check(version.contains("OpenGL ES 3.")) {
             "MGC Spatial merge requires GLES3, got: $version"
@@ -9480,9 +9545,9 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun release() {
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            noiseLutCache.clear()
             globalAlignment?.release()
             globalAlignment = null
-            noiseLutCache.clear()
             rgbChromaPostprocessor?.release()
             rgbChromaPostprocessor = null
             if (programs.isNotEmpty()) {
@@ -9544,26 +9609,21 @@ internal class GlesMgcRawSpatialStacker(
     private fun ceilDiv(value: Int, divisor: Int): Int =
         ceil(value.toDouble() / divisor.toDouble()).toInt().coerceAtLeast(1)
 
-    private fun alignmentGridExtent(
-        nominalLevelExtent: Int,
-        tileStride: Int,
-    ): Int = max(1, ceilDiv(nominalLevelExtent, tileStride) - 2)
-
     private fun alignmentGridWidth(
         level: TextureLevel,
         tileStride: Int,
-    ): Int = alignmentGridExtent(
-        ceilDiv(ceilDiv(width, 2), level.scaleToBayerQuads.toInt()),
-        tileStride,
-    )
+    ): Int {
+        check(tileStride == level.tileSize)
+        return level.gridWidth
+    }
 
     private fun alignmentGridHeight(
         level: TextureLevel,
         tileStride: Int,
-    ): Int = alignmentGridExtent(
-        ceilDiv(ceilDiv(height, 2), level.scaleToBayerQuads.toInt()),
-        tileStride,
-    )
+    ): Int {
+        check(tileStride == level.tileSize)
+        return level.gridHeight
+    }
 
     private fun rgbBandHeightCandidates(): IntArray = intArrayOf(
         outputHeight,
@@ -9617,7 +9677,6 @@ internal class GlesMgcRawSpatialStacker(
         const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         const val RAW_BYTES_PER_PIXEL = 2
         const val RGB_AOT_TILE_SIZE = 16
-        const val RGB_AOT_MERGE_SHARPNESS_SCALE = 0.8f
         const val RGB_RAW_WINDOW_SLOTS = 2
         const val RGB_MAX_IN_FLIGHT_PASSES = 2
         const val RGB_DIAGNOSTIC_PBO_SLOTS = 2
@@ -9628,14 +9687,16 @@ internal class GlesMgcRawSpatialStacker(
         const val RGB_CHROMA_GUIDE_RAW_RADIUS = 2
         const val ALIGN_TARGET_FINEST_DIMENSION = 256
         const val ALIGN_MIN_TILE_SIZE = 8
-        const val ALIGN_MAX_TILE_SIZE = 64
+        // Preferred Spatial options (38B0E48 / default tuning 528DA38) use 16 quads.
+        // SabreProcessor also selects these options when its merge engine is Spatial RGB.
+        // Same-input replay against a successful MGC 9.7.047 Spatial RGB RAW confirms
+        // this configuration; 32 changes the finest grids and final candidate origin.
+        const val SPATIAL_ALIGN_MAX_TILE_SIZE = 16
+        // Classic Sabre has a separate SNR-selected LK/L1 schedule. Keep its existing
+        // LK support independent until that full schedule has numerical parity.
+        const val SABRE_ALIGN_MAX_TILE_SIZE = 32
         const val ALIGN_LK_ITERATIONS_FINEST = 2
         const val ALIGN_LK_ITERATIONS_COARSER = 3
-        // Every LK iteration clamps its update to one pixel in that pyramid level. Mapped back
-        // to Bayer quads, the 32x/8x/2x/1x schedule is bounded by
-        // 3*32 + 3*8 + 3*2 + 2*1 = 128. Using the analytical bound keeps RGB tile planning on
-        // the GPU command stream instead of synchronously reading every alignment texture.
-        const val MAX_ALIGNMENT_DISPLACEMENT_BAYER_QUADS = 128f
         const val ALIGN_LK_GRID_MIN = 1
         const val MERGE_ALIGNMENT_GRID_MIN = 0
         const val GLOBAL_ALIGNMENT_RADIUS = 64
@@ -9648,9 +9709,6 @@ internal class GlesMgcRawSpatialStacker(
         // merge tile on its own flow instead of switching interpolation on and off as
         // neighboring motion crosses a tolerance boundary.
         const val SPATIAL_INTERPOLATION_FLOW_TOLERANCE = -1f
-        val ALIGN_PYRAMID_DOWNSAMPLE_STEPS = intArrayOf(2, 4, 4)
-        // Indexed from the finest one-sample-per-Bayer-quad level to the coarsest.
-        val ALIGN_LEVEL_TILE_STRIDES = intArrayOf(32, 32, 16, 8)
         // Captured at UnblockerRaw10Halide entry on the original MGC full-resolution path.
         const val UNBLOCKER_FULLRES_TILE_SIZE = 8
         const val UNBLOCKER_OUTPUT_SCALE = 1f

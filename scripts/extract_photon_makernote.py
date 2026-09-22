@@ -42,7 +42,8 @@ def read_makernote(path: Path) -> dict:
             raise ValueError("Invalid ExifIFD pointer")
         exif = struct.unpack(byte_order + "I", pointer)[0]
         kind, count, pointer = find_tag(exif, 0x927C)
-        if kind != 7 or not 1 <= count <= 16 * 1024 * 1024:
+        # Bounded local merge replay captures can include up to 32 frames of RAW/texture ROIs.
+        if kind != 7 or not 1 <= count <= 32 * 1024 * 1024:
             raise ValueError("Invalid or oversized MakerNote")
         payload = pointer[:count] if count <= 4 else read(
             struct.unpack(byte_order + "I", pointer)[0], count

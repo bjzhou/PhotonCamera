@@ -33,9 +33,25 @@
 PMA110 / Adreno 840 / GLES 3.2 V@0842.44 上，直方图的整数统计与 CPU 一致，但
 `float(sum) / float(count)` 在部分输入上与 JVM Float 相差 1 ULP，并可传到候选位移。
 这是浮点除法精度差异，不能仅凭 `highp` 声明认定迁移无损。
-RAW Spatial 的 `GlesSpatialGlobalAlignment(cpuCompatibleMean = true)` 在无十票峰值时，
+`GlesSpatialGlobalAlignment(cpuCompatibleMean = true)` 的兼容模式在无十票峰值时，
 以整数长除法生成 Float 有效位并执行 ties-to-even 舍入；此分支的票数与整数和都可被
 Float 精确表示。实机验证需同时比较均值纹理和最终候选输出，不能只比较直方图票数。
+
+### LK 正则项与浮点表达式重排
+
+本地 ANGLE Metal 上，LK 的 `1 + xx*yy - xy*xy` 在 `xx=yy=xy=4096` 时丢失
+`+1`，使完全相同的两张斜坡图产生 `(-1,-1)` 更新。仅改成
+`1 + (xx*yy - xy*xy)` 仍不能在该后端保住求值顺序；同一括号写法在 ANGLE
+SwiftShader 上则能保住。这是跨编译后端的浮点求值约束，尚未以此探针验证 PMA110，
+不能记为该设备独有的驱动缺陷。原 MGC ARM64 也存在先加 1 后减乘积的数值退化。
+
+- `highp` 不等于禁止重排；括号也不能替代 [`precise` 的求值约束](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_gpu_shader5.txt)。
+  `precise` 不能直接用于通用 GLSL ES 3.00；不要为此无条件提高整条管线的版本要求。
+- 参考帧 pass 将非负 Gram 行列式存入 `RGBA32F.a`，LK 在读取后才加 `1.0`。
+  这道纹理读写边界防止编译器把正则项重新合并到大乘积中，不增加 pass 或 CPU 回读。
+- 验证必须贯穿实际参考乘积 producer、纹理分配/写入、LK sampler 和 flow 回读；只验证
+  手工填入的 Hessian 或 shader 编译不能证明整个计算链成立。覆盖平坦图、单方向梯度、
+  已知平移与不同 tile 大小，并以独立高精度计算检查非零位移响应。
 
 ### 能力快照
 

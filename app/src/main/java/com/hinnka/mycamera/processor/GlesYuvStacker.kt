@@ -78,9 +78,7 @@ class GlesYuvStacker(
         val gridHeight: Int,
         val tileStride: Int,
         val tileSize: Int,
-        val normalize: Boolean,
         val products0: Int,
-        val products1: Int,
     )
 
     private interface MertensFramebufferSource {
@@ -1483,7 +1481,6 @@ class GlesYuvStacker(
         check(reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
         return reference.mapIndexed { levelIndex, level ->
             val tileSize = ALIGN_LEVEL_TILE_STRIDES[levelIndex]
-            val normalize = levelIndex != 0
             val productGridWidth = alignmentGridWidth(level, tileSize)
             val productGridHeight = alignmentGridHeight(level, tileSize)
             val products0 = createTexture2D(
@@ -1492,14 +1489,8 @@ class GlesYuvStacker(
                 GLES30.GL_RGBA32F,
                 GLES30.GL_NEAREST,
             )
-            val products1 = createTexture2D(
-                productGridWidth,
-                productGridHeight,
-                GLES30.GL_R32F,
-                GLES30.GL_NEAREST,
-            )
             bindFramebufferOutputs(
-                intArrayOf(products0, products1),
+                intArrayOf(products0),
                 "buildReferenceAlignmentProducts level $levelIndex",
             )
             GLES30.glViewport(0, 0, productGridWidth, productGridHeight)
@@ -1518,10 +1509,6 @@ class GlesYuvStacker(
                 uniform(alignmentGradientProductsProgram, "uTileSize"),
                 tileSize,
             )
-            GLES30.glUniform1i(
-                uniform(alignmentGradientProductsProgram, "uNormalize"),
-                if (normalize) 1 else 0,
-            )
             GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
             finishFramebufferPass("buildReferenceAlignmentProducts level $levelIndex")
             ReferenceAlignmentProducts(
@@ -1530,9 +1517,7 @@ class GlesYuvStacker(
                 gridHeight = productGridHeight,
                 tileStride = tileSize,
                 tileSize = tileSize,
-                normalize = normalize,
                 products0 = products0,
-                products1 = products1,
             )
         }
     }
@@ -1622,8 +1607,7 @@ class GlesYuvStacker(
                 referenceProducts.gridWidth == levelGridWidth &&
                 referenceProducts.gridHeight == levelGridHeight &&
                 referenceProducts.tileStride == tileStride &&
-                referenceProducts.tileSize == tileSize &&
-                referenceProducts.normalize == normalize
+                referenceProducts.tileSize == tileSize
         )
         var input = initial
         repeat(iterations) { iteration ->
@@ -1635,11 +1619,10 @@ class GlesYuvStacker(
             check(current.linearTexture != 0) { "YUV LK requires a filterable current pyramid" }
             bindTexture(blockLucasKanadeProgram, "uCurrent", 1, current.linearTexture)
             bindTexture(blockLucasKanadeProgram, "uProducts0", 2, referenceProducts.products0)
-            bindTexture(blockLucasKanadeProgram, "uProducts1", 3, referenceProducts.products1)
             bindTexture(
                 blockLucasKanadeProgram,
                 "uInitialAlignment",
-                4,
+                3,
                 input?.texture ?: zeroFlowTexture,
             )
             GLES30.glUniform2i(
@@ -1731,6 +1714,7 @@ class GlesYuvStacker(
             uniform(upsampleAlignmentProgram, "uTargetTileSize"),
             targetTileSize,
         )
+        GLES30.glUniform2i(uniform(upsampleAlignmentProgram, "uTargetImageOffset"), 0, 0)
         GLES30.glUniform1f(
             uniform(upsampleAlignmentProgram, "uInitialScale"),
             initialScale,
