@@ -65,10 +65,13 @@ internal class LogInputGl {
             uniform highp sampler2D uInverseAcr3Texture;
 
             float inverseAcr3(float value) {
-                int lastIndex = textureSize(uInverseAcr3Texture, 0).x - 1;
+                // Integer precision also controls int-to-float conversion precision.
+                // A mediump conversion can round 4095 to 4096, moving white beyond
+                // the texture and corrupting interpolation above the FP16 exact range.
+                highp int lastIndex = textureSize(uInverseAcr3Texture, 0).x - 1;
                 float position = clamp(value, 0.0, 1.0) * float(lastIndex);
-                int lowerIndex = int(floor(position));
-                int upperIndex = min(lowerIndex + 1, lastIndex);
+                highp int lowerIndex = int(floor(position));
+                highp int upperIndex = min(lowerIndex + 1, lastIndex);
                 float lower = texelFetch(uInverseAcr3Texture, ivec2(lowerIndex, 0), 0).r;
                 float upper = texelFetch(uInverseAcr3Texture, ivec2(upperIndex, 0), 0).r;
                 return mix(lower, upper, position - float(lowerIndex));

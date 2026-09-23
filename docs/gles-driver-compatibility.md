@@ -193,6 +193,17 @@ NDK 编译器可确认修复前的 LK 浮点读取带有 `RelaxedPrecision`，�
 已确认的源码精度契约缺失；没有反馈设备上的低/高精度读回对照时，不得将它写成某款
 GPU 已复现的故障，也不得把 `lowp` 一律等同于实际 FP16。
 
+### 曲线查表索引的整数转浮点精度
+
+Fragment 的 `precision highp float` 不覆盖默认 `mediump int`。用于曲线坐标缩放和
+插值权重的整数索引必须显式声明 `highp int`：`float(index)` 的转换本身可能携带
+低精度，之后赋给 highp 浮点变量不能恢复精度。4096 项表的末端索引 `4095` 在
+FP16 下会舍入为 `4096`，可能使白点取样越界；2048 以上的奇数索引也会影响插值权重。
+
+`LogInputGl` 的 NDK 编译检查确认，修复前两处整数转浮点带有 `RelaxedPrecision`，
+显式声明 highp 索引后标记消失。PMA110 / Adreno 840 的六种视频 Log 合成色阶读回
+在修复前后一致；三星高光伪色反馈尚未在对应设备复现，不将此记为三星驱动缺陷。
+
 ### `R16UI` 采样不代表可用于 image store
 
 GLES 3.1 可以通过 `usampler2D` 采样 `R16UI` texture，但核心 GLSL ES 3.10 image

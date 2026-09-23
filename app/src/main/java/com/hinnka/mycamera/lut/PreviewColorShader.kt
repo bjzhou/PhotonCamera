@@ -25,7 +25,7 @@ internal object PreviewColorShader {
             in vec2 vOutputCoord;
             out vec4 fragColor;
 
-            uniform $sampler uCameraTexture;
+            uniform highp $sampler uCameraTexture;
             uniform mediump sampler3D uLutTexture;
 
             uniform float uLutSize;
