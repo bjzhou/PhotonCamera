@@ -1,6 +1,6 @@
 # Photon Camera
 
-[English](./README.md) | [简体中文](./README_CN.md)
+[English](./README_EN.md) | [简体中文](./README_CN.md) | [日本語](./README_JA.md)
 
 [![Google Play](https://img.shields.io/badge/Google%20Play-Get%20it%20on-green?logo=google-play&logoColor=white)](https://play.google.com/store/apps/details?id=com.hinnka.mycamera)
 
