@@ -1026,9 +1026,84 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
+    /** Observable collar evidence for a short-frame flow, on the 8-quad merge grid. */
+    val bentoCollarSupport = """
+        #version 300 es
+        precision highp float;
+        precision highp sampler2D;
+        precision highp int;
+        uniform sampler2D uBaseGuide;
+        uniform sampler2D uShortGuide;
+        uniform sampler2D uHighlightMask;
+        uniform sampler2D uForwardAlignment;
+        uniform sampler2D uReverseAlignment;
+        uniform ivec2 uGuideSize;
+        uniform ivec2 uGridSize;
+        uniform int uTileStride;
+        out vec4 oSupport;
+        void main() {
+            ivec2 tile = ivec2(gl_FragCoord.xy);
+            vec2 forward = texelFetch(uForwardAlignment, tile, 0).xy;
+            vec2 center = (vec2(tile) + 0.5) * float(uTileStride);
+            vec2 mapped = center + forward;
+            if (!(abs(forward.x) < 1.0e5 && abs(forward.y) < 1.0e5) ||
+                any(lessThan(mapped, vec2(0.0))) ||
+                any(greaterThanEqual(mapped, vec2(uGuideSize))) ||
+                !(mapped.x >= 0.0 && mapped.y >= 0.0)) {
+                oSupport = vec4(0.0);
+                return;
+            }
+            ivec2 reverseTile = clamp(
+                ivec2(floor(mapped / float(uTileStride))),
+                ivec2(0), uGridSize - ivec2(1)
+            );
+            vec2 reverse = texelFetch(uReverseAlignment, reverseTile, 0).xy;
+            if (!(abs(reverse.x) < 1.0e5 && abs(reverse.y) < 1.0e5)) {
+                oSupport = vec4(0.0);
+                return;
+            }
+            float fbError = length(forward + reverse);
+            if (!(fbError <= 2.0)) {
+                oSupport = vec4(0.0, fbError, 0.0, 0.0);
+                return;
+            }
+            float agreement = 0.0;
+            float valid = 0.0;
+            float clipped = 0.0;
+            for (int y = 0; y < 4; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    ivec2 p = tile * uTileStride +
+                        ivec2((2 * x + 1) * uTileStride / 8,
+                              (2 * y + 1) * uTileStride / 8);
+                    vec2 q = vec2(p) + forward;
+                    if (any(lessThan(p, ivec2(0))) ||
+                        any(greaterThanEqual(p, uGuideSize)) ||
+                        any(lessThan(q, vec2(0.0))) ||
+                        any(greaterThanEqual(q, vec2(uGuideSize)))) continue;
+                    if (texelFetch(uHighlightMask, p, 0).r > 0.0) {
+                        clipped += 1.0;
+                        continue;
+                    }
+                    vec3 base = texelFetch(uBaseGuide, p, 0).rgb;
+                    vec3 shortValue = texture(uShortGuide,
+                        (q + vec2(0.5)) / vec2(uGuideSize)).rgb;
+                    if (any(greaterThan(abs(base), vec3(2.0))) ||
+                        any(greaterThan(abs(shortValue), vec3(2.0)))) continue;
+                    float delta = dot(abs(base - shortValue), vec3(0.25, 0.5, 0.25));
+                    agreement += 1.0 - smoothstep(0.04, 0.16, delta);
+                    valid += 1.0;
+                }
+            }
+            float confidence = valid >= 4.0 && clipped == 0.0
+                ? (agreement / valid) * (1.0 - smoothstep(0.75, 2.0, fbError))
+                : 0.0;
+            oSupport = vec4(confidence, fbError, valid / 16.0, clipped / 16.0);
+        }
+    """.trimIndent()
+
     // Embedded OpenCL sources: GainUp and
-    // Mask_AdjustHighlightMaskAndGenerateInpaintingMask. The third output is the aligned
-    // ultrashort clipping mask retained for Bento's overlap diagnostics.
+    // Mask_AdjustHighlightMaskAndGenerateInpaintingMask. Source saturation is assessed
+    // separately from native CFA codes, before WB, exposure gain and guide filtering.
     val bentoAdjustHighlightMask = """
         #version 300 es
         precision highp float;
@@ -1046,7 +1121,6 @@ internal object GlesMgcRawSpatialShaders {
         uniform float uMinRgbForInpainting;
         layout(location = 0) out float oAdjustedHighlightMask;
         layout(location = 1) out float oInpaintingMask;
-        layout(location = 2) out float oUltrashortClippingMask;
 
         vec2 mirrorUv(vec2 uv) {
             uv = mod(uv, 2.0);
@@ -1096,16 +1170,6 @@ internal object GlesMgcRawSpatialShaders {
                     ? 1.0
                     : 0.0;
 
-            float ultrashortMax = max(
-                ultrashort.r,
-                max(ultrashort.g, ultrashort.b)
-            );
-            oUltrashortClippingMask = clamp(
-                (ultrashortMax - uMaxRgbClippingThreshold) /
-                    (1.0 - uMaxRgbClippingThreshold),
-                0.0,
-                1.0
-            );
         }
     """.trimIndent()
 
@@ -1428,6 +1492,9 @@ internal object GlesMgcRawSpatialShaders {
         precision highp sampler2D;
         uniform sampler2D uChannelPlane;
         uniform sampler2D uLensShading;
+        uniform sampler2D uUltrashortWeight;
+        uniform vec3 uCameraWhite;
+        uniform int uHasUltrashort;
         uniform ivec2 uOutputSize;
         uniform float uOutputExposureScale;
         uniform int uUseLensShading;
@@ -1436,16 +1503,25 @@ internal object GlesMgcRawSpatialShaders {
 
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
+            vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uOutputSize);
             float value = texelFetch(uChannelPlane, p, 0).r * (1.0 / 16384.0);
             if (uUseLensShading != 0) {
-                vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uOutputSize);
                 vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
                 float channelShading = uChannel == 0 ? shading.r :
                     (uChannel == 1 ? 0.5 * (shading.g + shading.b) : shading.a);
                 value *= channelShading;
             }
+            // CameraWhite must follow the exposure that actually supplies this pixel.
+            // A rejected short leaves the reference's saturated RGB at 1/ratio in the
+            // exported short domain; clipping it later against short-domain CameraWhite
+            // misses the reference plateau and preserves its false magenta chroma.
+            bool hasShortObservation = uHasUltrashort != 0 &&
+                texture(uUltrashortWeight, uv).r > 0.0;
+            float whiteScale = hasShortObservation ? 1.0 : uOutputExposureScale;
+            float cameraWhite = uCameraWhite[uChannel] * whiteScale;
+            float outputValue = min(value * uOutputExposureScale, cameraWhite);
             uint encodedValue = uint(round(
-                clamp(value * uOutputExposureScale, 0.0, 1.0) * 65535.0
+                clamp(outputValue, 0.0, 1.0) * 65535.0
             ));
             // CPU-side glColorMask selects the destination RGB component for this pass.
             // Avoid dynamically indexing a fragment output, which is rejected by strict ES
@@ -1479,9 +1555,9 @@ internal object GlesMgcRawSpatialShaders {
     """.trimIndent()
 
     /**
-     * Detect source-frame sensor clipping after transporting the long-frame RAW into reference
+     * Detect source-frame sensor clipping after transporting its RAW into reference
      * coordinates. Detection stays in the unnormalized sensor domain so exposure scaling cannot
-     * make a clipped long-frame sample appear valid.
+     * make a clipped sample appear valid.
      */
     val alignedRawClippingMask = """
         #version 300 es
@@ -1507,8 +1583,10 @@ internal object GlesMgcRawSpatialShaders {
             for (int phase = 0; phase < 4; ++phase) {
                 ivec2 phaseOffset = ivec2(phase & 1, phase >> 1);
                 ivec2 rawPixel = min(rawOrigin + phaseOffset, uRawSize - ivec2(1));
-                float rawValue = float(texelFetch(uRaw, rawPixel, 0).r);
-                if (rawValue >= uPhaseClippingLevels[phase]) {
+                // Keep sensor codes integer through the comparison. Converting uint16
+                // samples in a fragment shader can be lowered to FP16 by Mali drivers.
+                uint rawValue = texelFetch(uRaw, rawPixel, 0).r;
+                if (rawValue >= uint(ceil(uPhaseClippingLevels[phase]))) {
                     return true;
                 }
             }
@@ -1522,8 +1600,8 @@ internal object GlesMgcRawSpatialShaders {
                 return;
             }
 
-            // Both MergeBayer and MergeRGB consume RAW/4 acceptance: one texel covers
-            // 2x2 Bayer quads. Use that domain's center.
+            // Long-frame acceptance uses RAW/4 (2x2 quads); Bento admission uses
+            // RAW/2 (one quad). Evaluate the center in the requested domain.
             ivec2 referenceQuad = min(
                 outputPixel * uBayerQuadsPerTexel +
                     ivec2(uBayerQuadsPerTexel / 2),

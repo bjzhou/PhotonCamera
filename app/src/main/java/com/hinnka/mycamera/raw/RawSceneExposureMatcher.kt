@@ -21,6 +21,7 @@ internal object RawSceneExposureMatcher {
         metadata: RawMetadata,
         deviceLimits: RawSceneExposureDeviceLimits? = null,
         portraitMask: PortraitMaskSnapshot? = null,
+        maxHdrRatio: Float = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
     ): RawSceneExposureRequest {
         val faceMeteringMask = portraitMask?.let(RawSceneExposureMath::prepareFaceMeteringMask)
         return RawSceneExposureRequest { frame ->
@@ -30,6 +31,7 @@ internal object RawSceneExposureMatcher {
                 metadata = metadata,
                 deviceLimits = deviceLimits,
                 faceMask = faceMeteringMask,
+                configuredMaxHdrRatio = maxHdrRatio,
             )
             if (result == null) {
                 PLog.w(TAG, "RAW scene exposure unavailable; MGC AE result omitted")

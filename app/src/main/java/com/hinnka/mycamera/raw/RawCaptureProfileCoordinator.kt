@@ -27,6 +27,7 @@ internal object RawCaptureProfileCoordinator {
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         rawNoiseProfileId: String = RawNoiseProfileManager.DEFAULT_PROFILE_ID,
+        maxHdrRatio: Float = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
     ): RawDngCaptureProfileResult? {
         val photonRequest = if (mode.usesPhotonHdr) {
             RawSceneExposureMatcher.createRequest(
@@ -34,6 +35,7 @@ internal object RawCaptureProfileCoordinator {
                 metadata = input.metadata,
                 deviceLimits = input.sceneExposureDeviceLimits,
                 portraitMask = capturePortraitMask,
+                maxHdrRatio = maxHdrRatio,
             )
         } else {
             null

@@ -75,6 +75,7 @@ import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
+import com.hinnka.mycamera.raw.RawSceneExposureMath
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawCaptureExposureCompensationMetadata
@@ -1710,6 +1711,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 SharingStarted.Eagerly,
                 MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
             )
+    val hdrPlusLongFrameExposureEv: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.hdrPlusLongFrameExposureEv }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat())
+    val hdrPlusShortFrameExposureEv: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.hdrPlusShortFrameExposureEv }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.DEFAULT_SHORT_FRAME_EXPOSURE_EV)
+    val mlAeMaxHdrRatio: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.mlAeMaxHdrRatio }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO)
     val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -2210,6 +2220,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         it.hdrPlusBracketExposureEnabled
                     )
                 }
+                if (currentCameraState.hdrPlusLongFrameExposureEv != it.hdrPlusLongFrameExposureEv) {
+                    cameraController.setHdrPlusLongFrameExposureEv(it.hdrPlusLongFrameExposureEv)
+                }
+                if (currentCameraState.hdrPlusShortFrameExposureEv != it.hdrPlusShortFrameExposureEv) {
+                    cameraController.setHdrPlusShortFrameExposureEv(it.hdrPlusShortFrameExposureEv)
+                }
                 if (multipleExposureEnabled && (it.useRaw || it.useJpgMax || it.useRawMax)) {
                     viewModelScope.launch {
                         userPreferencesRepository.saveCameraFeaturePreferences(
@@ -2419,6 +2435,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setHdrPlusBracketExposureEnabled(
                     prefs.hdrPlusBracketExposureEnabled
                 )
+                cameraController.setHdrPlusLongFrameExposureEv(prefs.hdrPlusLongFrameExposureEv)
+                cameraController.setHdrPlusShortFrameExposureEv(prefs.hdrPlusShortFrameExposureEv)
                 cameraController.setUseLivePhoto(shouldEnableLivePhoto(prefs))
                 // 应用保存的虚拟光圈
                 applyDefaultVirtualAperture(prefs.defaultVirtualAperture)
@@ -4845,6 +4863,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveHdrPlusBracketExposureEnabled(enabled)
         }
+    }
+
+    fun setHdrPlusLongFrameExposureEv(value: Float) {
+        val normalized = MultiFrameConfig.normalizeLongFrameExposureEv(value)
+        cameraController.setHdrPlusLongFrameExposureEv(normalized)
+        viewModelScope.launch { userPreferencesRepository.saveHdrPlusLongFrameExposureEv(normalized) }
+    }
+
+    fun setHdrPlusShortFrameExposureEv(value: Float) {
+        val normalized = MultiFrameConfig.normalizeShortFrameExposureEv(value)
+        cameraController.setHdrPlusShortFrameExposureEv(normalized)
+        viewModelScope.launch { userPreferencesRepository.saveHdrPlusShortFrameExposureEv(normalized) }
+    }
+
+    fun setMlAeMaxHdrRatio(value: Float) {
+        viewModelScope.launch { userPreferencesRepository.saveMlAeMaxHdrRatio(value) }
     }
 
     fun setMultipleExposureCount(count: Int) {

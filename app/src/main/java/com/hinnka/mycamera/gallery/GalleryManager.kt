@@ -67,6 +67,7 @@ import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawCaptureProfileCoordinator
+import com.hinnka.mycamera.raw.RawSceneExposureMath
 import com.hinnka.mycamera.raw.RawPhotonHdrMetadata
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -3450,6 +3451,7 @@ object GalleryManager {
                     masterBlackLevel = stackBlackLevel,
                     whiteLevel = stackWhiteLevel,
                     whiteBalanceGains = rawMetadata.whiteBalanceGains,
+                    cameraWhite = rawMetadata.cameraWhite,
                     noiseProfileSelection = noiseProfileSelection,
                     lensShading = rawMetadata.lensShadingMap,
                     lensShadingWidth = rawMetadata.lensShadingMapWidth,
@@ -4571,6 +4573,9 @@ object GalleryManager {
         viewfinderPreviewToCaptureRotationDegrees: Int,
         capturePortraitMask: PortraitMaskSnapshot? = null,
     ): RawDngProfilePreparationOptions {
+        val mlAeMaxHdrRatio = ContentRepository.getInstance(context)
+            .userPreferencesRepository.userPreferences.firstOrNull()?.mlAeMaxHdrRatio
+            ?: RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO
         val exposureMode = RawAdaptiveExposureMode.resolve(
             usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
             useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
@@ -4620,6 +4625,7 @@ object GalleryManager {
                     ),
                     rawBlackBorderCrop = metadata.rawBlackBorderCrop,
                     rawNoiseProfileId = resolveRawNoiseProfileId(context, metadata),
+                    maxHdrRatio = mlAeMaxHdrRatio,
                 )
             }
         } else {

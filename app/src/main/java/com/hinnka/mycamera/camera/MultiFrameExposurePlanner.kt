@@ -29,6 +29,7 @@ internal object MultiFrameExposurePlanner {
         isoUpper: Int,
         exposureTimeLowerNs: Long,
         exposureTimeUpperNs: Long,
+        targetExposureEv: Float = MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat(),
     ): MultiFrameLongExposurePlan {
         require(baseIso > 0 && baseExposureTimeNs > 0L) { "Base exposure must be positive" }
         require(isoLower > 0 && isoUpper >= isoLower) { "Invalid ISO range" }
@@ -47,7 +48,7 @@ internal object MultiFrameExposurePlanner {
             "Sensor minimum exposure time exceeds the long-frame shutter limit"
         }
 
-        val exposureMultiplier = 2.0.pow(MultiFrameConfig.LONG_FRAME_EXPOSURE_EV)
+        val exposureMultiplier = 2.0.pow(MultiFrameConfig.normalizeLongFrameExposureEv(targetExposureEv).toDouble())
         val baseExposureProduct = baseIso.toDouble() * baseExposureTimeNs.toDouble()
         val targetExposureProduct = baseExposureProduct * exposureMultiplier
         val unboundedExposureTimeNs = baseExposureTimeNs.toDouble() * exposureMultiplier

@@ -46,6 +46,7 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.firstOrNull
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -3583,6 +3584,10 @@ class RawDemosaicProcessor {
                         request = RawSceneExposureMatcher.createRequest(
                             context = context,
                             metadata = actualMetadata,
+                            maxHdrRatio = ContentRepository.getInstance(context)
+                                .userPreferencesRepository.userPreferences.firstOrNull()
+                                ?.mlAeMaxHdrRatio
+                                ?: RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
                         ),
                         metadata = actualMetadata,
                         sourceTextureId = demosaicTextureId,

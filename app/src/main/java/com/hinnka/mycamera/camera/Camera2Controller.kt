@@ -7387,6 +7387,18 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    fun setHdrPlusLongFrameExposureEv(value: Float) {
+        _state.value = _state.value.copy(
+            hdrPlusLongFrameExposureEv = MultiFrameConfig.normalizeLongFrameExposureEv(value),
+        )
+    }
+
+    fun setHdrPlusShortFrameExposureEv(value: Float) {
+        _state.value = _state.value.copy(
+            hdrPlusShortFrameExposureEv = MultiFrameConfig.normalizeShortFrameExposureEv(value),
+        )
+    }
+
 
     fun setCapturingLivePhoto(enabled: Boolean) {
         _state.value = _state.value.copy(isCapturingLivePhoto = enabled)
@@ -7897,13 +7909,14 @@ class Camera2Controller(private val context: Context) {
             PLog.i(
                 TAG,
                 "Multi-frame short request: base=ISO$manualBaseIso/${manualBaseShutter}ns " +
-                    "short=ISO$shortIso/${shortShutter}ns exposureRatio=$achievedRatio",
+                    "short=ISO$shortIso/${shortShutter}ns " +
+                    "targetEv=${state.hdrPlusShortFrameExposureEv} exposureRatio=$achievedRatio",
             )
             return
         }
 
-        val shortEv = -ln(MultiFrameConfig.SHORT_FRAME_EXPOSURE_DIVISOR) / ln(2.0)
-        val compensation = calculateHdrBracketExposureCompensation(state, shortEv.toFloat())
+        val shortEv = state.hdrPlusShortFrameExposureEv
+        val compensation = calculateHdrBracketExposureCompensation(state, shortEv)
         builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
         builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
         builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, compensation)
@@ -7921,10 +7934,9 @@ class Camera2Controller(private val context: Context) {
     ): Pair<Int, Long> {
         val isoRange = state.getIsoRange()
         val shutterRange = state.getShutterSpeedRange()
-        val targetProduct = baseIso.toDouble() * baseShutter.toDouble() /
-            MultiFrameConfig.SHORT_FRAME_EXPOSURE_DIVISOR
-        val initialShutter = (baseShutter.toDouble() /
-            MultiFrameConfig.SHORT_FRAME_EXPOSURE_DIVISOR)
+        val exposureMultiplier = 2.0.pow(state.hdrPlusShortFrameExposureEv.toDouble())
+        val targetProduct = baseIso.toDouble() * baseShutter.toDouble() * exposureMultiplier
+        val initialShutter = (baseShutter.toDouble() * exposureMultiplier)
             .roundToLong()
             .coerceIn(shutterRange.lower, shutterRange.upper)
         val shortIso = (targetProduct / initialShutter.toDouble())
@@ -8012,6 +8024,7 @@ class Camera2Controller(private val context: Context) {
                     isoUpper = longFrameIsoUpper,
                     exposureTimeLowerNs = shutterRange.lower,
                     exposureTimeUpperNs = shutterRange.upper,
+                    targetExposureEv = state.hdrPlusLongFrameExposureEv,
                 )
             }.onFailure { error ->
                 PLog.e(TAG, "Unable to plan bounded multi-frame long exposure", error)
@@ -8035,7 +8048,7 @@ class Camera2Controller(private val context: Context) {
                     TAG,
                     "Multi-frame long request: base=ISO$manualBaseIso/${manualBaseShutter}ns " +
                         "long=ISO${plan.sensitivityIso}/${plan.exposureTimeNs}ns " +
-                        "targetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
+                        "targetEv=${state.hdrPlusLongFrameExposureEv} " +
                         "plannedEv=${plan.plannedDeltaEv} isoUpperLimited=${plan.isoUpperLimited} " +
                         "shutterUpperLimited=${plan.shutterUpperLimited} " +
                         "maxAnalogIso=$longFrameIsoUpper " +
@@ -8251,7 +8264,8 @@ class Camera2Controller(private val context: Context) {
                             "$shortFrameCount " +
                             "longFrames=$scheduledLongFrameCount " +
                             "fallbackNormalFrames=${longFrameCount - scheduledLongFrameCount} " +
-                            "longTargetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
+                            "shortTargetEv=${currentState.hdrPlusShortFrameExposureEv} " +
+                            "longTargetEv=${currentState.hdrPlusLongFrameExposureEv} " +
                             "longNominalMaxShutterNs=" +
                             "${MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS} " +
                             "total=${radianceRequests.size}",

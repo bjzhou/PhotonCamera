@@ -184,6 +184,12 @@ internal object RawSceneExposureMath {
     // MGC 9.7 CaptureTuning::max_hdr_ratio(kHdrPlusOn, autoNight=false, factor=-1).
     // This limits the AE final long/short TET pair before the highlight-preservation step.
     const val FAST_MOMENTS_MAX_HDR_RATIO = 9.8f
+    const val MIN_CONFIGURED_MAX_HDR_RATIO = 1f
+    const val MAX_CONFIGURED_MAX_HDR_RATIO = 20f
+
+    fun normalizeConfiguredMaxHdrRatio(value: Float): Float =
+        if (value.isFinite()) value.coerceIn(MIN_CONFIGURED_MAX_HDR_RATIO, MAX_CONFIGURED_MAX_HDR_RATIO)
+        else FAST_MOMENTS_MAX_HDR_RATIO
     const val LARGE_FACE_MAX_HDR_RATIO_FLOOR = 6f
     const val HDR_RATIO_LIMIT_SHORT_POWER = 0.5f
     const val MGC_DEFAULT_UNSAFE_UNDEREXPOSURE_MULTIPLIER = 1.1f
@@ -1267,6 +1273,7 @@ internal object RawSceneExposureEstimator {
         metadata: RawMetadata,
         deviceLimits: RawSceneExposureDeviceLimits?,
         faceMask: FloatArray? = null,
+        configuredMaxHdrRatio: Float = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
     ): RawSceneExposureEstimate? {
         val estimateStartedNs = SystemClock.elapsedRealtimeNanos()
         val resolvedDeviceLimits = deviceLimits?.takeIf(RawSceneExposureDeviceLimits::isValid)
@@ -1333,7 +1340,7 @@ internal object RawSceneExposureEstimator {
         val largeFaceHdrRatioReductionStrength =
             RawSceneExposureMath.largeFaceHdrRatioReductionStrength(facePixelQuantity)
         val effectiveMaxHdrRatio = RawSceneExposureMath.maxHdrRatioForLargeFace(
-            baseMaxHdrRatio = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+            baseMaxHdrRatio = RawSceneExposureMath.normalizeConfiguredMaxHdrRatio(configuredMaxHdrRatio),
             reductionStrength = largeFaceHdrRatioReductionStrength,
         ) ?: run {
             PLog.e(TAG, "Unable to resolve the large-face max HDR ratio")
@@ -1488,7 +1495,7 @@ internal object RawSceneExposureEstimator {
                         "hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit} " +
                         "finalHdrRatio=${fusion.finalHdrRatio} " +
                         "hdrNetRatioSource=FINAL_LONG_TET_OVER_FINAL_SHORT_TET " +
-                        "baseMaxHdrRatio=${RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO} " +
+                        "baseMaxHdrRatio=${RawSceneExposureMath.normalizeConfiguredMaxHdrRatio(configuredMaxHdrRatio)} " +
                         "effectiveMaxHdrRatio=$effectiveMaxHdrRatio " +
                         "largeFaceHdrRatioReductionStrength=$largeFaceHdrRatioReductionStrength " +
                         "hdrRatioLimitShortPower=${RawSceneExposureMath.HDR_RATIO_LIMIT_SHORT_POWER} " +
@@ -1564,6 +1571,7 @@ internal object RawSceneExposureEstimator {
                         faceMaskApplied = detectedFaceMaskEvidence,
                         largeFaceHdrRatioReductionStrength =
                             largeFaceHdrRatioReductionStrength,
+                        baseMaxHdrRatio = RawSceneExposureMath.normalizeConfiguredMaxHdrRatio(configuredMaxHdrRatio),
                         effectiveMaxHdrRatio = effectiveMaxHdrRatio,
                         fractionPixelsClippedAtFinalShortTet =
                             fractionPixelsClippedAtFinalShortTet,
@@ -1617,6 +1625,7 @@ internal object RawSceneExposureEstimator {
         facePixelQuantity: Float?,
         faceMaskApplied: Boolean,
         largeFaceHdrRatioReductionStrength: Float,
+        baseMaxHdrRatio: Float,
         effectiveMaxHdrRatio: Float,
         fractionPixelsClippedAtFinalShortTet: Float,
     ): String = buildString(3_500) {
@@ -1665,7 +1674,7 @@ internal object RawSceneExposureEstimator {
         appendLine("finalPortraitGain=${fusion.finalPortraitGain}")
         appendLine("hdrRatioBeforeLimit=${fusion.hdrRatioBeforeLimit}")
         appendLine("finalHdrRatio=${fusion.finalHdrRatio}")
-        appendLine("baseMaxHdrRatio=${RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO}")
+        appendLine("baseMaxHdrRatio=$baseMaxHdrRatio")
         appendLine("effectiveMaxHdrRatio=$effectiveMaxHdrRatio")
         appendLine("largeFaceHdrRatioReductionStrength=$largeFaceHdrRatioReductionStrength")
         appendLine("hdrRatioLimitShortPower=${RawSceneExposureMath.HDR_RATIO_LIMIT_SHORT_POWER}")

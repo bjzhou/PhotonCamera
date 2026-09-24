@@ -101,6 +101,7 @@ import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
+import com.hinnka.mycamera.raw.RawSceneExposureMath
 import androidx.core.net.toUri
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.Lifecycle
@@ -351,6 +352,9 @@ fun SettingsScreen(
     val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsState()
     val hdrPlusMergeMode by viewModel.hdrPlusMergeMode.collectAsState()
     val hdrPlusBracketExposureEnabled by viewModel.hdrPlusBracketExposureEnabled.collectAsState()
+    val hdrPlusLongFrameExposureEv by viewModel.hdrPlusLongFrameExposureEv.collectAsState()
+    val hdrPlusShortFrameExposureEv by viewModel.hdrPlusShortFrameExposureEv.collectAsState()
+    val mlAeMaxHdrRatio by viewModel.mlAeMaxHdrRatio.collectAsState()
     val effectiveHdrPlusBracketExposure = hdrPlusMergeMode.supportsBracketExposure &&
         hdrPlusBracketExposureEnabled
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
@@ -784,6 +788,15 @@ fun SettingsScreen(
     }
     var hdrPlusFrameCountSliderValue by remember(hdrPlusFrameCount) {
         mutableStateOf(hdrPlusFrameCount.toFloat())
+    }
+    var hdrPlusLongFrameExposureEvUi by remember(hdrPlusLongFrameExposureEv) {
+        mutableStateOf(hdrPlusLongFrameExposureEv)
+    }
+    var hdrPlusShortFrameExposureEvUi by remember(hdrPlusShortFrameExposureEv) {
+        mutableStateOf(hdrPlusShortFrameExposureEv)
+    }
+    var mlAeMaxHdrRatioUi by remember(mlAeMaxHdrRatio) {
+        mutableStateOf(mlAeMaxHdrRatio)
     }
     var rawMaxOutputScaleUi by remember(rawMaxOutputScale) {
         mutableStateOf(MultiFrameConfig.normalizeOutputScale(rawMaxOutputScale))
@@ -2055,6 +2068,59 @@ fun SettingsScreen(
                             checked = effectiveHdrPlusBracketExposure,
                             onCheckedChange = viewModel::setHdrPlusBracketExposureEnabled,
                             enabled = hdrPlusMergeMode.supportsBracketExposure,
+                        )
+
+                        if (effectiveHdrPlusBracketExposure) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                            SliderSettingItem(
+                                title = stringResource(R.string.settings_hdr_plus_long_frame_ev),
+                                description = stringResource(R.string.settings_hdr_plus_long_frame_ev_description),
+                                value = hdrPlusLongFrameExposureEvUi,
+                                valueRange = MultiFrameConfig.MIN_LONG_FRAME_EXPOSURE_EV..
+                                    MultiFrameConfig.MAX_LONG_FRAME_EXPOSURE_EV,
+                                onValueChange = { hdrPlusLongFrameExposureEvUi = (it * 10f).roundToInt() / 10f },
+                                onValueChangeFinished = {
+                                    viewModel.setHdrPlusLongFrameExposureEv(hdrPlusLongFrameExposureEvUi)
+                                },
+                                resetValue = MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat(),
+                                valueTextFormatter = { String.format(Locale.getDefault(), "+%.1f EV", it) },
+                            )
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                            SliderSettingItem(
+                                title = stringResource(R.string.settings_hdr_plus_short_frame_ev),
+                                description = stringResource(R.string.settings_hdr_plus_short_frame_ev_description),
+                                value = hdrPlusShortFrameExposureEvUi,
+                                valueRange = MultiFrameConfig.MIN_SHORT_FRAME_EXPOSURE_EV..
+                                    MultiFrameConfig.MAX_SHORT_FRAME_EXPOSURE_EV,
+                                onValueChange = { hdrPlusShortFrameExposureEvUi = (it * 10f).roundToInt() / 10f },
+                                onValueChangeFinished = {
+                                    viewModel.setHdrPlusShortFrameExposureEv(hdrPlusShortFrameExposureEvUi)
+                                },
+                                resetValue = MultiFrameConfig.DEFAULT_SHORT_FRAME_EXPOSURE_EV,
+                                valueTextFormatter = { String.format(Locale.getDefault(), "%.1f EV", it) },
+                            )
+                        }
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_ml_ae_max_hdr_ratio),
+                            description = stringResource(R.string.settings_ml_ae_max_hdr_ratio_description),
+                            value = mlAeMaxHdrRatioUi,
+                            valueRange = RawSceneExposureMath.MIN_CONFIGURED_MAX_HDR_RATIO..
+                                RawSceneExposureMath.MAX_CONFIGURED_MAX_HDR_RATIO,
+                            onValueChange = { mlAeMaxHdrRatioUi = (it * 10f).roundToInt() / 10f },
+                            onValueChangeFinished = { viewModel.setMlAeMaxHdrRatio(mlAeMaxHdrRatioUi) },
+                            resetValue = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+                            valueTextFormatter = { String.format(Locale.getDefault(), "%.1f×", it) },
                         )
 
                         HorizontalDivider(

@@ -35,6 +35,7 @@ import com.hinnka.mycamera.raw.CanonPictureStyle
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences
+import com.hinnka.mycamera.raw.RawSceneExposureMath
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -208,6 +209,9 @@ data class UserPreferences(
     val hdrPlusFrameCount: Int = MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
     val hdrPlusBracketExposureEnabled: Boolean =
         MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
+    val hdrPlusLongFrameExposureEv: Float = MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat(),
+    val hdrPlusShortFrameExposureEv: Float = MultiFrameConfig.DEFAULT_SHORT_FRAME_EXPOSURE_EV,
+    val mlAeMaxHdrRatio: Float = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT, // RAWmax 输出放大算法
     val rawDigitalZoomResamplingEnabled: Boolean = false,
@@ -473,6 +477,11 @@ class UserPreferencesRepository(private val context: Context) {
         private val HDR_PLUS_MERGE_MODE = stringPreferencesKey("hdr_plus_merge_mode")
         private val HDR_PLUS_BRACKET_EXPOSURE_ENABLED =
             booleanPreferencesKey("hdr_plus_bracket_exposure_enabled")
+        private val HDR_PLUS_LONG_FRAME_EXPOSURE_EV =
+            floatPreferencesKey("hdr_plus_long_frame_exposure_ev")
+        private val HDR_PLUS_SHORT_FRAME_EXPOSURE_EV =
+            floatPreferencesKey("hdr_plus_short_frame_exposure_ev")
+        private val ML_AE_MAX_HDR_RATIO = floatPreferencesKey("ml_ae_max_hdr_ratio")
         private val USE_MULTIPLE_EXPOSURE = booleanPreferencesKey("use_multiple_exposure")
         private val MULTIPLE_EXPOSURE_COUNT = intPreferencesKey("multiple_exposure_count")
         private val LEGACY_USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
@@ -807,6 +816,18 @@ class UserPreferencesRepository(private val context: Context) {
                     }
                     ?: MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
                 hdrPlusBracketExposureEnabled = hdrPlusBracketExposureEnabled,
+                hdrPlusLongFrameExposureEv = MultiFrameConfig.normalizeLongFrameExposureEv(
+                    preferences[HDR_PLUS_LONG_FRAME_EXPOSURE_EV]
+                        ?: MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat(),
+                ),
+                hdrPlusShortFrameExposureEv = MultiFrameConfig.normalizeShortFrameExposureEv(
+                    preferences[HDR_PLUS_SHORT_FRAME_EXPOSURE_EV]
+                        ?: MultiFrameConfig.DEFAULT_SHORT_FRAME_EXPOSURE_EV,
+                ),
+                mlAeMaxHdrRatio = RawSceneExposureMath.normalizeConfiguredMaxHdrRatio(
+                    preferences[ML_AE_MAX_HDR_RATIO]
+                        ?: RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+                ),
                 rawMaxOutputScale = rawOutputUpscaleMode.resolveOutputScale(
                     (preferences[RAW_MAX_OUTPUT_SCALE]
                         ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
@@ -2062,6 +2083,27 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[HDR_PLUS_FRAME_COUNT] ?: MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
                 bracketExposureEnabled = bracketExposureEnabled,
             )
+        }
+    }
+
+    suspend fun saveHdrPlusLongFrameExposureEv(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[HDR_PLUS_LONG_FRAME_EXPOSURE_EV] =
+                MultiFrameConfig.normalizeLongFrameExposureEv(value)
+        }
+    }
+
+    suspend fun saveHdrPlusShortFrameExposureEv(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[HDR_PLUS_SHORT_FRAME_EXPOSURE_EV] =
+                MultiFrameConfig.normalizeShortFrameExposureEv(value)
+        }
+    }
+
+    suspend fun saveMlAeMaxHdrRatio(value: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[ML_AE_MAX_HDR_RATIO] =
+                RawSceneExposureMath.normalizeConfiguredMaxHdrRatio(value)
         }
     }
 

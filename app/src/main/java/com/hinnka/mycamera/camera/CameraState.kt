@@ -374,6 +374,8 @@ data class CameraState(
     val hdrPlusMergeMode: MgcRawMaxMode = MgcRawMaxMode.DEFAULT,
     val useJpgMaxHdrComposition: Boolean = false,
     val hdrPlusBracketExposureEnabled: Boolean = MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
+    val hdrPlusLongFrameExposureEv: Float = MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat(),
+    val hdrPlusShortFrameExposureEv: Float = MultiFrameConfig.DEFAULT_SHORT_FRAME_EXPOSURE_EV,
     val useRaw: Boolean = false,
     val useMultipleExposure: Boolean = false,
     val rawMinShutterSpeedNs: Long = 0L,
