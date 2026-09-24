@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.data
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.hinnka.mycamera.R
@@ -850,18 +851,31 @@ class CustomImportManager(private val context: Context) {
      * 导入 Logo 文件
      */
     fun importLogo(uri: Uri): String? {
+        val fileName = getFileName(uri) ?: "logo.png"
+        val extension = fileName.substringAfterLast('.', "png")
+            .lowercase(Locale.US)
+            .filter { it.isLetterOrDigit() }
+            .take(10)
+            .ifEmpty { "png" }
+        val logoFile = File(customLogoDir, "logo_${UUID.randomUUID()}.$extension")
         return try {
-            val fileName = getFileName(uri) ?: "logo_${UUID.randomUUID()}.png"
-            val logoFile = File(customLogoDir, fileName)
-
             openInputStream(uri)?.use { inputStream ->
                 logoFile.outputStream().use { outputStream ->
                     inputStream.copyTo(outputStream)
                 }
             } ?: return null
 
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(logoFile.absolutePath, options)
+            if (options.outWidth <= 0 || options.outHeight <= 0) {
+                PLog.w(TAG, "Imported logo is not a readable image: $uri")
+                logoFile.delete()
+                return null
+            }
+
             logoFile.absolutePath
         } catch (e: Exception) {
+            logoFile.delete()
             PLog.e(TAG, "Failed to import logo", e)
             null
         }

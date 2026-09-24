@@ -14,6 +14,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.utils.PLog
+import java.io.File
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -784,8 +785,8 @@ class FrameRenderer(
         return when (element) {
             is FrameElement.Text -> getTextContent(element, metadata) != null
             is FrameElement.Logo -> {
-                val logoKey = metadata.customProperties["LOGO"]
-                logoKey != "none"
+                val logoKey = element.overrideSource ?: metadata.customProperties["LOGO"]
+                logoKey != "none" && logoAspectRatio(element, metadata) != null
             }
 
             is FrameElement.Divider -> true
@@ -859,9 +860,10 @@ class FrameRenderer(
             }
 
             is FrameElement.Logo -> {
-                val logoKey = metadata.customProperties["LOGO"]
+                val logoKey = element.overrideSource ?: metadata.customProperties["LOGO"]
                 if (logoKey == "none") return 0f
                 val (bmpW, _) = measureLogoSize(element, metadata, dimensions)
+                if (bmpW <= 0) return 0f
                 bmpW + dimensions.toPixels(element.marginPx) * 2 + dimensions.elementSpacing
             }
 
@@ -1000,7 +1002,7 @@ class FrameRenderer(
         fun resolve(elements: List<FrameElement>): List<FrameElement> = elements.map { element ->
             if (element is FrameElement.Logo && element.widthPx == null) {
                 val ratio = logoAspectRatio(element, metadata)
-                element.copy(widthPx = legacyLogoWidthPx(element, ratio))
+                if (ratio != null) element.copy(widthPx = legacyLogoWidthPx(element, ratio)) else element
             } else element
         }
         return template.copy(
@@ -1018,19 +1020,23 @@ class FrameRenderer(
         return if (element.maxWidthPx > 0f) minOf(width, element.maxWidthPx) else width
     }
 
-    private fun logoAspectRatio(element: FrameElement.Logo, metadata: MediaMetadata?): Float {
+    private fun logoAspectRatio(element: FrameElement.Logo, metadata: MediaMetadata?): Float? {
         val logoKey = element.overrideSource ?: metadata?.customProperties?.get("LOGO")
         val width: Int
         val height: Int
         if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
+            if (logoKey.startsWith("/") && !File(logoKey).isFile) return null
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            if (logoKey.startsWith("content://")) {
-                context.contentResolver.openInputStream(android.net.Uri.parse(logoKey))?.use {
-                    BitmapFactory.decodeStream(it, null, options)
+            val decoded = runCatching {
+                if (logoKey.startsWith("content://")) {
+                    context.contentResolver.openInputStream(android.net.Uri.parse(logoKey))?.use {
+                        BitmapFactory.decodeStream(it, null, options)
+                    }
+                } else {
+                    BitmapFactory.decodeFile(logoKey, options)
                 }
-            } else {
-                BitmapFactory.decodeFile(logoKey, options)
-            }
+            }.isSuccess
+            if (!decoded) return null
             width = options.outWidth
             height = options.outHeight
         } else {
@@ -1038,11 +1044,11 @@ class FrameRenderer(
                 LogoType.APP -> R.mipmap.ic_launcher_round
                 LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
             }
-            val drawable = requireNotNull(context.getDrawable(drawableRes))
+            val drawable = context.getDrawable(drawableRes) ?: return null
             width = drawable.intrinsicWidth
             height = drawable.intrinsicHeight
         }
-        require(width > 0 && height > 0) { "Invalid logo dimensions: $logoKey ($width x $height)" }
+        if (width <= 0 || height <= 0) return null
         return width.toFloat() / height
     }
 
@@ -1051,15 +1057,10 @@ class FrameRenderer(
         metadata: MediaMetadata?,
         dimensions: FrameDimensions
     ): Pair<Int, Int> {
-        return try {
-            val ratio = logoAspectRatio(element, metadata)
-            val widthPx = element.widthPx ?: legacyLogoWidthPx(element, ratio)
-            val width = dimensions.toPixels(widthPx)
-            width.roundToInt() to (width / ratio).roundToInt()
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to measure logo size", e)
-            0 to 0
-        }
+        val ratio = logoAspectRatio(element, metadata) ?: return 0 to 0
+        val widthPx = element.widthPx ?: legacyLogoWidthPx(element, ratio)
+        val width = dimensions.toPixels(widthPx)
+        return width.roundToInt() to (width / ratio).roundToInt()
     }
 
     /**

@@ -269,7 +269,9 @@ sealed class FrameElementDraft(
         val logoType: LogoType = LogoType.BRAND,
         val overrideSource: String? = null,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
-        val widthPx: Float = 240.0f,
+        val widthPx: Float? = 240.0f,
+        val legacyHeightPx: Float = 72.0f,
+        val legacyMaxWidthPx: Float = 0f,
         val light: Boolean = false,
         val marginPx: Float = 24.0f,
         override val line: Int = 0
@@ -279,6 +281,8 @@ sealed class FrameElementDraft(
             overrideSource = overrideSource,
             alignment = alignment,
             widthPx = widthPx,
+            sizePx = legacyHeightPx,
+            maxWidthPx = legacyMaxWidthPx,
             light = light,
             marginPx = marginPx,
             line = line
@@ -338,7 +342,9 @@ sealed class FrameElementDraft(
                     logoType = element.logoType,
                     overrideSource = element.overrideSource,
                     alignment = element.alignment,
-                    widthPx = requireNotNull(element.widthPx) { "Resolve legacy logo widths before editing" },
+                    widthPx = element.widthPx,
+                    legacyHeightPx = element.sizePx,
+                    legacyMaxWidthPx = element.maxWidthPx,
                     light = element.light,
                     marginPx = element.marginPx,
                     line = element.line

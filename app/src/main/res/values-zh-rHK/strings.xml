@@ -729,6 +729,8 @@
     <string name="frame_editor_logo_type">Logo 類型</string>
     <string name="frame_editor_logo_source">Logo 來源</string>
     <string name="frame_editor_logo_size">Logo 寬度 (px)</string>
+    <string name="frame_editor_logo_legacy_height">舊版 Logo 高度 (px)</string>
+    <string name="frame_editor_logo_missing">Logo 檔案已遺失，請重新匯入圖片或選擇其他來源。</string>
     <string name="frame_editor_logo_max_width">Logo 最大寬度 (px)</string>
     <string name="frame_editor_margin">邊距 (px)</string>
     <string name="frame_editor_logo_light">使用淺色 Logo 變體</string>

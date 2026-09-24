@@ -105,6 +105,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import java.io.File
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
 
@@ -193,6 +194,9 @@ fun FrameEditorScreen(
             }
             if (importedPath != null) {
                 draft = updateLogoElementById(draft, targetId) { it.copy(overrideSource = importedPath) }
+                validationMessage = null
+            } else {
+                validationMessage = imageImportFailedMessage
             }
         }
     }
@@ -215,6 +219,15 @@ fun FrameEditorScreen(
     }
 
     val hasChanges = draft != initialDraft
+    val hasMissingLogoFile = if (draft.layout.position == FramePosition.IMAGE) false else {
+        val visibleElements = draft.elements +
+            (if (draft.layout.position == FramePosition.BOTH) draft.elementsTop.orEmpty() else emptyList())
+        visibleElements.any { element ->
+            element is FrameElementDraft.Logo &&
+                element.overrideSource?.takeIf { it.startsWith("/") }
+                    ?.let { !File(it).isFile } == true
+        }
+    }
     val canSave = draft.name.trim().isNotEmpty() &&
         (draft.layout.position != FramePosition.IMAGE ||
             !draft.layout.imagePath.isNullOrBlank() ||
@@ -283,6 +296,13 @@ fun FrameEditorScreen(
                             fontSize = 12.sp
                         )
                     }
+                    if (hasMissingLogoFile) {
+                        Text(
+                            text = stringResource(R.string.frame_editor_logo_missing),
+                            color = Color(0xFFFF8A80),
+                            fontSize = 12.sp
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -319,7 +339,7 @@ fun FrameEditorScreen(
                                     }
                                 }
                             },
-                            enabled = !isSaving,
+                            enabled = !isSaving && !hasMissingLogoFile,
                             colors = ButtonDefaults.buttonColors(containerColor = AccentColor),
                             modifier = Modifier.weight(1f)
                         ) {
@@ -1312,8 +1332,11 @@ private fun ElementEditor(
                 onValueChange = { onElementChange(element.copy(line = it)) }
             )
             NumberField(
-                label = stringResource(R.string.frame_editor_logo_size),
-                value = element.widthPx,
+                label = stringResource(
+                    if (element.widthPx == null) R.string.frame_editor_logo_legacy_height
+                    else R.string.frame_editor_logo_size
+                ),
+                value = element.widthPx ?: element.legacyHeightPx,
                 onValueChange = { onElementChange(element.copy(widthPx = it.coerceAtLeast(0f))) }
             )
             NumberField(
@@ -2207,7 +2230,7 @@ private fun elementSummary(element: FrameElementDraft): String = when (element) 
         R.string.frame_editor_summary_logo,
         logoTypeLabel(element.logoType),
         alignmentLabel(element.alignment),
-        element.widthPx
+        element.widthPx ?: element.legacyHeightPx
     )
     is FrameElementDraft.Divider -> stringResource(
         R.string.frame_editor_summary_divider,

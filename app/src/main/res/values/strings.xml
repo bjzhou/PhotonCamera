@@ -777,6 +777,8 @@
     <string name="frame_editor_logo_type">Logo Type</string>
     <string name="frame_editor_logo_source">Logo Source</string>
     <string name="frame_editor_logo_size">Logo Width (px)</string>
+    <string name="frame_editor_logo_legacy_height">Legacy Logo Height (px)</string>
+    <string name="frame_editor_logo_missing">This logo file is missing. Import the image again or choose another source.</string>
     <string name="frame_editor_logo_max_width">Logo Max Width (px)</string>
     <string name="frame_editor_margin">Margin (px)</string>
     <string name="frame_editor_logo_light">Use light logo variant</string>
