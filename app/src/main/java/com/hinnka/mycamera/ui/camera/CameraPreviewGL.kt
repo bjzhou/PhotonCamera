@@ -22,6 +22,7 @@ import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.raw.SpectralFilmLut
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
@@ -48,6 +49,7 @@ fun CameraPreviewGL(
     calibrationOffset: Int,
     baselineLut: LutConfig?,
     currentLut: LutConfig?,
+    spectralFilmPreviewLut: SpectralFilmLut?,
     baselineColorRecipeParams: ColorRecipeParams,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
@@ -292,6 +294,7 @@ fun CameraPreviewGL(
                         val colorRecipeEnabled = !colorRecipeParams.isDefault()
                         val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
                         // 更新 LUT 设置
+                        glSurfaceView.setSpectralFilmPreview(spectralFilmPreviewLut)
                         glSurfaceView.setBaselineLut(baselineLut)
                         glSurfaceView.setBaselineLutEnabled(baselineLut != null)
                         glSurfaceView.setLut(currentLut)

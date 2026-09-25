@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.lut
 
 import android.opengl.GLES30
+import com.hinnka.mycamera.raw.SpectralFilmLut
 import com.hinnka.mycamera.utils.PLog
 
 internal data class ColorPassLocations(
@@ -56,6 +57,8 @@ internal data class ColorPassLocations(
     val uTexelSizeLocation: Int,
     val uCurveTextureLocation: Int,
     val uCurveEnabledLocation: Int,
+    /** Null when the variant does not include the Spektrafilm preview stage. */
+    val spectralFilmLocations: SpectralFilmPreviewLocations?,
     val aPositionLocation: Int,
     val aTexCoordLocation: Int,
 )
@@ -63,9 +66,14 @@ internal data class ColorPassLocations(
 internal class PreviewColorProgramCache {
     private val programs = mutableMapOf<PreviewColorShaderVariant, ColorPassLocations>()
     private val logInput = LogInputGl()
+    private val spectralFilm = SpectralFilmPreviewGl()
 
     fun bindLogInput(locations: ColorPassLocations) {
         logInput.bind(locations.uInverseAcr3TextureLocation, textureUnit = 4)
+    }
+
+    fun bindSpectralFilm(locations: ColorPassLocations, lut: SpectralFilmLut?) {
+        spectralFilm.bind(locations.spectralFilmLocations, lut)
     }
 
     fun get(variant: PreviewColorShaderVariant): ColorPassLocations? {
@@ -91,7 +99,7 @@ internal class PreviewColorProgramCache {
             return null
         }
 
-        val locations = queryLocations(programId)
+        val locations = queryLocations(programId, variant)
         programs[variant] = locations
         PLog.d(TAG, "Compiled preview color shader variant: $variant")
         return locations
@@ -99,16 +107,18 @@ internal class PreviewColorProgramCache {
 
     fun release() {
         logInput.release()
+        spectralFilm.release()
         programs.values.forEach { GlUtils.deleteProgram(it.programId) }
         programs.clear()
     }
 
     fun reset() {
         logInput.reset()
+        spectralFilm.reset()
         programs.clear()
     }
 
-    private fun queryLocations(program: Int): ColorPassLocations {
+    private fun queryLocations(program: Int, variant: PreviewColorShaderVariant): ColorPassLocations {
         return ColorPassLocations(
             programId = program,
             uMVPMatrixLocation = GLES30.glGetUniformLocation(program, "uMVPMatrix"),
@@ -165,6 +175,11 @@ internal class PreviewColorProgramCache {
             uTexelSizeLocation = GLES30.glGetUniformLocation(program, "uTexelSize"),
             uCurveTextureLocation = GLES30.glGetUniformLocation(program, "uCurveTexture"),
             uCurveEnabledLocation = GLES30.glGetUniformLocation(program, "uCurveEnabled"),
+            spectralFilmLocations = if (variant.includeSpectralFilm) {
+                SpectralFilmPreviewLocations.query(program)
+            } else {
+                null
+            },
             aPositionLocation = GLES30.glGetAttribLocation(program, "aPosition"),
             aTexCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord"),
         )

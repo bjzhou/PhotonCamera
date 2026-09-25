@@ -14,7 +14,9 @@ internal object PreviewColorShader {
         }
         val needsOklab = variant.includeOklchDensity || variant.includeLchMixer
         val needsClassifiers = variant.includeLchMixer || variant.includeLutMask
-        val needsLogInput = variant.includeVideoLog || variant.includeExtendedLutCurves
+        val needsLogInput = variant.includeVideoLog ||
+            variant.includeExtendedLutCurves ||
+            variant.includeSpectralFilm
         return """
             #version 300 es
             ${extension}
@@ -86,6 +88,7 @@ internal object PreviewColorShader {
 
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
             ${if (needsLogInput) LogInputGl.GLSL else ""}
+            ${if (variant.includeSpectralFilm) SpectralFilmPreviewGl.GLSL else ""}
             ${PreviewColorShaderModules.EXPOSURE}
             ${ContrastShader.GLSL}
             ${DirectFlashShader.GLSL}
@@ -173,6 +176,11 @@ internal object PreviewColorShader {
                 ${if (variant.includeJpegInputToneCurve) """
                 color.rgb = applyJpegInputToneCurve(color.rgb);
                 color.rgb = sanitizeColor(color.rgb);
+                """ else ""}
+
+                ${if (variant.includeSpectralFilm) """
+                // RAW 渲染引擎模拟：先于基准层与创意层，与 RAW 管线中引擎所处位置一致。
+                color.rgb = sanitizeColor(applySpectralFilmPreview(color.rgb));
                 """ else ""}
 
                 if (uColorRecipeEnabled) {

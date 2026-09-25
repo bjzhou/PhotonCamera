@@ -91,6 +91,8 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawNoiseProfileInfo
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.raw.SpectralFilmLut
+import com.hinnka.mycamera.raw.SpectralFilmProfile
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
@@ -611,6 +613,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
 
     var currentBaselineLutConfig: LutConfig? by mutableStateOf(null)
+        private set
+
+    /** RAW 引擎为 Spektrafilm 时用于取景器实时预览的胶片/相纸阶段。 */
+    var currentSpectralFilmPreviewLut: SpectralFilmLut? by mutableStateOf(null)
         private set
 
     var currentLutId = MutableStateFlow("standard")
@@ -2358,6 +2364,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
+        viewModelScope.launch {
+            userPreferencesRepository.userPreferences
+                .map { resolvePreviewSpectralFilmSettings(it) }
+                .distinctUntilChanged()
+                .collectLatest { settings ->
+                    val stock = settings?.stock
+                    val print = settings?.print
+                    currentSpectralFilmPreviewLut = if (stock != null && print != null) {
+                        // 与 RAW 处理共享 SpectralFilmProfile 的选择缓存与磁盘 LUT 缓存。
+                        withContext(Dispatchers.IO) {
+                            SpectralFilmProfile.loadCombinedLut(getApplication(), stock, print, settings.tuning)
+                        }
+                    } else {
+                        null
+                    }
+                }
+        }
+
         // 加载用户偏好设置
         viewModelScope.launch {
             val prefs = userPreferencesRepository.userPreferences.firstOrNull()
@@ -2976,6 +3000,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
             glSurfaceView?.let { view ->
                 val currentState = state.value
+                view.setSpectralFilmPreview(currentSpectralFilmPreviewLut)
                 view.setBaselineLut(currentBaselineLutConfig)
                 view.setBaselineLutEnabled(currentBaselineLutConfig != null)
                 view.setBaselineParams(currentBaselineRecipeParams.value)
@@ -3115,6 +3140,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             print = userPrefs?.rawSpectralFilmPrint ?: "kodak_portra_endura",
             tuning = (userPrefs?.rawSpectralFilmTuningsByStock?.get(stock) ?: SpectralFilmTuning.DEFAULT).normalized()
         )
+    }
+
+    private fun resolvePreviewSpectralFilmSettings(userPrefs: UserPreferences): RawSpectralFilmSettings? {
+        // 取景器只在 RAW 拍照预览中模拟引擎，条件与 RAW 基准色彩层一致。
+        if (resolvePreviewBaselineTarget(userPrefs) == null) return null
+        if (userPrefs.rawRenderingEngine != RawRenderingEngine.Spektrafilm) return null
+        return resolveRawSpectralFilmSettings(userPrefs)
     }
 
     private fun resolvePreviewBaselineLut(userPrefs: UserPreferences): LutConfig? {

@@ -1182,6 +1182,7 @@ fun CameraScreen(
                             calibrationOffset = calibrationOffset,
                             baselineLut = viewModel.currentBaselineLutConfig,
                             currentLut = viewModel.currentLutConfig,
+                            spectralFilmPreviewLut = viewModel.currentSpectralFilmPreviewLut,
                             baselineColorRecipeParams = currentBaselineRecipeParams,
                             colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                             focusPoint = state.focusPoint,

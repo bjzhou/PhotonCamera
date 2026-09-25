@@ -6,17 +6,19 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 internal object SpektrafilmToneShader {
-    val SPECTRAL_FILM_COMBINED_UNIFORMS = """
+    /** Film/print stage resources shared by the RAW engine and the realtime viewfinder. */
+    val SPECTRAL_FILM_UNIFORMS = """
         uniform highp sampler3D uSpectralFilmTexture;
         uniform highp sampler3D uSpectralPrintTexture;
-        uniform mat3 uOutputTransform;
         uniform int uSpectralFilmSize;
         uniform int uSpectralPrintSize;
         uniform float uSpectralInputScale;
         uniform float uSpectralPrintInputScale;
         uniform vec3 uSpectralNegativeDensityGains;
     """.trimIndent()
-    val SPECTRAL_FILM_COMBINED_FUNCTIONS = """
+
+    /** Maps linear ProPhoto RGB through the film (and print) stages back to linear ProPhoto RGB. */
+    val SPECTRAL_FILM_FUNCTIONS = """
         vec3 linearToProPhoto(vec3 color) {
             vec3 clamped = max(color, vec3(0.0));
             vec3 isHigh = step(vec3(0.001953125), clamped);
@@ -62,6 +64,14 @@ internal object SpektrafilmToneShader {
             // encoded ProPhoto RGB and share the same linear output contract.
             return proPhotoToLinear(filmResult);
         }
+    """.trimIndent()
+
+    val SPECTRAL_FILM_COMBINED_UNIFORMS = """
+        $SPECTRAL_FILM_UNIFORMS
+        uniform mat3 uOutputTransform;
+    """.trimIndent()
+    val SPECTRAL_FILM_COMBINED_FUNCTIONS = """
+        $SPECTRAL_FILM_FUNCTIONS
 
         vec3 applyEngineTone(vec3 color) {
             return uOutputTransform * applySpectralFilm(color);
@@ -79,37 +89,80 @@ internal class SpektrafilmToneAlgorithm(quad: RawFullscreenQuad) :
     RawRenderingEngineToneAlgorithm(quad, SpektrafilmToneShader.DEFINITION) {
     // Shared tone resources occupy 0 (input), 7 (gain table), 2 (HDR coordinate),
     // and 4 (HDR base curve). Keep both 3D samplers explicit on every draw.
-    private val filmTexture = LutTexture(6, "film")
-    private val printTexture = LutTexture(5, "print")
+    private val stages = SpectralFilmStageTextures(filmUnit = 6, printUnit = 5)
 
     override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
         super.bindEngineResources(program, input)
-        val lut = input.spectralFilmLut
-        filmTexture.bind(program, "uSpectralFilmTexture", lut?.filmTable)
-        printTexture.bind(program, "uSpectralPrintTexture", lut?.printTable)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSpectralFilmSize"), lut?.size ?: 1)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSpectralPrintSize"), lut?.printTable?.size ?: 1)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSpectralInputScale"), lut?.inputScale ?: 1f)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSpectralPrintInputScale"), lut?.printInputScale ?: 1f)
-        val gains = lut?.negativeDensityGains
-        GLES30.glUniform3f(
-            GLES30.glGetUniformLocation(program, "uSpectralNegativeDensityGains"),
-            gains?.get(0) ?: 1f, gains?.get(1) ?: 1f, gains?.get(2) ?: 1f,
-        )
+        stages.bind(SpectralFilmUniformLocations.query(program), input.spectralFilmLut)
         RawGlesProgram.logErrors("SpektrafilmToneAlgorithm.bindEngineResources")
     }
 
     override fun releaseEngineResources() {
+        stages.release()
+    }
+}
+
+internal data class SpectralFilmUniformLocations(
+    val filmTexture: Int,
+    val printTexture: Int,
+    val filmSize: Int,
+    val printSize: Int,
+    val inputScale: Int,
+    val printInputScale: Int,
+    val negativeDensityGains: Int,
+) {
+    companion object {
+        fun query(program: Int) = SpectralFilmUniformLocations(
+            filmTexture = GLES30.glGetUniformLocation(program, "uSpectralFilmTexture"),
+            printTexture = GLES30.glGetUniformLocation(program, "uSpectralPrintTexture"),
+            filmSize = GLES30.glGetUniformLocation(program, "uSpectralFilmSize"),
+            printSize = GLES30.glGetUniformLocation(program, "uSpectralPrintSize"),
+            inputScale = GLES30.glGetUniformLocation(program, "uSpectralInputScale"),
+            printInputScale = GLES30.glGetUniformLocation(program, "uSpectralPrintInputScale"),
+            negativeDensityGains = GLES30.glGetUniformLocation(program, "uSpectralNegativeDensityGains"),
+        )
+    }
+}
+
+/**
+ * Owns the film and print 3D textures of one GL context. Stages are uploaded only when
+ * their source asset changes; density tuning only updates uniforms.
+ */
+internal class SpectralFilmStageTextures(filmUnit: Int, printUnit: Int) {
+    private val filmTexture = LutTexture(filmUnit, "film")
+    private val printTexture = LutTexture(printUnit, "print")
+
+    fun bind(locations: SpectralFilmUniformLocations, lut: SpectralFilmLut?) {
+        filmTexture.bind(locations.filmTexture, lut?.filmTable)
+        printTexture.bind(locations.printTexture, lut?.printTable)
+        GLES30.glUniform1i(locations.filmSize, lut?.size ?: 1)
+        GLES30.glUniform1i(locations.printSize, lut?.printTable?.size ?: 1)
+        GLES30.glUniform1f(locations.inputScale, lut?.inputScale ?: 1f)
+        GLES30.glUniform1f(locations.printInputScale, lut?.printInputScale ?: 1f)
+        val gains = lut?.negativeDensityGains
+        GLES30.glUniform3f(
+            locations.negativeDensityGains,
+            gains?.get(0) ?: 1f, gains?.get(1) ?: 1f, gains?.get(2) ?: 1f,
+        )
+    }
+
+    fun release() {
         filmTexture.release()
         printTexture.release()
+    }
+
+    /** Forget handles after the owning EGL context has been lost. */
+    fun reset() {
+        filmTexture.reset()
+        printTexture.reset()
     }
 
     private class LutTexture(private val unit: Int, private val stage: String) {
         private var textureId = 0
         private var textureKey: String? = null
 
-        fun bind(program: Int, uniform: String, table: SpectralLutTable?) {
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, uniform), unit)
+        fun bind(samplerLocation: Int, table: SpectralLutTable?) {
+            GLES30.glUniform1i(samplerLocation, unit)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
             val key = table?.sourceKey ?: FALLBACK_KEY
             if (textureId == 0 || textureKey != key) upload(table, key)
@@ -119,8 +172,12 @@ internal class SpektrafilmToneAlgorithm(quad: RawFullscreenQuad) :
         fun release() {
             if (textureId != 0) {
                 GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
-                textureId = 0
             }
+            reset()
+        }
+
+        fun reset() {
+            textureId = 0
             textureKey = null
         }
 
@@ -172,7 +229,7 @@ internal class SpektrafilmToneAlgorithm(quad: RawFullscreenQuad) :
     }
 
     private companion object {
-        const val TAG = "SpektrafilmToneAlgorithm"
+        const val TAG = "SpectralFilmStageTextures"
         const val FALLBACK_KEY = "fallback"
     }
 }
