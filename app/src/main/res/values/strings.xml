@@ -297,7 +297,7 @@
     <string name="settings_hdr_plus_long_frame_ev_description">Exposure offset from the normal frame. The sensor shutter and ISO limits still apply.</string>
     <string name="settings_hdr_plus_short_frame_ev">Short frame exposure</string>
     <string name="settings_hdr_plus_short_frame_ev_description">Exposure offset from the normal frame for preserving highlights.</string>
-    <string name="settings_ml_ae_max_hdr_ratio">ML AE HDR Ratio limit</string>
+    <string name="settings_ml_ae_max_hdr_ratio">HDR Ratio limit</string>
     <string name="settings_ml_ae_max_hdr_ratio_description">Maximum long-to-short exposure ratio in ML AE. Large face detection may reduce this limit further.</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capture a short video clip along with your photo for a dynamic live photo effect.</string>

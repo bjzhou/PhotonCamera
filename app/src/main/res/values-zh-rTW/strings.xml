@@ -286,7 +286,7 @@
     <string name="settings_hdr_plus_long_frame_ev_description">相對一般幀的曝光偏移，仍受快門和 ISO 上限限制。</string>
     <string name="settings_hdr_plus_short_frame_ev">短幀曝光補償</string>
     <string name="settings_hdr_plus_short_frame_ev_description">相對一般幀的曝光偏移，用於保留高光。</string>
-    <string name="settings_ml_ae_max_hdr_ratio">ML AE HDR Ratio 上限</string>
+    <string name="settings_ml_ae_max_hdr_ratio">HDR Ratio 上限</string>
     <string name="settings_ml_ae_max_hdr_ratio_description">ML AE 中長幀與短幀曝光比的上限；偵測到較大人臉時可能進一步降低。</string>
     <string name="settings_use_live_photo">動態相片 (Live Photo)</string>
     <string name="settings_use_live_photo_description">在拍照時同時錄制一段短影片，讓相片動起來。</string>
