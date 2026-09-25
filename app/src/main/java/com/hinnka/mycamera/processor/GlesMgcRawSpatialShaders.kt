@@ -969,6 +969,7 @@ internal object GlesMgcRawSpatialShaders {
         precision highp sampler2D;
         precision highp int;
         uniform sampler2D uBaseFrame;
+        uniform sampler2D uSensorClipping;
         uniform ivec2 uSize;
         uniform float uMaxRgbClippingThreshold;
         out float oHighlightMask;
@@ -985,7 +986,11 @@ internal object GlesMgcRawSpatialShaders {
             float clippedRatio =
                 (maxIntensity - uMaxRgbClippingThreshold) /
                 (1.0 - uMaxRgbClippingThreshold);
-            oHighlightMask = clamp(clippedRatio, 0.0, 1.0);
+            // The WB-balanced, filtered guide can stay below the ramp while a native CFA
+            // phase is already saturated. Those reference samples carry no highlight detail
+            // and must be replaced by the ultrashort like guide-detected clipping.
+            float sensorClipped = texelFetch(uSensorClipping, p, 0).r;
+            oHighlightMask = max(clamp(clippedRatio, 0.0, 1.0), sensorClipped);
         }
     """.trimIndent()
 
@@ -1163,10 +1168,14 @@ internal object GlesMgcRawSpatialShaders {
             float smallest = min(base8.r, min(base8.g, base8.b));
             float largest = max(base8.r, max(base8.g, base8.b));
             float middle = base8.r + base8.g + base8.b - smallest - largest;
+            // A rejected short over a fully clipped reference (guide ramp complete or a
+            // sensor-clipped CFA phase) leaves only the clipped plateau, which renders as a
+            // flat gray patch in the ultrashort domain. It is a hole regardless of its hue.
             oInpaintingMask =
                 fallback > 0.0 &&
-                smallest >= uMinRgbForInpainting &&
-                middle >= uMaxRgbClippingThreshold
+                (highlight >= 1.0 ||
+                    (smallest >= uMinRgbForInpainting &&
+                        middle >= uMaxRgbClippingThreshold))
                     ? 1.0
                     : 0.0;
 
